@@ -194,6 +194,99 @@ def _save_flight(app_db, *, route: str, days_offset: int, idx: int) -> Flight:
     return f
 
 
+def _save_pack(
+    app_db,
+    flight_id: str,
+    *,
+    assessment: str | None,
+    days_out: int,
+    artifact_path: str = "",
+) -> None:
+    """Insert a minimal latest briefing pack row for a flight."""
+    from weatherbrief.db.models import BriefingPackRow
+
+    s = app_db()
+    s.add(BriefingPackRow(
+        flight_id=flight_id,
+        fetch_timestamp=datetime.now(timezone.utc),
+        days_out=days_out,
+        assessment=assessment,
+        assessment_reason="test",
+        has_digest=True,
+        artifact_path=artifact_path,
+    ))
+    s.commit()
+    s.close()
+
+
+class TestLatestBriefingInline:
+    """The list response carries enough per-flight briefing data to paint the
+    card and drive the debrief form — no per-flight /packs/latest calls."""
+
+    def test_card_data_present_inline(self, client, app_db):
+        # assessment / days_out / fetch_timestamp are exactly the three fields
+        # the card consumed from the old /packs/latest round-trip.
+        f = _save_flight(app_db, route="rcard", days_offset=+5, idx=1)
+        _save_pack(app_db, f.id, assessment="AMBER", days_out=3)
+        rec = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)
+        lb = rec["latest_briefing"]
+        assert lb is not None
+        assert lb["assessment"] == "AMBER"
+        assert lb["days_out"] == 3
+        assert lb["fetch_timestamp"] is not None
+        # No route_advisories.json on disk → flag is False.
+        assert lb["has_advisories"] is False
+
+    def test_no_pack_yields_null_briefing(self, client, app_db):
+        f = _save_flight(app_db, route="rnone", days_offset=+5, idx=2)
+        rec = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)
+        assert rec["latest_briefing"] is None
+
+    def test_has_advisories_true_when_manifest_on_disk(self, client, app_db, tmp_path):
+        f = _save_flight(app_db, route="radv", days_offset=+5, idx=3)
+        adv_dir = tmp_path / "pack-radv"
+        adv_dir.mkdir(parents=True, exist_ok=True)
+        (adv_dir / "route_advisories.json").write_text("{}")
+        _save_pack(app_db, f.id, assessment="GREEN", days_out=2, artifact_path=str(adv_dir))
+        rec = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)
+        assert rec["latest_briefing"]["has_advisories"] is True
+
+
+class TestPastPagination:
+    """Only the past section paginates; future + recent always come back full."""
+
+    def test_past_limit_slices_and_sets_total_header(self, client, app_db):
+        # 5 flights older than the 30-day recent window (all "past"), plus one
+        # future flight that must appear on every page.
+        for i in range(5):
+            _save_flight(app_db, route=f"p{i}", days_offset=-(40 + i), idx=i)
+        _save_flight(app_db, route="fut", days_offset=+5, idx=99)
+
+        resp = client.get("/api/flights?past_limit=2&past_offset=0")
+        assert resp.headers["X-Past-Total"] == "5"
+        body = resp.json()
+        page1 = [f["id"] for f in body if f["section"] == "past"]
+        assert len(page1) == 2
+        assert sum(1 for f in body if f["section"] == "future") == 1
+
+        resp2 = client.get("/api/flights?past_limit=2&past_offset=2")
+        page2 = [f["id"] for f in resp2.json() if f["section"] == "past"]
+        assert len(page2) == 2
+        assert set(page1).isdisjoint(page2)  # no overlap across pages
+        # Future still present on the second page.
+        assert sum(1 for f in resp2.json() if f["section"] == "future") == 1
+
+        resp3 = client.get("/api/flights?past_limit=2&past_offset=4")
+        assert len([f for f in resp3.json() if f["section"] == "past"]) == 1
+
+    def test_no_past_limit_returns_all_past(self, client, app_db):
+        for i in range(3):
+            _save_flight(app_db, route=f"q{i}", days_offset=-(40 + i), idx=i)
+        resp = client.get("/api/flights")
+        assert resp.headers["X-Past-Total"] == "3"
+        assert len([f for f in resp.json() if f["section"] == "past"]) == 3
+
+
 class TestApiSections:
     def test_listing_includes_section_field(self, client, app_db):
         _save_flight(app_db, route="rt1", days_offset=+5, idx=1)

@@ -12,6 +12,7 @@
 
   "flights.empty": "No flights yet. Create one to get started.",
   "flights.past": "Past flights ({count})",
+  "flights.showMorePast": "Show more ({count})",
   "flights.deleteConfirm": "Delete flight {id}? This removes all briefing history.",
   "flights.noBriefings": "No briefings yet",
   "flights.pastBadge": "Past",

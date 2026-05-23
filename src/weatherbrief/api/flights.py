@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -33,6 +33,7 @@ from weatherbrief.storage.flights import (
     save_flight,
     subscribe_flight,
     unsubscribe_flight,
+    _resolve_artifact_path,
 )
 
 router = APIRouter(prefix="/flights", tags=["flights"])
@@ -100,13 +101,20 @@ class AircraftInfo(BaseModel):
 
 
 class BriefingStatusInfo(BaseModel):
-    """Summary of latest briefing pack, included in flight listings."""
+    """Summary of latest briefing pack, included in flight listings.
+
+    Carries everything the flights-list card and the debrief form need so
+    the page renders from the single ``/flights`` response — no per-flight
+    ``/packs/latest`` round-trips. ``has_advisories`` lets the debrief form
+    decide whether to fetch the advisories manifest at all.
+    """
 
     assessment: str | None = None
     assessment_reason: str | None = None
     has_digest: bool = False
     days_out: int | None = None
     fetch_timestamp: str | None = None
+    has_advisories: bool = False
 
 
 class FlightResponse(BaseModel):
@@ -407,6 +415,19 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
         )
     ).scalars().all()
 
+    from pathlib import Path
+
+    def _has_advisories(artifact_path: str | None) -> bool:
+        # Mirrors packs._meta_to_response: advisories presence is the
+        # route_advisories.json file on disk, not a DB column. A cheap local
+        # stat per latest pack, all in this one request — far cheaper than the
+        # per-flight /packs/latest round-trips it replaces. Resolve the stored
+        # path against the current DATA_DIR first (worktrees run from a
+        # different CWD than where the pack was written).
+        if not artifact_path:
+            return False
+        return (Path(_resolve_artifact_path(artifact_path)) / "route_advisories.json").exists()
+
     return {
         row.flight_id: BriefingStatusInfo(
             assessment=row.assessment,
@@ -414,6 +435,7 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
             has_digest=row.has_digest,
             days_out=row.days_out,
             fetch_timestamp=row.fetch_timestamp.isoformat(),
+            has_advisories=_has_advisories(row.artifact_path),
         )
         for row in rows
     }
@@ -421,6 +443,9 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
 
 @router.get("", response_model=list[FlightResponse])
 def list_all_flights(
+    response: Response,
+    past_limit: int | None = None,
+    past_offset: int = 0,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -428,6 +453,16 @@ def list_all_flights(
 
     Subscribed flights are filtered out when the owner has flipped them to
     private (see storage.flights.list_flights_with_role).
+
+    Pagination (opt-in, web flights page): ``future`` + ``recent`` flights are
+    always returned in full (small, time-sensitive). The ``past`` section can
+    be paginated via ``past_limit`` / ``past_offset`` — when ``past_limit`` is
+    omitted (iOS/MCP clients), the full past list is returned unchanged. The
+    ``X-Past-Total`` response header always carries the full past count so the
+    client knows whether more pages exist.
+
+    Section computation runs over the *full* owned set before slicing, so
+    ``_compute_recent_section`` still sees every past flight.
     """
     paired = list_flights_with_role(db, user_id)
     pack_status = _get_latest_packs(db, [f.id for f, _, _ in paired])
@@ -438,24 +473,34 @@ def list_all_flights(
     ]
     recent_set = _compute_recent_section(owned_pairs)
 
-    out: list[FlightResponse] = []
+    # Build responses, splitting past (paginated) from future+recent (always
+    # full). Order within each group follows ``list_flights_with_role``
+    # (departure_time desc); the frontend re-buckets by ``section`` so the
+    # concatenation order below only needs to preserve per-section order.
+    other: list[FlightResponse] = []  # future + recent
+    past: list[FlightResponse] = []
     for f, role, owner_name in paired:
         debrief = debrief_map.get(f.id) if role == "owner" else None
         section = _classify_section(f, has_debrief=debrief is not None, recent_set=recent_set)
-        out.append(
-            _flight_to_response(
-                f,
-                db,
-                viewer_id=user_id,
-                latest_briefing=pack_status.get(f.id),
-                role=role,
-                subscribed=(role == "subscriber"),
-                owner_display_name=owner_name,
-                debrief=debrief,
-                section=section,
-            )
+        resp = _flight_to_response(
+            f,
+            db,
+            viewer_id=user_id,
+            latest_briefing=pack_status.get(f.id),
+            role=role,
+            subscribed=(role == "subscriber"),
+            owner_display_name=owner_name,
+            debrief=debrief,
+            section=section,
         )
-    return out
+        (past if section == "past" else other).append(resp)
+
+    response.headers["X-Past-Total"] = str(len(past))
+    if past_limit is not None:
+        start = max(0, past_offset)
+        past = past[start : start + max(0, past_limit)]
+
+    return other + past
 
 
 def _bulk_debriefs_for_owned(

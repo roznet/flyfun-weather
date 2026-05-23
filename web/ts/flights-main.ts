@@ -557,20 +557,21 @@ async function init(): Promise<void> {
   store.subscribe((state, prev) => {
     if (
       state.flights !== prev.flights ||
-      state.latestPacks !== prev.latestPacks ||
+      state.pastTotal !== prev.pastTotal ||
       state.activeRefreshes !== prev.activeRefreshes ||
       state.selectedIds !== prev.selectedIds ||
       state.debriefStats !== prev.debriefStats
     ) {
       ui.renderFlightList(
         state.flights,
-        state.latestPacks,
         state.activeRefreshes,
         state.selectedIds,
+        state.pastTotal,
         (id) => navigateToBriefing(id),
         (id) => navigateToFlight(id),
         (id) => store.getState().deleteFlight(id),
         selectionHandlers,
+        () => store.getState().loadMorePast(),
         (id) => store.getState().unsubscribeFlight(id),
         state.debriefStats,
         refreshAfterDebrief,

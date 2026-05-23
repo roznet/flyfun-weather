@@ -26,8 +26,44 @@ export class RefreshStreamError extends Error {
 
 // --- Flights ---
 
-export async function fetchFlights(): Promise<FlightResponse[]> {
-  return apiFetch<FlightResponse[]>('/flights');
+export interface FlightsPage {
+  flights: FlightResponse[];
+  /** Full count of the user's "past" flights, regardless of pagination, read
+   *  from the X-Past-Total response header. Lets the page decide whether to
+   *  show a "Show more" affordance. Falls back to the returned past count when
+   *  the header is absent (older server). */
+  pastTotal: number;
+}
+
+/** Fetch the flights list. ``pastLimit`` paginates only the past section;
+ *  future + recent are always returned in full. Omit ``pastLimit`` for the
+ *  full, unpaginated list. */
+export async function fetchFlights(opts?: {
+  pastLimit?: number;
+  pastOffset?: number;
+}): Promise<FlightsPage> {
+  const params = new URLSearchParams();
+  if (opts?.pastLimit != null) params.set('past_limit', String(opts.pastLimit));
+  if (opts?.pastOffset != null) params.set('past_offset', String(opts.pastOffset));
+  const qs = params.toString();
+
+  let pastTotal: number | null = null;
+  const flights = await apiFetch<FlightResponse[]>(
+    `/flights${qs ? `?${qs}` : ''}`,
+    undefined,
+    (resp) => {
+      const header = resp.headers.get('X-Past-Total');
+      if (header != null) {
+        const parsed = parseInt(header, 10);
+        if (!Number.isNaN(parsed)) pastTotal = parsed;
+      }
+    },
+  );
+
+  return {
+    flights,
+    pastTotal: pastTotal ?? flights.filter((f) => f.section === 'past').length,
+  };
 }
 
 export async function fetchFlight(id: string): Promise<FlightResponse> {

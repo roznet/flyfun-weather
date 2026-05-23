@@ -10,6 +10,7 @@
   "theme.dark": "Sombre",
   "flights.empty": "Aucun vol pour le moment. Créez-en un pour commencer.",
   "flights.past": "Vols passés ({count})",
+  "flights.showMorePast": "Afficher plus ({count})",
   "flights.deleteConfirm": "Supprimer le vol {id} ? Tout l'historique des briefings sera supprimé.",
   "flights.noBriefings": "Aucun briefing pour le moment",
   "flights.pastBadge": "Passé",

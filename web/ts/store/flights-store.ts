@@ -1,16 +1,19 @@
 /** Zustand vanilla store for the Flights management page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { DebriefStats, FlightResponse, PackMeta } from './types';
+import type { DebriefStats, FlightResponse } from './types';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { fetchDebriefStats } from '../adapters/debrief-adapter';
 import { errorToMessage } from '../utils';
 
+/** Past-section page size. Future + recent are never paginated. */
+export const PAST_PAGE_SIZE = 20;
+
 export interface FlightsState {
   // Data
   flights: FlightResponse[];
-  latestPacks: Record<string, PackMeta | null>; // flight_id → latest pack
+  pastTotal: number;  // full count of "past" flights (for the "Show more" gate)
   activeRefreshes: Record<string, RefreshEntry>; // flight_id → active refresh entry
   debriefStats: DebriefStats | null;
 
@@ -21,6 +24,7 @@ export interface FlightsState {
 
   // Actions
   loadFlights: () => Promise<void>;
+  loadMorePast: () => Promise<void>;
   loadDebriefStats: () => Promise<void>;
   pollActiveRefreshes: () => Promise<void>;
   createFlight: (waypoints: string[], targetDate: string, opts?: {
@@ -44,7 +48,7 @@ export interface FlightsState {
 
 export const flightsStore = createStore<FlightsState>((set, get) => ({
   flights: [],
-  latestPacks: {},
+  pastTotal: 0,
   activeRefreshes: {},
   debriefStats: null,
   loading: false,
@@ -54,23 +58,32 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   loadFlights: async () => {
     set({ loading: true, error: null });
     try {
-      const flights = await api.fetchFlights();
-      set({ flights, loading: false });
-
-      // Load latest pack for each flight (in parallel)
-      const packs: Record<string, PackMeta | null> = {};
-      await Promise.all(
-        flights.map(async (f) => {
-          try {
-            packs[f.id] = await api.fetchLatestPack(f.id);
-          } catch {
-            packs[f.id] = null;
-          }
-        })
-      );
-      set({ latestPacks: packs });
+      // The card and the debrief form read everything they need from each
+      // flight's inline `latest_briefing`, so a single request paints the
+      // page — no per-flight /packs/latest round-trips. Only the past section
+      // is paginated; future + recent always come back in full.
+      const { flights, pastTotal } = await api.fetchFlights({ pastLimit: PAST_PAGE_SIZE });
+      set({ flights, pastTotal, loading: false });
     } catch (err) {
       set({ loading: false, error: `Failed to load flights: ${err}` });
+    }
+  },
+
+  loadMorePast: async () => {
+    const current = get().flights;
+    const loadedPast = current.filter((f) => f.section === 'past').length;
+    try {
+      const { flights: page, pastTotal } = await api.fetchFlights({
+        pastLimit: PAST_PAGE_SIZE,
+        pastOffset: loadedPast,
+      });
+      // The page also re-lists future + recent (always returned in full); keep
+      // only the genuinely new past rows and append them to the past bucket.
+      const existingIds = new Set(current.map((f) => f.id));
+      const newPast = page.filter((f) => f.section === 'past' && !existingIds.has(f.id));
+      set({ flights: [...current, ...newPast], pastTotal });
+    } catch (err) {
+      set({ error: `Failed to load more flights: ${err}` });
     }
   },
 
