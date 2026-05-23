@@ -5,7 +5,17 @@
  *  - flight-category color helper
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// `flightCategoryColor('LIFR')` reads the theme-driven `--lifr` CSS var via
+// cssVar(), which calls getComputedStyle(document) — unavailable in the node
+// test environment. Stub cssVar to return its fallback so the LIFR branch is
+// exercisable here; the other categories use literals and are unaffected.
+vi.mock('../../ts/visualization/interaction-utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../ts/visualization/interaction-utils')>();
+  return { ...actual, cssVar: (_name: string, fallback: string) => fallback };
+});
+
 import { extractVizData, getUnavailableLayers } from '../../ts/visualization/data-extract';
 import {
   columnSpanNm, sigmetSpanNm, sortColumnsForDraw, isSevereSigmet,
@@ -238,6 +248,10 @@ describe('flightCategoryColor', () => {
 
   it('falls back to gray for an unknown category', () => {
     expect(flightCategoryColor('???')).toBe('#6b7280');
+  });
+
+  it('reads LIFR from the --lifr CSS var (cssVar fallback when unset)', () => {
+    expect(flightCategoryColor('LIFR')).toBe('#8e24aa');
   });
 });
 
