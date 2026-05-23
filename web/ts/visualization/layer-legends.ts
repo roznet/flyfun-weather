@@ -3,7 +3,7 @@
  * All colors are derived dynamically from the active cross-section theme.
  */
 
-import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from './scales';
+import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity, flightCategoryColor } from './scales';
 import { getActiveTheme } from './cross-section/theme';
 import { parseCloudLayerId, DEFAULT_NATURAL_CONFIG, type CloudStyle } from './cross-section/layers/cloud-bands-factory';
 import { t } from '../i18n/i18n';
@@ -147,6 +147,18 @@ function obscurationLegend(): LegendEntry[] {
   ];
 }
 
+function currentConditionsLegend(): LegendEntry[] {
+  // Diagonal hatch overlay matching the SIGMET zone's 45° canvas hatching.
+  const sigmetHatch = 'repeating-linear-gradient(45deg, rgba(200, 45, 45, 0.85) 0px, rgba(200, 45, 45, 0.85) 2px, transparent 2px, transparent 8px)';
+  return [
+    { label: t('legend.conditions.vfr'), color: flightCategoryColor('VFR'), meaning: t('legend.conditions.vfrDesc') },
+    { label: t('legend.conditions.mvfr'), color: flightCategoryColor('MVFR'), meaning: t('legend.conditions.mvfrDesc') },
+    { label: t('legend.conditions.ifr'), color: flightCategoryColor('IFR'), meaning: t('legend.conditions.ifrDesc') },
+    { label: t('legend.conditions.lifr'), color: flightCategoryColor('LIFR'), meaning: t('legend.conditions.lifrDesc') },
+    { label: t('legend.conditions.sigmet'), color: 'rgba(200, 45, 45, 0.16)', meaning: t('legend.conditions.sigmetDesc'), hatchStyle: sigmetHatch },
+  ];
+}
+
 function lineLegends(): Record<string, LegendEntry[]> {
   const theme = getActiveTheme();
   return {
@@ -183,6 +195,7 @@ export function getLayerLegend(layerId: string): LegendEntry[] | null {
     'convective-bg': convectiveLegend,
     'inversion-bands': inversionLegend,
     'surface-obscuration-bands': obscurationLegend,
+    'current-conditions': currentConditionsLegend,
   };
 
   const bandBuilder = bandLegends[layerId];

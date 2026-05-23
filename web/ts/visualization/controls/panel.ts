@@ -1,6 +1,6 @@
 /** Visualization control panel: layout toggle, model selector, layer checkboxes, map controls. */
 
-import type { VizLayout, VizSettings, CompareBandMode } from '../types';
+import type { VizLayout, VizSettings, CompareBandMode, LayerGroup } from '../types';
 import type { DisplayMode } from '../../types/metrics';
 import { getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset } from '../cross-section/layer-registry';
 import {
@@ -46,6 +46,9 @@ export interface LayerTogglesOptions {
   /** Fired when the user picks a different cloud style. Wire to the store
    *  so the choice persists alongside other viz settings. */
   onCloudStyleChange?: (style: 'natural' | 'soft' | 'square') => void;
+  /** Layer groups to omit entirely from the toggle list. Used by the
+   *  airport-profile drawer to drop the route-only `conditions` group. */
+  hiddenGroups?: Set<LayerGroup>;
 }
 
 /** Source state derived from which cloud layer ids are currently enabled.
@@ -128,10 +131,11 @@ function layerTogglesHtml(
   enabledLayers: Record<string, boolean>,
   opts: LayerTogglesOptions = {},
 ): string {
-  const { displayMode, preferredMethods, unavailableLayers, cloudStyle, substitutedLayers } = opts;
+  const { displayMode, preferredMethods, unavailableLayers, cloudStyle, substitutedLayers, hiddenGroups } = opts;
   const groups = getLayerGroups();
   let html = '<div class="viz-layer-toggles">';
   for (const group of groups) {
+    if (hiddenGroups?.has(group.group)) continue;
     const isCompactCollapse = displayMode === 'compact' && COMPACT_GROUPS.has(group.group);
     const layersToRender = isCompactCollapse
       ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group])]

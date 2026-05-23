@@ -65,6 +65,7 @@ export type LayerGroup =
   | 'turbulence'
   | 'convection'
   | 'obscuration'
+  | 'conditions'
   | 'reference';
 
 // --- Terrain ---
@@ -96,6 +97,53 @@ export interface VizRouteData {
    * offsets from the start time, and `totalDistanceNm` is the total span.
    */
   timeAxisMode?: boolean;
+  /**
+   * D-0 current conditions overlay (METAR airport columns + route SIGMET
+   * zones). Sourced from `snapshot.route_observations` / `route_sigmets`,
+   * which are model-independent and `null` on D-1+ — so this is `null`
+   * whenever the snapshot carries no observations or SIGMETs.
+   */
+  currentConditions: VizCurrentConditions | null;
+}
+
+/** METAR-reporting airport projected onto the cross-section X axis. */
+export interface VizMetarColumn {
+  icao: string;
+  /** Along-route distance (nm) → column center on the X axis. */
+  enrouteDistanceNm: number;
+  /** Perpendicular offset from the route (nm) → draw order (closest on top). */
+  distanceFromRouteNm: number;
+  /** "VFR" | "MVFR" | "IFR" | "LIFR" — drives the column fill color. */
+  flightCategory: string;
+  /** Column base (ft MSL): terrain elevation under the column's X position. */
+  baseFt: number;
+  // Hover-detail fields (METAR ground truth).
+  metarRaw: string | null;
+  ceilingFt: number | null;
+  visibilityM: number | null;
+  windDir: number | null;
+  windSpeedKt: number | null;
+  windGustKt: number | null;
+}
+
+/** Route SIGMET projected onto the cross-section (enroute span × vertical band). */
+export interface VizSigmetZone {
+  /** Enroute span start/end (nm) on the X axis. */
+  enrouteFromNm: number;
+  enrouteToNm: number;
+  /** Vertical band (ft MSL); `null` → span the full plot height. */
+  baseFt: number | null;
+  topFt: number | null;
+  /** Hazard word (TURB/ICE/TS/MTW/VA...). */
+  hazard: string;
+  /** SEV/EMBD/... — drives severity coloring. */
+  qualifier: string | null;
+  rawText: string;
+}
+
+export interface VizCurrentConditions {
+  airports: VizMetarColumn[];
+  sigmets: VizSigmetZone[];
 }
 
 export interface WaypointMarker {

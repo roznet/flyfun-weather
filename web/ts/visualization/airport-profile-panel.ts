@@ -501,7 +501,11 @@ export class AirportProfilePanel {
       // Toggles work even before the cross-section renderer mounts —
       // state is owned by the panel and applied via setLayers() once
       // the renderer exists (see ensureCrossRenderer).
-      renderLayerToggles(host, this.enabledLayers, (layerId) => this.onLayerToggle(layerId));
+      // The current-conditions overlay is route-only (distance X axis); the
+      // airport-profile drawer is time-axis, so drop that group's toggle.
+      renderLayerToggles(host, this.enabledLayers, (layerId) => this.onLayerToggle(layerId), {
+        hiddenGroups: new Set(['conditions']),
+      });
     }
     if (showSkewT) {
       const host = this.drawerEl.querySelector('.ap-drawer-skewt-host') as HTMLElement;

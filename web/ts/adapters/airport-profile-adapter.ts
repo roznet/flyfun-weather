@@ -259,6 +259,8 @@ export function snapshotToVizData(
       { distanceNm: Math.max(1, (meta.hours.length - 1) * HOURS_TO_NM_SCALE), elevationFt },
     ],
     timeAxisMode: true,
+    // No route-distance overlay in the single-airport, time-axis view.
+    currentConditions: null,
   };
 }
 
