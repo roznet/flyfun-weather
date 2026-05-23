@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyNwpFallback,
   getSubstitutedLayers,
+  getDdSubstituteId,
 } from '../../ts/visualization/cross-section/nwp-fallback';
 
 // What getUnavailableLayers adds when a model has no native NWP cloud data.
@@ -26,10 +27,12 @@ describe('applyNwpFallback — clouds', () => {
     expect(getSubstitutedLayers(enabled, effective).size).toBe(0);
   });
 
-  it('NWP unavailable + soft NWP enabled → soft DD injected, same style', () => {
+  it('NWP unavailable + soft NWP enabled → soft DD injected, NWP variant disabled', () => {
     const enabled = { 'soft-nwp-cloud-bands': true };
     const effective = applyNwpFallback(enabled, NWP_UNAVAILABLE);
     expect(effective['soft-cloud-bands']).toBe(true);
+    // The replaced NWP variant must not stay enabled (renderer + panel state).
+    expect(effective['soft-nwp-cloud-bands']).toBe(false);
     expect(getSubstitutedLayers(enabled, effective).has('soft-cloud-bands')).toBe(true);
   });
 
@@ -42,10 +45,11 @@ describe('applyNwpFallback — clouds', () => {
     expect(effective['cloud-bands']).toBe(true);
   });
 
-  it('NWP unavailable + square NWP enabled → square DD injected', () => {
+  it('NWP unavailable + square NWP enabled → square DD injected, NWP variant disabled', () => {
     const enabled = { 'square-nwp-cloud-bands': true };
     const effective = applyNwpFallback(enabled, NWP_UNAVAILABLE);
     expect(effective['square-cloud-bands']).toBe(true);
+    expect(effective['square-nwp-cloud-bands']).toBe(false);
   });
 
   it('explicit DD choice stays and is not flagged as substituted', () => {
@@ -124,5 +128,24 @@ describe('applyNwpFallback — invariants', () => {
     const enabled = { 'nwp-cloud-bands': true, 'icing-ogimet-nwp-bands': true, 'ieng-icing-bands': true };
     const effective = applyNwpFallback(enabled, NWP_UNAVAILABLE);
     for (const id of NWP_UNAVAILABLE) expect(effective[id]).toBe(false);
+  });
+});
+
+describe('getDdSubstituteId', () => {
+  it('maps each NWP cloud style to its same-style DD layer', () => {
+    expect(getDdSubstituteId('soft-nwp-cloud-bands')).toBe('soft-cloud-bands');
+    expect(getDdSubstituteId('nwp-cloud-bands')).toBe('cloud-bands');
+    expect(getDdSubstituteId('square-nwp-cloud-bands')).toBe('square-cloud-bands');
+  });
+
+  it('maps Ogimet-NWP icing to Ogimet-DD', () => {
+    expect(getDdSubstituteId('icing-ogimet-nwp-bands')).toBe('icing-bands');
+  });
+
+  it('returns null for DD layers, IENG, and non-cloud/icing layers', () => {
+    expect(getDdSubstituteId('soft-cloud-bands')).toBeNull();
+    expect(getDdSubstituteId('ieng-icing-bands')).toBeNull();
+    expect(getDdSubstituteId('cat-bands')).toBeNull();
+    expect(getDdSubstituteId('terrain')).toBeNull();
   });
 });

@@ -8,6 +8,7 @@ import {
   ALL_CLOUD_LAYER_IDS,
   parseCloudLayerId,
 } from '../cross-section/layers/cloud-bands-factory';
+import { getDdSubstituteId } from '../cross-section/nwp-fallback';
 import { getComparableLayerGroups, getComparableLayer } from '../cross-section/compare-layers';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { modelLabel } from '../../utils';
@@ -149,13 +150,19 @@ function layerTogglesHtml(
     }
     for (const layer of layersToRender) {
       const isUnavailable = unavailableLayers?.has(layer.id) ?? false;
-      const isSubstituted = !isUnavailable && (substitutedLayers?.has(layer.id) ?? false);
-      const checked = isSubstituted || (!isUnavailable && enabledLayers[layer.id] !== false) ? 'checked' : '';
-      const disabled = isUnavailable ? 'disabled' : '';
-      const dimClass = isUnavailable
+      // In compact mode the group collapses to its preferred layer; if that's
+      // an NWP layer being served by a DD substitute, show the substitute state
+      // (checked+dimmed) instead of "unavailable" / a plain checkbox.
+      const compactSubId = isCompactCollapse ? getDdSubstituteId(layer.id) : null;
+      const isSubstituted = (compactSubId != null && (substitutedLayers?.has(compactSubId) ?? false))
+        || (!isUnavailable && (substitutedLayers?.has(layer.id) ?? false));
+      const showUnavailable = isUnavailable && !isSubstituted;
+      const checked = isSubstituted || (!showUnavailable && enabledLayers[layer.id] !== false) ? 'checked' : '';
+      const disabled = showUnavailable ? 'disabled' : '';
+      const dimClass = showUnavailable
         ? ' viz-layer-unavailable'
         : (isSubstituted ? ' viz-layer-substituted' : '');
-      const tooltip = isUnavailable
+      const tooltip = showUnavailable
         ? ` title="${t('viz.notAvailableModel')}"`
         : (isSubstituted ? ` title="${t('viz.substitutedNwp')}"` : '');
       html += `<label class="viz-layer-checkbox${dimClass}"${tooltip}>`;
