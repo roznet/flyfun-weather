@@ -355,6 +355,11 @@ export function redirectToLogin(): void {
 
 export const API_BASE = '/api';
 
+/**
+ * @param onResponse Inspect response metadata (e.g. read a header) before the
+ *   body is parsed. Read headers only — do NOT consume the body (e.g. by
+ *   calling `resp.json()`/`resp.text()`), or the `resp.json()` below will reject.
+ */
 export async function apiFetch<T>(
   path: string,
   init?: RequestInit,

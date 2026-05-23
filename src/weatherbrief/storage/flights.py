@@ -257,6 +257,20 @@ def _resolve_artifact_path(raw: str) -> str:
     return raw
 
 
+def pack_has_advisories(artifact_path: str | None) -> bool:
+    """True when a pack's ``route_advisories.json`` exists on disk.
+
+    Advisories presence is a file on disk, not a DB column — this is the
+    single source of truth for that check, used by both the per-pack
+    response builder and the bulk flight-list query. Resolves the stored
+    path against the current DATA_DIR first (worktrees run from a different
+    CWD than where the pack was written).
+    """
+    if not artifact_path:
+        return False
+    return (Path(_resolve_artifact_path(artifact_path)) / "route_advisories.json").exists()
+
+
 def _parse_diagnostics(raw: str | None) -> list[Diagnostic]:
     """Parse diagnostics_json into typed Diagnostic entries.
 

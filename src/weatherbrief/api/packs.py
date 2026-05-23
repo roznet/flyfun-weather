@@ -63,6 +63,7 @@ from weatherbrief.storage.flights import (
     list_packs,
     load_pack_meta,
     pack_dir_for,
+    pack_has_advisories,
     save_pack_meta,
     update_pack_meta,
 )
@@ -345,11 +346,7 @@ def _meta_to_response(
     meta: BriefingPackMeta,
     data_status: DataStatus | None = None,
 ) -> PackMetaResponse:
-    # Check for advisories file on disk
-    has_advisories = False
-    if meta.artifact_path:
-        from pathlib import Path
-        has_advisories = (Path(meta.artifact_path) / "route_advisories.json").exists()
+    has_advisories = pack_has_advisories(meta.artifact_path)
 
     return PackMetaResponse(
         flight_id=meta.flight_id,
