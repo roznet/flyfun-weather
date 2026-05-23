@@ -90,11 +90,11 @@ function drawMetarColumns(
     ctx.globalAlpha = 0.32;
     ctx.fillStyle = color;
     ctx.fillRect(x0, yTop, x1 - x0, yBase - yTop);
-    ctx.restore();
-
+    ctx.globalAlpha = 1;
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
     ctx.strokeRect(x0, yTop, x1 - x0, yBase - yTop);
+    ctx.restore();
   }
 
   // Labels: closest-to-route first (label priority), with X-collision
@@ -156,11 +156,10 @@ function drawSigmetZone(
     ctx, x0, yTop, x1, yBase,
     `rgba(${rgb}, ${severe ? 0.7 : 0.5})`, severe ? 2 : 1.5,
   );
-  ctx.restore();
-
   ctx.strokeStyle = `rgba(${rgb}, 0.9)`;
   ctx.lineWidth = severe ? 2 : 1.5;
   ctx.strokeRect(x0, yTop, x1 - x0, yBase - yTop);
+  ctx.restore();
 
   // Hazard label inside the zone (top-left).
   const label = s.qualifier ? `${s.qualifier} ${s.hazard}` : s.hazard;

@@ -357,11 +357,9 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   void hasOgimetNwp; void hasIeng;
 
   // Current conditions (D-0 METAR columns + SIGMET zones): unavailable when
-  // the snapshot carried no observations and no SIGMETs (D-1+).
-  const cc = data.currentConditions;
-  if (!cc || (cc.airports.length === 0 && cc.sigmets.length === 0)) {
-    unavailable.add('current-conditions');
-  }
+  // the snapshot carried no observations and no SIGMETs. `buildCurrentConditions`
+  // returns null (never an empty object) in that case, so a null check suffices.
+  if (!data.currentConditions) unavailable.add('current-conditions');
 
   return unavailable;
 }
