@@ -135,9 +135,11 @@ function drawSigmetZone(
   const bottom = plotArea.top + plotArea.height;
 
   const [from, to] = sigmetSpanNm(s.enrouteFromNm, s.enrouteToNm);
-  let x0 = transform.distanceToX(from);
-  let x1 = transform.distanceToX(to);
-  if (x1 < x0) [x0, x1] = [x1, x0];
+  // Clamp to the plot area so a span past the route ends doesn't place its
+  // label in the axis margin (the renderer already clips the fills).
+  const x0 = Math.max(plotArea.left, transform.distanceToX(from));
+  const x1 = Math.min(plotArea.left + plotArea.width, transform.distanceToX(to));
+  if (x1 <= x0) return;
 
   // Vertical band: a null bound spans the full plot height (unknown extent).
   let yTop = s.topFt != null ? transform.altitudeToY(s.topFt) : top;
