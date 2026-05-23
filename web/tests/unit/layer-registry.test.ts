@@ -137,17 +137,16 @@ describe('getPreferredLayerForGroup', () => {
 describe('getLayerGroups', () => {
   it('returns groups in stable display order', () => {
     const groups = getLayerGroups().map((g) => g.group);
-    // Order asserted in layer-registry.ts
-    const expected = ['terrain', 'reference', 'temperature', 'clouds', 'icing', 'turbulence', 'convection'];
-    // Filter expected to match what's actually present (some groups may be absent if no layers)
-    for (const g of expected) {
-      const idxActual = groups.indexOf(g as typeof groups[number]);
-      if (idxActual === -1) continue;
-      // Just check 'clouds' comes before 'icing' before 'turbulence' before 'convection'
-    }
     expect(groups.indexOf('clouds')).toBeLessThan(groups.indexOf('icing'));
     expect(groups.indexOf('icing')).toBeLessThan(groups.indexOf('turbulence'));
     expect(groups.indexOf('turbulence')).toBeLessThan(groups.indexOf('convection'));
+  });
+
+  it('omits the terrain group (terrain always renders, no toggle)', () => {
+    const groups = getLayerGroups().map((g) => g.group);
+    expect(groups).not.toContain('terrain');
+    // The terrain layer itself is still registered — it just has no UI toggle.
+    expect(getAllLayers().some((l) => l.id === 'terrain')).toBe(true);
   });
 
   it('every group entry has at least one layer', () => {

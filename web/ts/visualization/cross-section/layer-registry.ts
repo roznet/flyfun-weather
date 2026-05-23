@@ -221,7 +221,10 @@ export function getLayerGroups(): LayerGroupInfo[] {
     reference: t('viz.group.reference'),
   };
 
-  const order: LayerGroup[] = ['terrain', 'reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection'];
+  // 'terrain' is intentionally omitted: terrain always renders (force-on at
+  // render time), so it has no UI toggle. The terrainFillLayer stays in
+  // ALL_LAYERS — only its panel group is dropped here.
+  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection'];
 
   return order
     .filter((g) => groupMap.has(g))

@@ -14,6 +14,7 @@ import { initInfoPopup, showMetricInfo, showPopupContent } from './components/in
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
+import { applyNwpFallback, getSubstitutedLayers } from './visualization/cross-section/nwp-fallback';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
@@ -567,6 +568,14 @@ async function init(): Promise<void> {
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
     const unavailable = getUnavailableLayers(data);
     const allLayers = getAllLayers();
+    // Render-time enable map: disable layers the model can't provide and
+    // substitute DD clouds/icing for unavailable NWP. The stored preference
+    // (state.vizSettings.enabledLayers) is never mutated.
+    const effectiveEnabled = applyNwpFallback(state.vizSettings.enabledLayers, unavailable);
+    const substitutedLayers = getSubstitutedLayers(state.vizSettings.enabledLayers, effectiveEnabled);
+    // Terrain always renders — its toggle was removed, so force-on overrides
+    // any stale terrain:false left in localStorage from the old checkbox.
+    effectiveEnabled['terrain'] = true;
     const showCrossSection = layout === 'cross-section' || layout === 'split';
     const showCompare = layout === 'compare';
     const showMap = layout === 'map' || layout === 'split';
@@ -649,10 +658,6 @@ async function init(): Promise<void> {
       }
 
       vizRenderer.setData(data);
-      // Merge unavailable layers as disabled so they don't render,
-      // without modifying the stored user preference.
-      const effectiveEnabled = { ...state.vizSettings.enabledLayers };
-      for (const id of unavailable) effectiveEnabled[id] = false;
       vizRenderer.setLayers(allLayers, effectiveEnabled);
       vizRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
       vizRenderer.render();
@@ -847,7 +852,7 @@ async function init(): Promise<void> {
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
         onPresetChange: (presetId) => store.getState().setVizPreset(presetId),
         onCloudStyleChange: (style) => store.getState().setCloudStyle(style),
-      }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable);
+      }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable, substitutedLayers);
 
       // Render route graph controls (below graph)
       if (routeGraphControlsContainer && showCrossSection) {
