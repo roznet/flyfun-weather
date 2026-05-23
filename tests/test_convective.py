@@ -1,10 +1,12 @@
 """Tests for convective risk assessment (sounding/convective.py)."""
 
 from weatherbrief.analysis.sounding.convective import (
+    ConvectiveCrossCheck,
     _effective_cape,
     assess_convective_nwp,
     assess_convective_thermo,
     classify_regime,
+    convective_cross_check,
     effective_cape,
 )
 from weatherbrief.models import (
@@ -874,3 +876,106 @@ def test_sounding_analysis_backward_compat_convective_thermo():
     conv = ConvectiveAssessment(risk_level=ConvectiveRisk.LOW, method="thermo")
     sa = SoundingAnalysis(convective=conv)
     assert sa.convective_thermo is conv
+
+
+# ---------------------------------------------------------------------------
+# convective_cross_check — DD-vs-model-scheme divergence (details-only)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_check_dd_not_corroborated():
+    """Thermo MODERATE + model cover 0% (no geom) → dd_not_corroborated."""
+    thermo = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cape_jkg=1100.0, method="thermo"
+    )
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cover_pct=0.0, method="nwp"
+    )
+    xc = convective_cross_check(thermo, nwp)
+    assert isinstance(xc, ConvectiveCrossCheck)
+    assert xc.direction == "dd_not_corroborated"
+    assert "not corroborated" in xc.note
+    assert "MODERATE" in xc.note
+    assert "1100" in xc.note
+    assert "0%" in xc.note
+
+
+def test_cross_check_model_active_dd_quiet():
+    """Thermo NONE + model cover 40% → model_active_dd_quiet."""
+    thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.NONE, method="thermo")
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.NONE, cover_pct=40.0, method="nwp"
+    )
+    xc = convective_cross_check(thermo, nwp)
+    assert xc is not None
+    assert xc.direction == "model_active_dd_quiet"
+    assert "active" in xc.note
+    assert "40% cover" in xc.note
+
+
+def test_cross_check_geom_only_active():
+    """ECMWF/ICON geom-only (cover None + base/top) counts as model-active."""
+    thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.MARGINAL, method="thermo")
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MARGINAL,
+        cover_pct=None,
+        base_ft=4000.0,
+        top_ft=20000.0,
+        method="nwp_hybrid",
+    )
+    xc = convective_cross_check(thermo, nwp)
+    assert xc is not None
+    assert xc.direction == "model_active_dd_quiet"
+    assert "tops 20000ft" in xc.note
+
+
+def test_cross_check_none_when_nwp_missing():
+    """No NWP convective scheme → silent (None)."""
+    thermo = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.HIGH, cape_jkg=1500.0, method="thermo"
+    )
+    assert convective_cross_check(thermo, None) is None
+
+
+def test_cross_check_none_when_agree_both_active():
+    """Thermo MODERATE + model active (60% cover) → both agree, None."""
+    thermo = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cape_jkg=900.0, method="thermo"
+    )
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cover_pct=60.0, method="nwp"
+    )
+    assert convective_cross_check(thermo, nwp) is None
+
+
+def test_cross_check_none_when_agree_both_quiet():
+    """Thermo NONE + model quiet (0% cover) → both agree, None."""
+    thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.NONE, method="thermo")
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.NONE, cover_pct=0.0, method="nwp"
+    )
+    assert convective_cross_check(thermo, nwp) is None
+
+
+def test_cross_check_cover_with_geom_not_quiet():
+    """Cover 0% but convective geometry present → not 'quiet', so no false signal."""
+    thermo = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cape_jkg=1000.0, method="thermo"
+    )
+    # cover 0 but base/top present → model_has_geom True → model_quiet False
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE,
+        cover_pct=0.0,
+        base_ft=4000.0,
+        top_ft=18000.0,
+        method="nwp",
+    )
+    assert convective_cross_check(thermo, nwp) is None
+
+
+def test_cross_check_none_when_thermo_missing():
+    """No thermo assessment → nothing to compare against (None)."""
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.NONE, cover_pct=40.0, method="nwp"
+    )
+    assert convective_cross_check(None, nwp) is None

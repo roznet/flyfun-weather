@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.units import format_visibility
 from weatherbrief.models import (
@@ -314,6 +315,29 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 lines.append(f"    - {sup}")
             for mod in conv.severe_modifiers:
                 lines.append(f"    ! {mod}")
+
+        # Model convective-scheme diagnostic — the independent vote on whether
+        # convection fires (cover/geometry), distinct from the CAPE-derived risk.
+        nwp_conv = sa.convective_nwp
+        if nwp_conv is not None:
+            mparts: list[str] = []
+            if nwp_conv.cover_pct is not None:
+                mparts.append(f"cover={nwp_conv.cover_pct:.0f}%")
+            if nwp_conv.base_ft is not None and nwp_conv.top_ft is not None:
+                mparts.append(f"base={nwp_conv.base_ft:.0f}ft, top={nwp_conv.top_ft:.0f}ft")
+            elif nwp_conv.top_ft is not None:
+                mparts.append(f"top={nwp_conv.top_ft:.0f}ft")
+            if mparts:
+                lines.append(
+                    f"  Convective model scheme [{model}] ({nwp_conv.method}): "
+                    f"{', '.join(mparts)}"
+                )
+
+        # DD-vs-model cross-check — emitted even when the thermo risk is NONE so
+        # the "model active where DD shows none" direction reaches the LLM.
+        xc = convective_cross_check(sa.convective_thermo or sa.convective, sa.convective_nwp)
+        if xc is not None:
+            lines.append(f"    → cross-check: {xc.note}")
 
         for zone in sa.icing_zones:
             sld = " SLD!" if zone.sld_risk else ""

@@ -592,7 +592,7 @@ export function renderAdvisories(
     const entry = catalog.get(advId);
     if (!entry) return;
     const adv = manifest.advisories.find(a => a.advisory_id === advId);
-    showPopupContent(renderAdvisoryPopup(entry, adv?.parameters_used ?? {}));
+    showPopupContent(renderAdvisoryPopup(entry, adv?.parameters_used ?? {}, adv));
   });
 
   // Wire runway info popups (event delegation)

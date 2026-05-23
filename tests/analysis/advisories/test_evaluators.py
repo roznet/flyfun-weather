@@ -92,6 +92,78 @@ class TestConvective:
         # All 10 points have MODERATE risk → 100% > red threshold
         assert result.aggregate_status == AdvisoryStatus.RED
 
+    def test_cross_check_populated_grade_unchanged(self):
+        """High-CAPE thermo + zero-cover NWP scheme populates per-model
+        cross_check, but the grade is identical to the same context with no
+        NWP scheme attached (cross-check is additive metadata only)."""
+        from datetime import datetime
+
+        from weatherbrief.models import (
+            ConvectiveAssessment,
+            ConvectiveRisk,
+            RoutePointAnalysis,
+            SoundingAnalysis,
+            ThermodynamicIndices,
+        )
+
+        thermo = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.MODERATE,
+            cape_jkg=1100.0,
+            top_ft=25000.0,
+            method="thermo",
+        )
+        nwp_quiet = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.MODERATE, cover_pct=0.0, method="nwp"
+        )
+
+        def _ctx(conv_nwp: ConvectiveAssessment | None) -> RouteContext:
+            analyses = [
+                RoutePointAnalysis(
+                    point_index=i,
+                    lat=48.0 + i * 0.5,
+                    lon=2.0 + i * 0.5,
+                    distance_from_origin_nm=i * 20.0,
+                    interpolated_time=datetime(2026, 3, 1, 10, 0),
+                    forecast_hour=datetime(2026, 3, 1, 9, 0),
+                    track_deg=135.0,
+                    sounding={
+                        "gfs": SoundingAnalysis(
+                            indices=ThermodynamicIndices(),
+                            convective=thermo,
+                            convective_thermo=thermo,
+                            convective_nwp=conv_nwp,
+                        )
+                    },
+                )
+                for i in range(10)
+            ]
+            return RouteContext(
+                analyses=analyses,
+                cross_sections=[],
+                elevation=None,
+                models=["gfs"],
+                cruise_altitude_ft=8000,
+                flight_ceiling_ft=18000,
+                total_distance_nm=200,
+            )
+
+        params = {
+            "min_risk": 2,
+            "affected_pct_amber": 20,
+            "affected_pct_red": 50,
+            "top_clearance_ft": 2000,
+        }
+
+        res_with = ConvectiveEvaluator.evaluate(_ctx(nwp_quiet), params)
+        res_without = ConvectiveEvaluator.evaluate(_ctx(None), params)
+
+        assert res_with.per_model[0].cross_check is not None
+        assert "not corroborated" in res_with.per_model[0].cross_check
+        assert res_without.per_model[0].cross_check is None
+        # Grade must be unchanged by the cross-check.
+        assert res_with.aggregate_status == res_without.aggregate_status
+        assert res_with.per_model[0].status == res_without.per_model[0].status
+
 
 class TestCloudTop:
     def test_green_no_clouds(self, clear_context: RouteContext):

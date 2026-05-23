@@ -34,6 +34,7 @@ export interface ModelAdvisoryResult {
   affected_pct: number;
   affected_nm: number;
   total_nm: number;
+  cross_check?: string | null;
 }
 
 export interface RouteAdvisoryResult {
