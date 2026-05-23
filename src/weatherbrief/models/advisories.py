@@ -95,6 +95,10 @@ class ModelAdvisoryResult(BaseModel):
     affected_pct: float = 0.0
     affected_nm: float = 0.0
     total_nm: float = 0.0
+    # Optional details-only metadata: divergence between the chosen method and
+    # an independent second derivation (e.g. convective DD-vs-model scheme).
+    # Never affects the grade; surfaced only in the info popup and LLM digest.
+    cross_check: str | None = None
 
     @classmethod
     def build(
@@ -106,6 +110,7 @@ class ModelAdvisoryResult(BaseModel):
         affected: int,
         total: int,
         total_distance_nm: float,
+        cross_check: str | None = None,
     ) -> ModelAdvisoryResult:
         """Build a result, computing pct and nm from point counts."""
         return cls(
@@ -117,6 +122,7 @@ class ModelAdvisoryResult(BaseModel):
             affected_pct=round(100 * affected / total, 1) if total > 0 else 0,
             affected_nm=round(total_distance_nm * affected / total, 1) if total > 0 else 0,
             total_nm=round(total_distance_nm, 1),
+            cross_check=cross_check,
         )
 
 

@@ -313,6 +313,7 @@
   "advisories.parameter": "Parameter",
   "advisories.value": "Value",
   "advisories.description": "Description",
+  "advisories.crossCheck": "Cross-check (model scheme)",
 
   "viz.xSection": "X-Section",
   "viz.compare": "Compare",

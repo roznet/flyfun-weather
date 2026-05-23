@@ -72,6 +72,11 @@ Structure your response as JSON with these exact fields:
   component). Do NOT re-analyze wind for other runways or worry about tailwind
   on the reported runway — it is always the into-wind direction. Only discuss
   crosswind and gust values as presented.
+- Prefer the configured analysis method for the assessment. When the alternate
+  method (e.g. the model's convective scheme vs the sounding-derived CAPE risk)
+  diverges materially, mention it as a confidence/uncertainty caveat in the
+  relevant section — do NOT flip the GREEN/AMBER/RED assessment on the alternate
+  method alone.
 - All wind speeds should be in knots, altitudes in feet, temperatures in
   Celsius.
 - The DATE header includes the day-of-week — use it for the flight date.

@@ -6,6 +6,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
+from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -124,12 +125,28 @@ class ConvectiveEvaluator:
             worst_risk = ConvectiveRisk.NONE
             below_cruise_count = 0  # risky points skipped because tops below cruise
             max_cover_pct: float | None = None
+            # Details-only DD-vs-model-scheme cross-check tally (never grades).
+            xcheck_fired = 0
+            xcheck_dirs: dict[str, int] = {}
+            xcheck_worst_dd_risk = ConvectiveRisk.NONE
 
             for rpa in ctx.analyses:
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
                     continue
                 total += 1
+
+                # Independent of the grade filters below: compare the chosen
+                # thermo risk against the model's own convective scheme.
+                xc = convective_cross_check(sounding.convective, sounding.convective_nwp)
+                if xc is not None:
+                    xcheck_fired += 1
+                    xcheck_dirs[xc.direction] = xcheck_dirs.get(xc.direction, 0) + 1
+                    if xc.direction == "dd_not_corroborated" and sounding.convective is not None:
+                        if _RISK_ORDER.index(sounding.convective.risk_level) > _RISK_ORDER.index(
+                            xcheck_worst_dd_risk
+                        ):
+                            xcheck_worst_dd_risk = sounding.convective.risk_level
 
                 conv = sounding.convective
                 if conv is None:
@@ -179,10 +196,26 @@ class ConvectiveEvaluator:
                     status = AdvisoryStatus.AMBER
                 detail = adv_t("convective.risk_over", loc, risk=worst_risk.value.upper(), extent=ext) + cover_suffix
 
+            cross_check: str | None = None
+            if xcheck_fired > 0:
+                dominant = max(xcheck_dirs, key=lambda d: xcheck_dirs[d])
+                xc_ext = format_extent(xcheck_fired, total, ctx.total_distance_nm)
+                if dominant == "dd_not_corroborated":
+                    cross_check = (
+                        f"DD {xcheck_worst_dd_risk.value.upper()} not corroborated — "
+                        f"model convective scheme quiet over {xc_ext}"
+                    )
+                else:  # model_active_dd_quiet
+                    cross_check = (
+                        f"model convective scheme active where DD shows little/none "
+                        f"over {xc_ext}"
+                    )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                cross_check=cross_check,
             ))
 
         return RouteAdvisoryResult.from_per_model("convective", per_model, params)

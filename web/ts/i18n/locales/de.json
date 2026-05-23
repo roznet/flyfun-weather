@@ -252,6 +252,7 @@
   "advisories.parameter": "Parameter",
   "advisories.value": "Wert",
   "advisories.description": "Beschreibung",
+  "advisories.crossCheck": "Gegenprüfung (Modellschema)",
   "viz.xSection": "Querschnitt",
   "viz.compare": "Vergleich",
   "viz.split": "Teilen",

@@ -6,6 +6,8 @@ and returns ConvectiveAssessment.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from weatherbrief.models import (
     ConvectiveAssessment,
     ConvectiveRegime,
@@ -528,3 +530,83 @@ def assess_convective_nwp(
         cover_pct=cover,
         method=method,
     )
+
+
+# Convective DD-vs-model cross-check thresholds (tunable module constants).
+# These gate the "does the model's own convective scheme corroborate the
+# CAPE-derived risk" signal surfaced in the advisory popup and LLM digest.
+# They never affect the grade.
+_XCHECK_MODEL_QUIET_COVER_PCT = 10.0   # cover <= this (and no convective geom) => model "quiet"
+_XCHECK_MODEL_ACTIVE_COVER_PCT = 25.0  # cover >= this => model "active"
+
+
+class ConvectiveCrossCheck(NamedTuple):
+    """Material divergence between the thermo (CAPE) risk and the model scheme.
+
+    ``direction`` names the kind of disagreement; ``note`` is a human-readable
+    explanation. Only returned when the two derivations disagree materially —
+    otherwise the caller gets ``None``.
+    """
+
+    direction: str  # "dd_not_corroborated" | "model_active_dd_quiet"
+    note: str
+
+
+def convective_cross_check(
+    thermo: ConvectiveAssessment | None,
+    nwp: ConvectiveAssessment | None,
+) -> ConvectiveCrossCheck | None:
+    """Cross-check the chosen thermo risk against the model's convective scheme.
+
+    The genuinely independent signal is the model's convective-cover diagnostic
+    (``cover_pct``) or, for models that only emit convective geometry (ICON-EU
+    hybrid, ECMWF hcct), the presence of a convective base/top. The model's own
+    ``risk_level`` is deliberately NOT used: it is derived from the same CAPE
+    thresholds as thermo, so comparing the two would be near-circular.
+
+    Returns ``None`` (silent) unless one of two material divergences fires:
+    - ``dd_not_corroborated`` — thermo MODERATE+ but the model scheme is quiet
+      (low cover, no convective geometry).
+    - ``model_active_dd_quiet`` — thermo NONE/MARGINAL but the model scheme is
+      active (meaningful cover, or convective geometry present).
+
+    A model that reports convective base/top but no ``cover_pct`` (ECMWF/ICON)
+    counts as model-active.
+    """
+    if nwp is None or thermo is None:
+        return None
+
+    model_has_geom = nwp.base_ft is not None and nwp.top_ft is not None
+    model_active = (
+        nwp.cover_pct is not None and nwp.cover_pct >= _XCHECK_MODEL_ACTIVE_COVER_PCT
+    ) or (nwp.cover_pct is None and model_has_geom)
+    model_quiet = (
+        nwp.cover_pct is not None
+        and nwp.cover_pct <= _XCHECK_MODEL_QUIET_COVER_PCT
+        and not model_has_geom
+    )
+
+    thermo_high = _RISK_LEVELS.index(thermo.risk_level) >= _RISK_LEVELS.index(
+        ConvectiveRisk.MODERATE
+    )
+    thermo_low = thermo.risk_level in (ConvectiveRisk.NONE, ConvectiveRisk.MARGINAL)
+
+    if thermo_high and model_quiet:
+        cape_txt = f" (CAPE {thermo.cape_jkg:.0f})" if thermo.cape_jkg is not None else ""
+        note = (
+            f"DD {thermo.risk_level.value.upper()}{cape_txt} but model convective "
+            f"cover {nwp.cover_pct:.0f}% — not corroborated by model scheme"
+        )
+        return ConvectiveCrossCheck(direction="dd_not_corroborated", note=note)
+
+    if thermo_low and model_active:
+        bits: list[str] = []
+        if nwp.cover_pct is not None:
+            bits.append(f"{nwp.cover_pct:.0f}% cover")
+        if nwp.top_ft is not None:
+            bits.append(f"tops {nwp.top_ft:.0f}ft")
+        desc = " / ".join(bits) if bits else "model scheme"
+        note = f"model convective scheme active ({desc}) despite weak DD instability"
+        return ConvectiveCrossCheck(direction="model_active_dd_quiet", note=note)
+
+    return None

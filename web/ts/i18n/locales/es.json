@@ -252,6 +252,7 @@
   "advisories.parameter": "Parámetro",
   "advisories.value": "Valor",
   "advisories.description": "Descripción",
+  "advisories.crossCheck": "Verificación cruzada (esquema del modelo)",
   "viz.xSection": "Sección transversal",
   "viz.compare": "Comparar",
   "viz.split": "Dividir",

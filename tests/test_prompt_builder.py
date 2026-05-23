@@ -239,3 +239,55 @@ def test_build_context_divergence_poor_included(sample_snapshot):
     assert "Divergence:" in context
     assert "cloud_cover_pct poor" in context
     assert "spread=70.0" in context
+
+
+def test_build_context_convective_model_scheme_and_cross_check(sample_snapshot):
+    """Divergent sounding emits the model-scheme line and a cross-check note
+    (dd_not_corroborated: thermo MODERATE but model convective cover 0%)."""
+    from weatherbrief.models import ConvectiveAssessment, ConvectiveRisk, ThermodynamicIndices
+
+    thermo = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cape_jkg=1100.0, method="thermo"
+    )
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cover_pct=0.0, method="nwp"
+    )
+    sample_snapshot.analyses[0].sounding["gfs"] = SoundingAnalysis(
+        indices=ThermodynamicIndices(),
+        convective=thermo,
+        convective_thermo=thermo,
+        convective_nwp=nwp,
+    )
+
+    target_time = datetime(2026, 2, 17, 9, 0, 0)
+    context = build_digest_context(sample_snapshot, target_time)
+
+    assert "Convective model scheme [gfs]" in context
+    assert "cover=0%" in context
+    assert "cross-check:" in context
+    assert "not corroborated" in context
+
+
+def test_build_context_convective_cross_check_when_thermo_none(sample_snapshot):
+    """The model-active / DD-quiet direction is emitted even when the thermo
+    risk is NONE (the old risk!=NONE guard would have hidden it)."""
+    from weatherbrief.models import ConvectiveAssessment, ConvectiveRisk, ThermodynamicIndices
+
+    thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.NONE, method="thermo")
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.NONE, cover_pct=40.0, top_ft=22000.0, method="nwp"
+    )
+    sample_snapshot.analyses[0].sounding["gfs"] = SoundingAnalysis(
+        indices=ThermodynamicIndices(),
+        convective=thermo,
+        convective_thermo=thermo,
+        convective_nwp=nwp,
+    )
+
+    target_time = datetime(2026, 2, 17, 9, 0, 0)
+    context = build_digest_context(sample_snapshot, target_time)
+
+    assert "Convective model scheme [gfs]" in context
+    assert "cover=40%" in context
+    assert "cross-check:" in context
+    assert "model convective scheme active" in context
