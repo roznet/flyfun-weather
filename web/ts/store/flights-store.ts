@@ -19,6 +19,7 @@ export interface FlightsState {
 
   // UI state
   loading: boolean;
+  loadingMore: boolean;  // a "Show more" past-page fetch is in flight
   error: string | null;
   selectedIds: Set<string>;  // flights ticked for bulk actions
 
@@ -52,6 +53,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   activeRefreshes: {},
   debriefStats: null,
   loading: false,
+  loadingMore: false,
   error: null,
   selectedIds: new Set(),
 
@@ -70,8 +72,13 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   },
 
   loadMorePast: async () => {
+    // Guard against rapid double-clicks: until the in-flight page lands,
+    // loadedPast wouldn't advance, so concurrent calls would all request the
+    // same offset and waste round-trips.
+    if (get().loadingMore) return;
     const current = get().flights;
     const loadedPast = current.filter((f) => f.section === 'past').length;
+    set({ loadingMore: true });
     try {
       const { flights: page, pastTotal } = await api.fetchFlights({
         pastLimit: PAST_PAGE_SIZE,
@@ -81,9 +88,9 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       // only the genuinely new past rows and append them to the past bucket.
       const existingIds = new Set(current.map((f) => f.id));
       const newPast = page.filter((f) => f.section === 'past' && !existingIds.has(f.id));
-      set({ flights: [...current, ...newPast], pastTotal });
+      set({ flights: [...current, ...newPast], pastTotal, loadingMore: false });
     } catch (err) {
-      set({ error: `Failed to load more flights: ${err}` });
+      set({ error: `Failed to load more flights: ${err}`, loadingMore: false });
     }
   },
 

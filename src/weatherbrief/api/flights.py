@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -29,11 +29,11 @@ from weatherbrief.storage.flights import (
     is_subscribed,
     list_flights_with_role,
     load_flight,
+    pack_has_advisories,
     safe_path_component,
     save_flight,
     subscribe_flight,
     unsubscribe_flight,
-    _resolve_artifact_path,
 )
 
 router = APIRouter(prefix="/flights", tags=["flights"])
@@ -415,19 +415,9 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
         )
     ).scalars().all()
 
-    from pathlib import Path
-
-    def _has_advisories(artifact_path: str | None) -> bool:
-        # Mirrors packs._meta_to_response: advisories presence is the
-        # route_advisories.json file on disk, not a DB column. A cheap local
-        # stat per latest pack, all in this one request — far cheaper than the
-        # per-flight /packs/latest round-trips it replaces. Resolve the stored
-        # path against the current DATA_DIR first (worktrees run from a
-        # different CWD than where the pack was written).
-        if not artifact_path:
-            return False
-        return (Path(_resolve_artifact_path(artifact_path)) / "route_advisories.json").exists()
-
+    # has_advisories is a per-pack disk stat (route_advisories.json), all in
+    # this one request — far cheaper than the per-flight /packs/latest
+    # round-trips it replaces.
     return {
         row.flight_id: BriefingStatusInfo(
             assessment=row.assessment,
@@ -435,7 +425,7 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
             has_digest=row.has_digest,
             days_out=row.days_out,
             fetch_timestamp=row.fetch_timestamp.isoformat(),
-            has_advisories=_has_advisories(row.artifact_path),
+            has_advisories=pack_has_advisories(row.artifact_path),
         )
         for row in rows
     }
@@ -444,8 +434,8 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
 @router.get("", response_model=list[FlightResponse])
 def list_all_flights(
     response: Response,
-    past_limit: int | None = None,
-    past_offset: int = 0,
+    past_limit: int | None = Query(default=None, ge=0),
+    past_offset: int = Query(default=0, ge=0),
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -497,8 +487,8 @@ def list_all_flights(
 
     response.headers["X-Past-Total"] = str(len(past))
     if past_limit is not None:
-        start = max(0, past_offset)
-        past = past[start : start + max(0, past_limit)]
+        # past_offset / past_limit are validated >= 0 by Query(ge=0).
+        past = past[past_offset : past_offset + past_limit]
 
     return other + past
 
