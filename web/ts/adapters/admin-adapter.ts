@@ -145,6 +145,71 @@ export async function fetchUserCosts(userId: string, limit = 50): Promise<UserCo
   return apiFetch<UserCostsResponse>(`/admin/users/${encodeURIComponent(userId)}/costs?limit=${limit}`);
 }
 
+// --- Cost config + program cost report ---
+
+export interface CostConfigData {
+  token_cost_per_1k_input: number;
+  token_cost_per_1k_output: number;
+  droplet_monthly_usd: number;
+  misc_monthly_usd: number;
+  subscriptions_monthly_usd: number;
+  subscription_details: Record<string, number> | null;
+  disk_cost_per_gb_monthly: number;
+  estimated_monthly_briefings: number;
+  margin_percent: number;
+}
+
+export interface CostConfigVersion {
+  id: number;
+  active_from: string;
+  active_until: string | null;
+  config: CostConfigData;
+}
+
+export interface CostReportFixedLine {
+  label: string;
+  monthly_usd: number;
+  prorated_usd: number;
+}
+
+export interface CostReport {
+  window_days: number;
+  fixed_lines: CostReportFixedLine[];
+  fixed_monthly_usd: number;
+  fixed_prorated_usd: number;
+  variable_token_usd: number;
+  variable_storage_usd: number;
+  variable_usd: number;
+  subtotal_usd: number;
+  margin_percent: number;
+  margin_usd: number;
+  total_usd: number;
+  num_briefings: number;
+  num_users: number;
+  cost_per_briefing_usd: number;
+  cost_per_user_usd: number;
+  config_id: number;
+}
+
+export async function fetchCostReport(window: '7d' | '30d' = '30d'): Promise<CostReport | null> {
+  return apiFetch<CostReport | null>(`/admin/cost-report?window=${window}`);
+}
+
+export async function fetchCostConfig(): Promise<CostConfigVersion | null> {
+  return apiFetch<CostConfigVersion | null>('/admin/cost-config');
+}
+
+export async function fetchCostConfigHistory(): Promise<CostConfigVersion[]> {
+  return apiFetch<CostConfigVersion[]>('/admin/cost-config/history');
+}
+
+export async function updateCostConfig(body: Partial<CostConfigData>): Promise<CostConfigVersion> {
+  return apiFetch<CostConfigVersion>('/admin/cost-config', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
 // --- Hub (cross-app) ---
 
 export interface HubServiceCost {

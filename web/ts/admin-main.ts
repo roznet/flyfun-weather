@@ -13,6 +13,7 @@ import { redirectToLogin, renderUserInfo, escapeHtml, formatDate } from './utils
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 import { initUsageAnalyticsTab } from './admin-usage-view';
+import { initCostTab } from './admin-cost-view';
 
 let currentPeriod: AdminPeriod = '30d';
 
@@ -53,6 +54,7 @@ let perfLoaded = false;
 let systemsLoaded = false;
 let messagesLoaded = false;
 let usageAnalyticsLoaded = false;
+let costLoaded = false;
 let systemsPeriod: AdminPeriod = '30d';
 let systemsSort: 'last_active' | 'total_cost' = 'last_active';
 let systemsData: HubResponse | null = null;
@@ -86,6 +88,10 @@ function setupTabs(): void {
       if (tabId === 'tab-usage-analytics' && !usageAnalyticsLoaded) {
         usageAnalyticsLoaded = true;
         void initUsageAnalyticsTab();
+      }
+      if (tabId === 'tab-cost' && !costLoaded) {
+        costLoaded = true;
+        void initCostTab();
       }
     });
   });

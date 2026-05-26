@@ -42,6 +42,7 @@ from weatherbrief.api.profiles import admin_router as profiles_admin_router, rou
 from weatherbrief.api.admin import router as admin_router, require_admin
 from weatherbrief.api.credits import (
     admin_router as cost_config_router,
+    report_router as cost_report_router,
     router as credits_router,
     transparency_router,
 )
@@ -453,6 +454,7 @@ def create_app() -> FastAPI:
     app.include_router(credits_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")
     app.include_router(cost_config_router, prefix="/api")
+    app.include_router(cost_report_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
     app.include_router(analytics_router, prefix="/api")
     app.include_router(analytics_admin_router, prefix="/api")

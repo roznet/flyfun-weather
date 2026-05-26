@@ -1,6 +1,14 @@
 """Tests for the cost computation module."""
 
-from weatherbrief.costs import CostBreakdown, CostConfig, DEFAULT_CONFIG, compute_cost, breakdown_to_dict
+from weatherbrief.costs import (
+    CostBreakdown,
+    CostConfig,
+    DEFAULT_CONFIG,
+    breakdown_to_dict,
+    compute_cost,
+    compute_program_cost,
+    program_report_to_dict,
+)
 
 
 def _default_config(**overrides) -> CostConfig:
@@ -186,3 +194,113 @@ class TestBreakdownToDict:
             "storage_cost_usd", "subtotal_usd", "margin_usd", "total_usd",
             "config_id",
         }
+
+
+class TestComputeProgramCost:
+    """Program-wide window report: real fixed cost + actual variable cost."""
+
+    def test_30d_proration_equals_monthly(self):
+        """A 30-day window prorates fixed cost to exactly one month."""
+        r = compute_program_cost(
+            _default_config(), config_id=1, window_days=30,
+            variable_token_usd=0.0, variable_storage_usd=0.0,
+            num_briefings=0, num_users=0,
+        )
+        # 24 (droplet) + 2 (misc) + 30 (subs) = 56
+        assert r.fixed_monthly_usd == 56.0
+        assert r.fixed_prorated_usd == 56.0
+
+    def test_7d_proration_scales_down(self):
+        """A 7-day window prorates fixed cost by 7/30."""
+        r = compute_program_cost(
+            _default_config(), config_id=1, window_days=7,
+            variable_token_usd=0.0, variable_storage_usd=0.0,
+            num_briefings=0, num_users=0,
+        )
+        assert r.fixed_monthly_usd == 56.0
+        assert abs(r.fixed_prorated_usd - 56.0 * 7 / 30) < 1e-3
+
+    def test_variable_is_token_plus_storage(self):
+        r = compute_program_cost(
+            _default_config(), config_id=1, window_days=30,
+            variable_token_usd=0.40, variable_storage_usd=0.10,
+            num_briefings=100, num_users=10,
+        )
+        assert abs(r.variable_usd - 0.50) < 1e-6
+        assert abs(r.subtotal_usd - (56.0 + 0.50)) < 1e-3
+
+    def test_margin_included_in_total(self):
+        """Total includes the configured margin on the combined subtotal."""
+        r = compute_program_cost(
+            _default_config(margin_percent=30.0), config_id=1, window_days=30,
+            variable_token_usd=0.40, variable_storage_usd=0.10,
+            num_briefings=100, num_users=10,
+        )
+        subtotal = 56.0 + 0.50
+        assert abs(r.margin_usd - subtotal * 0.3) < 1e-3
+        assert abs(r.total_usd - subtotal * 1.3) < 1e-3
+
+    def test_per_briefing_and_per_user(self):
+        r = compute_program_cost(
+            _default_config(margin_percent=0.0), config_id=1, window_days=30,
+            variable_token_usd=4.0, variable_storage_usd=0.0,
+            num_briefings=100, num_users=10,
+        )
+        # subtotal = 56 + 4 = 60, margin 0 -> total 60
+        assert abs(r.total_usd - 60.0) < 1e-3
+        assert abs(r.cost_per_briefing_usd - 0.6) < 1e-3
+        assert abs(r.cost_per_user_usd - 6.0) < 1e-3
+
+    def test_zero_briefings_and_users_guarded(self):
+        """No briefings/users must not divide by zero."""
+        r = compute_program_cost(
+            _default_config(), config_id=1, window_days=30,
+            variable_token_usd=0.0, variable_storage_usd=0.0,
+            num_briefings=0, num_users=0,
+        )
+        assert r.cost_per_briefing_usd == 0.0
+        assert r.cost_per_user_usd == 0.0
+
+    def test_subscription_line_items_itemized(self):
+        """Each subscription_details entry becomes its own prorated fixed line."""
+        cfg = _default_config(subscription_details={"open_meteo": 30, "ecmwf": 50})
+        r = compute_program_cost(
+            cfg, config_id=1, window_days=30,
+            variable_token_usd=0.0, variable_storage_usd=0.0,
+            num_briefings=0, num_users=0,
+        )
+        labels = [ln.label for ln in r.fixed_lines]
+        assert "Subscription: open_meteo" in labels
+        assert "Subscription: ecmwf" in labels
+        # 24 + 2 + 30 + 50 = 106
+        assert r.fixed_monthly_usd == 106.0
+
+    def test_no_subscription_details_single_line(self):
+        """Without itemization, a single Subscriptions line uses the total."""
+        cfg = _default_config(subscription_details=None, subscriptions_monthly_usd=80.0)
+        r = compute_program_cost(
+            cfg, config_id=1, window_days=30,
+            variable_token_usd=0.0, variable_storage_usd=0.0,
+            num_briefings=0, num_users=0,
+        )
+        labels = [ln.label for ln in r.fixed_lines]
+        assert "Subscriptions" in labels
+        assert r.fixed_monthly_usd == 24.0 + 2.0 + 80.0
+
+    def test_report_to_dict_keys(self):
+        r = compute_program_cost(
+            _default_config(), config_id=7, window_days=30,
+            variable_token_usd=0.4, variable_storage_usd=0.1,
+            num_briefings=10, num_users=3,
+        )
+        d = program_report_to_dict(r)
+        assert d["config_id"] == 7
+        assert set(d.keys()) == {
+            "window_days", "fixed_lines", "fixed_monthly_usd", "fixed_prorated_usd",
+            "variable_token_usd", "variable_storage_usd", "variable_usd",
+            "subtotal_usd", "margin_percent", "margin_usd", "total_usd",
+            "num_briefings", "num_users", "cost_per_briefing_usd",
+            "cost_per_user_usd", "config_id",
+        }
+        assert isinstance(d["fixed_lines"], list)
+        assert set(d["fixed_lines"][0].keys()) == {"label", "monthly_usd", "prorated_usd"}

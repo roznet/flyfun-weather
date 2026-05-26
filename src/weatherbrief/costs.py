@@ -98,6 +98,134 @@ def compute_cost(
     )
 
 
+_DAYS_PER_MONTH = 30.0
+
+
+@dataclass(frozen=True)
+class FixedCostLine:
+    """One amortizable fixed-cost line item (server, a subscription, ...)."""
+
+    label: str
+    monthly_usd: float
+    prorated_usd: float  # monthly_usd scaled to the report window
+
+
+@dataclass(frozen=True)
+class ProgramCostReport:
+    """Program-wide cost over a window: real fixed cost + actual variable cost.
+
+    Fixed costs come straight from the config (prorated by window), decoupled
+    from the per-briefing amortization, so they reflect what the operator
+    actually pays.  Variable costs are the actual token + storage charges
+    summed from the ledger over the same window.
+    """
+
+    window_days: int
+    fixed_lines: tuple[FixedCostLine, ...]
+    fixed_monthly_usd: float
+    fixed_prorated_usd: float
+    variable_token_usd: float
+    variable_storage_usd: float
+    variable_usd: float
+    subtotal_usd: float  # fixed_prorated + variable
+    margin_percent: float
+    margin_usd: float
+    total_usd: float
+    num_briefings: int
+    num_users: int
+    cost_per_briefing_usd: float
+    cost_per_user_usd: float
+    config_id: int
+
+
+def compute_program_cost(
+    config: CostConfig,
+    config_id: int,
+    window_days: int,
+    variable_token_usd: float,
+    variable_storage_usd: float,
+    num_briefings: int,
+    num_users: int,
+) -> ProgramCostReport:
+    """Compute a program-wide cost report for a time window.
+
+    Fixed costs (droplet, misc, each subscription line) are prorated to the
+    window.  Variable costs are the actual token/storage totals from the
+    ledger.  Margin is applied to the combined subtotal so the rate card stays
+    internally consistent.  Per-briefing/per-user figures are guarded for zero.
+    """
+    months = window_days / _DAYS_PER_MONTH
+
+    def _line(label: str, monthly: float) -> FixedCostLine:
+        return FixedCostLine(
+            label=label,
+            monthly_usd=round(monthly, 4),
+            prorated_usd=round(monthly * months, 4),
+        )
+
+    lines: list[FixedCostLine] = [
+        _line("Server (droplet)", config.droplet_monthly_usd),
+        _line("Misc", config.misc_monthly_usd),
+    ]
+    details = config.subscription_details or {}
+    if details:
+        for name, monthly in details.items():
+            lines.append(_line(f"Subscription: {name}", float(monthly)))
+    elif config.subscriptions_monthly_usd:
+        lines.append(_line("Subscriptions", config.subscriptions_monthly_usd))
+
+    fixed_monthly = sum(line.monthly_usd for line in lines)
+    fixed_prorated = sum(line.prorated_usd for line in lines)
+    variable = variable_token_usd + variable_storage_usd
+    subtotal = fixed_prorated + variable
+    margin = subtotal * (config.margin_percent / 100)
+    total = subtotal + margin
+
+    return ProgramCostReport(
+        window_days=window_days,
+        fixed_lines=tuple(lines),
+        fixed_monthly_usd=round(fixed_monthly, 4),
+        fixed_prorated_usd=round(fixed_prorated, 4),
+        variable_token_usd=round(variable_token_usd, 4),
+        variable_storage_usd=round(variable_storage_usd, 4),
+        variable_usd=round(variable, 4),
+        subtotal_usd=round(subtotal, 4),
+        margin_percent=config.margin_percent,
+        margin_usd=round(margin, 4),
+        total_usd=round(total, 4),
+        num_briefings=num_briefings,
+        num_users=num_users,
+        cost_per_briefing_usd=round(total / num_briefings, 4) if num_briefings > 0 else 0.0,
+        cost_per_user_usd=round(total / num_users, 4) if num_users > 0 else 0.0,
+        config_id=config_id,
+    )
+
+
+def program_report_to_dict(r: ProgramCostReport) -> dict:
+    """Serialize a ProgramCostReport for the API response."""
+    return {
+        "window_days": r.window_days,
+        "fixed_lines": [
+            {"label": ln.label, "monthly_usd": ln.monthly_usd, "prorated_usd": ln.prorated_usd}
+            for ln in r.fixed_lines
+        ],
+        "fixed_monthly_usd": r.fixed_monthly_usd,
+        "fixed_prorated_usd": r.fixed_prorated_usd,
+        "variable_token_usd": r.variable_token_usd,
+        "variable_storage_usd": r.variable_storage_usd,
+        "variable_usd": r.variable_usd,
+        "subtotal_usd": r.subtotal_usd,
+        "margin_percent": r.margin_percent,
+        "margin_usd": r.margin_usd,
+        "total_usd": r.total_usd,
+        "num_briefings": r.num_briefings,
+        "num_users": r.num_users,
+        "cost_per_briefing_usd": r.cost_per_briefing_usd,
+        "cost_per_user_usd": r.cost_per_user_usd,
+        "config_id": r.config_id,
+    }
+
+
 def config_from_row(row) -> tuple[CostConfig, int]:
     """Convert a CostConfigRow ORM object to a (CostConfig, config_id) tuple."""
     return CostConfig.from_json(row.config_json), row.id

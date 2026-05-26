@@ -18,7 +18,9 @@ from weatherbrief.costs import (
     DEFAULT_CONFIG,
     breakdown_to_dict,
     compute_cost,
+    compute_program_cost,
     config_from_row,
+    program_report_to_dict,
 )
 from flyfun_common.costs import record_cost
 from flyfun_common.db import current_user_id, get_db
@@ -302,6 +304,21 @@ def update_cost_config(
     # Merge: defaults ← current values ← overrides, then validate
     defaults = json.loads(DEFAULT_CONFIG.to_json())
     merged = {**defaults, **current_config, **body}
+
+    # Subscriptions are itemized in subscription_details; keep the total in sync
+    # so the rate card never drifts from its line items.
+    details = merged.get("subscription_details")
+    if details:
+        try:
+            merged["subscriptions_monthly_usd"] = round(
+                sum(float(v) for v in details.values()), 4
+            )
+        except (TypeError, ValueError, AttributeError):
+            raise HTTPException(
+                status_code=422,
+                detail="subscription_details values must be numbers",
+            )
+
     CostConfig.from_json(json.dumps(merged))
 
     new_row = CostConfigRow(
@@ -326,6 +343,82 @@ def get_cost_config_history(
         .all()
     )
     return [_config_to_response(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Router: admin program cost report
+# ---------------------------------------------------------------------------
+
+report_router = APIRouter(prefix="/admin/cost-report", tags=["admin"])
+
+_ALLOWED_WINDOWS = {"7d": 7, "30d": 30}
+
+
+def _program_variable_and_counts(
+    db: Session, since: datetime,
+) -> tuple[float, float, int, int]:
+    """Sum actual token/storage cost and count briefings + distinct users since.
+
+    Variable cost is pulled from each briefing's stored CostBreakdown so it
+    reflects what was actually charged, independent of the current rate card.
+    """
+    rows = (
+        db.query(CostLedgerRow.detail_json, CostLedgerRow.user_id)
+        .filter(
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == "briefing",
+            CostLedgerRow.created_at >= since,
+        )
+        .all()
+    )
+    token_usd = 0.0
+    storage_usd = 0.0
+    users: set[str] = set()
+    for detail_json, user_id in rows:
+        users.add(user_id)
+        if not detail_json:
+            continue
+        try:
+            bd = json.loads(detail_json)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        token_usd += bd.get("token_cost_usd", 0.0)
+        storage_usd += bd.get("storage_cost_usd", 0.0)
+    return token_usd, storage_usd, len(rows), len(users)
+
+
+@report_router.get("")
+def get_cost_report(
+    window: str = "30d",
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Program-wide cost report for a window: real fixed cost + actual variable."""
+    window_days = _ALLOWED_WINDOWS.get(window)
+    if window_days is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid window '{window}'. Use one of: {', '.join(_ALLOWED_WINDOWS)}",
+        )
+
+    config_row = get_active_cost_config(db)
+    if not config_row:
+        return None
+
+    config, config_id = config_from_row(config_row)
+    since = datetime.now(timezone.utc) - timedelta(days=window_days)
+    token_usd, storage_usd, num_briefings, num_users = _program_variable_and_counts(db, since)
+
+    report = compute_program_cost(
+        config=config,
+        config_id=config_id,
+        window_days=window_days,
+        variable_token_usd=token_usd,
+        variable_storage_usd=storage_usd,
+        num_briefings=num_briefings,
+        num_users=num_users,
+    )
+    return program_report_to_dict(report)
 
 
 # ---------------------------------------------------------------------------

@@ -242,6 +242,52 @@
       color: var(--text-muted);
     }
     .ua-error { color: var(--danger); padding: 0.5rem 0; display: none; }
+
+    /* Cost tab */
+    .cost-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .cost-fieldset {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem 1rem 1rem;
+    }
+    .cost-fieldset legend {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      padding: 0 0.4rem;
+    }
+    .cost-field {
+      display: block;
+      margin-bottom: 0.6rem;
+    }
+    .cost-field > span {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 0.2rem;
+    }
+    .cost-field input[type="number"],
+    .cost-field input[type="text"] {
+      width: 100%;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .sub-row {
+      display: grid;
+      grid-template-columns: 1fr 90px 32px;
+      gap: 0.4rem;
+      margin-bottom: 0.35rem;
+    }
+    .sub-row input { padding: 0.3rem 0.4rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); }
+    .sub-del { padding: 0.2rem; line-height: 1; }
   </style>
 </head>
 <body>
@@ -261,6 +307,7 @@
       <button class="tab-btn" data-tab="tab-messages">Messages</button>
       <button class="tab-btn" data-tab="tab-usage">Usage</button>
       <button class="tab-btn" data-tab="tab-usage-analytics">Usage Analytics</button>
+      <button class="tab-btn" data-tab="tab-cost">Cost</button>
       <button class="tab-btn" data-tab="tab-systems">Systems</button>
       <button class="tab-btn" data-tab="tab-performance">Performance</button>
     </div>
@@ -419,6 +466,50 @@
             Same text the Monday cron writes to the log.
           </p>
           <pre id="digest-text" class="digest-pre"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cost tab -->
+    <div id="tab-cost" class="tab-panel">
+      <div id="cost-error" class="ua-error"></div>
+      <div id="cost-loading" class="muted" style="text-align:center;padding:2rem;">Click the Cost tab to load…</div>
+      <div id="cost-content" style="display:none;">
+        <div class="section">
+          <div class="section-header">
+            <h3>Program cost</h3>
+            <div id="cost-period-toggle" class="period-toggle">
+              <button class="toggle-btn" data-window="7d">Last 7 days</button>
+              <button class="toggle-btn active" data-window="30d">Last 30 days</button>
+            </div>
+          </div>
+          <div id="cost-report-summary" class="summary-bar"></div>
+          <div style="overflow-x:auto;">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Fixed cost line</th>
+                  <th style="text-align:center;">Monthly</th>
+                  <th style="text-align:center;">This window</th>
+                </tr>
+              </thead>
+              <tbody id="cost-fixed-tbody"></tbody>
+            </table>
+          </div>
+          <p id="cost-report-note" class="muted" style="font-size:0.8rem;margin-top:0.5rem;"></p>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h3>Rate card</h3>
+            <a href="/cost-summary.html" style="font-size:0.85rem;">Open cost summary →</a>
+          </div>
+          <div id="cost-config-status" class="muted" style="font-size:0.85rem;margin-bottom:0.6rem;"></div>
+          <form id="cost-config-form"></form>
+          <details id="cost-config-history-wrap" style="margin-top:1rem;">
+            <summary style="cursor:pointer;font-size:0.85rem;">Config history</summary>
+            <div id="cost-config-history"></div>
+          </details>
         </div>
       </div>
     </div>
