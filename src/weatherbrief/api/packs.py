@@ -2500,10 +2500,16 @@ def get_bundle(
     payload = json.dumps(bundle, separators=(",", ":")).encode()
     compressed = gzip.compress(payload)
 
+    # X-Uncompressed-Length lets the client show accurate download progress:
+    # Content-Length is the compressed size, but URLSession transparently
+    # decompresses, so the client counts decompressed bytes against this total.
     return Response(
         content=compressed,
         media_type="application/json",
-        headers={"Content-Encoding": "gzip"},
+        headers={
+            "Content-Encoding": "gzip",
+            "X-Uncompressed-Length": str(len(payload)),
+        },
     )
 
 

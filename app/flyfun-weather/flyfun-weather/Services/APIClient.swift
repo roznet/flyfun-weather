@@ -159,6 +159,31 @@ actor APIClient {
         return try await _fetch(url: url, method: method, body: body, label: path)
     }
 
+    /// Fetch raw data while reporting transfer progress as bytes arrive.
+    ///
+    /// `progress` receives `(receivedBytes, totalBytes)`. The total comes from the server's
+    /// `X-Uncompressed-Length` header: `Content-Length` reflects the gzip-compressed size, but
+    /// URLSession transparently decompresses, so we count decompressed bytes against the
+    /// decompressed total. If the header is absent, `totalBytes` is `-1` (size unknown).
+    func requestDataStreaming(
+        _ path: String,
+        progress: @Sendable @escaping (_ receivedBytes: Int64, _ totalBytes: Int64) -> Void
+    ) async throws -> Data {
+        let url = baseURL.appendingPathComponent(path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+
+        Self.logger.debug("GET \(path) (streaming)")
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let delegate = StreamingDownloadDelegate(onProgress: progress, continuation: continuation)
+            let task = session.dataTask(with: request)
+            task.delegate = delegate
+            task.resume()
+        }
+    }
+
     private func _fetch(url: URL, method: String, body: Data?, label: String) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -192,6 +217,81 @@ actor APIClient {
         default:
             let msg = String(data: data, encoding: .utf8)
             throw APIError.serverError(http.statusCode, msg)
+        }
+    }
+}
+
+/// URLSession delegate that streams a response into memory while reporting progress.
+/// State is touched only on URLSession's serial per-task delegate queue; `keepAlive`
+/// retains the delegate (task-delegate retention is not guaranteed) until completion.
+private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private var buffer = Data()
+    private var total: Int64 = -1
+    private var lastReportedBytes: Int64 = 0
+    private let onProgress: @Sendable (Int64, Int64) -> Void
+    private var continuation: CheckedContinuation<Data, Error>?
+    private var keepAlive: StreamingDownloadDelegate?
+
+    init(onProgress: @escaping @Sendable (Int64, Int64) -> Void,
+         continuation: CheckedContinuation<Data, Error>) {
+        self.onProgress = onProgress
+        self.continuation = continuation
+        super.init()
+        self.keepAlive = self
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        if let http = response as? HTTPURLResponse,
+           let header = http.value(forHTTPHeaderField: "X-Uncompressed-Length"),
+           let len = Int64(header) {
+            total = len
+            if len > 0, len < 64 * 1024 * 1024 { buffer.reserveCapacity(Int(len)) }
+            // Report the total up front so the UI can show the size before bytes arrive.
+            onProgress(0, len)
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        buffer.append(data)
+        let received = Int64(buffer.count)
+        // Throttle to ~128 KB steps (or the final byte when the total is known)
+        // so we don't spawn a UI update per network chunk.
+        if received - lastReportedBytes >= 131_072 || (total > 0 && received >= total) {
+            lastReportedBytes = received
+            onProgress(received, total)
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        defer { keepAlive = nil }
+        guard let continuation else { return }
+        self.continuation = nil
+
+        if let error {
+            continuation.resume(throwing: APIError.networkError(error))
+            return
+        }
+        guard let http = task.response as? HTTPURLResponse else {
+            continuation.resume(throwing: APIError.networkError(URLError(.badServerResponse)))
+            return
+        }
+        switch http.statusCode {
+        case 200...299:
+            continuation.resume(returning: buffer)
+        case 401:
+            continuation.resume(throwing: APIError.unauthorized)
+        case 403:
+            continuation.resume(throwing: APIError.forbidden("Forbidden"))
+        case 404:
+            continuation.resume(throwing: APIError.notFound)
+        default:
+            continuation.resume(throwing: APIError.serverError(http.statusCode, String(data: buffer, encoding: .utf8)))
         }
     }
 }
