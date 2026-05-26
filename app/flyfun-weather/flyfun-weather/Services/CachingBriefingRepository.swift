@@ -215,14 +215,14 @@ final class CachingBriefingRepository: BriefingRepository {
             throw APIError.decodingError(NSError(domain: "BundleDownload", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid bundle format"]))
         }
 
-        var totalBytes: Int64 = 0
+        var diskBytes: Int64 = 0
         var downloaded: Set<String> = []
 
         for (endpoint, value) in bundle {
             do {
                 let entryData = try JSONSerialization.data(withJSONObject: value)
                 try await cache.writeData(entryData, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
-                totalBytes += Int64(entryData.count)
+                diskBytes += Int64(entryData.count)
                 downloaded.insert(endpoint)
             } catch {
                 Self.logger.warning("Failed to cache \(endpoint): \(error)")
@@ -236,13 +236,13 @@ final class CachingBriefingRepository: BriefingRepository {
             flightTitle: flightTitle,
             assessment: assessment,
             endpoints: downloaded,
-            totalBytes: totalBytes
+            totalBytes: diskBytes
         )
         // Cache pack metadata for offline latestPack() recovery
         if let packMeta, let metaData = try? JSONEncoder.weatherBrief.encode(packMeta) {
             try? await cache.writeFlightMetadata(metaData, flightId: flightId, name: "pack-meta")
         }
-        Self.logger.info("Downloaded pack \(flightId)/\(timestamp): \(downloaded.count) endpoints, \(totalBytes) bytes")
+        Self.logger.info("Downloaded pack \(flightId)/\(timestamp): \(downloaded.count) endpoints, \(diskBytes) bytes")
     }
 
     func deletePack(flightId: String, timestamp: String) async {

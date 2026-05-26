@@ -273,8 +273,11 @@ private struct DownloadBannerView: View {
             let isPreparing = total <= 0 && received == 0
             VStack(spacing: 4) {
                 HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
+                    // Spinner only while there's no determinate bar to convey activity.
+                    if total <= 0 {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                     Text(isPreparing ? "Preparing…" : "Downloading…")
                         .font(.caption.bold())
                     if let detail = sizeText(received: received, total: total) {
