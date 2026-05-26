@@ -148,7 +148,7 @@ final class BriefingViewModel {
     /// Download the current pack for offline access.
     func downloadCurrentPack() async {
         guard let pack, let caching = repository as? CachingBriefingRepository else { return }
-        downloadState = .downloading(progress: 0, receivedBytes: 0, totalBytes: 0)
+        downloadState = .downloading(progress: 0, receivedBytes: 0, totalBytes: -1)
         do {
             try await caching.downloadPack(
                 flightId: flight.id,

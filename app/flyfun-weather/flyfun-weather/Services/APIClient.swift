@@ -165,6 +165,12 @@ actor APIClient {
     /// `X-Uncompressed-Length` header: `Content-Length` reflects the gzip-compressed size, but
     /// URLSession transparently decompresses, so we count decompressed bytes against the
     /// decompressed total. If the header is absent, `totalBytes` is `-1` (size unknown).
+    ///
+    /// Like `streamSSE`, this needs a custom URLSession delegate (for byte-level progress) that
+    /// `RollingBearerSession` doesn't wrap, so the Bearer token is attached directly from the
+    /// store. Token renewal (`X-Renewed-Token`) is skipped and a 401 surfaces as
+    /// `APIError.unauthorized` rather than firing the rolling session's `onUnauthorized`; the
+    /// caller handles the error. Acceptable because this is a one-shot, user-initiated fetch.
     func requestDataStreaming(
         _ path: String,
         progress: @Sendable @escaping (_ receivedBytes: Int64, _ totalBytes: Int64) -> Void
@@ -172,7 +178,9 @@ actor APIClient {
         let url = baseURL.appendingPathComponent(path)
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        if let token = tokenStore.token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         // The session's default 30s is an idle timeout; the server can spend longer than
         // that building the bundle (sounding analysis per point × model) before sending any
         // bytes, which would otherwise abort the download during the "Preparing…" phase.

@@ -208,7 +208,6 @@ final class CachingBriefingRepository: BriefingRepository {
             let fraction = total > 0 ? min(Double(received) / Double(total), 1.0) : 0
             progress(fraction, received, total)
         }
-        let networkBytes = Int64(data.count)
 
         // Parse the bundle: { "endpoint-name": { ... }, ... }
         guard let bundle = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -228,7 +227,6 @@ final class CachingBriefingRepository: BriefingRepository {
                 Self.logger.warning("Failed to cache \(endpoint): \(error)")
             }
         }
-        progress(1.0, networkBytes, networkBytes)
 
         await cache.registerDownload(
             flightId: flightId,

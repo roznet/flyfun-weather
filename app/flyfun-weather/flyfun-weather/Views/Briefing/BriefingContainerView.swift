@@ -296,6 +296,8 @@ private struct DownloadBannerView: View {
                     ProgressView(value: progress)
                         .tint(.accentColor)
                 } else {
+                    // .linear is required: a bare ProgressView() renders as a circular
+                    // spinner; we want an indeterminate bar while the total is unknown.
                     ProgressView()
                         .progressViewStyle(.linear)
                 }
