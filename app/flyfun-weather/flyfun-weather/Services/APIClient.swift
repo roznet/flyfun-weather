@@ -159,6 +159,10 @@ actor APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        // The session's default 30s is an idle timeout; the server can spend longer than
+        // that building the bundle (sounding analysis per point × model) before sending any
+        // bytes, which would otherwise abort the download during the "Preparing…" phase.
+        request.timeoutInterval = 300
 
         Self.logger.debug("GET \(path) (streaming)")
 
