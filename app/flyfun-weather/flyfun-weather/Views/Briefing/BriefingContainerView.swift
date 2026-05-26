@@ -23,6 +23,7 @@ struct BriefingContainerView: View {
             if let viewModel {
                 VStack(spacing: 0) {
                     RefreshBannerView(state: viewModel.refreshState)
+                    DownloadBannerView(state: viewModel.downloadState)
                     BriefingContentView(viewModel: viewModel, trackingService: trackingService)
                 }
             } else {
@@ -145,7 +146,7 @@ private struct BriefingToolbarView: View {
                 } label: {
                     Image(systemName: "arrow.down.circle")
                 }
-            case .downloading(let progress):
+            case .downloading(let progress, _, _):
                 ProgressView(value: progress)
                     .progressViewStyle(.circular)
                     .controlSize(.small)
@@ -247,6 +248,67 @@ private struct RefreshBannerView: View {
             .padding(.vertical, 6)
             .background(.red.opacity(0.1))
         }
+    }
+}
+
+/// Banner showing pack download progress (size + percentage) while downloading.
+private struct DownloadBannerView: View {
+    let state: DownloadState
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        f.allowedUnits = [.useKB, .useMB]
+        f.allowsNonnumericFormatting = false  // "0 KB", not "Zero KB"
+        return f
+    }()
+
+    var body: some View {
+        if case .downloading(let progress, let received, let total) = state {
+            // Before any bytes arrive the server is still building the bundle, so
+            // there's nothing to count yet — label that phase "Preparing…".
+            let isPreparing = total <= 0 && received == 0
+            VStack(spacing: 4) {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(isPreparing ? "Preparing…" : "Downloading…")
+                        .font(.caption.bold())
+                    if let detail = sizeText(received: received, total: total) {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if total > 0 {
+                        Text("\(Int(progress * 100))%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if total > 0 {
+                    ProgressView(value: progress)
+                        .tint(.accentColor)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .background(.regularMaterial)
+        }
+    }
+
+    private func sizeText(received: Int64, total: Int64) -> String? {
+        let f = Self.byteFormatter
+        if total > 0 {
+            return "\(f.string(fromByteCount: received)) / \(f.string(fromByteCount: total))"
+        }
+        if received > 0 {
+            return f.string(fromByteCount: received)
+        }
+        return nil
     }
 }
 

@@ -2,9 +2,10 @@ import Foundation
 import OSLog
 
 /// Download state for a pack.
+/// `totalBytes <= 0` means the size is unknown (server didn't send the length header).
 enum DownloadState: Equatable {
     case notDownloaded
-    case downloading(progress: Double)
+    case downloading(progress: Double, receivedBytes: Int64, totalBytes: Int64)
     case downloaded
     case error(String)
 }
@@ -195,14 +196,19 @@ final class CachingBriefingRepository: BriefingRepository {
         flightTitle: String,
         assessment: String?,
         packMeta: PackMetaResponse? = nil,
-        progress: @Sendable @escaping (Double) -> Void
+        progress: @Sendable @escaping (_ fraction: Double, _ receivedBytes: Int64, _ totalBytes: Int64) -> Void
     ) async throws {
-        progress(0.1)
+        progress(0, 0, 0)
 
-        // Single request fetches everything (gzip-compressed by server)
+        // Single streaming request fetches everything (gzip-compressed by server).
+        // The network transfer is the slow part on poor connections; the percentage
+        // tracks bytes received. The local disk writes below are near-instant.
         let path = "/api/flights/\(flightId)/packs/\(timestamp)/bundle"
-        let data = try await client.requestData(path)
-        progress(0.7)
+        let data = try await client.requestDataStreaming(path) { received, total in
+            let fraction = total > 0 ? min(Double(received) / Double(total), 1.0) : 0
+            progress(fraction, received, total)
+        }
+        let networkBytes = Int64(data.count)
 
         // Parse the bundle: { "endpoint-name": { ... }, ... }
         guard let bundle = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -212,7 +218,7 @@ final class CachingBriefingRepository: BriefingRepository {
         var totalBytes: Int64 = 0
         var downloaded: Set<String> = []
 
-        for (i, (endpoint, value)) in bundle.enumerated() {
+        for (endpoint, value) in bundle {
             do {
                 let entryData = try JSONSerialization.data(withJSONObject: value)
                 try await cache.writeData(entryData, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
@@ -221,8 +227,8 @@ final class CachingBriefingRepository: BriefingRepository {
             } catch {
                 Self.logger.warning("Failed to cache \(endpoint): \(error)")
             }
-            progress(0.7 + 0.3 * Double(i + 1) / Double(bundle.count))
         }
+        progress(1.0, networkBytes, networkBytes)
 
         await cache.registerDownload(
             flightId: flightId,
