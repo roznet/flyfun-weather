@@ -18,6 +18,12 @@ interface FeatureRow {
   attachment_pct: number;
 }
 
+interface EventCount {
+  event: string;
+  total_count: number;
+  unique_anons: number;
+}
+
 interface SummaryResponse {
   window: { start: string; end: string; days: number };
   totals: {
@@ -28,6 +34,7 @@ interface SummaryResponse {
     briefings_refreshes: number;
   };
   features: FeatureRow[];
+  events: EventCount[];
 }
 
 interface TimeseriesPoint {
@@ -130,6 +137,27 @@ function renderSummary(s: SummaryResponse): void {
           <td class="num">${f.total_uses.toLocaleString()}</td>
         </tr>`;
       },
+    )
+    .join('');
+
+  renderEvents(s.events);
+}
+
+function renderEvents(events: EventCount[]): void {
+  const tbody = document.getElementById('events-tbody');
+  if (!tbody) return;
+  if (!events || events.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No events in this window.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = events
+    .map(
+      (e) => `
+        <tr>
+          <td>${escapeHtml(e.event)}</td>
+          <td class="num">${e.total_count.toLocaleString()}</td>
+          <td class="num">${e.unique_anons.toLocaleString()}</td>
+        </tr>`,
     )
     .join('');
 }

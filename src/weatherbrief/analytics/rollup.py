@@ -191,11 +191,11 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
         n_features += 1
 
     # ``detailed_mode`` is a *derived* feature — there's no single event
-    # whose presence means "user opted into detailed mode". Instead we
-    # interpret display_mode.changed by looking at the **last** mode set
-    # in each briefing and counting briefings whose final mode is
-    # ``detailed``. This needs the event stream + props, so it can't
-    # collapse into the simple FEATURE_OF loop above.
+    # whose presence means "user opted into the Full Details view". Instead
+    # we interpret display_mode.changed by looking at the **last** mode set
+    # in each briefing and counting briefings whose final mode is ``full``.
+    # This needs the event stream + props, so it can't collapse into the
+    # simple FEATURE_OF loop above.
     detailed_with, detailed_total = _extract_detailed_mode(
         db, briefings_today_subq, day_start, day_end,
     )
@@ -221,14 +221,16 @@ def _extract_detailed_mode(
 ) -> tuple[int, int]:
     """Derive ``detailed_mode`` feature counts from display_mode.changed.
 
-    A briefing counts as "detailed" if its **last** ``display_mode.changed``
-    event of the day ended with ``to: detailed``. Briefings whose final
-    transition was back to ``compact`` (or who never switched) don't count.
+    The client ``DisplayMode`` is ``'compact' | 'full'`` (default
+    ``compact``); ``full`` is the opt-in "Full Details" view. A briefing
+    counts as "detailed" if its **last** ``display_mode.changed`` event of
+    the day ended with ``to: full``. Briefings whose final transition was
+    back to ``compact`` (or who never switched) don't count.
 
-    ``total_uses`` only counts transitions *to* detailed mode, matching
-    the "feature activated" semantic used by all other features. Counting
-    every transition (including detailed → compact) would inflate the
-    number for users who toggled back and forth.
+    ``total_uses`` only counts transitions *to* full mode, matching the
+    "feature activated" semantic used by all other features. Counting every
+    transition (including full → compact) would inflate the number for
+    users who toggled back and forth.
 
     Returns ``(briefings_with_feature, total_uses)``.
     """
@@ -251,12 +253,12 @@ def _extract_detailed_mode(
         except Exception:
             continue
         to_mode = str(props.get("to") or "").lower()
-        if to_mode in ("compact", "detailed"):
+        if to_mode in ("compact", "full"):
             latest_mode[bid] = to_mode
-            if to_mode == "detailed":
+            if to_mode == "full":
                 to_detailed_count += 1
 
-    detailed_briefings = sum(1 for m in latest_mode.values() if m == "detailed")
+    detailed_briefings = sum(1 for m in latest_mode.values() if m == "full")
     return detailed_briefings, to_detailed_count
 
 

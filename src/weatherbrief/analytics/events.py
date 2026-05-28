@@ -42,6 +42,14 @@ class Event(StrEnum):
     SKEWT_OPENED = "skewt.opened"
     COMPARE_OPENED = "compare.opened"
     COMPARE_AIRPORT_ADDED = "compare.airport_added"
+    ALTITUDE_TABLE_OPENED = "altitude_table.opened"
+
+    # Onboarding -------------------------------------------------------------
+    TOUR_STARTED = "tour.started"
+    TOUR_COMPLETED = "tour.completed"
+
+    # Standalone (maps page — no briefing context) ---------------------------
+    CLIMATOLOGY_OPENED = "climatology.opened"
 
     # User preferences -------------------------------------------------------
     AUTO_REFRESH_ENABLED = "auto_refresh.enabled"
@@ -61,6 +69,7 @@ FEATURE_OF: dict[str, str] = {
     Event.SKEWT_OPENED.value: "skewt",
     Event.COMPARE_OPENED.value: "compare",
     Event.COMPARE_AIRPORT_ADDED.value: "compare",
+    Event.ALTITUDE_TABLE_OPENED.value: "altitude_table",
     Event.AUTO_REFRESH_ENABLED.value: "auto_refresh",
     Event.BRIEFING_REFRESH_REQUESTED.value: "manual_refresh",
 }
@@ -73,6 +82,7 @@ KNOWN_FEATURES: tuple[str, ...] = (
     "forecast_map",
     "skewt",
     "compare",
+    "altitude_table",
     "auto_refresh",
     "manual_refresh",
     "detailed_mode",

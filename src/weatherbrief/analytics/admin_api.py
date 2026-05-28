@@ -32,6 +32,47 @@ _DEFAULT_WINDOW_DAYS = 30
 _MAX_WINDOW_DAYS = 365
 
 
+# Explicit display order for each briefing-shape dimension. These buckets are
+# categorical/ordinal strings that don't sort naturally — distance and lead
+# time have a logical progression, not an alphabetical one. ``None``/unknown
+# always sorts last (handled in ``_sort_buckets``).
+_BUCKET_ORDER: dict[str, list[str]] = {
+    "by_region": ["EU", "US", "OTHER"],
+    "by_distance": ["short", "medium", "long"],
+    "by_route_points": ["2", "3-5", "6+"],
+    "by_lead_time": [
+        "post_departure", "same_day", "1d", "2_3d", "4_7d", "7d_plus", "no_etd",
+    ],
+    "by_alternate_etd": ["true", "false"],
+}
+# Dimensions whose keys are plain integers ("1", "2", ... "10") — string sort
+# would order "10" before "2", so sort numerically with unknown last.
+_NUMERIC_DIMS: frozenset[str] = frozenset({"by_model_count", "by_seq"})
+
+
+def _sort_buckets(dim: str, buckets: list[dict]) -> list[dict]:
+    """Sort one dimension's buckets into a stable, human-sensible order.
+
+    Numeric dims sort ascending by integer value; ordinal dims follow their
+    explicit ``_BUCKET_ORDER`` list. Unknown/``None`` keys go last in both
+    cases so they never interrupt the meaningful sequence.
+    """
+    if dim in _NUMERIC_DIMS:
+        def num_key(b: dict) -> tuple[int, int]:
+            try:
+                return (0, int(b["key"]))
+            except (TypeError, ValueError):
+                return (1, 0)
+        return sorted(buckets, key=num_key)
+
+    order = _BUCKET_ORDER.get(dim)
+    if order is None:
+        return buckets
+    index = {key: i for i, key in enumerate(order)}
+    last = len(order)
+    return sorted(buckets, key=lambda b: index.get(b["key"], last))
+
+
 def _window(days: int) -> tuple[date, date, datetime, datetime]:
     days = max(1, min(days, _MAX_WINDOW_DAYS))
     end_day = (datetime.now(timezone.utc) - timedelta(days=1)).date()
@@ -111,6 +152,31 @@ def usage_summary(
         for feature, with_feat, total, uses in feature_rows
     ]
 
+    # Raw per-event counts from the daily rollup. The feature table above is
+    # derived/curated; this is the ground truth for every event the client
+    # emits — including standalone (no-briefing) events like
+    # ``climatology.opened`` that have nowhere else to show. ``unique_anons``
+    # is summed across days, so a user active on multiple days is counted
+    # once per day (slight overcount — fine for a sanity-check table).
+    event_rows = db.execute(
+        select(
+            AnalyticsEventDailyRow.event,
+            func.coalesce(func.sum(AnalyticsEventDailyRow.total_count), 0),
+            func.coalesce(func.sum(AnalyticsEventDailyRow.unique_anons), 0),
+        )
+        .where(AnalyticsEventDailyRow.day >= start_day)
+        .where(AnalyticsEventDailyRow.day <= end_day)
+        .group_by(AnalyticsEventDailyRow.event)
+    ).all()
+    events = sorted(
+        (
+            {"event": ev, "total_count": int(c), "unique_anons": int(u)}
+            for ev, c, u in event_rows
+        ),
+        key=lambda r: r["total_count"],
+        reverse=True,
+    )
+
     return {
         "window": {
             "start": start_day.isoformat(),
@@ -125,6 +191,7 @@ def usage_summary(
             "briefings_refreshes": int(n_refreshes),
         },
         "features": features,
+        "events": events,
     }
 
 
@@ -215,21 +282,17 @@ def briefing_shape(
         (AnalyticsFlightDimRow.route_points <= 5, "3-5"),
         else_="6+",
     )
-    rp_order = {"2": 0, "3-5": 1, "6+": 2}
-    rp_buckets = sorted(
-        _count_by(route_points_bucket),
-        key=lambda b: rp_order.get(b["key"], 99),
-    )
 
-    return {
+    raw = {
         "by_region": _count_by(AnalyticsFlightDimRow.region),
         "by_distance": _count_by(AnalyticsFlightDimRow.distance_bucket),
-        "by_route_points": rp_buckets,
+        "by_route_points": _count_by(route_points_bucket),
         "by_lead_time": _count_by(AnalyticsBriefingDimRow.lead_time_bucket),
         "by_model_count": _count_by(AnalyticsBriefingDimRow.model_count),
         "by_alternate_etd": _count_by(AnalyticsFlightDimRow.has_alternate_etd),
         "by_seq": _count_by(AnalyticsBriefingDimRow.briefing_seq),
     }
+    return {dim: _sort_buckets(dim, buckets) for dim, buckets in raw.items()}
 
 
 @router.get("/digest")

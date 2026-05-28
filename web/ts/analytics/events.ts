@@ -22,6 +22,14 @@ export const EVENTS = {
   SKEWT_OPENED: 'skewt.opened',
   COMPARE_OPENED: 'compare.opened',
   COMPARE_AIRPORT_ADDED: 'compare.airport_added',
+  ALTITUDE_TABLE_OPENED: 'altitude_table.opened',
+
+  // Onboarding
+  TOUR_STARTED: 'tour.started',
+  TOUR_COMPLETED: 'tour.completed',
+
+  // Standalone (maps page — no briefing context)
+  CLIMATOLOGY_OPENED: 'climatology.opened',
 
   // User preferences
   AUTO_REFRESH_ENABLED: 'auto_refresh.enabled',

@@ -22,6 +22,7 @@ import { initI18n, t } from './i18n/i18n';
 import { setUnitsPreference } from './units';
 import { createUrlState } from './utils/url-state';
 import { shareCurrentUrl } from './utils/share-link';
+import { track, EVENTS } from './analytics/track';
 
 let forecastMap: WeatherMap | null = null;
 let synopticMap: SynopticMap | null = null;
@@ -743,6 +744,9 @@ async function main(): Promise<void> {
     if (!btn) return;
     const tab = btn.getAttribute('data-tab') as Tab;
     if (!tab) return;
+    // Track user-driven climatology opens here (not in switchTab) so the
+    // URL-hydration path in main() doesn't fire a phantom open on load.
+    if (tab === 'climatology') track(EVENTS.CLIMATOLOGY_OPENED);
     switchTab(tab);
     syncUrl();
   });

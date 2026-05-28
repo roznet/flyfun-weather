@@ -98,6 +98,7 @@ async function init(): Promise<void> {
   // Initialize metric info popup
   initInfoPopup();
   initSkewtToggle();
+  initSkewtViewTracking();
   document.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.metric-info-btn') as HTMLElement | null;
     if (btn && !btn.classList.contains('advisory-info-btn')) {
@@ -215,6 +216,10 @@ async function init(): Promise<void> {
 
   /** Fetch altitude table and show popup. */
   async function handleAltitudeTable(): Promise<void> {
+    // Plain track (not once-per-briefing): each open is a deliberate click,
+    // so total_uses reflects real intensity. briefings_with_feature still
+    // dedupes by briefing_id server-side for the attachment rate.
+    track(EVENTS.ALTITUDE_TABLE_OPENED);
     await store.getState().fetchAltitudeTable();
     const result = store.getState().altitudeTable;
     if (result) {
@@ -271,6 +276,28 @@ async function init(): Promise<void> {
     if (dynBtn) dynBtn.addEventListener('click', () => setSkewtViewMode('dynamic'));
     if (cmpBtn) cmpBtn.addEventListener('click', () => setSkewtViewMode('compare'));
     if (statBtn) statBtn.addEventListener('click', () => setSkewtViewMode('static'));
+  }
+
+  // The skew-T section is expanded by default in the (default) dynamic view,
+  // so switching sub-mode is a poor proxy for engagement — most users just
+  // scroll down and look. Count "scrolled the skew-T into view" as the open
+  // signal. trackOncePerBriefing dedupes against the sub-mode-switch path so
+  // a briefing is counted at most once regardless of which happens first.
+  function initSkewtViewTracking(): void {
+    if (typeof IntersectionObserver === 'undefined') return;
+    const skewtWrapper = document.querySelector('[data-section="skewt"]');
+    if (!skewtWrapper) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            trackOncePerBriefing(EVENTS.SKEWT_OPENED, { view: skewtViewMode });
+          }
+        }
+      },
+      { threshold: 0.25 },
+    );
+    observer.observe(skewtWrapper);
   }
 
   function destroySkewtRenderer(): void {

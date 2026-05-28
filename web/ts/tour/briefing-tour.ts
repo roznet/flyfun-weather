@@ -3,6 +3,7 @@ import 'driver.js/dist/driver.css';
 import { briefingStore } from '../store/briefing-store';
 import { t } from '../i18n/i18n';
 import { markOffered } from './tour-storage';
+import { track, EVENTS } from '../analytics/track';
 
 function ensureSectionExpanded(sectionAttr: string): void {
   const wrapper = document.querySelector<HTMLElement>(`[data-section="${sectionAttr}"]`);
@@ -138,10 +139,20 @@ export function startBriefingTour(): void {
     activeDriver = null;
   }
   preloadSkewT();
+  track(EVENTS.TOUR_STARTED);
   activeDriver = driver({
     showProgress: true,
     allowClose: true,
     steps: buildSteps(),
+    // Overriding onDestroyStarted means driver.js no longer auto-closes, so
+    // we must call destroy() ourselves. Reaching the last step (Done, or
+    // closing while on it) counts as completed; closing earlier does not.
+    onDestroyStarted: () => {
+      if (activeDriver?.isLastStep()) {
+        track(EVENTS.TOUR_COMPLETED);
+      }
+      activeDriver?.destroy();
+    },
     onDestroyed: () => {
       activeDriver = null;
     },

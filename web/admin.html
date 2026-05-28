@@ -452,6 +452,27 @@
         </div>
 
         <div class="section">
+          <h3>Event counts (raw)</h3>
+          <p class="muted" style="font-size:0.85rem;">
+            Ground-truth count of every event the client emitted in the window, straight
+            from the daily rollup. Includes standalone (no-briefing) events like climatology
+            that don't appear in the feature table above.
+          </p>
+          <div style="overflow-x:auto;">
+            <table class="feature-table">
+              <thead>
+                <tr>
+                  <th>Event</th>
+                  <th class="num">Total</th>
+                  <th class="num">Unique users</th>
+                </tr>
+              </thead>
+              <tbody id="events-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="section">
           <h3>Briefing shape</h3>
           <p class="muted" style="font-size:0.85rem;">
             Distribution of briefings in the window across the dimensions snapshotted at
