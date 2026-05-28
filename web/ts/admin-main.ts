@@ -852,7 +852,7 @@ async function loadAdminMessages(): Promise<void> {
         <tbody>${messages.map(m => `<tr data-id="${m.id}">
           <td>${escapeHtml(m.date)}</td>
           <td><span class="message-category message-category-${escapeHtml(m.category)}">${escapeHtml(MSG_CATEGORY_LABELS[m.category] || m.category)}</span></td>
-          <td>${escapeHtml(m.title)}</td>
+          <td>${m.highlight ? '<span title="Highlighted — lights the notification dot" style="color:#e0a800;">&#9733;</span> ' : ''}${escapeHtml(m.title)}</td>
           <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(m.body)}">${escapeHtml(m.body.length > 80 ? m.body.slice(0, 80) + '...' : m.body)}</td>
           <td>
             <button class="btn" style="font-size:0.75rem;padding:0.2rem 0.5rem;" onclick="window._editMsg(${m.id})">Edit</button>
@@ -869,7 +869,7 @@ async function loadAdminMessages(): Promise<void> {
   document.getElementById('btn-create-message')?.addEventListener('click', () => showMessageModal());
 }
 
-function showMessageModal(existing?: { id: number; date: string; title: string; body: string; category: string }): void {
+function showMessageModal(existing?: { id: number; date: string; title: string; body: string; category: string; highlight?: boolean }): void {
   document.getElementById('msg-modal')?.remove();
 
   const isEdit = !!existing;
@@ -893,6 +893,10 @@ function showMessageModal(existing?: { id: number; date: string; title: string; 
         <input type="text" id="msg-title" value="${escapeHtml(existing?.title || '')}" placeholder="Short title" style="padding:0.4rem;border:1px solid var(--border);border-radius:4px;">
         <label style="font-size:0.85rem;font-weight:500;">Body (Markdown)</label>
         <textarea id="msg-body" rows="6" style="padding:0.4rem;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit;" placeholder="Supports **bold**, *italic*, \`code\`, [links](url), and - list items">${escapeHtml(existing?.body || '')}</textarea>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;font-weight:500;cursor:pointer;margin-top:0.25rem;">
+          <input type="checkbox" id="msg-highlight" ${existing?.highlight ? 'checked' : ''} style="width:auto;margin:0;">
+          Highlight &mdash; lights the notification dot
+        </label>
         <div id="msg-error" style="color:#dc3545;font-size:0.8rem;min-height:1.2em;"></div>
         <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-top:0.5rem;">
           <button class="btn" id="msg-cancel">Cancel</button>
@@ -910,6 +914,7 @@ function showMessageModal(existing?: { id: number; date: string; title: string; 
     const title = (document.getElementById('msg-title') as HTMLInputElement).value.trim();
     const body = (document.getElementById('msg-body') as HTMLTextAreaElement).value.trim();
     const category = (document.getElementById('msg-category') as HTMLSelectElement).value;
+    const highlight = (document.getElementById('msg-highlight') as HTMLInputElement).checked;
     const errorEl = document.getElementById('msg-error')!;
 
     if (!date || !title || !body) {
@@ -920,10 +925,10 @@ function showMessageModal(existing?: { id: number; date: string; title: string; 
     try {
       if (isEdit) {
         const { adminUpdateMessage } = await import('./adapters/messages-adapter');
-        await adminUpdateMessage(existing!.id, { date, title, body, category });
+        await adminUpdateMessage(existing!.id, { date, title, body, category, highlight });
       } else {
         const { adminCreateMessage } = await import('./adapters/messages-adapter');
-        await adminCreateMessage({ date, title, body, category });
+        await adminCreateMessage({ date, title, body, category, highlight });
       }
       overlay.remove();
       loadAdminMessages();
