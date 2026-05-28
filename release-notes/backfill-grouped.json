@@ -1,0 +1,107 @@
+[
+  {
+    "date": "2026-05-23",
+    "title": "See current conditions right on your route",
+    "category": "feature",
+    "highlight": true,
+    "body": "The D-0 cross-section now draws what's happening *now* along your route:\n\n- **Reporting airports** appear as columns colored by flight category (VFR / MVFR / IFR / LIFR), positioned geographically along the route.\n- **Live SIGMETs** show as red hazard zones over the stretch and altitude band they affect, with deeper red for severe/embedded.\n\nToggle it from the layer menu. It grays out for future days, where there's nothing live to show yet."
+  },
+  {
+    "date": "2026-05-23",
+    "title": "Smarter convective guidance",
+    "category": "feature",
+    "highlight": false,
+    "body": "When the sounding-based storm risk disagrees with the model's own convective scheme, the advisory popup and AI digest now flag the dissent so you can weigh it yourself. Your chosen method still sets the overall grade."
+  },
+  {
+    "date": "2026-05-22",
+    "title": "Visibility in your local units",
+    "category": "change",
+    "highlight": false,
+    "body": "Visibility now renders the way you expect for your region — **kilometres in Europe, statute miles in the US** — and defaults to *auto* based on the flight's location. Set it explicitly under Settings if you prefer. Other aviation units (ft, kt, nm) are universal and unchanged."
+  },
+  {
+    "date": "2026-05-20",
+    "title": "Refreshes that scale with how close your flight is",
+    "category": "change",
+    "highlight": false,
+    "body": "Re-running a full briefing takes real compute on our side, so we now match how hard a manual refresh works to your flight's timing: **far out, we hold back** on full recomputes to save server resources; **as the date gets closer, refreshes run more often** so you get the freshest picture when it matters. A day-of refresh always at least re-pulls live METAR/TAF."
+  },
+  {
+    "date": "2026-05-20",
+    "title": "Sign in with a magic link",
+    "category": "feature",
+    "highlight": true,
+    "body": "You can now sign in with just your **email address** — we send a one-tap magic link, no password needed. Google and Apple sign-in still work exactly as before."
+  },
+  {
+    "date": "2026-05-19",
+    "title": "Climatology maps and airport leaderboard",
+    "category": "feature",
+    "highlight": true,
+    "body": "A new **Climatology** tab on the maps page lets you explore long-run patterns by month:\n\n- **Map view** — flight-category, thunderstorm/fog, wind, and volatility datasets with a month picker.\n- **Top airports** — a leaderboard ranking airports by the same metric you're viewing.\n\nHandy for spotting which fields tend to behave best at a given time of year."
+  },
+  {
+    "date": "2026-05-19",
+    "title": "Take a guided tour of the briefing",
+    "category": "feature",
+    "highlight": false,
+    "body": "New to the briefing page? A **guided tour** (the ? button in the toolbar) walks you through the summary, advisories, cross-section, layer toggles, route graph, and Skew-T — and lets you poke at the real controls as you go."
+  },
+  {
+    "date": "2026-05-14",
+    "title": "Import flights straight from Autorouter",
+    "category": "feature",
+    "highlight": true,
+    "body": "Link your Autorouter account in Settings and pull your filed routes directly into a briefing with the new **Import from Autorouter** button on the Flights page — no more copy-pasting flight plans."
+  },
+  {
+    "date": "2026-05-11",
+    "title": "Redesigned cloud display",
+    "category": "feature",
+    "highlight": true,
+    "body": "Clouds on the cross-section have been completely reworked to look like what you'd actually see out the window:\n\n- **Natural puffy clouds** where coverage is drawn as how much sky is filled — scattered puffs with gaps, broken humps, or a solid overcast blanket.\n- **Separate cloud sources and styles** you can mix and match, plus a new surface-obscuration layer for fog and low stratus.\n- The **Skew-T now shows the same cloud decks** as the cross-section, so the two views always agree."
+  },
+  {
+    "date": "2026-05-11",
+    "title": "A clearer guide to where the data comes from",
+    "category": "feature",
+    "highlight": false,
+    "body": "The Help page now has a **Data Sources & Models** table laying out every weather model we use, what it covers, and how the pieces fit together."
+  },
+  {
+    "date": "2026-05-08",
+    "title": "Airport profiles straight from the map",
+    "category": "feature",
+    "highlight": false,
+    "body": "**Right-click any airport** on the forecast map to open a side panel with a vertical cross-section and Skew-T for that airport — current hour plus the next few — without having to create a flight briefing. Compare models right in the panel."
+  },
+  {
+    "date": "2026-05-05",
+    "title": "Share any view, and faster briefing loads",
+    "category": "feature",
+    "highlight": false,
+    "body": "- **Shareable links** — every forecast and accuracy map view now has a self-describing URL, with a Share button that uses your device's share sheet.\n- **Faster briefings** — the page now renders the weather assessment as soon as it's ready, without waiting for the AI digest to finish."
+  },
+  {
+    "date": "2026-05-05",
+    "title": "Know how fresh your data is",
+    "category": "feature",
+    "highlight": false,
+    "body": "Each weather source now reports its own freshness, with a **per-source detail popover** and a provider-aware banner so you can see at a glance whether a model has updated for your flight window."
+  },
+  {
+    "date": "2026-04-25",
+    "title": "Log how the flight actually went",
+    "category": "feature",
+    "highlight": false,
+    "body": "After a flight you can now record a quick **debrief** — flew / cancelled / monitored — with reason chips (icing, wind, thunderstorms, visibility…) and a note. The Flights list gently nudges you to debrief recent flights, and a stats panel tracks your outcomes over time."
+  },
+  {
+    "date": "2026-05-23",
+    "title": "Behind the scenes: faster, more reliable briefings",
+    "category": "change",
+    "highlight": false,
+    "body": "Lots of unglamorous-but-important work over the last few weeks: parallelised weather fetching and GRIB decoding, smarter caching, memory and stability fixes, and more accurate cloud and icing calculations. The upshot — briefings build faster and more reliably."
+  }
+]
