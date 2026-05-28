@@ -8,6 +8,7 @@ export interface SystemMessage {
   title: string;
   body: string;
   category: 'feature' | 'change' | 'fix';
+  highlight: boolean;
 }
 
 export interface MessagesStatus {
@@ -34,6 +35,7 @@ export interface MessageCreate {
   title: string;
   body: string;
   category: string;
+  highlight: boolean;
 }
 
 export interface MessageUpdate {
@@ -41,6 +43,7 @@ export interface MessageUpdate {
   title?: string;
   body?: string;
   category?: string;
+  highlight?: boolean;
 }
 
 export async function adminListMessages(): Promise<SystemMessage[]> {
