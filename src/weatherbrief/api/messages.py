@@ -34,6 +34,7 @@ class SystemMessage(BaseModel):
     title: str
     body: str
     category: str
+    highlight: bool
 
 
 class MessagesStatus(BaseModel):
@@ -46,6 +47,7 @@ class MessageCreate(BaseModel):
     title: str
     body: str
     category: MessageCategory = "feature"
+    highlight: bool = False
 
 
 class MessageUpdate(BaseModel):
@@ -53,6 +55,7 @@ class MessageUpdate(BaseModel):
     title: str | None = None
     body: str | None = None
     category: MessageCategory | None = None
+    highlight: bool | None = None
 
 
 # --- Helpers ---
@@ -69,7 +72,10 @@ def _get_last_seen_id(row: UserPreferencesRow | None) -> int:
 
 
 def _row_to_response(r: SystemMessageRow) -> SystemMessage:
-    return SystemMessage(id=r.id, date=r.date, title=r.title, body=r.body, category=r.category)
+    return SystemMessage(
+        id=r.id, date=r.date, title=r.title, body=r.body,
+        category=r.category, highlight=r.highlight,
+    )
 
 
 # --- Public endpoints ---
@@ -89,8 +95,11 @@ def get_messages_status(
     """Return unseen message count for the current user."""
     prefs_row = db.get(UserPreferencesRow, user_id)
     last_seen_id = _get_last_seen_id(prefs_row)
+    # Only highlighted messages light the notification dot. Non-highlighted
+    # releases still appear in the stream but never bump the unseen count.
     unseen_count = db.query(func.count(SystemMessageRow.id)).filter(
-        SystemMessageRow.id > last_seen_id
+        SystemMessageRow.id > last_seen_id,
+        SystemMessageRow.highlight.is_(True),
     ).scalar() or 0
     latest = db.query(func.max(SystemMessageRow.date)).scalar()
     return MessagesStatus(
@@ -146,6 +155,7 @@ def admin_create_message(
         title=body.title,
         body=body.body,
         category=body.category,
+        highlight=body.highlight,
     )
     db.add(row)
     db.flush()
@@ -171,6 +181,8 @@ def admin_update_message(
         row.body = body.body
     if body.category is not None:
         row.category = body.category
+    if body.highlight is not None:
+        row.highlight = body.highlight
     db.flush()
     return _row_to_response(row)
 

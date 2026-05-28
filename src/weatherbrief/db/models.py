@@ -403,6 +403,9 @@ class SystemMessageRow(Base):
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(20), default="feature")  # feature, change, fix
+    # When true, counts toward the unseen badge / notification dot. When false,
+    # the message still appears in the stream but never lights the dot.
+    highlight: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
