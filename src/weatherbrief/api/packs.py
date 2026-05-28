@@ -1766,9 +1766,19 @@ async def refresh_briefing_stream(
 
     loop.run_in_executor(_refresh_executor, run_pipeline)
 
+    # Long pipeline phases (fetch, LLM digest) can run 30-60s without emitting a
+    # progress event. A POST stream that sits idle that long gets reaped by Safari
+    # and reverse proxies, surfacing as "Load failed" on the client. Send a
+    # comment-line keepalive on idle so bytes keep flowing.
+    HEARTBEAT_INTERVAL = 15.0
+
     async def event_generator() -> AsyncGenerator[str, None]:
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
+            except asyncio.TimeoutError:
+                yield ": ping\n\n"
+                continue
             event_type = event.get("type", "progress")
             data = json_mod.dumps(event, default=str)
             yield f"event: {event_type}\ndata: {data}\n\n"

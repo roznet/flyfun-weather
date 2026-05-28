@@ -206,6 +206,20 @@ function makeRefreshEventHandler(
   };
 }
 
+/**
+ * True when a refresh error is a dropped/truncated SSE stream rather than a real
+ * failure. The fetch-based refresh stream is held open for the whole ~2min
+ * pipeline; Safari and reverse proxies reap idle POST streams, which throws a
+ * generic `TypeError` ("Load failed" / "Failed to fetch"), or the stream ends
+ * cleanly without a `complete` event. In both cases the refresh keeps running
+ * server-side, so we recover by polling instead of showing the error.
+ */
+function isStreamDrop(err: unknown): boolean {
+  if (err instanceof RefreshStreamError) return false;
+  if (err instanceof TypeError) return true;
+  return err instanceof Error && err.message === 'Refresh stream ended without completion';
+}
+
 export const briefingStore = createStore<BriefingState>((set, get) => ({
   flight: null,
   packs: [],
@@ -361,6 +375,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         get().checkActiveRefresh();
         return;
       }
+      // A dropped/truncated stream isn't a real failure — the refresh keeps
+      // running server-side, so poll for it instead of surfacing "Load failed".
+      if (isStreamDrop(err)) {
+        get().checkActiveRefresh();
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: msg });
     }
@@ -384,6 +404,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         get().checkActiveRefresh();
         return;
       }
+      if (isStreamDrop(err)) {
+        get().checkActiveRefresh();
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false, error: msg });
     }
@@ -394,7 +418,18 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     if (!flight) return;
     try {
       const status = await api.fetchRefreshStatus(flight.id);
-      if (!status.active) return;
+      if (!status.active) {
+        // Nothing running. If we still believed a refresh was in flight (e.g.
+        // the SSE stream dropped near the end), it finished while we were
+        // disconnected — reconcile to the latest pack and clear the spinner.
+        if (get().refreshing) {
+          set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, digestPending: false });
+          await get().loadPacks();
+          await get().selectLatest();
+          get().checkFreshness();
+        }
+        return;
+      }
 
       // A refresh is active — show its progress and poll until done
       set({
