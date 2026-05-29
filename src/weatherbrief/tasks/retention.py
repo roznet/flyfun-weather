@@ -31,7 +31,16 @@ logger = logging.getLogger(__name__)
 
 # Files / directories removed during T1.  Everything else in the pack dir
 # is kept (briefing.json, route_analyses.json, advisories, digest, etc.).
-_HEAVY_FILES = ("cross_section.json", "forecasts.json", "gramet.pdf", "gramet.png")
+# sounding_profiles.json.gz is derived from cross_section.json and the
+# on-the-fly fallback also needs cross_section.json — so the sidecar must die
+# in the same T1 sweep that strips cross_section.json, not linger to T2.
+_HEAVY_FILES = (
+    "cross_section.json",
+    "forecasts.json",
+    "gramet.pdf",
+    "gramet.png",
+    "sounding_profiles.json.gz",
+)
 _HEAVY_DIRS = ("skewt",)
 
 

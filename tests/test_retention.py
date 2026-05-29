@@ -53,6 +53,9 @@ def _make_pack_dir(tmp_path: Path, *, heavy: bool = True) -> Path:
         (pack_dir / "forecasts.json").write_bytes(b"x" * 2_000)
         (pack_dir / "gramet.pdf").write_bytes(b"%PDF" + b"x" * 5_000)
         (pack_dir / "gramet.png").write_bytes(b"\x89PNG" + b"x" * 3_000)
+        # Sounding-profile sidecar — derived from cross_section.json, so it must
+        # be stripped in the same T1 sweep (issue #188).
+        (pack_dir / "sounding_profiles.json.gz").write_bytes(b"\x1f\x8b" + b"x" * 4_000)
 
         skewt = pack_dir / "skewt" / "route"
         skewt.mkdir(parents=True)
@@ -158,6 +161,7 @@ class TestPurgeHeavyArtifacts:
         assert not (pack_dir / "forecasts.json").exists()
         assert not (pack_dir / "gramet.pdf").exists()
         assert not (pack_dir / "gramet.png").exists()
+        assert not (pack_dir / "sounding_profiles.json.gz").exists()
         assert not (pack_dir / "skewt").exists()
         # Light files preserved
         assert (pack_dir / "briefing.json").exists()

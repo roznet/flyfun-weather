@@ -129,6 +129,36 @@ def save_analysis_artifacts(
             )
         )
 
+        # Sounding-profile sidecar: shaped profiles for every (point, model),
+        # built from the FULL in-memory manifest (derived_levels intact, before
+        # the strip above) plus cross_section.json (already on disk from
+        # save_fetch_artifacts). No added MetPy recompute. Endpoints read this
+        # instead of recomputing, killing the multi-second offline-pack
+        # "Preparing…" stall (issue #188). The online viewer never loads it.
+        _write_sounding_sidecar(pack_dir, route_analyses_manifest)
+
+
+def _write_sounding_sidecar(pack_dir: Path, manifest: RouteAnalysesManifest) -> None:
+    """Build and write ``sounding_profiles.json.gz`` from the in-memory manifest.
+
+    Best-effort: a failure here must never fail the refresh — the endpoints
+    transparently fall back to on-the-fly recompute when the sidecar is absent.
+    """
+    cs_path = pack_dir / "cross_section.json"
+    if not cs_path.exists():
+        return
+    try:
+        from weatherbrief.storage.sounding_profiles import write_sounding_sidecar
+
+        # Dump WITHOUT the derived_levels exclude so _build_sounding_profile
+        # finds them present and does not recompute.
+        ra_full = json.loads(manifest.model_dump_json())
+        cs_data = json.loads(cs_path.read_text())
+        count = write_sounding_sidecar(pack_dir, ra_full, cs_data)
+        logger.debug("Wrote sounding sidecar with %d profiles to %s", count, pack_dir)
+    except Exception:
+        logger.warning("Failed to write sounding sidecar to %s", pack_dir, exc_info=True)
+
 
 def save_advisory_artifacts(
     pack_dir: Path,
