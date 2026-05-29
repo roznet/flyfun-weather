@@ -345,6 +345,14 @@ class PackMetaResponse(BaseModel):
     dwd_charts_default_id: str | None = None
     dwd_charts_in_coverage: bool = False
     dwd_charts_within_horizon: bool = False
+    # Met Office surface-pressure charts — second front-chart source.
+    # ``metoffice_charts_public`` is env-derived (same for all users); the
+    # frontend shows the source toggle when (admin OR this flag).
+    metoffice_charts_run_cycle: str | None = None
+    metoffice_charts_default_id: str | None = None
+    metoffice_charts_in_coverage: bool = False
+    metoffice_charts_within_horizon: bool = False
+    metoffice_charts_public: bool = False
 
 
 def _meta_to_response(
@@ -376,6 +384,11 @@ def _meta_to_response(
         dwd_charts_default_id=meta.dwd_charts_default_id,
         dwd_charts_in_coverage=meta.dwd_charts_in_coverage,
         dwd_charts_within_horizon=meta.dwd_charts_within_horizon,
+        metoffice_charts_run_cycle=meta.metoffice_charts_run_cycle,
+        metoffice_charts_default_id=meta.metoffice_charts_default_id,
+        metoffice_charts_in_coverage=meta.metoffice_charts_in_coverage,
+        metoffice_charts_within_horizon=meta.metoffice_charts_within_horizon,
+        metoffice_charts_public=_metoffice_public(),
     )
 
 
@@ -1132,6 +1145,10 @@ def _build_pack_meta(
         dwd_charts_default_id=result.dwd_charts_default_id,
         dwd_charts_in_coverage=result.dwd_charts_in_coverage,
         dwd_charts_within_horizon=result.dwd_charts_within_horizon,
+        metoffice_charts_run_cycle=result.metoffice_charts_run_cycle,
+        metoffice_charts_default_id=result.metoffice_charts_default_id,
+        metoffice_charts_in_coverage=result.metoffice_charts_in_coverage,
+        metoffice_charts_within_horizon=result.metoffice_charts_within_horizon,
     )
 
 
@@ -2831,6 +2848,115 @@ def get_dwd_chart_overlay(
     if not waypoints:
         # No briefing.json or no waypoints in it — pack predates the
         # split-storage era. Section will just render without the overlay.
+        raise HTTPException(
+            status_code=404, detail="No waypoints available for overlay",
+        )
+
+    overlay = build_route_overlay(waypoints)
+    return JSONResponse(
+        content=overlay,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+def _metoffice_public() -> bool:
+    """Env-flag: is the Met Office source released to non-admin users yet?"""
+    from weatherbrief.fetch.metoffice_charts import public_enabled
+    return public_enabled()
+
+
+def _metoffice_charts_allowed(request: Request, db: Session) -> bool:
+    """Gate: Met Office charts are admin-only until ``METOFFICE_CHARTS_PUBLIC=1``.
+
+    Returns True if the public flag is set, or the caller is an admin (dev
+    mode counts as admin). The caller must already be authenticated.
+    """
+    if _metoffice_public():
+        return True
+    try:
+        from weatherbrief.api.admin import require_admin
+        require_admin(request, db=db)
+        return True
+    except HTTPException:
+        return False
+
+
+@router.get("/{timestamp}/metoffice-chart/{chart_id}")
+def get_metoffice_chart(
+    flight_id: str,
+    timestamp: str,
+    chart_id: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Serve a Met Office surface-pressure chart GIF for this pack.
+
+    Mirror of :func:`get_dwd_chart` against the
+    ``DATA_DIR/metoffice_charts/<run_cycle>/`` cache. Gated to admins until
+    ``METOFFICE_CHARTS_PUBLIC=1`` (Met Office reuse authorisation pending).
+    Returns 410 (Gone) when the cache has been evicted.
+    """
+    from weatherbrief.fetch.metoffice_charts import CHART_IDS, resolve_chart_path
+
+    if not _metoffice_charts_allowed(request, db):
+        raise HTTPException(status_code=403, detail="Met Office charts not available")
+    if chart_id not in CHART_IDS:
+        raise HTTPException(status_code=400, detail="Invalid chart id")
+
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    meta = _load_pack_meta_or_404(db, flight_id, timestamp)
+
+    if not meta.metoffice_charts_run_cycle:
+        raise HTTPException(
+            status_code=404, detail="Met Office charts not available for this pack",
+        )
+
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    path = resolve_chart_path(data_dir, meta.metoffice_charts_run_cycle, chart_id)
+    if path is None:
+        raise HTTPException(status_code=410, detail="Chart no longer cached")
+
+    return FileResponse(
+        path,
+        media_type="image/gif",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/{timestamp}/metoffice-chart-overlay")
+def get_metoffice_chart_overlay(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Compute the route-overlay JSON for the Met Office chart section.
+
+    Mirror of :func:`get_dwd_chart_overlay`. Returns ``{}`` (200) when the
+    chart isn't calibrated, so the frontend renders the chart without an
+    overlay rather than erroring. Same admin/flag gate as the chart bytes.
+    """
+    from weatherbrief.fetch.metoffice_charts import build_route_overlay
+
+    if not _metoffice_charts_allowed(request, db):
+        raise HTTPException(status_code=403, detail="Met Office charts not available")
+
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    waypoints: list[tuple[str, float, float]] = []
+    briefing_path = pack_dir / "briefing.json"
+    if briefing_path.exists():
+        try:
+            data = json_mod.loads(briefing_path.read_text())
+            for wp in (data.get("route") or {}).get("waypoints") or []:
+                if "icao" in wp and "lat" in wp and "lon" in wp:
+                    waypoints.append((wp["icao"], float(wp["lat"]), float(wp["lon"])))
+        except (json_mod.JSONDecodeError, OSError, TypeError, ValueError):
+            logger.warning("Failed to parse briefing.json for MO overlay", exc_info=True)
+
+    if not waypoints:
         raise HTTPException(
             status_code=404, detail="No waypoints available for overlay",
         )

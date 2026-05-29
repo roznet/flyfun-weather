@@ -676,6 +676,16 @@ export function dwdChartOverlayUrl(flightId: string, timestamp: string): string 
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/dwd-chart-overlay`;
 }
 
+// --- Met Office surface-pressure charts ---
+
+export function metofficeChartUrl(flightId: string, timestamp: string, chartId: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/metoffice-chart/${encodeURIComponent(chartId)}`;
+}
+
+export function metofficeChartOverlayUrl(flightId: string, timestamp: string): string {
+  return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/metoffice-chart-overlay`;
+}
+
 // --- Report ---
 
 export function reportPdfUrl(flightId: string, timestamp: string): string {

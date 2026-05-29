@@ -38,6 +38,7 @@ from weatherbrief.tasks.fetch import run_fetch
 from weatherbrief.tasks.analyze import run_analysis
 from weatherbrief.tasks.advise import AdvisoryResult, run_advisories
 from weatherbrief.tasks.dwd_charts import run_dwd_charts
+from weatherbrief.tasks.metoffice_charts import run_metoffice_charts
 from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,11 @@ class BriefingResult:
     dwd_charts_default_id: str | None = None
     dwd_charts_in_coverage: bool = False
     dwd_charts_within_horizon: bool = False
+    # Met Office surface-pressure charts — same shape, second source.
+    metoffice_charts_run_cycle: str | None = None
+    metoffice_charts_default_id: str | None = None
+    metoffice_charts_in_coverage: bool = False
+    metoffice_charts_within_horizon: bool = False
     usage: BriefingUsage = field(default_factory=BriefingUsage)
 
 
@@ -574,6 +580,23 @@ def execute_briefing(
     result.dwd_charts_in_coverage = dwd_charts_result.in_coverage
     result.dwd_charts_within_horizon = dwd_charts_result.within_horizon
     stage_timings["dwd_charts"] = perf_counter() - _t0
+
+    # === 5c. Met Office Surface Pressure charts ===
+    # Same cheap conditional-GET pattern as DWD; second front-chart source
+    # (admin-gated until Met Office authorise reuse). Eligibility checked
+    # inside run_metoffice_charts.
+    _t0 = perf_counter()
+    metoffice_charts_result = run_metoffice_charts(
+        route=route,
+        departure_time=departure_time,
+        data_dir=data_dir,
+        pack_dir=pack_dir,
+    )
+    result.metoffice_charts_run_cycle = metoffice_charts_result.run_cycle
+    result.metoffice_charts_default_id = metoffice_charts_result.default_chart_id
+    result.metoffice_charts_in_coverage = metoffice_charts_result.in_coverage
+    result.metoffice_charts_within_horizon = metoffice_charts_result.within_horizon
+    stage_timings["metoffice_charts"] = perf_counter() - _t0
 
     # === 6. Optional: Skew-T ===
     if options.generate_skewt:

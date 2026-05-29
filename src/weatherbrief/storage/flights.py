@@ -223,6 +223,10 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.dwd_charts_default_id = meta.dwd_charts_default_id
     row.dwd_charts_in_coverage = meta.dwd_charts_in_coverage
     row.dwd_charts_within_horizon = meta.dwd_charts_within_horizon
+    row.metoffice_charts_run_cycle = meta.metoffice_charts_run_cycle
+    row.metoffice_charts_default_id = meta.metoffice_charts_default_id
+    row.metoffice_charts_in_coverage = meta.metoffice_charts_in_coverage
+    row.metoffice_charts_within_horizon = meta.metoffice_charts_within_horizon
 
 
 def _meta_to_row(meta: BriefingPackMeta) -> BriefingPackRow:
@@ -333,6 +337,10 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         dwd_charts_default_id=row.dwd_charts_default_id,
         dwd_charts_in_coverage=row.dwd_charts_in_coverage,
         dwd_charts_within_horizon=row.dwd_charts_within_horizon,
+        metoffice_charts_run_cycle=row.metoffice_charts_run_cycle,
+        metoffice_charts_default_id=row.metoffice_charts_default_id,
+        metoffice_charts_in_coverage=row.metoffice_charts_in_coverage,
+        metoffice_charts_within_horizon=row.metoffice_charts_within_horizon,
     )
 
 

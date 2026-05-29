@@ -1017,7 +1017,7 @@ async function init(): Promise<void> {
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
-      ui.renderDwdCharts(state.flight, state.currentPack);
+      ui.renderDwdCharts(state.flight, state.currentPack, user.is_admin || !!state.currentPack?.metoffice_charts_public);
       ui.renderDWDOverview(state.flight, state.currentPack, user.is_admin);
       ui.renderGramet(state.flight, state.currentPack);
       renderPointSections(state);
@@ -1429,7 +1429,7 @@ async function init(): Promise<void> {
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending);
-    ui.renderDwdCharts(s.flight, s.currentPack);
+    ui.renderDwdCharts(s.flight, s.currentPack, user.is_admin || !!s.currentPack?.metoffice_charts_public);
     ui.renderDWDOverview(s.flight, s.currentPack, user.is_admin);
     ui.renderGramet(s.flight, s.currentPack);
     renderPointSections(s);
