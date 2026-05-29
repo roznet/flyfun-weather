@@ -246,7 +246,8 @@ data/packs/
             ├── briefing.json           # ForecastSnapshot minus forecasts & cross_sections
             ├── forecasts.json          # Route + metadata + raw forecasts only
             ├── cross_section.json
-            ├── route_analyses.json    # RouteAnalysesManifest
+            ├── route_analyses.json    # RouteAnalysesManifest (derived_levels stripped)
+            ├── sounding_profiles.json.gz # Sidecar: shaped sounding profiles per (point,model); written at refresh from the in-memory manifest so bundle/Skew-T endpoints skip MetPy recompute. Online viewer never loads it. T1-stripped with cross_section.json.
             ├── elevation_profile.json # ElevationProfile (SRTM terrain)
             ├── gramet.pdf             # GRAMET cross-section (PDF)
             ├── skewt/
