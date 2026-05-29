@@ -1314,7 +1314,7 @@ async function fetchAndRenderDigestJson(
   }
 }
 
-// --- DWD Surface Analysis & Forecast ---
+// --- Surface Pressure & Fronts (DWD + Met Office) ---
 
 const DWD_CHART_TABS: ReadonlyArray<{ id: string; label: string; offsetH: number }> = [
   { id: 'ana', label: 'Analysis', offsetH: 0 },
@@ -1325,7 +1325,19 @@ const DWD_CHART_TABS: ReadonlyArray<{ id: string; label: string; offsetH: number
   { id: '108', label: '+108h', offsetH: 108 },
 ];
 
+const METOFFICE_CHART_TABS: ReadonlyArray<{ id: string; label: string; offsetH: number }> = [
+  { id: 'ana', label: 'Analysis', offsetH: 0 },
+  { id: '012', label: '+12h', offsetH: 12 },
+  { id: '024', label: '+24h', offsetH: 24 },
+  { id: '036', label: '+36h', offsetH: 36 },
+  { id: '048', label: '+48h', offsetH: 48 },
+  { id: '060', label: '+60h', offsetH: 60 },
+  { id: '072', label: '+72h', offsetH: 72 },
+  { id: '084', label: '+84h', offsetH: 84 },
+];
+
 const DWD_PAGE_URL = 'https://www.dwd.de/DE/leistungen/hobbymet_wk_europa/hobbyeuropakarten.html';
+const METOFFICE_PAGE_URL = 'https://weather.metoffice.gov.uk/maps-and-charts/surface-pressure';
 
 /** Parse "2026-05-08T06Z" into a Date. Returns null on failure. */
 function parseRunCycle(runCycle: string): Date | null {
@@ -1360,20 +1372,15 @@ interface DwdChartWaypoint {
   y: number;
 }
 
-interface DwdChartOverlay {
-  analysis: { native_size: [number, number]; waypoints: DwdChartWaypoint[] };
-  icon: { native_size: [number, number]; waypoints: DwdChartWaypoint[] };
-}
-
-function chartTypeFor(chartId: string): 'analysis' | 'icon' {
-  return chartId === 'ana' ? 'analysis' : 'icon';
-}
+// Overlay JSON keyed by chart-type: DWD uses {analysis, icon}, Met Office
+// uses {colour}. Source descriptors map a chart id to its key.
+type ChartOverlay = Record<string, { native_size: [number, number]; waypoints: DwdChartWaypoint[] }>;
 
 function renderRouteSvg(
-  overlay: DwdChartOverlay,
-  chartType: 'analysis' | 'icon',
+  overlay: ChartOverlay,
+  overlayKey: string,
 ): string {
-  const data = overlay[chartType];
+  const data = overlay[overlayKey];
   if (!data || !data.waypoints.length) return '';
   const [w, h] = data.native_size;
   const wps = data.waypoints;
@@ -1443,9 +1450,57 @@ function renderRouteSvg(
   `;
 }
 
+interface ChartSource {
+  key: 'dwd' | 'metoffice';
+  label: string;
+  tabs: ReadonlyArray<{ id: string; label: string; offsetH: number }>;
+  runCycle: string;
+  defaultId: string;
+  chartUrl: (chartId: string) => string;
+  overlayUrl: () => string;
+  overlayKeyFor: (chartId: string) => string;
+  attributionHtml: string;
+}
+
+function makeDwdSource(flight: FlightResponse, pack: PackMeta): ChartSource {
+  return {
+    key: 'dwd',
+    label: 'DWD',
+    tabs: DWD_CHART_TABS,
+    runCycle: pack.dwd_charts_run_cycle as string,
+    defaultId: pack.dwd_charts_default_id || 'ana',
+    chartUrl: (id) => api.dwdChartUrl(flight.id, pack.fetch_timestamp, id),
+    overlayUrl: () => api.dwdChartOverlayUrl(flight.id, pack.fetch_timestamp),
+    overlayKeyFor: (id) => (id === 'ana' ? 'analysis' : 'icon'),
+    attributionHtml: `Source: <a href="${DWD_PAGE_URL}" target="_blank" rel="noopener">Deutscher Wetterdienst (DWD)</a>, CC BY 4.0`,
+  };
+}
+
+function makeMetofficeSource(flight: FlightResponse, pack: PackMeta): ChartSource {
+  return {
+    key: 'metoffice',
+    label: 'Met Office',
+    tabs: METOFFICE_CHART_TABS,
+    runCycle: pack.metoffice_charts_run_cycle as string,
+    defaultId: pack.metoffice_charts_default_id || 'ana',
+    chartUrl: (id) => api.metofficeChartUrl(flight.id, pack.fetch_timestamp, id),
+    overlayUrl: () => api.metofficeChartOverlayUrl(flight.id, pack.fetch_timestamp),
+    overlayKeyFor: () => 'colour',
+    attributionHtml: `Source: <a href="${METOFFICE_PAGE_URL}" target="_blank" rel="noopener">Met Office</a> · &copy; Crown copyright`,
+  };
+}
+
+/**
+ * Surface Pressure & Fronts panel. Hosts the DWD chart source and, when
+ * available, the Met Office source behind a `[DWD | Met Office]` toggle.
+ *
+ * `metofficeAvailable` is `user.is_admin || pack.metoffice_charts_public`
+ * — the Met Office source is admin-gated until Met Office authorise reuse.
+ */
 export function renderDwdCharts(
   flight: FlightResponse | null,
   pack: PackMeta | null,
+  metofficeAvailable = false,
 ): void {
   const wrapper = $('dwd-charts-wrapper');
   const el = $('dwd-charts-section');
@@ -1456,117 +1511,163 @@ export function renderDwdCharts(
     return;
   }
 
-  if (!pack.dwd_charts_in_coverage) {
-    // Section silently hidden for non-Europe routes (matches DWD-overview behaviour).
-    wrapper.style.display = 'none';
-    return;
+  const sources: ChartSource[] = [];
+  if (pack.dwd_charts_in_coverage && pack.dwd_charts_within_horizon && pack.dwd_charts_run_cycle) {
+    sources.push(makeDwdSource(flight, pack));
+  }
+  if (
+    metofficeAvailable &&
+    pack.metoffice_charts_in_coverage &&
+    pack.metoffice_charts_within_horizon &&
+    pack.metoffice_charts_run_cycle
+  ) {
+    sources.push(makeMetofficeSource(flight, pack));
   }
 
-  if (!pack.dwd_charts_within_horizon || !pack.dwd_charts_run_cycle) {
-    wrapper.style.display = '';
-    el.innerHTML = `<p class="muted">DWD charts unavailable for this briefing — flight is beyond the +108h forecast horizon, or the chart refresh failed.</p>`;
-    return;
-  }
-
-  const runCycle = pack.dwd_charts_run_cycle;
-  const issuedDate = parseRunCycle(runCycle);
-  const defaultId = pack.dwd_charts_default_id || 'ana';
-
-  wrapper.style.display = '';
-
-  const tabsHtml = DWD_CHART_TABS.map((tab) => {
-    const cls = tab.id === defaultId ? 'btn-toggle active' : 'btn-toggle';
-    return `<button type="button" class="${cls}" data-chart-id="${tab.id}">${escapeHtml(tab.label)}</button>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div class="dwd-charts-tabs" role="tablist" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; align-items:center;">
-      ${tabsHtml}
-      <label style="margin-left:auto; display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;" title="Toggle route overlay">
-        <input type="checkbox" id="dwd-charts-route-toggle" checked style="cursor:pointer;">
-        <span>Show route</span>
-      </label>
-    </div>
-    <div id="dwd-charts-image-wrap" style="text-align:center;">
-      <div id="dwd-charts-image-container" style="position:relative; display:inline-block; max-width:100%;">
-        <img id="dwd-charts-image" alt="DWD chart" style="display:block; max-width:100%; height:auto;">
-        <div id="dwd-charts-overlay-slot" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
-      </div>
-      <p id="dwd-charts-caption" class="header-meta" style="margin-top:6px;"></p>
-    </div>
-  `;
-
-  let currentChartId = defaultId;
-  let routeVisible = true;
-  let overlay: DwdChartOverlay | null = null;
-
-  const updateOverlay = (): void => {
-    const slot = document.getElementById('dwd-charts-overlay-slot');
-    if (!slot) return;
-    if (!overlay || !routeVisible) {
-      slot.innerHTML = '';
+  const inCoverage = pack.dwd_charts_in_coverage || (metofficeAvailable && pack.metoffice_charts_in_coverage);
+  if (sources.length === 0) {
+    if (!inCoverage) {
+      // Non-Europe route — section silently hidden (matches prior behaviour).
+      wrapper.style.display = 'none';
       return;
     }
-    slot.innerHTML = renderRouteSvg(overlay, chartTypeFor(currentChartId));
-  };
+    wrapper.style.display = '';
+    el.innerHTML = `<p class="muted">Surface charts unavailable for this briefing — flight is beyond the forecast horizon, or the chart refresh failed.</p>`;
+    return;
+  }
 
-  // Fetch overlay once per render. Failures degrade silently — chart still works.
-  fetch(api.dwdChartOverlayUrl(flight.id, pack.fetch_timestamp))
-    .then((r) => (r.ok ? (r.json() as Promise<DwdChartOverlay>) : null))
-    .then((data) => {
-      overlay = data;
-      updateOverlay();
-    })
-    .catch(() => {
-      overlay = null;
-    });
+  wrapper.style.display = '';
+  mountChartPanel(el, sources);
+}
 
-  const showChart = (chartId: string): void => {
-    currentChartId = chartId;
-    const img = document.getElementById('dwd-charts-image') as HTMLImageElement | null;
-    const caption = document.getElementById('dwd-charts-caption');
-    if (!img || !caption) return;
+function mountChartPanel(el: HTMLElement, sources: ChartSource[]): void {
+  let activeKey = sources[0].key;
+  let routeVisible = true; // persists across source switches
 
-    img.src = api.dwdChartUrl(flight.id, pack.fetch_timestamp, chartId);
-    img.alt = `DWD chart ${chartId}`;
-    img.onerror = () => {
-      img.style.display = 'none';
-      caption.innerHTML = `<span class="muted">Chart no longer available — the cached file has been evicted.</span>`;
+  const render = (): void => {
+    const src = sources.find((s) => s.key === activeKey) as ChartSource;
+    const issuedDate = parseRunCycle(src.runCycle);
+
+    const sourceToggleHtml =
+      sources.length > 1
+        ? `<div class="chart-source-toggle" role="tablist" style="display:flex; gap:6px; margin-bottom:8px;">
+             ${sources
+               .map(
+                 (s) =>
+                   `<button type="button" class="btn-toggle${s.key === activeKey ? ' active' : ''}" data-source="${s.key}">${escapeHtml(s.label)}</button>`,
+               )
+               .join('')}
+           </div>`
+        : '';
+
+    const tabsHtml = src.tabs
+      .map((tab) => {
+        const cls = tab.id === src.defaultId ? 'btn-toggle active' : 'btn-toggle';
+        return `<button type="button" class="${cls}" data-chart-id="${tab.id}">${escapeHtml(tab.label)}</button>`;
+      })
+      .join('');
+
+    el.innerHTML = `
+      ${sourceToggleHtml}
+      <div class="dwd-charts-tabs" role="tablist" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; align-items:center;">
+        ${tabsHtml}
+        <label style="margin-left:auto; display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none;" title="Toggle route overlay">
+          <input type="checkbox" id="dwd-charts-route-toggle" ${routeVisible ? 'checked' : ''} style="cursor:pointer;">
+          <span>Show route</span>
+        </label>
+      </div>
+      <div id="dwd-charts-image-wrap" style="text-align:center;">
+        <div id="dwd-charts-image-container" style="position:relative; display:inline-block; max-width:100%;">
+          <img id="dwd-charts-image" alt="${escapeHtml(src.label)} chart" style="display:block; max-width:100%; height:auto;">
+          <div id="dwd-charts-overlay-slot" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
+        </div>
+        <p id="dwd-charts-caption" class="header-meta" style="margin-top:6px;"></p>
+      </div>
+    `;
+
+    let currentChartId = src.defaultId;
+    let overlay: ChartOverlay | null = null;
+
+    const updateOverlay = (): void => {
       const slot = document.getElementById('dwd-charts-overlay-slot');
-      if (slot) slot.innerHTML = '';
-    };
-    img.onload = () => {
-      img.style.display = '';
-      updateOverlay();
+      if (!slot) return;
+      if (!overlay || !routeVisible) {
+        slot.innerHTML = '';
+        return;
+      }
+      slot.innerHTML = renderRouteSvg(overlay, src.overlayKeyFor(currentChartId));
     };
 
-    let issuedCaption = '';
-    if (issuedDate) {
-      const ago = formatHoursAgo(Date.now() - issuedDate.getTime());
-      issuedCaption = `Issued ${ago} (${escapeHtml(formatUtcCaption(issuedDate))}) · `;
-    }
-    caption.innerHTML = `${issuedCaption}Source: <a href="${DWD_PAGE_URL}" target="_blank" rel="noopener">Deutscher Wetterdienst (DWD)</a>, CC BY 4.0`;
+    // Fetch overlay once per source render. Failures degrade silently.
+    fetch(src.overlayUrl())
+      .then((r) => (r.ok ? (r.json() as Promise<ChartOverlay>) : null))
+      .then((data) => {
+        overlay = data;
+        updateOverlay();
+      })
+      .catch(() => {
+        overlay = null;
+      });
+
+    const showChart = (chartId: string): void => {
+      currentChartId = chartId;
+      const img = document.getElementById('dwd-charts-image') as HTMLImageElement | null;
+      const caption = document.getElementById('dwd-charts-caption');
+      if (!img || !caption) return;
+
+      img.src = src.chartUrl(chartId);
+      img.alt = `${src.label} chart ${chartId}`;
+      img.onerror = () => {
+        img.style.display = 'none';
+        caption.innerHTML = `<span class="muted">Chart no longer available — the cached file has been evicted.</span>`;
+        const slot = document.getElementById('dwd-charts-overlay-slot');
+        if (slot) slot.innerHTML = '';
+      };
+      img.onload = () => {
+        img.style.display = '';
+        updateOverlay();
+      };
+
+      let issuedCaption = '';
+      if (issuedDate) {
+        const ago = formatHoursAgo(Date.now() - issuedDate.getTime());
+        issuedCaption = `Issued ${ago} (${escapeHtml(formatUtcCaption(issuedDate))}) · `;
+      }
+      caption.innerHTML = `${issuedCaption}${src.attributionHtml}`;
+
+      el.querySelectorAll('.dwd-charts-tabs .btn-toggle[data-chart-id]').forEach((btn) => {
+        const b = btn as HTMLButtonElement;
+        b.classList.toggle('active', b.dataset.chartId === chartId);
+      });
+    };
 
     el.querySelectorAll('.dwd-charts-tabs .btn-toggle[data-chart-id]').forEach((btn) => {
-      const b = btn as HTMLButtonElement;
-      b.classList.toggle('active', b.dataset.chartId === chartId);
+      btn.addEventListener('click', () => {
+        const id = (btn as HTMLButtonElement).dataset.chartId;
+        if (id) showChart(id);
+      });
     });
+
+    el.querySelectorAll('.chart-source-toggle .btn-toggle[data-source]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = (btn as HTMLButtonElement).dataset.source as ChartSource['key'] | undefined;
+        if (key && key !== activeKey) {
+          activeKey = key;
+          render();
+        }
+      });
+    });
+
+    const routeCheckbox = document.getElementById('dwd-charts-route-toggle') as HTMLInputElement | null;
+    routeCheckbox?.addEventListener('change', () => {
+      routeVisible = routeCheckbox.checked;
+      updateOverlay();
+    });
+
+    showChart(src.defaultId);
   };
 
-  el.querySelectorAll('.dwd-charts-tabs .btn-toggle[data-chart-id]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = (btn as HTMLButtonElement).dataset.chartId;
-      if (id) showChart(id);
-    });
-  });
-
-  const routeCheckbox = document.getElementById('dwd-charts-route-toggle') as HTMLInputElement | null;
-  routeCheckbox?.addEventListener('change', () => {
-    routeVisible = routeCheckbox.checked;
-    updateOverlay();
-  });
-
-  showChart(defaultId);
+  render();
 }
 
 // --- DWD Synoptic Overview ---

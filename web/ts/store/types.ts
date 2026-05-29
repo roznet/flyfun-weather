@@ -203,6 +203,11 @@ export interface PackMeta {
   dwd_charts_default_id?: string | null;
   dwd_charts_in_coverage?: boolean;
   dwd_charts_within_horizon?: boolean;
+  metoffice_charts_run_cycle?: string | null;
+  metoffice_charts_default_id?: string | null;
+  metoffice_charts_in_coverage?: boolean;
+  metoffice_charts_within_horizon?: boolean;
+  metoffice_charts_public?: boolean;
 }
 
 export interface ModelDivergence {

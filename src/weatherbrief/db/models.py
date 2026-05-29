@@ -239,6 +239,16 @@ class BriefingPackRow(Base):
     dwd_charts_within_horizon: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0",
     )
+    # Met Office surface-pressure charts — second front-chart source.
+    # Bytes live in DATA_DIR/metoffice_charts/<run_cycle>/.
+    metoffice_charts_run_cycle: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    metoffice_charts_default_id: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    metoffice_charts_in_coverage: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0",
+    )
+    metoffice_charts_within_horizon: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0",
+    )
     integrity_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     flight: Mapped[FlightRow] = relationship(back_populates="packs")
