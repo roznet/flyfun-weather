@@ -2155,6 +2155,68 @@ def _cmd_route_hewson(args: argparse.Namespace) -> None:
         )
 
 
+def _cmd_route_fronts(args: argparse.Namespace) -> None:
+    """Locate front crossings + nearest approaching front along a route."""
+    from weatherbrief.airports import resolve_waypoints
+    from weatherbrief.frontal.case import load_case
+    from weatherbrief.frontal.grid import build_terrain_mask
+    from weatherbrief.frontal.route_sampling import analyze_route_fronts
+
+    case = load_case(Path(args.case))
+    models = [args.model] if args.model else case.models
+    for m in models:
+        if m not in case.models:
+            print(f"Error: model '{m}' not in case (available: {case.models})",
+                  file=sys.stderr)
+            sys.exit(1)
+
+    codes = args.waypoints.split()
+    if len(codes) < 2:
+        print("Error: provide at least 2 waypoints", file=sys.stderr)
+        sys.exit(1)
+    waypoints, rejected = resolve_waypoints(codes, args.airports_db)
+    for r in rejected:
+        print(f"  (rejected {r.name}: {r.reason})", file=sys.stderr)
+    pts = [(wp.lat, wp.lon) for wp in waypoints]
+
+    terrain_mask = None if args.no_terrain_mask else build_terrain_mask(case.lat, case.lon)
+    use_anomaly = not args.no_anomaly_filter
+
+    header = (
+        f"Route fronts — {' '.join(wp.icao for wp in waypoints)}  "
+        f"hour=+{args.hour:g}  level={args.level or '850'}hPa"
+    )
+    print(header)
+    print("=" * len(header))
+    for m in models:
+        res = analyze_route_fronts(
+            case, m, pts, args.hour,
+            level_hPa=args.level, terrain_mask=terrain_mask,
+            proximity_km=args.proximity_km, use_anomaly_filter=use_anomaly,
+        )
+        print(f"\n[{m}]")
+        if res.crossings:
+            for c in res.crossings:
+                print(
+                    f"  CROSS {c.kind.upper():>14}/{c.intensity:<11} @{c.distance_km:6.0f} km "
+                    f"({c.lat:.2f},{c.lon:.2f})  |∇θe|={c.gradient:4.1f} K/100km  "
+                    f"Δθe={c.delta_theta_e:+5.1f} K  adv={c.advection:+.2f} K/h"
+                )
+        else:
+            print("  no on-track front crossing")
+        nf = res.nearest
+        if nf is None:
+            print(f"  nearest gated front: none within {args.proximity_km:g} km")
+        elif nf.on_track:
+            print(f"  nearest gated front: on-track ({nf.lat:.2f},{nf.lon:.2f}) "
+                  f"|∇θe|={nf.gradient:.1f}  trend={nf.trend}")
+        else:
+            rate = f" ({nf.closing_km_per_h:+.0f} km/h)" if nf.closing_km_per_h is not None else ""
+            print(f"  nearest gated front: ~{nf.distance_km:.0f} km off-track "
+                  f"({nf.lat:.2f},{nf.lon:.2f}) |∇θe|={nf.gradient:.1f} K/100km "
+                  f"Δθe={nf.delta_theta_e:+.0f} K  {nf.trend.upper()}{rate}")
+
+
 def _cmd_redraw_zones(args: argparse.Namespace) -> None:
     """Redraw analysis_with_zones.png for a case using its current expected.yaml."""
     case_dir = Path(args.case)
@@ -2466,6 +2528,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to euro_aip airports SQLite DB (default: data/nav.db)",
     )
 
+    # route-fronts
+    p_route_fronts = sub.add_parser(
+        "route-fronts",
+        help="Locate front crossings + nearest approaching front along a route",
+    )
+    p_route_fronts.add_argument(
+        "--case", required=True,
+        help="Calibration case dir (e.g. data/calibration/2026-05-31_route_test)",
+    )
+    p_route_fronts.add_argument(
+        "--model", default=None,
+        help="Model key in the case; omit to run every model in the case",
+    )
+    p_route_fronts.add_argument(
+        "--waypoints", required=True,
+        help='Space-separated ICAO/navaid/fix codes (e.g. "LFQA DIKOL BILGO LFAT")',
+    )
+    p_route_fronts.add_argument(
+        "--hour", type=float, default=0.0,
+        help="Forecast hour offset from case start (fractional ok). Default 0.",
+    )
+    p_route_fronts.add_argument(
+        "--level", type=int, default=None,
+        help="Pressure level hPa (925/850/700); default = case 850.",
+    )
+    p_route_fronts.add_argument(
+        "--proximity-km", type=float, default=120.0,
+        help="Off-track search radius for nearby fronts (default 120 km).",
+    )
+    p_route_fronts.add_argument(
+        "--no-anomaly-filter", action="store_true",
+        help="Disable the background anomaly filter (keeps orographic gradients).",
+    )
+    p_route_fronts.add_argument(
+        "--no-terrain-mask", action="store_true",
+        help="Disable terrain masking of high-elevation cells.",
+    )
+    p_route_fronts.add_argument(
+        "--airports-db", default="data/nav.db",
+        help="Path to euro_aip airports SQLite DB (default: data/nav.db)",
+    )
+
     # clear-cache
     p_clear = sub.add_parser("clear-cache", help="Delete cached grid data")
     p_clear.add_argument("--cache-dir")
@@ -2498,6 +2602,7 @@ def main() -> None:
         "redraw-zones": _cmd_redraw_zones,
         "plot-hewson": _cmd_plot_hewson,
         "route-hewson": _cmd_route_hewson,
+        "route-fronts": _cmd_route_fronts,
         "clear-cache": _cmd_clear_cache,
     }
     commands[args.command](args)

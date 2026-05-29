@@ -24,7 +24,10 @@ from typing import Sequence
 import numpy as np
 
 from weatherbrief.frontal.case import Case
-from weatherbrief.frontal.detect import compute_hewson_diagnostics
+from weatherbrief.frontal.detect import (
+    compute_frontal_zones,
+    compute_hewson_diagnostics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -280,16 +283,25 @@ def _sample_grids(
 # ---------------------------------------------------------------------------
 
 
-# §2.2 / §2.3 thresholds. A front crossing must clear BOTH the magnitude gate
-# (|∇θe| — a significant air-mass boundary) and the sharpness gate (−∇²θe — a
-# concentrated gradient maximum, not a broad plateau or a col). The advection
-# gate only governs cold/warm classification, not acceptance.
-_DEFAULT_GRADIENT_MIN = 6.0       # K / 100 km  (>4 significant, >8 classical)
-_DEFAULT_NEG_LAPLACIAN_MIN = 1.0  # K / (100 km)²  (concentrated, not a plateau)
-_DEFAULT_ADVECTION_MIN = 0.5      # K / h  (below this: quasi-stationary)
-_DEFAULT_MERGE_KM = 60.0          # collapse multiple zero-crossings on one front
+# §2.2 / §2.3 acceptance gates. A front crossing must clear BOTH the magnitude
+# gate (|∇θe| — a significant air-mass boundary) and the air-mass-jump gate
+# (|Δθe| across a ±window — a genuine change of air mass, not a col/plateau).
+# The advection gate only governs cold/warm classification, not acceptance.
+#
+# Why Δθe and not −∇²θe (the original sharpness gate): TFP = −∇|∇θe|·∇̂θe is
+# *zero at the gradient maximum* — the front axis — and −∇²θe is also ≈0 there
+# by construction (the θe step is near-linear through its inflection). So
+# gating −∇²θe ≥ k at the TFP zero-crossing rejects essentially every real
+# front (verified on the 2026-05-31 Channel cold front: −∇²θe ≈ 0 at the zero
+# on all three models). The gradient gate already rejects weak cols; the θe
+# jump is the robust air-mass discriminator. −∇²θe is still reported on the
+# FrontCrossing as a diagnostic. See designs note + memory project_hewson_route_locator_gates.
+_DEFAULT_GRADIENT_MIN = 6.0        # K / 100 km  (>4 significant, >8 classical)
+_DEFAULT_DELTA_THETA_E_MIN = 5.0   # K  (|θe jump| across ±window — air-mass contrast)
+_DEFAULT_ADVECTION_MIN = 0.5       # K / h  (below this: quasi-stationary)
+_DEFAULT_MERGE_KM = 60.0           # collapse multiple zero-crossings on one front
 _DEFAULT_AIRMASS_WINDOW_KM = 75.0  # ± window to measure the θe jump across a front
-_DEFAULT_STEP_KM = 15.0           # ~2 samples per 0.25° cell (~28 km)
+_DEFAULT_STEP_KM = 15.0            # ~2 samples per 0.25° cell (~28 km)
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -397,7 +409,7 @@ def detect_front_crossings(
     samples: Sequence[dict],
     *,
     gradient_min: float = _DEFAULT_GRADIENT_MIN,
-    neg_laplacian_min: float = _DEFAULT_NEG_LAPLACIAN_MIN,
+    delta_theta_e_min: float = _DEFAULT_DELTA_THETA_E_MIN,
     advection_min: float = _DEFAULT_ADVECTION_MIN,
     merge_km: float = _DEFAULT_MERGE_KM,
     airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
@@ -412,12 +424,18 @@ def detect_front_crossings(
     precompute NPZ can both feed it.
 
     A crossing is a TFP sign change between adjacent samples whose interpolated
-    zero point clears the gradient (magnitude) and −∇²θe (sharpness) gates. This
-    is the Hewson locator restricted to the route: the sharpness gate rejects
-    the gradient *cols* that produce half of all TFP zero-crossings, and the
-    magnitude gate rejects weak/dry boundaries. Adjacent surviving crossings
-    within ``merge_km`` are collapsed to the strongest (one physical front can
-    straddle several dense steps).
+    zero point clears the gradient (magnitude) gate AND whose θe jump across
+    ±``airmass_window_km`` clears the air-mass-jump gate. This is the Hewson
+    locator restricted to the route: the gradient gate rejects weak/dry
+    boundaries, the Δθe gate rejects gradient *cols* (which have a strong local
+    gradient but no net change of air mass). Adjacent surviving crossings within
+    ``merge_km`` are collapsed to the strongest (one physical front can straddle
+    several dense steps).
+
+    Note the air-mass-jump gate replaced an earlier −∇²θe "sharpness" gate: −∇²θe
+    is ≈0 at the TFP zero by construction, so gating on it there suppressed real
+    fronts (see the module-level threshold comment). −∇²θe is still reported on
+    each :class:`FrontCrossing` for diagnostics.
     """
     raw: list[FrontCrossing] = []
     for a, b in zip(samples[:-1], samples[1:]):
@@ -438,14 +456,15 @@ def detect_front_crossings(
             return float(va + frac * (vb - va))
 
         grad = _interp("gradient")
-        neg_lap = _interp("neg_laplacian")
-        if not (np.isfinite(grad) and np.isfinite(neg_lap)):
+        if not np.isfinite(grad) or grad < gradient_min:
             continue
-        if grad < gradient_min or neg_lap < neg_laplacian_min:
+
+        dist = _interp("distance_km")
+        delta_theta_e = _airmass_delta(samples, dist, airmass_window_km)
+        if not np.isfinite(delta_theta_e) or abs(delta_theta_e) < delta_theta_e_min:
             continue
 
         adv = _interp("advection")
-        dist = _interp("distance_km")
         if adv > advection_min:
             kind = "warm"
         elif adv < -advection_min:
@@ -459,11 +478,11 @@ def detect_front_crossings(
                 lon=_interp("lon"),
                 distance_km=dist,
                 gradient=grad,
-                neg_laplacian=neg_lap,
+                neg_laplacian=_interp("neg_laplacian"),
                 advection=adv,
                 tfp_before=float(ta),
                 tfp_after=float(tb),
-                delta_theta_e=_airmass_delta(samples, dist, airmass_window_km),
+                delta_theta_e=delta_theta_e,
                 kind=kind,
                 intensity=_intensity_label(grad),
             )
@@ -560,4 +579,372 @@ def bilinear_sample(
     return float(
         (1.0 - fy) * ((1.0 - fx) * g00 + fx * g01)
         + fy * ((1.0 - fx) * g10 + fx * g11)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Off-track proximity: fronts the route does NOT cross but passes close to.
+#
+# A pure on-track locator (detect_front_crossings) answers "does a front cross
+# my track?". For route-SIGMET it is not enough: a sharp front can sit a few
+# tens of km off the route — beside it, or just beyond the destination the route
+# stops short of — and still be the dominant hazard, especially if it is moving
+# onto the track. find_nearby_fronts extracts the gated front *axis* on the grid
+# near the route and reports the single nearest front + whether it is closing.
+#
+# Orographic / sea-land θe gradients are persistent, not transient, so they are
+# rejected by an anomaly filter (gradient minus the time-mean "background"
+# gradient), mirroring tracking.apply_anomaly_filter. Without it the scan
+# false-alarms on e.g. the Alpine foothills (verified on the 2026-05-31 Leg 1).
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_PROXIMITY_KM = 120.0      # lateral/ahead search radius around the route
+_DEFAULT_ANOMALY_MIN = 2.0         # K/100km gradient anomaly above background
+_DEFAULT_APPROACH_DH = 2.0         # h ahead used to judge closing vs receding
+_CLOSING_RATE_KM = 8.0             # |Δdistance| over the window to call it moving
+
+
+@dataclass(frozen=True)
+class GatedFrontPoint:
+    """One grid cell sitting on a gated front axis (a TFP zero-line)."""
+    lat: float
+    lon: float
+    gradient: float        # |∇θe|  K/100km
+    delta_theta_e: float   # |θe jump| across ±window along the gradient, K
+    anomaly: float         # gradient − background, K/100km (NaN if no background)
+
+
+@dataclass(frozen=True)
+class FrontProximity:
+    """Nearest gated front to a route, with its approach sense.
+
+    ``distance_km`` is the great-circle distance from the closest route point to
+    the front axis. ``on_track`` is True when that distance is within the
+    densification step (i.e. the front is effectively crossed and also shows up
+    in :func:`find_route_fronts`). ``trend`` is one of ``closing`` / ``receding``
+    / ``steady`` / ``unknown``; ``closing_km_per_h`` is signed (negative = the
+    front is getting closer) or None when no approach test was run.
+    """
+    distance_km: float
+    lat: float
+    lon: float
+    gradient: float
+    delta_theta_e: float
+    on_track: bool
+    trend: str
+    closing_km_per_h: float | None
+
+
+@dataclass(frozen=True)
+class RouteFrontAnalysis:
+    """Full per-route frontal picture for one model at one valid hour."""
+    model: str
+    hour: float
+    crossings: list[FrontCrossing]      # fronts the track crosses
+    nearest: FrontProximity | None      # nearest front (may be on- or off-track)
+
+
+def _hewson_grids_at(
+    case: Case,
+    model: str,
+    hour: float,
+    *,
+    level_hPa: int | None = None,
+    terrain_mask: np.ndarray | None = None,
+) -> dict | None:
+    """Hewson diagnostic grids (gradient, tfp, dT_dx, dT_dy, theta_e) at a
+    fractional hour, linearly interpolated between bounding available hours.
+    Returns None when the hour is outside the case range.
+    """
+    avail = case.available_hours(model)
+    lo, hi = _bracket(avail, hour)
+    if lo is None or hi is None:
+        return None
+
+    def _diag(h: int) -> dict:
+        f = case.fields(model, h, level_hPa)
+        d = compute_hewson_diagnostics(
+            f["theta_e"], case.lat, case.lon,
+            u=f["u850"], v=f["v850"], terrain_mask=terrain_mask,
+        )
+        return {
+            "gradient": d["gradient"], "tfp": d["tfp"],
+            "dT_dx": d["dT_dx"], "dT_dy": d["dT_dy"], "theta_e": f["theta_e"],
+        }
+
+    if lo == hi:
+        return _diag(lo)
+    w = (hour - lo) / (hi - lo)
+    g0, g1 = _diag(lo), _diag(hi)
+    return {k: (1.0 - w) * g0[k] + w * g1[k] for k in g0}
+
+
+def compute_background_gradient(
+    case: Case,
+    model: str,
+    *,
+    level_hPa: int | None = None,
+    terrain_mask: np.ndarray | None = None,
+    hour_stride: int = 6,
+) -> np.ndarray:
+    """Time-mean |∇θe| over the case's forecast hours — the persistent
+    (orographic / sea-land) background used to anomaly-filter route fronts.
+
+    Sampled every ``hour_stride`` hours to bound cost; the mean is dominated by
+    persistent features either way (a front passing through for a few hours
+    barely moves a multi-day mean).
+    """
+    hours = case.available_hours(model)
+    sampled = hours[::hour_stride] or hours
+    acc: np.ndarray | None = None
+    n = 0
+    for h in sampled:
+        f = case.fields(model, h, level_hPa)
+        if f is None:
+            continue
+        g = compute_frontal_zones(
+            f["theta_e"], case.lat, case.lon, terrain_mask=terrain_mask,
+        )["gradient"]
+        acc = g if acc is None else acc + g
+        n += 1
+    if acc is None or n == 0:
+        return np.zeros((len(case.lat), len(case.lon)))
+    return acc / n
+
+
+def _route_bbox(
+    dense: Sequence[tuple[float, float, float]], margin_km: float,
+) -> tuple[float, float, float, float]:
+    """(lat_min, lat_max, lon_min, lon_max) around a route + a km margin."""
+    las = [p[0] for p in dense]
+    los = [p[1] for p in dense]
+    mlat = margin_km / 111.0
+    mlon = margin_km / (111.0 * float(np.cos(np.radians(np.mean(las)))))
+    return (min(las) - mlat, max(las) + mlat, min(los) - mlon, max(los) + mlon)
+
+
+def extract_gated_fronts(
+    case: Case,
+    model: str,
+    hour: float,
+    *,
+    bbox: tuple[float, float, float, float] | None = None,
+    level_hPa: int | None = None,
+    terrain_mask: np.ndarray | None = None,
+    background: np.ndarray | None = None,
+    gradient_min: float = _DEFAULT_GRADIENT_MIN,
+    delta_theta_e_min: float = _DEFAULT_DELTA_THETA_E_MIN,
+    anomaly_min: float = _DEFAULT_ANOMALY_MIN,
+    airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
+) -> list[GatedFrontPoint]:
+    """Grid cells on a gated front axis (TFP zero-line) within ``bbox``.
+
+    A cell qualifies when (1) TFP changes sign to its east or north neighbour —
+    the front axis passes through the cell, (2) |∇θe| ≥ ``gradient_min``,
+    (3) when ``background`` is given, the gradient anomaly (gradient − background)
+    ≥ ``anomaly_min`` — this rejects persistent orographic / sea-land gradients,
+    and (4) the θe jump across ±``airmass_window_km`` along the gradient ≥
+    ``delta_theta_e_min``. Same gate philosophy as :func:`detect_front_crossings`,
+    applied to the 2-D field instead of the 1-D route series.
+    """
+    grids = _hewson_grids_at(
+        case, model, hour, level_hPa=level_hPa, terrain_mask=terrain_mask,
+    )
+    if grids is None:
+        return []
+    grad, tfp = grids["gradient"], grids["tfp"]
+    dtdx, dtdy, the = grids["dT_dx"], grids["dT_dy"], grids["theta_e"]
+    lat, lon = case.lat, case.lon
+
+    if bbox is None:
+        ila = range(len(lat))
+        jlo = range(len(lon))
+    else:
+        la0, la1, lo0, lo1 = bbox
+        ila = np.where((lat >= la0) & (lat <= la1))[0]
+        jlo = np.where((lon >= lo0) & (lon <= lo1))[0]
+
+    gmag = np.sqrt(dtdx ** 2 + dtdy ** 2)
+    gmag = np.where(gmag > 1e-9, gmag, 1e-9)
+    ux, uy = dtdx / gmag, dtdy / gmag   # unit gradient (cold→warm), dimensionless
+
+    out: list[GatedFrontPoint] = []
+    ny, nx = tfp.shape
+    for i in ila:
+        for j in jlo:
+            t = tfp[i, j]
+            if not np.isfinite(t):
+                continue
+            sign_change = (
+                (j + 1 < nx and np.isfinite(tfp[i, j + 1]) and t * tfp[i, j + 1] < 0)
+                or (i + 1 < ny and np.isfinite(tfp[i + 1, j]) and t * tfp[i + 1, j] < 0)
+            )
+            if not sign_change:
+                continue
+            if terrain_mask is not None and not terrain_mask[i, j]:
+                continue  # high-terrain cell — orographic θe, not a synoptic front
+            g = float(grad[i, j])
+            if not np.isfinite(g) or g < gradient_min:
+                continue
+            anomaly = float("nan")
+            if background is not None:
+                anomaly = g - float(background[i, j])
+                if anomaly < anomaly_min:
+                    continue
+            la, lo = float(lat[i]), float(lon[j])
+            dlat = (uy[i, j] * airmass_window_km) / 111.0
+            dlon = (ux[i, j] * airmass_window_km) / (
+                111.0 * float(np.cos(np.radians(la)))
+            )
+            warm = bilinear_sample(the, lat, lon, la + dlat, lo + dlon)
+            cold = bilinear_sample(the, lat, lon, la - dlat, lo - dlon)
+            dthe = warm - cold
+            if not np.isfinite(dthe) or abs(dthe) < delta_theta_e_min:
+                continue
+            out.append(GatedFrontPoint(
+                lat=la, lon=lo, gradient=g, delta_theta_e=float(dthe),
+                anomaly=anomaly,
+            ))
+    return out
+
+
+def _nearest_front(
+    dense: Sequence[tuple[float, float, float]],
+    cells: Sequence[GatedFrontPoint],
+) -> tuple[float, GatedFrontPoint] | None:
+    """(min great-circle distance, the front cell) from a route to gated cells."""
+    best: tuple[float, GatedFrontPoint] | None = None
+    for c in cells:
+        d = min(haversine_km(la, lo, c.lat, c.lon) for la, lo, _ in dense)
+        if best is None or d < best[0]:
+            best = (d, c)
+    return best
+
+
+def find_nearby_fronts(
+    case: Case,
+    model: str,
+    waypoints: Sequence[tuple[float, float]],
+    hour: float,
+    *,
+    level_hPa: int | None = None,
+    terrain_mask: np.ndarray | None = None,
+    proximity_km: float = _DEFAULT_PROXIMITY_KM,
+    step_km: float = _DEFAULT_STEP_KM,
+    gradient_min: float = _DEFAULT_GRADIENT_MIN,
+    delta_theta_e_min: float = _DEFAULT_DELTA_THETA_E_MIN,
+    anomaly_min: float = _DEFAULT_ANOMALY_MIN,
+    airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
+    use_anomaly_filter: bool = True,
+    approach_dh: float | None = _DEFAULT_APPROACH_DH,
+    on_track_km: float | None = None,
+    background: np.ndarray | None = None,
+) -> FrontProximity | None:
+    """Nearest gated front to a route, with a closing/receding verdict.
+
+    Walks the densified route, extracts gated front cells in a ``proximity_km``
+    bbox, and returns the single closest front. When ``approach_dh`` is set the
+    same scan is repeated ``approach_dh`` hours later and the change in nearest
+    distance classifies the front as closing / receding / steady. Returns None
+    when no gated front exists within the bbox. Pass a precomputed
+    ``background`` to avoid recomputing it across calls.
+    """
+    dense = densify_route(waypoints, step_km=step_km)
+    if len(dense) < 1:
+        return None
+    bbox = _route_bbox(dense, proximity_km)
+    if use_anomaly_filter and background is None:
+        background = compute_background_gradient(
+            case, model, level_hPa=level_hPa, terrain_mask=terrain_mask,
+        )
+
+    def _cells(h: float) -> list[GatedFrontPoint]:
+        return extract_gated_fronts(
+            case, model, h, bbox=bbox, level_hPa=level_hPa,
+            terrain_mask=terrain_mask, background=background,
+            gradient_min=gradient_min, delta_theta_e_min=delta_theta_e_min,
+            anomaly_min=anomaly_min, airmass_window_km=airmass_window_km,
+        )
+
+    near = _nearest_front(dense, _cells(hour))
+    if near is None:
+        return None
+    dist, cell = near
+
+    trend, rate = "unknown", None
+    if approach_dh:
+        # Track the SAME front forward: find the cell at hour+dh closest to this
+        # front's current position (not the nearest-to-route, which could be a
+        # different front), then measure how its route distance changed. Comparing
+        # nearest-to-route at two times conflates distinct fronts when several are
+        # near and gives a meaningless rate.
+        later_cells = _cells(hour + approach_dh)
+        same = min(
+            later_cells,
+            key=lambda c: haversine_km(cell.lat, cell.lon, c.lat, c.lon),
+            default=None,
+        )
+        # Only trust the association if the front didn't jump implausibly far.
+        if same is not None and haversine_km(cell.lat, cell.lon, same.lat, same.lon) <= proximity_km:
+            dist_later = min(haversine_km(la, lo, same.lat, same.lon) for la, lo, _ in dense)
+            rate = (dist_later - dist) / approach_dh
+            delta = dist_later - dist
+            trend = (
+                "closing" if delta < -_CLOSING_RATE_KM
+                else "receding" if delta > _CLOSING_RATE_KM
+                else "steady"
+            )
+
+    threshold = on_track_km if on_track_km is not None else step_km
+    return FrontProximity(
+        distance_km=dist, lat=cell.lat, lon=cell.lon, gradient=cell.gradient,
+        delta_theta_e=cell.delta_theta_e, on_track=dist <= threshold,
+        trend=trend, closing_km_per_h=rate,
+    )
+
+
+def analyze_route_fronts(
+    case: Case,
+    model: str,
+    waypoints: Sequence[tuple[float, float]],
+    hour: float,
+    *,
+    level_hPa: int | None = None,
+    terrain_mask: np.ndarray | None = None,
+    step_km: float = _DEFAULT_STEP_KM,
+    proximity_km: float = _DEFAULT_PROXIMITY_KM,
+    approach_dh: float | None = _DEFAULT_APPROACH_DH,
+    gradient_min: float = _DEFAULT_GRADIENT_MIN,
+    delta_theta_e_min: float = _DEFAULT_DELTA_THETA_E_MIN,
+    advection_min: float = _DEFAULT_ADVECTION_MIN,
+    merge_km: float = _DEFAULT_MERGE_KM,
+    airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
+    anomaly_min: float = _DEFAULT_ANOMALY_MIN,
+    use_anomaly_filter: bool = True,
+) -> RouteFrontAnalysis:
+    """End-to-end per-route frontal analysis for one model at one valid hour.
+
+    Combines the on-track locator (:func:`find_route_fronts`) with the off-track
+    proximity scan (:func:`find_nearby_fronts`) into one structured result — the
+    "what fronts does this leg cross, and what front is it about to run into?"
+    answer that feeds route-SIGMET advisories (#168).
+    """
+    crossings = find_route_fronts(
+        case, model, waypoints, hour,
+        level_hPa=level_hPa, step_km=step_km, terrain_mask=terrain_mask,
+        gradient_min=gradient_min, delta_theta_e_min=delta_theta_e_min,
+        advection_min=advection_min, merge_km=merge_km,
+        airmass_window_km=airmass_window_km,
+    )
+    nearest = find_nearby_fronts(
+        case, model, waypoints, hour,
+        level_hPa=level_hPa, terrain_mask=terrain_mask,
+        proximity_km=proximity_km, step_km=step_km, gradient_min=gradient_min,
+        delta_theta_e_min=delta_theta_e_min, anomaly_min=anomaly_min,
+        airmass_window_km=airmass_window_km, use_anomaly_filter=use_anomaly_filter,
+        approach_dh=approach_dh,
+    )
+    return RouteFrontAnalysis(
+        model=model, hour=float(hour), crossings=crossings, nearest=nearest,
     )
