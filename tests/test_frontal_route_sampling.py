@@ -117,7 +117,7 @@ def _synthetic_case(n_hours: int = 3) -> Case:
     )
 
     # Monkey-patch fields / available_hours — synthetic grids don't live on disk
-    case.fields = lambda model, hour, _src=fields_by_hour: _src.get(hour)  # type: ignore
+    case.fields = lambda model, hour, level_hPa=None, _src=fields_by_hour: _src.get(hour)  # type: ignore
     case.available_hours = lambda model: list(range(n_hours))              # type: ignore
     return case
 
