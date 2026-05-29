@@ -21,6 +21,7 @@ venv/
 web/test-results
 
 tmp
+debug
 
 .claude/worktrees
 .claude/projects
