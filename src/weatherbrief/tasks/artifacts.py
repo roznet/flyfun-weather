@@ -151,8 +151,10 @@ def _write_sounding_sidecar(pack_dir: Path, manifest: RouteAnalysesManifest) -> 
         from weatherbrief.storage.sounding_profiles import write_sounding_sidecar
 
         # Dump WITHOUT the derived_levels exclude so _build_sounding_profile
-        # finds them present and does not recompute.
-        ra_full = json.loads(manifest.model_dump_json())
+        # finds them present and does not recompute. mode="json" yields a dict
+        # with JSON-compatible types (datetime → ISO string) and skips the lossy
+        # serialise-then-parse float round-trip.
+        ra_full = manifest.model_dump(mode="json")
         cs_data = json.loads(cs_path.read_text())
         count = write_sounding_sidecar(pack_dir, ra_full, cs_data)
         logger.debug("Wrote sounding sidecar with %d profiles to %s", count, pack_dir)

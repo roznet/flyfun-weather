@@ -19,6 +19,7 @@ import gzip
 import json
 import logging
 from datetime import datetime
+from math import exp
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -137,7 +138,7 @@ def _build_sounding_profile(
                 for dl in onthefly_result.derived_levels:
                     derived_by_pressure[dl.pressure_hpa] = dl.model_dump()
         except Exception:
-            logging.getLogger(__name__).debug("On-the-fly sounding analysis failed", exc_info=True)
+            logger.debug("On-the-fly sounding analysis failed", exc_info=True)
 
     sorted_levels = sorted(hourly.pressure_levels, key=lambda x: x.pressure_hpa, reverse=True)
     levels = []
@@ -159,7 +160,6 @@ def _build_sounding_profile(
             rh = pl.relative_humidity_pct
         elif rh is None and pl.dewpoint_c is not None:
             # Magnus formula: RH ≈ 100 × exp(17.67×Td/(Td+243.5) - 17.67×T/(T+243.5))
-            from math import exp
             try:
                 rh = round(100.0 * exp(
                     17.67 * pl.dewpoint_c / (pl.dewpoint_c + 243.5)
@@ -175,16 +175,15 @@ def _build_sounding_profile(
         # θe: Bolton (1980) approximation
         theta_e = dl.get("theta_e_k")
         if theta_e is None and pl.dewpoint_c is not None:
-            from math import exp as _exp
             try:
                 T_K = pl.temperature_c + 273.15
                 # Mixing ratio from dewpoint
-                e = 6.112 * _exp(17.67 * pl.dewpoint_c / (pl.dewpoint_c + 243.5))
+                e = 6.112 * exp(17.67 * pl.dewpoint_c / (pl.dewpoint_c + 243.5))
                 r = 0.622 * e / (pl.pressure_hpa - e)  # kg/kg
                 # Potential temperature
                 theta = T_K * (1000.0 / pl.pressure_hpa) ** 0.2854
                 # θe ≈ θ × exp(Lv × r / (cp × T))
-                theta_e = round(theta * _exp(2.501e6 * r / (1004.0 * T_K)), 1)
+                theta_e = round(theta * exp(2.501e6 * r / (1004.0 * T_K)), 1)
             except Exception:
                 pass
 
@@ -215,7 +214,7 @@ def _build_sounding_profile(
 
         levels.append(SoundingProfileLevel(
             pressure_hpa=pl.pressure_hpa,
-            altitude_ft=alt_ft or dl.get("altitude_ft"),
+            altitude_ft=alt_ft if alt_ft is not None else dl.get("altitude_ft"),
             temperature_c=pl.temperature_c,
             dewpoint_c=pl.dewpoint_c,
             wind_speed_kt=pl.wind_speed_kt,
