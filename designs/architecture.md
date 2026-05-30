@@ -247,7 +247,7 @@ data/packs/
             ├── forecasts.json          # Route + metadata + raw forecasts only
             ├── cross_section.json
             ├── route_analyses.json    # RouteAnalysesManifest (derived_levels stripped)
-            ├── sounding_profiles.json.gz # Sidecar: shaped sounding profiles per (point,model); written at refresh from the in-memory manifest so bundle/Skew-T endpoints skip MetPy recompute. Online viewer never loads it. T1-stripped with cross_section.json.
+            ├── sounding_profiles.json.gz # Sidecar (see note below)
             ├── elevation_profile.json # ElevationProfile (SRTM terrain)
             ├── gramet.pdf             # GRAMET cross-section (PDF)
             ├── skewt/
@@ -257,6 +257,8 @@ data/packs/
             ├── digest.md
             └── digest.json
 ```
+
+`sounding_profiles.json.gz` holds shaped sounding profiles per (point, model), written at refresh time from the in-memory manifest so the bundle and Skew-T endpoints skip the MetPy recompute. The online viewer never loads it, and it is stripped at T1 retention alongside `cross_section.json`.
 
 Path components are sanitized via `safe_path_component()` to prevent traversal attacks.
 

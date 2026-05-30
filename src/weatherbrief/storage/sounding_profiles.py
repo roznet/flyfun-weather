@@ -286,9 +286,13 @@ def _sounding_key(point_index: int, model: str) -> str:
 def build_sounding_sidecar(ra_data: dict, cs_data: dict) -> dict[str, dict]:
     """Build the ``{ "sounding-{pt}-{model}": <profile dict>, ... }`` mapping.
 
-    ``ra_data`` must be the *full* route-analyses dict (``derived_levels``
-    present) so :func:`_build_sounding_profile` does **not** recompute. Keys and
-    value shape are exactly what ``get_bundle`` produces today.
+    ``ra_data`` should ideally be the *full* route-analyses dict
+    (``derived_levels`` present) so :func:`_build_sounding_profile` does **not**
+    recompute — this is the refresh-time path. It also works with the on-disk
+    ``route_analyses.json`` (``derived_levels`` stripped), in which case each
+    profile recomputes via ``analyze_sounding`` (~50–200 ms each); that is the
+    intentional fallback used by ``get_bundle`` for packs predating the sidecar.
+    Keys and value shape are exactly what ``get_bundle`` produces today.
     """
     out: dict[str, dict] = {}
     models = ra_data.get("models", [])
@@ -313,7 +317,13 @@ def write_sounding_sidecar(pack_dir: Path, ra_data: dict, cs_data: dict) -> int:
     if not sidecar:
         return 0
     payload = json.dumps(sidecar, separators=(",", ":")).encode()
-    (pack_dir / SIDECAR_FILENAME).write_bytes(gzip.compress(payload))
+    # Write atomically: a crash between compress and a direct write_bytes could
+    # leave a truncated gzip. read_sounding_sidecar tolerates that (falls back
+    # to recompute), but temp-file + rename avoids it entirely. rename() is
+    # atomic on POSIX when src and dst share a filesystem — always true here.
+    tmp_path = pack_dir / (SIDECAR_FILENAME + ".tmp")
+    tmp_path.write_bytes(gzip.compress(payload))
+    tmp_path.rename(pack_dir / SIDECAR_FILENAME)
     return len(sidecar)
 
 
