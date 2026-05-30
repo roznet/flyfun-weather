@@ -175,7 +175,9 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   });
 
   // --- Mock flights list ---
-  await page.route('**/api/flights', route => {
+  // Regex (not a glob) so it also matches the paginated `?past_limit=…` query
+  // string the store now sends; bare `**/api/flights` would miss it.
+  await page.route(/\/api\/flights(\?.*)?$/, route => {
     const url = route.request().url();
     const method = route.request().method();
 
