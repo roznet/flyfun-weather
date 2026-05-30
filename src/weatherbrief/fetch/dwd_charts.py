@@ -182,6 +182,7 @@ def parse_run_cycle_dt(run_cycle: str) -> datetime | None:
 def select_default_chart_id(
     departure_time: datetime,
     run_cycle: str,
+    available_ids: set[str] | None = None,
 ) -> str:
     """Pick the chart whose estimated valid time best brackets the flight ETD.
 
@@ -190,6 +191,13 @@ def select_default_chart_id(
       - else: nearest forecast offset (tie-break toward earlier offset)
       - if ETD beyond the +108h horizon, caller should set ``within_horizon=False``
         BEFORE calling this; we still return ``"108"`` defensively.
+
+    ``available_ids`` constrains the choice to charts that were actually
+    fetched. DWD's server is flaky and individual forecast charts can fail
+    independently (recorded in ``report.charts_failed``), so without this
+    filter we could default to an offset whose PNG was never cached — the
+    renderer would then 410 and show a blank error. Falls back to "ana" when
+    no forecast charts are available.
     """
     issued = parse_run_cycle_dt(run_cycle)
     if issued is None:
@@ -197,7 +205,13 @@ def select_default_chart_id(
     delta_hours = (departure_time - issued).total_seconds() / 3600.0
     if delta_hours < 3:
         return "ana"
-    forecast_ids = ("036", "048", "060", "084", "108")
+    forecast_ids = tuple(
+        cid
+        for cid in ("036", "048", "060", "084", "108")
+        if available_ids is None or cid in available_ids
+    )
+    if not forecast_ids:
+        return "ana"
     return min(
         forecast_ids,
         key=lambda cid: (abs(FORECAST_OFFSETS_H[cid] - delta_hours), FORECAST_OFFSETS_H[cid]),

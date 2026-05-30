@@ -115,6 +115,24 @@ def test_select_default_chart_etd_beyond_horizon_returns_108():
     ) == "108"
 
 
+def test_select_default_skips_unavailable_offsets():
+    """A forecast chart can fail to fetch — never default to a missing one."""
+    issued = datetime(2026, 5, 8, 6, 0, tzinfo=timezone.utc)
+    available = {"ana", "036", "048", "060", "084"}  # 108 failed to fetch
+    # 108h out would normally pick 108; constrained, falls back to nearest available (084)
+    assert select_default_chart_id(
+        issued + timedelta(hours=108), "2026-05-08T06Z", available_ids=available,
+    ) == "084"
+    # within the available range it still picks the true nearest
+    assert select_default_chart_id(
+        issued + timedelta(hours=48), "2026-05-08T06Z", available_ids=available,
+    ) == "048"
+    # no forecast charts available at all -> analysis
+    assert select_default_chart_id(
+        issued + timedelta(hours=48), "2026-05-08T06Z", available_ids={"ana"},
+    ) == "ana"
+
+
 # ---------------------------------------------------------------------------
 # refresh_charts
 # ---------------------------------------------------------------------------

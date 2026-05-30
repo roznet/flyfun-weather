@@ -93,7 +93,13 @@ def run_dwd_charts(
             within_horizon=False,
         )
 
-    default_id = select_default_chart_id(departure_time, report.run_cycle)
+    # Constrain the default to charts that were actually fetched — DWD's
+    # server is flaky and a forecast chart can fail, leaving a default that
+    # would 410 at render time.
+    available = set(report.charts_refreshed) | set(report.charts_unchanged)
+    default_id = select_default_chart_id(
+        departure_time, report.run_cycle, available_ids=available
+    )
 
     if report.charts_failed:
         logger.info(
