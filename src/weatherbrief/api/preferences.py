@@ -66,6 +66,7 @@ class PreferencesResponse(BaseModel):
     locale: str
     units_region: str
     synoptic_forecast_map_enabled: bool
+    defer_email_for_model_update: bool
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
 
@@ -87,6 +88,7 @@ class PreferencesUpdate(BaseModel):
     locale: str | None = None
     units_region: Literal["auto", "europe", "us"] | None = None
     synoptic_forecast_map_enabled: bool | None = None
+    defer_email_for_model_update: bool | None = None
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -131,6 +133,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
         "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
+        "defer_email_for_model_update": data.get("defer_email_for_model_update", False),
     }
 
 
@@ -252,6 +255,8 @@ def update_preferences(
         data["units_region"] = body.units_region
     if body.synoptic_forecast_map_enabled is not None:
         data["synoptic_forecast_map_enabled"] = body.synoptic_forecast_map_enabled
+    if body.defer_email_for_model_update is not None:
+        data["defer_email_for_model_update"] = body.defer_email_for_model_update
 
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)
@@ -371,6 +376,22 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
         return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "soft_nwp", "convective_method": "nwp", "units_region": "auto"}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
+
+
+def load_defer_email_for_model_update(db: Session, user_id: str) -> bool:
+    """Return the user's "defer auto-refresh email for an imminent model run".
+
+    Opt-in account preference (default ``False`` = current behaviour). Read by
+    the auto-refresh scheduler (issue #192, Lever 1). The silent NULL-default
+    snap (Lever 2) does not consult this — it applies regardless.
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if not row or not row.app_prefs_json:
+        return False
+    try:
+        return bool(json.loads(row.app_prefs_json).get("defer_email_for_model_update", False))
+    except json.JSONDecodeError:
+        return False
 
 
 def can_view_pireps(db: Session, user_id: str) -> bool:

@@ -32,6 +32,36 @@ logger = logging.getLogger(__name__)
 _POLL_INTERVAL_SECONDS = 600  # 10 minutes
 _STARTUP_DELAY_SECONDS = 30
 _PREFLIGHT_LEAD_HOURS = 2
+
+# --- Model-update-aware email timing (issue #192) --------------------------
+# When a flight's regular auto-refresh slot is scheduled to fire shortly
+# *before* a fresh, horizon-extending model run lands, defer the send so the
+# briefing rides the newer run instead of being stale-at-birth. Strictly
+# bounded, only ever defers (firing earlier is never useful), and never applied
+# on/near the day of the flight — timeliness wins there (the preflight slot
+# already guarantees a final refresh near departure).
+#
+# "Big" run = ECMWF full-horizon 00/12Z delivery (168h, landing ~06:40/18:40
+# UTC). The 06/18Z cycles reach only 90h, so waiting for them far out would
+# give a *shorter* horizon — they are excluded by next_full_horizon_run().
+# ECMWF covers Europe + US and is the horizon-extending primary for both, so it
+# is used region-agnostically; region-aware multi-model selection (ICON-EU /
+# ARPEGE / GFS) is a documented future extension.
+_MODEL_UPDATE_SOURCE = "ecmwf:direct"
+_MODEL_UPDATE_MODEL = "ecmwf"
+# Only defer when the regular slot is at least this many calendar days before
+# the flight. On the day of / day before, timeliness beats freshness.
+_MODEL_UPDATE_MIN_DAYS_OUT = 2
+# A big run must be expected within this window *after* the regular slot for a
+# defer to be worthwhile. Slots earlier than this already ride a fresh run.
+_MODEL_UPDATE_WAIT_WINDOW = timedelta(hours=2)
+# Buffer after the expected delivery so the run has actually landed + decoded
+# before we build the brief (mirrors the forecast-fetch +15m offset).
+_MODEL_UPDATE_MARGIN = timedelta(minutes=20)
+# Hard cap on how far a slot may be deferred, so a slipping run never delays the
+# email indefinitely. >= WAIT_WINDOW + MARGIN so a legitimate wait is never
+# clipped, with headroom for a modest slip.
+_MODEL_UPDATE_MAX_WAIT = timedelta(hours=2, minutes=30)
 _RETENTION_INTERVAL_SECONDS = 86_400  # 24 hours
 _RETENTION_STARTUP_DELAY_SECONDS = 120  # let auto-refresh settle first
 _VERIF_POLL_SECONDS = 600  # 10 minutes
@@ -152,6 +182,10 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
     )
     rows = db.execute(stmt).scalars().all()
 
+    from weatherbrief.fetch.freshness.markers import get_store
+    store = get_store()
+    defer_cache: dict[str, bool] = {}
+
     due: list[FlightRow] = []
     for row in rows:
         flight_start = _flight_start_dt(row)
@@ -162,17 +196,51 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
         if now_utc >= flight_start:
             continue
 
-        due_at = _next_due_at(row, flight_start, now_utc)
+        # Model-update-aware timing (issue #192) applies to the silent
+        # NULL-default majority (Lever 2: snap out of the pre-delivery
+        # dead-zone) and to explicit-hour users who opted in (Lever 1).
+        apply_mu = row.auto_refresh_hour is None or _user_defers_for_model_update(
+            db, row.user_id, defer_cache,
+        )
+
+        due_at = _next_due_at(
+            row, flight_start, now_utc,
+            apply_model_update=apply_mu, store=store,
+        )
         if due_at is not None and now_utc >= due_at:
             due.append(row)
 
     return due
 
 
+def _user_defers_for_model_update(
+    db: Session, user_id: str, cache: dict[str, bool],
+) -> bool:
+    """Return the user's opt-in "defer for imminent model update" toggle.
+
+    Cached per scheduler cycle so a batch of one user's flights costs a single
+    preferences read. Defaults to ``False`` (current behaviour) on any error.
+    """
+    if user_id in cache:
+        return cache[user_id]
+    try:
+        from weatherbrief.api.preferences import load_defer_email_for_model_update
+
+        value = load_defer_email_for_model_update(db, user_id)
+    except Exception:
+        logger.debug("Could not load defer preference for %s", user_id, exc_info=True)
+        value = False
+    cache[user_id] = value
+    return value
+
+
 def _next_due_at(
     row: FlightRow,
     flight_start_dt: datetime,
     now_utc: datetime,
+    *,
+    apply_model_update: bool = False,
+    store=None,
 ) -> datetime | None:
     """Absolute UTC datetime when the next auto-refresh is due.
 
@@ -183,6 +251,13 @@ def _next_due_at(
 
     Always returns a time strictly before ``flight_start_dt`` (since
     *preflight* is ``flight_start − PREFLIGHT_LEAD_HOURS``).
+
+    When ``apply_model_update`` is set (issue #192 — NULL-default snap or the
+    opt-in account toggle), the *regular* term may be deferred a bounded amount
+    so the briefing rides an imminent horizon-extending model run instead of
+    being stale-at-birth. Only the regular term is touched; *preflight* is left
+    untouched, and the deferral never applies within
+    ``_MODEL_UPDATE_MIN_DAYS_OUT`` of the flight.
     """
     effective_hour = row.auto_refresh_hour
     if effective_hour is None:
@@ -201,6 +276,11 @@ def _next_due_at(
         effective_hour, tzinfo=timezone.utc,
     )
 
+    if apply_model_update:
+        regular = _defer_regular_for_model_update(
+            regular, flight_start_dt, store,
+        )
+
     # If we already refreshed at or after the pre-flight time, that slot is
     # satisfied — only the regular schedule matters from here on.
     last_refresh = row.last_auto_refresh_at
@@ -210,6 +290,61 @@ def _next_due_at(
         return regular
 
     return min(regular, preflight)
+
+
+def _defer_regular_for_model_update(
+    regular: datetime,
+    flight_start_dt: datetime,
+    store,
+) -> datetime:
+    """Defer the regular slot to ride an imminent full-horizon model run.
+
+    Returns a time ``>= regular`` (deferring earlier is never useful), bounded
+    by ``_MODEL_UPDATE_MAX_WAIT``. Returns ``regular`` unchanged when:
+
+    - the slot is within ``_MODEL_UPDATE_MIN_DAYS_OUT`` of the flight (day-of /
+      day-before — timeliness wins);
+    - no full-horizon run lands within ``_MODEL_UPDATE_WAIT_WINDOW`` after the
+      slot (it already rides a fresh run, or the next big run is far off);
+    - the imminent big run is already in hand (e.g. it arrived early); or
+    - the marker can't confirm the schedule (missing / stale heartbeat).
+
+    Mirrors the forecast-fetch loop's bounded "wait for a slow marker before
+    firing" pattern (``_wait_for_marker_freshness``), plus the day-of asymmetry.
+    """
+    # Day-of / day-before: never defer — the preflight slot owns this window.
+    if (flight_start_dt.date() - regular.date()).days < _MODEL_UPDATE_MIN_DAYS_OUT:
+        return regular
+
+    from weatherbrief.fetch.freshness import LOOP_INTERVAL
+    from weatherbrief.fetch.freshness.markers import get_store
+    from weatherbrief.fetch.freshness.registry import (
+        next_cycle_init_after,
+        next_full_horizon_run,
+    )
+
+    target_init, target_delivery = next_full_horizon_run(_MODEL_UPDATE_SOURCE, regular)
+    # Slot already rides a fresh run, or the next big run is beyond the window.
+    if target_delivery - regular > _MODEL_UPDATE_WAIT_WINDOW:
+        return regular
+
+    if store is None:
+        store = get_store()
+    marker = store.get_sync(_MODEL_UPDATE_SOURCE, _MODEL_UPDATE_MODEL)
+    if marker is None or marker.is_stale(LOOP_INTERVAL):
+        return regular  # can't confirm an imminent delivery — don't gamble
+
+    if marker.init >= target_init:
+        return regular  # the big run is already in hand
+
+    # Slip-aware: if the marker's next expected delivery is for the very cycle
+    # we're waiting on, respect a late-running run (still capped by MAX_WAIT).
+    delivery = target_delivery
+    if next_cycle_init_after(_MODEL_UPDATE_SOURCE, marker.init) == target_init:
+        delivery = max(delivery, marker.next_expected)
+
+    deferred = min(delivery + _MODEL_UPDATE_MARGIN, regular + _MODEL_UPDATE_MAX_WAIT)
+    return deferred if deferred > regular else regular
 
 
 def _flight_start_dt(row: FlightRow) -> datetime | None:

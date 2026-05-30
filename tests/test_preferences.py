@@ -85,6 +85,27 @@ class TestPreferencesAPI:
         resp = client.put("/api/user/preferences", json={"units_region": "metric"})
         assert resp.status_code == 422
 
+    def test_defer_email_for_model_update_round_trip(self, client, app_db):
+        # Default off (current behaviour).
+        assert client.get("/api/user/preferences").json()["defer_email_for_model_update"] is False
+
+        resp = client.put(
+            "/api/user/preferences",
+            json={"defer_email_for_model_update": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["defer_email_for_model_update"] is True
+        assert client.get("/api/user/preferences").json()["defer_email_for_model_update"] is True
+
+        # The scheduler's loader reads the same stored value.
+        from weatherbrief.api.preferences import load_defer_email_for_model_update
+
+        session = app_db()
+        try:
+            assert load_defer_email_for_model_update(session, DEV_USER_ID) is True
+        finally:
+            session.close()
+
     def test_save_flight_defaults(self, client):
         resp = client.put("/api/user/preferences", json={
             "defaults": {

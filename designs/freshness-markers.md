@@ -170,7 +170,7 @@ When tuning registry offsets:
 
 ## References
 
-- Issue #108 (design + acceptance criteria); issue #167 (tiered refresh gate)
+- Issue #108 (design + acceptance criteria); issue #167 (tiered refresh gate); issue #192 (model-update-aware auto-refresh email timing — `scheduler._defer_regular_for_model_update` consumes the store + `registry.next_full_horizon_run`/`max_horizon`)
 - Existing helpers wrapped: `fetch/model_status.py`, `fetch/grib/{grib_fetch,icon_eu_fetch,ecmwf_watcher}.py`
 - Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_finalize_refresh` (records `model_sources`), `_provider_label` (reads `registry.SOURCE_REGISTRY.provider_label`)
 - Tiered gate: `api/packs.py:decide_refresh` + `_refresh_threshold`/`_days_out_now`/`RefreshDecision`, `ModelStatus.covers_horizon`; wired into `refresh_briefing`, `refresh_briefing_stream`, `scheduler._auto_refresh_one`; realtime seam `tasks/route_weather.run_realtime_refresh` (see [metar-taf-route-weather.md](metar-taf-route-weather.md))
