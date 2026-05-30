@@ -36,6 +36,7 @@ const VARIABLE_TO_METRIC: Record<string, string> = {
   'bulk_shear_0_6km_kt': 'bulk_shear_0_6km_kt',
   'max_omega_pa_s': 'max_omega_pa_s',
   'nwp_cape_jkg': 'nwp_cape_jkg',
+  'pressure_msl_hpa': 'qnh',
 };
 
 // --- Core lookup functions ---

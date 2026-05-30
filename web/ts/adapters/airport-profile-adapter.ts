@@ -397,6 +397,9 @@ function synthesizeVizPoint(
     terrainElevationFt: elevationFt,
     temperatureC: surface?.temperature_2m_c ?? null,
     precipitationMm: surface?.precipitation_mm ?? null,
+    // MSL pressure is not part of the airport-profile surface payload, so QNH
+    // has no source here — the route-graph metric renders empty for profiles.
+    qnhHpa: null,
     surfaceObscuration,
   };
 }

@@ -2,7 +2,7 @@
 
 import type { VizRouteData, VizPoint } from '../types';
 import type { RouteGraphRenderer } from './renderer';
-import type { RouteGraphMetric } from './metrics';
+import { getMetricLabel, type RouteGraphMetric } from './metrics';
 import {
   getCanvasX, findNearestPointIndex, ensureTooltip as ensureTooltipEl,
   positionTooltip, hideTooltip as hideTooltipEl, findNearbyWaypoint,
@@ -90,7 +90,7 @@ export function attachRouteGraphInteraction(
     const fmt = v !== null
       ? (metric.formatValue ? metric.formatValue(v) : v.toFixed(1))
       : 'N/A';
-    return `<span style="color:${metric.color}">${metric.label}: ${fmt}</span>`;
+    return `<span style="color:${metric.color}">${getMetricLabel(metric.id)}: ${fmt}</span>`;
   }
 
   function showTooltip(e: MouseEvent, point: VizPoint, idx: number): void {

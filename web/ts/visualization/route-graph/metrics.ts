@@ -2,6 +2,7 @@
 
 import type { VizPoint } from '../types';
 import { t } from '../../i18n/i18n';
+import { getUnitsRegion, qnhUnitLabel, qnhDisplayValue } from '../../units';
 
 export type RenderType = 'line' | 'bar';
 
@@ -98,6 +99,32 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     formatValue: (v) => `${Math.round(v)} J/kg`,
   },
   {
+    id: 'cin',
+    label: 'CIN',
+    unit: 'J/kg',
+    renderType: 'bar',
+    color: '#0d9488',
+    // CIN is convention-negative (energy that inhibits convection), so bars
+    // hang below the zero line — the inhibition "cap" reading next to CAPE.
+    getValue: (p) => p.cinSurfaceJkg,
+    suggestedRange: [-300, 0],
+    formatValue: (v) => `${Math.round(v)} J/kg`,
+  },
+  {
+    id: 'qnh',
+    label: 'QNH',
+    // Region-aware unit (hPa for Europe, inHg for the US). The getter is read
+    // at render time so the axis label matches getValue's converted units.
+    get unit(): string { return qnhUnitLabel(); },
+    renderType: 'line',
+    color: '#475569',
+    // VizPoint carries canonical hPa; convert to the display region's units so
+    // axis ticks/scale and the value agree (hPa ~1013, inHg ~29.92).
+    getValue: (p) => (p.qnhHpa == null ? null : qnhDisplayValue(p.qnhHpa)),
+    formatValue: (v) =>
+      getUnitsRegion() === 'us' ? `${v.toFixed(2)} inHg` : `${Math.round(v)} hPa`,
+  },
+  {
     id: 'freezing-level',
     label: 'Freezing Level',
     unit: 'ft',
@@ -143,6 +170,19 @@ export function getMetricById(id: string): RouteGraphMetric | undefined {
   return ROUTE_GRAPH_METRICS.find((m) => m.id === id);
 }
 
+/**
+ * Localized display name for a metric (used by both the dropdown and the
+ * hover tooltip). Most metrics map straight to their `graph.<id>` i18n key;
+ * QNH is region-aware — "Altimeter" in the US (inHg) vs "QNH" in Europe (hPa),
+ * matching the unit shown on its axis.
+ */
+export function getMetricLabel(id: string): string {
+  if (id === 'qnh') {
+    return getUnitsRegion() === 'us' ? t('graph.altimeter') : t('graph.qnh');
+  }
+  return t('graph.' + id);
+}
+
 /** Get all metric options for dropdown (including a "None" option for the right axis). */
 export function getMetricOptions(includeNone: boolean): Array<{ id: string; label: string }> {
   const options: Array<{ id: string; label: string }> = [];
@@ -150,7 +190,7 @@ export function getMetricOptions(includeNone: boolean): Array<{ id: string; labe
     options.push({ id: METRIC_NONE, label: t('graph.none') });
   }
   for (const m of ROUTE_GRAPH_METRICS) {
-    options.push({ id: m.id, label: t('graph.' + m.id) });
+    options.push({ id: m.id, label: getMetricLabel(m.id) });
   }
   return options;
 }
