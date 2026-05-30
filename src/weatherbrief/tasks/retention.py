@@ -167,10 +167,13 @@ def _purge_heavy_artifacts(pack: BriefingPackRow, pack_dir: Path | None, dry_run
     if pack_dir is None or not pack_dir.exists():
         return 0
 
-    # Skip if already stripped (no heavy artifacts remain).
-    if not pack.has_skewt and not pack.has_gramet:
-        return 0
-
+    # NB: don't gate on has_skewt/has_gramet here. Those flags only track
+    # Skew-T PNGs / GRAMET, but the bulk heavy files (forecasts.json,
+    # cross_section.json, sounding_profiles.json.gz) exist independently of
+    # them — and with generate_skewt=False by default, both flags are commonly
+    # False, which previously skipped the whole purge and leaked those files
+    # past T1 until T2. The per-file exists() checks below already make this
+    # idempotent (a re-run on an already-stripped pack frees 0 bytes cheaply).
     freed = 0
 
     for name in _HEAVY_FILES:

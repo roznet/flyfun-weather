@@ -174,12 +174,29 @@ class TestPurgeHeavyArtifacts:
         assert pack.has_gramet is False
 
     def test_skips_already_stripped(self, db_session, dev_user, tmp_path):
+        # No heavy files left on disk → nothing to free (idempotent re-run).
         pack_dir = _make_pack_dir(tmp_path, heavy=False)
         _insert_flight(db_session, dev_user, departure_days_ago=35)
         pack = _insert_pack(db_session, "flight-1", pack_dir, has_skewt=False, has_gramet=False)
 
         freed = _purge_heavy_artifacts(pack, pack_dir, dry_run=False)
         assert freed == 0
+
+    def test_strips_heavy_files_when_flags_false(self, db_session, dev_user, tmp_path):
+        # Regression: forecasts.json / cross_section.json / the sounding sidecar
+        # exist independently of has_skewt/has_gramet. With generate_skewt=False
+        # (the default) both flags are commonly False — the purge must still
+        # reclaim those heavy files rather than skip the pack and leak them to T2.
+        pack_dir = _make_pack_dir(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=35)
+        pack = _insert_pack(db_session, "flight-1", pack_dir, has_skewt=False, has_gramet=False)
+
+        freed = _purge_heavy_artifacts(pack, pack_dir, dry_run=False)
+
+        assert freed > 0
+        assert not (pack_dir / "forecasts.json").exists()
+        assert not (pack_dir / "cross_section.json").exists()
+        assert not (pack_dir / "sounding_profiles.json.gz").exists()
 
     def test_handles_missing_dir(self, db_session, dev_user, tmp_path):
         nonexistent = tmp_path / "gone"
