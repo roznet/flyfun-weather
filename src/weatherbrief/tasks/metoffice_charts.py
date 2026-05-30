@@ -48,7 +48,6 @@ def run_metoffice_charts(
     route: RouteConfig,
     departure_time: datetime,
     data_dir: Path,
-    pack_dir: Path | None = None,
 ) -> MetofficeChartsResult:
     """Refresh the Met Office chart cache and compute briefing references.
 
@@ -84,7 +83,12 @@ def run_metoffice_charts(
             within_horizon=False,
         )
 
-    default_id = select_default_chart_id(departure_time, report.run_cycle)
+    # Constrain the default to charts that were actually fetched — a 00Z run
+    # may omit +72h/+84h, and defaulting to a missing offset would 410.
+    available = set(report.charts_refreshed) | set(report.charts_unchanged)
+    default_id = select_default_chart_id(
+        departure_time, report.run_cycle, available_ids=available
+    )
 
     if report.charts_failed:
         logger.info(

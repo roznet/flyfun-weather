@@ -147,14 +147,19 @@ def sweep(points: list[ControlPoint], base_proj: dict) -> FitResult:
 
 
 _EXAMPLE = {
-    "_comment": "Pixel origin top-left; x right, y down. 800x540 colour chart.",
+    "_comment": (
+        "Pixel origin top-left; x right, y down. 800x540 colour chart. "
+        "The x,y below are APPROXIMATE (from the current calibration) so the "
+        "example runs without fitting a degenerate all-zero homography — "
+        "REPLACE them with your own clicks when calibrating a fresh chart."
+    ),
     "points": [
-        {"name": "Lands End", "lon": -5.72, "lat": 50.07, "x": 0, "y": 0},
-        {"name": "Brest", "lon": -4.49, "lat": 48.39, "x": 0, "y": 0},
-        {"name": "Gibraltar", "lon": -5.35, "lat": 36.14, "x": 0, "y": 0},
-        {"name": "Bergen", "lon": 5.32, "lat": 60.39, "x": 0, "y": 0},
-        {"name": "Reykjavik", "lon": -21.94, "lat": 64.15, "x": 0, "y": 0},
-        {"name": "Skagen", "lon": 10.59, "lat": 57.72, "x": 0, "y": 0},
+        {"name": "Lands End", "lon": -5.72, "lat": 50.07, "x": 418, "y": 325},
+        {"name": "Brest", "lon": -4.49, "lat": 48.39, "x": 436, "y": 338},
+        {"name": "Gibraltar", "lon": -5.35, "lat": 36.14, "x": 506, "y": 475},
+        {"name": "Bergen", "lon": 5.32, "lat": 60.39, "x": 410, "y": 187},
+        {"name": "Reykjavik", "lon": -21.94, "lat": 64.15, "x": 267, "y": 213},
+        {"name": "Skagen", "lon": 10.59, "lat": 57.72, "x": 453, "y": 188},
     ],
 }
 

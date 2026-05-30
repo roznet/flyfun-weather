@@ -106,6 +106,24 @@ def test_select_default_nearest_offset():
     assert select_default_chart_id(issued + timedelta(hours=18), "2026-05-29T00Z") == "012"
 
 
+def test_select_default_skips_unavailable_offsets():
+    """A 00Z run may omit +72h/+84h — never default to a chart not fetched."""
+    issued = datetime(2026, 5, 29, 0, tzinfo=timezone.utc)
+    available = {"ana", "012", "024", "036", "048", "060"}  # 072/084 missing
+    # 75h out would normally pick 072; constrained, falls back to nearest available (060)
+    assert select_default_chart_id(
+        issued + timedelta(hours=75), "2026-05-29T00Z", available_ids=available
+    ) == "060"
+    # within the available range it still picks the true nearest
+    assert select_default_chart_id(
+        issued + timedelta(hours=48), "2026-05-29T00Z", available_ids=available
+    ) == "048"
+    # no forecast charts available at all -> analysis
+    assert select_default_chart_id(
+        issued + timedelta(hours=48), "2026-05-29T00Z", available_ids={"ana"}
+    ) == "ana"
+
+
 # ---------------------------------------------------------------------------
 # fetch_index
 # ---------------------------------------------------------------------------
