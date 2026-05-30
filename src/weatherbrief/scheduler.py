@@ -232,7 +232,7 @@ def _user_defers_for_model_update(
 
         value = load_defer_email_for_model_update(db, user_id)
     except Exception:
-        logger.debug("Could not load defer preference for %s", user_id, exc_info=True)
+        logger.warning("Could not load defer preference for %s", user_id, exc_info=True)
         value = False
     cache[user_id] = value
     return value
@@ -348,7 +348,13 @@ def _defer_regular_for_model_update(
         delivery = max(delivery, marker.next_expected)
 
     deferred = min(delivery + _MODEL_UPDATE_MARGIN, regular + _MODEL_UPDATE_MAX_WAIT)
-    return deferred if deferred > regular else regular
+    # next_full_horizon_run guarantees delivery > regular and both margin/max-wait
+    # are positive, so the deferred time is always strictly after the slot.
+    logger.info(
+        "Auto-refresh: deferring regular slot %s → %s for imminent %s %02dZ run",
+        regular.isoformat(), deferred.isoformat(), _MODEL_UPDATE_MODEL, target_init.hour,
+    )
+    return deferred
 
 
 def _flight_start_dt(row: FlightRow) -> datetime | None:

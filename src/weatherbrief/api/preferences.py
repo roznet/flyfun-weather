@@ -373,7 +373,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "soft_nwp", "convective_method": "nwp", "units_region": "auto"}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "soft_nwp", "convective_method": "nwp", "units_region": "auto", "defer_email_for_model_update": False}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 
@@ -384,14 +384,11 @@ def load_defer_email_for_model_update(db: Session, user_id: str) -> bool:
     Opt-in account preference (default ``False`` = current behaviour). Read by
     the auto-refresh scheduler (issue #192, Lever 1). The silent NULL-default
     snap (Lever 2) does not consult this — it applies regardless.
+
+    Reuses :func:`load_service_toggles` so the no-row fallback and the JSON
+    parsing stay in one place (the toggle is part of ``_parse_service_toggles``).
     """
-    row = db.get(UserPreferencesRow, user_id)
-    if not row or not row.app_prefs_json:
-        return False
-    try:
-        return bool(json.loads(row.app_prefs_json).get("defer_email_for_model_update", False))
-    except json.JSONDecodeError:
-        return False
+    return bool(load_service_toggles(db, user_id).get("defer_email_for_model_update", False))
 
 
 def can_view_pireps(db: Session, user_id: str) -> bool:
