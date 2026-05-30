@@ -671,38 +671,41 @@ class TestNextDueAtModelUpdate:
         return store
 
     def test_null_default_snaps_out_of_dead_zone(self):
-        # Departure 07:00 → default hour 06:00 lands in the pre-delivery dead
-        # zone; with the snap it rides the 00Z run at 07:00.
-        row = _make_row(departure_time=_utc(2026, 3, 5, 7), auto_refresh_hour=None)
-        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 5, 6, 40))
-        now = _utc(2026, 3, 5, 5, 30)
+        # Departure-1 default hour lands in the pre-delivery dead zone; with the
+        # snap the regular slot rides the imminent 00Z run. Flight is 6 days out
+        # so the days_out >= 2 gate passes and preflight is far in the future.
+        row = _make_row(departure_time=_utc(2026, 3, 7, 7), auto_refresh_hour=None)
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        now = _utc(2026, 3, 1, 5, 30)
         due = _next_due_at(
-            row, _utc(2026, 3, 5, 7), now,
+            row, _utc(2026, 3, 7, 7), now,
             apply_model_update=True, store=store,
         )
-        assert due == _utc(2026, 3, 5, 7)
+        # regular = Mar 1 06:00 → deferred to Mar 1 07:00; min(.., preflight
+        # Mar 7 05:00) = Mar 1 07:00.
+        assert due == _utc(2026, 3, 1, 7)
 
     def test_no_apply_leaves_slot_unchanged(self):
-        row = _make_row(departure_time=_utc(2026, 3, 5, 7), auto_refresh_hour=None)
-        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 5, 6, 40))
-        now = _utc(2026, 3, 5, 5, 30)
+        row = _make_row(departure_time=_utc(2026, 3, 7, 7), auto_refresh_hour=None)
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        now = _utc(2026, 3, 1, 5, 30)
         due = _next_due_at(
-            row, _utc(2026, 3, 5, 7), now,
+            row, _utc(2026, 3, 7, 7), now,
             apply_model_update=False, store=store,
         )
-        assert due == _utc(2026, 3, 5, 6)
+        assert due == _utc(2026, 3, 1, 6)
 
     def test_explicit_hour_riding_fresh_not_snapped(self):
-        # Explicit 08:00 already rides the fresh 00Z run → unchanged even when
-        # the toggle is on.
-        row = _make_row(departure_time=_utc(2026, 3, 5, 9), auto_refresh_hour=8)
-        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 5, 6, 40))
-        now = _utc(2026, 3, 5, 5, 30)
+        # Explicit 08:00 already rides the fresh 00Z run (next full run is 12Z
+        # at 18:40, beyond the 2h window) → unchanged even with the toggle on.
+        row = _make_row(departure_time=_utc(2026, 3, 7, 9), auto_refresh_hour=8)
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        now = _utc(2026, 3, 1, 5, 30)
         due = _next_due_at(
-            row, _utc(2026, 3, 5, 9), now,
+            row, _utc(2026, 3, 7, 9), now,
             apply_model_update=True, store=store,
         )
-        assert due == _utc(2026, 3, 5, 8)
+        assert due == _utc(2026, 3, 1, 8)
 
     def test_preflight_term_untouched_by_snap(self):
         # A late regular hour is still capped by preflight; the snap only
