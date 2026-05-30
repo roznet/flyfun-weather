@@ -9,8 +9,6 @@ export type RenderType = 'line' | 'bar';
 export interface RouteGraphMetric {
   /** Unique identifier used in settings persistence. */
   readonly id: string;
-  /** Display name shown in dropdowns. */
-  readonly label: string;
   /** Unit string shown on the Y-axis (e.g., "kt", "°C", "mm"). */
   readonly unit: string;
   /** How to render: smooth line or filled bars. */
@@ -36,7 +34,6 @@ export interface RouteGraphMetric {
 export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   {
     id: 'headwind',
-    label: 'Head/Tailwind',
     unit: 'kt',
     renderType: 'line',
     color: '#2563eb',
@@ -50,7 +47,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'crosswind',
-    label: 'Crosswind',
     unit: 'kt',
     renderType: 'line',
     color: '#7c3aed',
@@ -60,7 +56,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'temperature',
-    label: 'Temperature (2m)',
     unit: '°C',
     renderType: 'line',
     color: '#dc2626',
@@ -70,7 +65,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'precipitation',
-    label: 'Precipitation',
     unit: 'mm',
     renderType: 'bar',
     color: '#0ea5e9',
@@ -80,7 +74,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'cloud-cover',
-    label: 'Cloud Cover',
     unit: '%',
     renderType: 'bar',
     color: '#6b7280',
@@ -90,7 +83,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'cape',
-    label: 'CAPE',
     unit: 'J/kg',
     renderType: 'bar',
     color: '#f59e0b',
@@ -100,19 +92,19 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'cin',
-    label: 'CIN',
     unit: 'J/kg',
     renderType: 'bar',
     color: '#0d9488',
     // CIN is convention-negative (energy that inhibits convection), so bars
     // hang below the zero line — the inhibition "cap" reading next to CAPE.
+    // zero sits at the top of the range, so draw it explicitly for reference.
+    showZeroLine: true,
     getValue: (p) => p.cinSurfaceJkg,
     suggestedRange: [-300, 0],
     formatValue: (v) => `${Math.round(v)} J/kg`,
   },
   {
     id: 'qnh',
-    label: 'QNH',
     // Region-aware unit (hPa for Europe, inHg for the US). The getter is read
     // at render time so the axis label matches getValue's converted units.
     get unit(): string { return qnhUnitLabel(); },
@@ -126,7 +118,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'freezing-level',
-    label: 'Freezing Level',
     unit: 'ft',
     renderType: 'line',
     color: '#06b6d4',
@@ -135,7 +126,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'ceiling-dd',
-    label: 'Ceiling DD',
     unit: 'ft AGL',
     renderType: 'line',
     color: '#8b5cf6',
@@ -148,7 +138,6 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
   },
   {
     id: 'ceiling-nwp',
-    label: 'Ceiling NWP',
     unit: 'ft AGL',
     renderType: 'line',
     color: '#d946ef',
