@@ -520,6 +520,14 @@ def create_app() -> FastAPI:
             f"/briefing.html?{urlencode(params)}", status_code=302,
         )
 
+    # Clean, shareable deep link to the "What's New" tab of the help page.
+    # The help page is a single client-rendered document with tabs selected
+    # via ``?tab=``; copying the address bar from the tab yields a bare
+    # ``/help.html``. This redirect gives a stable URL to hand out instead.
+    @app.get("/whats-new")
+    def whats_new_redirect():
+        return RedirectResponse("/help.html?tab=whats-new", status_code=302)
+
     # Mount static files for web UI (if directory exists)
     web_dir = Path(__file__).resolve().parent.parent.parent.parent / "web"
     if web_dir.exists():

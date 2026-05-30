@@ -51,6 +51,9 @@ class Event(StrEnum):
     # Standalone (maps page — no briefing context) ---------------------------
     CLIMATOLOGY_OPENED = "climatology.opened"
 
+    # Help page (no briefing context) ----------------------------------------
+    HELP_WHATS_NEW_OPENED = "help.whats_new_opened"  # props: {source}
+
     # User preferences -------------------------------------------------------
     AUTO_REFRESH_ENABLED = "auto_refresh.enabled"
     AUTO_REFRESH_DISABLED = "auto_refresh.disabled"

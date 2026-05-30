@@ -9,6 +9,7 @@ import { initI18n, t } from './i18n/i18n';
 import { mountDataSourcesTable } from './data-sources-table';
 import { initInfoPopup } from './components/info-popup';
 import { buildDemoTourUrl } from './tour/demo-config';
+import { track, EVENTS } from './analytics/track';
 
 let isSignedIn = false;
 
@@ -59,15 +60,16 @@ async function init(): Promise<void> {
     a.addEventListener('click', (e) => {
       e.preventDefault();
       const tab = a.dataset.tabLink;
-      if (tab) switchTab(tab);
+      if (tab) switchTab(tab, 'link');
     });
   });
 
-  // Check if URL has ?tab=... to auto-switch
+  // Check if URL has ?tab=... to auto-switch. This is also the shareable
+  // deep link target (e.g. /whats-new redirects to ?tab=whats-new).
   const params = new URLSearchParams(window.location.search);
   const initialTab = params.get('tab');
   if (initialTab === 'whats-new' || initialTab === 'data-sources') {
-    switchTab(initialTab);
+    switchTab(initialTab, 'deeplink');
   }
 }
 
@@ -94,14 +96,34 @@ function initTabs(): void {
     const btn = (e.target as HTMLElement).closest('.tab-btn') as HTMLElement | null;
     if (!btn) return;
     const tab = btn.dataset.tab;
-    if (tab) switchTab(tab);
+    if (tab) switchTab(tab, 'tab');
   });
 }
 
 let messagesLoaded = false;
 let fullDataSourcesLoaded = false;
 
-function switchTab(tab: string): void {
+/** How the user arrived at a tab — used as a low-cardinality analytics dim. */
+type TabSource = 'tab' | 'link' | 'deeplink';
+
+/** Keep the URL query param in sync with the active tab so copying the
+ *  address bar (or bookmarking) captures the tab rather than landing on the
+ *  default guide. The default 'guide' tab is represented as a clean URL. */
+function syncTabUrl(tab: string): void {
+  try {
+    const url = new URL(window.location.href);
+    if (tab === 'guide') {
+      url.searchParams.delete('tab');
+    } else {
+      url.searchParams.set('tab', tab);
+    }
+    window.history.replaceState(null, '', url.toString());
+  } catch {
+    // non-critical — analytics/URL sync must never break tab switching
+  }
+}
+
+function switchTab(tab: string, source: TabSource = 'tab'): void {
   // Update tab buttons
   document.querySelectorAll('.help-tabs .tab-btn').forEach(btn => {
     btn.classList.toggle('active', (btn as HTMLElement).dataset.tab === tab);
@@ -110,6 +132,12 @@ function switchTab(tab: string): void {
   document.querySelectorAll('.tab-panel').forEach(panel => {
     panel.classList.toggle('active', panel.id === `tab-${tab}`);
   });
+
+  syncTabUrl(tab);
+
+  if (tab === 'whats-new') {
+    track(EVENTS.HELP_WHATS_NEW_OPENED, { source });
+  }
 
   if (tab === 'whats-new' && !messagesLoaded) {
     messagesLoaded = true;
