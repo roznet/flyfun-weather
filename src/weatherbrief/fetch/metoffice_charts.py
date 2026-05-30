@@ -263,11 +263,21 @@ def _parse_iso_z(value: str | None) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 
-def select_default_chart_id(departure_time: datetime, run_cycle: str) -> str:
+def select_default_chart_id(
+    departure_time: datetime,
+    run_cycle: str,
+    available_ids: set[str] | None = None,
+) -> str:
     """Pick the chart whose valid time best brackets the flight ETD.
 
     ETD within ~3h of issuance -> analysis; otherwise the nearest available
     forecast offset (tie-break toward the earlier offset).
+
+    ``available_ids`` constrains the choice to charts that were actually
+    fetched. A 00Z run's index legitimately omits +72h/+84h (only issued at
+    1930 UTC), so without this filter we could default to an offset whose GIF
+    was never cached — the renderer would then 410 and show a blank error.
+    Falls back to "ana" when no forecast charts are available.
     """
     issued = parse_run_cycle_dt(run_cycle)
     if issued is None:
@@ -275,7 +285,13 @@ def select_default_chart_id(departure_time: datetime, run_cycle: str) -> str:
     delta_hours = (departure_time - issued).total_seconds() / 3600.0
     if delta_hours < 3:
         return "ana"
-    forecast_ids = tuple(cid for cid in CHART_IDS if cid != "ana")
+    forecast_ids = tuple(
+        cid
+        for cid in CHART_IDS
+        if cid != "ana" and (available_ids is None or cid in available_ids)
+    )
+    if not forecast_ids:
+        return "ana"
     return min(
         forecast_ids,
         key=lambda cid: (abs(FORECAST_OFFSETS_H[cid] - delta_hours), FORECAST_OFFSETS_H[cid]),

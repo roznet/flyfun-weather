@@ -590,7 +590,6 @@ def execute_briefing(
         route=route,
         departure_time=departure_time,
         data_dir=data_dir,
-        pack_dir=pack_dir,
     )
     result.metoffice_charts_run_cycle = metoffice_charts_result.run_cycle
     result.metoffice_charts_default_id = metoffice_charts_result.default_chart_id

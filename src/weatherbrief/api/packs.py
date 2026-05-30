@@ -3153,7 +3153,9 @@ def get_metoffice_chart(
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
     path = resolve_chart_path(data_dir, meta.metoffice_charts_run_cycle, chart_id)
     if path is None:
-        raise HTTPException(status_code=410, detail="Chart no longer cached")
+        # Either never fetched for this run (a 00Z run may omit +72h/+84h)
+        # or evicted from the cache. Frontend renders a placeholder.
+        raise HTTPException(status_code=410, detail="Chart not available")
 
     return FileResponse(
         path,
