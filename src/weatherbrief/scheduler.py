@@ -19,6 +19,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,6 +27,9 @@ from sqlalchemy.orm import Session
 from flyfun_common.db import SessionLocal
 from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FlightRow
+
+if TYPE_CHECKING:
+    from weatherbrief.fetch.freshness.markers import MarkerStore
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +244,7 @@ def _next_due_at(
     now_utc: datetime,
     *,
     apply_model_update: bool = False,
-    store=None,
+    store: "MarkerStore | None" = None,
 ) -> datetime | None:
     """Absolute UTC datetime when the next auto-refresh is due.
 
@@ -295,7 +299,7 @@ def _next_due_at(
 def _defer_regular_for_model_update(
     regular: datetime,
     flight_start_dt: datetime,
-    store,
+    store: "MarkerStore | None",
 ) -> datetime:
     """Defer the regular slot to ride an imminent full-horizon model run.
 
