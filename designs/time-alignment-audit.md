@@ -63,15 +63,16 @@ Edge cases:
 
 ### Enrichment Flow
 
-`enrich_forecasts()` receives `flight_duration_hours` from `RouteConfig` via the call chain:
+`enrich_forecasts()` receives `flight_duration_hours` from `RouteConfig` (via `run_fetch` in `tasks/fetch.py`) and fans out to three models. Phase 1 runs GFS (download+decode), ECMWF (local-disk decode), and ICON-EU download in a 3-worker thread pool; Phase 2 decodes ICON-EU sequentially (memory-heavy) after GFS is done:
 
 ```
 run_fetch(route, ...) → enrich_forecasts(flight_duration_hours=route.flight_duration_hours)
-  → _enrich_gfs(flight_duration_hours)
-  → _enrich_icon_eu(flight_duration_hours)
+  Phase 1 (parallel pool): _enrich_gfs · _enrich_ecmwf · _prefetch_icon_eu_data
+  Phase 2 (sequential):    ICON-EU decode/merge
+  then propagate_all(...) + apply_gfs_rh_condensate_gate(...)
 ```
 
-For each model, the enrichment loops over the computed forecast hours:
+GFS and ICON-EU write into the shared cross-sections; ECMWF writes its own `ecmwf_sections` (per-model cross-section). For each model, the enrichment loops over the computed forecast hours:
 
 **GFS CLWMR/ICMR** (`_enrich_clwmr_icmr`):
 ```
@@ -98,15 +99,16 @@ All four loops above (GFS cloud water, GFS cloud diag, ICON-EU QC/QI, ICON-EU cl
 
 ### Hour Matching
 
-`_merge_cloud_water_into_sections()` and `_apply_cloud_diagnostics_to_sections()` accept `valid_utc: datetime | None`:
+`_merge_cloud_water_into_sections()` and `_apply_cloud_diagnostics_to_sections()` accept `valid_utc: datetime | None` and match via the `_matches_valid_time()` helper:
 
 ```python
-for hourly in wf.hourly:
-    if valid_utc is not None and hourly.time.hour != valid_utc.hour:
-        continue  # skip non-matching hours
+def _matches_valid_time(hourly_time, valid_utc):
+    if valid_utc is None:
+        return True
+    return hourly_time.date() == valid_utc.date() and hourly_time.hour == valid_utc.hour
 ```
 
-`valid_utc=None` enriches all hours (unused in practice, preserved for backward compatibility).
+It compares **both date and hour** (not just the hour) — necessary because long GRIB steps (e.g. ECMWF out to 192h) span multiple days, where an hour-only match would cross-day-collide. `valid_utc=None` enriches all hours (unused in practice, preserved for backward compatibility).
 
 ### Interpolated-Hour Gap and Propagation
 
@@ -159,10 +161,10 @@ Hours before the first native step (e.g., 00–05 when the first GRIB hour is 06
 
 | Consumer | Field used | Fallback without diagnostics |
 |----------|-----------|------------------------------|
-| Ogimet icing NWP fallback (`icing.py`) | `nwp_cloud_diagnostics` | Bulk % across full band → **false icing** |
-| SFIP cloud cover input (`sfip.py`) | `nwp_cloud_diagnostics` | Bulk % by pressure band → **inflated scores** |
-| Altitude advisories VMC/IMC (`advisories.py`) | `nwp_cloud_diagnostics` | Bulk % by ICAO band → **wrong regime labels** |
-| NWP ceiling (`__init__.py`) | `nwp_cloud_diagnostics.ceiling_ft` | `None` → no NWP ceiling |
+| Ogimet icing NWP fallback (`analysis/sounding/icing.py`) | `nwp_cloud_diagnostics` | Bulk % across full band → **false icing** |
+| SFIP cloud cover input (`analysis/sounding/sfip.py`) | `nwp_cloud_diagnostics` | Bulk % by pressure band → **inflated scores** |
+| Altitude advisories VMC/IMC (`analysis/sounding/advisories.py`) | `nwp_cloud_diagnostics` | Bulk % by ICAO band → **wrong regime labels** |
+| NWP ceiling (`analysis/sounding/__init__.py`) | `nwp_cloud_diagnostics.ceiling_ft` | `None` → no NWP ceiling |
 | Cross-section NWP cloud layer viz (frontend) | `nwp_cloud_diagnostics` | `null` → no layer rendering |
 
 **CLWMR/ICMR gap**: Not propagated. At lead times where the gap exists (>120h for GFS), CLWMR is often unavailable entirely. When present only at native hours, interpolated hours fall through to the Ogimet path (the standard icing method) instead of the LWC-direct path — acceptable since Ogimet is the primary assessment and the cloud diagnostics propagation ensures the NWP fallback works correctly regardless.
@@ -191,7 +193,7 @@ Linear time mapping assuming constant ground speed. `at_time()` picks the closes
 
 ## GFS / ICON-EU Priority
 
-GFS enriches first. ICON-EU checks `hourly.nwp_cloud_diagnostics is None` before writing cloud diagnostics, preventing contradictory overrides. For CLWMR/ICMR, ICON-EU (QC/QI) overwrites GFS values at matching pressure levels — ICON-EU has higher resolution over Europe.
+GFS and ICON-EU share one set of cross-sections. GFS enriches first; ICON-EU checks `hourly.nwp_cloud_diagnostics is None` before writing cloud diagnostics, preventing contradictory overrides. For CLWMR/ICMR, ICON-EU (QC/QI) overwrites GFS values at matching pressure levels — ICON-EU has higher resolution over Europe. ECMWF enriches a separate per-model `ecmwf_sections`, so there is no GFS/ICON-EU-vs-ECMWF priority contest — ECMWF replaces full pressure-level soundings (a2) and applies surface + cloud diagnostics (a1) into its own sections.
 
 ## Minor Notes
 

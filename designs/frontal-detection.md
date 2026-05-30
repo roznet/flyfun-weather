@@ -16,14 +16,21 @@ Cross-section annotation is explicitly deferred — the cross-section already sh
 
 ```
 src/weatherbrief/frontal/
-├── grid.py       — grid definition, Open-Meteo fetch, field prep, terrain mask
-├── detect.py     — gradient thresholding, dual T850+θe, front type classification
-├── zones.py      — 18 European zones, 19 route templates, zone intersection
-├── tracking.py   — two-pass anomaly filtering, zone timeseries, clearance timing
-├── cache.py      — file cache keyed by (model, init_time) for dev iteration
-├── cli.py        — analyze, zones, route, score, validate, diagnose, new-case, charts
-└── __main__.py   — python -m weatherbrief.frontal.cli
+├── grid.py          — grid definition, Open-Meteo fetch, field prep, terrain mask
+├── detect.py        — gradient thresholding, dual T850+θe, front type, Hewson diagnostics
+├── zones.py         — 20 European zones, 19 route templates, zone intersection
+├── tracking.py      — two-pass anomaly filtering, zone timeseries, persistence + clearance timing
+├── route_sampling.py — Hewson per-leg front-crossing locator + proximity gating (#168, WIP)
+├── case.py          — calibration Case loader (Open-Meteo + ERA5 sources), field save/load
+├── cache.py         — file cache keyed by (model, init_time) for dev iteration
+├── cli.py           — analyze/zones/route/score/validate/diagnose/new-case/charts +
+│                      plot-hewson/redraw-zones/route-hewson/route-fronts/clear-cache
+└── __main__.py      — python -m weatherbrief.frontal.cli
 ```
+
+The zone-aggregation path (zones.py + tracking.py) is the original calibration
+target; `route_sampling.py` is the newer per-leg Hewson direction (see Key Choices /
+the pivot noted under Calibration). Both share the grid + detect primitives.
 
 ### Data Flow
 
@@ -43,7 +50,7 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
 
 ### Grid (`grid.py`)
 - **Domain**: 35-60°N, -20 to 28°E at **0.25° resolution** (101 × 193 = 19,493 points). Aligned with ERA5's default CDS regridding so ERA5 and Open-Meteo land on identical grid points (see `designs/future/hewson-fields-aviation-advisories.md` for rationale).
-- **Fetch**: Lightweight `fetch_grid_fields()` on `OpenMeteoClient` — only 4 variables (T850, Td850, wind speed/dir), `chunk_size=500`, returns raw arrays (no WaypointForecast objects)
+- **Fetch**: Lightweight `fetch_grid_fields(client, model_key, ...)` module-level helper (takes an `OpenMeteoClient`, not a method on it) — 4 variables per level (T, Td, wind speed/dir), `_GRID_CHUNK_SIZE=500`, returns raw arrays (no WaypointForecast objects). `levels` defaults to `[850]` for single-level detection; pass `[925, 850, 700]` for Hewson multi-level precompute (variable names are level-suffixed, e.g. `temperature_850hPa`)
 - **Field prep**: `prepare_field()` — nearest-neighbor NaN fill, rejects fields with >5% missing. Must run before any gradient computation (gaussian_filter silently corrupts NaN neighbors)
 - **Terrain**: `build_terrain_mask()` from SRTM3 data (>1500m masked), `fill_terrain()` for linear interpolation across masked cells
 - **θe**: `compute_theta_e()` via MetPy from T850 + Td850
@@ -60,6 +67,8 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
   - Tracks detection source via bitmask (bit 0=T850, bit 1=θe)
   - Cold fronts show in both; warm fronts primarily in θe
 
+- **`compute_hewson_diagnostics()`**: Raw θe-based Hewson derivatives (gradient, TFP, −∇²θe, advection) with NO threshold/mask — for visualization, threshold calibration, and the route-sampling path. Consumed by `route_sampling.py`.
+
 - **`classify_front_type()`**: Cross-front wind component
   - Wind projected onto temperature gradient direction (cold→warm vector)
   - Positive = cold front, negative = warm front
@@ -68,7 +77,7 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
   - Returns: 0=not front, 1=cold, 2=warm, 3=indeterminate
 
 ### Zones (`zones.py`)
-- **18 zones** covering European GA chokepoints — each ≥3×4°. A bare 3×4° box at 0.25° is 13×17 = 221 points; our smallest real zones (balearics, uk_south) carry 400–700 points.
+- **20 zones** covering European GA chokepoints — each ≥3×4°. A bare 3×4° box at 0.25° is 13×17 = 221 points; our smallest real zones (balearics, uk_south) carry 400–700 points.
 - **19 route templates** (e.g., `uk_alps`, `germany_med`) — ordered zone lists for common GA corridors
 - **`find_fronts_in_regions()`**: Aggregates grid detections to zone scale
   - Threshold: ≥8% coverage AND ≥32 absolute points (4× the old 8-point floor, preserving the same fraction-of-minimum-zone threshold at the 4× denser grid)
@@ -85,7 +94,8 @@ This eliminates Alpine, Pyrenean, and sea-land gradients without per-zone tuning
 
 - **`apply_anomaly_filter()`**: Per-channel anomaly filtering, used by `build_zone_timeseries()` and CLI commands (`score`, `validate`, `diagnose`)
 - **`build_zone_timeseries()`**: Full pipeline for one model → `{zone: [{hour, present, type, intensity, orientation}, ...]}`
-- **Clearance timing**: `find_frontal_clearance_time()` — earliest hour with 3+ consecutive clear hours
+- **Persistence filter**: `_apply_persistence_filter()` — suppresses zones flagged "present" for too many consecutive hours (catches residual stationary gradients the anomaly check misses)
+- **Clearance timing**: `find_frontal_clearance_time()` — earliest hour with 3+ consecutive clear hours (`find_clearance_times_all_models()` runs it across models)
 - **Timing spread**: `compute_timing_spread()` — inter-model agreement if spread ≤6h
 
 ## Key Choices
@@ -162,5 +172,5 @@ These informed our pivot away from zone-level detection toward per-leg Hewson ad
 
 - Full plan (with future phases): [frontal-detection-plan.md](./future/frontal-detection-plan.md)
 - Calibration workflow: [front-calibration.md](./future/front-calibration.md)
-- Tests: `tests/test_frontal_*.py` (5 files covering detect, grid, zones, tracking, cache)
+- Tests: `tests/test_frontal_*.py` (7 files covering detect, grid, zones, tracking, cache, case, route_sampling)
 - Key code: `src/weatherbrief/frontal/`

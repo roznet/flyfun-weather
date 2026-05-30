@@ -2,6 +2,14 @@
 
 > Comprehensive catalog of all weather metrics: data sources, derivation methods, per-model availability, physical interpretation, and aviation relevance.
 
+## How to use this doc / source of truth
+
+This doc has two audiences: a **human/meteorologist** reviewing how we interpret weather signals, and **Claude** needing a map of what's available without reading all the code. Its lasting value is the *physical interpretation and aviation relevance* of each metric (what it measures, why it matters for GA) — that content is stable and worth trusting.
+
+Two kinds of content here are **code-derived and may drift** — treat them as a guide, not gospel, and confirm against code when it matters:
+- the **per-model availability matrix** (the yes/no columns) mirrors what the fetch layer requests per model — verify against the fetch/GRIB config (`fetch/`, [weather-engine-specs.md](./weather-engine-specs.md));
+- the **exact threshold numbers** (e.g. divergence cutoffs, classification bands) mirror constants in the analyzers / advisory catalog (`analysis/`, `advisories/catalog.py`).
+
 ## Overview
 
 WeatherBrief computes ~85 metrics from NWP model data across 7 weather models (GFS, ECMWF, ICON, Météo-France, UKMO, GEM, Best-Match). Each metric falls into one of four source categories:
@@ -56,13 +64,12 @@ NWP models compute thermodynamic indices internally using their full vertical re
 | `cloud_cover_high` | % | yes | yes | yes | yes | yes | yes | 20000ft+ (ICAO high). Cirrus, usually no icing concern. |
 | `freezing_level_height` | m | yes | **no** | yes | **no** | yes | **no** | NWP-computed 0°C isotherm height. Upper boundary of rain, lower boundary of icing. |
 | `cape` | J/kg | yes | yes | yes | yes | yes | yes | NWP-computed convective available potential energy. Type varies: GFS/best_match=SB, ECMWF=MU, ICON=ML. |
-| `convective_inhibition` | J/kg | yes | yes | **no** | **no** | **no** | **no** | NWP-computed CIN. Only GFS and ECMWF. Preserved as `nwp_cin_jkg` for validation vs MetPy-derived CIN. |
+| `convective_inhibition` | J/kg | yes | yes | **no** | **no** | yes | **no** | NWP-computed CIN. GFS, ECMWF, UKMO. Preserved as `nwp_cin_jkg` for validation vs MetPy-derived CIN. |
 | `lifted_index` | — | yes | **no** | **no** | **no** | **no** | **no** | NWP-computed lifted index. GFS only. Preserved as `nwp_lifted_index` for validation vs MetPy-derived LI. |
 | `visibility` | m | yes | **no** | yes | **no** | yes | **no** | Parameterized horizontal visibility. < 5000m = marginal VFR. |
 | `rain` | mm | yes | yes | yes | yes | yes | yes | Liquid precipitation only. Used for precipitation phase classification. |
 | `showers` | mm | yes | yes | yes | yes | yes | yes | Convective precipitation. |
 | `snowfall` | cm | yes | yes | yes | yes | yes | yes | Solid precipitation. Used for surface phase assessment. |
-| `weather_code` | code | yes | yes | yes | yes | yes | yes | WMO weather interpretation code. |
 
 ### 1.2 Pressure Level Variables
 
@@ -73,7 +80,7 @@ Pressure levels vary by model (range 1000–150 hPa, ~SFC to ~FL450):
 | GFS / Best-Match | 1000, 975, 950, ..., 300, 250, 200, 150 | 28 | 25 hPa spacing below 500, extends to FL450 |
 | ECMWF (Open-Meteo) | 1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50 | 13 | Fallback when outside direct-GRIB coverage or beyond 7-day range |
 | ECMWF (direct GRIB) | 1000, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30, 20, 10, 7, 5, 3, 2, 1 | 25 | ECPDS push, Europe + US, 0–168h at 00/12z, 0–144h at 06/18z. Replaces the 13-level Open-Meteo sounding for covered points. Horizon is derived from files on disk, not stream name (robust to the 50r1 `scda`→`oper` merge). |
-| ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30 | 19 | Open-Meteo (verified Mar 2026). Still no intermediate levels between 800–300 hPa. GRIB enrichment adds CLW/ICMR/cloud diagnostics via DWD ICON-EU model-level data (Europe only). |
+| ICON | 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30 | 19 | Open-Meteo (verified Mar 2026), used outside the ICON-EU domain. Within Europe, DWD ICON-EU GRIB now does a **full sounding replacement** to the 28-level EXTENDED set (T/RH/wind/geopotential + omega from `w`, plus CLW/ICMR and 3D cloud fraction `clc`) — same mechanism as ECMWF, see §1.3. |
 | Météo-France | 1000, 950, 925, ..., 300, 250, 200, 150 | 19 | |
 | UKMO | 1000, 975, 950, ..., 300, 250, 200, 150 | 20 | Supports vertical_velocity |
 | GEM | 1000, 950, 925, ..., 300, 250, 200, 150 | 20 | |
@@ -86,7 +93,7 @@ Pressure levels vary by model (range 1000–150 hPa, ~SFC to ~FL450):
 | `wind_speed` | kt | yes | yes | yes | yes | yes | yes | Wind at level for headwind/crosswind and shear calculations. |
 | `wind_direction` | ° | yes | yes | yes | yes | yes | yes | Wind direction at level. |
 | `geopotential_height` | m | yes | yes | yes | yes | yes | yes | Height of pressure surface. Converts pressure levels to altitude. |
-| `vertical_velocity` | Pa/s | yes | yes | **no** | **no** | yes | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. Available for GFS, ECMWF, UKMO. |
+| `vertical_velocity` | Pa/s | yes | yes | **no**† | **no** | yes | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. From Open-Meteo API: GFS, ECMWF, UKMO. †ICON has no API omega, but ICON-EU GRIB now supplies it (derived from model `w`) inside the EU domain — so ICON gets vertical-motion/CAT analysis there. |
 
 ### 1.3 GRIB2 Enrichment Variables
 
@@ -124,9 +131,16 @@ Unit conversions: Pa → altitude ft via standard atmosphere, K → °C, gpm →
 
 #### ICON-EU Pressure-Level Variables (via DWD opendata)
 
+ICON-EU GRIB now does a **full sounding replacement** (not just enrichment) for routes in the EU domain — fetched on model levels, log-pressure interpolated to the 28-level EXTENDED set, replacing the 19-level Open-Meteo sounding.
+
 | Variable | GRIB2 Name | Unit | Source | Note |
 |----------|-----------|------|--------|------|
-| Cloud Liquid Water | QC | kg/kg | `opendata.dwd.de/weather/nwp/icon-eu/grib/` | On model levels 35–74, interpolated to pressure levels |
+| Temperature | T | K | `opendata.dwd.de/weather/nwp/icon-eu/grib/` | Full replacement |
+| Specific humidity | QV | kg/kg | Same | → RH/dewpoint (relhum unavailable on these levels) |
+| U / V wind | U, V | m/s | Same | → wind speed/direction |
+| Vertical velocity | W | m/s | Same | → omega (Pa/s) via `ω = −ρ·g·w`; enables ICON vertical-motion/CAT and SFIP `full` (with ω) |
+| Cloud fraction (3D) | CLC | % | Same | Per-level cloud fraction → `nwp_3d` cloud layers |
+| Cloud Liquid Water | QC | kg/kg | Same | On model levels, interpolated to pressure levels |
 | Cloud Ice Mixing Ratio | QI | kg/kg | Same | Same interpolation |
 | Pressure | P | Pa | Same | Used for log-pressure vertical interpolation |
 
@@ -144,9 +158,9 @@ Single-level scalar fields providing cloud ceiling, convective boundaries, and l
 | High cloud cover | CLCH | `high.cover_pct` | % | >20000ft cloud fraction |
 | Total cloud cover | CLCT | `total_cover_pct` | % | Full-column cloud fraction |
 
-Unit conversion: meters → feet (× 3.28084) for heights. Cloud cover percentages (0–100%) stored as-is. Unlike GFS which uses gpm for ceiling and Pa for cloud boundaries, ICON-EU reports all heights in meters. With CLCL/CLCM/CLCH/CLCT, ICON-EU now provides layer cloud cover percentages that enable `_nwp_cloud_cover_at()` to use model-native cloud data instead of falling through to Open-Meteo ICAO band values.
+Unit conversion: meters → feet (× 3.28084) for heights. Cloud cover percentages (0–100%) stored as-is. Unlike GFS which uses gpm for ceiling and Pa for cloud boundaries, ICON-EU reports all heights in meters. CLCL/CLCM/CLCH/CLCT supply the bulk band percentages; the per-level `clc` (above) additionally drives `nwp_3d` cloud layers and `_nwp_cloud_cover_at()` with model-native data instead of Open-Meteo ICAO band values.
 
-**ICON-EU specifics:** Domain 29.5–70.5°N, 23.5°W–62.5°E (Europe only). Routes outside are silently skipped. Model-level data on levels 35–74 (not pressure levels) — log-pressure interpolation using P field to target 12 ICON pressure levels. Single-level data requires no vertical interpolation. ~6.5km resolution. Cycles every 3h, ~3h publication delay, files deleted after ~24h.
+**ICON-EU specifics:** Domain 29.5–70.5°N, 23.5°W–62.5°E (Europe only). Routes outside are silently skipped. Model-level data (not pressure levels) — log-pressure interpolation using P field to the 28-level EXTENDED set (a full sounding replacement). Single-level data requires no vertical interpolation. ~6.5km resolution. Cycles every 3h, ~3h publication delay, files deleted after ~24h.
 
 #### ECMWF IFS Pressure-Level Variables (via ECPDS commercial)
 
@@ -182,7 +196,7 @@ Surface (a1) single-level scalar fields. Stored in `NWPCloudDiagnostics` model.
 
 **Surface fields delivered but not yet processed:** `10fg` (wind gusts), `10u`/`10v` (10m wind), `2t`/`2d` (screen T/Td), `blh` (boundary layer height), `capes` (CAPE-shear), `cp` (convective precipitation), `degm10l` (-10°C level), `fzra` (freezing rain accum), `kx` (K-index), `totalx` (Total Totals), `lsp` (large-scale precip), `msl`/`sp` (pressure), `ptype` (precip type code), `sf` (snowfall), `tp` (total precip), `vis` (visibility). `kx`, `totalx`, and `cp` are the highest-value follow-ups — they directly indicate model-observed thunderstorm activity (the fields Windy uses to drive ECMWF thunder icons).
 
-**ECMWF specifics:** ECPDS push delivery to `ECMWF_GRIB_DIR` (no HTTP, no cache). Coverage is the `ifs-ens-cf` subscription grid: Europe + US at 0.25°. Cycles: 00/12z deliver 0–168h, 06/18z deliver 0–144h (horizon is read from files on disk, not from stream name — robust to the 50r1 `scda`→`oper` merge on 12-May-2026). Publication delay ~6–8h after init. Post-amendment cadence is hourly 0–90h then 3h tail on pressure-level data; surface fields are 3h throughout. Intermediate hours within the flight window get forward-filled from the preceding native step (`fetch/grib/fill.py::_forward_fill_pressure_levels`); linear time interpolation is a future improvement. Files may contain multiple geographic sub-grids; cfgrib splits them into separate Datasets and the decoder uses first-wins per point.
+**ECMWF specifics:** ECPDS push delivery to `ECMWF_GRIB_DIR` (no HTTP, no cache). Coverage is the `ifs-ens-cf` subscription grid: Europe + US at 0.25°. Cycles: 00/12z deliver 0–168h, 06/18z deliver 0–144h (horizon is read from files on disk, not from stream name — robust to the 50r1 `scda`→`oper` merge on 12-May-2026). Publication delay ~6–8h after init. Post-amendment cadence is hourly 0–90h then 3h tail on pressure-level data; surface fields are 3h throughout. Intermediate gap hours within the flight window are filled by per-level **linear time interpolation** (`fetch/grib/fill.py::_linear_interp_pressure_levels` — T, RH, wind, geopotential, omega, CLW/ICMR, cloud cover; dewpoint re-derived via Magnus from interpolated T+RH). Files may contain multiple geographic sub-grids; cfgrib splits them into separate Datasets and the decoder uses first-wins per point.
 
 ---
 
@@ -258,13 +272,13 @@ Consecutive pressure levels where dewpoint depression < 3°C are grouped into cl
 
 #### NWP (Model Diagnostics) — alternative
 
-Three-tier approach ensures all models produce NWP cloud layers:
+`build_nwp_cloud_layers()` produces layers from native model sources **only**, tried in order of richness. Open-Meteo bulk `cloud_cover_low/mid/high` are intentionally NOT synthesized into layers here — consumers need a clean "native or absent" signal:
 
-**Tier 1 — GRIB (GFS):** Uses native model boundaries (base_ft, top_ft) and coverage from GRIB2. Tagged `source="grib"`.
+**Source 1 — Per-level 3D cloud fraction (ECMWF `cc`, ICON-EU `clc`):** Real deck base/top derived from the model's own per-level cloud fraction. Tagged `source="nwp_3d"`.
 
-**Tier 2 — Synthesized (all others):** When GRIB boundaries absent but Open-Meteo cloud_cover_{low,mid,high} exist, synthesizes layers by narrowing ICAO bands with DD cloud envelope + inversion capping (≥2°C) + LCL floor. Tagged `source="synthesized"`. Minimum cover threshold: 25%.
+**Source 2 — GRIB diagnostics (GFS):** Native model boundaries (base_ft, top_ft) and coverage from GRIB2 cloud diagnostics. Tagged `source="grib"`.
 
-**Tier 3:** Returns None only when no cloud cover data at all.
+Returns `None` when neither source is available (model has no native NWP cloud envelope — treat as "no data," not "clear sky"); returns an empty list when a native source exists but no level cleared the threshold (genuine clear-sky forecast). Minimum cover threshold: `_MIN_COVER_PCT = 12.5%` (≈ FEW, 1–2 oktas).
 
 **NWP coverage classification:**
 
@@ -276,7 +290,7 @@ Three-tier approach ensures all models produce NWP cloud layers:
 
 Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000–45000ft).
 
-**Source tracking:** Each `EnhancedCloudLayer` carries `source` ("dd"/"grib"/"synthesized"). `SoundingAnalysis.cloud_method_effective` records what was actually used: "dd", "nwp" (GRIB sources), or "nwp_synthesized" (synthesized sources).
+**Source tracking:** Each `EnhancedCloudLayer` carries `source` ("dd"/"grib"/"nwp_3d"; legacy "synthesized" no longer produced). `SoundingAnalysis.cloud_method_effective` records what was actually used: "dd", "nwp" (when any layer source is "grib"), or "nwp_synthesized" (non-grib native sources, i.e. "nwp_3d").
 
 **Dual cloud data sources** — a known inconsistency:
 - **DD (sounding-derived):** from dewpoint depression at pressure levels (8–28 levels, coarse vertical resolution)
@@ -310,19 +324,17 @@ Convective:  200 × (ρv_base − ρv_cell) / ρv_20sat × √((T − 253.15)/20
 
 Where ρv = water vapor density, computed as `e_sat(Td) / (R_v × T_K)`. The stratiform/convective cloud split is estimated from CAPE (see §4.4).
 
-**2-pass cloud gating (for zone formation):**
-- **Pass 1:** LWC-direct (CLWMR > 0), DD-based (DD < 2°C), or cloud proximity (within 500ft of BKN/OVC). Scattered clouds (DD 2–3°C) skipped — avoidable in VMC.
-- **Pass 2 (NWP fallback):** Levels in 0 to −20°C that pass 1 missed → if NWP cloud > 50% at corresponding altitude band → assess. Catches sub-grid microphysics the sounding missed.
+**Cloud gating (`assess_icing_zones_ogimet_dd`):** A level is assessed only if `is_in_cloud_layer()` places it within a DD cloud layer (DD-detected, NWP-filtered — the same layers drawn on the cross-section). Within cloud, the DD attenuation factor modulates severity. Per-level index stored in `lv.icing_index`. (The older 2-pass LWC/DD/NWP-fallback gate is no longer used.)
 
 #### 3.2b Ogimet-NWP (alternative)
 
 Same Ogimet index but uses NWP model cloud cover as cloud signal.
 
-**Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude)`
+**Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude) × glaciation(CLW, ICMR)`
 
-Altitude-aware: `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks **all** diagnostic layers (low/mid/high) regardless of ICAO band and returns the highest cloud cover for any layer whose base/top range (±500ft margin) contains the altitude. Falls back to bulk ICAO band percentages when diagnostics unavailable.
+**Requires a model-native cloud envelope:** `assess_icing_zones_ogimet_nwp` returns `[]` immediately when no NWP cloud layers exist — it refuses to fabricate icing zones from bulk percentages alone (would produce calls the cross-section can't anchor to a cloud band). Gating is `is_in_cloud_layer(lv, nwp_clouds)`.
 
-**DD cloud proximity gate:** When diagnostics are absent (ECMWF, GEM, etc.), bulk NWP band percentages would smear cloud across entire ICAO bands (e.g. 15% low cloud applied uniformly SFC–6500ft). To prevent false-positive icing at cloud-free altitudes, levels without diagnostics are additionally gated by `is_near_cloud()` (shared in `icing_common.py`): the level must have DD < 2°C or be within 500ft of a BKN/OVC cloud layer. This uses the DD-derived cloud layers as a vertical constraint when precise NWP boundaries are unavailable. Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by Ogimet-DD) to prevent overwriting.
+Within cloud, severity is scaled by the NWP cloud fraction at altitude from `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`), which checks **all** diagnostic layers regardless of ICAO band and returns the highest cover for any layer whose base/top (± margin) contains the altitude; falls back to bulk ICAO band percentages when diagnostics unavailable. When CLW/ICMR microphysics are present, a temperature-floored glaciation factor further reduces the index in glaciated cloud. Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by Ogimet-DD) to prevent overwriting.
 
 #### 3.2c SFIP-NWP
 
@@ -332,20 +344,22 @@ See §3.2d below for full SFIP algorithm details.
 
 | Ogimet Index | Risk | | SFIP_100 | Risk |
 |------|------|-|----------|------|
-| ≤ 0 | None | | < 15 | None |
-| 0–30 | Light | | 15–30 | Light |
+| < 10 | None | | < 15 | None |
+| 10–30 | Light | | 15–30 | Light |
 | 30–80 | Moderate | | 30–55 | Moderate |
 | ≥ 80 | Severe | | ≥ 55 | Severe |
 
-#### Shared: Icing Type Classification
+#### Icing Type Classification
 
-All three methods use `classify_icing_type()` from `icing_common.py`. Uses wet-bulb temperature (dry-bulb fallback). Accretion surface temperature is closer to wet-bulb; thresholds shifted ~1°C colder than dry-bulb equivalents:
+The two **Ogimet** methods (DD, NWP) use `classify_icing_type()` from `icing_common.py`, keyed on **wet-bulb** temperature (dry-bulb fallback). Accretion surface temperature is closer to wet-bulb; thresholds shifted ~1°C colder than dry-bulb equivalents:
 
 | Wet-bulb range | Type | Physics |
 |----------------|------|---------|
 | −4°C to 0°C | Clear ice | Supercooled water freezes on contact as clear, dense glaze. Most dangerous — adds weight, changes airfoil shape. |
 | −11°C to −4°C | Mixed | Mix of supercooled droplets and ice crystals. Irregular accretion. |
 | < −11°C | Rime | Smaller droplets freeze instantly as rough, opaque ice. Less aerodynamic penalty than clear. |
+
+**SFIP uses a different (dry-bulb) classifier** — its own `_classify_icing_type()` in `sfip.py`, per Belo-Pereira (2015) / Morcrette (2019): CLEAR −3 to 0°C, MIXED −10 to −3°C, RIME < −10°C. These are dry-bulb thresholds, ~1°C warmer than the Ogimet wet-bulb bands above.
 
 #### Shared: Severity Enhancement
 
@@ -364,8 +378,8 @@ A second icing index computed alongside Ogimet, based on fuzzy-logic membership 
 
 | Variant | Name | When | Inputs | Weights |
 |---------|------|------|--------|---------|
-| `full` | SFIP_O | GFS or ECMWF (CLW from GRIB2 + ω) | T, RH, CLW, ω | 0.35, 0.15, 0.35, 0.15 |
-| `full_no_vv` | SFIP_O | ICON-EU (CLW from GRIB2, no ω) | T, RH, CLW, 0 | 0.35, 0.15, 0.35, 0.15 |
+| `full` | SFIP_O | GFS, ECMWF, or ICON-EU (CLW from GRIB2 + ω) | T, RH, CLW, ω | 0.35, 0.15, 0.35, 0.15 |
+| `full_no_vv` | SFIP_O | CLW from GRIB2 but ω unavailable | T, RH, CLW, 0 | 0.35, 0.15, 0.35, 0.15 |
 | `interp` | SFIP_O | CLW spatially/vertically interpolated + ω | T, RH, CLW(interp), ω | 0.35, 0.15, 0.35, 0.15 |
 | `interp_no_vv` | SFIP_O | CLW interpolated, no ω | T, RH, CLW(interp), 0 | 0.35, 0.15, 0.35, 0.15 |
 | `proxy` | SFIP_4 | No CLW, has ω (UKMO, or ECMWF outside direct-GRIB coverage) | T, RH, DD+cloud proxy, ω | 0.40, 0.25, 0.25, 0.10 |
@@ -382,9 +396,9 @@ The `_no_vv` suffix indicates omega (vertical velocity) is unavailable for the m
 
 **Glaciation factor** (GFS/ICON-EU/ECMWF): When ICMR data is available, `M_CLW *= CLW / (CLW + ICE)`. Reduces icing when cloud is mostly glaciated.
 
-**Gating:** Temperature [0, −25]°C. Full variant also gates on CLW > 0; proxy variant requires cloud proximity via `is_near_cloud()` (DD < 3°C or within 500ft of detected cloud layer, including SCT — wider threshold than Ogimet's DD < 2°C BKN/OVC-only gate).
+**Gating:** Temperature [0, −25]°C. Cloud gating is by `is_in_cloud_layer()` (altitude within a cloud layer ± margin), keyed on which layer list: full variant gates on the **NWP** cloud layers (CLW is a model field), proxy variant on the **DD** cloud layers (sounding-derived + NWP-filtered). Full also drops CLW ≤ 0 in `compute_sfip_level`. (The older `is_near_cloud()` per-level DD re-check is deprecated and no longer used here.)
 
-**Altitude-aware NWP cloud check:** Delegates to `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) which checks **all** diagnostic layers regardless of ICAO band (handles cross-band cloud layers). Returns 0 if the level falls outside any NWP cloud layer, preventing false positives from bulk ICAO-band percentages. Falls back to bulk band values when diagnostics are unavailable (same pattern as Ogimet-NWP: proxy variant then requires DD cloud proximity to gate).
+**Altitude-aware NWP cloud check:** The NWP cloud-cover factor (M_VV/M_CLW_proxy inputs) delegates to `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`), which checks **all** diagnostic layers regardless of ICAO band (handles cross-band cloud layers) and returns the highest cover for any layer whose base/top (± margin) contains the altitude. Falls back to bulk ICAO-band values when diagnostics are unavailable. (This is the cover lookup; the zone-formation gate itself is `is_in_cloud_layer()` per the Gating note above.)
 
 **Severity mapping** (GA-tuned thresholds matching IcingRisk enum):
 
@@ -407,7 +421,7 @@ The `_no_vv` suffix indicates omega (vertical velocity) is unavailable for the m
 | Model | Variant | CLW Source | VV Source | Glaciation |
 |-------|---------|-----------|-----------|-----------|
 | GFS | `full`/`interp` (SFIP_O) | CLWMR from GFS GRIB2 (interp where gaps filled) | ω from API | Yes (ICMR from GRIB2) |
-| ICON | `full_no_vv`/`interp_no_vv` (SFIP_O)* | QC from ICON-EU GRIB2 (interp where gaps filled) | **None** (ω unavailable) | Yes (QI from ICON-EU) |
+| ICON | `full`/`interp` (SFIP_O)* | QC from ICON-EU GRIB2 (interp where gaps filled) | ω from ICON-EU GRIB (derived from `w`) | Yes (QI from ICON-EU) |
 | ECMWF | `full`/`interp` (SFIP_O)† | clwc from ECMWF GRIB2 | w from ECMWF GRIB2 (replaces Open-Meteo ω) | Yes (ciwc from GRIB2) |
 | MétéoFr | `proxy_no_vv` (SFIP_4) | DD + cloud proxy | **None** (ω unavailable) | No |
 | UKMO | `proxy` (SFIP_4) | DD + cloud proxy | ω from API | No |
@@ -443,11 +457,11 @@ European-calibrated thresholds (lower than US values — European convection pro
 
 | Class | Criterion | Meaning |
 |-------|-----------|---------|
-| Quiescent | all \|ω\| < 1 Pa/s | Calm, stable air. Smooth flight expected. |
+| Quiescent | max \|ω\| < 0.1 Pa/s | Calm, stable air. Smooth flight expected. |
 | Synoptic ascent | mean ω < 0, no large values | Large-scale uplift (front, low pressure). Widespread cloud/precip likely. |
 | Synoptic subsidence | mean ω > 0, no large values | Large-scale sinking. Clearing, possible inversions. Often smooth. |
 | Oscillating | ≥ 2 sign changes in ω | Wave activity. Mountain waves, gravity waves. Possible turbulence. |
-| Convective | \|ω\| > 10 Pa/s | Vigorous vertical motion. Active convection in model. |
+| Convective | max \|ω\| > 1 Pa/s | Vigorous vertical motion. Active convection in model. |
 
 **CAT risk** from Richardson number at each layer (thresholds loosened from classical 0.25/0.5/1.0 to compensate for NWP vertical resolution bias — 25-50 hPa between levels is too coarse to resolve thin shear layers where KH instability develops, so computed Ri is systematically too high):
 
@@ -534,7 +548,7 @@ Shows data source for each key quantity per model. **Bold** = derived when API f
 | Dewpoint at levels | API | API | API | API | API | API | — |
 | Wind at levels | API | API | API | API | API | API | — |
 | Geopotential height | API | API | API | API | API | API | — |
-| Omega (ω) | API | API | **n/a** | **n/a** | API | **n/a** | Not derivable. No vertical motion/CAT for ICON, MétéoFr, GEM. Available for GFS, ECMWF, UKMO. |
+| Omega (ω) | API | API | **GRIB2**† | **n/a** | API | **n/a** | API: GFS, ECMWF, UKMO. ICON gets ω from ICON-EU GRIB (derived from `w`) inside the EU domain → vertical motion/CAT available there; no API omega. Not derivable for MétéoFr, GEM. |
 | Cloud cover (total) | API | API | API | API | API | API | — |
 | Cloud cover low/mid/high | API | API | API | API | API | API | — |
 | Freezing level | API | **GRIB2**‡/**derived** | API | **derived** | API | **derived** | ECMWF: `deg0l` from ECPDS GRIB when in coverage; otherwise linear interpolation of T profile through 0°C |
@@ -545,7 +559,7 @@ Shows data source for each key quantity per model. **Bold** = derived when API f
 | CLWMR (cloud liquid water) | **GRIB2** | **GRIB2**‡ | **GRIB2**† | **n/a** | **n/a** | **n/a** | GFS: S3 `.idx`. ECMWF: ECPDS. ICON: DWD model levels. |
 | ICMR (ice mixing ratio) | **GRIB2** | **GRIB2**‡ | **GRIB2**† | **n/a** | **n/a** | **n/a** | Same sources as CLWMR |
 | NWP cloud diagnostics | **GRIB2** | **GRIB2**‡ | **GRIB2**† | **n/a** | **n/a** | **n/a** | GFS: full (ceiling, base/top/temp per layer). ECMWF: ceiling, covers per tier, convective top (hcct). ICON: ceiling, convective base/top, covers per tier. |
-| SFIP icing index | Full | Full‡/Proxy | Full†/Proxy | Proxy | Proxy | Proxy | Full uses GRIB2 CLW; proxy uses DD+cloud cover |
+| SFIP icing index | Full | Full‡/Proxy | Full†/Proxy | Proxy | Proxy | Proxy | Full uses GRIB2 CLW (+ω where available); proxy uses DD+cloud cover. ICON full now includes ω from GRIB. |
 | Precipitation phase | GRIB2+Tw | Tw only | GRIB2†+Tw | Tw only | Tw only | Tw only | GRIB2 ice fraction preferred, wet-bulb fallback |
 
 † ICON GRIB2 enrichment only available when route is within ICON-EU domain (Europe: 29.5–70.5°N, 23.5°W–62.5°E).
@@ -582,7 +596,7 @@ Sounding-derived cloud layers are mapped to ICAO bands (low < 6500ft, mid 6500�
 
 | Quantity | Why | Impact |
 |----------|-----|--------|
-| Omega (ω) for ICON/MétéoFr/GEM | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models. Available for GFS, ECMWF, UKMO. |
+| Omega (ω) for MétéoFr/GEM | Requires model dynamics, not recoverable from T/wind alone | No vertical motion classification or CAT risk for these models. API: GFS, ECMWF, UKMO. ICON gets ω from ICON-EU GRIB (`w`) inside the EU domain. |
 | Visibility for ECMWF/MétéoFr/GEM | Parameterized from sub-grid microphysics not available at pressure levels | VFR/IFR assessment limited to cloud cover proxy for these models |
 | Freezing level for MétéoFr/GEM | Not in API | Derived via linear interpolation of T profile through 0°C. ECMWF now has `deg0l` directly from ECPDS GRIB (when in coverage); derivation is the fallback outside coverage. |
 | Precipitation probability | Requires ensemble spread data | Only available from GFS and ECMWF |

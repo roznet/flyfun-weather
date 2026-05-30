@@ -21,12 +21,18 @@ Sidecar table 1:1 with `flights`, JSON columns for the variable-shape parts:
 ```
 flight_debriefs
   flight_id      PK, FK → flights.id ON DELETE CASCADE
-  decision       'cancelled' | 'flown'
+  decision       'cancelled' | 'flown' | 'monitoring'
   reasons_json   ['IMC','WIND',...]                  (cancelled only)
   outcomes_json  {'icing':'worse','cloud':'consistent',...}  (flown only)
   note           free text, ≤ 300 chars
   created_at, updated_at
 ```
+
+`monitoring` = flight created to watch weather, not intended to fly. It is
+neither a go nor a no-go decision, so both `reasons_json` and `outcomes_json`
+must be empty (enforced by the Pydantic `_decision_shape` validator). It is
+tracked separately in stats and excluded from both the cancellation-reason and
+category-accuracy aggregates so it doesn't bias calibration data.
 
 JSON over per-category columns because the taxonomy will evolve and
 per-user stats fit comfortably in Python (≤ a few hundred rows). When
@@ -54,7 +60,7 @@ Single shared vocabulary in `weatherbrief.debriefs.taxonomy`:
 | VIS | ✓ | ✓ |
 | OPS | ✓ | — (non-weather, no outcome to grade) |
 
-`OutcomeValue`: `consistent | better | worse`.
+`Decision`: `cancelled | flown | monitoring`. `OutcomeValue`: `consistent | better | worse`.
 
 `KEYWORD_MAP` maps each tag to phrases that the free-text note matches —
 used by the hybrid entry UX to auto-toggle chips as the pilot types. The
@@ -114,7 +120,7 @@ exemption (full T1+T2 skip) is unchanged.
 
 ## UI layout
 
-Flights list page (`web/flights.html`):
+Flights list page (`web/index.html`, entry `flights-main.ts`):
 
 ```
 [ Future flights ]

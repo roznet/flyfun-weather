@@ -20,7 +20,7 @@ OpenMeteoClient.fetch_multi_point()  (1 API call per model, all points)
 filter by waypoint_icao → list[WaypointForecast]  (for analysis)
 + list[RouteCrossSection]  (full route, saved separately)
     ↓
-[optional] enrich_forecasts()  (GRIB2 CLWMR/ICMR from GFS S3)
+[optional] enrich_forecasts()  (GRIB2 cloud water/ice + diagnostics: GFS S3, ICON-EU DWD, ECMWF IFS ECPDS)
     ↓
 analyze_waypoint()  (per waypoint)
 ├→ compute_wind_components()
@@ -32,7 +32,7 @@ analyze_waypoint()  (per waypoint)
 │   ├→ assess_convective()
 │   └→ assess_vertical_motion()  (CAT risk, strong motion)
 ├→ compute_altitude_advisories()  (vertical regimes + advisories)
-└→ compare_models()  (15 metrics)
+└→ compare_models()  (22 metrics)
     ↓
 analyze_all_route_points()  → RouteAnalysesManifest (full route analysis)
     ↓
@@ -63,11 +63,15 @@ src/weatherbrief/
 ├── models/            # Pydantic v2 data models (split into submodules)
 │   ├── __init__.py    # Re-exports all models
 │   ├── analysis.py    # Route, forecast, analysis models (RouteConfig, ForecastSnapshot, etc.)
-│   ├── observations.py # METAR/TAF models (AirportObservation, ObservationComparison, RouteObservations)
+│   ├── advisories.py  # Route advisory + manifest models
+│   ├── airport_conditions.py # Airport flight-category/wind condition models
+│   ├── observations.py # METAR/TAF + SIGMET models (AirportObservation, RouteObservations, RouteSigmets)
+│   ├── diagnostic.py / diagnostic_codes.py # Per-point diagnostic flags + code catalog
+│   ├── verification.py # METAR/TAF verification + digest models
 │   └── storage.py     # Flight, BriefingPackMeta
 ├── airports.py        # ICAO → lat/lon via euro_aip
 ├── pipeline.py        # Thin orchestrator: calls tasks/ modules in sequence
-├── scheduler.py       # Background auto-refresh: polls every 10min, freshness check, email notification
+├── scheduler.py       # Background loops: auto-refresh (10min) + retention, verification scoring/digest/rollup, METAR ingest, ECMWF watcher (5min), GRIB pre-cache, analytics rollup
 ├── tasks/             # Independent pipeline stages (extracted from pipeline.py)
 │   ├── __init__.py    # Re-exports: run_fetch, run_analysis, run_advisories, etc.
 │   ├── fetch.py       # run_fetch() → FetchResult (route interpolation, Open-Meteo, GRIB)
@@ -75,7 +79,13 @@ src/weatherbrief/
 │   ├── advise.py      # run_advisories() → AdvisoryResult (evaluator + airport conditions)
 │   ├── route_weather.py # run_route_weather() + run_observation_comparison() (D-0 METAR/TAF)
 │   ├── artifacts.py   # Save/load helpers for pack_dir I/O (JSON serialization)
-│   └── outputs.py     # run_gramet(), run_skewt(), run_llm_digest() → independent results
+│   ├── outputs.py     # run_gramet(), run_skewt(), run_llm_digest() → independent results
+│   ├── retention.py / refresh_delta.py # T1/T2 pack retention + delta refresh
+│   ├── verification*.py / scoring.py / standalone_verification.py # METAR/TAF verification, scoring, rollups (see metar-taf-accuracy.md)
+│   ├── airport_summary.py / airport_watchlist.py / standalone_grib.py # Standalone pan-European monitoring cycle
+│   ├── map_queries.py / cache_builder.py / climatology_queries.py # Forecast-map + climatology query/cache builders
+│   ├── dwd_charts.py / metoffice_charts.py # Front-chart fetch/georeference tasks
+│   └── admin_digest_stats.py # Admin digest/usage stats
 ├── fetch/
 │   ├── variables.py   # Model endpoints, API parameters
 │   ├── open_meteo.py  # Open-Meteo client (single + multi-point)
@@ -86,25 +96,32 @@ src/weatherbrief/
 │   ├── nws_text.py    # NWS Area Forecast Discussions (US routes)
 │   ├── text_forecasts.py # Route-aware text forecast dispatcher (NWS or DWD by region)
 │   ├── dwd_text.py    # DWD synoptic text forecasts (European routes)
-│   ├── gramet.py      # Autorouter GRAMET
-│   └── grib/          # GFS GRIB2 enrichment (CLWMR/ICMR)
+│   ├── dwd_charts.py  # DWD surface-front chart download + georeferencing
+│   ├── metoffice_charts.py # Met Office surface-front charts (gated source)
+│   ├── freshness/     # Marker-based per-(model, source) staleness (see freshness-markers.md)
+│   └── grib/          # GRIB2 enrichment (GFS S3, ICON-EU DWD, ECMWF IFS ECPDS)
 │       ├── __init__.py     # enrich_forecasts() public API
 │       ├── gfs_idx.py      # .idx parser + byte-range planner
 │       ├── grib_fetch.py   # HTTP Range downloads from S3
 │       ├── icon_eu_fetch.py # ICON-EU GRIB2 from DWD opendata
 │       ├── icon_eu_levels.py # Log-pressure interpolation from model levels
+│       ├── ecmwf_fetch.py  # ECMWF IFS GRIB read from ECPDS-delivered files
+│       ├── ecmwf_watcher.py # Watch/ingest ECPDS-delivered ECMWF runs
 │       ├── decode.py       # cfgrib decode + spatial interpolation (chunked for memory)
+│       ├── decode_worker.py # Subprocess decode entry for the priority process pool
+│       ├── precache.py     # Pre-fetch GRIB runs off freshness markers
 │       ├── fill.py         # Forward-fill GRIB fields across time axis
 │       └── cache.py        # Disk cache per model (48h TTL)
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
-│   ├── comparison.py  # Multi-model divergence scoring (15 thresholds)
+│   ├── comparison.py  # Multi-model divergence scoring (22 thresholds)
 │   ├── advisories/    # Route advisory evaluators (13 hazard types)
 │   │   ├── __init__.py      # evaluate_all(), get_catalog()
 │   │   ├── registry.py      # @register decorator, auto-discovery
 │   │   ├── _helpers.py      # Shared: format_extent, pct_above_threshold, terrain lookup
 │   │   ├── cloud_top.py     # Cloud top vs ceiling
 │   │   ├── convective.py    # Convective risk along route
+│   │   ├── dd_nwp_agreement.py # DD-vs-NWP within-model cloud/icing agreement
 │   │   ├── fiki_icing.py    # FIKI icing layer thickness
 │   │   ├── flight_category.py # Airport ceiling/visibility (tunable MVFR/IFR thresholds)
 │   │   ├── airport_wind.py  # Airport crosswind + gust assessment
@@ -121,6 +138,11 @@ src/weatherbrief/
 │       ├── thermodynamics.py  # MetPy indices + derived levels
 │       ├── clouds.py       # Cloud layers from dewpoint depression
 │       ├── icing.py        # Icing zones from wet-bulb + Ogimet index
+│       ├── icing_common.py # Shared icing helpers across methods
+│       ├── sfip.py         # SFIP NWP-based icing potential index
+│       ├── sld.py          # Supercooled large droplet risk
+│       ├── e_shear.py      # Effective bulk shear
+│       ├── precipitation.py # Precipitation type/intensity classification
 │       ├── inversions.py   # Temperature inversion detection
 │       ├── convective.py   # Convective risk from indices
 │       ├── vertical_motion.py  # Vertical motion classification + CAT risk
@@ -130,35 +152,51 @@ src/weatherbrief/
 │   ├── skewt.py       # Skew-T diagram generation
 │   ├── llm_config.py  # LLM config schema + factory
 │   ├── llm_digest.py  # LangGraph digest pipeline
-│   └── prompt_builder.py  # Context assembly for LLM
+│   ├── prompt_builder.py  # Context assembly for LLM
+│   ├── dwd_translate.py # DE→EN translation for DWD synoptic text
+│   └── format_utils.py / exceptions.py # Shared formatting helpers + digest exceptions
 ├── db/
 │   ├── __init__.py    # Re-exports from flyfun-common (Base, SessionLocal, get_engine, etc.)
 │   └── models.py      # Re-exports shared models (UserRow, ApiTokenRow, etc.) + app-specific tables
 ├── storage/
 │   ├── snapshots.py   # Snapshot + cross-section save/load/list (file-based)
-│   └── flights.py     # Flight + BriefingPack CRUD (DB-backed)
+│   ├── sounding_profiles.py # sounding_profiles.json.gz sidecar I/O
+│   ├── flights.py     # Flight + BriefingPack CRUD (DB-backed)
+│   ├── aircraft.py / aircraft_types.py # iOS aircraft registry CRUD + type catalog
+│   ├── pireps.py / debriefs.py # PIREP + post-flight debrief CRUD
+│   └── system_profiles.py # System/admin profile storage
 ├── api/
 │   ├── app.py         # FastAPI app, lifespan (DB init), mounts flyfun-common auth router
 │   ├── flights.py     # CRUD /api/flights (DB sessions via Depends)
 │   ├── packs.py       # Packs: history, artifacts, refresh (with RefreshRegistry), report, email
 │   ├── profiles.py    # Flight parameter profiles CRUD (per-user named templates)
 │   ├── preferences.py # User preferences + autorouter credentials CRUD
-│   ├── throttle.py    # Concurrency limiters: generation_slot (5), pdf_limiter (3), plot_limiter (2)
+│   ├── throttle.py    # Server-wide generation_slot semaphore (3) + per-key sliding-window rate limiters (pdf, plot, pirep, feedback, analytics)
 │   ├── usage.py       # Usage summary + daily rate limits
 │   ├── credits.py     # Cost summary, charge, admin cost config, transparency endpoint
 │   ├── feedback.py    # User feedback submission, admin workflow (status/reply/send/notes)
 │   ├── security.py    # Audit logging (admin actions, pack access), HMAC integrity helpers
-│   └── admin.py       # Admin: user list, approval, usage overview, per-user costs, API agent/token mgmt
+│   ├── admin.py       # Admin: user list, approval, usage overview, per-user costs, API agent/token mgmt
+│   ├── deps.py        # Shared FastAPI dependencies (auth, DB session)
+│   ├── tokens.py      # API token mgmt for the current user
+│   ├── aircraft.py / pireps.py / debriefs.py # iOS companion: aircraft registry, PIREPs, post-flight debrief
+│   ├── maps.py / hewson_map.py / climatology.py / airport_profile.py # Forecast/front/climatology map + airport-profile endpoints
+│   ├── data_sources.py / models.py / messages.py / validation.py / user_migrations.py # Source registry, model metadata, in-app messages, input validation, per-user migrations
 ├── costs.py           # Pure cost computation (no DB/IO): CostConfig, CostBreakdown, compute_cost()
 ├── report/
 │   ├── render.py      # render_html(), render_pdf() via Jinja2 + WeasyPrint
 │   └── templates/     # Jinja2 template for self-contained HTML report
 ├── notify/
 │   ├── email.py       # Email delivery: Resend API (primary) with SMTP fallback
-│   └── admin_email.py # Notifications: signup, feedback, welcome, feedback reply to user
+│   ├── admin_email.py # Notifications: signup, feedback, welcome, feedback reply to user
+│   ├── magic_link_email.py # Magic-link / passwordless sign-in email
+│   ├── verification_email.py # Daily verification digest email
+│   └── admin_digest_email.py # Admin digest stats email
 └── triage/
     ├── __main__.py    # CLI entry point for feedback triage
-    └── process.py     # AI triage via Claude CLI: classify, analyze, suggest reply
+    ├── process.py     # AI triage via Claude CLI: classify, analyze, suggest reply
+    ├── prompt.py      # Triage prompt assembly
+    └── security.py    # Triage input sanitization
 ```
 
 ## Web Frontend (`web/`)
@@ -168,12 +206,16 @@ Vanilla TypeScript + Zustand (no React), bundled by esbuild.
 ```
 web/
 ├── index.html         # Flights list page
+├── flight.html        # Single-flight overview page
 ├── briefing.html      # Briefing report page (collapsible sections)
-├── login.html         # OAuth login page
+├── login.html / auth-verify.html # OAuth + magic-link login/verify
 ├── settings.html      # User preferences + usage dashboard
 ├── admin.html         # Admin: user approval + usage overview
-├── user-costs.html    # Admin: per-user cost attribution dashboard
-├── help.html          # Help & documentation
+├── user-costs.html / cost-summary.html # Admin per-user costs + cost summary
+├── maps.html          # Pan-European forecast/front maps
+├── verification.html  # METAR/TAF verification dashboard
+├── pireps.html        # PIREP feed
+├── help.html / privacy.html # Help & documentation, privacy policy
 ├── css/style.css      # Shared styles
 ├── ts/
 │   ├── store/         # Zustand vanilla stores + shared types
@@ -183,6 +225,9 @@ web/
 │   ├── helpers/       # Metric lookup, threshold rendering
 │   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
 │   ├── data/          # Static data (metrics-catalog.json, metrics-display.json)
+│   ├── analytics/     # Client-side analytics event tracking
+│   ├── i18n/          # Localization strings
+│   ├── tour/          # Guided product tour
 │   ├── visualization/ # Interactive visualizations (cross-section + route graph + route map)
 │   │   ├── cross-section/
 │   │   │   ├── renderer.ts      # Main canvas engine + coordinate transforms
@@ -201,7 +246,7 @@ web/
 │   │   │   └── constants.ts     # Shared layout constants
 │   │   ├── route-map/           # Leaflet geographic route visualization
 │   │   │   ├── renderer.ts      # Leaflet map lifecycle, segment polylines, waypoints
-│   │   │   ├── metrics.ts       # 14-metric registry (MapMetric objects)
+│   │   │   ├── metrics.ts       # 13-metric registry (MapMetric objects)
 │   │   │   ├── segment-style.ts # Pure: computeSegmentStyles() → {color, weight}[]
 │   │   │   ├── interaction.ts   # Hover, click, tooltip, sync callbacks
 │   │   │   ├── altitude-slider.ts # Range input for level-dependent metrics
@@ -214,11 +259,14 @@ web/
 │   │   └── types.ts             # Shared viz type definitions
 │   ├── utils.ts       # Shared utilities (API base, auth checks, centralized nav banner)
 │   ├── theme.ts       # Dark/light/system theme: persistence, toggle UI, matchMedia listener
-│   ├── flights-main.ts    # Flights page entry
+│   ├── flights-main.ts / flight-main.ts # Flights list + single-flight page entries
 │   ├── briefing-main.ts   # Briefing page entry
 │   ├── settings-main.ts   # Settings page entry
 │   ├── admin-main.ts      # Admin page entry
-│   ├── user-costs-main.ts # Admin: per-user cost attribution page
+│   ├── user-costs-main.ts / cost-summary-main.ts # Admin per-user costs + cost summary entries
+│   ├── maps-main.ts       # Forecast/front maps page entry
+│   ├── verification-main.ts # Verification dashboard entry
+│   ├── pireps-main.ts     # PIREP feed entry
 │   └── help-main.ts       # Help page entry
 └── dist/              # esbuild output (committed)
 ```
@@ -232,7 +280,12 @@ Flight and pack metadata are stored in a relational database via SQLAlchemy ORM.
 - **Dev mode** (`ENVIRONMENT=development`): SQLite at `data/weatherbrief.db`, tables auto-created on startup, dev user auto-inserted.
 - **Production** (`ENVIRONMENT=production`): MySQL via `DATABASE_URL` env var, schema managed by Alembic migrations.
 
-Tables: `users`, `user_preferences`, `api_tokens`, `cost_ledger` (from flyfun-common) + `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `feedback`, `cost_config` (app-specific). See [multi-user-deployment.md](./multi-user-deployment.md) for user/flight schema, [cost-attribution-design.md](./cost-attribution-design.md) for cost schema.
+Tables: `users`, `user_preferences`, `api_tokens`, `cost_ledger` (from flyfun-common) + app-specific tables, grouped by feature:
+- Core: `flight_profiles`, `flights`, `briefing_packs`, `briefing_usage`, `api_usage_log`, `feedback`, `cost_config`, `system_messages`, `device_tokens`, `flight_subscriptions`
+- iOS companion: `user_aircraft`, `pireps`, `flight_debriefs`
+- METAR/TAF verification (see metar-taf-accuracy.md): `verification_observations`, `verification_scores`, `taf_verification_scores`, `verification_cycles`, `verification_cache`, `verification_daily_stats`, `verification_monthly_stats`, `flight_verification_map`, `airport_forecast_snapshots`, `airport_daily_summary`, `airport_monthly_summary`
+
+See [multi-user-deployment.md](./multi-user-deployment.md) for user/flight schema, [cost-attribution-design.md](./cost-attribution-design.md) for cost schema.
 
 ### File artifacts (disk)
 
@@ -327,6 +380,8 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/flights/{id}/packs/refresh/status` | GET | Refresh status for a specific flight |
 | `/api/admin/metrics` | GET | Queue depth, active refreshes, timing stats (admin) |
 
+The table above covers the core flight/pack/admin surface. Additional feature areas mount their own routers (see linked docs): iOS companion (`/api/aircraft`, `/api/pireps`, `/api/observations`, `/api/companion`, flight debriefs), forecast/front/climatology maps (`/api/maps`, `/api/hewson`, `/api/climatology`, `/api/airport-profile`), METAR/TAF verification (`/api/verification`), in-app messages, model/data-source metadata, and per-user API token management. The MCP server (fastmcp) exposes a separate tool surface.
+
 **Shareable briefing links**: any authenticated user can view any flight's briefings via direct URL. Only the flight owner can refresh, delete, or trigger email. The frontend conditionally shows action buttons based on ownership.
 
 Static files served from `web/` at root.
@@ -355,8 +410,10 @@ Static files served from `web/` at root.
 | `pymysql>=1.1` | Pure-Python MySQL driver |
 | `cryptography>=42.0` | MySQL auth + Fernet credential encryption |
 | `authlib>=1.3` | Google OAuth OIDC flow |
-| `python-jose[cryptography]` | JWT encode/decode |
-| `requests` | HTTP API calls |
+| `pyjwt>=2.8` | JWT encode/decode |
+| `fastmcp>=2.13` | MCP server (AI flight-planning tools) |
+| `timezonefinder>=6.2` | Lat/lon → timezone for local-time display |
+| `requests`, `httpx` | HTTP API calls |
 | `pyyaml` | Route config |
 | `fastapi`, `uvicorn` | API server |
 | `metpy`, `matplotlib`, `numpy` | Sounding analysis + Skew-T plots |
@@ -371,63 +428,13 @@ Static files served from `web/` at root.
 
 ## Phase Roadmap
 
-| Phase | Status | Summary |
-|-------|--------|---------|
-| 1 | Done | Open-Meteo fetch, wind/icing/cloud analysis, JSON snapshots, text digest |
-| 2 | Done | Route rework (YAML, per-waypoint track), GRAMET, Skew-T plots |
-| 3 | Done | DWD text forecasts, LLM digest (LangGraph + structured output) |
-| 4a | Done | MetPy sounding analysis: thermodynamic indices, enhanced clouds/icing/convective, altitude band comparison |
-| 4b | Done | Vertical motion + CAT turbulence: omega profiles, Richardson number, Brunt-Vaisala frequency |
-| 4c | Planned | Ensemble & remaining model comparison refinement |
-| 5 | Done | Web UI, API, PDF report, email delivery |
-| 6.1 | Done | Docker + DB + Deploy: SQLAlchemy storage, Alembic migrations, Docker packaging |
-| 6.2 | Done | Auth: Google OAuth, JWT sessions, user-scoped data, approval workflow |
-| 6.3 | Done | Preferences: per-user settings, Fernet-encrypted autorouter credentials |
-| 6.4 | Done | Usage tracking, daily rate limits, admin page, shareable briefing links |
-| 7.1 | Done | Interactive cross-section visualization: canvas renderer, 8 layer types, hover/click interaction |
-| 7.2 | Done | SRTM terrain elevation profile along route (90m resolution, 0.5nm spacing) |
-| 7.3 | Done | Model freshness checking: smart refresh skips unchanged models |
-| 7.4 | Done | Enhanced Skew-T: CAPE/CIN shading, hodograph, indices panel, overlays |
-| 7.5 | Done | Metric explanations UI: catalog-driven info popups, tiered display, threshold scales |
-| 7.6 | Done | Inversion detection, Ogimet icing index, GRAMET PDF, convective risk visualization |
-| 7.7 | Done | Legacy routes.yaml removal, collapsible sections, admin force refresh |
-| 7.8 | Done | NWP cloud bands, terrain draw-order fix, layer legends, "Discuss with AI" buttons |
-| 8.1 | Done | Route advisory system: 13 evaluators, registry, user-tunable parameters, recalculation, frontend dashboard |
-| 8.2 | Done | Extended pressure levels (25 for GFS/ECMWF) + GRIB2 enrichment (CLWMR/ICMR from GFS S3), LWC-based icing |
-| 9.1 | Done | Flight parameter profiles: named templates for altitude/models/advisories, profile CRUD API, settings UI |
-| 9.2 | Done | Unified atmospheric profile table, icing severity toggle, Windy meteogram links |
-| 10.1 | Done | Route graph: canvas chart below cross-section for scalar metrics (wind, temp, precip, CAPE, freezing level) |
-| 10.2 | Done | Route-aware text forecasts: NWS AFD (US) and DWD (Europe) integrated into LLM digest |
-| 10.3 | Done | METAR/TAF route weather: D-0 observations, obs-vs-model comparison, TAF highlighting, wind advisories |
-| 10.4 | Done | API token authentication for bot/agent users (admin-managed, `wb_` prefix, SHA-256 hashed) |
-| 11.1 | Done | Cost attribution: per-briefing cost computation, credit balance, auto-reload, ledger, admin config, transparency endpoint |
-| 11.2 | Done | User feedback: submission with categories, admin email notifications, admin feedback listing |
-| 11.3 | Done | Refresh registry: prevent duplicate refreshes, per-flight status tracking, SSE progress streaming |
-| 11.4 | Done | Route map visualization: Leaflet geographic view with 14-metric coloring, altitude slider, hover sync |
-| 11.5 | Done | Admin user costs page: per-user cost attribution dashboard, cost distribution chart, transaction ledger |
-| 11.6 | Done | UX: centralized navigation banner, consistent nav across all pages |
-| 11.7 | Done | First-login workflow: welcome wizard (intro, aircraft defaults, guided tour), setup_completed tracking |
-| 11.8 | Done | Dark/light/system theme: CSS custom properties, FOUC prevention, theme-aware canvases, map tile switching, image inversion |
-| 11.9 | Done | Auto-refresh scheduler: background polling, freshness check, pre-flight lead time, email notification |
-| 11.10 | Done | Flight privacy: private flag hides flights from shared briefing links |
-| 11.11 | Done | Compact/full display mode: compact hides sounding analysis, model comparison, secondary advisories |
-| 12.1 | Done | Cross-section theme system: switchable themes (standard, high-contrast), theme preview, cloud hatch patterns, theme-aware legends |
-| 12.2 | Done | Auth consolidation: OAuth, JWT, DB engine, encryption moved to flyfun-common; cross-subdomain SSO via `flyfun_auth` cookie |
-| 12.3 | Done | Cost unification: drop credits abstraction, USD everywhere, shared cost_ledger via flyfun-common |
-| 12.4 | Done | Admin hub: cross-app Systems tab via flyfun-common's create_hub_router |
-| 12.5 | Done | Feedback workflow: status tracking (pending/ready/replied/ignored), AI triage, admin reply email |
-| 12.6 | Done | Security hardening: HMAC pack integrity, audit logging (admin actions, pack access) |
-| 12.7 | Done | Account deletion: cascade delete flights/profiles/artifacts, auth callback |
-| 12.8 | Done | Email: Resend API provider with SMTP fallback |
-| 12.9 | Done | Convective advisory altitude-awareness, ceiling route graph metrics, route map width variation |
-| 12.10 | Done | GRIB2 memory optimization: two-phase sequential decode, chunked ICON-EU processing |
-| 12.11 | Done | Memory hardening for long routes: per-fhour cleanup in all GRIB enrichment loops, post-advisory release of `cross_sections` in `pipeline.py` (already on disk, not needed downstream), container limit raised to 3 GB. Per-request memory curve logged at end of `execute_briefing()` (`Memory curve: start=… fetch=… analyze=… advisories=… post_clear=… end=… MB; peak=… (+N this request)`) for ongoing observability |
+Completed-phase development changelog moved to [archive/phase-roadmap.md](./archive/phase-roadmap.md) to keep this doc focused on current architecture. The only still-open item is **Phase 4c** (ensemble & remaining model-comparison refinement). Shipped subsystems each have their own design doc — see the index.
 
 ## Docker
 
 The app is packaged as a Docker image (`python:3.13-slim`) with:
-- System deps for WeasyPrint (libpango, libcairo, etc.)
-- `euro-aip` installed from GitHub (not local path)
+- System deps for WeasyPrint (libpango, libcairo, etc.) + eccodes for GRIB2 decode
+- `euro-aip` installed from PyPI (`pip install -e .`), not a local path
 - Non-root user (UID 2000)
 - Exposed on port 8020
 

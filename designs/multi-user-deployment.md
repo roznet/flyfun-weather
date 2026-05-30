@@ -38,7 +38,7 @@ Caddy injects CSP headers via `deploy/weather.flyfun.aero.caddy`. Key directives
 | `img-src` | `'self' data: blob: *.tile.openstreetmap.org *.basemaps.cartocdn.com` | Leaflet map tiles (light/dark themes) |
 | `connect-src` | `'self' *.flyfun.aero` | API calls + cross-subdomain (forms.flyfun.aero) |
 | `form-action` | `'self' accounts.google.com` | Google OAuth redirect |
-| `frame-ancestors` | `'none'` | No embedding |
+| `frame-ancestors` | `'self'` | No cross-origin embedding (also sets `font-src 'self'`, `base-uri 'self'`) |
 
 **Gotcha**: Any new external resource (CDN script, external fetch, new tile provider) will be silently blocked. The `/code-review` command checks PRs against this policy. When adding external resources, either update the CSP in the Caddy file or refactor to stay within the policy.
 
@@ -47,7 +47,7 @@ Caddy injects CSP headers via `deploy/weather.flyfun.aero.caddy`. Key directives
 `ENVIRONMENT=development` (from `.env`) activates dev mode:
 
 - **Auth bypass**: Middleware auto-injects a dev user (`dev-user-001`, email `dev@localhost`). No login page needed.
-- **SQLite instead of MySQL**: defaults to `sqlite:///data/weatherbrief.db`. SQLAlchemy abstracts the dialect.
+- **SQLite instead of MySQL**: defaults to `sqlite:///{DATA_DIR}/flyfun.db` (shared with other flyfun apps via the common engine). SQLAlchemy abstracts the dialect.
 - **Same file storage and API routes**: everything works identically.
 
 On first startup: creates DB, tables, and dev user automatically. No manual setup needed.
@@ -63,188 +63,36 @@ On first startup: creates DB, tables, and dev user automatically. No manual setu
 
 ## Database Schema (MySQL / SQLite via SQLAlchemy)
 
-### users (from flyfun-common)
+Column definitions live in code — shared rows (`users`, `user_preferences`, `cost_ledger`, `api_tokens`) in **flyfun-common**, app-specific rows in `db/models.py`. This section records identity/keys, ownership, and the non-obvious design rules, not the column lists (read the models for those).
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | VARCHAR(36) PK | UUID |
-| provider | VARCHAR(20) | `google`, `apple`, or `api` (bot/agent) |
-| provider_sub | VARCHAR(255) UNIQUE | OAuth subject ID |
-| email | VARCHAR(255) | From OAuth profile |
-| display_name | VARCHAR(255) | |
-| approved | BOOLEAN DEFAULT TRUE | Auto-approved on signup; admin can revoke |
-| spending_limit | FLOAT DEFAULT 500.0 | Spending limit (was `credit_balance`) |
-| created_at | DATETIME | |
-| last_login_at | DATETIME | |
+**Shared rows (flyfun-common):**
+- **users** — `id` UUID PK; `provider` (`google`/`apple`/`api` for bot/agent) + `provider_sub` UNIQUE OAuth subject; `approved` (auto-approved on signup, admin-revocable); `spending_limit` FLOAT (renamed from `credit_balance`).
+- **user_preferences** — `user_id` PK/FK; `app_prefs_json` (defaults, service toggles, advisory prefs, digest config — renamed from `defaults_json`, digest merged in); `encrypted_creds_json` (Fernet-encrypted autorouter creds — renamed from `encrypted_autorouter_creds`); `setup_completed`.
+- **cost_ledger** — append-only USD cost tracking (replaced the old credit_ledger). See [cost-attribution-design.md](./cost-attribution-design.md).
+- **api_tokens** — `token_hash` = SHA-256 of an `ff_…` token (legacy `wb_` still accepted); `revoked` is a soft-delete kept for the audit trail.
 
-### user_preferences (from flyfun-common)
+**App-specific rows (`db/models.py`):**
 
-| Column | Type | Notes |
-|--------|------|-------|
-| user_id | VARCHAR(36) PK FK | |
-| app_prefs_json | TEXT | JSON: defaults, service toggles, advisory prefs, digest config (was `defaults_json`; digest_config merged in) |
-| encrypted_creds_json | TEXT | Fernet-encrypted JSON: `{"username": "...", "password": "..."}` (was `encrypted_autorouter_creds`) |
-| setup_completed | BOOLEAN DEFAULT FALSE | True after user completes first-login wizard |
-
-### flight_profiles
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | INT AUTO_INCREMENT PK | |
-| user_id | VARCHAR(36) FK | Cascade delete with user |
-| name | VARCHAR(100) DEFAULT "Default" | Unique per user (case-insensitive) |
-| is_default | BOOLEAN DEFAULT FALSE | One default per user |
-| settings_json | TEXT | JSON: cruise_altitude_ft, flight_ceiling_ft, speed_kt, models, advisory_models, gramet/llm/icing toggles, advisory enable/params |
-| created_at | DATETIME | |
-| updated_at | DATETIME | |
-
-### user_aircraft
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | INT AUTO_INCREMENT PK | |
-| user_id | VARCHAR(64) FK | Cascade delete with user |
-| icao_type | VARCHAR(4) NOT NULL | ICAO DOC 8643 designator (e.g. SR22, C172) |
-| tail_number | VARCHAR(10) NULL | Privacy-gated: only shown to owner |
-| nickname | VARCHAR(50) NULL | e.g. "Club SR22" — only shown to owner |
-| is_ifr | BOOLEAN DEFAULT FALSE | IFR capable |
-| is_fiki | BOOLEAN DEFAULT FALSE | FIKI equipped |
-| cruise_speed_kt | INT NULL | Typical cruise speed |
-| ceiling_ft | INT NULL | Service ceiling |
-| is_default | BOOLEAN DEFAULT FALSE | One default per user |
-| created_at | DATETIME | |
-
-ICAO type data is a **static JSON file** (`configs/icao_aircraft_types.json`, ~150 GA types) loaded into memory — not a database table. Searched via `storage/aircraft_types.py`.
-
-Aircraft and flight profiles are **independent** — aircraft provides physical capabilities (speed, ceiling, FIKI), profiles provide mission preferences (models, advisories, flight rules). Selecting an aircraft pre-fills defaults but doesn't constrain the profile.
-
-**Privacy rule**: `tail_number` and `nickname` are only included in API responses when `viewer_id == aircraft.user_id`. All other fields (type, capabilities) are always visible. This applies uniformly: flight detail views, shared flights, and future PIREPs.
+### flight_profiles & user_aircraft
+Mission preferences (`flight_profiles` — models/advisories/flight-rules in `settings_json`, `system_template_key` → `configs/system_profiles.json`) vs physical capabilities (`user_aircraft` — cruise speed, ceiling, FIKI, IFR). They are **independent**: selecting an aircraft pre-fills profile defaults but doesn't constrain the profile. ICAO type data is a static JSON file (`configs/icao_aircraft_types.json`, ~150 GA types loaded into memory), not a table — searched via `storage/aircraft_types.py`. **Privacy rule:** `tail_number`/`nickname` are returned only when `viewer_id == aircraft.user_id`; type/capabilities are always visible. This applies uniformly across flight-detail, shared flights, and PIREPs.
 
 ### flights
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | VARCHAR(100) PK | `{route_slug}-{target_date}-{hash}` |
-| user_id | VARCHAR(36) FK | |
-| profile_id | INT FK NULL | → flight_profiles.id, SET NULL on delete |
-| aircraft_id | INT FK NULL | → user_aircraft.id, SET NULL on delete |
-| route_name | VARCHAR(100) | |
-| waypoints | JSON | `["EGTK","LFPB","LSGS"]` |
-| departure_time | DATETIME(6) NOT NULL | Aware UTC departure (replaces old target_date + target_time_utc) |
-| cruise_altitude_ft | INT DEFAULT 8000 | |
-| flight_ceiling_ft | INT DEFAULT 18000 | |
-| flight_duration_hours | FLOAT DEFAULT 0.0 | |
-| private | BOOLEAN DEFAULT FALSE | Hide from other users' shared briefing links |
-| auto_refresh | BOOLEAN DEFAULT FALSE | Enable background auto-refresh |
-| auto_refresh_hour | INT NULL | Preferred UTC hour for daily refresh (default: departure_time.hour − 1) |
-| last_auto_refresh_at | DATETIME(6) NULL | Timestamp of last auto-refresh (for scheduling) |
-| created_at | DATETIME | |
+PK `id = {route_slug}-{target_date}-{hash}` — same route+date with different time/altitude is a different flight. `departure_time` is aware-UTC (replaced the old `target_date` + `target_time_utc`); `alt_departure_time` drives "what-if" alt-time advisories. Notable flags: `private` (hide from others' shared links), `auto_refresh`/`auto_refresh_hour`/`last_auto_refresh_at`, `verification_status`, `raw_route` + `parser_version` (the Field-15 route the pilot typed), `share_code` (random base62 token for `/s/{code}`). FKs to `flight_profiles`/`user_aircraft` are SET NULL on delete; `user_id` cascades.
 
 ### flight_subscriptions
-
-Read-only sharing of a flight between pilots. A subscription lets a non-owner see the owner's latest briefing on their own flight list and flight/briefing pages. Subscribers cannot edit, refresh, or delete the flight; write endpoints still gate on `row.user_id == viewer_id`.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | INT AUTO_INCREMENT PK | |
-| flight_id | VARCHAR(256) FK NOT NULL | → flights.id, CASCADE on delete |
-| user_id | VARCHAR(64) FK NOT NULL | → users.id, CASCADE on delete |
-| created_at | DATETIME(6) NOT NULL | Aware UTC |
-
-Unique `(flight_id, user_id)` prevents double-subscription; `subscribe_flight` catches the resulting `IntegrityError` inside a SAVEPOINT to make concurrent POSTs idempotent. Privacy flip is enforced at query time in `list_flights_with_role`: subscribed flights disappear from the recipient's list when `flights.private = TRUE`.
+Read-only sharing between pilots — surfaces the owner's latest briefing on the subscriber's flight list and flight/briefing pages; write endpoints still gate on `row.user_id == viewer_id`. UNIQUE `(flight_id, user_id)` prevents double-subscription, and `subscribe_flight` catches the resulting `IntegrityError` inside a SAVEPOINT to make concurrent POSTs idempotent. The privacy flip is enforced at query time in `list_flights_with_role`: subscribed flights disappear from the recipient's list when `flights.private = TRUE`.
 
 ### briefing_packs
+Pack metadata only — the artifacts themselves are files (see [data-models.md](./data-models.md)). Notable columns: `assessment` GREEN/AMBER/RED + reason, `integrity_hmac` (tamper check over pack contents), `model_init_times_json`, `artifact_path`. JSON/flag columns omitted for brevity: `grib_init_times_json`, `model_sources_json`, `models_skipped_region_json`, `diagnostics_json`, the alt-time fields (`alt_assessment*`, `has_alt_advisories`), and the DWD / Met Office surface-chart reference columns (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). Chart bytes live in the shared `DATA_DIR` cache; the row stores only references.
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | INT AUTO_INCREMENT PK | |
-| flight_id | VARCHAR(100) FK | |
-| fetch_timestamp | DATETIME(6) NOT NULL | Aware UTC, microsecond precision |
-| days_out | INT | |
-| has_gramet | BOOLEAN DEFAULT FALSE | |
-| has_skewt | BOOLEAN DEFAULT FALSE | |
-| has_digest | BOOLEAN DEFAULT FALSE | |
-| assessment | VARCHAR(10) NULL | GREEN/AMBER/RED |
-| assessment_reason | TEXT NULL | |
-| model_init_times | TEXT NULL | JSON: NWP model init timestamps at fetch time |
-| artifact_path | VARCHAR(500) | Relative path to pack directory |
-
-### api_tokens
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | INT AUTO_INCREMENT PK | |
-| user_id | VARCHAR(36) FK | Cascade delete with user |
-| token_hash | VARCHAR(64) UNIQUE | SHA-256 hex digest of `ff_...` token (legacy `wb_` accepted) |
-| name | VARCHAR(100) | Human-readable label (e.g., "CI bot") |
-| created_at | DATETIME | |
-| expires_at | DATETIME NULL | Optional expiry |
-| last_used_at | DATETIME NULL | Updated on each authenticated request |
-| revoked | BOOLEAN DEFAULT FALSE | Soft-delete for audit trail |
-
-### briefing_usage
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | INT AUTO_INCREMENT PK | |
-| user_id | VARCHAR(36) FK | |
-| flight_id | VARCHAR(100) FK | Which flight was refreshed |
-| timestamp | DATETIME | |
-| open_meteo_calls | INT DEFAULT 0 | Number of Open-Meteo API calls in this refresh |
-| gramet_fetched | BOOLEAN DEFAULT FALSE | Was GRAMET successfully fetched? |
-| gramet_failed | BOOLEAN DEFAULT FALSE | Did GRAMET fetch fail? |
-| llm_digest | BOOLEAN DEFAULT FALSE | Was LLM digest generated? |
-| llm_model | VARCHAR(100) NULL | e.g. `anthropic:claude-sonnet-4-5-20250929` |
-| llm_input_tokens | INT NULL | LLM input token count |
-| llm_output_tokens | INT NULL | LLM output token count |
-| result_size_bytes | INT NULL | Total artifact size on disk |
-| elapsed_seconds | FLOAT NULL | Total time to complete refresh |
-| queue_wait_seconds | FLOAT NULL | Time spent waiting in queue before execution |
-| triggered_by | VARCHAR(16) NULL | `user`, `scheduler`, or `admin` |
-
-### feedback
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | INT AUTO_INCREMENT PK | |
-| user_id | VARCHAR(64) FK | → users.id |
-| flight_id | VARCHAR(256) NULL | Nullable — feedback can be submitted without a flight |
-| pack_timestamp | DATETIME(6) NULL | Specific pack within the flight |
-| category | VARCHAR(32) | `data_issue`, `too_conservative`, `too_optimistic`, `incorrect_interpretation`, `other` |
-| comment | TEXT | Required, 1-5000 chars |
-| status | VARCHAR(16) DEFAULT 'pending' | Workflow: `pending` → `ready` → `replied` or `ignored` |
-| classification | VARCHAR(32) NULL | AI triage: `BUG_FIXABLE`, `RESPOND_ONLY`, `NEEDS_INVESTIGATION`, `DEFER_TO_HUMAN` |
-| ai_analysis | TEXT NULL | AI-generated reasoning |
-| admin_reply | TEXT NULL | Draft/sent reply text |
-| admin_notes | TEXT NULL | Internal admin notes |
-| confidence | FLOAT NULL | AI classification confidence (0-1) |
-| created_at | DATETIME | |
-| processed_at | DATETIME NULL | When AI triage completed |
-| replied_at | DATETIME NULL | When reply email sent to user |
-
-### cost_ledger (from flyfun-common)
-
-Append-only cost tracking table (replaces old credit_ledger for new transactions): `id`, `user_id`, `service`, `action`, `cost`, `metadata_json`, `created_at`.
-
-### cost_config (app-specific)
-
-See [cost-attribution-design.md](./cost-attribution-design.md) for full schema.
+### briefing_usage & feedback
+`briefing_usage` — per-refresh resource accounting (Open-Meteo call count, GRAMET success/fail, LLM model + input/output tokens, result size, elapsed + queue-wait seconds, `triggered_by` = user/scheduler/admin) that feeds cost attribution. `feedback` — user submission with `category`, workflow `status` (`pending → ready → replied`/`ignored`), and AI triage (`classification` = BUG_FIXABLE/RESPOND_ONLY/NEEDS_INVESTIGATION/DEFER_TO_HUMAN, `confidence`, `ai_analysis`, plus audit `triage_prompt`/`triage_raw_response` stored as MEDIUMTEXT on MySQL), `admin_reply`/`admin_notes`.
 
 ### pireps
-
-Pilot weather reports — community observations. Schema in `designs/future/pirep-plan.md`.
-
-Key columns: `id`, `client_uuid` (unique, offline dedup), `submitted_at`, `observed_at`, `latitude`/`longitude`, `gps_altitude_ft`, `reported_altitude_ft`, `in_cloud`, `icing_intensity`/`icing_type`, `turbulence_intensity`, `ceiling_msl_ft`, `tops_msl_ft`/`tops_basis`, `temp_c`, `wind_dir`/`wind_speed_kt`, `remarks`, `aircraft_id` (FK → user_aircraft, SET NULL), `pack_id` (FK → briefing_packs, SET NULL), `source` (manual/inflight/postflight), `user_id` (FK → users, SET NULL for anonymization on account deletion).
-
-**Permission gating**: `pirep_can_view` and `pirep_can_publish` flags in `app_prefs_json`. Admin can set per-user or bulk. Feature-gating 403s must NOT trigger login redirect in frontend (see `apiFetch` in `web/ts/utils.ts`).
-
-**Flight query**: PIREPs queried by `flight_id` match via `pack_id` OR (for PIREPs without pack_id) by user + flight time window (departure ±2h).
-
-**Retention**: PIREPs are never deleted. Packs linked to PIREPs are exempt from T1/T2 retention cleanup.
+Pilot weather reports (community observations) — full schema in `designs/future/pirep-plan.md`. `client_uuid` UNIQUE for offline dedup; `source` = manual/inflight/postflight; `aircraft_id`/`pack_id`/`user_id` are all SET NULL on delete (`user_id` nulled to anonymize on account deletion). **Permission gating:** `pirep_can_view`/`pirep_can_publish` flags in `app_prefs_json` (admin sets per-user or bulk); feature-gating 403s must NOT trigger a login redirect in the frontend (see `apiFetch` in `web/ts/utils.ts`). **Flight query:** matched by `pack_id`, or for pack-less PIREPs by user + flight time window (departure ±2h). **Retention:** never deleted, and packs linked to PIREPs are exempt from T1/T2 retention cleanup.
 
 ### device_tokens
-
-APNs push notification tokens (M2, table created but not yet used): `id`, `user_id` (FK → users, CASCADE), `token` (unique), `environment` (sandbox/production), `updated_at`.
+APNs push tokens (M2 — table created but not yet used): `user_id` FK CASCADE, `token` UNIQUE, `environment` sandbox/production.
 
 ## Authentication (via flyfun-common)
 
@@ -280,7 +128,7 @@ A third sign-in path alongside Google/Apple, for users who don't want to link th
 
 **Email content.** `weatherbrief.notify.magic_link_email.send_magic_link_email` sends an HTML + plain-text email containing both the click-through link and the 6-digit code, plus the requesting IP (so the user can spot misuse). Dev mode logs the link/code instead of sending.
 
-**Schema.** `magic_link_tokens` (id, email, token_hash, otp_code_hash, created_at, expires_at, used_at, requested_ip) and `magic_link_consume_attempts` (id, ip, attempted_at). Migration `056_magic_link_tokens.py` creates both tables and adds `ix_users_email` since email-keyed lookup runs on every consume.
+**Schema.** `magic_link_tokens` (id, email, token_hash, otp_code_hash, created_at, expires_at, used_at, requested_ip) and `magic_link_consume_attempts` (id, ip, attempted_at). Migration `059_magic_link_tokens.py` creates both tables and adds `ix_users_email` since email-keyed lookup runs on every consume.
 
 ### API Token Authentication (bot/agent users)
 
@@ -322,17 +170,18 @@ Every refresh logged to `briefing_usage` with timing metrics (`elapsed_seconds`,
 
 | Resource | Limit | Notes |
 |----------|-------|-------|
-| Concurrent refreshes (server) | 5 | Returns 503 when full; scheduler bypasses queue limit |
-| Concurrent refreshes (per user) | 2 | Returns 429 when exceeded; prevents one user hogging the queue |
-| PDF generation | 3 concurrent | Semaphore in `api/throttle.py` |
-| Skew-T plot generation | 2 concurrent | Semaphore in `api/throttle.py` |
+| Refresh queue depth (server) | 5 | `MAX_QUEUE_DEPTH`; returns 503 when full; scheduler bypasses queue limit |
+| Concurrent refreshes (per user) | 2 | `MAX_PER_USER`; returns 429 when exceeded; prevents one user hogging the queue |
+| Heavy generation (PDF + Skew-T) | 3 concurrent | Single combined `threading.Semaphore(3)` in `api/throttle.py`; returns 503 |
+| PDF render rate | 10/hr | `pdf_limiter` sliding window (WeasyPrint is very heavy) |
+| Skew-T / hodograph render rate | 60/hr | `plot_limiter` sliding window (combined budget) |
 
 `RefreshRegistry` (in-memory) tracks active refreshes by flight and user, queue depth, and timing. Each `RefreshEntry` carries `user_id` for per-user accounting. `GET /api/admin/metrics` returns live queue state + 24h/7d/30d timing statistics. `GET /api/refresh/stats` returns 7-day average refresh time (public, used by frontend progress hint).
 
 ### Refresh Progress UX
 
 During a refresh, the SSE stream and freshness bar show:
-- Pipeline stage labels with progress percentage (13 stages, 5%–95%)
+- Pipeline stage labels with progress percentage (14 stages, 5%–95%; `_STAGE_LABELS`/`_STAGE_PROGRESS` in `api/packs.py`)
 - **"You can close this page"** hint with average refresh time (from `/api/refresh/stats`)
 - **"Email me when done"** checkbox — passes `?notify_email=true` to the stream endpoint, which calls `send_briefing_email()` on completion
 
@@ -373,8 +222,8 @@ docker exec -i shared-mysql mysql -u root -p < deploy/03-create-weatherbrief-db.
 # 3. Create .env with production settings
 # (ENVIRONMENT=production, DATABASE_URL, DATA_DIR, AIRPORTS_DB, API keys)
 
-# 4. Copy airports.db into data/
-mkdir -p data && cp /path/to/airports.db data/
+# 4. Copy nav.db into data/ (AIRPORTS_DB points at data/nav.db; built by euro_aip)
+mkdir -p data && cp /path/to/nav.db data/
 
 # 5. Build, start, migrate
 docker compose up -d --build
@@ -409,7 +258,7 @@ git pull && docker compose up -d --build
 | `ENVIRONMENT` | No | `development` | `production` for Docker/MySQL |
 | `DATABASE_URL` | Prod only | — | MySQL connection string |
 | `DATA_DIR` | No | `data` | Artifact storage root |
-| `AIRPORTS_DB` | Yes | — | Path to euro-aip airports.db |
+| `AIRPORTS_DB` | Yes | — | Path to `data/nav.db` (built by euro_aip) |
 | `OPENAI_API_KEY` | For LLM digest | — | |
 | `ANTHROPIC_API_KEY` | For LLM digest | — | |
 | `AUTOROUTER_USERNAME` | For GRAMET | — | Fallback; per-user creds preferred |

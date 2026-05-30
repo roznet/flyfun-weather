@@ -12,28 +12,29 @@ Multi-model NWP data from the free Open-Meteo API.
 
 ### Model Endpoints (`fetch/variables.py`)
 
-Each model has a `ModelEndpoint` dataclass specifying URL, max forecast range, and unavailable variables:
+Each model has a `ModelEndpoint` dataclass (`name`, `base_url`, `max_days`, `unavailable_surface`, `unavailable_pressure`, `pressure_levels`, `default`, `region`, `required_icao_prefixes`) in `MODEL_ENDPOINTS`. There are **6** endpoints (no `best_match` — Open-Meteo's auto-blend was dropped):
 
-| Model | Endpoint | Max Days | Notes |
-|-------|----------|----------|-------|
-| `best_match` | `/v1/forecast` | 16 | Open-Meteo's auto-blend |
-| `gfs` | `/v1/gfs` | 16 | NCEP GFS |
-| `ecmwf` | `/v1/ecmwf` | 10 | No freezing_level, visibility |
-| `icon` | `/v1/dwd-icon` | 7 | No vertical_velocity at pressure levels |
-| `ukmo` | `/v1/forecast?models=ukmo_seamless` | 7 | Uses `model_param` field, no precip_probability |
-| `meteofrance` | `/v1/meteofrance` | 6 | No precip_probability, freezing_level, visibility, vertical_velocity |
-| `gem` | `/v1/gem` | 10 | No freezing_level, visibility, vertical_velocity |
+| Model | Endpoint | Max Days | Region / gate | Notes |
+|-------|----------|----------|---------------|-------|
+| `ecmwf` | `/v1/ecmwf` | 10 | global, default | No freezing_level, visibility, lifted_index. vertical_velocity now available |
+| `gfs` | `/v1/gfs` | 16 | global, default | NCEP GFS — full surface + pressure-level set |
+| `icon` | `/v1/dwd-icon` | 7 | europe, default | No convective_inhibition, lifted_index; no vertical_velocity at pressure levels |
+| `ukmo` | `/v1/forecast?models=ukmo_seamless` | 7 | europe, needs `EG…` | Uses `model_param`; no precip_probability, lifted_index |
+| `meteofrance` | `/v1/meteofrance` | 6 | europe, needs `LF…` | No precip_probability, freezing_level, visibility, convective_inhibition, lifted_index, vertical_velocity |
+| `gem` | `/v1/gem` | 10 | north_america | No freezing_level, visibility, convective_inhibition, lifted_index, vertical_velocity |
 
-`build_hourly_params()` constructs the API parameter string, excluding each model's unavailable variables. Pressure levels are **per-model** via `ModelEndpoint.pressure_levels`:
+`region` (`ModelRegion.GLOBAL/EUROPE/NORTH_AMERICA`) and `required_icao_prefixes` let the pipeline skip models irrelevant to a route (`detect_model_region(route)`, `route_covers_prefixes(route, prefixes)`).
 
-| Model | Count | Range | Notes |
-|-------|-------|-------|-------|
-| GFS / Best-Match | 28 | 1000–150 hPa | 25 hPa spacing below 500, extends to upper atmosphere |
-| ECMWF | 11 | 1000–150 hPa | Coarser spacing, includes 250/200/150 |
-| ICON | 12 | 1000–300 hPa | 250/200/150 return null |
-| Météo-France | 19 | 1000–150 hPa | |
-| UKMO | 20 | 1000–150 hPa | Supports vertical_velocity |
-| GEM | 20 | 1000–150 hPa | |
+`build_hourly_params()` constructs the API parameter string, excluding each model's unavailable variables. Pressure levels are **per-model** via `ModelEndpoint.pressure_levels` (named constants in `variables.py`):
+
+| Model | Count | Constant | Notes |
+|-------|-------|----------|-------|
+| GFS | 28 | `EXTENDED_PRESSURE_LEVELS` | 25 hPa spacing below 500, up to 150 hPa |
+| ECMWF | 13 | `ECMWF_PRESSURE_LEVELS` | 1000–50 hPa, no intermediate levels (OM limitation) |
+| ICON | 19 | `ICON_PRESSURE_LEVELS` | 1000–30 hPa; GRIB enrichment interpolates to extended levels |
+| Météo-France | 19 | `METEOFRANCE_PRESSURE_LEVELS` | 1000–150 hPa |
+| UKMO | 20 | `UKMO_PRESSURE_LEVELS` | 1000–150 hPa, supports vertical_velocity |
+| GEM | 20 | `GEM_PRESSURE_LEVELS` | 1000–150 hPa |
 
 ### Client Usage
 
@@ -62,12 +63,13 @@ The pipeline uses `fetch_multi_point()` to consolidate API calls: **1 call per m
 
 ### Retry & Rate Limiting
 
-`_get_with_retry()` handles Open-Meteo 429 responses with a generous backoff schedule:
+`_get_with_retry()` handles Open-Meteo 429 and 5xx responses with a generous backoff schedule:
 
-- **Max retries**: 4, with backoff `[10, 30, 60, 90]` seconds (generous for expanded pressure-level requests)
+- **Max retries**: `_MAX_RETRIES = 4`, with `_RETRY_BACKOFF = [10, 30, 60, 90]` seconds (generous for expanded pressure-level requests)
 - Respects `Retry-After` header from server if present; falls back to backoff schedule otherwise
-- Only retries on 429 (rate-limit) — other HTTP errors propagate immediately
+- Retries on `_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}` — rate-limit and transient server errors; other HTTP errors propagate immediately
 - Logging includes attempt count, wait time, and truncated URL for debugging
+- `_prepare_request()` swaps the host for historical (`historical-forecast-api`) or customer-API-key (`customer-api`) modes; `get_json()` is the public GET-with-retry entry used by callers building their own URLs (e.g. frontal grid fetch)
 
 ### Route Walking (`fetch/route_walk.py`)
 
@@ -81,8 +83,8 @@ Common route generator used by both interpolation and elevation profiling. Yield
 Generates evenly-spaced `RoutePoint` objects along a multi-leg route for cross-section data. Delegates to `walk_route()`.
 
 ```python
-route_points = interpolate_route(route, spacing_nm=20.0)
-# → ~20 RoutePoint objects for a 400nm route
+route_points = interpolate_route(route, spacing_nm=10.0)  # default 10nm
+# → ~40 RoutePoint objects for a 400nm route
 ```
 
 - Each point has `distance_from_origin_nm` for cross-section visualization
@@ -135,24 +137,31 @@ European routes get German synoptic overviews from DWD Open Data (free, no API k
 - **Graceful failure** — each forecast independently None-able
 - Text is in German — the LLM translates and synthesizes as part of the digest
 
-## Autorouter GRAMET (`fetch/gramet.py`)
+## Autorouter GRAMET (`tasks/outputs.py:run_gramet()`)
 
-Vertical cross-section images from the Autorouter API (requires euro_aip credentials).
+Vertical cross-section PDF from the Autorouter API. The fetch lives in `tasks/outputs.py` (there is no longer a `fetch/gramet.py`); the client itself is `euro_aip.briefing.sources.autorouter_gramet.AutorouterGrametSource` — push the complexity into the library, not weatherbrief.
 
 ```python
-gramet = AutorouterGramet()  # uses AutorouterCredentialManager
-data = gramet.fetch_gramet(
-    icao_codes=["EGTK", "LFPB", "LSGS"],
-    altitude_ft=8000,
-    departure_time=dt,
-    duration_hours=4.5,
-    format="pdf",  # PDF for better cloud rendering; PNG fallback available
+result = run_gramet(
+    route, departure_time, pack_dir=..., data_dir=...,
+    autorouter_token=token, user_id=user_id,
+)  # → GrametResult(path=..., fetched=True) | GrametResult(diagnostic=...)
+# internally:
+cred_manager = AutorouterCredentialManager(cache_dir)
+cred_manager.set_token(autorouter_token)
+gramet_client = AutorouterGrametSource(cred_manager)
+data = gramet_client.fetch_gramet(
+    waypoints=[wp.icao for wp in route.waypoints],
+    altitude_ft=route.cruise_altitude_ft,
+    departure_time=departure_time,
+    duration_hours=route.flight_duration_hours or 2.0,
+    fmt="pdf",
 )  # → bytes (PDF)
 ```
 
-- Auth via Bearer token from `euro_aip.utils.autorouter_credentials`
-- **Per-user credentials**: in multi-user mode, each user's encrypted autorouter credentials are loaded from the DB and passed to `AutorouterGramet(username=..., password=...)`. A per-user token cache dir (`data/.cache/autorouter/{user_id}/`) prevents users from sharing cached OAuth tokens.
-- API params: waypoints (space-separated), altitude (feet), departuretime (Unix), totaleet (seconds)
+- Auth via a pre-obtained `autorouter_token` set on `AutorouterCredentialManager` (no DB username/password in the fetch path)
+- **Per-user token cache**: when `user_id` + `data_dir` are present, the cache dir is `{data_dir}/.cache/autorouter/{user_id}/` so users don't share cached OAuth tokens; otherwise `~/.cache/weatherbrief`
+- No token → `GrametResult()` (expected user state, no diagnostic). Output written to `{pack_dir}/gramet.pdf` (or a dated `data_dir/gramet/...` path). Missing euro_aip → info diagnostic; fetch error → warn diagnostic with `GrametCode`
 
 ## Elevation Profile (`fetch/elevation.py`)
 
@@ -183,7 +192,7 @@ if not status.fresh:
     schedule_refresh()
 ```
 
-Eight tracked source/model pairs: ECMWF/GFS/ICON-EU direct (GRIB) + 5 Open-Meteo republishes (`gfs/ecmwf/icon/meteofrance/ukmo:openmeteo`).
+Nine tracked source/model pairs (`SOURCE_REGISTRY` in `fetch/freshness/registry.py`): 3 direct GRIB (`ecmwf:direct`, `gfs:noaa`, `icon_eu:dwd`) + 6 Open-Meteo republishes (`gfs/ecmwf/icon/meteofrance/ukmo/gem:openmeteo`). Each `SourceConfig` carries schedule (cycles, delivery_offset, horizon) plus descriptive metadata (model/provider label, role, resolution, coverage, pressure_levels) feeding `/api/data-sources` and the help-page table.
 
 The legacy `fetch/model_status.py` module (`fetch_model_metadata`, `compute_next_update`) is still imported by `_finalize_refresh` to record per-model Open-Meteo init times on each pack. `check_freshness` and `compute_next_update` are no longer consumed by the freshness endpoint.
 
@@ -195,8 +204,11 @@ GRIB2 enrichment for Cloud Liquid Water, Ice Mixing Ratio, and cloud diagnostics
 
 ```python
 from weatherbrief.fetch.grib import enrich_forecasts
-enrich_forecasts(cross_sections, all_forecasts, route_points,
-                 target_date, target_hour, data_dir=data_dir)
+grib_init_times, grib_skip_reasons = enrich_forecasts(
+    cross_sections, all_forecasts, route_points, departure_time,
+    data_dir=data_dir, flight_duration_hours=4.5,
+    as_of_time=None, priority=None,  # priority defaults to the _DECODE_PRIORITY ContextVar
+)
 # Modifies PressureLevelData in-place: sets cloud_liquid_water_kg_kg, ice_mixing_ratio_kg_kg
 # Also attaches NWPCloudDiagnostics and overrides cloud cover for model-run consistency
 ```

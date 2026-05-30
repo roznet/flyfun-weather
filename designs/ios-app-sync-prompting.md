@@ -45,9 +45,13 @@ Observation created
 
 ### Current implementation note (Phase 3 M1)
 
-`PirepOfflineStore` actor writes queue to a JSON file in Documents (not SwiftData yet). Network-error detection relies on `URLError` codes via `underlyingError as? URLError` — `APIClient` wraps URL errors in `APIError`, so the raw URL code is on the underlying error, not the top-level. Offline PIREPs get a synthetic `PirepResponse.offline`. On successful online submit, `offlineStore.sync(using: repository)` drains the queue (connectivity confirmed).
+`PirepOfflineStore` actor writes the queue to a JSON file (`pending_pireps.json`) in Documents (not SwiftData yet). Offline detection lives on `APIError.isTransientNetwork`: it unwraps `case .networkError(let inner)`, casts `inner as? URLError`, and only treats an allowlist of codes as offline (`.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost`) — `APIClient` wraps URL errors in `APIError.networkError`, so the raw `URLError.code` is on the inner error, not the top level. `PirepViewModel.submit` catches `where apiError.isTransientNetwork`, calls `offlineStore.enqueue(request)`, and shows a synthetic `PirepResponse.offline`. On a successful online submit it first calls `offlineStore.sync(using: repository)`, which drains the whole queue in one `submitPirepsBatch` call (no chunking yet — server dedups via `client_uuid`).
+
+There is **no `NWPathMonitor`** yet. The queue is flushed on two triggers: (1) the successful-submit path above, and (2) `AppState.syncPendingPireps()` (calls `offlineStore.load()` then `sync(using:)`), invoked from `WeatherBriefApp` on `scenePhase == .active` — i.e. the queue retries when the app is foregrounded, not on a connectivity-restored event.
 
 ## Prompting Engine (Phase 3b — Detailed Spec)
+
+> Status: design intent only — none of this is implemented yet. No `RouteProgressTracker`, trigger rules, priority queue, or `ForecastSummary`/`forecastAtCurrentPosition()` exist in the iOS code. The Swift below is illustrative of the intended shape, not real symbols.
 
 The intelligence layer that makes the app "smart" — watches aircraft progress, reads ahead in the forecast, decides when and what to ask. Requires Phase 2 offline data (synced cross-section data at each route point).
 

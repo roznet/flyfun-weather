@@ -10,10 +10,11 @@ See [skewt-canvas.md](./skewt-canvas.md) for the full Skew-T design.
 
 ## Layout Modes
 
-The visualization supports three layout modes (persisted to localStorage):
+The visualization supports four layout modes (`VizLayout` in `visualization/types.ts`, persisted to localStorage):
 - **cross-section**: Vertical profile only (cross-section + route graph)
 - **map**: Geographic view only (Leaflet route map)
 - **split**: Side-by-side (cross-section left, map right)
+- **compare**: Single layer across all models simultaneously (see [Compare Mode](#compare-mode) below)
 
 Toggled via buttons in the control panel. Components are created/destroyed on layout change.
 
@@ -34,8 +35,8 @@ data-extract.ts  → extractVizData() → VizRouteData
 ┌───────────────────────┬──────────────────────┬──────────────────────┐
 │  CrossSectionRenderer │  RouteGraphRenderer  │  RouteMapRenderer    │
 │  ├── axes.ts          │  ├── axes.ts         │  ├── renderer.ts     │
-│  ├── layer-registry   │  ├── metrics.ts      │  ├── metrics.ts (14) │
-│  ├── layers/*.ts (13) │  ├── interaction.ts  │  ├── segment-style   │
+│  ├── layer-registry   │  ├── metrics.ts (9)  │  ├── metrics.ts (13) │
+│  ├── layers/*.ts (18) │  ├── interaction.ts  │  ├── segment-style   │
 │  └── interaction.ts   │  └── constants.ts    │  ├── interaction.ts  │
 │                       │                      │  ├── altitude-slider │
 │                       │                      │  └── legend.ts       │
@@ -51,9 +52,9 @@ scales.ts          (shared color/opacity functions for all three renderers)
 
 ## Layers
 
-Rendered back-to-front in this order:
+Rendered back-to-front, per `ALL_LAYERS` order in `layer-registry.ts`:
 
-Rendering order: **bands → terrain (covers below-surface artifacts) → lines → reference**.
+Rendering order: **obscuration → clouds → convection → icing → CAT/E-Shear/inversions → terrain (covers below-surface artifacts) → current conditions → lines → reference**.
 
 | Layer | Name | Group | File | Default | Description |
 |-------|------|-------|------|---------|-------------|
@@ -64,7 +65,7 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 | Square NWP clouds | Square NWP | clouds | `cloud-bands-factory.ts` | off | Solid filled cells per zone, opacity from cover% (ForeFlight-like) |
 | Square DD clouds | Square DD | clouds | `cloud-bands-factory.ts` | off | Same square cells using DD-derived cloud layers |
 | NWP Convective | NWP Convective | convection | `nwp-convective-bg.ts` | **on** | Model convective scheme output (base/top/coverage) |
-| Thermo Convective | Thermo Convective | convection | `thermo-convective-bg.ts` | off | CAPE/CIN tower columns LCL→EL, hatching, CB labels |
+| Thermo Convective | Thermo Convective | convection | `thermo-convective-bg.ts` | off | CAPE/CIN tower columns LFC→EL (LCL fallback), hatching, TCU/CB/+TS labels |
 | Icing bands | Ogimet-DD | icing | `icing-bands.ts` | off | DD-attenuated Ogimet index |
 | Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | **on** | NWP cloud-fraction-scaled Ogimet index with glaciation |
 | SFIP bands | SFIP-NWP | icing | `sfip-bands.ts` | off | Fuzzy-logic SFIP icing index |
@@ -75,6 +76,7 @@ Rendering order: **bands → terrain (covers below-surface artifacts) → lines 
 | Inversion bands | Inversions | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
 | Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | off† | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). †Default ON in airport-profile drawer, OFF on briefing — context-aware via `getDefaultEnabled('airport-profile')`. |
 | Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
+| Current conditions | Current conditions | conditions | `current-conditions.ts` | off | D-0 overlay: METAR airport columns (flight-category color, ±2 nm, 5000 ft tall) + route SIGMET hatched zones; model-independent, projected from the snapshot |
 | Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
 | −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |
 | −20°C level | −20°C | temperature | `temperature-lines.ts` | off | Navy dashed line |
@@ -193,9 +195,9 @@ Three-way page theme support via `web/ts/theme.ts` (separate from cross-section 
 
 ## Convective Tower Rendering
 
-The convective background layer (`convective-bg.ts`) is the most complex:
-- **Marginal risk skipped**: points with `convectiveRisk === 'marginal'` skip tower rendering entirely (marginal CAPE <100 J/kg produces misleading visual towers for noise-level instability)
-- **Tower columns**: drawn from LCL → estimated tower top for each route point with risk ≥ LOW
+Convective towers are rendered by two layers — `thermo-convective-bg.ts` (CAPE/CIN thermodynamic scheme) and `nwp-convective-bg.ts` (model convective scheme base/top). The thermo layer is the more complex:
+- **Marginal risk skipped**: points with `convectiveRisk === 'none' | 'marginal'` skip tower rendering entirely (marginal CAPE <100 J/kg produces misleading visual towers for noise-level instability)
+- **Tower columns**: drawn from base (LFC, falling back to LCL) → estimated tower top for each route point with risk ≥ LOW
 - **Tower top estimation**: uses thermodynamic EL if available and reliable (>3000ft above LCL), else estimates from `max(freezingLevel, −10°C, −20°C)` altitude lines as fallbacks
 - **Anvil strip**: 500ft strip at tower top (darker shade)
 - **Hatching**: diagonal lines on HIGH/EXTREME risk
@@ -288,7 +290,7 @@ Keyboard (ESC) and click-outside close the popup.
 
 ### Metrics Catalog (`data/metrics-catalog.json`)
 
-40+ metrics (including `sounding_ceiling_ft` and `nwp_ceiling_ft` for Key Altitudes) with catalog-driven contextual help:
+~60 metrics (including `sounding_ceiling_ft` and `nwp_ceiling_ft` for Key Altitudes) with catalog-driven contextual help:
 
 - `vibe`: One-liner analogy (e.g., "The atmosphere's battery level" for CAPE)
 - `primary_goal`, `best_used_for`, `limitations`: Aviation-focused guidance
@@ -306,7 +308,7 @@ Info popups include buttons for Claude, ChatGPT, and Gemini that copy a context-
 
 ### Layer Control Panel
 
-`controls/panel.ts` renders checkboxes grouped by category (terrain, temperature, clouds, icing, stability, turbulence, convection, reference). Layers with a `metricId` get an info button that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods. A **theme selector dropdown** and **preview button** appear in the toolbar (both standard and compare mode) for switching cross-section themes.
+`controls/panel.ts` renders checkboxes grouped by category. `getLayerGroups()` returns them in the order `reference, temperature, clouds, obscuration, icing, stability, turbulence, convection, conditions` — the `terrain` group is intentionally omitted from the panel (terrain always renders, force-on at render time, so it has no UI toggle). Layers with a `metricId` get an info button that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods. A **theme selector dropdown** and **preview button** appear in the toolbar (both standard and compare mode) for switching cross-section themes.
 
 ## Unified Atmospheric Profile Table
 
@@ -378,30 +380,27 @@ Leaflet-based geographic visualization showing weather metrics as colored route 
 | `altitude-slider.ts` | Range input for level-dependent metrics (0 → ceiling, 500ft steps, FL labels) |
 | `legend.ts` | DOM gradient bar with color stops and labels |
 
-### Metric Registry (17 metrics)
+### Metric Registry (13 metrics)
 
-| Metric | Alt-Dependent | Color Scale | Width |
-|--------|:---:|-------------|-------|
-| cloud-cover-total | | Gray 0-100% | Linear 3–25px |
-| cloud-cover-low | | Gray 0-100% | Linear 3–25px |
-| convective-risk | | Green→Yellow→Red discrete | Fixed 15px |
-| headwind-only | | Green (tailwind) ↔ Red (headwind) | Linear 3–25px (0–30kt) |
-| tailwind-only | | Separate tailwind view | Linear 3–25px (0–30kt) |
-| crosswind | | White→Purple | Fixed 15px |
-| cape | | Green→Yellow→Red continuous | Linear 3–25px (0–2000 J/kg) |
-| freezing-level | | Dark→Light blue | Fixed 15px |
-| nwp-ceiling | | Purple (LIFR)→Red (IFR)→Amber (MVFR)→Green (VFR) | Inverted 25→3px (0–5000ft) |
-| temp-at-level | Yes | Blue→White→Red diverging | Inverted: thick=cold (icing) |
-| temperature | | Blue→White→Red diverging | Fixed 15px |
-| model-agreement | | Green/Orange/Red discrete | Fixed 15px |
-| icing-risk-at-level | Yes | Green→Yellow→Orange→Red | Fixed 15px |
-| sfip-at-level | Yes | Green→Yellow→Orange→Red | Fixed 15px |
-| cat-risk-at-level | Yes | Green→Yellow→Orange→Red | Fixed 15px |
-| cloud-at-level | Yes | Gray 0-100% | Fixed 15px |
+| Metric (id) | Label | Alt-Dependent | Color Scale |
+|-------------|-------|:---:|-------------|
+| cloud-cover-total | Cloud Cover (Total) | | Gray 0-100% |
+| cloud-cover-low | Cloud Cover (Low) | | Gray 0-100% |
+| convective-risk | Convective Risk | | Green→Yellow→Red discrete |
+| headwind | Headwind | | Green (tailwind) ↔ Red (headwind) |
+| tailwind | Tailwind | | Separate tailwind view |
+| cape | CAPE | | Green→Yellow→Red continuous (0–2000 J/kg) |
+| nwp-ceiling | NWP Ceiling | | Purple (LIFR)→Red (IFR)→Amber (MVFR)→Green (VFR) |
+| temp-at-level | Temperature at FL | Yes | Blue→White→Red diverging |
+| model-agreement | Model Agreement | | Green/Orange/Red discrete |
+| icing-risk-at-level | Icing Risk at FL | Yes | Green→Yellow→Orange→Red |
+| sfip-at-level | SFIP at FL | Yes | Green→Yellow→Orange→Red |
+| cat-risk-at-level | CAT Risk at FL | Yes | Green→Yellow→Orange→Red |
+| cloud-at-level | Cloud at FL | Yes | Gray 0-100% |
 
 **Width variation**: Route map segments now vary in width as well as color. Each metric defines a `getWidth(point)` function. Width communicates a secondary dimension (e.g., nwp-ceiling uses inverted width so low ceilings appear thick/dangerous).
 
-Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`, `tempAtAlt()`) to find the relevant value at the slider's flight level.
+Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`, `tempAtAltitude()`) to find the relevant value at the slider's flight level.
 
 ### Rendering
 

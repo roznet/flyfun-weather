@@ -110,7 +110,7 @@ Auto-rescheduling interrupted work is **only safe because dispatched jobs are pu
 
 ## Inherent tradeoffs (v1, documented not fixed)
 
-- **Global teardown kills collateral.** stdlib `ProcessPoolExecutor` can't replace one wedged worker (recycling disabled after `:712`), so one bad job tears down the whole pool. Auto-reschedule is a deliberate workaround. Escalation: per-worker supervision / `pebble`.
+- **Global teardown kills collateral.** stdlib `ProcessPoolExecutor` can't replace one wedged worker (recycling disabled by default in `_decode_pool_max_tasks_per_child` after the 2026-05-17 recycle-race incident), so one bad job tears down the whole pool. Auto-reschedule is a deliberate workaround. Escalation: per-worker supervision / `pebble`.
 - **Priority reduces queue latency, doesn't bound it.** Non-preemption + FIFO-within-level → head-of-line blocking (a long BACKGROUND decode holds a worker while INTERACTIVE waits, bounded by job runtime). Hard interactive SLA → reserved-worker **bulkhead**. Low-priority **starvation** → **aging**. Both deferred.
 
 ## Observability

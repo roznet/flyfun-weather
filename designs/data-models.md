@@ -4,8 +4,12 @@
 
 Models are organized in `src/weatherbrief/models/` package:
 - `analysis.py` — route, forecast, and weather analysis models
-- `storage.py` — `Flight`, `FlightProfile`, `BriefingPackMeta`
-- `advisories.py` — route advisory models (status, results, catalog, manifest)
+- `storage.py` — `Flight`, `FlightProfile`, `BriefingPackMeta`, `FlightDebrief`
+- `advisories.py` — route advisory models (status, results, catalog, manifest, altitude table)
+- `observations.py` — METAR/TAF/SIGMET route models, `RefreshDelta`, `RealtimeRefreshResult`
+- `airport_conditions.py` — derived airport flight-category conditions (see advisories.md)
+- `diagnostic.py` / `diagnostic_codes.py` — structured pipeline events + stable codes
+- `verification.py` — forecast-vs-observation verification records
 - `__init__.py` — re-exports everything for backward-compatible imports
 
 ## Intent
@@ -45,11 +49,11 @@ One model's forecast for one waypoint: `(waypoint, model, fetched_at, hourly: li
 
 ### PressureLevelData
 
-Per-level NWP data. Core fields: `pressure_hpa`, `temperature_c`, `dewpoint_c`, `relative_humidity_pct`, `wind_speed_kt`, `wind_direction_deg`, `geopotential_height_m`. Optional GRIB2-enriched fields: `cloud_liquid_water_kg_kg` (CLWMR), `ice_mixing_ratio_kg_kg` (ICMR) — populated by GRIB2 enrichment when enabled.
+Per-level NWP data. Core fields: `pressure_hpa`, `temperature_c`, `dewpoint_c`, `relative_humidity_pct`, `wind_speed_kt`, `wind_direction_deg`, `geopotential_height_m`, `vertical_velocity_pa_s` (omega). Optional GRIB2-enriched fields: `cloud_liquid_water_kg_kg` (CLWMR), `ice_mixing_ratio_kg_kg` (ICMR), `cloud_area_fraction_pct` (CLC from ICON-EU, 0–100), `clw_interpolated` (True when CLW filled by spatial interpolation) — populated by GRIB2 enrichment when enabled.
 
 ### HourlyForecast
 
-Single timestep with 17 optional surface fields + `pressure_levels: list[PressureLevelData]`. Use `level_at(pressure_hpa)` for quick lookup.
+Single timestep with ~22 optional surface fields + optional `nwp_cloud_diagnostics: NWPCloudDiagnostics` (GFS GRIB2 cloud layers) + `pressure_levels: list[PressureLevelData]`. Use `level_at(pressure_hpa)` for quick lookup.
 
 ### RoutePoint
 
@@ -70,7 +74,11 @@ Cross-section forecast data along the full route for one model: `(model, route_p
 
 ### ForecastSnapshot
 
-Root object for one fetch run: `(route, target_date, fetch_date, days_out, forecasts, analyses, cross_sections)`. Serialized to JSON for persistence.
+Root object for one fetch run: `(route, target_date, fetch_date, days_out, departure_time, forecasts, analyses, cross_sections, route_observations, route_sigmets, last_refresh_delta)`. Serialized to JSON for persistence.
+
+- `departure_time` is the aware-UTC departure (None for old packs)
+- `route_observations` / `route_sigmets` carry METAR/TAF/SIGMET (`models/observations.py`)
+- `last_refresh_delta` holds the worsening summary from the last cheap real-time refresh; None after a full pipeline run
 
 - `forecasts` contains only waypoint forecasts (used by analysis)
 - `cross_sections` contains full route data per model (used for cross-section visualization)
@@ -97,18 +105,23 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km. **Raw NWP values:** nwp_cape_jkg, nwp_cape_type (sb/ml/mu/unknown), nwp_cin_jkg, nwp_lifted_index, nwp_freezing_level_ft, cape_raw_vs_calc_divergent |
-| `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3, cloud_liquid_water_g_kg, ice_mixing_ratio_g_kg, icing_index (Ogimet-DD 0–100), icing_index_nwp (Ogimet-NWP 0–100), sfip_raw, sfip_100, sfip_severity, sfip_variant, clw_interpolated |
-| `EnhancedCloudLayer` | Cloud layer from dewpoint depression or NWP diagnostics | base/top (ft + hPa), thickness, mean_temperature_c, coverage (FEW/SCT/BKN/OVC), source ("dd"/"nwp_3d"/"grib"/"synthesized") |
+| `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3, cloud_liquid_water_g_kg, ice_mixing_ratio_g_kg, icing_index (Ogimet-DD 0–100), icing_index_nwp (Ogimet-NWP 0–100), sfip_raw, sfip_100, sfip_severity, sfip_variant ("full"/"proxy"/"interp"), clw_interpolated, precip_phase |
+| `EnhancedCloudLayer` | Cloud layer from dewpoint depression or NWP diagnostics | base/top (ft + hPa), thickness, mean_temperature_c, coverage (FEW/SCT/BKN/OVC), mean_dewpoint_depression_c, mean_cloud_cover_pct, theoretical_max_top_ft, source ("dd"/"grib"/"synthesized") |
 | `NWPCloudDiagnostics` | NWP-surface diagnostics (GRIB) | low/mid/high (NWPCloudLayerDiag each), convective_cover_pct, convective_base_ft, convective_top_ft, total_cover_pct, boundary_cover_pct, ceiling_ft, freezing_level_ft (ECMWF `deg0l`) |
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
 | `IcingZone` | Grouped icing zone (Ogimet-DD or Ogimet-NWP) | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_temperature_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
-| `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant ("full"/"full_no_vv"/"interp"/"interp_no_vv"/"proxy"/"proxy_no_vv") |
-| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, severe_modifiers list, base_ft/top_ft (unified bounds), cover_pct (NWP only), method ("thermo"/"nwp"/"nwp_hybrid"/"nwp_lcl_top") |
+| `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant ("full"/"proxy") |
+| `SldZone` | Supercooled Large Droplet zone | base/top (ft + hPa), risk, mechanism ("warm_nose"/"coalescence"), mean_temperature_c |
+| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, k_index, total_totals, severe_modifiers, regime (`ConvectiveRegime`), drivers/suppressors lists, elevated_convection, base_ft/top_ft (unified bounds), cover_pct (NWP only), method ("thermo"/"nwp"/"nwp_hybrid") |
+| `ConvectiveRegime` | Enum: dominant convective regime | THERMAL, WEAK_INSTABILITY, LOADED_GUN, ACTIVE (`.label` → title-case) |
+| `ParcelPathPoint` | Lifted parcel temp profile point | pressure_hpa, temperature_c |
+| `PrecipitationAssessment` | Precip type + intensity for a sounding | surface_phase, surface_intensity, precipitation_zones, freezing_rain_risk, warm_nose_base/top_ft, rain_mm, snow_cm, total_mm |
+| `PrecipitationZone` | Vertical zone of uniform precip phase | base/top (ft + hPa), phase (`PrecipPhase`), mean_wet_bulb_c, ice_fraction |
 | `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
 | `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |
-| `VerticalMotionAssessment` | Vertical motion + turbulence | classification, max_omega_pa_s, max_w_fpm, max_w_level_ft, cat_risk_layers, convective_contamination |
-| `SoundingAnalysis` | Container per model | indices, derived_levels, cloud_layers, dd_cloud_layers, nwp_cloud_layers, icing_zones, icing_ogimet_dd_zones, icing_ogimet_nwp_zones, sfip_zones, inversion_layers, convective, vertical_motion, cloud_cover_{low,mid,high}_pct, cloud_method_effective. **Field semantics:** `cloud_layers`/`icing_zones` are the "active" slots (resolved per user preference by `_resolve_analyses()`). `dd_cloud_layers`/`icing_ogimet_dd_zones` are immutable DD sources (excluded from JSON, reconstructed by validator on load). `cloud_method_effective` records which method was actually applied: "dd", "nwp" (GRIB), or "nwp_synthesized" (Open-Meteo + DD heuristics). All downstream consumers read only the active slots. |
+| `VerticalMotionAssessment` | Vertical motion + turbulence | classification, max_omega_pa_s, max_w_fpm, max_w_level_ft, cat_risk_layers, e_shear_layers, convective_contamination |
+| `SoundingAnalysis` | Container per model | indices, parcel_path, derived_levels, cloud_layers, nwp_cloud_layers, dd_cloud_layers, icing_zones, icing_ogimet_dd_zones, icing_ogimet_nwp_zones, sfip_zones, ieng_icing_zones, sld_zones, inversion_layers, convective, convective_thermo, convective_nwp, precipitation, vertical_motion, cloud_cover_{low,mid,high}_pct, surface visibility_m/temperature_2m_c/dewpoint_2m_c, nwp_cloud_diagnostics, cloud_method_effective. **Field semantics:** `cloud_layers`/`icing_zones` are the "active" slots (resolved per user preference by `_resolve_analyses()`). `dd_cloud_layers`/`icing_ogimet_dd_zones` are immutable DD sources, reconstructed by the `_sync_dd_sources` validator on load. `convective` is the active slot; `convective_thermo`/`convective_nwp` retain both derivations. `cloud_method_effective` records which method was actually applied: "dd", "nwp" (GRIB), or "nwp_synthesized" (Open-Meteo + DD heuristics). All downstream consumers read only the active slots. |
 
 ### Altitude Advisories
 
@@ -124,7 +137,7 @@ All analysis for one waypoint. Contains:
 - `wind_components: dict[str, WindComponent]` — model → wind decomposition
 - `sounding: dict[str, SoundingAnalysis]` — model → full sounding analysis
 - `altitude_advisories: AltitudeAdvisories | None` — dynamic vertical regimes and altitude advisories
-- `model_divergence: list[ModelDivergence]` — 15 metrics compared across models
+- `model_divergence: list[ModelDivergence]` — up to ~18 metrics compared across models (only emitted when ≥2 models report the value; see `tasks/analyze.py`)
 
 ### RoutePointAnalysis
 
@@ -138,12 +151,16 @@ Container for all route point analyses, saved as `route_analyses.json` in the pa
 
 Fields: `route_name`, `target_date`, `departure_time`, `flight_duration_hours`, `total_distance_nm`, `cruise_altitude_ft`, `models`, `analyses: list[RoutePointAnalysis]`.
 
+### RouteWindOverlay
+
+`RouteWindOverlay` (`cruise_altitude_ft`, `points: list[RoutePointWindOverlay]`) carries per-point wind components recomputed at an override altitude, so route-graph/route-map headwind can be refreshed without regenerating the full analysis manifest. `RoutePointWindOverlay` is just `(point_index, wind_components)`.
+
 ### Elevation Profile
 
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `ElevationPoint` | Single terrain sample along route | distance_nm, elevation_ft, lat, lon |
-| `ElevationProfile` | High-resolution terrain profile | route_name, points, max_elevation_ft, total_distance_nm, spacing_nm |
+| `ElevationProfile` | High-resolution terrain profile | route_name, points, max_elevation_ft, total_distance_nm |
 
 Saved as `elevation_profile.json` in the pack directory. ~800 points for a 400nm route at 0.5nm spacing.
 
@@ -182,6 +199,7 @@ FlightProfile(
 - One default profile per user (auto-created on first access, migrates legacy `defaults_json`)
 - Settings applied dynamically at briefing refresh time — not stored on Flight
 - Flexible JSON allows adding new settings without migrations
+- `system_template_key` (optional) marks a profile cloned from a built-in system template; `created_at`/`updated_at` are aware-UTC timestamps
 
 ### Flight
 
@@ -209,6 +227,7 @@ flight.target_time_utc  # → 9
 - `departure_time` is the canonical field — a single aware-UTC datetime
 - `target_date` and `target_time_utc` are `@computed_field` properties for backward compatibility (used by email, admin, digest, and frontend display code)
 - `aircraft_id` links to a user's aircraft (see `multi-user-deployment.md` for schema). Independent from `profile_id` — aircraft provides physical defaults (speed, ceiling), profile provides mission preferences.
+- Additional fields: `private` (sharing opt-out), `alt_departure_time` (optional same-day alternate departure), `auto_refresh` / `auto_refresh_hour` / `last_auto_refresh_at` (scheduled refresh), `raw_route` + `parser_version` (original Field-15 string the pilot typed and the euro_aip version that derived `waypoints` from it; both NULL for iOS/MCP-created flights), `share_code` (short token for `/s/{code}` redirect, minted at save time)
 
 ### BriefingPackMeta
 
@@ -227,7 +246,9 @@ BriefingPackMeta(
 )
 ```
 
-Stored in `pack.json` alongside artifacts. `fetch_timestamp` is a timezone-aware UTC datetime (stored as `DATETIME(6)` in MySQL, text in SQLite). `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)".
+Persisted as a `BriefingPackRow` in the DB (`_meta_to_row`/`_apply_meta_to_row` in `storage/flights.py`), not a `pack.json` file. `id` is the DB primary key. `fetch_timestamp` is a timezone-aware UTC datetime (stored as `DATETIME(6)` in MySQL, text in SQLite). `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)". `model_sources` maps each model to its freshness source key (e.g. `ecmwf:direct`).
+
+Other fields: `artifact_path` (pack directory), `models_skipped_region` (models out of coverage), `alt_assessment`/`alt_assessment_reason`/`has_alt_advisories` (optional same-day alternate departure), and DWD + Met Office surface-chart references (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). `is_historical` is a `@computed_field` (true when `days_out < 0`).
 
 `BriefingPackMeta.diagnostics: list[Diagnostic]` carries structured pipeline events from every stage (fetch, analyze, advisories, gramet, skewt, digest). See the **Diagnostic** section below.
 
@@ -291,26 +312,33 @@ See [digest.md](./digest.md) for the digest-stage classifier (`classify_llm_exce
 
 | Model | Purpose | Key fields |
 |-------|---------|------------|
-| `AdvisoryStatus` | Enum: GREEN, AMBER, RED, UNAVAILABLE | `worst()` classmethod for aggregation |
-| `AdvisoryParameterDef` | Tunable parameter metadata | key, label, type (number/percent/altitude/speed/boolean), unit, default, min, max, step |
-| `AdvisoryCatalogEntry` | Evaluator metadata for UI | id, name, short_description, description, category (icing/cloud/turbulence/convective/model), default_enabled, parameters |
-| `ModelAdvisoryResult` | One advisory, one model | status, detail, affected_count, total_count, affected_pct, affected_nm. `build()` classmethod computes pct/nm from counts |
-| `RouteAdvisoryResult` | Aggregate across models | advisory_id, aggregate_status, aggregate_detail, per_model list, parameters_used. `from_per_model()` classmethod aggregates (worst status, detail from worst model) |
-| `RouteAdvisoriesManifest` | Top-level container | advisories, catalog, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, models |
+| `AdvisoryStatus` | Enum: GREEN, AMBER, RED, UNAVAILABLE | `worst()` + `majority()` classmethods for aggregation |
+| `AdvisoryAggregation` | Enum: WORST, MAJORITY | how per-model statuses combine |
+| `AdvisoryParameterDef` | Tunable parameter metadata | key, label, description, type (number/percent/altitude/speed/boolean), unit, default, min, max, step |
+| `AdvisoryCatalogEntry` | Evaluator metadata for UI | id, name, short_description, description, category (icing/cloud/turbulence/convective/model), default_enabled, altitude_dependent, parameters |
+| `ModelAdvisoryResult` | One advisory, one model | status, detail, affected_points, total_points, affected_pct, affected_nm, total_nm, cross_check (details-only DD-vs-model divergence). `build()` classmethod computes pct/nm from counts |
+| `RouteAdvisoryResult` | Aggregate across models | advisory_id, aggregate_status, aggregate_detail, per_model list, parameters_used. `from_per_model()` classmethod aggregates (default MAJORITY, ties broken by worst; detail from a representative model) |
+| `RouteAdvisoriesManifest` | Top-level container | advisories, catalog, route_name, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, models, aggregation, airport_conditions |
+| `AltitudeAdvisoryRow` | One row of the altitude table | altitude_ft, statuses (advisory_id→status), red/amber/green_count |
+| `AltitudeTableResult` | Altitude-dependent advisory sweep | rows (desc by altitude), advisory_ids, advisory_names, cruise/ceiling/step_ft, best_below_cruise, best_above_cruise |
 
 See [advisories.md](./advisories.md) for the evaluator framework.
 
 ## Enums
 
-- `ModelSource`: `GFS`, `ECMWF`, `ICON`, `UKMO`, `METEOFRANCE` (note: `BEST_MATCH` retained in enum for backward-compat deserialization but removed from `MODEL_ENDPOINTS`)
+- `ModelSource`: `GFS`, `ECMWF`, `ICON`, `UKMO`, `METEOFRANCE`, `GEM` (note: `BEST_MATCH` retained in enum for backward-compat deserialization but not in `MODEL_ENDPOINTS`). `GEM` is North-America-region; `ICON`/`UKMO`/`METEOFRANCE` are Europe-region.
 - `IcingRisk`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`
 - `IcingType`: `NONE`, `RIME`, `MIXED`, `CLEAR`
-- `CloudCoverage`: `SCT`, `BKN`, `OVC`
+- `CloudCoverage`: `FEW`, `SCT`, `BKN`, `OVC`
 - `ConvectiveRisk`: `NONE`, `MARGINAL`, `LOW`, `MODERATE`, `HIGH`, `EXTREME`
+- `ConvectiveRegime`: `THERMAL`, `WEAK_INSTABILITY`, `LOADED_GUN`, `ACTIVE`
+- `PrecipPhase`: `SNOW`, `MIXED`, `RAIN`, `FREEZING_RAIN`, `ICE_PELLETS`, `DRY`
+- `PrecipIntensity`: `NONE`, `LIGHT`, `MODERATE`, `HEAVY`
 - `AgreementLevel`: `GOOD`, `MODERATE`, `POOR`
 - `VerticalMotionClass`: `QUIESCENT`, `SYNOPTIC_ASCENT`, `SYNOPTIC_SUBSIDENCE`, `CONVECTIVE`, `OSCILLATING`, `UNAVAILABLE`
 - `CATRiskLevel`: `NONE`, `LIGHT`, `MODERATE`, `SEVERE`
 - `AdvisoryStatus`: `GREEN`, `AMBER`, `RED`, `UNAVAILABLE`
+- `AdvisoryAggregation`: `WORST`, `MAJORITY`
 
 ## Patterns
 
@@ -330,8 +358,8 @@ See [advisories.md](./advisories.md) for the evaluator framework.
 
 ## References
 
-- Route loading: `config.py`, `airports.py`
+- Waypoint resolution / route building: `airports.py` (`resolve_waypoints()`)
 - Analysis consumers: [analysis.md](./analysis.md)
-- Snapshot persistence: `storage/snapshots.py`
+- Snapshot persistence: `storage/snapshots.py` (`save_snapshot`/`save_cross_section`/`load_snapshot`); split-file loaders `load_briefing()`/`load_forecasts()`/`load_cross_sections()` live in `tasks/artifacts.py`
 - Flight/pack storage: `storage/flights.py`
 - API response models: `api/flights.py`, `api/packs.py`

@@ -29,14 +29,16 @@ MetPy-based atmospheric analysis subpackage. Single entry point:
 from weatherbrief.analysis.sounding import analyze_sounding
 
 result = analyze_sounding(hourly.pressure_levels, hourly)
-# Returns SoundingAnalysis | None (None if <3 valid levels)
+# Returns SoundingAnalysis | None (None if profile prep fails / <3 valid levels)
 ```
 
-Pipeline: `prepare → thermodynamics → nwp_value_preservation → enrich_lwc → clouds → cloud_top_uncertainty → inversions → nwp_clouds → sfip → ogimet_dd → ogimet_nwp → ieng → precipitation → sld → convective → vertical_motion → ceiling` (then post-pass: `e_shear` across all route points)
+**Lite → heavy split.** `analyze_sounding()` runs `prepare_profile()` once, then:
+1. `analyze_sounding_lite()` — core thermodynamic indices (LCL, parcel, LFC, EL, surface/MU/ML-CAPE, lifted index, freezing level), core derived levels, DD cloud layers (+ NWP coverage reclassification), inversions, ceiling, and convective assessment (thermo + NWP). This is the subset shared with standalone verification.
+2. `_analyze_sounding_heavy()` — mutates the lite result in place: extended indices (Showalter, K-index, Total Totals, PW, bulk shear), extended derived levels (wet bulb, theta-e, RH, omega→w), LWC enrichment (with vertical CLW/ICMR interpolation), cloud top uncertainty, NWP cloud layers, SFIP / Ogimet-DD / Ogimet-NWP / IENG icing, precipitation, SLD, stability indicators + vertical motion / turbulence.
 
-Note: NWP value preservation (attaching `nwp_cape_jkg` etc. to indices) must run before any consumer of `_effective_cape()` — i.e. before icing, cloud top uncertainty, and convective assessment.
+E-Shear is a separate post-pass (`tasks/analyze.py:_enrich_e_shear()`) across all route points after every per-point sounding completes (HWS needs neighbors).
 
-Note: inversions are detected **before** NWP cloud building because the synthesis tier uses inversion layers for cloud top capping.
+Note: inversions are detected **before** NWP cloud building because the synthesis tier uses inversion layers for cloud top capping. Cloud top uncertainty and icing all read `effective_cape()` over the CAPE variants (no separate NWP-value-preservation pass — raw NWP CAPE/CIN are attached to indices inside `analyze_sounding_lite`).
 
 ### Prepare (`sounding/prepare.py`)
 
@@ -46,26 +48,35 @@ Pint arrays **never leak** beyond the sounding subpackage.
 
 ### Thermodynamics (`sounding/thermodynamics.py`)
 
-All MetPy calls live here. Two functions:
+All MetPy calls live here. Each is split into a **core** function (cheap subset, also used by standalone verification) and an **extended** function (full-briefing fields). `compute_indices()` / `compute_derived_levels()` are convenience wrappers that run core then extended.
 
-**`compute_indices(profile) → ThermodynamicIndices`** — profile-level values:
+**`compute_indices_core(profile) → CoreIndicesResult`** — profile-level values (the `.indices` field is `ThermodynamicIndices`, `.parcel_path` is the captured parcel path for client-side Skew-T CAPE/CIN):
 - Parcel profile, LCL, LFC, EL (via MetPy, handles None for stable profiles)
-- CAPE/CIN: surface-based, most-unstable, mixed-layer
-- Lifted index, Showalter index, K-index, Total Totals
+- CAPE/CIN: surface-based, most-unstable, mixed-layer (MU/ML live in **core** — the convective tier needs them everywhere)
+- Lifted index
+- Temperature crossings: freezing level (0°C), -10°C, -20°C (linear interpolation)
+
+**`compute_indices_extended(profile, idx)`** — mutates `idx` in place, adds:
+- Showalter index, K-index, Total Totals
 - Precipitable water
 - Bulk wind shear: 0-6km and 0-1km
-- Temperature crossings: freezing level (0°C), -10°C, -20°C (linear interpolation)
-- Ceiling: `sounding_ceiling_ft` (lowest BKN/OVC cloud layer, LCL as floor when cloud starts at first level) and `nwp_ceiling_ft` (from NWP diagnostics)
 
-**`compute_derived_levels(profile) → list[DerivedLevel]`** — per pressure level:
+Ceiling (`sounding_ceiling_ft` — lowest BKN/OVC cloud layer, LCL as floor when cloud starts at first level — and `nwp_ceiling_ft` from NWP diagnostics) is set in `analyze_sounding_lite`, not in these functions.
+
+**`compute_derived_levels_core(profile) → list[DerivedLevel]`** — per pressure level, cheap (no MetPy):
 - Altitude (ft), temperature, dewpoint (carried through from profile)
-- Wet-bulb temperature (`mpcalc.wet_bulb_temperature`)
 - Dewpoint depression (T - Td)
-- Theta-E (`mpcalc.equivalent_potential_temperature`)
 - Lapse rate between adjacent levels (°C/km)
+- Wind speed/direction (from profile)
+- Omega (Pa/s) raw — read by the convective loaded-gun trigger before extended runs
+
+**`compute_derived_levels_extended(profile, levels)`** — mutates levels in place, adds MetPy-derived:
+- Wet-bulb temperature (`mpcalc.wet_bulb_temperature`)
+- Theta-E (`mpcalc.equivalent_potential_temperature`)
 - Relative humidity (from `mpcalc.relative_humidity_from_dewpoint`)
-- Omega (Pa/s) and vertical velocity w (ft/min) — from NWP model data when available
-- Richardson number and Brunt-Vaisala frequency (N²) — stability indicators for CAT assessment
+- Vertical velocity w (ft/min) from omega
+
+Richardson number and Brunt-Vaisala frequency (N²) are added by `compute_stability_indicators(profile, derived_levels)` in `vertical_motion.py` (not here) — stability indicators for CAT assessment.
 
 Every MetPy call is wrapped in try/except — returns None for fields that fail. All pint magnitudes extracted via `.magnitude` before storing in Pydantic models.
 
@@ -84,22 +95,21 @@ layers = detect_cloud_layers(derived_levels, lcl_altitude_ft=idx.lcl_altitude_ft
 - Coverage from mean dewpoint depression: < 1°C → OVC, 1-2°C → BKN, 2-3°C → SCT
 - Records base/top altitudes, thickness, mean temperature
 
-**NWP (Model Diagnostics) — alternative.** Four-tier approach, preferred → fallback.
+**NWP (Model Diagnostics) — alternative.** Native sources only, tried in order of richness.
 
 ```python
 nwp_layers = build_nwp_cloud_layers(
     diagnostics, cloud_cover_low, cloud_cover_mid, cloud_cover_high,
     pressure_levels=levels,
-    dd_cloud_layers=cloud_layers, inversion_layers=inversions, lcl_altitude_ft=lcl_ft,
 )
 ```
 
-- **Tier 0 (3D cloud fraction):** ECMWF `cc` / ICON-EU `clc` — `build_nwp_cloud_layers_from_fraction()` scans `cloud_area_fraction_pct` per pressure level, groups contiguous levels ≥12.5% into decks, base/top from `geopotential_height_m`. Tagged `source="nwp_3d"`. Preferred whenever any level carries CAF.
-- **Tier 1 (GRIB bulk bands):** GFS — uses native model boundaries (HGHL/HGHM/HGHH + LCDC/MCDC/HCDC), tagged `source="grib"`.
-- **Tier 2 (Synthesized):** Open-Meteo-only models — narrows ICAO bands using DD cloud envelope + inversion capping (≥2°C) + LCL floor, tagged `source="synthesized"`. Minimum cover 25%.
-- **Tier 3:** Returns None only when no cloud cover data at all.
-- Coverage mapping: ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 uses peak deck CAF).
-- Each `EnhancedCloudLayer` carries `source` field ("dd"/"nwp_3d"/"grib"/"synthesized").
+- **Source 1 (3D cloud fraction):** ECMWF `cc` / ICON-EU `clc` — `build_nwp_cloud_layers_from_fraction()` scans `cloud_area_fraction_pct` per pressure level, groups contiguous levels ≥12.5% into decks, base/top from `geopotential_height_m`. Tagged `source="nwp_3d"`. Preferred whenever any level carries CAF.
+- **Source 2 (GRIB diagnostics):** GFS — uses native model boundaries (HGHL/HGHM/HGHH + LCDC/MCDC/HCDC), tagged `source="grib"`.
+- **Returns `None`** when neither native source is available (no model-native cloud envelope). Callers must treat `None` as "no NWP layer data," not "clear sky." Returns `[]` when a native source exists but nothing exceeded threshold (genuine clear forecast).
+- **No synthesized tier.** Open-Meteo bulk `cloud_cover_low/mid/high_pct` are intentionally NOT synthesized into layers here — downstream consumers (Ogimet-NWP / IENG icing, cross-section NWP toggle) need a clean "native or absent" signal. (Synthesis from bulk %, with DD/inversion/LCL narrowing, still lives behind the disabled `apply_nwp_coverage` overlay — see `_APPLY_NWP_COVERAGE_OVERLAY` in `sounding/__init__.py`.)
+- Coverage mapping: ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (3D source uses peak deck CAF).
+- Each `EnhancedCloudLayer` carries `source` field ("dd"/"nwp_3d"/"grib").
 - `SoundingAnalysis.cloud_method_effective` tracks what method was actually used ("dd", "nwp", "nwp_synthesized").
 
 **Cloud top uncertainty enrichment:** For convective (CAPE > 500): `theoretical_max_top_ft = EL`. For stratiform: `theoretical_max_top_ft = -20°C level`. Only set when exceeding sounding-derived cloud top.
@@ -124,7 +134,7 @@ layers = detect_inversions(derived_levels)
 
 ### Icing (`sounding/icing.py`, `sounding/sfip.py`, `sounding/icing_common.py`)
 
-Three icing methods, selectable via `icing_method` user setting. All three are always computed and stored; the selected method determines which `icing_zones` are used by advisory evaluators. Shared utilities (cloud layer gating, NWP cloud altitude lookup, icing type classification, zone grouping) live in `icing_common.py`.
+Four icing methods (Ogimet-DD, Ogimet-NWP, SFIP-NWP, IENG-NWP) — all always computed and stored. The `icing_method` user setting selects which fills the active `icing_zones` slot (only `ogimet_dd`/`ogimet_nwp`/`sfip_nwp` are wired into `_resolve_analyses`; IENG is computed/stored but not currently user-selectable). Shared utilities (cloud layer gating, NWP cloud altitude lookup, icing type classification, zone grouping) live in `icing_common.py`.
 
 #### Cloud Gating Architecture
 
@@ -139,8 +149,8 @@ No per-level DD re-checking. The cloud layer list already encodes the detection 
 
 | Cloud method | Layers | How built | Display |
 |-------------|--------|-----------|---------|
-| **DD** | `cloud_layers` | `detect_cloud_layers(DD<3°C)` → `apply_nwp_coverage(drop if NWP<12.5%)` | Gray bands |
-| **NWP** | `nwp_cloud_layers` | `build_nwp_cloud_layers(GRIB diagnostics or synthesized from %)` | Blue bands |
+| **DD** | `cloud_layers` | `detect_cloud_layers(DD<3°C)` (published verbatim; `apply_nwp_coverage` overlay is disabled by default) | Gray bands |
+| **NWP** | `nwp_cloud_layers` | `build_nwp_cloud_layers()` — native 3D CAF or GRIB diagnostics only (`None` if no native source) | Blue bands |
 
 **Consistency with display:** icing can only be computed where cloud is drawn. If no cloud band is displayed at a given altitude, no icing is computed there. This prevents false alarms in moist-but-clear air (DD<3°C but NWP says <12.5% cloud).
 
@@ -244,19 +254,20 @@ Some GFS grid cells return `None` for CLW/ICMR via Open-Meteo, which forces SFIP
 
 #### Stage 2: Vertical (`sounding/__init__.py`)
 
-After `_enrich_lwc()` direct-matches GRIB 50hPa levels to derived levels, `_interpolate_cloud_water()` fills intermediate 25hPa levels by linear interpolation in pressure-space between enriched neighbors. Only interpolates when both neighbors have data.
-
-Called in `analyze_all_route_points()` between `compute_route_tracks()` and the per-point analysis loop.
+After `_enrich_lwc()` direct-matches GRIB 50hPa levels to derived levels, it calls `_interpolate_cloud_water()` to fill intermediate 25hPa levels by linear interpolation in pressure-space between enriched neighbors. Only interpolates when both neighbors have data.
 
 ### LWC Enrichment (`sounding/__init__.py`)
 
-`_enrich_lwc()` converts CLWMR (kg/kg) from `PressureLevelData` to LWC (g/m³) on `DerivedLevel` using air density from ideal gas law: `LWC = CLWMR × (P / (Rd × T_K)) × 1000`. Called after `compute_derived_levels()`, before cloud detection.
+`_enrich_lwc()` converts CLWMR (kg/kg) from `PressureLevelData` to LWC (g/m³) on `DerivedLevel` using air density from ideal gas law: `LWC = CLWMR × (P / (Rd × T_K)) × 1000`, also setting mixing ratios in g/kg for SFIP, then runs the Stage-2 vertical interpolation. Called from the heavy pass, before cloud-top/icing.
 
 ### Convective (`sounding/convective.py`)
 
-Pure threshold logic from `ThermodynamicIndices` — no MetPy dependency.
+Pure threshold logic from `ThermodynamicIndices` — no MetPy dependency. Two assessors run per sounding and are both stored:
+- `assess_convective_thermo()` → `convective_thermo` (default `convective`) — sounding-derived risk from `effective_cape` + regime/realizability logic and severity modifiers.
+- `assess_convective_nwp()` → `convective_nwp` — model's own convective scheme (cover %, convective base/top geometry). Selected when `convective_method="nwp"`.
+- `convective_cross_check(thermo, nwp)` → `ConvectiveCrossCheck | None` — surfaces material dissent between thermo risk and the model's *independent* convective-cover/geometry signal (the model's own `risk_level` is NOT used — it shares CAPE thresholds with thermo so the comparison would be circular). Fires only `dd_not_corroborated` (thermo MODERATE+ but model quiet) or `model_active_dd_quiet` (thermo NONE/MARGINAL but model active).
 
-**Effective CAPE** = max(SB-CAPE, MU-CAPE, ML-CAPE, NWP raw CAPE). Includes all available CAPE variants: MU-CAPE catches elevated convection, ML-CAPE captures mixed-layer instability (ICON), and NWP raw CAPE uses the model's full vertical resolution (50–140 levels vs MetPy's 8–28).
+**Effective CAPE** = max(SB-CAPE, MU-CAPE, ML-CAPE) over available MetPy variants, falling back to NWP raw CAPE **only** when no MetPy variant exists (model-native CAPE diverges from sounding-derived values and could inflate risk if pooled). MU-CAPE catches elevated convection; ML-CAPE captures mixed-layer instability (ICON).
 
 European-calibrated thresholds (lower than US values — European convection produces severe weather at lower CAPE):
 
@@ -284,7 +295,7 @@ vm = assess_vertical_motion(derived_levels)
 ```
 
 **Three functions:**
-- `compute_stability_indicators(derived_levels)` — computes Brunt-Vaisala frequency (N²) and Richardson number per layer from wind shear and temperature gradients
+- `compute_stability_indicators(profile, derived_levels)` — computes Brunt-Vaisala frequency (N²) and Richardson number per layer from wind shear and temperature gradients (mutates `derived_levels` in place)
 - `classify_vertical_motion(derived_levels)` — classifies omega profile into `VerticalMotionClass` (QUIESCENT, SYNOPTIC_ASCENT/SUBSIDENCE, CONVECTIVE, OSCILLATING)
 - `assess_vertical_motion(derived_levels)` — combines classification with CAT risk layer identification
 
@@ -373,38 +384,44 @@ div = compare_models("temperature_c", {"gfs": 5.0, "ecmwf": 6.0, "icon": 5.5})
 div.agreement  # → AgreementLevel.GOOD
 ```
 
-**Thresholds** (good, poor) — 15 total:
+**Thresholds** `DIVERGENCE_THRESHOLDS` (good, poor) — 21 entries (some, e.g. `cape_jkg`/`ceiling_ft`/`visibility_m`, are defined for variables not currently collected by `_run_point_analysis`). `DEFAULT_THRESHOLD = (5.0, 15.0)` for anything unlisted:
 
 | Variable | Good ≤ | Poor > |
 |----------|--------|--------|
 | temperature_c | 2.0 | 5.0 |
 | wind_speed_kt | 5.0 | 15.0 |
 | wind_direction_deg | 20° | 60° |
-| cloud_cover_pct | 15.0 | 40.0 |
 | precipitation_mm | 1.0 | 5.0 |
+| cloud_cover_pct | 20.0 | 50.0 |
 | freezing_level_m | 200.0 | 600.0 |
+| ceiling_ft | 500.0 | 1500.0 |
+| visibility_m | 2000.0 | 5000.0 |
 | freezing_level_ft | 500.0 | 1500.0 |
+| cape_jkg | 200.0 | 500.0 |
 | cape_surface_jkg | 200.0 | 500.0 |
-| lcl_altitude_ft | 500.0 | 1500.0 |
+| nwp_cape_jkg | 200.0 | 500.0 |
+| lcl_altitude_ft | 750.0 | 2000.0 |
 | k_index | 5.0 | 15.0 |
-| total_totals | 3.0 | 8.0 |
+| total_totals | 5.0 | 12.0 |
 | precipitable_water_mm | 5.0 | 15.0 |
 | lifted_index | 2.0 | 5.0 |
 | bulk_shear_0_6km_kt | 5.0 | 15.0 |
-| max_omega_pa_s | 1.0 | 5.0 |
+| max_omega_pa_s | 0.1 | 0.5 |
+| snowfall_cm | 0.5 | 2.0 |
+| rain_mm | 1.0 | 5.0 |
 
 **Circular statistics** for `wind_direction_deg` — uses sin/cos sum for mean, max angular difference for spread.
 
 ## Pipeline Integration
 
-In `pipeline.py`, shared analysis via `_run_point_analysis()` (used by both waypoint and route-point paths):
+In `tasks/analyze.py`, shared analysis via `_run_point_analysis()` (used by both waypoint and route-point paths):
 1. Find closest pressure level to cruise altitude for wind analysis
-2. Run `analyze_sounding()` per model → store in `soundings[model_key]` — computes all three icing methods and both cloud methods per sounding
-3. Extract indices for cross-model comparison (9 sounding-derived metrics + 6 surface metrics)
+2. Run `analyze_sounding()` per model → store in `soundings[model_key]` — computes all four icing methods and both cloud methods per sounding
+3. Extract values into the `comp` accumulator for cross-model comparison (sounding-derived + surface metrics)
 4. After all models: `compute_altitude_advisories()` → altitude advisories
-5. Compute cross-model divergence for all 15 metrics
+5. Compute cross-model divergence (`compare_models()`) for every accumulator variable with ≥2 models
 
-Route-point analysis (`analyze_all_route_points()`) adds interpolated time based on distance/speed and per-point track bearing (`compute_route_tracks()`).
+Route-point analysis (`analyze_all_route_points()`) adds interpolated time based on distance/speed and per-point track bearing (`compute_route_tracks()`), then runs the E-Shear post-pass (`_enrich_e_shear()`).
 
 **Method resolution for advisories** (`tasks/advise.py`): Before advisory evaluation, `_resolve_analyses()` returns new `RoutePointAnalysis` objects with the user's preferred method resolved into the active slots — originals are never mutated (uses `model_copy()`). Returns the original list unchanged when no swap is needed.
 - `icing_method="ogimet_dd"`: no swap needed (default in `icing_zones`)
@@ -412,6 +429,8 @@ Route-point analysis (`analyze_all_route_points()`) adds interpolated time based
 - `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` into `icing_zones`
 - `cloud_method="dd"`: no swap needed (default in `cloud_layers`)
 - `cloud_method="nwp"`: resolves `nwp_cloud_layers` → `cloud_layers` (falls back to `dd_cloud_layers` if NWP unavailable). Sets `cloud_method_effective` to "nwp" (grib sources), "nwp_synthesized" (synthesized sources), or "dd" (fallback)
+- `convective_method="thermo"`: no swap needed (default `convective` = `convective_thermo`)
+- `convective_method="nwp"`: resolves `convective_nwp` → `convective` (falls back to `convective_thermo` if the model has no NWP convective scheme)
 
 **Immutable DD source fields**: `SoundingAnalysis` stores `dd_cloud_layers` and `icing_ogimet_dd_zones` at construction. These preserve the original DD data so resolution can always fall back. Excluded from serialization (redundant in default state); a `model_validator` reconstructs them from `cloud_layers`/`icing_zones` when loading old JSON.
 

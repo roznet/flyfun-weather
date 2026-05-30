@@ -17,8 +17,8 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD for US, DWD for Europe), Autorouter GRAMET, SRTM elevation, model freshness, GRIB2 enrichment (GFS + ICON-EU + ECMWF IFS via ECPDS) with two-phase sequential decode for memory safety.
-Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `AutorouterGramet`, `get_elevation_profile`, `enrich_forecasts`
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD for US, DWD for Europe), SRTM elevation, model freshness, GRIB2 enrichment (GFS + ICON-EU + ECMWF IFS via ECPDS) with two-phase sequential decode for memory safety. (GRAMET now runs in `tasks/outputs.py:run_gramet()` via euro_aip's `AutorouterGrametSource`.)
+Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `get_elevation_profile`, `enrich_forecasts`
 → Full doc: fetch.md
 
 ### freshness-markers
@@ -32,7 +32,7 @@ Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_ad
 → Full doc: analysis.md
 
 ### advisories
-Route advisory system: 14 deterministic evaluators across 6 categories (icing, cloud, turbulence, convective, airport conditions, feasibility, model quality incl. DD-vs-NWP within-model agreement) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), icing/cloud method swapping, altitude-aware convective filtering, and recalculation without re-fetching.
+Route advisory system: 13 deterministic evaluators across 6 categories (icing, cloud, turbulence, convective, airport conditions, feasibility, model quality incl. DD-vs-NWP within-model agreement) with per-model severity grading, user-tunable parameters, registry auto-discovery, aggregation modes (worst/majority), icing/cloud method swapping, altitude-aware convective filtering, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
 → Full doc: advisories.md
 
@@ -41,13 +41,13 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Four synchronized visualizations: canvas cross-section (16 weather layers across 8 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), Leaflet route map (17 metric-colored segment types with altitude slider and width variation), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable cross-section themes (standard, high-contrast, gramet) with cloud hatch patterns, theme preview, and theme-aware legends. Four layout modes (cross-section, compare, split, map), shared color scales, hover sync, compact/full layer mode, icing/cloud method groups. Compare mode renders one layer across all models with four band modes (overlay, overlay-soft, consensus, consensus+outlines).
+Four synchronized visualizations: canvas cross-section (~25 weather layers across 9 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), Leaflet route map (13 metric-colored segment types with altitude slider and width variation), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable cross-section themes (standard, high-contrast, gramet) with cloud hatch patterns, theme preview, and theme-aware legends. Four layout modes (cross-section, compare, split, map), shared color scales, hover sync, compact/full layer mode, icing/cloud method groups. Compare mode renders one layer across all models with four band modes (overlay, overlay-soft, consensus, consensus+outlines).
 Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `SkewTRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 
 ### skewt-canvas
-Dynamic client-rendered Skew-T log-P diagram replacing static MetPy PNGs. Canvas-based with background grid (isotherms, adiabats, mixing ratios), T/Td/parcel path curves, CAPE/CIN shading, overlay bands (clouds, icing, inversions, convective), dual-axis side panel (14 variables incl. HW/XW and CC, grouped by theme via `<optgroup>`), hover tooltip, and linked cursor with cross-section. On-the-fly sounding analysis for derived variables.
-Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `VARIABLE_REGISTRY`, `VARIABLE_GROUPS`, `SKEWT_OVERLAYS`
+Dynamic client-rendered Skew-T log-P diagram replacing static MetPy PNGs. Canvas-based with background grid (isotherms, adiabats, mixing ratios), T/Td/parcel path curves, CAPE/CIN shading, overlay bands (clouds, icing, inversions, convective), dual-axis side panel (14 variables incl. HW/XW and CC, grouped by theme via `<optgroup>`), hover tooltip, linked cursor with cross-section, and a multi-model Compare mode. Sidecar-first analysis: derived variables come from `sounding_profiles.json.gz` written at refresh, with on-the-fly recompute only as fallback.
+Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `SkewTCompareRenderer`, `attachSkewTCompareInteraction`, `renderSkewtCompareControls`, `renderCompareSidePanel`, `VARIABLE_REGISTRY`, `VARIABLE_GROUPS`, `SKEWT_OVERLAYS`
 → Full doc: skewt-canvas.md
 
 ### route-graph
@@ -60,8 +60,8 @@ Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDiges
 → Full doc: digest.md
 
 ### metar-taf-route-weather
-D-0 METAR/TAF integration: fetch observations from route corridor airports, compare against NWP predictions, wind advisory computation, TAF highlighting, observations refresh endpoint. Sibling D-0 **route SIGMET** integration (area hazards, no model comparison) shares the same module + real-time refresh seam; model retains polygon/enroute-span/vertical-band for a future cross-section overlay.
-Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `RouteObservations`, `AirportObservation`, `run_route_sigmets`, `RouteSigmets`, `SigmetAlongRoute`, `RealtimeRefreshResult`
+D-0 METAR/TAF integration: fetch observations from route corridor airports, compare against NWP predictions, wind advisory computation, TAF highlighting, observations refresh endpoint. Sibling D-0 **route SIGMET** integration (area hazards, no model comparison) shares the same module + real-time refresh seam; model retains polygon/enroute-span/vertical-band for a future cross-section overlay. Deterministic worsened-conditions banner computed on refresh via `compute_refresh_delta`.
+Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `compute_refresh_delta`, `RefreshDelta`, `RouteObservations`, `AirportObservation`, `run_route_sigmets`, `RouteSigmets`, `SigmetAlongRoute`, `RealtimeRefreshResult`
 → Full doc: metar-taf-route-weather.md
 
 ### time-alignment
@@ -97,7 +97,7 @@ Tech stack (SwiftUI, SwiftData, MapKit, iOS 18+), MVVM + Repository pattern, lay
 → Full doc: ios-app-architecture.md
 
 ### ios-app-data-models
-Swift `@Model` classes: `Flight`, `PackMeta`, `BriefingPayload`, `ModelCrossSection`, `Observation`, `FlightSession`, `TrackPoint`. First-class PIREPs (nullable `flightId`/`session`), client UUIDs for idempotent sync, forecast snapshot embedded with each observation.
+No SwiftData. Three plain-struct tiers under `Models/`: Codable API structs (`FlightResponse`, `PackMetaResponse`, `SnapshotResponse`, `RouteAnalysesResponse`, `AdvisoriesResponse`, `PirepResponse`, …), `Viz*` domain structs (`VizData.swift`) for cross-section/route-graph rendering, and an `Assessment` enum. Persistence via two actors: `BriefingCacheStore` (JSON-on-disk pack cache, 5 required endpoints) and `PirepOfflineStore` (pending-PIREP queue). Flat PIREP model with client UUIDs for idempotent offline sync.
 → Full doc: ios-app-data-models.md
 
 ### ios-app-server-api
@@ -109,11 +109,11 @@ End-state feature set + vision: briefing sync (lightweight offline payload + on-
 → Full doc: ios-app-features.md
 
 ### ios-app-ui
-Cockpit UI design principles (one-handed, large tap targets, high-contrast, non-blocking), screen layouts (briefing viewer, in-flight mode, in-flight map), report card variants (prompted side-card, full bottom sheet with "All correct" shortcut).
+Cockpit UI design principles (one-handed, large tap targets, high-contrast, non-blocking) and screen layouts. As-built: briefing viewer + a single manual `PirepReportingView` sheet inside the existing tabs. The in-flight mode/map and report-card variants (prompted side-card, full bottom sheet with "All correct" shortcut) are original Phase-3 vision, NOT yet built.
 → Full doc: ios-app-ui.md
 
 ### ios-app-sync-prompting
-Sync engine spec (offline queue, `NWPathMonitor` flush, append-only semantics, WebSocket real-time) + forecast-driven prompting engine (route progress tracker, 7 trigger types with entry/exit/cooldown, priority queue, forecast lookup from cross-section data).
+Sync engine + forecast-driven prompting engine — largely Phase 3a/3b design intent. Implemented today: the JSON-file `PirepOfflineStore` queue. Still spec-only (absent from Swift code): `NWPathMonitor` flush, WebSocket real-time, route progress tracker, 7 trigger types with entry/exit/cooldown, priority queue, forecast lookup from cross-section data.
 → Full doc: ios-app-sync-prompting.md
 
 ### ios-app-roadmap
@@ -121,12 +121,12 @@ Sync engine spec (offline queue, `NWPathMonitor` flush, append-only semantics, W
 → Full doc: ios-app-roadmap.md
 
 ### forecast-page
-Pan-European weather overview map with per-airport forecast visualization (8 metrics incl. runway crosswind/headwind, consensus modes). Cache layer serves pre-computed JSON with staleness tracking; falls back to live queries. (The model accuracy heatmap was removed in #154; the replacement view consumes ``get_optimistic_bias_leaderboard`` from the verification stats module — see `metar-taf-accuracy.md`.)
+Pan-European weather overview map with per-airport forecast visualization (9 metrics incl. visibility and runway crosswind/headwind, consensus modes). Cache layer serves pre-computed JSON with staleness tracking; falls back to live queries. (The model accuracy heatmap was removed in #154; the replacement view consumes ``get_optimistic_bias_leaderboard`` from the verification stats module — see `metar-taf-accuracy.md`.)
 Key exports: `get_forecast_map_data`, `WeatherMap`, `fetchForecastMap`
 → Full doc: forecast-page.md
 
 ### metar-taf-accuracy [project]
-Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone monitoring (~830 pan-European airports) with full/light cycle split (full at 06/18 UTC fetches forecasts + sounding enrichment, light at 09/12/15 UTC scores existing snapshots). Monthly rollup aggregation, dashboard cache layer with staleness tracking, chunk-level retry, error recording, graceful degradation.
+Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone monitoring (~830 pan-European airports) via three decoupled loops — METAR ingest (every 30 min), forecast fetch + sounding enrichment (07/19 UTC), and scoring of existing snapshots (06/09/12/15/18 UTC). Monthly rollup aggregation, dashboard cache layer with staleness tracking, chunk-level retry, error recording, graceful degradation.
 Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `run_monthly_rollup`, `rebuild_all`, `is_stale`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
 

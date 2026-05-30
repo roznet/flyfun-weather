@@ -2,7 +2,9 @@
 
 > 3-phase roadmap, decisions made, open questions
 
-The app is built in three major phases, each delivering standalone value. The architecture (MVVM + Repository, SwiftData from day one) is designed so each phase extends the previous without rewrites.
+The app is built in three major phases, each delivering standalone value. The architecture (MVVM + Repository) is designed so each phase extends the previous without rewrites.
+
+> Status note: this is the original forward-looking roadmap. Several details below describe *intended* design that the shipped code diverged from — corrections are inlined. Notably the app does **not** use SwiftData (caching is file-based via `FileManager`); the shipped iOS PIREP feature is **flight-linked only** (no standalone PIREP, no community feed/map, no push notifications in the app yet); PIREP `source` is the string `"inflight"` (not the planned `.standalone`/`.manual` enum); and PIREP server routes live at `/api/pireps`, not `/api/observations`. The richer community/standalone PIREP surface (query by airport/bounds/radius, severity filters) currently lives on the **web/server** side (`api/pireps.py`, `web/pireps.html`), not in the app. See [Overview](./ios-app-overview.md) for the authoritative current status.
 
 The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversation that makes this app uniquely valuable. Phases 1 and 2 build the foundation and deliver value along the way.
 
@@ -15,17 +17,17 @@ The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversa
 **App work**:
 
 - **Foundation**
-  - Xcode project with SwiftUI App lifecycle, SwiftData
-  - SPM deps: RZFlight, RZUtils
-  - API client (URLSession + async/await, JWT auth header)
-  - Repository layer (online-only initially, interface designed for caching)
-  - SwiftData models for flights and briefing data (cache, prepares Phase 2)
-  - Error handling and loading states
+  - Xcode project with SwiftUI App lifecycle (no SwiftData — see Decisions Made)
+  - SPM dep: RZFlight (RZUtils planned but not yet imported)
+  - API client (URLSession + async/await, JWT auth header) — `APIClient`
+  - Repository layer (`BriefingRepository` protocol, `OnlineBriefingRepository`, interface designed for caching)
+  - JSON `Codable` API models under `Models/API`; cached as raw JSON files (prepares Phase 2)
+  - Error handling and loading states (`LoadingState`)
 
 - **Authentication**
-  - Google OAuth via `ASWebAuthenticationSession`
-  - `flyfunweather://auth/callback` URL scheme handling
-  - JWT in Keychain (`CodableSecureStorage`)
+  - Google OAuth via `ASWebAuthenticationSession` (`LoginView`)
+  - `flyfunweather://auth?token=…` deep-link callback handling (`AppState`)
+  - JWT in Keychain via `KeychainBearerTokenStore` (service `aero.flyfun.weather`)
   - Auto-refresh near expiry, re-auth on 401
 
 - **Flight list**
@@ -46,26 +48,16 @@ The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversa
 
 ### Cross-Section Renderer (Phase 1 — Incremental)
 
-Web has ~16 layers across 8 groups. Native built incrementally starting with most valuable:
+Was built incrementally; cross-section parity with web has largely shipped. Renderer uses the same cross-section data structure as web (TypeScript `extractVizData` ported to Swift; see `Models/Domain/VizData.swift`). Each layer conforms to the `CrossSectionLayerProtocol` and draws on a SwiftUI `Canvas`.
 
-**Wave 1** (core — ship with these):
-- Cloud coverage (filled regions by altitude)
-- Icing severity (color-coded zones)
-- Wind barbs (direction + speed at altitude)
-- Temperature (isotherms or color fill)
-- Terrain profile (elevation along route)
+Shipped layers (`Views/CrossSection/Layers/*Layer.swift`, 13 layers):
+- `TerrainLayer`, `TemperatureLinesLayer`, `ReferenceLinesLayer`
+- `CloudBandsLayer`, `SoftCloudBandsLayer`, `NwpCloudBandsLayer`
+- `IcingBandsLayer`, `IcingOgimetNwpBandsLayer`, `SfipBandsLayer`
+- `CATBandsLayer`, `InversionBandsLayer`
+- `NwpConvectiveBgLayer`, `ThermoConvectiveBgLayer`
 
-**Wave 2** (add iteratively):
-- Humidity / relative humidity
-- Vertical motion / CAT turbulence
-- Convective indices
-
-**Wave 3** (full parity):
-- Pressure levels
-- Visibility
-- Remaining specialized layers
-
-Renderer uses same cross-section data structure as web — TypeScript `extractVizData` ported to Swift. Each layer is a composable `CrossSectionLayer` protocol conformance on Canvas.
+Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, `ColorScales`, `CoordTransform`. Skew-T detail is a separate on-demand view (`SkewTDetailView`).
 
 ## Phase 2 — Offline Briefing Viewer ✅ (offline resilience done; push + SwiftData pending)
 
@@ -81,11 +73,13 @@ Renderer uses same cross-section data structure as web — TypeScript `extractVi
 - **Push notifications** — APNS registration. Server-side push on auto-refresh with new pack. Notification tap opens updated briefing. Badge count for unread updates
 - **Offline map tiles** — cache MapKit tiles along route corridor (±30nm, low-to-medium zoom) as part of pre-flight sync
 
-## Phase 3 — In-Flight PIREP System 🚧 (M0+M1 done)
+## Phase 3 — In-Flight PIREP System 🚧 (3a partially shipped in app)
 
 **Goal**: The killer feature — pilots report weather during flight, two-way conversation. PIREPs stored locally, synced when online, shared in real-time with connectivity.
 
 Three sub-phases, each delivering incremental value.
+
+> Shipped in the app so far (3a subset): GPS tracking (`FlightTrackingService`, projects position onto the route), the in-flight report card (`PirepReportingView` + `PirepViewModel`, one-tap severity, no pre-selected values to avoid confirmation bias), an offline queue (`PirepOfflineStore`, JSON file `pending_pireps.json`) that batch-syncs via the server's `POST /pireps/batch` with client UUIDs for dedup, and a read-only per-flight PIREP tab (`PirepListView`). All shipped reports are flight-linked with `source = "inflight"`. Standalone filing, community feed/map, voice/Siri, prompting engine (3b), and live sharing (3c) are NOT in the app.
 
 ### Phase 3a — PIREP Filing + Offline Sync
 
@@ -108,31 +102,27 @@ Pilots can file PIREPs in two contexts: during an active flight session (linked 
   - "End Flight" on landing (or auto-detect via prolonged GS = 0)
   - Session persisted with start/end times
 
-- **GPS tracking**
-  - Core Location with `kCLLocationAccuracyKilometer` (battery-friendly, sufficient for NWP grids)
+- **GPS tracking** (shipped — `FlightTrackingService`)
+  - Core Location with `kCLLocationAccuracyBest` + `distanceFilter = 200` m (the planned `kCLLocationAccuracyKilometer` was dropped in favor of best accuracy throttled at the GPS level)
   - Background location mode (justified: PIREP location reporting)
   - Current position, altitude, GS, track
-  - Route progress: snap GPS position to nearest route point
+  - Route progress: projects GPS position onto the route (`ProjectedPosition`: along-route distance, cross-track distance, on-route within 10nm)
 
-- **In-flight report UI**
-  - Persistent "Report" button during flight session
-  - Full report sheet (all fields pre-populated from forecast)
-  - "All correct" one-tap confirmation
-  - Voice-to-text for optional free-text notes
-  - Saved with `source = .manual`
+- **In-flight report UI** (shipped — `PirepReportingView` / `PirepViewModel`)
+  - Report sheet reached during a flight session
+  - One-tap severity buttons, fields start **unset** (no forecast pre-population — deliberately avoids confirmation bias); GPS altitude auto-filled when vertical accuracy is valid
+  - Smart field ordering (`PirepField`), optional free-text remarks
+  - Saved with `source = "inflight"` (string, not the planned `.manual` enum)
 
 - **Observation timeline**
   - Scrollable list of observations during the flight
   - Ability to amend (creates new linked observation)
   - Shown as pins on the route map
 
-- **Offline sync engine**
-  - Observations saved with `syncStatus = .local`
-  - On connectivity (`NWPathMonitor`), batch POST queued to server
-  - Idempotent: client UUIDs, server dedupes
-  - Retry with exponential backoff
-  - Batch in chunks of 50 if queue large
-  - Mark `.synced` on success
+- **Offline sync engine** (shipped — `PirepOfflineStore`, simpler than originally specced)
+  - Unsent reports persisted to a JSON file (`pending_pireps.json`) via an `actor` queue
+  - Flushed by `sync(using:)` after a submit (`PirepViewModel`) and on app foreground (`AppState`) — there is **no** `NWPathMonitor`, no `syncStatus` enum, no exponential backoff, and no 50-chunk batching yet
+  - Idempotent: client UUIDs (`client_uuid`), server dedupes; entire queue POSTed via `submitPirepsBatch` → `POST /pireps/batch`, cleared on success
 
 - **Voice PIREP (Siri shortcut)**
   - Register "FlyFun PIREP" App Shortcut via `AppShortcutsProvider` + `AppIntent`
@@ -204,7 +194,7 @@ Ideas from the original brainstorm, to be designed when Phase 3 is complete:
 ## Decisions Made
 
 - **Native SwiftUI** — no WKWebView for viz. Cross-section native via SwiftUI Canvas, route graph via Swift Charts. Modern SwiftUI only (iOS 18+).
-- **No third-party heavyweights** — Apple-native SDKs only (URLSession, MapKit, SwiftData, Core Location). RZFlight + RZUtils via SPM.
+- **No third-party heavyweights** — Apple-native SDKs only (URLSession, MapKit, Core Location). RZFlight via SPM (RZUtils planned, not yet imported). Note: SwiftData was the original caching plan but was dropped for file-based caching (`BriefingCacheStore` + `FileManager`).
 - **Google OAuth natively** — `ASWebAuthenticationSession`, no token-paste friction. Same flow as web.
 - **Repository pattern from day one** — even Phase 1 uses repos, so Phase 2 adds caching without touching UI.
 - **Subdirectory** — iOS project lives in flyfun-weather repo alongside server code.

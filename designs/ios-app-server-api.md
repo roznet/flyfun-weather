@@ -16,134 +16,90 @@ Server-side work is phased to match the app roadmap. Endpoints listed below are 
 | `/api/flights/{id}/packs/{ts}/snapshot` | GET | 1 | Full briefing data |
 | `/api/flights/{id}/packs/{ts}/advisories` | GET | 1 | Route advisories |
 | `/api/flights/{id}/packs/{ts}/elevation` | GET | 1 | Elevation profile |
-| `/api/flights/{id}/packs/{ts}/skewt/{icao}/{model}.png` | GET | 1 | Skew-T image |
+| `/api/flights/{id}/packs/{ts}/skewt/{icao}/{model}` | GET | 1 | Skew-T image (PNG; no `.png` in route) |
 | `/api/flights/{id}/packs/{ts}/gramet.png` | GET | 1 | GRAMET image |
 | `/api/flights/{id}/packs` | GET | done | List all packs (history) |
 | `/api/flights/{id}/packs/freshness` | GET | 2 | Data freshness check |
 | `/api/flights/{id}/packs/refresh/stream` | POST | done | SSE streaming refresh with progress |
 | `/api/flights/{id}/packs/refresh/status` | GET | done | Check active refresh status |
-| `/api/flights/{id}/packs/{ts}/sounding-profile/{pt}/{model}` | GET | done | Raw sounding profile for client Skew-T |
+| `/api/flights/{id}/packs/{ts}/sounding-profile/{point_index}/{model}` | GET | done | Raw sounding profile for client Skew-T |
+| `/api/flights/{id}/packs/{ts}/bundle` | GET | done | Gzipped single-JSON offline bundle (see Phase 2) |
 | `/auth/apple/token` | POST | done | Native Apple Sign In token exchange |
 
 ## Phase 1 — Auth Extension (DONE)
 
 | Endpoint | Change |
 |----------|--------|
-| `/auth/login/google?platform=ios` | Callback redirects to `flyfunweather://auth/callback?token=<jwt>` |
+| `/auth/login/google?platform=ios` | Callback redirects to `<scheme>://auth/callback?token=<jwt>`. Scheme comes from `?scheme=` (stored in session as `oauth_scheme`), defaulting to `flyfun`. |
 | `/auth/apple/token` | Native Apple identity token → flyfun JWT |
 
-## Phase 2 — Companion Sync Endpoint
+Lives in `flyfun-common` (`flyfun_common/auth/router.py`), wired via `create_auth_router(...)` in `weatherbrief/api/app.py`.
+
+## Phase 2 — Offline Bundle Endpoint (DONE)
+
+Shipped as `/bundle` (not `/companion` as originally planned).
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/flights/{id}/packs/{ts}/companion` | GET | Lightweight offline payload — cross-section, route analyses, advisories, elevation, digest summary, route geometry, airport conditions. Everything needed for full display + prompting without raw forecasts. Target: a few hundred KB. |
+| `/api/flights/{id}/packs/{ts}/bundle` | GET | Single gzipped JSON object keyed by cache-endpoint name (`advisories`, `snapshot`, `route-analyses`, `elevation`, `digest`) plus pre-computed sounding profiles for every (point, model). For full offline display + client Skew-T. |
 
-The companion endpoint is a curated subset of `/snapshot` — derived analysis results only, not raw forecast arrays.
+Implementation notes (`packs.py::get_bundle`):
+- Response is `gzip`-compressed with `Content-Encoding: gzip`; an `X-Uncompressed-Length` header lets the client show accurate download progress (URLSession transparently decompresses).
+- Sounding profiles come from a gzipped sidecar written at refresh time (`read_sounding_sidecar`); falls back to `build_sounding_sidecar` for older packs.
+- Unlike the originally-envisioned curated companion, the bundle is the *full* pack snapshot, not a derived-analysis-only subset.
 
-## Phase 3 — Observations & Sessions
+## Phase 3 — PIREPs (DONE, reduced scope)
 
-Observations (PIREPs) are **top-level entities** — they can be filed with or without a flight. The API reflects this: primary endpoints at `/api/observations`, convenience accessors under flights.
+Shipped as **PIREPs** at `/api/pireps` (`api/pireps.py`), NOT the `/api/observations` + sessions + WebSocket design originally sketched. PIREPs are top-level entities, optionally linked to a flight via `pack_id`. There are **no flight sessions, no `/sessions` endpoints, no WebSocket live-push, and no server-side `/verification` endpoint** in this module — that part of the vision was descoped. (Verification has a separate, unrelated archive in `db/models.py` — `VerificationObservationRow` etc. — not exposed here.)
 
-### Observations (top-level)
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/observations` | POST | Batch submit. Array of observations with offline UUIDs. Idempotent — re-submit is no-op. Each may include `flight_id`/`session_id`. |
-| `/api/observations` | GET | Recent shared. Params: `lat`, `lon`, `radius_nm` (30), `since`, `airport_icao`. Community PIREP feed. |
-| `/api/observations/nearby` | GET | Near point or route. Params: `lat`, `lon`, `radius_nm`, `since`, or `flight_id` (uses the flight's route geometry). |
-| `/api/observations/mine` | GET | Current user's own (all, including unshared). |
-
-### Flight-scoped accessors
+Visibility is gated by per-user prefs: `can_publish_pireps` / `can_view_pireps` (preferences.py). Submission is rate-limited (`pirep_burst_limiter`, `pirep_daily_limiter`; 50/day, batch ≤ 50) and bounds-checked to Europe (`validate_european_bounds`).
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/flights/{id}/observations` | GET | Observations linked to this flight (own, all sessions). |
+| `/api/pireps` | POST | Submit one PIREP. 409 on duplicate `client_uuid`. |
+| `/api/pireps/batch` | POST | Offline sync: array of ≤50 PIREPs. Idempotent — duplicate `client_uuid` is silently skipped and the stored row returned. Out-of-bounds / bad aircraft/pack refs skipped silently. |
+| `/api/pireps` | GET | Query with flexible filters (see below). Returns `{items, count}`. |
 
-### Flight sessions
+`GET /api/pireps` filters (mutually-exclusive scope picks first match): `flight_id`, `pack_id`, `airport` (ICAO → lat/lon via euro_aip), `bounds` (`sw_lat,sw_lon,ne_lat,ne_lon`). Time: `from`/`to` (ISO) or `hours` (default 6, 1–48). Optional: `hazard` (icing|turbulence|cloud), `min_severity`, `altitude_min`, `altitude_max`, `aircraft_type`.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/flights/{id}/sessions` | POST | Start session (returns `session_id`) |
-| `/api/flights/{id}/sessions/{sid}` | PATCH | End session (`end_time`), update track summary |
-| `/api/flights/{id}/sessions` | GET | List sessions for a flight |
-| `/api/flights/{id}/sessions/{sid}` | GET | Session detail + observation summary |
-
-### Real-time (Phase 3c)
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/flights/{id}/sessions/{sid}/live` | WebSocket | Bidirectional during active session. Outbound: push observations as created. Inbound: nearby PIREPs from other active flights. Server maintains in-memory registry of active sessions + route geometries for spatial matching. |
-
-### Verification (future)
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/flights/{id}/verification` | GET | Forecast vs observation comparison (server-side) |
+PIREP *content* is community-global (airport/bounds queries see everyone's). Only flight-keyed scoping (`flight_id`/`pack_id`) is gated by flight visibility; for community results filed against a flight the viewer can't see, the `pack_id` linkage is stripped but the report stays visible (`_visible_linked_pack_ids`).
 
 ## Server Data Model
 
-```python
-class FlightSession(Base):
-    """Flight session from engine start to shutdown."""
-    id: UUID
-    flight_id: str
-    user_id: int
-    briefing_timestamp: str | None        # which pack was synced
-    start_time: datetime                   # UTC
-    end_time: datetime | None
-    track_summary: dict | None             # JSON: simplified track for route display
-    created_at: datetime
+`PirepRow` (`db/models.py`, table `pireps`). Note the field names differ from the original `Observation` sketch:
 
-class Observation(Base):
-    """PIREP — first-class. Standalone or flight-linked."""
-    id: UUID                               # client-generated, enables idempotent sync
-    user_id: int
-    timestamp: datetime                   # UTC
+```python
+class PirepRow(Base):
+    id: int                                # server PK (autoincrement), NOT a UUID
+    client_uuid: str | None                # unique; enables idempotent offline sync
+    submitted_at: datetime                 # UTC
+    observed_at: datetime                  # UTC
     latitude: float
     longitude: float
-    gps_altitude_ft: float | None          # nil for ground-based
-    pressure_altitude_ft: float | None
-
-    airport_icao: str | None               # for ground/airport-referenced
-
-    flight_id: str | None                  # optional linkage
-    session_id: UUID | None
-
-    source: str                           # prompted/manual/passive/standalone
-    prompt_trigger: str | None            # if prompted
-    response: str | None                  # confirmed/edited/denied/dismissed (nil for standalone)
-    forecast_summary: dict | None         # nil for standalone
-
-    flight_rules: str | None              # VMC/MVFR/IMC
-    icing: str | None                     # none/trace/light/moderate/severe
-    turbulence: str | None                # none/light/moderate/severe/extreme
-    cloud_coverage: str | None            # CLR/SCT/BKN/OVC
-    cloud_base_ft: int | None
-    cloud_top_ft: int | None              # "tops around 1500'"
-    precipitation: str | None
-    visibility: str | None
-    wind_comparison: str | None
-    oat_celsius: float | None
-    notes: str | None
-
-    route_point_index: int | None         # snapped to nearest route point (flight-linked)
-    is_shared: bool
-    created_at: datetime
+    gps_altitude_ft: int | None
+    reported_altitude_ft: int | None       # pressure/indicated altitude reported by pilot
+    in_cloud: bool | None
+    icing_intensity: str | None            # none/trace/light/moderate/severe
+    icing_type: str | None                 # rime/clear/mixed
+    turbulence_intensity: str | None       # none/light/moderate/severe
+    ceiling_msl_ft: int | None
+    tops_msl_ft: int | None
+    tops_basis: str | None                 # crossed/estimated_above/below_min
+    temp_c: float | None
+    wind_dir: int | None
+    wind_speed_kt: int | None
+    remarks: str | None
+    aircraft_id: int | None                # FK user_aircraft (ICAO type resolved on response)
+    pack_id: int | None                    # FK briefing_packs — flight linkage
+    source: str                            # manual/inflight/postflight
+    user_id: str | None                    # FK users
 ```
 
-## Spatial Query Design (Phase 3)
+Enum tuples live alongside the model: `ICING_INTENSITIES`, `ICING_TYPES`, `TURBULENCE_INTENSITIES`, `TOPS_BASES`, `PIREP_SOURCES`.
 
-Two use cases:
+## Spatial Query Design
 
-1. **Community PIREP feed** (Phase 3a) — "Recent PIREPs near EGTF" or "near lat/lon within 30nm". Simple DB query with great-circle distance filter. Index on `(timestamp, latitude, longitude)` is sufficient: `WHERE timestamp > since AND haversine(lat, lon, obs.lat, obs.lon) < radius`. Fast at expected volumes without specialized spatial indexing.
-
-2. **Live in-flight push** (Phase 3c) — "Push new PIREPs to active flight sessions whose routes pass nearby". Requires:
-   - **Active session registry** — in-memory `session_id → (flight_id, route_bbox, route_points)`, populated on session start, removed on end
-   - **Spatial filter** — for each new observation (any source — in-flight or standalone), iterate active sessions and check if it falls within `radius_nm` of any route point (great-circle). Sub-ms for hundreds of sessions
-   - **WebSocket broadcast** — push matching observations to the relevant session's WebSocket
-   - **Scaling** — if usage grows beyond ~1000 concurrent sessions, add spatial index (R-tree via `shapely` or PostGIS). In-memory avoids infra deps initially
-
-Standalone PIREPs filed on the ground also trigger the spatial broadcast — a pilot reporting "EGTF, base at 800'" immediately appears on any active session whose route passes near EGTF.
+Only the community-feed use case shipped. Queries use a great-circle / bounding-box filter in `storage/pireps.py` (`list_pireps`, `validate_european_bounds`); `pack_id` is indexed. There is no active-session registry and no spatial broadcast — those depended on the descoped sessions/WebSocket work. If live in-flight push is revived later, see git history for the original R-tree/PostGIS scaling sketch.
 
 ## References
 

@@ -1,212 +1,118 @@
 # iOS App Data Models
 
-> Swift `@Model` classes for SwiftData persistence + `Codable` structs for API serialization
+> The model layer as built: `Codable` API structs + Domain "Viz" structs. NO SwiftData.
 
-## Implementation Note
+## Architecture (as built)
 
-Models shown as `struct` for readability. In practice, persisted models use SwiftData `@Model class`, with separate `Codable` structs for API serialization. `CLLocationCoordinate2D` is not `Codable` — persisted models store `latitude: Double` and `longitude: Double` separately, with a computed `coordinate` property.
+Despite what `ios-app-architecture.md` says about SwiftData, **no `@Model` classes exist**. The
+model layer is three plain-struct tiers, all under
+`app/flyfun-weather/flyfun-weather/Models/` (+ two persistence actors under `Services/`):
 
-## Phase 1 — Briefing Viewer
+1. **API tier** (`Models/API/*.swift`) — `Codable, Sendable` structs that mirror the server JSON
+   1:1. Decoded straight from HTTP responses. This is the source of truth.
+2. **Domain tier** (`Models/Domain/*.swift`) — `Viz*` structs the cross-section / route-graph
+   renderers consume, plus the `Assessment` enum. Mapped from the API tier by ViewModels.
+3. **Persistence** — two `actor`s that read/write JSON files on disk. No SwiftData, no Core Data.
 
-```swift
-/// A flight from the WeatherBrief server
-@Model
-class Flight {
-    let id: String                        // slug (e.g. "lfat-lfmd-20260315")
-    var routeName: String
-    var waypoints: [String]               // ICAO codes
-    var departureTime: Date
-    var targetDate: String                // "YYYY-MM-DD"
-    var targetTimeUTC: Int                // hour 0-23
-    var cruiseAltitudeFt: Int
-    var flightCeilingFt: Int
-    var flightDurationHours: Double
-    var isPrivate: Bool
-    var autoRefresh: Bool
-    var assessment: String?               // "GREEN" / "AMBER" / "RED"
+`CLLocationCoordinate2D` (`Codable` caveat from the old doc) is irrelevant here — coordinates are
+always stored as separate `lat`/`lon` `Double`s in the API/Viz structs.
 
-    var packs: [PackMeta]
-}
+## API tier — key structs (`Models/API/`)
 
-/// Metadata for a briefing pack (one refresh = one pack)
-@Model
-class PackMeta {
-    let flightId: String
-    let fetchTimestamp: String             // ISO 8601 — unique id
-    var daysOut: Int
-    var isHistorical: Bool
-    var hasGramet: Bool
-    var hasSkewt: Bool
-    var hasDigest: Bool
-    var hasAdvisories: Bool
-    var assessment: String?
-    var assessmentReason: String?
-    var modelInitTimes: [String: Double]   // model_key → epoch seconds
+One file per server response. Names below are the actual Swift type names.
 
-    // Phase 1: fetched from /snapshot on demand
-    // Phase 2: pre-synced from /companion for offline
-    var cachedPayload: BriefingPayload?
-}
+- `FlightResponse` (`FlightResponse.swift`) — a flight. Fields: `id` (slug), `userId`,
+  `profileId?`, `routeName`, `waypoints: [String]`, `departureTime` (ISO string), `targetDate`,
+  `targetTimeUtc`, `cruiseAltitudeFt`, `flightCeilingFt`, `flightDurationHours`, `` `private` ``,
+  `autoRefresh`, `autoRefreshHour?`, `createdAt`. Computed `departureDate`, `shortTitle`.
+- `CreateFlightRequest` / `ParseFplRequest` / `ParseFplResponse` (`CreateFlightRequest.swift`) —
+  create-flight body and ICAO-FPL parse round-trip.
+- `PackMetaResponse` + `DataStatus` (`PackMetaResponse.swift`) — one briefing pack's metadata.
+  `fetchTimestamp` is the unique id; `modelInitTimes`/`gribInitTimes` are `[String: Int]` (epoch s),
+  plus `modelsSkippedRegion`, `dataStatus` (freshness: `fresh`, `staleModels`, `nextExpected*`).
+- `SnapshotResponse` (`SnapshotResponse.swift`) — route + per-waypoint analysis + `routeObservations`
+  (METAR/TAF airports). Nested: `RouteConfig`, `Waypoint`, `WaypointAnalysis`, `WindComponent`,
+  `SoundingAnalysisSummary`, `ThermodynamicIndicesSummary`, `RouteObservations`, `AirportObservation`.
+- `RouteAnalysesResponse` (`RouteAnalysesResponse.swift`) — the big one: per-point full sounding for
+  every model, drives the cross-section. Nested `RoutePointAnalysis` (per point: `windComponents`,
+  `sounding: [String: SoundingAnalysis]`, `modelDivergence: [ModelDivergence]`) → `SoundingAnalysis`
+  with `indices`, `cloudLayers`, `nwpCloudLayers`, `icingZones`, `icingOgimetNwpZones`, `sfipZones`,
+  `inversionLayers`, `convective`/`convectiveNwp`, `verticalMotion`, cloud-cover pcts,
+  `nwpCloudDiagnostics`. Supporting types: `ThermodynamicIndices`,
+  `EnhancedCloudLayer`, `IcingZone`, `SfipZone`, `InversionLayer`, `ConvectiveAssessment`,
+  `VerticalMotionAssessment`, `CATRiskLayer`, `NWPCloudDiagnostics`, `NWPCloudLayerDiag`,
+  `ModelDivergence`.
+- `AdvisoriesResponse` (`AdvisoriesResponse.swift`) — route advisories + catalog. Nested
+  `RouteAdvisoryResult` (aggregate + `perModel: [ModelAdvisoryResult]`), `AdvisoryCatalogEntry`,
+  `AdvisoryParameterDef`, and airport-condition types (`AirportConditions`,
+  `AirportConditionsSummary`, `RunwayEnd`, `AirportModelCondition`, `RunwayWind`).
+- `PirepResponse` + `PirepListResponse` + `SubmitPirepRequest` (`PirepResponse.swift`) — see PIREPs.
+- Other response files: `DigestResponse`, `ElevationResponse`, `PreferencesResponse`,
+  `RefreshEvent` (SSE), `SoundingProfileResponse`.
 
-/// Everything needed to display the full briefing
-@Model
-class BriefingPayload {
-    var crossSections: [String: ModelCrossSection]  // model_key → cross-section
-    var routeAnalyses: Data?              // JSON: per-point analysis
-    var advisories: Data?                 // JSON: per-evaluator per-model severity
-    var elevationProfile: Data?           // JSON: terrain
-    var digestSummary: String?
-    var digestSynoptic: String?
-    var digestTrend: String?
-    var routePoints: Data?                // JSON: [{lat, lon, distance_nm}]
-    var departureConditions: Data?        // JSON
-    var arrivalConditions: Data?
-}
+## Domain tier — Viz structs (`Models/Domain/`)
 
-/// Input to the Canvas renderer
-struct ModelCrossSection: Codable {
-    var modelKey: String
-    var routePoints: [CrossSectionPoint]
-    var pressureLevels: [Int]             // hPa (e.g. [1000, 925, 850, ...])
-}
+`VizData.swift` defines what the SwiftUI `Canvas` cross-section and Swift Charts route graph render.
+Built by ViewModels from `RouteAnalysesResponse` so the renderers never touch raw API shapes:
 
-struct CrossSectionPoint: Codable {
-    var index: Int
-    var latitude: Double
-    var longitude: Double
-    var distanceNm: Double
-    var levels: [String: LevelData]       // pressure_hPa (string) → data
-}
+- `VizRouteData` → `[VizPoint]` (+ `WaypointMarker`, `TerrainPoint`).
+- `VizPoint` carries per-distance state: `altitudeLines` (`AltitudeLines`), `cloudLayers` /
+  `nwpCloudLayers?` (`[VizCloudLayer]`), `icingZones` / `icingOgimetNwpZones` (`VizIcingZone`),
+  `sfipZones` (`VizSfipZone`), `catLayers` (`VizCATLayer`), `inversions` (`VizInversionLayer`),
+  convective + NWP-convective fields, cloud-cover pcts, wind components, `nwpCloudDiag`
+  (`VizCloudDiag`/`VizCloudDiagBand`), temperature, precip.
 
-struct LevelData: Codable {
-    var temperatureC: Double?
-    var dewpointC: Double?
-    var relativeHumidity: Double?
-    var windSpeedKt: Double?
-    var windDirectionDeg: Double?
-    var cloudCoverPercent: Double?
-    var icingIndex: Double?
-    var verticalVelocity: Double?
-}
+`Assessment.swift` — `enum Assessment: String, Codable, CaseIterable { green, amber, red,
+unavailable }` with SwiftUI `color` + `label`. This is the GREEN/AMBER/RED route severity.
 
-struct AdvisoryResult: Codable {
-    var evaluatorId: String
-    var evaluatorName: String
-    var category: String                  // icing/cloud/turbulence/airport/feasibility
-    var modelKey: String
-    var severity: String                  // GREEN/AMBER/RED
-    var title: String
-    var detail: String
-}
-```
+## Persistence — JSON files, two actors (`Services/`)
 
-## Phase 3 — Observations & Flight Sessions
+- `BriefingCacheStore` (`BriefingCacheStore.swift`) — `actor`. On-disk cache of pack endpoints under
+  Application Support (`BriefingCache/<flightId>/<timestamp>/<endpoint>.json`). Maintains an
+  `index.json` of `CachedPackEntry` (`flightId`, `timestamp`, `flightTitle`, `assessment`,
+  `downloadedAt`, `endpoints: Set<String>`, `totalBytes`). `requiredEndpoints` = advisories, digest,
+  snapshot, route-analyses, elevation — a pack `isComplete` when all are present. Also stores
+  root/per-flight metadata files for offline list fallback.
+- `PirepOfflineStore` (`PirepOfflineStore.swift`) — `actor`. JSON-file queue of unsent
+  `SubmitPirepRequest`s at `Documents/pending_pireps.json`. `enqueue` on failure, `sync(using:)`
+  flushes via a batch submit. Server dedups on `clientUuid`.
 
-PIREPs are **first-class entities**. An observation can exist standalone (no flight, no session) or be linked to a flight session for forecast verification.
+`CachingBriefingRepository` wraps the network `BriefingRepository` + `BriefingCacheStore` to make
+the data layer offline-capable (see `ios-app-architecture.md`).
 
-```swift
-/// A single weather observation (PIREP). Standalone or flight-linked.
-@Model
-class Observation {
-    let id: UUID
-    let timestamp: Date
-    var latitude: Double
-    var longitude: Double
-    var coordinate: CLLocationCoordinate2D {  // computed
-        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-    }
-    let gpsAltitudeFt: Double?            // nil for ground-based
-    let pressureAltitudeFt: Double?
-    let groundSpeedKt: Double?
-    let track: Double?
+## PIREPs — flat model, not first-class "Observations"
 
-    var airportIcao: String?              // for ground/airport-referenced PIREPs
+The old design's `Observation` / `FlightSession` / `TrackPoint` SwiftData entities and their enums
+(`ObservationSource`, `PromptTrigger`, `ForecastSummary`, etc.) were **never built**. PIREPs today
+are a single flat API struct:
 
-    var source: ObservationSource          // .prompted/.manual/.passive/.standalone
-    var promptTrigger: PromptTrigger?      // if .prompted
-    var forecastAtPoint: ForecastSummary?  // nil for standalone
+- `PirepResponse` — server PIREP. Key fields: `id: Int`, `clientUuid: String?`, `submittedAt`,
+  `observedAt`, `latitude`/`longitude`, `gpsAltitudeFt?`, `reportedAltitudeFt?`, `inCloud?`,
+  `icingIntensity?`/`icingType?`, `turbulenceIntensity?`, `ceilingMslFt?`, `topsMslFt?`/`topsBasis?`,
+  `tempC?`, `windDir?`/`windSpeedKt?`, `remarks?`, `aircraftType?`, `packId?`, `source`, `isOwn`.
+  Computed `altitude` (reported ?? GPS), `observedDate`, `maxSeverity`; `.offline` sentinel.
+- `SubmitPirepRequest` — submit body; `clientUuid` is client-generated for idempotent offline sync
+  (the one surviving idea from the old "client UUIDs" choice). `source` defaults to `"inflight"`.
+- `PirepListResponse` — `items` + `count`.
 
-    // Reported conditions (all optional — only notable items)
-    var flightRules: FlightRules?         // VMC/marginal/IMC
-    var icing: IcingSeverity?             // PIREP scale none→severe
-    var turbulence: TurbulenceSeverity?   // PIREP scale none→extreme
-    var cloudCoverage: CloudCoverage?     // CLR/SCT/BKN/OVC
-    var cloudBaseFt: Int?
-    var cloudTopFt: Int?
-    var precipitation: PrecipitationType?
-    var visibility: VisibilityRange?
-    var windComparison: WindComparison?
-    var oatCelsius: Double?
-    var notes: String?
-
-    var response: ObservationResponse?    // nil for standalone
-
-    var syncStatus: SyncStatus            // .local/.synced/.failed
-    var isShared: Bool
-
-    var session: FlightSession?           // nil for standalone
-    var flightId: String?                 // nil for standalone
-    var routePointIndex: Int?             // nearest route point at report time
-}
-
-enum ObservationSource: String, Codable {
-    case prompted, manual, passive, standalone
-}
-
-enum ObservationResponse: String, Codable {
-    case confirmed, edited, denied, dismissed
-}
-
-enum PromptTrigger: String, Codable {
-    case icingZone, imcZone, convectiveArea, turbulenceZone
-    case cloudBaseTransition, windShear, periodic
-}
-
-/// Snapshot of forecast at observation point — stored for verification
-struct ForecastSummary: Codable {
-    var predictedFlightRules: FlightRules?
-    var predictedIcing: IcingSeverity?
-    var predictedTurbulence: TurbulenceSeverity?
-    var predictedCloudCoverage: CloudCoverage?
-    var predictedCloudBaseFt: Int?
-    var predictedWindDir: Int?
-    var predictedWindSpeedKt: Int?
-    var model: String
-}
-
-/// Groups observations from engine start to shutdown
-@Model
-class FlightSession {
-    let id: UUID
-    let flightId: String
-    var briefingTimestamp: String?         // which pack was synced
-    let startTime: Date
-    var endTime: Date?
-
-    var observations: [Observation]       // inverse
-    var trackPoints: [TrackPoint]
-}
-
-@Model
-class TrackPoint {
-    let timestamp: Date
-    var latitude: Double
-    var longitude: Double
-    let altitudeFt: Double
-    let groundSpeedKt: Double
-
-    var session: FlightSession?
-}
-```
+There is no client-side session/track-point persistence model. `FlightTrackingService`
+(`Services/`) holds live GPS state (`ProjectedPosition`, `TrackingRoutePoint`) in memory, not as a
+persisted entity.
 
 ## Key Choices
 
-- **First-class PIREPs** — `flightId` and `session` are optional; standalone observations work without any flight context
-- **Client UUIDs** — `Observation.id: UUID` is client-generated so offline sync is idempotent
-- **Forecast snapshot embedded** — `forecastAtPoint` stored with the observation so verification survives later model refreshes
-- **Append-only** — observations are immutable once created; amendments are new observations
+- **No SwiftData** — persistence is hand-rolled JSON-on-disk via two actors. The architecture doc's
+  "SwiftData" row is aspirational/stale; this is the reality the model layer is built on.
+- **API structs are the source of truth** — Domain `Viz*` structs are derived per-render; nothing is
+  persisted in Domain shape.
+- **Client UUIDs for PIREPs** — `SubmitPirepRequest.clientUuid` lets the offline queue retry without
+  duplicating server-side.
+- **Pack completeness gate** — a cached pack only counts as offline-ready once all five
+  `requiredEndpoints` are on disk.
 
 ## References
 
-- [Server API](./ios-app-server-api.md) — matching server-side `Observation`, `FlightSession` tables
-- [Sync & Prompting](./ios-app-sync-prompting.md) — how `syncStatus` transitions
+- [Architecture](./ios-app-architecture.md) — MVVM + Repository, the caching repo, layer split.
+  Note: its "SwiftData" persistence claim does not match the built model layer.
+- [Server API](./ios-app-server-api.md) — server-side shapes these structs decode.
+- [Sync & Prompting](./ios-app-sync-prompting.md) — PIREP offline-sync flow.

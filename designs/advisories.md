@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories for 13 weather hazard categories along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 13 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, and feasibility categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ RouteContext (immutable)
   ├── cross_sections: list[RouteCrossSection]  (per-model forecast grids)
   ├── elevation: ElevationProfile | None
   ├── airport_conditions: AirportConditions | None  (dep + arr weather)
-  ├── models, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm
+  ├── models, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, locale
       ↓
 Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register IcingEscapeEvaluator       # en-route icing
@@ -143,7 +143,7 @@ User overrides stored in `flight_profiles.settings_json` under `advisories: {ena
 ## Pipeline Integration
 
 In `tasks/advise.py` via `run_advisories()`:
-1. **Method resolution**: `_resolve_analyses(rp_analyses, icing_method, cloud_method)` returns new objects with the user's preferred icing/cloud method resolved into the active `icing_zones`/`cloud_layers` slots via `model_copy()` — originals are never mutated. Returns the original list unchanged when no swap is needed. See [analysis.md](./analysis.md) for method details.
+1. **Method resolution**: `_resolve_analyses(rp_analyses, icing_method, cloud_method, convective_method)` returns new objects with the user's preferred icing/cloud/convective method resolved into the active `icing_zones`/`cloud_layers`/`convective` slots via `model_copy()` — originals are never mutated. Returns the original list unchanged when no swap is needed. See [analysis.md](./analysis.md) for method details.
 2. **Model filtering**: `advisory_models` preference selects which models to evaluate (default excludes `best_match`)
 3. Build `RouteContext` from existing route analyses, cross-sections, elevation, airport conditions
 4. Call `evaluate_all(ctx)` → `list[RouteAdvisoryResult]`
@@ -151,14 +151,22 @@ In `tasks/advise.py` via `run_advisories()`:
 
 Also supports `run_advisories_from_pack()` for re-evaluation from saved artifacts without re-fetching.
 
+**Altitude table** (`analysis/advisories/altitude_table.py` → `compute_altitude_table`, driven by `run_altitude_table_from_pack`): sweeps the *altitude-dependent* evaluators (`get_altitude_dependent_ids()`, derived from each catalog entry's `altitude_dependent` flag) across an altitude range at `step_ft` intervals, returning an `AltitudeTableResult` with per-altitude advisory rows plus `best_below_cruise`/`best_above_cruise` picks. Pure analysis module — does NOT import from `tasks/`.
+
+**Alt departure** (`run_alt_from_pack` + `derive_assessment_from_advisories`): re-runs analysis + advisories against the already-fetched forecast at a flight's `alt_departure_time`, writing `route_advisories_alt.json` and deriving an overall GREEN/AMBER/RED assessment (worst aggregate status) for the alt scenario.
+
 ## API Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `.../packs/{ts}/advisories` | GET | Return saved advisories JSON |
 | `.../packs/{ts}/advisories/recalculate` | POST | Re-evaluate with user prefs (enabled IDs + param overrides) |
+| `.../packs/{ts}/advisories/altitude-table` | POST | Altitude sweep (`step_ft` 500–5000, default 2000) → `AltitudeTableResult` |
+| `.../packs/{ts}/advisories/alt` | GET | Return saved alt-departure advisories JSON |
+| `.../packs/{ts}/advisories/alt/compute` | POST | Compute alt-departure advisories on-demand (requires flight `alt_departure_time`) |
+| `.../advisories/catalog` | GET | Catalog of all evaluators + parameter defs (on the preferences router) |
 
-Recalculate loads route analyses + elevation + cross-sections from disk, applies user preferences, returns fresh manifest.
+Recalculate loads route analyses + elevation + cross-sections from disk, applies user preferences, returns fresh manifest. Recalculate and altitude-table share `_load_advisory_profile()` to resolve enabled IDs, param overrides, aggregation, advisory models, icing/cloud/convective methods, and locale.
 
 ## Frontend
 
@@ -166,7 +174,8 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - Summary bar: badge counts per severity (e.g., "3 RED 2 AMBER 5 GREEN")
 - Advisory cards sorted RED → AMBER → GREEN → UNAVAILABLE
 - Each card: aggregate status badge + name + info button + per-model badges + detail text
-- **Altitude slider**: allows evaluating advisories at different cruise altitudes without recalculating the full pipeline
+- **Altitude slider**: re-evaluates advisories at different cruise altitudes without recalculating the full pipeline (altitude-dependent evaluators only)
+- **Altitude table button**: opens a popup rendering the `/advisories/altitude-table` sweep — per-altitude advisory grid with best-below/best-above-cruise picks
 - Recalculate button triggers POST endpoint and re-renders
 
 **Info popup** (`components/info-popup.ts`):

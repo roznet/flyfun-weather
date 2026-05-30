@@ -34,7 +34,7 @@ Cached locally. Everything the app needs to display the full briefing and power 
 Heavier artifacts derived from full forecast data that don't need to live on device:
 - **Skew-T plots** — generated per-waypoint per-model (PNG, ~100KB each)
 - **Full sounding analysis** — detailed thermodynamic indices per waypoint
-- **Model comparison details** — full 15-metric divergence table
+- **Model comparison details** — full multi-metric divergence table (21 scored variables in `analysis/comparison.py::DIVERGENCE_THRESHOLDS`)
 - **LLM digest full text** — complete AI briefing narrative
 - **GRAMET cross-section** — Autorouter PDF/PNG
 
@@ -57,7 +57,7 @@ Lightweight — derived analysis results, not raw forecasts. Cross-sections, rou
 
 PIREPs are **first-class** — they exist independently of flights. A pilot doesn't need a planned flight in WeatherBrief to file one. Just landed after pattern work? Open the app, tap "File PIREP", select the airport, report conditions. That PIREP is visible to every other user.
 
-When filed during an active flight session, it's linked to the flight for verification — but the link is optional. The data model has nullable `flight_id` and `session_id`.
+When filed during an active flight session, it's linked to the flight for verification — but the link is optional. The data model links a PIREP to a flight via a nullable `pack_id` (FK to the briefing pack it was filed against); standalone PIREPs leave it null. There is no `session_id` — the flight session is purely client-side (`FlightTrackingService`), not persisted on the server.
 
 ### Three ways to file
 
@@ -101,7 +101,7 @@ Once active, prompts governed by:
 
 ### Pilot-Initiated PIREPs (Always Available)
 
-Persistent "Report" button — flag something the app didn't prompt about, report unexpected conditions, or share what you're seeing. Full report card with all fields pre-populated from forecast at current position. `source = .manual`.
+Persistent "Report" button — flag something the app didn't prompt about, report unexpected conditions, or share what you're seeing. Full report card with all fields pre-populated from forecast at current position. The PIREP `source` field is a plain string validated server-side against `PIREP_SOURCES = ("manual", "inflight", "postflight")` (`db/models.py`); the active in-flight report card currently submits `"inflight"` (see `PirepViewModel`).
 
 **Auto-populated from device sensors**: position (lat/lon) → nearest waypoint, GPS altitude (with pressure altitude correction option), timestamp, ground speed, track.
 

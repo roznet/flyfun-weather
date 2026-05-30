@@ -19,12 +19,15 @@ web/ts/visualization/skewt/
 ├── axes.ts               # Pressure/FL axes, temperature labels, level markers, indices panel
 ├── overlay-bands.ts      # Cloud/icing/inversion/convective altitude bands
 ├── overlay-controls.ts   # Checkbox toggles + side panel dropdown UI
-├── variable-panel.ts     # Dual-axis side panel with 12+ variable registry
-├── interaction.ts        # Hover tooltip + linked cursor
-└── renderer.ts           # Main orchestrator — dual canvas, layout, render pipeline
+├── variable-panel.ts     # Dual-axis side panel registry + single & compare renderers
+├── interaction.ts        # Hover tooltip + linked cursor (single + compare)
+├── renderer.ts           # Main orchestrator — dual canvas, layout, render pipeline
+└── compare-renderer.ts   # Multi-model overlay: T/Td per model on one diagram
 ```
 
 **Dual canvas pattern** (same as cross-section): main canvas for layers, overlay canvas for hover crosshair. The overlay redraws cheaply on mouse move without re-rendering the full diagram.
+
+**Three modes** (toggle in viz controls): Dynamic (canvas, single model), Compare (multi-model overlay), Static (MetPy PNG fallback). `briefing-main.ts` drives all three.
 
 ## Data Flow
 
@@ -35,10 +38,11 @@ briefing-main.ts: loadSkewtData() fetches sounding-profile JSON
         ↓
 API: GET /{timestamp}/sounding-profile/{point_index}/{model}
         ↓
-Backend: reads route_analyses.json + cross_section.json
+Backend: load_or_build_sounding_profile() —
+         reads the gzipped sidecar (sounding_profiles.json.gz) if present,
+         else falls back to _build_sounding_profile() which reads
+         route_analyses.json + cross_section.json and recomputes on the fly
          assembles SoundingProfileResponse (levels + indices + overlays)
-         runs analyze_sounding() on-the-fly for derived_levels (~30ms)
-         computes DD, RH, lapse rate, θe, CLW, omega/w inline
         ↓
 Client: SkewTRenderer.setData(data)
         → background grid (cached offscreen canvas, blit at 1:1 pixels)
@@ -106,28 +110,45 @@ Two dropdowns in the controls. Selection persisted to `localStorage('wb_skewtSid
 
 `VARIABLE_GROUPS` defines display order; `renderGroupedOptions()` in `overlay-controls.ts` emits one `<optgroup label="…">` block per group, filtering registry by `VariableDef.group`. CC plots only for ECMWF/ICON (per-level cc not delivered by GFS — line gap, no fallback).
 
+Each variable and overlay carries a `metricId` into the shared metric catalog; `overlay-controls.ts` renders info (ⓘ) buttons next to the dropdowns, overlay toggles, and a fixed indices row (CAPE/CIN/LI/PW/0°C). The primary/secondary info button's `data-metric` updates live on dropdown change.
+
 ## Interaction
 
 - **Hover tooltip**: horizontal crosshair + tooltip with all values at nearest pressure level (T, Td, DD, RH, **CC**, wind, HW/XW, θe, lapse rate, icing, SFIP, w, altitude/FL)
 - **Linked cursor (Skew-T → cross-section)**: `onHoverAltitude` callback fires → cross-section draws horizontal line at that altitude
 - **Linked cursor (cross-section → Skew-T)**: cross-section `onHoverAltitude` callback → `skewtInteraction.setExternalHoverAlt()` draws blue dashed line
 
+## Compare Mode
+
+`SkewTCompareRenderer` (+ `attachSkewTCompareInteraction`, `renderSkewtCompareControls`) overlays T/Td curves from 2-3 models on a single diagram, each in a distinct color (solid = T, dashed = Td). Differs from the single-model renderer:
+
+- No overlay bands (clouds/icing/inversions) — would be ambiguous across models
+- Level markers (LCL/LFC/EL) and CAPE/CIN are optional toggles, **default off**; when on they use the primary model's indices
+- Side panel (`renderCompareSidePanel`) draws one line per model on a unified per-variable range; primary thicker/opaque, secondaries thinner/translucent
+- Controls: model chips (toggle + star marks primary), CAPE/CIN + levels checkboxes, same side-panel dropdowns
+- Persistence keyed separately: `wb_skewtCompareSidePanels`, `wb_skewtCompareCapeCin`, `wb_skewtCompareLevelMarkers`
+
 ## Backend: Sounding Profile Endpoint
 
-`GET /{timestamp}/sounding-profile/{point_index}/{model}` — extended for dynamic Skew-T:
+`GET /{timestamp}/sounding-profile/{point_index}/{model}` — serves the dynamic Skew-T (web + iOS). The models, builder, and sidecar I/O all live in `storage/sounding_profiles.py` (deliberately neutral — imported by both `api/packs.py` and `tasks/artifacts.py`, no `tasks → api` cycle).
 
-- `SoundingProfileLevel`: all `DerivedLevel` fields (RH, DD, θe, lapse rate, icing indices, CLW, Ri, omega, w)
-- `parcel_path`: captured from MetPy parcel profile computation (was previously discarded)
+- `SoundingProfileResponse` / `SoundingProfileLevel`: all `DerivedLevel` fields (RH, DD, θe, lapse rate, icing indices, CLW, ICE, CC, Ri, omega, w)
+- `parcel_path` (`ParcelPathPointResponse`): captured from MetPy parcel profile computation (was previously discarded)
 - `track_deg`, `label`: from route point analysis
 - `nwp_cloud_layers`, `icing_ogimet_nwp_zones`, `sfip_zones`, `convective`: from sounding analysis
-- **On-the-fly analysis**: when `derived_levels` aren't in stored JSON (excluded from `route_analyses.json` to save space), runs `analyze_sounding()` on-the-fly (~30ms) to get icing indices, Richardson number, etc.
+
+**Sidecar-first, recompute-fallback** (`load_or_build_sounding_profile`):
+
+- At refresh time, `tasks/artifacts.py` writes the gzipped sidecar `sounding_profiles.json.gz` from the in-memory route-analyses manifest — while `derived_levels` are still intact, before they're stripped from `route_analyses.json` for the online viewer.
+- The endpoint reads the sidecar and returns the pre-shaped profile without recompute.
+- When the sidecar is absent (old packs, or after T1 retention), `_build_sounding_profile()` reads `route_analyses.json` + `cross_section.json` and recomputes the MetPy sounding analysis (`analyze_sounding()`) on the fly (~30ms). Nothing hard-depends on the sidecar.
 
 `ParcelPathPoint` model added to `SoundingAnalysis` — captures the MetPy parcel profile array (previously computed for CAPE/CIN but discarded). Zero extra CPU cost.
 
 ## Key Choices
 
 - **Server-side thermodynamics**: all physics stays in Python/MetPy. Client does only rendering + trivial trig (HW/XW)
-- **On-the-fly analysis**: `derived_levels` excluded from `route_analyses.json` (saves ~50KB per model per point). Endpoint runs `analyze_sounding()` lazily — ~30ms, fast enough
+- **Sidecar over recompute**: `derived_levels` are excluded from `route_analyses.json` (saves space for the viewer) but persisted to a gzipped sidecar at refresh time, so the endpoint serves pre-shaped profiles without re-running `analyze_sounding()`. Recompute (~30ms) remains the fallback for packs that predate the sidecar or have aged past T1 retention
 - **Background grid caching**: isotherms/adiabats rendered once to offscreen `HTMLCanvasElement`, blitted at 1:1 pixel ratio (bypasses main canvas DPR transform)
 - **CAPE/CIN shading bounds**: only between LCL and EL (no shading below LCL or above EL)
 - **Any route point**: clicking any point (waypoint or interpolated) loads its Skew-T — not restricted to named waypoints
@@ -135,7 +156,6 @@ Two dropdowns in the controls. Selection persisted to `localStorage('wb_skewtSid
 
 ## Still Future
 
-- **Multi-model overlay**: plot T/Td from 2-3 models on same Skew-T with color coding and divergence highlighting
 - **Vertical zoom/pan**: focus on specific altitude ranges
 - **Theme integration**: rename `CrossSectionTheme` → `VizTheme` with Skew-T-specific color groups across all three themes
 - **Method sync**: sync icing/cloud preferred method between cross-section and Skew-T overlay toggles

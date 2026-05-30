@@ -51,6 +51,8 @@ interface RouteGraphMetric {
   suggestedRange?: [number, number];
   /** Optional: zero-line — draw a reference line at y=0 (useful for headwind). */
   showZeroLine?: boolean;
+  /** Optional: labels drawn above/below the zero line, e.g. ["Headwind ↑", "Tailwind ↓"]. */
+  zeroLineLabels?: [string, string];
 }
 ```
 
@@ -65,8 +67,8 @@ interface RouteGraphMetric {
 | `cloud-cover` | Cloud Cover | % | bar | `#6b7280` (gray) | `VizPoint.cloudCoverTotalPct` |
 | `cape` | CAPE | J/kg | bar | `#f59e0b` (amber) | `VizPoint.capeSurfaceJkg` |
 | `freezing-level` | Freezing Level | ft | line | `#06b6d4` (cyan) | `altitudeLines.freezingLevelFt` |
-| `ceiling-dd` | Sounding Ceiling | ft AGL | line | `#8b5cf6` (violet) | `soundingCeilingFt` − terrain elevation |
-| `ceiling-nwp` | NWP Ceiling | ft AGL | line | `#6366f1` (indigo) | `nwpCloudDiag.ceilingFt` − terrain elevation |
+| `ceiling-dd` | Ceiling DD | ft AGL | line | `#8b5cf6` (violet) | `soundingCeilingFt` − terrain elevation |
+| `ceiling-nwp` | Ceiling NWP | ft AGL | line | `#d946ef` (fuchsia) | `nwpCloudDiag.ceilingFt` − terrain elevation |
 
 **Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion and cap display at 5000ft AGL.
 
@@ -140,7 +142,7 @@ interface RouteGraphTransform {
 
 **Lines:** Smooth monotone cubic spline (Fritsch-Carlson) connecting `(distanceNm, value)` pairs. Gaps where value is `null`. Consistent with cross-section line rendering.
 
-**Bars:** Centered on each route point, width = half-step to each neighbor. Fill color from metric definition. Opacity 0.7 for readability.
+**Bars:** Drawn from the zero line to the value, centered on each route point, width = half-step to each neighbor. Fill color from metric definition. Opacity 0.6 for readability. Zero/null values skipped.
 
 **Dual rendering:** Left metric drawn first, right metric drawn second. Both clipped to the plot area.
 
@@ -162,7 +164,7 @@ The route graph controls are rendered between the cross-section and the graph:
 - **Toggle button** (`▼ Route Graph` / `▶ Route Graph`): Shows/hides the graph canvas. State persisted to localStorage.
 - **Left dropdown:** Selects the left Y-axis metric from the registry.
 - **Right dropdown:** Selects the right Y-axis metric. Can be set to "None" to show only one metric.
-- Dropdowns populated from the metric registry automatically — new metrics appear without UI code changes.
+- Dropdowns populated from the metric registry automatically (`getMetricOptions`) — new metrics appear without UI code changes. Option labels come from i18n keys `graph.<id>`, so adding a metric also means adding its translation key.
 
 ## State Management
 

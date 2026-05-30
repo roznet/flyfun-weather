@@ -153,8 +153,8 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 
 ## Frontend Integration
 
-- **credits-adapter.ts**: `fetchCostSummary()`, `fetchTransparency()` — typed API client
-- **admin-adapter.ts**: `fetchCostReport()`, `fetchCostConfig()`, `fetchCostConfigHistory()`, `updateCostConfig()` — program report + rate-card editing
+- **adapters/credits-adapter.ts**: `fetchCostSummary()`, `fetchTransparency()` — typed API client
+- **adapters/admin-adapter.ts**: `fetchCostReport()`, `fetchCostConfig()`, `fetchCostConfigHistory()`, `updateCostConfig()` — program report + rate-card editing
 - **user-costs-main.ts**: Admin per-user cost dashboard with stacked bar chart, transaction ledger with expandable USD breakdowns
 - **admin-cost-view.ts**: Admin "Cost" tab — program report (7d/30d toggle, summary cards, fixed-line table) + rate-card editor (itemized subscription rows with live subtotal, versioned save, config history)
 - **cost-summary.html / cost-summary-main.ts**: Program cost (what it costs to run the service, fixed breakdown + composition bar + per-briefing/per-user economics) plus the viewer's own usage. Admin-gated now via `is_admin`; designed to move into a Settings tab + add a donation link + a public program endpoint later.
