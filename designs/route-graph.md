@@ -11,7 +11,7 @@ Add a configurable 2D graph below the cross-section visualization. The graph sha
 1. **X-axis alignment** — The graph's X-axis must be pixel-aligned with the cross-section above it. Same left/right margins, same `distanceToX()` transform.
 2. **Dual Y-axes** — Left Y-axis and right Y-axis, each driven by a dropdown selector.
 3. **Initial metrics** — Head/tailwind at cruise (left, line) and temperature at cruise (right, line).
-4. **Extensible metric registry** — Adding a new metric = one registry entry (id, label, unit, getValue, renderType, color). No renderer changes needed.
+4. **Extensible metric registry** — Adding a new metric = one registry entry (id, unit, getValue, renderType, color) plus a `graph.<id>` i18n key. No renderer changes needed. The display name is resolved from i18n via `getMetricLabel(id)` (there is no `label` field on the metric).
 5. **Line and bar render types** — Lines for continuous values (temperature, wind), bars for discrete/cumulative values (precipitation).
 6. **Hover overlay** — Synced with cross-section. Shows numeric value(s) at cursor position.
 7. **Show/hide toggle** — Button below the cross-section to expand/collapse the route graph.
@@ -39,9 +39,8 @@ Each metric is a self-contained definition. Adding a new metric requires only ad
 
 ```typescript
 interface RouteGraphMetric {
-  id: string;                                    // unique identifier
-  label: string;                                 // display name for dropdown
-  unit: string;                                  // axis label (e.g., "kt", "°C", "mm")
+  id: string;                                    // unique identifier (also the i18n key suffix)
+  unit: string;                                  // axis label (e.g., "kt", "°C", "mm"); a getter for region-aware units (QNH)
   renderType: 'line' | 'bar';                    // how to render
   color: string;                                 // line/bar color
   getValue: (point: VizPoint) => number | null;  // extract value from data
@@ -66,21 +65,27 @@ interface RouteGraphMetric {
 | `precipitation` | Precipitation | mm | bar | `#0ea5e9` (sky) | `model_divergence["precipitation_mm"]` |
 | `cloud-cover` | Cloud Cover | % | bar | `#6b7280` (gray) | `VizPoint.cloudCoverTotalPct` |
 | `cape` | CAPE | J/kg | bar | `#f59e0b` (amber) | `VizPoint.capeSurfaceJkg` |
+| `cin` | CIN | J/kg | bar | `#0d9488` (teal) | `VizPoint.cinSurfaceJkg` |
+| `qnh` | QNH / Altimeter | hPa / inHg | line | `#475569` (slate) | `model_divergence["pressure_msl_hpa"]` |
 | `freezing-level` | Freezing Level | ft | line | `#06b6d4` (cyan) | `altitudeLines.freezingLevelFt` |
 | `ceiling-dd` | Ceiling DD | ft AGL | line | `#8b5cf6` (violet) | `soundingCeilingFt` − terrain elevation |
 | `ceiling-nwp` | Ceiling NWP | ft AGL | line | `#d946ef` (fuchsia) | `nwpCloudDiag.ceilingFt` − terrain elevation |
 
 **Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion and cap display at 5000ft AGL.
 
+**CIN** is convention-negative (it inhibits convection), so its bars hang *below* the zero line as the "cap" beside CAPE's upward bars; it sets `showZeroLine` so the reference line is drawn at the top of the `[-300, 0]` range.
+
+**QNH is region-aware** (the only such metric). It carries canonical hPa on `VizPoint.qnhHpa` and converts at the display edge via `units.ts` (`qnhDisplayValue` / `qnhUnitLabel`): Europe shows **QNH in hPa**, the US shows **Altimeter in inHg**. Both the `unit` field (a getter) and the name (`getMetricLabel`, key `graph.altimeter` vs `graph.qnh`) switch on `getUnitsRegion()`, so the axis label, ticks, tooltip, and dropdown all agree. The model-comparison table keeps it as canonical-hPa "QNH" (advanced tier, hidden by default).
+
 ### Future Metrics (no code changes to renderer needed)
 
-- Wind speed at cruise, visibility, precipitable water, K-index, lifted index, dewpoint depression, QNH, snowfall, rain probability — each is one registry entry.
+- Wind speed at cruise, visibility, precipitable water, K-index, lifted index, dewpoint depression, snowfall, rain probability — each is one registry entry.
 
 ## Data Flow
 
 ```
-VizRouteData.points[]          (existing — headwind, crosswind, CAPE, cloud cover)
-  + RoutePointAnalysis          (model_divergence → temperature_c, precipitation_mm)
+VizRouteData.points[]          (existing — headwind, crosswind, CAPE, CIN, cloud cover)
+  + RoutePointAnalysis          (model_divergence → temperature_c, precipitation_mm, pressure_msl_hpa)
       ↓
 RouteGraphMetric.getValue(point) → number | null
       ↓
@@ -90,11 +95,12 @@ RouteGraphRenderer.render()
   └── hover overlay (synced with cross-section)
 ```
 
-**Data extraction:** `VizPoint` is extended with two new optional fields extracted from `model_divergence`:
-- `temperatureC: number | null` — surface temperature for the selected model
-- `precipitationMm: number | null` — precipitation for the selected model
+**Data extraction:** `VizPoint` carries surface fields extracted from `model_divergence` (per-model values picked by `selectedModel`):
+- `temperatureC: number | null` — surface temperature
+- `precipitationMm: number | null` — precipitation
+- `qnhHpa: number | null` — mean-sea-level pressure (the QNH proxy), canonical hPa
 
-These are extracted from `RoutePointAnalysis.model_divergence` entries where `variable === "temperature_c"` and `variable === "precipitation_mm"`, using `model_values[selectedModel]`.
+These come from `RoutePointAnalysis.model_divergence` entries where `variable` is `"temperature_c"`, `"precipitation_mm"`, or `"pressure_msl_hpa"`, using `model_values[selectedModel]`. `model_divergence` is the only per-model surface store at a route point, so any new per-model surface metric is collected there in `tasks/analyze.py` (with an agreement threshold in `analysis/comparison.py`). CAPE and CIN instead come straight off the selected model's sounding indices (`VizPoint.capeSurfaceJkg` / `cinSurfaceJkg`).
 
 ## Renderer Design
 
@@ -164,7 +170,7 @@ The route graph controls are rendered between the cross-section and the graph:
 - **Toggle button** (`▼ Route Graph` / `▶ Route Graph`): Shows/hides the graph canvas. State persisted to localStorage.
 - **Left dropdown:** Selects the left Y-axis metric from the registry.
 - **Right dropdown:** Selects the right Y-axis metric. Can be set to "None" to show only one metric.
-- Dropdowns populated from the metric registry automatically (`getMetricOptions`) — new metrics appear without UI code changes. Option labels come from i18n keys `graph.<id>`, so adding a metric also means adding its translation key.
+- Dropdowns populated from the metric registry automatically (`getMetricOptions`) — new metrics appear without UI code changes. Option labels (and the tooltip name) come from `getMetricLabel(id)` → i18n key `graph.<id>`, so adding a metric also means adding its translation key. `getMetricLabel` is the single place that can vary a name by region (QNH→Altimeter); both the dropdown and `interaction.ts` tooltip call it so they never drift.
 
 ## State Management
 
@@ -188,14 +194,17 @@ Persisted to localStorage via existing `wb_vizSettings` mechanism.
 ```
 web/ts/visualization/
 ├── route-graph/
-│   ├── metrics.ts          # Metric registry (RouteGraphMetric[])
+│   ├── metrics.ts          # Metric registry + getMetricLabel (region-aware names)
 │   ├── renderer.ts         # RouteGraphRenderer class (canvas, transform, render)
 │   ├── axes.ts             # Y-axis drawing (left + right), X grid lines
-│   └── interaction.ts      # Hover/click synced with cross-section
-├── types.ts                # Extended VizSettings, VizPoint (add temperatureC, precipitationMm)
-├── data-extract.ts         # Extract temperature/precipitation from model_divergence
+│   └── interaction.ts      # Hover/click synced with cross-section (tooltip via getMetricLabel)
+├── types.ts                # Extended VizSettings, VizPoint (temperatureC, precipitationMm, qnhHpa)
+├── data-extract.ts         # Extract temperature/precipitation/pressure_msl from model_divergence
+├── units.ts                # Region-aware QNH conversion (qnhDisplayValue / qnhUnitLabel)
 └── controls/panel.ts       # Extended with route graph toggle + dropdowns
 ```
+
+Backend per-model surface plumbing: `tasks/analyze.py` collects the divergence variable, `analysis/comparison.py` holds its agreement threshold, and the comparison-table registration lives in `web/ts/data/metrics-{catalog,display}.json` + `helpers/metrics-helper.ts` (`VARIABLE_TO_METRIC`).
 
 ## Key Choices
 
@@ -204,7 +213,8 @@ web/ts/visualization/
 - **Compact height (150px)** — The cross-section is the primary visualization. The route graph is supplementary and shouldn't dominate vertical space.
 - **No X-axis labels** — Avoids duplicate labels. The cross-section's distance axis serves both.
 - **Dual Y-axis** — Allows comparing metrics with different units/scales (wind in kt vs temperature in °C).
-- **model_divergence for surface values** — Temperature and precipitation are available in model_divergence with per-model values, avoiding backend changes.
+- **model_divergence for surface values** — Temperature, precipitation, and QNH (`pressure_msl_hpa`) are carried per-model in model_divergence. Adding QNH there meant one collector line in `analyze.py` rather than a new per-point store, at the cost of it also appearing in the comparison table (parked at advanced tier).
+- **Canonical units on VizPoint, convert at the edge** — `qnhHpa` stays in hPa; region conversion happens in `getValue`/`unit`/`getMetricLabel` via `units.ts`, so a units-preference change needs no data re-extraction and the comparison table can keep showing canonical hPa.
 
 ## References
 

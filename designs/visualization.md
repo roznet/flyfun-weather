@@ -35,7 +35,7 @@ data-extract.ts  → extractVizData() → VizRouteData
 ┌───────────────────────┬──────────────────────┬──────────────────────┐
 │  CrossSectionRenderer │  RouteGraphRenderer  │  RouteMapRenderer    │
 │  ├── axes.ts          │  ├── axes.ts         │  ├── renderer.ts     │
-│  ├── layer-registry   │  ├── metrics.ts (9)  │  ├── metrics.ts (13) │
+│  ├── layer-registry   │  ├── metrics.ts (11) │  ├── metrics.ts (13) │
 │  ├── layers/*.ts (18) │  ├── interaction.ts  │  ├── segment-style   │
 │  └── interaction.ts   │  └── constants.ts    │  ├── interaction.ts  │
 │                       │                      │  ├── altitude-slider │

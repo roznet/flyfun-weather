@@ -41,7 +41,7 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Four synchronized visualizations: canvas cross-section (~25 weather layers across 9 groups), canvas route graph (9 scalar metrics incl. ceiling-DD/NWP), Leaflet route map (13 metric-colored segment types with altitude slider and width variation), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable cross-section themes (standard, high-contrast, gramet) with cloud hatch patterns, theme preview, and theme-aware legends. Four layout modes (cross-section, compare, split, map), shared color scales, hover sync, compact/full layer mode, icing/cloud method groups. Compare mode renders one layer across all models with four band modes (overlay, overlay-soft, consensus, consensus+outlines).
+Four synchronized visualizations: canvas cross-section (~25 weather layers across 9 groups), canvas route graph (11 scalar metrics incl. CIN and region-aware QNH/Altimeter), Leaflet route map (13 metric-colored segment types with altitude slider and width variation), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable cross-section themes (standard, high-contrast, gramet) with cloud hatch patterns, theme preview, and theme-aware legends. Four layout modes (cross-section, compare, split, map), shared color scales, hover sync, compact/full layer mode, icing/cloud method groups. Compare mode renders one layer across all models with four band modes (overlay, overlay-soft, consensus, consensus+outlines).
 Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `SkewTRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 
@@ -51,7 +51,7 @@ Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `SkewT
 → Full doc: skewt-canvas.md
 
 ### route-graph
-2D chart below cross-section for scalar weather values along route. Dual Y-axes, extensible metric registry (9 metrics incl. ceiling-DD/NWP AGL), line and bar render types, hover sync with cross-section.
+2D chart below cross-section for scalar weather values along route. Dual Y-axes, extensible metric registry (11 metrics incl. CIN and region-aware QNH/Altimeter), line and bar render types, hover sync with cross-section.
 → Full doc: route-graph.md
 
 ### digest
