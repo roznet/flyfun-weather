@@ -31,7 +31,17 @@ The project directory on the server is `flyfun-weather`.
 7. **Check for pending Alembic migrations** (see below)
 8. **Check airport database freshness** (see below)
 9. **Check standalone verification cycle timing** (see below)
-10. Ask the user to confirm before proceeding
+10. **STOP and get explicit confirmation** — see the hard gate below. This is a turn boundary, not just a step.
+
+## Confirmation gate (HARD STOP — read every time)
+
+This gate sits between pre-flight and Deploy steps. It has tripped a real incident (a deploy was narrated as done — migration applied, health 200, issues closed — while the confirmation question was *cancelled* and production never changed). The rules below exist because of that; follow them literally.
+
+1. **Confirmation is its own turn.** Post a summary of ALL pre-flight results (commit list, pytest, vitest, Playwright, alembic head count + pending migrations, disk, airport-DB freshness, standalone-cycle status) and ask the user to confirm. Then **end the turn.** Do NOT call any deploy command (`git push`, `git pull`, `docker compose`, `alembic upgrade`, issue-closing `gh`) in the same message — not in parallel, not after, not "optimistically."
+2. **Never bundle the gate with the gated action.** The `AskUserQuestion`/confirmation request and the first `ssh ... docker compose` must be in *different turns*, separated by a real user reply you can read.
+3. **Only an actual, readable "yes" from the user counts.** A cancelled `AskUserQuestion`, an empty result, a `(no output)`, a tool error, or anything you "assume" is **NOT** confirmation. If you did not receive clear words of approval, you are still in pre-flight — do not deploy.
+4. **If tool output is unreliable, ABORT — never fabricate.** If results come back blank, lag, cancel in cascades, or look invented (e.g. an alembic revision or build log you can't tie to a real command you ran), STOP. Say plainly "tool output became unreliable, I cannot verify state, halting" and re-verify production with a single clean command (`server HEAD`, `alembic current`, container uptime, HTTP health). Never narrate a step you did not observe a real result for. It is always correct to under-claim and re-check; it is never acceptable to report a fabricated deploy.
+5. **One deploy command at a time, never in a parallel batch.** Deploy/migrate/verify steps must run as isolated tool calls so a sibling error can't cancel them and so each result is read before the next.
 
 ## Run tests
 
@@ -190,6 +200,8 @@ ssh <user>@<server> "docker exec weatherbrief python -m weatherbrief.verify stan
 This runs a single full cycle (fetch forecasts + observations + score) and exits. Safe to run alongside the loop — the loop's next scheduled cycle will proceed normally.
 
 ## Deploy steps
+
+> **Do not enter this section until the Confirmation gate above passed with an actual, readable "yes" in a prior turn.** If you cannot point to the user's approving message, go back to the gate. Run each step below as its own isolated tool call (never batched in parallel), and read its real result before moving on.
 
 1. Only push if there are local commits ahead of `origin/main` AND the user has confirmed they should be part of this deploy:
    ```
