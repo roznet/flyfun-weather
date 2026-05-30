@@ -544,3 +544,132 @@ same logic the briefing uses.
   drivers/suppressors.
 - `tests/test_convective.py` — regime, realizable-tier, floor, ascent, elevated,
   and loaded-gun-not-hidden coverage.
+
+---
+
+## 5. GRAMET convective "tower" vs our NWP convective-cover: different GFS fields
+
+**Date:** 2026-05-30
+**Status:** Documented as-is (no algorithm change)
+**Context:** Pilot review of `lsgs_sapre_djl_somda_vatri_dikol_lfqa-2026-05-31`
+(LSGS→LFQA, pack 2026-05-30 12:50 Z) flagged that the GRAMET's convective
+tower sits "much earlier in the flight" than where our analysis puts convective
+risk. Asked to confirm we did the time/location interpolation right. The doubt
+specifically targeted the **NWP convective** signal (the model's own convective
+scheme), which the pilot believed GRAMET renders — not the DD/CAPE thermo risk
+that drives the route-level "78% of route" advisory (see §4).
+
+### Verification — interpolation is exact, no bug
+
+The GRAMET footer cites `GFS RefTime 2026-05-30 06Z`; our pipeline used the same
+run. We re-downloaded the raw GFS GRIB2 (`TCDC@convectiveCloudLayer`, init
+2026-05-30 06 Z, f026/f027/f028 = valid 2026-05-31 08/09/10 Z) straight from
+NOAA S3 and sampled it independently at the route points.
+
+1. **Time interpolation — exact.** Each point is placed linearly by
+   distance-fraction × duration from the departure time. That matches the
+   GRAMET's *own* x-axis time labels to the minute (50 nm→08:25, 100→08:50,
+   150→09:14, 200→09:39). LSGS 08:00 Z → LFQA 10:00 Z lines up.
+2. **Location interpolation — exact.** Route-point NWP fields are sampled
+   **directly from the GFS grid at each point's lat/lon** (bilinear, 4-corner) —
+   `spatial_interpolation.py` only *gap-fills* `None`s, it does not lerp between
+   waypoints. So a value between two waypoints can legitimately exceed both (a
+   cell sitting between them). Every stored `convective_cover_pct` reproduced
+   the raw GFS to within rounding (e.g. 153 nm: 08 Z 20.5 / 09 Z 57.0 / 10 Z 4.0).
+3. **Per-point hour selection — correct.** SOMDA (186 nm) has a transient
+   54.7 % convective-cover spike at 08 Z that collapses to 0 % by 09 Z. We reach
+   SOMDA at 09:32 (→ forecast hour 10:00) and correctly read ~0 %, **not** the
+   08 Z spike — demonstrating the time selection does not smear a transient cell
+   onto a later arrival.
+
+### The finding — it's a field/interpretation difference, GFS-internal
+
+The apparent mismatch is not an error; it's two different GFS products that
+genuinely disagree on *where* convection is:
+
+- **Our `convective_cover_pct`** comes from GFS `TCDC@convectiveCloudLayer`
+  (the convective scheme's cloud fraction). Along this route at flight time it
+  is a modest ~19 % at 49–69 nm but **peaks at 53–57 % over 143–163 nm at 09 Z**,
+  in a region where parcel CAPE is actually *low* (~160–260 J/kg).
+- **The GRAMET's prominent white tower at ~50 nm** sits exactly where GFS has
+  **high CAPE (~2066 J/kg at 69 nm)** and a deep cloud column — i.e. it tracks
+  parcel buoyancy / deep-cloud depth, **not** the convective-cloud-fraction
+  scalar. Our own *thermo/CAPE* convective agrees with the GRAMET here (thermo
+  tier reads HIGH at 69 nm, early).
+
+So GRAMET's tower aligns with our CAPE-derived view (early), while our
+NWP-cover signal peaks later (~150 nm) because GFS's convective-cloud-cover
+diagnostic disagrees with its own CAPE field there.
+
+### Framing — what NWP and DD each mean
+
+The two convective methods are, by definition, two different questions:
+
+- **DD** = derived from the thermodynamic state (CAPE/CIN/LI/shear, cloud from
+  RH). "Is the column buoyantly unstable?"
+- **NWP** = what the model *natively* tells us about convection — its own
+  convective-scheme output (GFS `convective_cover_pct`; ICON/ECMWF convective
+  base/top geometry). "Is the model's own scheme producing convective cloud
+  here?"
+
+They are *supposed* to be able to disagree. This case is a textbook instance:
+GFS's native convective cloud peaks mid-route (~150 nm, low CAPE) while the
+buoyancy/deep-cloud view — which the GRAMET tower tracks — peaks early
+(~50–69 nm). Surfacing that disagreement is the **product goal**: the app exists
+to expose forecast complexity, uncertainty, and model inconsistency, and the
+DD/NWP cross-section toggle plus `dd_nwp_agreement` advisory are how a pilot
+sees it. So this divergence is the feature working, not a defect.
+
+### Decision
+
+**No code change.** `convective_cover_pct` is a faithful sample of the GFS
+convective-cloud-layer field; the time/location placement is exact, so the NWP
+signal is correctly located. The divergence from DD is real model
+inconsistency, surfaced (not hidden) — exactly what we want.
+
+**Known nuance (cross-ref §4d):** today the NWP convective *risk tier* is itself
+derived from CAPE thresholds on every model path (GFS cover branch included) —
+`convective_cover_pct` is attached as informational, and the convective base/top
+provide geometry, but the **risk level** is CAPE. So the genuinely
+model-native signal that exposes this divergence today is the `cover_pct`
+diagnostic and the cross-section NWP cloud layer, **not** the NWP risk *level*
+(which mostly tracks DD, by §4's design). Making the NWP tier itself
+cover/geometry-driven — so "NWP = native" holds end-to-end and
+`dd_nwp_agreement`'s convective category (currently near-circular) starts firing
+on real divergence — was considered here and **deferred**: the existing cover
+diagnostic + DD/NWP display already serve the goal, and a cover→risk mapping
+needs PIREP calibration (areal cover ≠ intensity; ICON/ECMWF have geometry but
+no cover). Tracked as a possible follow-up, not a correctness fix.
+
+### Implications
+
+- **Don't expect the GRAMET convective tower to match our `convective_cover_pct`
+  geographically.** GRAMET's tower is the deep-cloud/CAPE view; our cover scalar
+  is the convective-scheme fraction. They are different GFS fields and can peak
+  tens of nm apart. (Same lesson as §2's "GRAMET is a black box" for icing.)
+- **Bracketing invariant confirmed (incidental).** While investigating, the
+  serialized 24 h cross-section was seen to forward-fill a constant convective
+  cover past the last fetched native step. This is **benign**: all three GRIB
+  paths fetch a step at/after arrival — GFS/ICON via `ceil(dur)+1+extra`
+  (`compute_flight_window_hours` / `compute_icon_eu_flight_window_hours`), ECMWF
+  via `flight_end + 3 h` margin — so every consumed route point is bracketed by
+  real anchors and the forward-filled tail (hours past the flight) is never read
+  by analysis. A defensive tidy-up (set trailing *instantaneous* convective
+  fields to `None` rather than freeze them, per §3's philosophy) is deferred —
+  cosmetic unless a consumer reads the post-arrival tail.
+
+### Real-world validation needed
+
+- Lightning / radar / satellite over the LSGS→LFQA corridor on 2026-05-31:
+  did convection fire near the ~50 nm CAPE tower (early), or over the 143–163 nm
+  convective-cover band (mid-route, low CAPE), or both? This would tell us which
+  GFS field verified and whether the cover scalar is catching real elevated
+  convective cloud or a scheme artefact in a low-CAPE column.
+
+### Files (no changes)
+
+Investigation only. Relevant code: `analysis/spatial_interpolation.py`
+(gap-fill-only spatial interp), `fetch/grib/decode.py` (bilinear grid sampling),
+`fetch/grib/fill.py` (time-axis interp + trailing forward-fill),
+`analysis/sounding/convective.py` (`assess_convective_nwp` vs
+`assess_convective_thermo`).
