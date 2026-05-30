@@ -43,7 +43,8 @@
         { "id": "precipitable_water_mm", "tier": "useful" },
         { "id": "wind_direction_deg", "tier": "advanced" },
         { "id": "bulk_shear_0_6km_kt", "tier": "advanced" },
-        { "id": "max_omega_pa_s", "tier": "advanced" }
+        { "id": "max_omega_pa_s", "tier": "advanced" },
+        { "id": "qnh", "tier": "advanced" }
       ]
     }
   },

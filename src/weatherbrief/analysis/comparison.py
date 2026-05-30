@@ -30,6 +30,7 @@ DIVERGENCE_THRESHOLDS: dict[str, tuple[float, float]] = {
     "max_omega_pa_s": (0.1, 0.5),
     "snowfall_cm": (0.5, 2.0),
     "rain_mm": (1.0, 5.0),
+    "pressure_msl_hpa": (2.0, 5.0),
 }
 
 # Variables that wrap around 360 degrees

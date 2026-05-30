@@ -935,5 +935,16 @@
     "wikipedia": "https://en.wikipedia.org/wiki/Vertical_draft",
     "llm_prompt": "explain vertical velocity (omega/w) on a Skew-T side panel, how to interpret synoptic-scale lift vs subsidence, and how vertical velocity relates to cloud formation and convective initiation for GA flight planning",
     "thresholds": []
+  },
+  "qnh": {
+    "name": "QNH",
+    "unit": "hPa",
+    "vibe": "The altimeter setting along the route",
+    "primary_goal": "Show mean sea-level pressure as the QNH a pilot would set.",
+    "best_used_for": "Spotting pressure gradients along the route (where QNH falls, expect a headwind shift and worsening weather) and anticipating altimeter resets across regions. Displayed in hPa for European routes and inHg for US routes per the unit preference.",
+    "limitations": "This is the model's mean sea-level pressure, a close proxy for QNH but not the exact reported altimeter setting — for the legal setting use the destination METAR. Models smooth tight pressure features, so a sharp low may read a few hPa high.",
+    "theory": "QNH is the pressure entered into an altimeter so it reads field elevation on the ground (and altitude above sea level in flight). It is derived by reducing station pressure to mean sea level using the standard atmosphere. We surface the model's pressure_msl field, which is the same mean-sea-level reduction, as the per-model QNH proxy.",
+    "wikipedia": "https://en.wikipedia.org/wiki/QNH",
+    "thresholds": []
   }
 }

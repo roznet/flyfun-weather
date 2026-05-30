@@ -224,6 +224,9 @@ export interface VizPoint {
   // Route graph scalars (extracted from model_divergence)
   temperatureC: number | null;
   precipitationMm: number | null;
+  /** Mean sea-level pressure (hPa), used as the QNH proxy. Canonical hPa;
+   *  display-unit conversion (hPa/inHg) happens at the route-graph edge. */
+  qnhHpa: number | null;
   /**
    * Surface obscuration band (fog / low stratus). Populated when the
    * surface forecast indicates reduced visibility or near-saturated low

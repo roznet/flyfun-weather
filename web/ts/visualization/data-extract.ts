@@ -257,6 +257,7 @@ function extractPoint(
   // Extract surface values from model_divergence (per-model values)
   const temperatureC = divergenceValue(rpa, 'temperature_c', model);
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
+  const qnhHpa = divergenceValue(rpa, 'pressure_msl_hpa', model);
 
   // Prefer NWP cloud layers when available so the obscuration band top
   // matches the cloud method drawn directly above it. `??` falls back
@@ -316,6 +317,7 @@ function extractPoint(
     terrainElevationFt,
     temperatureC,
     precipitationMm,
+    qnhHpa,
     surfaceObscuration,
   };
 }

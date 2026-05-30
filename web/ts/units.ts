@@ -94,7 +94,7 @@ export function formatVisibility(
   return `${Math.round(meters)} m`;
 }
 
-/** Format an altimeter setting / QNH in hPa. (Not yet wired into surfaces.) */
+/** Format an altimeter setting / QNH in hPa. */
 export function formatQNH(
   hpa: number | null | undefined,
   region: UnitsRegion = activeRegion,
@@ -102,6 +102,21 @@ export function formatQNH(
   if (hpa == null) return '';
   if (region === 'us') return `${(hpa / HPA_PER_INHG).toFixed(2)} inHg`;
   return `${Math.round(hpa)} hPa`;
+}
+
+/** QNH display-unit label for the active (or given) region. */
+export function qnhUnitLabel(region: UnitsRegion = activeRegion): string {
+  return region === 'us' ? 'inHg' : 'hPa';
+}
+
+/** Convert a QNH in canonical hPa to the active (or given) region's display
+ *  numeric value (hPa unchanged for Europe, inHg for the US). Use this when a
+ *  numeric value is needed (e.g. axis scaling); use formatQNH for a string. */
+export function qnhDisplayValue(
+  hpa: number,
+  region: UnitsRegion = activeRegion,
+): number {
+  return region === 'us' ? hpa / HPA_PER_INHG : hpa;
 }
 
 /** Format a temperature in Celsius. (Not yet wired into surfaces.) */

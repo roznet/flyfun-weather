@@ -93,7 +93,7 @@ def _run_point_analysis(
         "lcl_altitude_ft": {},
         "k_index": {}, "total_totals": {}, "precipitable_water_mm": {},
         "lifted_index": {}, "bulk_shear_0_6km_kt": {}, "max_omega_pa_s": {},
-        "snowfall_cm": {}, "rain_mm": {},
+        "snowfall_cm": {}, "rain_mm": {}, "pressure_msl_hpa": {},
     }
 
     target_pressure = altitude_to_pressure_hpa(cruise_altitude_ft)
@@ -141,6 +141,7 @@ def _run_point_analysis(
         _collect_opt(comp, "snowfall_cm", model_key, hourly.snowfall_cm)
         _collect_opt(comp, "rain_mm", model_key, hourly.rain_mm)
         _collect_opt(comp, "freezing_level_m", model_key, hourly.freezing_level_m)
+        _collect_opt(comp, "pressure_msl_hpa", model_key, hourly.pressure_msl_hpa)
 
     # Altitude advisories
     altitude_advisories = None
