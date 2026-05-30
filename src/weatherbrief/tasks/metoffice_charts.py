@@ -7,7 +7,7 @@ per-briefing reference fields.
 
 Eligibility:
   - in_coverage: route region is Europe (reuses ``detect_region``).
-  - within_horizon: ETD <= run_cycle + 84h at refresh time.
+  - within_horizon: ETD <= run_cycle + 120h at refresh time.
 
 Bytes are NOT stored on the pack — the briefing only stores
 (run_cycle, default_chart_id, eligibility flags). The renderer reads the
@@ -73,7 +73,7 @@ def run_metoffice_charts(
     if issued is None:
         return MetofficeChartsResult(in_coverage=True)
 
-    horizon_h = max(FORECAST_OFFSETS_H.values())  # 84
+    horizon_h = max(FORECAST_OFFSETS_H.values())  # 120
     within_horizon = departure_time <= issued + timedelta(hours=horizon_h)
     if not within_horizon:
         return MetofficeChartsResult(

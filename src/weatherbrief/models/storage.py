@@ -113,7 +113,7 @@ class BriefingPackMeta(BaseModel):
     dwd_charts_within_horizon: bool = False
     # Met Office surface-pressure charts — same shape, second source.
     metoffice_charts_run_cycle: Optional[str] = None  # e.g. "2026-05-29T00Z"
-    metoffice_charts_default_id: Optional[str] = None  # "ana" | "012" .. "084"
+    metoffice_charts_default_id: Optional[str] = None  # "ana" | "012" .. "120"
     metoffice_charts_in_coverage: bool = False
     metoffice_charts_within_horizon: bool = False
 

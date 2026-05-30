@@ -34,20 +34,25 @@ from weatherbrief.fetch.metoffice_charts import (
 _GIF_BYTES = b"GIF89a" + b"x" * 64
 
 _RUN_TOKEN = "2026-05-29T0000"
-# offset (hours) -> filename HH token used in FSXX00T_<HH>.gif
+# offset (hours) -> filename HH token used in FSXX<RR>T_<HH>.gif
 _OFFSETS = {"ana": "00", "012": "12", "024": "24", "036": "36",
-            "048": "48", "060": "60", "072": "72", "084": "84"}
+            "048": "48", "060": "60", "072": "72", "096": "96", "120": "120"}
 
 
-def _gif_url(hh: str) -> str:
-    return f"{MO_BASE_URL}/{MO_STYLE}/{_RUN_TOKEN}/FSXX00T_{hh}.gif"
+def _gif_url(hh: str, run_token: str = _RUN_TOKEN) -> str:
+    # The FSXX prefix embeds the run hour: a 12Z run serves FSXX12T_<HH>.gif.
+    run_hh = run_token[-4:-2]
+    return f"{MO_BASE_URL}/{MO_STYLE}/{run_token}/FSXX{run_hh}T_{hh}.gif"
 
 
-def _index_payload(issued: str = "2026-05-29T07:30:29Z") -> dict:
+def _index_payload(
+    issued: str = "2026-05-29T07:30:29Z",
+    run_token: str = _RUN_TOKEN,
+) -> dict:
     return {
         "issued": issued,
         "products": [
-            {"data_date": "2026-05-29T00:00:00Z", "uri": _gif_url(hh)}
+            {"data_date": "2026-05-29T00:00:00Z", "uri": _gif_url(hh, run_token)}
             for hh in _OFFSETS.values()
         ],
     }
@@ -107,9 +112,9 @@ def test_select_default_nearest_offset():
 
 
 def test_select_default_skips_unavailable_offsets():
-    """A 00Z run may omit +72h/+84h — never default to a chart not fetched."""
+    """A run may omit the longest offsets — never default to a chart not fetched."""
     issued = datetime(2026, 5, 29, 0, tzinfo=timezone.utc)
-    available = {"ana", "012", "024", "036", "048", "060"}  # 072/084 missing
+    available = {"ana", "012", "024", "036", "048", "060"}  # 072+ missing
     # 75h out would normally pick 072; constrained, falls back to nearest available (060)
     assert select_default_chart_id(
         issued + timedelta(hours=75), "2026-05-29T00Z", available_ids=available
@@ -137,6 +142,19 @@ def test_fetch_index_parses_run_and_products():
     assert idx.error is None
     assert idx.run_cycle == "2026-05-29T00Z"
     assert idx.issued == datetime(2026, 5, 29, 7, 30, 29, tzinfo=timezone.utc)
+    assert {e.chart_id for e in idx.entries} == set(CHART_IDS)
+
+
+@responses.activate
+def test_fetch_index_parses_non_00z_run():
+    """Regression: a 12Z run serves FSXX12T_<HH>.gif. The offset regex must
+    match any run hour, not just FSXX00T — otherwise prod parses zero
+    products for half the day (the 12Z run is current ~evening onward)."""
+    _add_index(_index_payload(run_token="2026-05-29T1200"))
+    import requests
+    idx = fetch_index(requests.Session())
+    assert idx.error is None
+    assert idx.run_cycle == "2026-05-29T12Z"
     assert {e.chart_id for e in idx.entries} == set(CHART_IDS)
 
 

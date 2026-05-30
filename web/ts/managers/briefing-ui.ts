@@ -1333,7 +1333,8 @@ const METOFFICE_CHART_TABS: ReadonlyArray<{ id: string; label: string; offsetH: 
   { id: '048', label: '+48h', offsetH: 48 },
   { id: '060', label: '+60h', offsetH: 60 },
   { id: '072', label: '+72h', offsetH: 72 },
-  { id: '084', label: '+84h', offsetH: 84 },
+  { id: '096', label: '+96h', offsetH: 96 },
+  { id: '120', label: '+120h', offsetH: 120 },
 ];
 
 const DWD_PAGE_URL = 'https://www.dwd.de/DE/leistungen/hobbymet_wk_europa/hobbyeuropakarten.html';

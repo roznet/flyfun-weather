@@ -22,14 +22,16 @@ Met Office publishes a JSON index that names the current run directly::
 
 The run token (``2026-05-29T0000``) lives in each product URI's path; we
 normalise it to the same ``YYYY-MM-DDThhZ`` key the DWD cache uses. The
-forecast offset (hours) is parsed from the ``FSXX00T_<HH>.gif`` filename.
+forecast offset (hours) is parsed from the ``FSXX<RR>T_<HH>.gif`` filename,
+where ``<RR>`` is the run hour (``00``/``12``) and ``<HH>`` the offset — so a
+12Z run delivers ``FSXX12T_24.gif`` for its +24h chart.
 
 Cache layout::
 
     {data_dir}/metoffice_charts/
         2026-05-29T00Z/            # one subdir per run (00Z / 12Z)
             ana.gif                # +0h analysis (FSXX00T_00.gif)
-            012.gif 024.gif 036.gif 048.gif 060.gif 072.gif 084.gif
+            012.gif 024.gif 036.gif 048.gif 060.gif 072.gif 096.gif 120.gif
             meta.json              # per-chart Last-Modified, ETag, ...
         2026-05-29T12Z/
             ...
@@ -65,7 +67,7 @@ MO_PAGE_URL = "https://weather.metoffice.gov.uk/maps-and-charts/surface-pressure
 MO_INDEX_URL = f"{MO_BASE_URL}/{MO_STYLE}"
 
 # Ordered for UI tab presentation. Forecast offsets in hours; "ana" == +0h.
-CHART_IDS: tuple[str, ...] = ("ana", "012", "024", "036", "048", "060", "072", "084")
+CHART_IDS: tuple[str, ...] = ("ana", "012", "024", "036", "048", "060", "072", "096", "120")
 FORECAST_OFFSETS_H: dict[str, int] = {
     "ana": 0,
     "012": 12,
@@ -74,7 +76,8 @@ FORECAST_OFFSETS_H: dict[str, int] = {
     "048": 48,
     "060": 60,
     "072": 72,
-    "084": 84,
+    "096": 96,
+    "120": 120,
 }
 
 _TIMEOUT_SECONDS = 30
@@ -164,7 +167,10 @@ class RefreshReport:
 # ---------------------------------------------------------------------------
 
 _RUN_TOKEN_RE = re.compile(r"/(\d{4}-\d{2}-\d{2}T\d{4})/")
-_OFFSET_RE = re.compile(r"FSXX00T_(\d{2,3})\.gif$", re.IGNORECASE)
+# The two-digit token after ``FSXX`` is the *run hour* (00/06/12/18), not a
+# fixed "00" — a 12Z run delivers ``FSXX12T_<offset>.gif``. Match any run hour
+# or the cache silently parses zero products for non-00Z runs.
+_OFFSET_RE = re.compile(r"FSXX\d{2}T_(\d{2,3})\.gif$", re.IGNORECASE)
 
 
 def run_token_to_cycle(token: str) -> str | None:
@@ -274,8 +280,8 @@ def select_default_chart_id(
     forecast offset (tie-break toward the earlier offset).
 
     ``available_ids`` constrains the choice to charts that were actually
-    fetched. A 00Z run's index legitimately omits +72h/+84h (only issued at
-    1930 UTC), so without this filter we could default to an offset whose GIF
+    fetched. A run's index may legitimately omit the longest offsets (e.g.
+    +96h/+120h), so without this filter we could default to an offset whose GIF
     was never cached — the renderer would then 410 and show a blank error.
     Falls back to "ana" when no forecast charts are available.
     """
