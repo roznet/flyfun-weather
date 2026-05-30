@@ -611,7 +611,7 @@ class GatedFrontPoint:
     lat: float
     lon: float
     gradient: float        # |∇θe|  K/100km
-    delta_theta_e: float   # |θe jump| across ±window along the gradient, K
+    delta_theta_e: float   # signed θe jump (warm − cold) across ±window along ∇θe, K
     anomaly: float         # gradient − background, K/100km (NaN if no background)
 
 
@@ -693,10 +693,11 @@ def compute_background_gradient(
 
     Sampled every ``hour_stride`` hours to bound cost; the mean is dominated by
     persistent features either way (a front passing through for a few hours
-    barely moves a multi-day mean).
+    barely moves a multi-day mean). The stride is in *hours*, not array indices,
+    so it behaves the same for hourly and 3-hourly models.
     """
     hours = case.available_hours(model)
-    sampled = hours[::hour_stride] or hours
+    sampled = [h for h in hours if h % hour_stride == 0] or hours
     acc: np.ndarray | None = None
     n = 0
     for h in sampled:
@@ -873,7 +874,7 @@ def find_nearby_fronts(
     dist, cell = near
 
     trend, rate = "unknown", None
-    if approach_dh:
+    if approach_dh is not None:
         # Track the SAME front forward: find the cell at hour+dh closest to this
         # front's current position (not the nearest-to-route, which could be a
         # different front), then measure how its route distance changed. Comparing

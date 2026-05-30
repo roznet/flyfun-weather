@@ -16,6 +16,7 @@ from weatherbrief.frontal.case import Case
 from weatherbrief.frontal.route_sampling import (
     analyze_route_fronts,
     bilinear_sample,
+    compute_background_gradient,
     detect_front_crossings,
     extract_gated_fronts,
     find_nearby_fronts,
@@ -286,6 +287,22 @@ def _front_case(front_lon=4.0, amplitude=30.0, n_hours=4, drift_per_h=0.0):
     case.fields = lambda model, hour, level_hPa=None, _s=fields_by_hour: _s.get(hour)  # type: ignore
     case.available_hours = lambda model: list(range(n_hours))                          # type: ignore
     return case
+
+
+class TestBackgroundGradient:
+    def test_hour_stride_is_temporal_not_index(self):
+        """hour_stride samples every N *hours*, identical for hourly & 3-hourly."""
+        case = _front_case()
+        base_fields = case.fields
+        called: list[int] = []
+        # 3-hourly model out to +24 h.
+        case.available_hours = lambda model: [0, 3, 6, 9, 12, 15, 18, 21, 24]  # type: ignore
+        case.fields = lambda model, hour, level_hPa=None: (             # type: ignore
+            called.append(hour) or base_fields(model, 0)
+        )
+        compute_background_gradient(case, "syn", hour_stride=6)
+        # every 6 HOURS → 0,6,12,18,24  (the old hours[::6] gave only 0,18)
+        assert called == [0, 6, 12, 18, 24]
 
 
 class TestGridProximity:

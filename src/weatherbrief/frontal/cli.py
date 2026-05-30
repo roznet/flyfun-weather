@@ -2178,6 +2178,12 @@ def _cmd_route_fronts(args: argparse.Namespace) -> None:
     for r in rejected:
         print(f"  (rejected {r.name}: {r.reason})", file=sys.stderr)
     pts = [(wp.lat, wp.lon) for wp in waypoints]
+    if len(pts) < 2:
+        print(
+            f"Error: only {len(pts)} waypoint(s) survived resolution — "
+            f"need at least 2 for a route", file=sys.stderr,
+        )
+        sys.exit(1)
 
     terrain_mask = None if args.no_terrain_mask else build_terrain_mask(case.lat, case.lon)
     use_anomaly = not args.no_anomaly_filter
