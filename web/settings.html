@@ -126,6 +126,12 @@
               <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Adds a "Synoptic Forecast" tab to the Forecast page with gridded θe / TFP / advection fields (Hewson frontal-detection method). Experimental — fields are still being calibrated.</span>
             </label>
           </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="toggle-defer-model-update"> Wait for an imminent model update before sending
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">When a scheduled auto-refresh email would go out shortly before a fresh ECMWF run lands (~06:40 / 18:40 UTC), hold it a little (up to ~2.5 h) so the briefing rides the newer forecast. Only applies 2+ days before the flight — never on the day of. Off by default.</span>
+            </label>
+          </div>
         </div>
 
         <div class="section" id="autorouter-section">

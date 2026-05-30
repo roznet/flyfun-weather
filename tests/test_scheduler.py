@@ -553,3 +553,170 @@ class TestAutoRefreshGate:
         _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
 
         mock_exec.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Model-update-aware email timing (issue #192)
+# ---------------------------------------------------------------------------
+
+class TestDeferRegularForModelUpdate:
+    """Defer a regular slot to ride an imminent ECMWF full-horizon (00/12Z)
+    delivery (~06:40 / 18:40 UTC). Only ever defers, bounded, never on the day
+    of / day before the flight.
+    """
+
+    # Flight far out so the days_out >= 2 gate is satisfied unless stated.
+    FLIGHT = _utc(2026, 3, 5, 9)
+
+    def _store(self, init, next_expected, *, stale=False):
+        """Build a MarkerStore with one ECMWF marker.
+
+        ``last_check`` is real wall-clock now (not the simulated timeline) so
+        ``Marker.is_stale`` — which compares against ``datetime.now`` — reports
+        a healthy heartbeat unless ``stale=True``.
+        """
+        from weatherbrief.fetch.freshness.markers import Marker, MarkerStore
+
+        store = MarkerStore()
+        store._markers[("ecmwf:direct", "ecmwf")] = Marker(
+            source="ecmwf:direct", model="ecmwf",
+            init=init, next_expected=next_expected,
+            last_check=None if stale else datetime.now(timezone.utc),
+        )
+        return store
+
+    def _defer(self, regular, store, flight=None):
+        from weatherbrief.scheduler import _defer_regular_for_model_update
+
+        return _defer_regular_for_model_update(regular, flight or self.FLIGHT, store)
+
+    def test_just_missed_morning_defers_to_after_delivery(self):
+        # 06:00 slot, latest run is prior 18Z, 00Z lands 06:40 → defer to 07:00.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        assert self._defer(_utc(2026, 3, 1, 6), store) == _utc(2026, 3, 1, 7)
+
+    def test_just_missed_05z_within_window_defers(self):
+        # 05:00 slot is 1h40m before 06:40 — inside the 2h window → defer 07:00.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        assert self._defer(_utc(2026, 3, 1, 5), store) == _utc(2026, 3, 1, 7)
+
+    def test_evening_just_missed_defers(self):
+        # 18:00 slot, 12Z lands 18:40 → defer to 19:00.
+        store = self._store(_utc(2026, 3, 1, 0), _utc(2026, 3, 1, 18, 40))
+        assert self._defer(_utc(2026, 3, 1, 18), store) == _utc(2026, 3, 1, 19)
+
+    def test_riding_fresh_no_defer(self):
+        # 08:00 slot already past the 06:40 delivery; next full run (18:40) is
+        # well beyond the 2h window → no defer.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        assert self._defer(_utc(2026, 3, 1, 8), store) == _utc(2026, 3, 1, 8)
+
+    def test_too_early_outside_window_no_defer(self):
+        # 04:00 slot is 2h40m before 06:40 — outside the 2h window → no defer.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        assert self._defer(_utc(2026, 3, 1, 4), store) == _utc(2026, 3, 1, 4)
+
+    def test_day_of_never_defers(self):
+        # Regular slot on the flight day → timeliness wins, never defer.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40))
+        flight = _utc(2026, 3, 1, 9)
+        assert self._defer(_utc(2026, 3, 1, 6), store, flight) == _utc(2026, 3, 1, 6)
+
+    def test_day_before_never_defers(self):
+        # days_out == 1 (slot Mar 4, flight Mar 5) → never defer.
+        store = self._store(_utc(2026, 3, 3, 18), _utc(2026, 3, 4, 6, 40))
+        flight = _utc(2026, 3, 5, 9)
+        assert self._defer(_utc(2026, 3, 4, 6), store, flight) == _utc(2026, 3, 4, 6)
+
+    def test_run_already_in_hand_no_defer(self):
+        # Marker already advanced to the 00Z target → fresh data in hand.
+        store = self._store(_utc(2026, 3, 1, 0), _utc(2026, 3, 1, 12, 40))
+        assert self._defer(_utc(2026, 3, 1, 6), store) == _utc(2026, 3, 1, 6)
+
+    def test_slip_respected_small(self):
+        # 00Z running slightly late (06:55) → defer to delivery + 20m = 07:15.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 55))
+        assert self._defer(_utc(2026, 3, 1, 6), store) == _utc(2026, 3, 1, 7, 15)
+
+    def test_slip_capped_at_max_wait(self):
+        # 00Z badly slipping (10:00) → capped at regular + 2h30m = 08:30.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 10, 0))
+        assert self._defer(_utc(2026, 3, 1, 6), store) == _utc(2026, 3, 1, 8, 30)
+
+    def test_stale_marker_no_defer(self):
+        # Suspect heartbeat → can't confirm an imminent delivery → no defer.
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 1, 6, 40), stale=True)
+        assert self._defer(_utc(2026, 3, 1, 6), store) == _utc(2026, 3, 1, 6)
+
+    def test_missing_marker_no_defer(self):
+        from weatherbrief.fetch.freshness.markers import MarkerStore
+
+        assert self._defer(_utc(2026, 3, 1, 6), MarkerStore()) == _utc(2026, 3, 1, 6)
+
+
+class TestNextDueAtModelUpdate:
+    """`_next_due_at` only applies the deferral when `apply_model_update` is set,
+    and only to the regular term (never preflight).
+    """
+
+    def _store(self, init, next_expected):
+        from weatherbrief.fetch.freshness.markers import Marker, MarkerStore
+
+        store = MarkerStore()
+        store._markers[("ecmwf:direct", "ecmwf")] = Marker(
+            source="ecmwf:direct", model="ecmwf",
+            init=init, next_expected=next_expected,
+            last_check=datetime.now(timezone.utc),
+        )
+        return store
+
+    def test_null_default_snaps_out_of_dead_zone(self):
+        # Departure 07:00 → default hour 06:00 lands in the pre-delivery dead
+        # zone; with the snap it rides the 00Z run at 07:00.
+        row = _make_row(departure_time=_utc(2026, 3, 5, 7), auto_refresh_hour=None)
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 5, 6, 40))
+        now = _utc(2026, 3, 5, 5, 30)
+        due = _next_due_at(
+            row, _utc(2026, 3, 5, 7), now,
+            apply_model_update=True, store=store,
+        )
+        assert due == _utc(2026, 3, 5, 7)
+
+    def test_no_apply_leaves_slot_unchanged(self):
+        row = _make_row(departure_time=_utc(2026, 3, 5, 7), auto_refresh_hour=None)
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 5, 6, 40))
+        now = _utc(2026, 3, 5, 5, 30)
+        due = _next_due_at(
+            row, _utc(2026, 3, 5, 7), now,
+            apply_model_update=False, store=store,
+        )
+        assert due == _utc(2026, 3, 5, 6)
+
+    def test_explicit_hour_riding_fresh_not_snapped(self):
+        # Explicit 08:00 already rides the fresh 00Z run → unchanged even when
+        # the toggle is on.
+        row = _make_row(departure_time=_utc(2026, 3, 5, 9), auto_refresh_hour=8)
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 5, 6, 40))
+        now = _utc(2026, 3, 5, 5, 30)
+        due = _next_due_at(
+            row, _utc(2026, 3, 5, 9), now,
+            apply_model_update=True, store=store,
+        )
+        assert due == _utc(2026, 3, 5, 8)
+
+    def test_preflight_term_untouched_by_snap(self):
+        # A late regular hour is still capped by preflight; the snap only
+        # touches the regular term, so the result stays the preflight time.
+        row = _make_row(
+            departure_time=_utc(2026, 3, 5, 9),
+            auto_refresh_hour=14,
+            last_auto_refresh_at=_utc(2026, 3, 4, 14, 0),
+        )
+        store = self._store(_utc(2026, 2, 28, 18), _utc(2026, 3, 5, 6, 40))
+        now = _utc(2026, 3, 4, 15, 0)
+        due = _next_due_at(
+            row, _utc(2026, 3, 5, 9), now,
+            apply_model_update=True, store=store,
+        )
+        # preflight = 07:00Z on flight day, earlier than the 14:00 regular slot.
+        assert due == _utc(2026, 3, 5, 7)

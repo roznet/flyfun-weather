@@ -419,6 +419,54 @@ def run_horizon(source: str, init: datetime) -> timedelta:
     return cfg.horizon_for(init.hour)
 
 
+def max_horizon(source: str) -> timedelta:
+    """Largest forecast horizon any cycle of ``source`` ever reaches.
+
+    For sources with a per-cycle horizon dict (e.g. ECMWF 00/12 = 168h vs
+    06/18 = 90h) this is the maximum; for uniform-horizon sources it is that
+    single value.
+    """
+    cfg = SOURCE_REGISTRY[source]
+    return max(cfg.horizon_for(h) for h in cfg.cycles)
+
+
+def next_full_horizon_run(source: str, after: datetime) -> tuple[datetime, datetime]:
+    """Return ``(init, expected_delivery)`` of the next *full-horizon* run.
+
+    A "full-horizon" run is one whose forecast horizon equals
+    :func:`max_horizon` for the source — i.e. it extends the forecast as far
+    as the source ever does.  For ECMWF the 00/12Z cycles reach 168h while the
+    06/18Z cycles reach only 90h, so only 00/12Z qualify; for uniform-horizon
+    sources every cycle qualifies.
+
+    The returned run is the one with the earliest *expected delivery wallclock*
+    strictly after ``after`` (delivery = ``init + delivery_offset``).  This is
+    what the email scheduler waits on: a run that lands shortly after a regular
+    slot and would replace it with a fresher, equally-long forecast.
+
+    Waiting for a *medium*-only cycle far out would give a shorter horizon
+    (actively worse), so those are excluded here by construction.
+    """
+    cfg = SOURCE_REGISTRY[source]
+    full_h = max_horizon(source)
+    base = after.replace(hour=0, minute=0, second=0, microsecond=0)
+    best: tuple[datetime, datetime] | None = None
+    # A run's delivery offset can be several hours, so a cycle init on the
+    # previous calendar day may still deliver after ``after``; scan a small
+    # window around it and keep the earliest qualifying delivery.
+    for day in (-1, 0, 1, 2):
+        for hour in cfg.cycles:
+            init = base + timedelta(days=day, hours=hour)
+            if cfg.horizon_for(init.hour) < full_h:
+                continue
+            delivery = init + cfg.offset_for(init.hour)
+            if delivery > after and (best is None or delivery < best[1]):
+                best = (init, delivery)
+    if best is None:  # pragma: no cover - cycles always include a full run
+        raise ValueError(f"no full-horizon cycle configured for {source!r}")
+    return best
+
+
 def cycle_init_for(source: str, dt: datetime) -> datetime:
     """Return the latest cycle init at-or-before ``dt`` for ``source``."""
     cfg = SOURCE_REGISTRY[source]

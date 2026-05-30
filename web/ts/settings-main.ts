@@ -671,6 +671,10 @@ function populateAccountForm(prefs: PreferencesResponse): void {
   if (synopticToggle) {
     synopticToggle.checked = prefs.synoptic_forecast_map_enabled ?? false;
   }
+  const deferToggle = document.getElementById('toggle-defer-model-update') as HTMLInputElement;
+  if (deferToggle) {
+    deferToggle.checked = prefs.defer_email_for_model_update ?? false;
+  }
 }
 
 // --- Advisory settings rendering ---
@@ -906,10 +910,12 @@ async function handleSave(): Promise<void> {
 
     // Save account-level preferences (locale + optional services + autorouter creds in dev mode)
     const synopticEnabled = (document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement)?.checked ?? false;
+    const deferModelUpdate = (document.getElementById('toggle-defer-model-update') as HTMLInputElement)?.checked ?? false;
     const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
       locale: selectedLocale,
       units_region: selectedUnitsRegion,
       synoptic_forecast_map_enabled: synopticEnabled,
+      defer_email_for_model_update: deferModelUpdate,
     };
     if (autorouterMode === 'password') {
       const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement)?.value.trim();

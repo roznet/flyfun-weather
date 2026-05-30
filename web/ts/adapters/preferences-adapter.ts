@@ -37,6 +37,7 @@ export interface PreferencesResponse {
   locale: string;
   units_region: string;
   synoptic_forecast_map_enabled: boolean;
+  defer_email_for_model_update: boolean;
   pirep_can_view: boolean;
   pirep_can_publish: boolean;
 }
@@ -53,6 +54,7 @@ export interface PreferencesUpdate {
   locale?: string;
   units_region?: string;
   synoptic_forecast_map_enabled?: boolean;
+  defer_email_for_model_update?: boolean;
 }
 
 export async function fetchPreferences(): Promise<PreferencesResponse> {

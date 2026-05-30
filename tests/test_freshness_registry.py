@@ -11,7 +11,9 @@ from weatherbrief.fetch.freshness.registry import (
     cycle_init_for,
     expected_delivery_for_init,
     initial_marker_for,
+    max_horizon,
     next_cycle_init_after,
+    next_full_horizon_run,
     next_run_after,
     run_horizon,
 )
@@ -171,3 +173,58 @@ def test_each_source_has_sane_offsets(key):
         assert timedelta(minutes=30) <= off <= timedelta(hours=12)
         h = cfg.horizon_for(cycle)
         assert h >= timedelta(hours=24)
+
+
+# ---------------------------------------------------------------------------
+# max_horizon / next_full_horizon_run (issue #192)
+# ---------------------------------------------------------------------------
+
+
+class TestMaxHorizon:
+    def test_ecmwf_direct_is_full_168h(self):
+        # 00/12Z reach 168h; 06/18Z only 90h — the max is 168h.
+        assert max_horizon("ecmwf:direct") == timedelta(hours=168)
+
+    def test_uniform_horizon_source(self):
+        assert max_horizon("gfs:noaa") == timedelta(hours=384)
+
+
+class TestNextFullHorizonRun:
+    """The big-run selector the email scheduler waits on (ECMWF 00/12Z)."""
+
+    def test_excludes_medium_cycles_picks_next_00z(self):
+        # A 06:00 slot: the imminent full-horizon run is 00Z (delivers 06:40),
+        # NOT the 06Z medium cycle (90h, delivers 12:40).
+        init, delivery = next_full_horizon_run("ecmwf:direct", _utc(2026, 3, 1, 6))
+        assert init == _utc(2026, 3, 1, 0)
+        assert delivery == _utc(2026, 3, 1, 6, 40)
+
+    def test_after_morning_delivery_next_is_12z(self):
+        # An 08:00 slot is past the 06:40 (00Z) delivery; the next full-horizon
+        # run is 12Z (delivers 18:40) — the 06Z medium run is skipped.
+        init, delivery = next_full_horizon_run("ecmwf:direct", _utc(2026, 3, 1, 8))
+        assert init == _utc(2026, 3, 1, 12)
+        assert delivery == _utc(2026, 3, 1, 18, 40)
+
+    def test_evening_slot_picks_12z(self):
+        init, delivery = next_full_horizon_run("ecmwf:direct", _utc(2026, 3, 1, 18))
+        assert init == _utc(2026, 3, 1, 12)
+        assert delivery == _utc(2026, 3, 1, 18, 40)
+
+    def test_late_evening_rolls_to_next_day_00z(self):
+        # After the 18:40 (12Z) delivery, the next full run is tomorrow's 00Z.
+        init, delivery = next_full_horizon_run("ecmwf:direct", _utc(2026, 3, 1, 19))
+        assert init == _utc(2026, 3, 2, 0)
+        assert delivery == _utc(2026, 3, 2, 6, 40)
+
+    def test_delivery_strictly_after_slot(self):
+        # A slot exactly at a delivery time gets the *next* run, not that one.
+        _, delivery = next_full_horizon_run("ecmwf:direct", _utc(2026, 3, 1, 6, 40))
+        assert delivery == _utc(2026, 3, 1, 18, 40)
+
+    def test_uniform_horizon_every_cycle_qualifies(self):
+        # GFS has a single horizon, so every cycle is "full"; next delivery
+        # after a 04:00 slot is the 00Z run (00Z + 5h = 05:00).
+        init, delivery = next_full_horizon_run("gfs:noaa", _utc(2026, 3, 1, 4))
+        assert init == _utc(2026, 3, 1, 0)
+        assert delivery == _utc(2026, 3, 1, 5)

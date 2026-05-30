@@ -191,6 +191,8 @@ Background scheduler (`scheduler.py`) polls every 10 minutes for flights with `a
 
 **Scheduling formula**: `next_due = min(next_regular, flight_start − 2h)` where `next_regular` is the next occurrence of the user's preferred hour (`auto_refresh_hour`, defaulting to `departure_time.hour − 1`) after the last refresh.
 
+**Model-update-aware timing (issue #192)**: the `next_regular` term may be *deferred* a bounded amount so a briefing rides an imminent horizon-extending model run instead of being stale-at-birth. `_defer_regular_for_model_update` (in `scheduler.py`) consults the freshness `MarkerStore` for the next ECMWF full-horizon (00/12Z, 168h) delivery (~06:40 / 18:40 UTC; the 06/18Z 90h cycles are excluded via `registry.next_full_horizon_run`). If the regular slot falls within `_MODEL_UPDATE_WAIT_WINDOW` (2h) *before* that delivery, the slot is pushed to `delivery + 20m`, capped at `slot + 2h30m` (so a slipping run never delays indefinitely). It **only ever defers**, never touches the preflight term, and is gated to slots `≥ 2` calendar days before the flight (never day-of / day-before — timeliness wins). Two levers drive whether it applies: the silent NULL-`auto_refresh_hour` default (snaps the `departure − 1` majority out of the pre-delivery dead-zone) and the opt-in account toggle `defer_email_for_model_update` (default off) for explicit-hour users.
+
 **Behavior**:
 - Skips flights whose start time has passed
 - Checks data freshness before refreshing (skips if models unchanged)
