@@ -18,18 +18,39 @@ Output shape matches the design doc §Phase A:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 import numpy as np
 
 from weatherbrief.frontal.case import Case
-from weatherbrief.frontal.detect import (
-    compute_frontal_zones,
-    compute_hewson_diagnostics,
+from weatherbrief.frontal.gates import FrontGateConfig
+from weatherbrief.frontal.sources import (
+    CaseFieldSource,
+    HewsonFieldSource,
+    HewsonGrids,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _as_source(
+    src: HewsonFieldSource | Case,
+    terrain_mask: np.ndarray | None = None,
+) -> HewsonFieldSource:
+    """Adapt a bare :class:`Case` to a :class:`CaseFieldSource`.
+
+    The detection functions all take a :class:`HewsonFieldSource`, but a great
+    deal of existing code (the ``route-hewson`` / ``route-fronts`` CLI, Phase A
+    tests, calibration scripts) calls them with a raw ``Case``. Auto-wrapping
+    keeps those call sites working while the production pipeline passes a
+    :class:`~weatherbrief.frontal.sources.SnapshotFieldSource`. When a source is
+    passed directly it already owns its terrain mask, so the ``terrain_mask``
+    argument is ignored in that case.
+    """
+    if isinstance(src, HewsonFieldSource):
+        return src
+    return CaseFieldSource(src, terrain_mask=terrain_mask)
 
 
 # Diagnostic field keys exposed per waypoint. `theta_e` is the raw
@@ -44,22 +65,8 @@ _FIELD_KEYS = (
 )
 
 
-@dataclass(frozen=True)
-class _HourGrids:
-    """Per-hour diagnostic grids + raw theta_e, keyed under _FIELD_KEYS.
-
-    Tendency is filled in separately because it needs adjacent hours.
-    """
-    theta_e: np.ndarray
-    gradient: np.ndarray
-    tfp: np.ndarray
-    neg_laplacian: np.ndarray
-    advection: np.ndarray
-    tendency: np.ndarray  # NaN-filled if neither neighbour is available
-
-
 def sample_hewson_at_route(
-    case: Case,
+    source: HewsonFieldSource | Case,
     model: str,
     waypoints: Sequence[tuple[float, float]],
     hours: Sequence[float] | float | None = None,
@@ -71,8 +78,9 @@ def sample_hewson_at_route(
 
     Parameters
     ----------
-    case : loaded Case (see `load_case`).
-    model : model key present in the case (e.g. "era5", "ecmwf").
+    source : a :class:`HewsonFieldSource` (snapshot or case-backed) or a bare
+        :class:`Case` (auto-wrapped in a ``CaseFieldSource``).
+    model : model key present in the source (e.g. "era5", "ecmwf").
     waypoints : iterable of (lat_deg, lon_deg) pairs.
     hours : forecast hour(s) at which to sample. One of:
         - None  → sample all waypoints at hour 0
@@ -93,21 +101,22 @@ def sample_hewson_at_route(
     Values are NaN when a waypoint sits outside the grid or the
     requested hour is outside the available range.
     """
+    source = _as_source(source, terrain_mask)
     wps = [(float(la), float(lo)) for la, lo in waypoints]
     hour_list = _normalize_hours(hours, len(wps))
 
-    if model not in case.models:
+    if model not in source.models:
         raise ValueError(
-            f"model {model!r} not in case (available: {case.models})"
+            f"model {model!r} not in source (available: {source.models})"
         )
 
-    avail_hours = case.available_hours(model)
+    avail_hours = source.available_hours(model)
     if not avail_hours:
-        raise ValueError(f"case has no available hours for model {model!r}")
+        raise ValueError(f"source has no available hours for model {model!r}")
 
-    # Unique integer hours we need to compute diagnostics for. For a
-    # fractional target hour h, we need ⌊h⌋ and ⌈h⌉ (both must be in
-    # avail_hours for the sample to be valid).
+    # Unique integer hours we need to fetch grids for. For a fractional target
+    # hour h, we need the two bounding available hours (both must be present for
+    # the sample to be valid).
     needed: set[int] = set()
     for h in hour_list:
         if h is None:
@@ -118,11 +127,14 @@ def sample_hewson_at_route(
         if hi is not None:
             needed.add(hi)
 
-    grids_by_hour: dict[int, _HourGrids] = {
-        h: _compute_hour_grids(case, model, h, avail_hours, terrain_mask, level_hPa)
-        for h in sorted(needed)
-    }
+    grids_by_hour: dict[int, HewsonGrids] = {}
+    for h in sorted(needed):
+        grids = source.grids_at_hour(model, h, level_hPa)
+        if grids is None:
+            raise ValueError(f"grids missing for model={model!r} hour={h}")
+        grids_by_hour[h] = grids
 
+    lat_axis, lon_axis = source.lat, source.lon
     results: list[dict] = []
     for (wp_lat, wp_lon), h in zip(wps, hour_list):
         entry: dict = {"lat": wp_lat, "lon": wp_lon, "hour": h}
@@ -140,13 +152,13 @@ def sample_hewson_at_route(
             continue
 
         if lo == hi:
-            sample = _sample_grids(grids_by_hour[lo], case.lat, case.lon,
+            sample = _sample_grids(grids_by_hour[lo], lat_axis, lon_axis,
                                    wp_lat, wp_lon)
         else:
             w = (h - lo) / (hi - lo)
-            s_lo = _sample_grids(grids_by_hour[lo], case.lat, case.lon,
+            s_lo = _sample_grids(grids_by_hour[lo], lat_axis, lon_axis,
                                  wp_lat, wp_lon)
-            s_hi = _sample_grids(grids_by_hour[hi], case.lat, case.lon,
+            s_hi = _sample_grids(grids_by_hour[hi], lat_axis, lon_axis,
                                  wp_lat, wp_lon)
             sample = {k: (1.0 - w) * s_lo[k] + w * s_hi[k] for k in _FIELD_KEYS}
 
@@ -193,77 +205,14 @@ def _bracket(
     return max(lo_candidates), min(hi_candidates)
 
 
-def _compute_hour_grids(
-    case: Case,
-    model: str,
-    hour: int,
-    avail_hours: list[int],
-    terrain_mask: np.ndarray | None,
-    level_hPa: int | None = None,
-) -> _HourGrids:
-    """Compute diagnostic grids + tendency for one integer hour."""
-    fields = case.fields(model, hour, level_hPa)
-    if fields is None:
-        raise ValueError(f"fields missing for model={model!r} hour={hour}")
-
-    diag = compute_hewson_diagnostics(
-        fields["theta_e"], case.lat, case.lon,
-        u=fields["u850"], v=fields["v850"],
-        terrain_mask=terrain_mask,
-    )
-
-    return _HourGrids(
-        theta_e=fields["theta_e"],
-        gradient=diag["gradient"],
-        tfp=diag["tfp"],
-        neg_laplacian=diag["neg_laplacian"],
-        advection=diag["advection"],
-        tendency=_tendency_grid(case, model, hour, avail_hours, level_hPa),
-    )
-
-
-def _tendency_grid(
-    case: Case,
-    model: str,
-    hour: int,
-    avail_hours: list[int],
-    level_hPa: int | None = None,
-) -> np.ndarray:
-    """∂θe/∂t at `hour`, using centered/forward/backward diff.
-
-    Mirrors the fallback logic in `_cmd_plot_hewson`: prefer centered
-    difference, fall back to one-sided at the ends of the range. Returns
-    a NaN-filled grid when neither neighbour is available.
-    """
-    prev_h = max((h for h in avail_hours if h < hour), default=None)
-    next_h = min((h for h in avail_hours if h > hour), default=None)
-
-    if prev_h is not None and next_h is not None:
-        f_prev = case.fields(model, prev_h, level_hPa)["theta_e"]
-        f_next = case.fields(model, next_h, level_hPa)["theta_e"]
-        return (f_next - f_prev) / (next_h - prev_h)
-    if next_h is not None:
-        f_here = case.fields(model, hour, level_hPa)["theta_e"]
-        f_next = case.fields(model, next_h, level_hPa)["theta_e"]
-        return (f_next - f_here) / (next_h - hour)
-    if prev_h is not None:
-        f_prev = case.fields(model, prev_h, level_hPa)["theta_e"]
-        f_here = case.fields(model, hour, level_hPa)["theta_e"]
-        return (f_here - f_prev) / (hour - prev_h)
-
-    # Single hour in the case — no tendency possible
-    shape = case.fields(model, hour, level_hPa)["theta_e"].shape
-    return np.full(shape, np.nan, dtype=np.float64)
-
-
 def _sample_grids(
-    grids: _HourGrids,
+    grids: HewsonGrids,
     lat_axis: np.ndarray,
     lon_axis: np.ndarray,
     wp_lat: float,
     wp_lon: float,
 ) -> dict[str, float]:
-    """Bilinear sample every field at one waypoint."""
+    """Bilinear sample every diagnostic field at one waypoint."""
     return {
         k: bilinear_sample(getattr(grids, k), lat_axis, lon_axis, wp_lat, wp_lon)
         for k in _FIELD_KEYS
@@ -405,39 +354,92 @@ def _airmass_delta(
     return float(theta_after - theta_before)
 
 
-def detect_front_crossings(
+# ---------------------------------------------------------------------------
+# Candidate / decision split
+#
+# The on-track locator is factored into three stages so the same expensive
+# sampling can be re-scored against many gate configs with zero re-sampling
+# (cheap calibration sweeps), and so every candidate records *why* it was
+# accepted or rejected and by what margin:
+#
+#   1. sample once          (sample_hewson_at_route on a densified route)
+#   2. generate candidates  (every TFP zero-crossing, carrying raw fields)
+#   3. apply a gate config  (FrontDecision per candidate: accepted / rejected_by)
+#
+# accepted decisions → FrontCrossing (merged within merge_km).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FrontCandidate:
+    """An *unfiltered* TFP zero-crossing along the route.
+
+    Carries the raw fields interpolated to the zero point plus the θe jump
+    measured across the generation window — everything a gate config needs to
+    accept/reject without touching the samples again. Distances are along-route
+    km from the first waypoint.
+    """
+    lat: float
+    lon: float
+    distance_km: float
+    gradient: float        # |∇θe|  K/100km
+    neg_laplacian: float   # −∇²θe  K/(100km)²  (sharpness, diagnostic only)
+    advection: float       # −V·∇θe  K/h
+    tfp_before: float
+    tfp_after: float
+    delta_theta_e: float   # θe(after) − θe(before) across the window, K
+    airmass_window_km: float  # window the Δθe above was measured across
+
+
+@dataclass(frozen=True)
+class FrontDecision:
+    """The verdict of one :class:`FrontGateConfig` on one :class:`FrontCandidate`.
+
+    ``rejected_by`` is the *first* acceptance gate the candidate failed
+    (``"gradient"`` or ``"delta_theta_e"``), or ``None`` when accepted.
+    ``margins`` gives each gate's signed slack (value − threshold; ≥ 0 means
+    the gate passed) so a calibrator can read "rejected: Δθe 4.2 K vs 5.0 gate"
+    straight off the trace. ``kind`` / ``intensity`` are always populated (they
+    are labels, computed regardless of acceptance).
+    """
+    candidate: FrontCandidate
+    accepted: bool
+    rejected_by: str | None
+    margins: dict[str, float]
+    kind: str              # "cold" | "warm" | "quasi-stationary"
+    intensity: str         # "significant" | "classical" | "sharp"
+
+    def to_crossing(self) -> FrontCrossing:
+        """Project an accepted decision onto the public :class:`FrontCrossing`."""
+        c = self.candidate
+        return FrontCrossing(
+            lat=c.lat, lon=c.lon, distance_km=c.distance_km,
+            gradient=c.gradient, neg_laplacian=c.neg_laplacian,
+            advection=c.advection, tfp_before=c.tfp_before,
+            tfp_after=c.tfp_after, delta_theta_e=c.delta_theta_e,
+            kind=self.kind, intensity=self.intensity,
+        )
+
+
+def generate_front_candidates(
     samples: Sequence[dict],
     *,
-    gradient_min: float = _DEFAULT_GRADIENT_MIN,
-    delta_theta_e_min: float = _DEFAULT_DELTA_THETA_E_MIN,
-    advection_min: float = _DEFAULT_ADVECTION_MIN,
-    merge_km: float = _DEFAULT_MERGE_KM,
     airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
-) -> list[FrontCrossing]:
-    """Locate front crossings in an ordered, densely-sampled route series.
+) -> list[FrontCandidate]:
+    """Every TFP zero-crossing in an ordered route series, **ungated**.
 
-    ``samples`` is an ordered list of dicts (one per dense route point), each
-    carrying at least ``lat, lon, distance_km, theta_e, gradient, tfp,
-    neg_laplacian, advection`` — the output shape of
-    :func:`sample_hewson_at_route` on a densified route, augmented with
-    ``distance_km``. Source-agnostic: a calibration ``Case`` or a live
-    precompute NPZ can both feed it.
+    ``samples`` is one dict per dense route point carrying at least ``lat, lon,
+    distance_km, theta_e, gradient, tfp, neg_laplacian, advection`` — the output
+    of :func:`sample_hewson_at_route` on a densified route, augmented with
+    ``distance_km``. Source-agnostic: a case-backed or snapshot-backed sampler
+    feeds it identically.
 
-    A crossing is a TFP sign change between adjacent samples whose interpolated
-    zero point clears the gradient (magnitude) gate AND whose θe jump across
-    ±``airmass_window_km`` clears the air-mass-jump gate. This is the Hewson
-    locator restricted to the route: the gradient gate rejects weak/dry
-    boundaries, the Δθe gate rejects gradient *cols* (which have a strong local
-    gradient but no net change of air mass). Adjacent surviving crossings within
-    ``merge_km`` are collapsed to the strongest (one physical front can straddle
-    several dense steps).
-
-    Note the air-mass-jump gate replaced an earlier −∇²θe "sharpness" gate: −∇²θe
-    is ≈0 at the TFP zero by construction, so gating on it there suppressed real
-    fronts (see the module-level threshold comment). −∇²θe is still reported on
-    each :class:`FrontCrossing` for diagnostics.
+    The θe jump is measured across ±``airmass_window_km`` here (a single ~15 km
+    step understates the air-mass contrast a pilot flies through), so a sweep
+    that only varies the threshold gates can reuse one candidate set; a sweep
+    that varies the *window* must regenerate.
     """
-    raw: list[FrontCrossing] = []
+    out: list[FrontCandidate] = []
     for a, b in zip(samples[:-1], samples[1:]):
         ta, tb = a["tfp"], b["tfp"]
         if not (np.isfinite(ta) and np.isfinite(tb)):
@@ -447,7 +449,6 @@ def detect_front_crossings(
         if ta * tb >= 0.0:  # no sign change → no zero-crossing on this step
             continue
 
-        # Linear interpolation fraction to the TFP zero between a and b.
         denom = ta - tb
         frac = ta / denom if denom != 0.0 else 0.5
 
@@ -456,39 +457,121 @@ def detect_front_crossings(
             return float(va + frac * (vb - va))
 
         grad = _interp("gradient")
-        if not np.isfinite(grad) or grad < gradient_min:
-            continue
-
+        if not np.isfinite(grad):
+            continue  # can't evaluate any gate without a finite gradient
         dist = _interp("distance_km")
-        delta_theta_e = _airmass_delta(samples, dist, airmass_window_km)
-        if not np.isfinite(delta_theta_e) or abs(delta_theta_e) < delta_theta_e_min:
-            continue
-
-        adv = _interp("advection")
-        if adv > advection_min:
-            kind = "warm"
-        elif adv < -advection_min:
-            kind = "cold"
-        else:
-            kind = "quasi-stationary"
-
-        raw.append(
-            FrontCrossing(
+        out.append(
+            FrontCandidate(
                 lat=_interp("lat"),
                 lon=_interp("lon"),
                 distance_km=dist,
                 gradient=grad,
                 neg_laplacian=_interp("neg_laplacian"),
-                advection=adv,
+                advection=_interp("advection"),
                 tfp_before=float(ta),
                 tfp_after=float(tb),
-                delta_theta_e=delta_theta_e,
-                kind=kind,
-                intensity=_intensity_label(grad),
+                delta_theta_e=_airmass_delta(samples, dist, airmass_window_km),
+                airmass_window_km=airmass_window_km,
             )
         )
+    return out
 
-    return _merge_crossings(raw, merge_km)
+
+def _classify_kind(advection: float, advection_min: float) -> str:
+    if advection > advection_min:
+        return "warm"
+    if advection < -advection_min:
+        return "cold"
+    return "quasi-stationary"
+
+
+def apply_gate_config(
+    candidates: Sequence[FrontCandidate],
+    config: FrontGateConfig,
+) -> list[FrontDecision]:
+    """Score each candidate against ``config`` → one :class:`FrontDecision` each.
+
+    Acceptance is the AND of the magnitude gate (|∇θe| ≥ ``gradient_min`` — a
+    significant air-mass boundary) and the air-mass-jump gate (|Δθe| ≥
+    ``delta_theta_e_min`` — a genuine change of air mass, not a gradient col).
+    The first failing gate is recorded in ``rejected_by``. Classification
+    (``advection_min``) and intensity (from |∇θe|) are labels only and reject
+    nothing.
+
+    The −∇²θe "sharpness" gate was deliberately *not* reinstated: −∇²θe ≈ 0 at
+    the TFP zero by construction, so gating on it there suppresses real fronts
+    (verified on the 2026-05-31 Channel front). It is still reported per
+    candidate as a diagnostic.
+    """
+    decisions: list[FrontDecision] = []
+    for c in candidates:
+        delta = c.delta_theta_e
+        margins = {
+            "gradient": c.gradient - config.gradient_min,
+            "delta_theta_e": (
+                abs(delta) - config.delta_theta_e_min
+                if np.isfinite(delta) else float("nan")
+            ),
+        }
+        rejected_by: str | None = None
+        if c.gradient < config.gradient_min:
+            rejected_by = "gradient"
+        elif not np.isfinite(delta) or abs(delta) < config.delta_theta_e_min:
+            rejected_by = "delta_theta_e"
+        decisions.append(
+            FrontDecision(
+                candidate=c,
+                accepted=rejected_by is None,
+                rejected_by=rejected_by,
+                margins=margins,
+                kind=_classify_kind(c.advection, config.advection_min),
+                intensity=_intensity_label(c.gradient),
+            )
+        )
+    return decisions
+
+
+def decisions_to_crossings(
+    decisions: Sequence[FrontDecision],
+    merge_km: float = _DEFAULT_MERGE_KM,
+) -> list[FrontCrossing]:
+    """Accepted decisions → merged :class:`FrontCrossing` list."""
+    accepted = [d.to_crossing() for d in decisions if d.accepted]
+    return _merge_crossings(accepted, merge_km)
+
+
+def detect_front_crossings(
+    samples: Sequence[dict],
+    *,
+    gradient_min: float = _DEFAULT_GRADIENT_MIN,
+    delta_theta_e_min: float = _DEFAULT_DELTA_THETA_E_MIN,
+    advection_min: float = _DEFAULT_ADVECTION_MIN,
+    merge_km: float = _DEFAULT_MERGE_KM,
+    airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
+    config: FrontGateConfig | None = None,
+) -> list[FrontCrossing]:
+    """Locate accepted front crossings in a densely-sampled route series.
+
+    Thin convenience wrapper over the candidate/decision split:
+    :func:`generate_front_candidates` → :func:`apply_gate_config` →
+    :func:`decisions_to_crossings`. Pass a :class:`FrontGateConfig` to gate with
+    a named recipe, or rely on the individual keyword gates (kept for backward
+    compatibility with existing callers/tests). When both are given the explicit
+    ``config`` wins.
+    """
+    if config is None:
+        config = FrontGateConfig(
+            gradient_min=gradient_min,
+            delta_theta_e_min=delta_theta_e_min,
+            advection_min=advection_min,
+            merge_km=merge_km,
+            airmass_window_km=airmass_window_km,
+        )
+    candidates = generate_front_candidates(
+        samples, airmass_window_km=config.airmass_window_km,
+    )
+    decisions = apply_gate_config(candidates, config)
+    return decisions_to_crossings(decisions, config.merge_km)
 
 
 def _merge_crossings(
@@ -514,8 +597,41 @@ def _merge_crossings(
     return merged
 
 
+def evaluate_route_fronts(
+    source: HewsonFieldSource | Case,
+    model: str,
+    waypoints: Sequence[tuple[float, float]],
+    hour: float,
+    config: FrontGateConfig,
+    *,
+    terrain_mask: np.ndarray | None = None,
+) -> list[FrontDecision]:
+    """Densify → sample → generate candidates → score against ``config``.
+
+    Returns the full per-candidate decision trace (accepted *and* rejected),
+    using ``config``'s level / step / window. Callers wanting just the accepted
+    crossings pass the result through :func:`decisions_to_crossings`; calibration
+    sweeps keep the trace and re-score the same candidate set with
+    :func:`apply_gate_config`.
+    """
+    dense = densify_route(waypoints, step_km=config.step_km)
+    samples = sample_hewson_at_route(
+        source, model,
+        [(la, lo) for la, lo, _ in dense],
+        hours=hour,
+        level_hPa=config.level_hPa,
+        terrain_mask=terrain_mask,
+    )
+    for s, (_, _, dist_km) in zip(samples, dense):
+        s["distance_km"] = dist_km
+    candidates = generate_front_candidates(
+        samples, airmass_window_km=config.airmass_window_km,
+    )
+    return apply_gate_config(candidates, config)
+
+
 def find_route_fronts(
-    case: Case,
+    source: HewsonFieldSource | Case,
     model: str,
     waypoints: Sequence[tuple[float, float]],
     hour: float,
@@ -523,17 +639,27 @@ def find_route_fronts(
     level_hPa: int | None = None,
     step_km: float = _DEFAULT_STEP_KM,
     terrain_mask: np.ndarray | None = None,
+    config: FrontGateConfig | None = None,
     **detect_kwargs,
 ) -> list[FrontCrossing]:
     """End-to-end: densify a route, sample Hewson fields, detect front crossings.
 
     Convenience orchestrator over :func:`densify_route`,
-    :func:`sample_hewson_at_route`, and :func:`detect_front_crossings`. Extra
-    keyword args are forwarded to the detector (gradient_min, etc.).
+    :func:`sample_hewson_at_route`, and the candidate/decision split. Accepts a
+    :class:`FrontGateConfig` (preferred) or the legacy individual keyword gates
+    (forwarded to :func:`detect_front_crossings` for backward compatibility).
     """
+    if config is not None:
+        return decisions_to_crossings(
+            evaluate_route_fronts(
+                source, model, waypoints, hour, config,
+                terrain_mask=terrain_mask,
+            ),
+            config.merge_km,
+        )
     dense = densify_route(waypoints, step_km=step_km)
     samples = sample_hewson_at_route(
-        case, model,
+        source, model,
         [(la, lo) for la, lo, _ in dense],
         hours=hour,
         level_hPa=level_hPa,
@@ -638,15 +764,24 @@ class FrontProximity:
 
 @dataclass(frozen=True)
 class RouteFrontAnalysis:
-    """Full per-route frontal picture for one model at one valid hour."""
+    """Full per-route frontal picture for one model at one valid hour.
+
+    ``decisions`` is the on-track candidate/decision trace (accepted *and*
+    rejected) and ``config`` is the gate recipe that produced this analysis —
+    both stamped in for reproducibility and so a calibrator can read why each
+    candidate passed or failed.
+    """
     model: str
     hour: float
     crossings: list[FrontCrossing]      # fronts the track crosses
     nearest: FrontProximity | None      # nearest front (may be on- or off-track)
+    level_hPa: int = 850
+    config: FrontGateConfig = field(default_factory=FrontGateConfig)
+    decisions: list[FrontDecision] = field(default_factory=list)
 
 
 def _hewson_grids_at(
-    case: Case,
+    source: HewsonFieldSource | Case,
     model: str,
     hour: float,
     *,
@@ -655,63 +790,52 @@ def _hewson_grids_at(
 ) -> dict | None:
     """Hewson diagnostic grids (gradient, tfp, dT_dx, dT_dy, theta_e) at a
     fractional hour, linearly interpolated between bounding available hours.
-    Returns None when the hour is outside the case range.
+    Returns None when the hour is outside the source range.
     """
-    avail = case.available_hours(model)
+    source = _as_source(source, terrain_mask)
+    avail = source.available_hours(model)
     lo, hi = _bracket(avail, hour)
     if lo is None or hi is None:
         return None
 
-    def _diag(h: int) -> dict:
-        f = case.fields(model, h, level_hPa)
-        d = compute_hewson_diagnostics(
-            f["theta_e"], case.lat, case.lon,
-            u=f["u850"], v=f["v850"], terrain_mask=terrain_mask,
-        )
+    def _diag(h: int) -> dict | None:
+        g = source.grids_at_hour(model, h, level_hPa)
+        if g is None:
+            return None
         return {
-            "gradient": d["gradient"], "tfp": d["tfp"],
-            "dT_dx": d["dT_dx"], "dT_dy": d["dT_dy"], "theta_e": f["theta_e"],
+            "gradient": g.gradient, "tfp": g.tfp,
+            "dT_dx": g.dT_dx, "dT_dy": g.dT_dy, "theta_e": g.theta_e,
         }
 
     if lo == hi:
         return _diag(lo)
-    w = (hour - lo) / (hi - lo)
     g0, g1 = _diag(lo), _diag(hi)
+    if g0 is None or g1 is None:
+        return None
+    w = (hour - lo) / (hi - lo)
     return {k: (1.0 - w) * g0[k] + w * g1[k] for k in g0}
 
 
 def compute_background_gradient(
-    case: Case,
+    source: HewsonFieldSource | Case,
     model: str,
     *,
     level_hPa: int | None = None,
     terrain_mask: np.ndarray | None = None,
     hour_stride: int = 6,
 ) -> np.ndarray:
-    """Time-mean |∇θe| over the case's forecast hours — the persistent
+    """Time-mean |∇θe| over the source's forecast hours — the persistent
     (orographic / sea-land) background used to anomaly-filter route fronts.
 
-    Sampled every ``hour_stride`` hours to bound cost; the mean is dominated by
-    persistent features either way (a front passing through for a few hours
-    barely moves a multi-day mean). The stride is in *hours*, not array indices,
-    so it behaves the same for hourly and 3-hourly models.
+    Delegates to :meth:`HewsonFieldSource.background_gradient`; kept as a
+    module-level function for the existing callers (and so a bare ``Case`` is
+    auto-wrapped). The stride is in *hours*, not array indices, so it behaves
+    the same for hourly and 3-hourly sources.
     """
-    hours = case.available_hours(model)
-    sampled = [h for h in hours if h % hour_stride == 0] or hours
-    acc: np.ndarray | None = None
-    n = 0
-    for h in sampled:
-        f = case.fields(model, h, level_hPa)
-        if f is None:
-            continue
-        g = compute_frontal_zones(
-            f["theta_e"], case.lat, case.lon, terrain_mask=terrain_mask,
-        )["gradient"]
-        acc = g if acc is None else acc + g
-        n += 1
-    if acc is None or n == 0:
-        return np.zeros((len(case.lat), len(case.lon)))
-    return acc / n
+    source = _as_source(source, terrain_mask)
+    return source.background_gradient(
+        model, level_hPa, hour_stride=hour_stride,
+    )
 
 
 def _route_bbox(
@@ -726,7 +850,7 @@ def _route_bbox(
 
 
 def extract_gated_fronts(
-    case: Case,
+    source: HewsonFieldSource | Case,
     model: str,
     hour: float,
     *,
@@ -749,14 +873,17 @@ def extract_gated_fronts(
     ``delta_theta_e_min``. Same gate philosophy as :func:`detect_front_crossings`,
     applied to the 2-D field instead of the 1-D route series.
     """
+    source = _as_source(source, terrain_mask)
+    if terrain_mask is None:
+        terrain_mask = source.terrain_mask
     grids = _hewson_grids_at(
-        case, model, hour, level_hPa=level_hPa, terrain_mask=terrain_mask,
+        source, model, hour, level_hPa=level_hPa, terrain_mask=terrain_mask,
     )
     if grids is None:
         return []
     grad, tfp = grids["gradient"], grids["tfp"]
     dtdx, dtdy, the = grids["dT_dx"], grids["dT_dy"], grids["theta_e"]
-    lat, lon = case.lat, case.lon
+    lat, lon = source.lat, source.lon
 
     if bbox is None:
         ila = range(len(lat))
@@ -824,7 +951,7 @@ def _nearest_front(
 
 
 def find_nearby_fronts(
-    case: Case,
+    source: HewsonFieldSource | Case,
     model: str,
     waypoints: Sequence[tuple[float, float]],
     hour: float,
@@ -851,18 +978,21 @@ def find_nearby_fronts(
     when no gated front exists within the bbox. Pass a precomputed
     ``background`` to avoid recomputing it across calls.
     """
+    source = _as_source(source, terrain_mask)
+    if terrain_mask is None:
+        terrain_mask = source.terrain_mask
     dense = densify_route(waypoints, step_km=step_km)
     if len(dense) < 1:
         return None
     bbox = _route_bbox(dense, proximity_km)
     if use_anomaly_filter and background is None:
         background = compute_background_gradient(
-            case, model, level_hPa=level_hPa, terrain_mask=terrain_mask,
+            source, model, level_hPa=level_hPa, terrain_mask=terrain_mask,
         )
 
     def _cells(h: float) -> list[GatedFrontPoint]:
         return extract_gated_fronts(
-            case, model, h, bbox=bbox, level_hPa=level_hPa,
+            source, model, h, bbox=bbox, level_hPa=level_hPa,
             terrain_mask=terrain_mask, background=background,
             gradient_min=gradient_min, delta_theta_e_min=delta_theta_e_min,
             anomaly_min=anomaly_min, airmass_window_km=airmass_window_km,
@@ -906,46 +1036,81 @@ def find_nearby_fronts(
 
 
 def analyze_route_fronts(
-    case: Case,
+    source: HewsonFieldSource | Case,
     model: str,
     waypoints: Sequence[tuple[float, float]],
     hour: float,
     *,
-    level_hPa: int | None = None,
+    config: FrontGateConfig | None = None,
     terrain_mask: np.ndarray | None = None,
-    step_km: float = _DEFAULT_STEP_KM,
-    proximity_km: float = _DEFAULT_PROXIMITY_KM,
-    approach_dh: float | None = _DEFAULT_APPROACH_DH,
-    gradient_min: float = _DEFAULT_GRADIENT_MIN,
-    delta_theta_e_min: float = _DEFAULT_DELTA_THETA_E_MIN,
-    advection_min: float = _DEFAULT_ADVECTION_MIN,
-    merge_km: float = _DEFAULT_MERGE_KM,
-    airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
-    anomaly_min: float = _DEFAULT_ANOMALY_MIN,
-    use_anomaly_filter: bool = True,
+    # Legacy per-gate overrides — used only when ``config`` is None, for the
+    # handful of callers/tests that still pass individual thresholds. Prefer
+    # building a FrontGateConfig.
+    level_hPa: int | None = None,
+    step_km: float | None = None,
+    proximity_km: float | None = None,
+    approach_dh: float | None = "__default__",  # sentinel: keep config value
+    gradient_min: float | None = None,
+    delta_theta_e_min: float | None = None,
+    advection_min: float | None = None,
+    merge_km: float | None = None,
+    airmass_window_km: float | None = None,
+    anomaly_min: float | None = None,
+    use_anomaly_filter: bool | None = None,
 ) -> RouteFrontAnalysis:
     """End-to-end per-route frontal analysis for one model at one valid hour.
 
-    Combines the on-track locator (:func:`find_route_fronts`) with the off-track
-    proximity scan (:func:`find_nearby_fronts`) into one structured result — the
-    "what fronts does this leg cross, and what front is it about to run into?"
-    answer that feeds route-SIGMET advisories (#168).
+    Source-agnostic and config-driven: takes a :class:`HewsonFieldSource`
+    (production passes a snapshot source; a bare :class:`Case` is auto-wrapped)
+    and a :class:`FrontGateConfig` *recipe*. Combines the on-track candidate/
+    decision locator with the off-track proximity scan into one structured
+    result — "what fronts does this leg cross, and what front is it about to run
+    into?" — and stamps the active config + full candidate trace into the
+    returned :class:`RouteFrontAnalysis` for reproducibility and calibration.
+
+    The legacy individual-gate keyword arguments are honoured only when
+    ``config`` is omitted (they build an ad-hoc config); ``config`` always wins.
     """
-    crossings = find_route_fronts(
-        case, model, waypoints, hour,
-        level_hPa=level_hPa, step_km=step_km, terrain_mask=terrain_mask,
-        gradient_min=gradient_min, delta_theta_e_min=delta_theta_e_min,
-        advection_min=advection_min, merge_km=merge_km,
-        airmass_window_km=airmass_window_km,
+    if config is None:
+        config = _build_config_from_legacy_kwargs(
+            level_hPa=level_hPa, step_km=step_km, proximity_km=proximity_km,
+            approach_dh=approach_dh, gradient_min=gradient_min,
+            delta_theta_e_min=delta_theta_e_min, advection_min=advection_min,
+            merge_km=merge_km, airmass_window_km=airmass_window_km,
+            anomaly_min=anomaly_min, use_anomaly_filter=use_anomaly_filter,
+        )
+
+    source = _as_source(source, terrain_mask)
+    decisions = evaluate_route_fronts(
+        source, model, waypoints, hour, config, terrain_mask=terrain_mask,
     )
+    crossings = decisions_to_crossings(decisions, config.merge_km)
     nearest = find_nearby_fronts(
-        case, model, waypoints, hour,
-        level_hPa=level_hPa, terrain_mask=terrain_mask,
-        proximity_km=proximity_km, step_km=step_km, gradient_min=gradient_min,
-        delta_theta_e_min=delta_theta_e_min, anomaly_min=anomaly_min,
-        airmass_window_km=airmass_window_km, use_anomaly_filter=use_anomaly_filter,
-        approach_dh=approach_dh,
+        source, model, waypoints, hour,
+        level_hPa=config.level_hPa, terrain_mask=terrain_mask,
+        proximity_km=config.proximity_km, step_km=config.step_km,
+        gradient_min=config.gradient_min,
+        delta_theta_e_min=config.delta_theta_e_min, anomaly_min=config.anomaly_min,
+        airmass_window_km=config.airmass_window_km,
+        use_anomaly_filter=config.use_anomaly_filter,
+        approach_dh=config.approach_dh,
     )
     return RouteFrontAnalysis(
         model=model, hour=float(hour), crossings=crossings, nearest=nearest,
+        level_hPa=config.level_hPa, config=config, decisions=decisions,
     )
+
+
+def _build_config_from_legacy_kwargs(**kw) -> FrontGateConfig:
+    """Build a :class:`FrontGateConfig` from the legacy per-gate keyword args,
+    dropping any left at their ``None`` sentinel so config defaults apply.
+    """
+    base = FrontGateConfig()
+    overrides: dict = {}
+    approach = kw.pop("approach_dh", "__default__")
+    if approach != "__default__":
+        overrides["approach_dh"] = approach
+    for name, value in kw.items():
+        if value is not None:
+            overrides[name] = value
+    return base.with_overrides(**overrides) if overrides else base
