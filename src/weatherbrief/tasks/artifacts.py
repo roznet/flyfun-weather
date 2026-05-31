@@ -17,6 +17,7 @@ from weatherbrief.models import (
     RouteAdvisoriesManifest,
     RouteAnalysesManifest,
     RouteCrossSection,
+    RouteFrontsManifest,
     RoutePoint,
 )
 
@@ -170,6 +171,25 @@ def save_advisory_artifacts(
     pack_dir.mkdir(parents=True, exist_ok=True)
     adv_path = pack_dir / "route_advisories.json"
     adv_path.write_text(manifest.model_dump_json(indent=2))
+
+
+def save_front_artifacts(
+    pack_dir: Path,
+    manifest: "RouteFrontsManifest",
+) -> None:
+    """Persist the front-detection artifact (``route_fronts.json``) to *pack_dir*."""
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "route_fronts.json").write_text(manifest.model_dump_json(indent=2))
+
+
+def load_route_fronts(pack_dir: Path) -> "RouteFrontsManifest | None":
+    """Load the front-detection manifest, returning *None* if missing."""
+    from weatherbrief.models import RouteFrontsManifest
+
+    fr_path = pack_dir / "route_fronts.json"
+    if not fr_path.exists():
+        return None
+    return RouteFrontsManifest.model_validate_json(fr_path.read_text())
 
 
 # ---------------------------------------------------------------------------
