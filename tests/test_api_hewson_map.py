@@ -546,3 +546,105 @@ def test_manifest_empty_when_no_data_dir(client):
 def test_manifest_requires_auth(client_anon):
     resp = client_anon.get("/api/hewson-map/manifest")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Fronts endpoint (2-D TFP=0 gated polylines — §C2)
+# ---------------------------------------------------------------------------
+
+
+def _write_front_snapshot(out_dir: Path, model: str = "ecmwf") -> Path:
+    """Write a snapshot whose 850 hPa field holds a real meridional θe front.
+
+    All three levels are populated (the endpoint validates the level is present)
+    using the same front so the gate detects an axis at any level.
+    """
+    from weatherbrief.frontal.detect import compute_hewson_diagnostics
+    from weatherbrief.hewson.precompute import tendency_k_per_hour, write_snapshot
+
+    lat = np.linspace(45.0, 52.0, 29)   # 0.25°
+    lon = np.linspace(-2.0, 6.0, 33)
+    _, lon_grid = np.meshgrid(lat, lon, indexing="ij")
+    n_time = _N_TIME
+
+    per_level: dict[int, dict] = {}
+    for L in _LEVELS:
+        metrics = {
+            k: np.full((n_time, lat.size, lon.size), np.nan, dtype=np.float32)
+            for k in ("theta_e", "gradient", "neg_laplacian", "tfp", "advection")
+        }
+        for h in range(n_time):
+            axis = 2.0 + 0.05 * h * _STRIDE_HOURS
+            theta = 290.0 + 6.0 * np.tanh((lon_grid - axis) / 0.3)
+            u = np.full_like(theta, 30.0)   # eastward → cold advection
+            v = np.zeros_like(theta)
+            d = compute_hewson_diagnostics(theta, lat, lon, u, v)
+            metrics["theta_e"][h] = theta
+            metrics["gradient"][h] = d["gradient"]
+            metrics["neg_laplacian"][h] = d["neg_laplacian"]
+            metrics["tfp"][h] = d["tfp"]
+            metrics["advection"][h] = d["advection"]
+        metrics["tendency"] = tendency_k_per_hour(
+            metrics["theta_e"], step_hours=_STRIDE_HOURS,
+        )
+        per_level[L] = metrics
+
+    path = snapshot_path(model, _INIT_UNIX, output_dir=out_dir)
+    write_snapshot(
+        path, init_time_unix=_INIT_UNIX,
+        valid_times=np.array(
+            [np.datetime64(_INIT_DT.replace(tzinfo=None) + timedelta(hours=h * _STRIDE_HOURS))
+             for h in range(n_time)],
+            dtype="datetime64[ns]",
+        ),
+        lat=lat, lon=lon, levels=list(_LEVELS),
+        stride_hours=_STRIDE_HOURS, per_level=per_level,
+    )
+    return path
+
+
+def test_get_fronts_happy_path(client, hewson_data_dir):
+    _write_front_snapshot(hewson_data_dir / "hewson")
+    resp = client.get(
+        "/api/hewson-map/fronts",
+        params={"model": "ecmwf", "init": _INIT_ISO, "level": 850,
+                "hour": 6, "gate": "default"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["gate"] == "default"
+    assert body["gate_config"]["level_hPa"] == 850
+    assert len(body["fronts"]) >= 1
+    front = body["fronts"][0]
+    assert front["kind"] == "cold"
+    assert front["length_km"] > 300.0
+    # GeoJSON [lon, lat] pairs, axis near the front longitude.
+    lons = [pt[0] for pt in front["coordinates"]]
+    assert min(lons) < 2.5 < max(lons) or abs(sum(lons) / len(lons) - 2.0) < 1.0
+
+
+def test_get_fronts_unknown_gate_400(client, hewson_data_dir):
+    _write_front_snapshot(hewson_data_dir / "hewson")
+    resp = client.get(
+        "/api/hewson-map/fronts",
+        params={"model": "ecmwf", "init": _INIT_ISO, "level": 850,
+                "hour": 0, "gate": "bogus"},
+    )
+    assert resp.status_code == 400
+    assert "unknown gate preset" in resp.json()["detail"]
+
+
+def test_get_fronts_missing_snapshot_404(client):
+    resp = client.get(
+        "/api/hewson-map/fronts",
+        params={"model": "ecmwf", "init": _INIT_ISO, "level": 850, "hour": 0},
+    )
+    assert resp.status_code == 404
+
+
+def test_get_fronts_requires_auth(client_anon):
+    resp = client_anon.get(
+        "/api/hewson-map/fronts",
+        params={"model": "ecmwf", "init": _INIT_ISO, "level": 850, "hour": 0},
+    )
+    assert resp.status_code == 401
