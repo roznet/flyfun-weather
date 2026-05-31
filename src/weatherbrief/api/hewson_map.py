@@ -44,6 +44,7 @@ from weatherbrief.hewson.precompute import (
     resolve_output_dir,
     snapshot_path,
 )
+from weatherbrief.frontal.gates import get_preset, preset_names
 
 logger = logging.getLogger(__name__)
 
@@ -418,4 +419,125 @@ def get_all_metrics(
         # Some legacy snapshots may be missing a metric; surface this so
         # the client can hide tooltip rows for those.
         "missing_metrics": missing,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Gated front polylines (the 2-D TFP=0 extractor — calibration overlay)
+# ---------------------------------------------------------------------------
+
+
+def _load_cached_terrain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray | None:
+    """Return the precompute's cached terrain mask if it matches this grid.
+
+    The precompute loop writes ``${DATA_DIR}/hewson/terrain_mask.npz`` on first
+    run; reuse it so the front extractor rejects orographic θe ridges. Returns
+    ``None`` (no masking) when the cache is absent or grid-mismatched rather
+    than rebuilding from SRTM in the request path.
+    """
+    path = resolve_output_dir() / "terrain_mask.npz"
+    if not path.exists():
+        return None
+    try:
+        with np.load(path) as npz:
+            mask = npz["mask"]
+            cached_lat = npz["lat"]
+            cached_lon = npz["lon"]
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile, EOFError):
+        logger.warning("Hewson fronts: unreadable terrain mask at %s", path)
+        return None
+    if (
+        mask.shape == (len(lat), len(lon))
+        and np.allclose(cached_lat, lat)
+        and np.allclose(cached_lon, lon)
+    ):
+        return mask
+    return None
+
+
+@router.get("/fronts")
+def get_fronts(
+    response: Response,
+    model: str = Query(..., description="ecmwf | gfs | icon"),
+    init: str = Query(..., description="ISO 8601 with Z"),
+    level: int = Query(..., description="Pressure level in hPa: 925, 850, or 700"),
+    hour: int = Query(..., ge=0, description="Forecast hour offset from init"),
+    gate: str = Query("default", description=" | ".join(preset_names())),
+    min_length_km: float = Query(200.0, ge=0, description="Drop axes shorter than this"),
+    _user_id: str = Depends(_synoptic_auth),
+):
+    """Gated TFP=0 **front polylines** for one (model, init, level, hour, gate).
+
+    The 2-D sibling of the route locator: extracts the Hewson front axes from the
+    snapshot's TFP grid and gates them with a named :class:`FrontGateConfig`
+    preset, so a calibrator can overlay "which gate reproduces the official
+    analysis?" on the synoptic map (issue #195 §C2). Returns GeoJSON-style
+    ``[lon, lat]`` coordinate pairs per polyline.
+
+    Admin/calibration-facing (same auth as the rest of the synoptic map). The
+    anomaly filter uses a time-mean background gradient computed from the
+    snapshot — a handful of extra slice reads, fine for an on-demand overlay.
+    """
+    _validate_common_params(model, level)
+    try:
+        config = get_preset(gate, level_hPa=level)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown gate preset {gate!r}; available: {preset_names()}",
+        ) from exc
+
+    path, init_time_unix = _resolve_snapshot_path(model, init)
+
+    # Validate the hour against the snapshot stride/horizon before the heavier
+    # source work, reusing the slice endpoint's checks.
+    with _open_snapshot(path) as npz:
+        _, stride_hours, valid_time_iso = _resolve_hour_index(npz, hour)
+
+    from weatherbrief.frontal.contour_fronts import extract_front_lines
+    from weatherbrief.frontal.sources import SnapshotFieldSource
+
+    source = SnapshotFieldSource(path, model_name=model)
+    terrain_mask = _load_cached_terrain_mask(source.lat, source.lon)
+    source.terrain_mask = terrain_mask
+    grids = source.grids_at_hour(model, hour, level)
+    if grids is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Snapshot has no data at level={level} hour={hour}",
+        )
+
+    background = None
+    if config.use_anomaly_filter:
+        background = source.background_gradient(model, level)
+
+    polylines = extract_front_lines(
+        grids, source.lat, source.lon, config,
+        min_length_km=min_length_km, background=background,
+        terrain_mask=terrain_mask,
+    )
+
+    features = [
+        {
+            "kind": pl.kind,
+            "length_km": round(pl.length_km, 1),
+            "mean_gradient": round(pl.mean_gradient, 2),
+            "mean_delta_theta_e": round(pl.mean_delta_theta_e, 2),
+            # GeoJSON LineString order is [lon, lat].
+            "coordinates": [[round(p[1], 4), round(p[0], 4)] for p in pl.points],
+        }
+        for pl in polylines
+    ]
+
+    response.headers["Cache-Control"] = "private, max-age=86400, immutable"
+    return {
+        "model": model,
+        "init_time": _format_init(init_time_unix),
+        "valid_time": valid_time_iso,
+        "level": level,
+        "hour": hour,
+        "stride_hours": stride_hours,
+        "gate": config.name,
+        "gate_config": config.to_dict(),
+        "fronts": features,
     }
