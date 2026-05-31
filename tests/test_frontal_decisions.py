@@ -138,12 +138,12 @@ class TestDecisionsToCrossings:
         cands = generate_front_candidates(_ramp_samples(gradient=5.5))
         decisions = apply_gate_config(cands, FrontGateConfig())
         assert decisions[0].accepted is False
-        assert decisions_to_crossings(decisions) == []
+        assert decisions_to_crossings(decisions, FrontGateConfig().merge_km) == []
 
     def test_accepted_projects_to_crossing(self):
         cands = generate_front_candidates(_ramp_samples(gradient=7.0))
         decisions = apply_gate_config(cands, FrontGateConfig())
-        crossings = decisions_to_crossings(decisions)
+        crossings = decisions_to_crossings(decisions, FrontGateConfig().merge_km)
         assert len(crossings) == 1
         assert crossings[0].kind == "cold"
         assert crossings[0].gradient == 7.0

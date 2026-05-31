@@ -533,9 +533,14 @@ def apply_gate_config(
 
 def decisions_to_crossings(
     decisions: Sequence[FrontDecision],
-    merge_km: float = _DEFAULT_MERGE_KM,
+    merge_km: float,
 ) -> list[FrontCrossing]:
-    """Accepted decisions → merged :class:`FrontCrossing` list."""
+    """Accepted decisions → merged :class:`FrontCrossing` list.
+
+    ``merge_km`` is required (pass ``config.merge_km``) — defaulting it silently
+    decoupled the merge distance from the active gate recipe, a footgun for new
+    callers (PR #198 review).
+    """
     accepted = [d.to_crossing() for d in decisions if d.accepted]
     return _merge_crossings(accepted, merge_km)
 
