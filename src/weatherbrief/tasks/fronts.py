@@ -152,14 +152,7 @@ def _analyze_one(
     decisions = apply_gate_config(candidates, config)
     crossings = decisions_to_crossings(decisions, config.merge_km)
 
-    nearest = find_nearby_fronts(
-        source, model, waypoints, mid_hour,
-        level_hPa=config.level_hPa,
-        proximity_km=config.proximity_km, step_km=config.step_km,
-        gradient_min=config.gradient_min, delta_theta_e_min=config.delta_theta_e_min,
-        anomaly_min=config.anomaly_min, airmass_window_km=config.airmass_window_km,
-        use_anomaly_filter=config.use_anomaly_filter, approach_dh=config.approach_dh,
-    )
+    nearest = find_nearby_fronts(source, model, waypoints, mid_hour, config=config)
     return RouteFrontAnalysis(
         model=model, hour=float(mid_hour), crossings=crossings, nearest=nearest,
         level_hPa=config.level_hPa, config=config, decisions=decisions,
@@ -254,7 +247,20 @@ def compute_route_fronts(
                            exc_info=True)
             missing.append(model)
             continue
-        source.terrain_mask = terrain_mask
+        # Only apply the cached terrain mask if it matches this snapshot's grid
+        # — a stale mask (e.g. from a resolution change) would otherwise crash
+        # fill_terrain() on a shape mismatch. Mismatch → no masking (graceful).
+        if (
+            terrain_mask is not None
+            and terrain_mask.shape == (source.lat.size, source.lon.size)
+        ):
+            source.terrain_mask = terrain_mask
+        elif terrain_mask is not None:
+            logger.warning(
+                "Front detection: terrain mask %s mismatches %s grid %s — "
+                "skipping terrain masking",
+                terrain_mask.shape, model, (source.lat.size, source.lon.size),
+            )
         snapshot_inits[model] = _iso_z(source.init_time_unix)
 
         # ETAs → snapshot-relative forecast hours.
@@ -266,7 +272,9 @@ def compute_route_fronts(
         if not levels:
             missing.append(model)
             continue
-        levels_seen = levels
+        # Accumulate across models — a partial snapshot could expose a subset,
+        # and manifest.levels must describe everything actually in per_model.
+        levels_seen = sorted(set(levels_seen) | set(levels))
         primary_level = nearest_cruise_level(cruise_altitude_ft, levels)
 
         analyses: list[RouteFrontAnalysisModel] = []
