@@ -1017,6 +1017,12 @@ def find_nearby_fronts(
     Pass a :class:`FrontGateConfig` as ``config`` to source every gate / geometry
     parameter from one recipe (preferred — avoids unpacking ~9 fields at the call
     site). When ``config`` is given it overrides the individual keyword gates.
+
+    ``background`` (when pre-supplied) MUST be the time-mean |∇θe| at the *same*
+    ``level_hPa`` as this scan — it is the level's own persistent baseline. In a
+    multi-level loop, compute one background per level (or leave it ``None`` to
+    let this function compute the matching one). The array carries no level tag,
+    so a mismatched background silently distorts the anomaly filter.
     """
     if config is not None:
         level_hPa = config.level_hPa
