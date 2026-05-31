@@ -1,5 +1,7 @@
 /** Shared types for the cross-section and map visualizations. */
 
+import type { FrontCrossing, FrontProximity } from '../types/fronts';
+
 // --- Settings ---
 
 export type VizLayout = 'cross-section' | 'map' | 'split' | 'compare';
@@ -22,6 +24,9 @@ export interface VizSettings {
    *  so re-checking a cloud source after unchecking all keeps the user's
    *  choice instead of snapping back to the default. */
   cloudStyle?: 'natural' | 'soft' | 'square';
+  /** Show the experimental Hewson front overlay on the route map (#196).
+   *  Default off; only has effect when front data is present. */
+  mapFrontsVisible?: boolean;
 }
 
 // --- Coordinate Transform ---
@@ -66,6 +71,7 @@ export type LayerGroup =
   | 'convection'
   | 'obscuration'
   | 'conditions'
+  | 'fronts'
   | 'reference';
 
 // --- Terrain ---
@@ -104,6 +110,21 @@ export interface VizRouteData {
    * whenever the snapshot carries no observations or SIGMETs.
    */
   currentConditions: VizCurrentConditions | null;
+  /**
+   * Experimental Hewson front overlay (#196), already resolved to the rendered
+   * model at its primary (nearest-cruise) level. `null` whenever the "Auto
+   * Front Detection" pref was off or the rendered model carries no front data
+   * (only ecmwf/gfs/icon do) — so the fronts layer/overlay grays out.
+   */
+  fronts: VizFronts | null;
+}
+
+/** Front crossings + nearest off-track front for the rendered model/level. */
+export interface VizFronts {
+  crossings: FrontCrossing[];
+  nearest: FrontProximity | null;
+  /** Pressure level (hPa) the crossings were detected at — for tooltip provenance. */
+  primaryLevelHpa: number;
 }
 
 /** METAR-reporting airport projected onto the cross-section X axis. */

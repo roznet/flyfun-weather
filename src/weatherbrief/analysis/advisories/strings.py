@@ -315,6 +315,86 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Condiciones IFR aceptables en toda la ruta",
     },
 
+    # --- fronts (experimental Hewson front detection, #196) ---
+    "fronts.none": {
+        "en": "No active fronts along route",
+        "fr": "Aucun front actif sur le trajet",
+        "de": "Keine aktiven Fronten entlang der Strecke",
+        "es": "Sin frentes activos en la ruta",
+    },
+    "fronts.kind.cold": {
+        "en": "cold front",
+        "fr": "front froid",
+        "de": "Kaltfront",
+        "es": "frente frío",
+    },
+    "fronts.kind.warm": {
+        "en": "warm front",
+        "fr": "front chaud",
+        "de": "Warmfront",
+        "es": "frente cálido",
+    },
+    "fronts.kind.quasi": {
+        "en": "quasi-stationary front",
+        "fr": "front quasi stationnaire",
+        "de": "quasistationäre Front",
+        "es": "frente cuasiestacionario",
+    },
+    "fronts.where.early": {
+        "en": "early on the route",
+        "fr": "en début de trajet",
+        "de": "früh auf der Strecke",
+        "es": "al principio de la ruta",
+    },
+    "fronts.where.mid": {
+        "en": "mid-route",
+        "fr": "à mi-parcours",
+        "de": "auf halber Strecke",
+        "es": "a mitad de ruta",
+    },
+    "fronts.where.late": {
+        "en": "late on the route",
+        "fr": "en fin de trajet",
+        "de": "spät auf der Strecke",
+        "es": "al final de la ruta",
+    },
+    "fronts.sharp": {
+        "en": "sharp ",
+        "fr": "marqué : ",
+        "de": "scharfe ",
+        "es": "marcado: ",
+    },
+    "fronts.crossing": {
+        "en": "{prefix}{kind} {where}",
+        "fr": "{prefix}{kind} {where}",
+        "de": "{prefix}{kind} {where}",
+        "es": "{prefix}{kind} {where}",
+    },
+    "fronts.crossing_multi": {
+        "en": "{count} fronts along route — worst: {prefix}{kind} {where}",
+        "fr": "{count} fronts sur le trajet — le plus marqué : {prefix}{kind} {where}",
+        "de": "{count} Fronten entlang der Strecke — stärkste: {prefix}{kind} {where}",
+        "es": "{count} frentes en la ruta — el más fuerte: {prefix}{kind} {where}",
+    },
+    "fronts.tail.deteriorating": {
+        "en": " — deteriorating conditions likely",
+        "fr": " — conditions susceptibles de se dégrader",
+        "de": " — Verschlechterung wahrscheinlich",
+        "es": " — probable deterioro de las condiciones",
+    },
+    "fronts.tail.improving": {
+        "en": " — improving conditions",
+        "fr": " — amélioration des conditions",
+        "de": " — Wetterbesserung",
+        "es": " — mejora de las condiciones",
+    },
+    "fronts.closing": {
+        "en": "Front {dist} km off-track and closing",
+        "fr": "Front à {dist} km hors trajet et se rapprochant",
+        "de": "Front {dist} km abseits der Strecke und näher kommend",
+        "es": "Frente a {dist} km fuera de ruta y acercándose",
+    },
+
     # --- shared airport labels ---
     "airport.dep": {
         "en": "Dep",

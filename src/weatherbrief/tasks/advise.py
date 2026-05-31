@@ -151,6 +151,34 @@ def _compute_advisory_model_names(
     return filtered if filtered else model_names
 
 
+def _front_context(pack_dir: Path | None, enabled_ids: set[str] | None):
+    """Load the front artifact (if any) and ensure its advisory is enabled.
+
+    Returns ``(route_fronts, enabled_ids)``. The experimental front advisory is
+    ``default_enabled=False``, so it would never run on its own; whenever the
+    ``route_fronts.json`` artifact is present (i.e. the ``auto_front_detection``
+    preference was on) we inject its id into the enabled set so it surfaces —
+    the artifact's presence *is* the enable signal (issue #196 §1).
+    """
+    if pack_dir is None:
+        return None, enabled_ids
+    from weatherbrief.tasks.artifacts import load_route_fronts
+
+    route_fronts = load_route_fronts(pack_dir)
+    if route_fronts is None:
+        return None, enabled_ids
+
+    from weatherbrief.analysis.advisories.fronts import FRONTS_ADVISORY_ID
+
+    if enabled_ids is None:
+        # Materialize the default set so we don't accidentally disable the
+        # other default advisories by passing a one-element enabled set.
+        from weatherbrief.analysis.advisories import get_catalog
+
+        enabled_ids = {e.id for e in get_catalog() if e.default_enabled}
+    return route_fronts, set(enabled_ids) | {FRONTS_ADVISORY_ID}
+
+
 def _compute_airport_conditions(
     rp_analyses: list[RoutePointAnalysis],
     cross_sections: list[RouteCrossSection],
@@ -227,6 +255,10 @@ def run_advisories(
     try:
         from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
 
+        # Front artifact (experimental) — written before advisories in the
+        # pipeline, so it is on disk by the time we get here when the pref is on.
+        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids)
+
         ctx = RouteContext(
             analyses=rp_analyses,
             cross_sections=cross_sections,
@@ -237,6 +269,7 @@ def run_advisories(
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conds,
             locale=locale,
+            route_fronts=route_fronts,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -336,6 +369,8 @@ def run_advisories_from_pack(
     try:
         from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
 
+        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids)
+
         ctx = RouteContext(
             analyses=analyses,
             cross_sections=cross_sections,
@@ -346,6 +381,7 @@ def run_advisories_from_pack(
             total_distance_nm=manifest.total_distance_nm,
             airport_conditions=airport_conds,
             locale=locale,
+            route_fronts=route_fronts,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -559,6 +595,10 @@ def run_alt_from_pack(
     try:
         from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
 
+        # Reuse the primary briefing's front artifact (fronts are not re-run per
+        # alt departure time — the smooth advective fields tolerate the offset).
+        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids)
+
         ctx = RouteContext(
             analyses=rp_analyses,
             cross_sections=cross_sections,
@@ -569,6 +609,7 @@ def run_alt_from_pack(
             total_distance_nm=total_distance,
             airport_conditions=airport_conds,
             locale=locale,
+            route_fronts=route_fronts,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)

@@ -308,6 +308,27 @@ def execute_briefing(
     if rss is not None:
         rss_curve.append(("analyze", rss))
 
+    # === 2.5b Front detection (experimental, opt-in via auto_front_detection) ===
+    # Runs *before* advisories so the front advisory evaluator can read the
+    # written route_fronts.json. Reads precomputed Hewson snapshots from
+    # ${DATA_DIR}/hewson — milliseconds, zero extra fetch. Skipped entirely
+    # unless the preference is enabled.
+    if options.auto_front_detection and analysis_result.route_analyses:
+        _t0 = perf_counter()
+        try:
+            from weatherbrief.tasks.fronts import run_fronts
+
+            run_fronts(
+                analysis_result.route_analyses,
+                route_name=route.name,
+                cruise_altitude_ft=route.cruise_altitude_ft,
+                advisory_models=options.advisory_models,
+                pack_dir=pack_dir,
+            )
+        except Exception:
+            logger.warning("Front detection stage failed", exc_info=True)
+        stage_timings["fronts"] = perf_counter() - _t0
+
     # === 3. Advisories ===
     # Build advisory preference args from options (shared by primary + alt)
     adv_aggregation = None
@@ -349,25 +370,6 @@ def execute_briefing(
     rss = _current_rss_mb()
     if rss is not None:
         rss_curve.append(("advisories", rss))
-
-    # === 3.0b Front detection (experimental, opt-in via auto_front_detection) ===
-    # Reads precomputed Hewson snapshots from ${DATA_DIR}/hewson — milliseconds,
-    # zero extra fetch. Skipped entirely unless the preference is enabled.
-    if options.auto_front_detection and analysis_result.route_analyses:
-        _t0 = perf_counter()
-        try:
-            from weatherbrief.tasks.fronts import run_fronts
-
-            run_fronts(
-                analysis_result.route_analyses,
-                route_name=route.name,
-                cruise_altitude_ft=route.cruise_altitude_ft,
-                advisory_models=options.advisory_models,
-                pack_dir=pack_dir,
-            )
-        except Exception:
-            logger.warning("Front detection stage failed", exc_info=True)
-        stage_timings["fronts"] = perf_counter() - _t0
 
     # cross_sections is no longer needed in memory after regular advisories:
     # save_fetch_artifacts persisted cross_section.json at end of fetch, alt

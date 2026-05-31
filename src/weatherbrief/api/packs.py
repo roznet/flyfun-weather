@@ -2420,6 +2420,32 @@ def recalculate_advisories(
     enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
+    # Experimental front detection (#196): keep route_fronts.json in sync with
+    # the pref so the front advisory appears/disappears on recalc. Recompute
+    # reads the precomputed Hewson snapshot — no re-fetch. The advisory task
+    # then picks up (or no longer finds) the artifact.
+    from weatherbrief.api.profiles import load_profile_settings
+
+    auto_front_detection = bool(
+        load_profile_settings(db, flight.profile_id, user_id).get("auto_front_detection", False)
+    )
+    if auto_front_detection:
+        try:
+            from weatherbrief.tasks.fronts import run_fronts_from_pack
+
+            run_fronts_from_pack(
+                pack_dir,
+                advisory_models=adv_models,
+                cruise_altitude_ft=cruise_altitude_ft,
+            )
+        except Exception:
+            logger.warning("Front detection recompute failed during recalculate", exc_info=True)
+    else:
+        # Pref off → drop any stale artifact so the advisory disappears.
+        stale = pack_dir / "route_fronts.json"
+        if stale.exists():
+            stale.unlink()
+
     advisory_result = run_advisories_from_pack(
         pack_dir,
         cruise_altitude_ft=cruise_altitude_ft,

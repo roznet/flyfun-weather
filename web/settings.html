@@ -364,6 +364,12 @@
               <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Upgrade icing severity when RH &gt; 95% or precipitable water &gt; 25 mm.</span>
             </label>
           </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="toggle-auto-front-detection"> Experimental Auto Front Detection
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">⚠️ Experimental. Adds a front advisory plus map &amp; cross-section overlays from Hewson θe diagnostics (ECMWF / GFS / ICON only). These are <em>free-atmosphere air-mass boundaries</em> — advisory-only, not official SIGWX, and blind to low IMC / fog. Adds some compute and rendering per briefing.</span>
+            </label>
+          </div>
           <div class="subsection">
             <h4 class="subsection-heading">Models</h4>
             <p class="muted section-hint">Select which briefing models are evaluated for advisories. Unchecked models are still available for cross-section and Skew-T.</p>

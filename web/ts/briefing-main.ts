@@ -593,6 +593,7 @@ async function init(): Promise<void> {
       effectiveCruiseAltitudeFt: getEffectiveCruiseOverride(state),
       routeObservations: state.snapshot?.route_observations,
       routeSigmets: state.snapshot?.route_sigmets,
+      routeFronts: state.routeFronts,
     };
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
     const unavailable = getUnavailableLayers(data);
@@ -803,6 +804,7 @@ async function init(): Promise<void> {
       mapRenderer.setColorMetric(colorMetric);
       mapRenderer.setWidthMetric(widthMetric);
       mapRenderer.setAltitude(altFt);
+      mapRenderer.setShowFronts(state.vizSettings.mapFrontsVisible ?? false);
       mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
       mapRenderer.render();
 
@@ -839,7 +841,8 @@ async function init(): Promise<void> {
         renderMapControls(mapControlsContainer, state.vizSettings, {
           onColorMetricChange: (id) => store.getState().setMapColorMetric(id),
           onWidthMetricChange: (id) => store.getState().setMapWidthMetric(id),
-        });
+          onFrontsToggle: (visible) => store.getState().setMapFrontsVisible(visible),
+        }, data.fronts != null);
       }
 
       // Legend

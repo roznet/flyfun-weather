@@ -39,6 +39,7 @@ class ProfileSettings(BaseModel):
     gramet_enabled: bool | None = None
     llm_digest_enabled: bool | None = None
     icing_severity_enhance: bool | None = None
+    auto_front_detection: bool | None = None  # experimental front detection (#196)
     icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", or "sfip_nwp"
     cloud_method: str | None = None  # "dd" or "nwp"
     convective_method: str | None = None  # "thermo" or "nwp"
