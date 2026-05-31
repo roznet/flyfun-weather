@@ -27,7 +27,11 @@ import numpy as np
 from contourpy import contour_generator
 
 from weatherbrief.frontal.gates import FrontGateConfig
-from weatherbrief.frontal.route_sampling import bilinear_sample, haversine_km
+from weatherbrief.frontal.route_sampling import (
+    _classify_kind,
+    bilinear_sample,
+    haversine_km,
+)
 from weatherbrief.frontal.sources import HewsonGrids
 
 
@@ -138,9 +142,14 @@ def _polyline_length_km(vertices: list[FrontVertex]) -> float:
 
 
 def _classify_run(vertices: list[FrontVertex], advection_min: float) -> str:
-    """Majority advection class along a gated run (warm / cold / stationary)."""
-    warm = sum(1 for v in vertices if v.advection > advection_min)
-    cold = sum(1 for v in vertices if v.advection < -advection_min)
+    """Majority advection class along a gated run (warm / cold / stationary).
+
+    Reuses :func:`_classify_kind` per vertex so the warm/cold threshold logic
+    lives in one place; this only adds the majority vote on top.
+    """
+    kinds = [_classify_kind(v.advection, advection_min) for v in vertices]
+    warm = kinds.count("warm")
+    cold = kinds.count("cold")
     if warm == 0 and cold == 0:
         return "quasi-stationary"
     return "warm" if warm >= cold else "cold"
