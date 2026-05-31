@@ -6,9 +6,17 @@
  */
 
 import * as L from 'leaflet';
-import type { HewsonAllMetricsSlice, HewsonSlice } from '../adapters/hewson-map-adapter';
+import type { HewsonAllMetricsSlice, HewsonFront, HewsonSlice } from '../adapters/hewson-map-adapter';
 import { COLORMAPS, gradientCss, type HewsonMetric } from './hewson-colormaps';
 import { HewsonGridLayer } from './hewson-grid-layer';
+
+// Gate-detected front-axis colours (match the CLI DWD overlay: blue cold,
+// red warm, purple quasi-stationary).
+const FRONT_COLORS: Record<string, string> = {
+  cold: '#0a5adc',
+  warm: '#dc0000',
+  'quasi-stationary': '#960096',
+};
 
 const HEWSON_METRIC_ORDER: HewsonMetric[] = [
   'theta_e', 'gradient', 'neg_laplacian', 'tfp', 'advection', 'tendency',
@@ -31,6 +39,7 @@ export class SynopticMap {
   private map: L.Map | null = null;
   private tileLayer: L.TileLayer | null = null;
   private gridLayer: HewsonGridLayer | null = null;
+  private frontsLayer: L.LayerGroup | null = null;
   private legendEl: HTMLElement | null = null;
   // Hover state — populated via setHoverGrid(); cleared when no grid is loaded.
   private hoverGrid: HewsonAllMetricsSlice | null = null;
@@ -57,6 +66,9 @@ export class SynopticMap {
 
     this.gridLayer = new HewsonGridLayer();
     this.gridLayer.addTo(this.map);
+
+    // Front polylines draw on top of the grid overlay.
+    this.frontsLayer = L.layerGroup().addTo(this.map);
 
     // Cursor-following tooltip — wired once at init, hidden until hoverGrid
     // is populated by setHoverGrid().
@@ -110,9 +122,37 @@ export class SynopticMap {
 
   clear(): void {
     this.gridLayer?.clear();
+    this.clearFronts();
     this.removeLegend();
     this.hoverGrid = null;
     this.hideHover();
+  }
+
+  /** Draw gate-detected front polylines (replacing any already shown). Each
+   * front is a coloured Leaflet polyline with a tooltip summarising its
+   * kind / length / mean intensity. */
+  setFronts(fronts: HewsonFront[]): void {
+    if (!this.frontsLayer) return;
+    this.frontsLayer.clearLayers();
+    for (const f of fronts) {
+      // API gives GeoJSON [lon, lat]; Leaflet wants [lat, lon].
+      const latlngs = f.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]);
+      if (latlngs.length < 2) continue;
+      const color = FRONT_COLORS[f.kind] ?? FRONT_COLORS['quasi-stationary'];
+      const line = L.polyline(latlngs, {
+        color, weight: 4, opacity: 0.9, lineJoin: 'round',
+      });
+      line.bindTooltip(
+        `${f.kind} front · ${Math.round(f.length_km)} km · ` +
+        `|∇θe| ${f.mean_gradient.toFixed(1)} · Δθe ${f.mean_delta_theta_e.toFixed(1)} K`,
+        { sticky: true },
+      );
+      line.addTo(this.frontsLayer);
+    }
+  }
+
+  clearFronts(): void {
+    this.frontsLayer?.clearLayers();
   }
 
   /** Cache the all-metrics grid for cursor-tooltip lookups. Pass null to

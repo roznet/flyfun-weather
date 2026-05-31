@@ -6,7 +6,7 @@ import {
   type ForecastMapResponse,
 } from './adapters/maps-adapter';
 import {
-  fetchHewsonManifest, fetchHewsonSlice, fetchHewsonAllMetrics,
+  fetchHewsonManifest, fetchHewsonSlice, fetchHewsonAllMetrics, fetchHewsonFronts,
   type HewsonManifest, type HewsonManifestSnapshot,
   type HewsonAllMetricsSlice,
 } from './adapters/hewson-map-adapter';
@@ -40,6 +40,9 @@ let synMetric: HewsonMetric = 'tfp';
 let synHour = 0;
 let synOpacity = 0.5;
 let synScale: ColorScale = 'default';
+// Gate-detected front overlay: 'off' or a gate preset name. Dev/calibration —
+// draws TFP=0 axes on top of the grid for the current (model, init, level, hour).
+let synFrontsGate = 'off';
 // Cached multi-metric grid for the active (model, init, level, hour) — used
 // by the cursor tooltip and (when present) lets metric-change skip a
 // network call. Fetched in the background after the fast initial render.
@@ -456,6 +459,36 @@ async function loadSynoptic(): Promise<void> {
   //     the canvas is already rendered above; this just enables hover when
   //     it lands. Errors are non-fatal; map remains interactive without hover.
   fetchAllMetricsInBackground(myToken);
+
+  // --- 3. Optional front overlay (calibration). Independent of the canvas;
+  //     fetched only when a gate preset is selected.
+  loadFronts(myToken);
+}
+
+/** Fetch + render the gate-detected front axes for the current
+ * (model, init, level, hour, gate), or clear them when the gate is 'off'.
+ * Token-guarded so a stale response can't draw fronts for a since-changed
+ * selection; failures clear the overlay and leave the grid interactive. */
+function loadFronts(myToken: number): void {
+  if (!synopticMap) return;
+  if (synFrontsGate === 'off' || !synInit) {
+    synopticMap.clearFronts();
+    return;
+  }
+  fetchHewsonFronts({
+    model: synModel,
+    init: synInit,
+    level: synLevel,
+    hour: synHour,
+    gate: synFrontsGate,
+  }).then((resp) => {
+    if (myToken !== synLoadToken) return;  // stale — selection moved on
+    synopticMap?.setFronts(resp.fronts);
+  }).catch((err) => {
+    if (myToken !== synLoadToken) return;
+    console.warn('Hewson fronts fetch failed:', err);
+    synopticMap?.clearFronts();
+  });
 }
 
 /** Fire an /all-metrics fetch in the background and wire its response to
@@ -600,6 +633,14 @@ function wireSynopticControls(): void {
     synOpacity = pct / 100;
     if (opVal) opVal.textContent = `${pct}%`;
     synopticMap?.setOpacity(synOpacity);
+  });
+
+  const frontsSel = $('syn-fronts-picker') as HTMLSelectElement | null;
+  frontsSel?.addEventListener('change', () => {
+    synFrontsGate = frontsSel.value;
+    // No grid refetch — just (re)load or clear the front overlay for the
+    // current selection.
+    loadFronts(synLoadToken);
   });
 
   $('syn-info-btn')?.addEventListener('click', (e) => {

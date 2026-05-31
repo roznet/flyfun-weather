@@ -112,3 +112,56 @@ export async function fetchHewsonAllMetrics(
   }
   return resp.json();
 }
+
+// --- Gated front polylines (the 2-D TFP=0 extractor, §C2) ---
+
+export interface HewsonFront {
+  kind: string;                       // "cold" | "warm" | "quasi-stationary"
+  length_km: number;
+  mean_gradient: number;
+  mean_delta_theta_e: number;
+  coordinates: [number, number][];    // GeoJSON [lon, lat] pairs
+}
+
+export interface HewsonFrontsResponse {
+  model: string;
+  init_time: string;
+  valid_time: string;
+  level: number;
+  hour: number;
+  stride_hours: number;
+  gate: string;
+  gate_config: Record<string, number | string | boolean | null>;
+  fronts: HewsonFront[];
+}
+
+export interface HewsonFrontsParams {
+  model: string;
+  init: string;
+  level: number;
+  hour: number;
+  gate: string;            // preset: default | strict | sensitive | gradient-only
+  minLengthKm?: number;
+}
+
+export async function fetchHewsonFronts(
+  p: HewsonFrontsParams,
+): Promise<HewsonFrontsResponse> {
+  const qs = new URLSearchParams({
+    model: p.model,
+    init: p.init,
+    level: String(p.level),
+    hour: String(p.hour),
+    gate: p.gate,
+  });
+  if (p.minLengthKm !== undefined) qs.set('min_length_km', String(p.minLengthKm));
+  const resp = await fetch(
+    `${apiBase}/hewson-map/fronts?${qs}`, { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    let detail: string | undefined;
+    try { detail = (await resp.json())?.detail; } catch { /* ignore */ }
+    throw new Error(detail ?? `Hewson fronts: ${resp.status}`);
+  }
+  return resp.json();
+}
