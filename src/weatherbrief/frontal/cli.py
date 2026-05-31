@@ -1846,6 +1846,56 @@ def _draw_zones_on_dwd(
     Image.alpha_composite(img, overlay).convert("RGB").save(output_path)
 
 
+_FRONT_LINE_RGBA = {
+    "cold": (0, 90, 220, 255),     # blue
+    "warm": (220, 0, 0, 255),      # red
+    "quasi-stationary": (150, 0, 150, 255),  # purple
+}
+
+
+def _draw_fronts_on_dwd(
+    img_path: str | Path,
+    output_path: str | Path,
+    chart_type: str,
+    *,
+    crossings=None,
+    polylines=None,
+    route=None,
+) -> None:
+    """Overlay detected fronts on a georeferenced DWD chart.
+
+    Draws the route (grey), on-track :class:`FrontCrossing` markers (filled
+    circles, coloured by kind), and 2-D :class:`FrontPolyline` axes (coloured
+    lines). Lets a human eyeball gate output against the official drawn fronts
+    (issue #195 §C / §C2) — the cheapest, annotation-free calibration check.
+    """
+    from PIL import Image, ImageDraw
+
+    img = Image.open(img_path).convert("RGBA")
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    if route:
+        pts = [_dwd_lonlat_to_pixel(lo, la, chart_type) for la, lo in route]
+        if len(pts) >= 2:
+            draw.line(pts, fill=(80, 80, 80, 220), width=3)
+
+    for pl in (polylines or []):
+        pixels = [_dwd_lonlat_to_pixel(lo, la, chart_type) for la, lo in pl.points]
+        if len(pixels) >= 2:
+            color = _FRONT_LINE_RGBA.get(pl.kind, _FRONT_LINE_RGBA["quasi-stationary"])
+            draw.line(pixels, fill=color, width=4)
+
+    for xc in (crossings or []):
+        cx, cy = _dwd_lonlat_to_pixel(xc.lon, xc.lat, chart_type)
+        color = _FRONT_LINE_RGBA.get(xc.kind, _FRONT_LINE_RGBA["quasi-stationary"])
+        r = 12
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=color,
+                     outline=(255, 255, 255, 255), width=2)
+
+    Image.alpha_composite(img, overlay).convert("RGB").save(output_path)
+
+
 def _load_expected_fronts(case_dir: Path, hour_offset: int = 0) -> dict[str, str]:
     """Read expected.yaml and return zone→front_type for the given hour_offset.
 
@@ -2223,6 +2273,134 @@ def _cmd_route_fronts(args: argparse.Namespace) -> None:
                   f"Δθe={nf.delta_theta_e:+.0f} K  {nf.trend.upper()}{rate}")
 
 
+def _cmd_front_calibrate(args: argparse.Namespace) -> None:
+    """Sweep gate configs over one (case, route, hour) and tabulate the verdicts.
+
+    Samples the route **once**, generates the unfiltered TFP-zero candidate set,
+    then applies each gate preset to that same set (zero re-sampling — the whole
+    point of the candidate/decision split). Prints a config × (#candidates,
+    #accepted, rejection breakdown, crossings) table so a calibrator can see
+    which recipe reproduces the expected fronts. Optionally overlays one gate's
+    detected fronts on a georeferenced DWD chart (§C / §C2).
+    """
+    from weatherbrief.airports import resolve_waypoints
+    from weatherbrief.frontal.case import load_case
+    from weatherbrief.frontal.gates import get_preset, preset_names
+    from weatherbrief.frontal.grid import build_terrain_mask
+    from weatherbrief.frontal.route_sampling import (
+        apply_gate_config,
+        decisions_to_crossings,
+        densify_route,
+        find_nearby_fronts,
+        generate_front_candidates,
+        grids_at_fractional_hour,
+        sample_hewson_at_route,
+    )
+    from weatherbrief.frontal.sources import CaseFieldSource
+
+    case = load_case(Path(args.case))
+    model = args.model or case.models[0]
+    if model not in case.models:
+        print(f"Error: model '{model}' not in case (available: {case.models})",
+              file=sys.stderr)
+        sys.exit(1)
+
+    codes = args.waypoints.split()
+    waypoints, rejected = resolve_waypoints(codes, args.airports_db)
+    for r in rejected:
+        print(f"  (rejected {r.name}: {r.reason})", file=sys.stderr)
+    pts = [(wp.lat, wp.lon) for wp in waypoints]
+    if len(pts) < 2:
+        print("Error: need at least 2 resolvable waypoints", file=sys.stderr)
+        sys.exit(1)
+
+    gate_names = (
+        [g.strip() for g in args.gates.split(",") if g.strip()]
+        if args.gates else list(preset_names())
+    )
+    try:
+        configs = [get_preset(g, level_hPa=args.level) for g in gate_names]
+    except KeyError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    terrain_mask = None if args.no_terrain_mask else build_terrain_mask(case.lat, case.lon)
+    source = CaseFieldSource(case, terrain_mask=terrain_mask)
+
+    # Sample ONCE at a shared (level, step, window). All swept gates here share
+    # level/step/window (only the threshold gates vary), so one candidate set
+    # serves them all.
+    base = configs[0]
+    dense = densify_route(pts, step_km=base.step_km)
+    samples = sample_hewson_at_route(
+        source, model, [(la, lo) for la, lo, _ in dense],
+        hours=args.hour, level_hPa=base.level_hPa,
+    )
+    for s, (_, _, dist_km) in zip(samples, dense):
+        s["distance_km"] = dist_km
+    candidates = generate_front_candidates(samples, airmass_window_km=base.airmass_window_km)
+
+    header = (
+        f"front-calibrate — {' '.join(wp.icao for wp in waypoints)}  "
+        f"model={model}  hour=+{args.hour:g}  level={base.level_hPa}hPa  "
+        f"candidates={len(candidates)}"
+    )
+    print(header)
+    print("=" * len(header))
+    print(f"{'gate':<14} {'accept':>6} {'rej:grad':>8} {'rej:Δθe':>8}  crossings")
+    print("-" * 78)
+
+    primary_crossings = []
+    for cfg in configs:
+        decisions = apply_gate_config(candidates, cfg)
+        crossings = decisions_to_crossings(decisions, cfg.merge_km)
+        rej_grad = sum(1 for d in decisions if d.rejected_by == "gradient")
+        rej_dthe = sum(1 for d in decisions if d.rejected_by == "delta_theta_e")
+        summary = ", ".join(
+            f"{c.kind[:4]}@{c.distance_km:.0f}km(|∇|{c.gradient:.0f})"
+            for c in crossings
+        ) or "—"
+        print(f"{cfg.name:<14} {len(crossings):>6} {rej_grad:>8} {rej_dthe:>8}  {summary}")
+        if cfg.name == base.name:
+            primary_crossings = crossings
+
+    # Off-track nearest front for the primary gate (one scan).
+    nearest = find_nearby_fronts(
+        source, model, pts, args.hour, level_hPa=base.level_hPa,
+        proximity_km=base.proximity_km, step_km=base.step_km,
+        gradient_min=base.gradient_min, delta_theta_e_min=base.delta_theta_e_min,
+        anomaly_min=base.anomaly_min, airmass_window_km=base.airmass_window_km,
+        use_anomaly_filter=base.use_anomaly_filter, approach_dh=base.approach_dh,
+    )
+    if nearest is not None:
+        loc = "on-track" if nearest.on_track else f"~{nearest.distance_km:.0f} km off-track"
+        print(f"\nnearest gated front ({base.name}): {loc} "
+              f"({nearest.lat:.2f},{nearest.lon:.2f}) |∇θe|={nearest.gradient:.1f} "
+              f"trend={nearest.trend}")
+
+    # Optional: overlay the primary gate's fronts on a DWD chart.
+    if args.draw:
+        polylines = None
+        if args.map_fronts:
+            from weatherbrief.frontal.contour_fronts import extract_front_lines
+            grids = grids_at_fractional_hour(
+                source, model, args.hour, level_hPa=base.level_hPa,
+                terrain_mask=terrain_mask,
+            )
+            if grids is not None:
+                background = source.background_gradient(model, base.level_hPa)
+                polylines = extract_front_lines(
+                    grids, case.lat, case.lon, base,
+                    min_length_km=args.min_length_km, background=background,
+                    terrain_mask=terrain_mask,
+                )
+        _draw_fronts_on_dwd(
+            args.chart, args.draw, args.chart_type,
+            crossings=primary_crossings, polylines=polylines, route=pts,
+        )
+        print(f"\nWrote overlay → {args.draw}")
+
+
 def _cmd_redraw_zones(args: argparse.Namespace) -> None:
     """Redraw analysis_with_zones.png for a case using its current expected.yaml."""
     case_dir = Path(args.case)
@@ -2576,6 +2754,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to euro_aip airports SQLite DB (default: data/nav.db)",
     )
 
+    # front-calibrate
+    p_cal = sub.add_parser(
+        "front-calibrate",
+        help="Sweep gate presets over a route and tabulate verdicts (+ chart overlay)",
+    )
+    p_cal.add_argument("--case", required=True, help="Calibration case dir")
+    p_cal.add_argument("--model", default=None, help="Model key (default: case's first)")
+    p_cal.add_argument(
+        "--waypoints", required=True,
+        help='Space-separated ICAO/navaid/fix codes',
+    )
+    p_cal.add_argument("--hour", type=float, default=0.0, help="Forecast hour offset")
+    p_cal.add_argument("--level", type=int, default=850, help="Pressure level hPa")
+    p_cal.add_argument(
+        "--gates", default=None,
+        help="Comma-separated gate presets (default: all registered presets)",
+    )
+    p_cal.add_argument("--no-terrain-mask", action="store_true")
+    p_cal.add_argument(
+        "--draw", default=None,
+        help="Output PNG: overlay the primary gate's fronts on a DWD chart",
+    )
+    p_cal.add_argument(
+        "--chart", default=None,
+        help="Input DWD chart PNG to draw on (required with --draw)",
+    )
+    p_cal.add_argument("--chart-type", default="analysis", help="analysis | forecast")
+    p_cal.add_argument(
+        "--map-fronts", action="store_true",
+        help="Also extract + draw 2-D TFP=0 front lines for the primary gate",
+    )
+    p_cal.add_argument("--min-length-km", type=float, default=200.0)
+    p_cal.add_argument(
+        "--airports-db", default="data/nav.db",
+        help="Path to euro_aip airports SQLite DB (default: data/nav.db)",
+    )
+
     # clear-cache
     p_clear = sub.add_parser("clear-cache", help="Delete cached grid data")
     p_clear.add_argument("--cache-dir")
@@ -2609,6 +2824,7 @@ def main() -> None:
         "plot-hewson": _cmd_plot_hewson,
         "route-hewson": _cmd_route_hewson,
         "route-fronts": _cmd_route_fronts,
+        "front-calibrate": _cmd_front_calibrate,
         "clear-cache": _cmd_clear_cache,
     }
     commands[args.command](args)
