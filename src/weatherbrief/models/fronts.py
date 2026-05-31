@@ -1,0 +1,99 @@
+"""Pydantic models for the per-briefing front-detection artifact.
+
+These are the serialization boundary for ``route_fronts.json`` — the data half
+of the Hewson front-detection feature (issue #195, Part 1). The compute layer
+(``weatherbrief.frontal.route_sampling``) works in frozen dataclasses; the
+``run_fronts`` stage projects those onto these models so the artifact has a
+validated, typed schema that the endpoint serves and Part 2 (#196) consumes.
+
+The active :class:`~weatherbrief.frontal.gates.FrontGateConfig` is stamped in as
+a plain dict (``gate_config``) so there is a single source of truth for the
+recipe — the dataclass — rather than a mirrored Pydantic copy that could drift.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class FrontCrossingModel(BaseModel):
+    """A front the track crosses (accepted on-track candidate)."""
+
+    lat: float
+    lon: float
+    distance_km: float
+    gradient: float            # |∇θe|  K/100km
+    neg_laplacian: float       # −∇²θe  K/(100km)²  (diagnostic)
+    advection: float           # −V·∇θe  K/h
+    tfp_before: float
+    tfp_after: float
+    delta_theta_e: float       # θe jump across the window, K
+    kind: str                  # "cold" | "warm" | "quasi-stationary"
+    intensity: str             # "significant" | "classical" | "sharp"
+
+
+class FrontProximityModel(BaseModel):
+    """Nearest gated front to the route (on- or off-track) + approach sense."""
+
+    distance_km: float
+    lat: float
+    lon: float
+    gradient: float
+    delta_theta_e: float
+    on_track: bool
+    trend: str                 # "closing" | "receding" | "steady" | "unknown"
+    closing_km_per_h: float | None = None
+
+
+class FrontDecisionModel(BaseModel):
+    """One candidate's verdict — the rejection trace for calibration/debugging."""
+
+    lat: float
+    lon: float
+    distance_km: float
+    gradient: float
+    delta_theta_e: float
+    advection: float
+    accepted: bool
+    rejected_by: str | None = None     # "gradient" | "delta_theta_e" | None
+    kind: str
+    intensity: str
+    margins: dict[str, float] = Field(default_factory=dict)
+
+
+class RouteFrontAnalysisModel(BaseModel):
+    """Per-route frontal picture for one model at one level/valid hour."""
+
+    model: str
+    level_hPa: int
+    hour: float                # snapshot-relative forecast hour the off-track scan ran at
+    crossings: list[FrontCrossingModel] = Field(default_factory=list)
+    nearest: FrontProximityModel | None = None
+    decisions: list[FrontDecisionModel] = Field(default_factory=list)
+
+
+class RouteFrontsManifest(BaseModel):
+    """Top-level ``route_fronts.json`` container.
+
+    ``per_model`` maps each detected model to one
+    :class:`RouteFrontAnalysisModel` per stored pressure level (the level
+    nearest cruise is ``primary_level_hPa``; the others are kept so Part 2's
+    cross-section bands have data). ``gate_config`` is the active recipe stamp.
+    """
+
+    schema_version: int = 1
+    route_name: str = ""
+    generated_at: datetime
+    primary_level_hPa: int                       # level nearest cruise altitude
+    levels: list[int] = Field(default_factory=list)
+    gate_config: dict = Field(default_factory=dict)
+    models: list[str] = Field(default_factory=list)
+    # model → [analysis per level], ordered as ``levels``.
+    per_model: dict[str, list[RouteFrontAnalysisModel]] = Field(default_factory=dict)
+    # Models requested but with no precompute snapshot (degraded gracefully).
+    models_without_snapshot: list[str] = Field(default_factory=list)
+    # Snapshot init each model's detection read (model → ISO 8601 Z).
+    snapshot_inits: dict[str, str] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)

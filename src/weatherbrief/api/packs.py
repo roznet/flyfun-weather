@@ -879,6 +879,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     do_gramet = True
     do_llm_digest = True
     do_icing_enhance = True
+    auto_front_detection = False  # experimental front-detection artifact (#195)
     icing_method = None
     cloud_method = None
     convective_method = None
@@ -912,6 +913,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         do_gramet = profile_settings.get("gramet_enabled", True)
         do_llm_digest = profile_settings.get("llm_digest_enabled", True)
         do_icing_enhance = profile_settings.get("icing_severity_enhance", False)
+        auto_front_detection = profile_settings.get("auto_front_detection", False)
         icing_method = profile_settings.get("icing_method")
         cloud_method = profile_settings.get("cloud_method")
         convective_method = profile_settings.get("convective_method")
@@ -950,6 +952,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         user_id=user_id,
         airports_db_path=db_path,
         icing_severity_enhance=do_icing_enhance,
+        auto_front_detection=auto_front_detection,
         historical_mode=is_historical,
     )
     if as_of_time:
@@ -2162,6 +2165,26 @@ def get_advisories(
     if not adv_path.exists():
         raise HTTPException(status_code=404, detail="Route advisories not available")
     return FileResponse(adv_path, media_type="application/json")
+
+
+@router.get("/{timestamp}/route-fronts")
+def get_route_fronts(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the front-detection artifact (``route_fronts.json``) for a pack.
+
+    Written only when the experimental ``auto_front_detection`` preference is
+    on (default off) — 404 otherwise. The data half of #195; visualization /
+    advisory wiring is Part 2 (#196).
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    fronts_path = pack_dir / "route_fronts.json"
+    if not fronts_path.exists():
+        raise HTTPException(status_code=404, detail="Route fronts not available")
+    return FileResponse(fronts_path, media_type="application/json")
 
 
 @router.get("/{timestamp}/advisories/alt")

@@ -103,6 +103,23 @@ def _terrain_mask_path(output_dir: Path | None = None) -> Path:
     return resolve_output_dir(output_dir) / "terrain_mask.npz"
 
 
+def latest_snapshot(
+    model: str, output_dir: Path | None = None,
+) -> Path | None:
+    """Most-recent snapshot file for ``model`` (by ISO-8601-Z filename), or None.
+
+    The front-detection stage reads the freshest snapshot per model; an init
+    mismatch between it and the briefing's forecast cycle is acceptable for the
+    smooth advective Hewson fields (see design §8). Filenames sort
+    chronologically so ``max`` over the glob is the latest.
+    """
+    subdir = resolve_output_dir(output_dir) / model
+    if not subdir.exists():
+        return None
+    snaps = sorted(subdir.glob("*.npz"))
+    return snaps[-1] if snaps else None
+
+
 # ---------------------------------------------------------------------------
 # Terrain-mask caching
 # ---------------------------------------------------------------------------

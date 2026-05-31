@@ -81,6 +81,13 @@ from weatherbrief.models.advisories import (  # noqa: F401
     RouteAdvisoriesManifest,
     RouteAdvisoryResult,
 )
+from weatherbrief.models.fronts import (  # noqa: F401
+    FrontCrossingModel,
+    FrontDecisionModel,
+    FrontProximityModel,
+    RouteFrontAnalysisModel,
+    RouteFrontsManifest,
+)
 from weatherbrief.models.airport_conditions import (  # noqa: F401
     FLIGHT_CATEGORY_COLORS,
     AirportConditions,
