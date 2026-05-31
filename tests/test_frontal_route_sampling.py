@@ -182,7 +182,7 @@ class TestSampleHewsonAtRoute:
 
     def test_unknown_model_raises(self):
         case = _synthetic_case()
-        with pytest.raises(ValueError, match="not in case"):
+        with pytest.raises(ValueError, match="not in source"):
             sample_hewson_at_route(case, "nope", [(47.0, 2.0)])
 
     def test_hours_length_mismatch_raises(self):

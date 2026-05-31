@@ -196,6 +196,38 @@ def compute_frontal_zones_dual(
     }
 
 
+def theta_e_gradient_components(
+    field: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    terrain_mask: np.ndarray | None = None,
+    smooth_sigma: float = 0.5,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Light-smoothed horizontal gradient ``(dT_dx, dT_dy)`` of a scalar field.
+
+    Returns components in **K/km** (lat-dependent dlon spacing handled per row).
+    Factored out of :func:`compute_hewson_diagnostics` so the snapshot field
+    source can re-derive the gradient *direction* from a stored θe grid — the
+    precompute NPZ deliberately does not persist ``dT_dx``/``dT_dy`` (design
+    §4.7), yet the off-track front extractor needs the unit gradient to measure
+    the cross-front θe jump. Sharing this keeps the recomputed direction bit-for
+    bit consistent with the precompute path.
+    """
+    field_input = field
+    if terrain_mask is not None:
+        field_input = fill_terrain(field, terrain_mask)
+    field_smooth = gaussian_filter(field_input, sigma=smooth_sigma)
+
+    dlat_km = 111.0
+    dlon_km = 111.0 * np.cos(np.radians(lat))
+    dlat_spacing = dlat_km * np.abs(np.diff(lat).mean())
+    dlon_col = (dlon_km * np.abs(np.diff(lon).mean()))[:, np.newaxis]
+
+    dT_dy = np.gradient(field_smooth, dlat_spacing, axis=0)
+    dT_dx = np.gradient(field_smooth, axis=1) / dlon_col
+    return dT_dx, dT_dy
+
+
 def compute_hewson_diagnostics(
     field: np.ndarray,
     lat: np.ndarray,
@@ -248,9 +280,12 @@ def compute_hewson_diagnostics(
     dlon_spacing_per_row = dlon_km * np.abs(np.diff(lon).mean())
     dlon_col = dlon_spacing_per_row[:, np.newaxis]
 
-    # Light-smoothed gradient (K/km, then /100 → K/100km)
-    dT_dy = np.gradient(field_smooth, dlat_spacing, axis=0)
-    dT_dx = np.gradient(field_smooth, axis=1) / dlon_col
+    # Light-smoothed gradient (K/km, then /100 → K/100km). Shares
+    # theta_e_gradient_components so the snapshot field source re-derives an
+    # identical direction from stored θe.
+    dT_dx, dT_dy = theta_e_gradient_components(
+        field_input, lat, lon, terrain_mask=None, smooth_sigma=smooth_sigma,
+    )
     grad_mag = np.sqrt(dT_dx**2 + dT_dy**2)
     grad_mag_100km = grad_mag * 100.0
 
