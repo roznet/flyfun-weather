@@ -5,6 +5,7 @@ import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
 import { isDarkTheme } from '../interaction-utils';
+import { frontColor, frontTooltip, FRONT_INTENSITY_WEIGHT } from '../front-style';
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -17,12 +18,14 @@ export class RouteMapRenderer {
   private tileLayer: L.TileLayer | null = null;
   private segmentGroup: L.LayerGroup | null = null;
   private waypointGroup: L.LayerGroup | null = null;
+  private frontsGroup: L.LayerGroup | null = null;
   private highlightMarker: L.CircleMarker | null = null;
 
   private data: VizRouteData | null = null;
   private colorMetric: MapMetric | null = null;
   private widthMetric: MapMetric | null = null;
   private altitudeFt = 0;
+  private showFronts = false;
   private selectedPointIndex = -1;
   private initialized = false;
   private currentTileTheme: 'light' | 'dark' = 'light';
@@ -48,6 +51,11 @@ export class RouteMapRenderer {
     this.altitudeFt = altitudeFt;
   }
 
+  /** Toggle the experimental Hewson front overlay (#196). */
+  setShowFronts(show: boolean): void {
+    this.showFronts = show;
+  }
+
   setSelectedPointIndex(index: number): void {
     this.selectedPointIndex = index;
     this.updateHighlight();
@@ -59,6 +67,7 @@ export class RouteMapRenderer {
 
     this.ensureMap();
     this.renderSegments();
+    this.renderFronts();
     this.renderWaypoints();
     this.updateHighlight();
   }
@@ -113,6 +122,7 @@ export class RouteMapRenderer {
       this.map = null;
     }
     this.segmentGroup = null;
+    this.frontsGroup = null;
     this.waypointGroup = null;
     this.highlightMarker = null;
     this.initialized = false;
@@ -141,6 +151,7 @@ export class RouteMapRenderer {
     }) as EventListener);
 
     this.segmentGroup = L.layerGroup().addTo(this.map);
+    this.frontsGroup = L.layerGroup().addTo(this.map);
     this.waypointGroup = L.layerGroup().addTo(this.map);
 
     // Fit to route bounds
@@ -203,6 +214,52 @@ export class RouteMapRenderer {
       (line as any)._segmentIndex = i;
 
       this.segmentGroup.addLayer(line);
+    }
+  }
+
+  /** Experimental Hewson front overlay (#196): a marker per on-track crossing
+   *  (colored by kind, sized by intensity) plus an off-track marker for the
+   *  nearest closing front. Advisory-only, free-atmosphere boundaries. */
+  private renderFronts(): void {
+    if (!this.data || !this.frontsGroup || !this.map) return;
+    this.frontsGroup.clearLayers();
+    const fronts = this.data.fronts;
+    if (!this.showFronts || !fronts) return;
+
+    for (const c of fronts.crossings) {
+      const color = frontColor(c.kind);
+      const marker = L.circleMarker([c.lat, c.lon], {
+        radius: 4 + (FRONT_INTENSITY_WEIGHT[c.intensity] ?? 2),
+        color,
+        fillColor: color,
+        fillOpacity: 0.85,
+        weight: 2,
+      });
+      marker.bindTooltip(frontTooltip(c), {
+        direction: 'top',
+        offset: [0, -8],
+        className: 'map-waypoint-tooltip',
+      });
+      this.frontsGroup.addLayer(marker);
+    }
+
+    // Off-track nearest front, only when it is closing on the route.
+    const n = fronts.nearest;
+    if (n && !n.on_track && n.trend === 'closing') {
+      const rate = n.closing_km_per_h != null ? ` ${n.closing_km_per_h.toFixed(0)} km/h` : '';
+      const marker = L.circleMarker([n.lat, n.lon], {
+        radius: 6,
+        color: '#6b7280',
+        fillColor: '#9ca3af',
+        fillOpacity: 0.5,
+        weight: 2,
+        dashArray: '3,3',
+      });
+      marker.bindTooltip(
+        `Front ${n.distance_km.toFixed(0)} km off-track, closing${rate}`,
+        { direction: 'top', offset: [0, -8], className: 'map-waypoint-tooltip' },
+      );
+      this.frontsGroup.addLayer(marker);
     }
   }
 

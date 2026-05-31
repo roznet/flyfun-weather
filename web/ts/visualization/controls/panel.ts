@@ -302,6 +302,8 @@ export interface RouteGraphControlCallbacks {
 export interface MapControlCallbacks {
   onColorMetricChange: (metricId: string) => void;
   onWidthMetricChange: (metricId: string) => void;
+  /** Toggle the experimental Hewson front overlay (#196). */
+  onFrontsToggle?: (visible: boolean) => void;
 }
 
 export function renderVizControls(
@@ -525,6 +527,7 @@ export function renderMapControls(
   container: HTMLElement,
   settings: VizSettings,
   callbacks: MapControlCallbacks,
+  frontsAvailable = false,
 ): void {
   const colorOptions = getMapMetricOptions(false);
   const widthOptions = getMapMetricOptions(true);
@@ -551,9 +554,26 @@ export function renderMapControls(
   html += '</select>';
   html += '</label>';
 
+  // Experimental Hewson front overlay — only surfaced when front data exists
+  // for this briefing (i.e. the "Auto Front Detection" pref was on).
+  if (frontsAvailable) {
+    const checked = settings.mapFrontsVisible ? ' checked' : '';
+    html += '<label class="map-control-label viz-toggle">';
+    html += `<input type="checkbox" id="map-fronts-toggle"${checked}>`;
+    html += `<span class="viz-toggle-label">${t('viz.fronts')}</span>`;
+    html += '</label>';
+  }
+
   html += '</div>';
 
   container.innerHTML = html;
+
+  const frontsToggle = container.querySelector('#map-fronts-toggle') as HTMLInputElement | null;
+  if (frontsToggle) {
+    frontsToggle.addEventListener('change', () => {
+      callbacks.onFrontsToggle?.(frontsToggle.checked);
+    });
+  }
 
   // Wire metric dropdowns
   const colorSelect = container.querySelector('#map-color-metric') as HTMLSelectElement | null;

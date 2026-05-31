@@ -2,7 +2,8 @@
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets } from '../store/types';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
-import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone } from './types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts } from './types';
+import type { RouteFrontsManifest } from '../types/fronts';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
 
@@ -21,6 +22,9 @@ export interface ExtractVizOptions {
   /** D-0 route SIGMETs from the snapshot, for the current-conditions
    *  overlay. `null`/absent on D-1+. */
   routeSigmets?: RouteSigmets | null;
+  /** Experimental Hewson front artifact (#196). `null`/absent unless the
+   *  "Auto Front Detection" pref was on. Resolved per-model below. */
+  routeFronts?: RouteFrontsManifest | null;
 }
 
 export function extractVizData(
@@ -82,6 +86,30 @@ export function extractVizData(
     flightDurationHours: manifest.flight_duration_hours,
     terrainProfile,
     currentConditions: buildCurrentConditions(opts?.routeObservations, opts?.routeSigmets, terrainProfile),
+    fronts: buildFronts(opts?.routeFronts, model),
+  };
+}
+
+/**
+ * Resolve the front manifest to the rendered model at its primary
+ * (nearest-cruise) level. Returns `null` when there is no artifact or the
+ * model carries no front data (only ecmwf/gfs/icon are precomputed). Matches
+ * the analysis by `level_hPa`, not position (manifest contract).
+ */
+function buildFronts(
+  manifest: RouteFrontsManifest | null | undefined,
+  model: string,
+): VizFronts | null {
+  if (!manifest) return null;
+  const analyses = manifest.per_model[model];
+  if (!analyses || analyses.length === 0) return null;
+  const primary = manifest.primary_level_hPa;
+  const analysis = analyses.find((a) => a.level_hPa === primary) ?? analyses[0];
+  if (analysis.crossings.length === 0 && !analysis.nearest) return null;
+  return {
+    crossings: analysis.crossings,
+    nearest: analysis.nearest ?? null,
+    primaryLevelHpa: analysis.level_hPa,
   };
 }
 
@@ -362,6 +390,11 @@ export function getUnavailableLayers(data: VizRouteData): Set<string> {
   // the snapshot carried no observations and no SIGMETs. `buildCurrentConditions`
   // returns null (never an empty object) in that case, so a null check suffices.
   if (!data.currentConditions) unavailable.add('current-conditions');
+
+  // Experimental front markers (#196): unavailable unless the rendered model
+  // carries on-track front crossings (only ecmwf/gfs/icon do, and only when
+  // the "Auto Front Detection" pref was on).
+  if (!data.fronts || data.fronts.crossings.length === 0) unavailable.add('fronts-markers');
 
   return unavailable;
 }

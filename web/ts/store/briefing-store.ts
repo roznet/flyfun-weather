@@ -3,6 +3,7 @@
 import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
+import type { RouteFrontsManifest } from '../types/fronts';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
@@ -54,6 +55,7 @@ function loadVizSettings(): VizSettings {
     compareModels: {},
     compareBandMode: 'consensus-outline',
     cloudStyle: 'square',
+    mapFrontsVisible: false,
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
@@ -83,6 +85,10 @@ export interface BriefingState {
   digest: WeatherDigest | null;
   routeAnalyses: RouteAnalysesManifest | null;
   routeAdvisories: RouteAdvisoriesManifest | null;
+  /** Experimental Hewson front-detection artifact (#196). null unless the
+   *  "Auto Front Detection" pref was on at generation time. Feeds the route-map
+   *  + cross-section front overlays. */
+  routeFronts: RouteFrontsManifest | null;
   altAdvisories: RouteAdvisoriesManifest | null;
   /** Per-route-point wind components at the advisoryAltitudeOverride.
    * null when no override is active (manifest values are correct). */
@@ -152,6 +158,7 @@ export interface BriefingState {
   setMapColorMetric: (metricId: string) => void;
   setMapWidthMetric: (metricId: string) => void;
   setMapAltitude: (altitudeFt: number | null) => void;
+  setMapFrontsVisible: (visible: boolean) => void;
   setRouteGraphVisible: (visible: boolean) => void;
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
   setCompareLayer: (layerId: string) => void;
@@ -228,6 +235,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   digest: null,
   routeAnalyses: null,
   routeAdvisories: null,
+  routeFronts: null,
   altAdvisories: null,
   windOverlay: null,
   showingAlt: false,
@@ -302,16 +310,21 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           // Digest fetch is non-critical
         }
       }
-      // Fetch route analyses, advisories, and elevation profile in parallel
+      // Fetch route analyses, advisories, elevation, and fronts in parallel.
+      // route-fronts is experimental + frequently absent (pref off) — fetch it
+      // non-blocking and treat any rejection as "no fronts".
       let routeAdvisories: RouteAdvisoriesManifest | null = null;
-      const [raResult, epResult, advResult] = await Promise.allSettled([
+      let routeFronts: RouteFrontsManifest | null = null;
+      const [raResult, epResult, advResult, frResult] = await Promise.allSettled([
         api.fetchRouteAnalyses(flight.id, timestamp),
         api.fetchElevationProfile(flight.id, timestamp),
         pack.has_advisories ? api.fetchRouteAdvisories(flight.id, timestamp) : Promise.reject('no advisories'),
+        api.fetchRouteFronts(flight.id, timestamp),
       ]);
       if (raResult.status === 'fulfilled') routeAnalyses = raResult.value;
       if (epResult.status === 'fulfilled') elevationProfile = epResult.value;
       if (advResult.status === 'fulfilled') routeAdvisories = advResult.value;
+      if (frResult.status === 'fulfilled') routeFronts = frResult.value;
 
       // Reconcile selectedModel against this pack's available models.
       // Why: packs fetched with a non-default model set (e.g. ECMWF only) would
@@ -324,7 +337,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, elevationProfile, selectedModel, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, selectedModel, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
@@ -708,6 +721,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setMapAltitude: (altitudeFt: number | null) => {
     const updated = { ...get().vizSettings, mapAltitudeFt: altitudeFt };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setMapFrontsVisible: (visible: boolean) => {
+    const updated = { ...get().vizSettings, mapFrontsVisible: visible };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },

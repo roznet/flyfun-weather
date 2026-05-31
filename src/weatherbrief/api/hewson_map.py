@@ -55,6 +55,12 @@ router = APIRouter(prefix="/hewson-map", tags=["hewson-map"])
 # toggle in Settings → Account → Optional Services. The endpoint itself
 # only requires an authenticated user; the frontend hides the tab unless
 # the preference is enabled.
+#
+# NOTE (#196): the gate-detected front overlay on this maps page is
+# intentionally left available to any logged-in user for now so testers can
+# help calibrate. The long-term gate is the experimental `auto_front_detection`
+# preference (added in #196 alongside the briefing front advisory + overlays);
+# fold this in here when calibration is settled.
 _synoptic_auth = current_user_id
 
 

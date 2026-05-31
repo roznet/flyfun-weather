@@ -13,6 +13,7 @@ import type {
   RouteSigmets,
 } from '../store/types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
+import type { RouteFrontsManifest } from '../types/fronts';
 import type { SoundingProfileData } from '../visualization/skewt/types';
 import { API_BASE, apiFetch, redirectToLogin } from '../utils';
 
@@ -507,6 +508,19 @@ export async function fetchRouteAdvisories(
 ): Promise<RouteAdvisoriesManifest> {
   return apiFetch<RouteAdvisoriesManifest>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories`
+  );
+}
+
+/** Fetch the experimental front-detection artifact (route_fronts.json).
+ *  404s (and is therefore expected to reject) whenever the experimental
+ *  "Auto Front Detection" pref was off at generation time — callers fetch it
+ *  non-blocking and treat rejection as "no fronts". */
+export async function fetchRouteFronts(
+  flightId: string,
+  timestamp: string,
+): Promise<RouteFrontsManifest> {
+  return apiFetch<RouteFrontsManifest>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/route-fronts`
   );
 }
 

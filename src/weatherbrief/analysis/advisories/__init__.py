@@ -21,6 +21,7 @@ from weatherbrief.models import (
     ElevationProfile,
     RouteAdvisoryResult,
     RouteCrossSection,
+    RouteFrontsManifest,
     RoutePointAnalysis,
 )
 
@@ -38,6 +39,11 @@ class RouteContext:
     total_distance_nm: float
     airport_conditions: AirportConditions | None = None
     locale: str | None = None
+    # Experimental Hewson front-detection artifact (issue #196). Present only
+    # when the ``auto_front_detection`` preference was on at generation time —
+    # the front advisory evaluator skips (UNAVAILABLE) when this is None, so the
+    # advisory surfaces *only* when the experimental feature is enabled.
+    route_fronts: RouteFrontsManifest | None = None
 
 
 @runtime_checkable

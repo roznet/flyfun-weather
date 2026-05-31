@@ -12,6 +12,7 @@ export interface ProfileSettings {
   gramet_enabled: boolean | null;
   llm_digest_enabled: boolean | null;
   icing_severity_enhance: boolean | null;
+  auto_front_detection: boolean | null;
   icing_method: string | null;
   cloud_method: string | null;
   convective_method: string | null;
