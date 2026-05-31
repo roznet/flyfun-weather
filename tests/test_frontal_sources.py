@@ -17,7 +17,10 @@ import pytest
 from weatherbrief.frontal.case import Case
 from weatherbrief.frontal.detect import compute_hewson_diagnostics
 from weatherbrief.frontal.gates import FrontGateConfig
-from weatherbrief.frontal.route_sampling import analyze_route_fronts
+from weatherbrief.frontal.route_sampling import (
+    analyze_route_fronts,
+    grids_at_fractional_hour,
+)
 from weatherbrief.frontal.sources import CaseFieldSource, SnapshotFieldSource
 from weatherbrief.hewson.precompute import (
     tendency_k_per_hour,
@@ -125,6 +128,22 @@ class TestCaseFieldSource:
         src = CaseFieldSource(_make_case(lat, lon, theta, u, v))
         assert src.available_hours("syn") == [0, 1, 2, 3, 4]
         assert src.models == ["syn"]
+
+
+class TestFractionalHour:
+    def test_interpolates_between_integer_hours(self):
+        lat, lon, theta, u, v = _build_field_stacks()
+        src = CaseFieldSource(_make_case(lat, lon, theta, u, v))
+        g0 = src.grids_at_hour("syn", 1, 850)
+        g1 = src.grids_at_hour("syn", 2, 850)
+        gm = grids_at_fractional_hour(src, "syn", 1.5, level_hPa=850)
+        assert gm is not None
+        np.testing.assert_allclose(gm.theta_e, 0.5 * (g0.theta_e + g1.theta_e))
+
+    def test_out_of_range_returns_none(self):
+        lat, lon, theta, u, v = _build_field_stacks()
+        src = CaseFieldSource(_make_case(lat, lon, theta, u, v))
+        assert grids_at_fractional_hour(src, "syn", 99.0, level_hPa=850) is None
 
 
 class TestSnapshotFieldSource:

@@ -816,6 +816,41 @@ def _hewson_grids_at(
     return {k: (1.0 - w) * g0[k] + w * g1[k] for k in g0}
 
 
+def grids_at_fractional_hour(
+    source: HewsonFieldSource | Case,
+    model: str,
+    hour: float,
+    *,
+    level_hPa: int | None = None,
+    terrain_mask: np.ndarray | None = None,
+) -> HewsonGrids | None:
+    """Full :class:`HewsonGrids` at a fractional hour, linearly interpolated.
+
+    Brackets ``hour`` between the two bounding available integer hours and
+    blends every field. Returns ``None`` when the hour falls outside the
+    source's range. Used by the 2-D contour extractor / calibration map, which
+    want all diagnostics (advection for classification) at an arbitrary time.
+    """
+    source = _as_source(source, terrain_mask)
+    avail = source.available_hours(model)
+    lo, hi = _bracket(avail, hour)
+    if lo is None or hi is None:
+        return None
+    g_lo = source.grids_at_hour(model, lo, level_hPa)
+    if lo == hi:
+        return g_lo
+    g_hi = source.grids_at_hour(model, hi, level_hPa)
+    if g_lo is None or g_hi is None:
+        return None
+    w = (hour - lo) / (hi - lo)
+    fields = ("theta_e", "gradient", "tfp", "neg_laplacian",
+              "advection", "tendency", "dT_dx", "dT_dy")
+    return HewsonGrids(**{
+        f: (1.0 - w) * getattr(g_lo, f) + w * getattr(g_hi, f)
+        for f in fields
+    })
+
+
 def compute_background_gradient(
     source: HewsonFieldSource | Case,
     model: str,
