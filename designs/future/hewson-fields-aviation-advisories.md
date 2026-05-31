@@ -630,7 +630,8 @@ Opens after Phase D so the map + cross-section surface has something to show moi
 | **Phase D.2** (map layer + tooltips + ERA5 cases) | ✅ Done (2026-04-25, PR #96) — Synoptic Forecast tab on `/maps.html`, canvas grid overlay, cursor-following tooltip with all 6 metrics, default/storm scale toggle, briefing-style (i) modal with Discuss-with-AI prompts, `era5-case` CLI for historical events (Storm Ciarán test case) |
 | Phase D.3 (cross-section bands) | 🎯 **NEXT** — requires D.0 (done) |
 | Phase D.4 (stencil in GRIB era) | Gated on native-GRIB ingestion being live for the user's briefing model |
-| Phase C (advisory evaluators) | After Phase D, informed by what pilots actually use from the map/cross-section |
+| **Phase C data layer** (#195 Part 1) | ✅ Done — `FrontGateConfig` + `HewsonFieldSource` (snapshot/case), candidate/decision split, `run_fronts` stage + `route_fronts.json` + `auto_front_detection` pref + `GET .../route-fronts`, 2-D TFP=0 extractor + `GET /api/hewson-map/fronts` + synoptic-map overlay, `front-calibrate` sweep CLI + DWD chart overlay. Detection reads the precompute snapshot — milliseconds, zero fetch. |
+| Phase C advisory evaluators (#196 Part 2) | After #195 — front advisory evaluator, AI-digest wiring, cross-section bands, settings-page toggle UI |
 | Phase E (moisture cross-check) | After Phase D — RH₉₂₅, LCC, TP, CAPE, debrief feature #92 |
 | Retrospective validation | ✅ Pairwise cancel test 3/3 (all pilot-cancellation days scored higher than replacement-flown days) — best calibration signal we have |
 

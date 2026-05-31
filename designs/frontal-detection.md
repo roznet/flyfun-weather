@@ -18,15 +18,45 @@ Cross-section annotation is explicitly deferred — the cross-section already sh
 src/weatherbrief/frontal/
 ├── grid.py          — grid definition, Open-Meteo fetch, field prep, terrain mask
 ├── detect.py        — gradient thresholding, dual T850+θe, front type, Hewson diagnostics
+│                      (theta_e_gradient_components shared with the snapshot source)
 ├── zones.py         — 20 European zones, 19 route templates, zone intersection
 ├── tracking.py      — two-pass anomaly filtering, zone timeseries, persistence + clearance timing
-├── route_sampling.py — Hewson per-leg front-crossing locator + proximity gating (#168, WIP)
+├── gates.py         — FrontGateConfig (one serializable detection recipe) + preset registry
+├── sources.py       — HewsonFieldSource: SnapshotFieldSource (precompute NPZ, prod) +
+│                      CaseFieldSource (recompute, calibration). One detector, swappable data.
+├── route_sampling.py — on-track locator: sample → candidates → decisions (gated by config) +
+│                      off-track proximity gating (#168). Takes a source, not a Case.
+├── contour_fronts.py — 2-D TFP=0 front-line extractor (contourpy) gated by the same config (#195 §C2)
 ├── case.py          — calibration Case loader (Open-Meteo + ERA5 sources), field save/load
 ├── cache.py         — file cache keyed by (model, init_time) for dev iteration
 ├── cli.py           — analyze/zones/route/score/validate/diagnose/new-case/charts +
-│                      plot-hewson/redraw-zones/route-hewson/route-fronts/clear-cache
+│                      plot-hewson/redraw-zones/route-hewson/route-fronts/front-calibrate/clear-cache
 └── __main__.py      — python -m weatherbrief.frontal.cli
 ```
+
+### Front detection: source-agnostic, config-driven (#195)
+
+The per-leg locator (`route_sampling.py`) is split along two seams so one
+detection algorithm serves the briefing pipeline, calibration, and the 2-D map:
+
+- **Data source** (`sources.py`): `analyze_route_fronts(source, ...)` takes a
+  `HewsonFieldSource`. Production reads the precomputed Hewson NPZ snapshot
+  (`SnapshotFieldSource` — zero fetch, derivatives already on the full grid);
+  calibration/ERA5 recompute from a `Case` (`CaseFieldSource`). Chosen in code,
+  not a user toggle (design `hewson-fields-aviation-advisories.md` §6.2).
+- **Gate recipe** (`gates.py`): the ~10 scattered threshold constants collapse
+  into one frozen, serializable `FrontGateConfig` (carries the pressure level;
+  gates are level-specific). Presets: `default / strict / sensitive /
+  gradient-only`. Stamped into every `route_fronts.json` for reproducibility.
+- **Candidate/decision split**: sample once → `generate_front_candidates`
+  (all TFP zero-crossings, ungated) → `apply_gate_config` (`FrontDecision` with
+  `accepted` / `rejected_by` / margins). N configs re-score one candidate set
+  with zero re-sampling — the basis of the `front-calibrate` sweep CLI.
+
+Pipeline wiring lives in `tasks/fronts.py` (`run_fronts` + `run_fronts_from_pack`),
+gated by the experimental `auto_front_detection` preference (default off); the
+artifact is served at `GET .../packs/{ts}/route-fronts`. The 2-D extractor is
+served at `GET /api/hewson-map/fronts` and overlaid on the synoptic map.
 
 The zone-aggregation path (zones.py + tracking.py) is the original calibration
 target; `route_sampling.py` is the newer per-leg Hewson direction (see Key Choices /
