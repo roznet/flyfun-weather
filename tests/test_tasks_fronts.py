@@ -144,6 +144,28 @@ class TestComputeRouteFronts:
         assert manifest.models_without_snapshot == ["ecmwf"]
         assert manifest.per_model == {}
 
+    def test_stale_terrain_mask_does_not_crash(self, tmp_path):
+        """A wrong-shaped cached terrain mask is skipped, not fatal (#198 review)."""
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir)
+        # Plant a terrain mask for a different (smaller) grid.
+        out_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            out_dir / "terrain_mask.npz",
+            mask=np.ones((3, 3), dtype=bool),
+            lat=np.linspace(45, 47, 3), lon=np.linspace(0, 2, 3),
+        )
+        analyses = _route_analyses()
+        manifest = compute_route_fronts(
+            [(a.lat, a.lon) for a in analyses],
+            [a.interpolated_time for a in analyses],
+            route_name="r", cruise_altitude_ft=5000,
+            advisory_models=["ecmwf"], output_dir=out_dir,
+        )
+        # Detection still runs (mask ignored) — no shape-mismatch crash.
+        assert manifest.models == ["ecmwf"]
+        assert manifest.per_model["ecmwf"]
+
 
 class TestRunFronts:
     def test_writes_artifact_and_roundtrips(self, tmp_path):

@@ -991,6 +991,7 @@ def find_nearby_fronts(
     waypoints: Sequence[tuple[float, float]],
     hour: float,
     *,
+    config: FrontGateConfig | None = None,
     level_hPa: int | None = None,
     terrain_mask: np.ndarray | None = None,
     proximity_km: float = _DEFAULT_PROXIMITY_KM,
@@ -1012,7 +1013,21 @@ def find_nearby_fronts(
     distance classifies the front as closing / receding / steady. Returns None
     when no gated front exists within the bbox. Pass a precomputed
     ``background`` to avoid recomputing it across calls.
+
+    Pass a :class:`FrontGateConfig` as ``config`` to source every gate / geometry
+    parameter from one recipe (preferred — avoids unpacking ~9 fields at the call
+    site). When ``config`` is given it overrides the individual keyword gates.
     """
+    if config is not None:
+        level_hPa = config.level_hPa
+        proximity_km = config.proximity_km
+        step_km = config.step_km
+        gradient_min = config.gradient_min
+        delta_theta_e_min = config.delta_theta_e_min
+        anomaly_min = config.anomaly_min
+        airmass_window_km = config.airmass_window_km
+        use_anomaly_filter = config.use_anomaly_filter
+        approach_dh = config.approach_dh
     source = _as_source(source, terrain_mask)
     if terrain_mask is None:
         terrain_mask = source.terrain_mask
@@ -1080,11 +1095,13 @@ def analyze_route_fronts(
     terrain_mask: np.ndarray | None = None,
     # Legacy per-gate overrides — used only when ``config`` is None, for the
     # handful of callers/tests that still pass individual thresholds. Prefer
-    # building a FrontGateConfig.
+    # building a FrontGateConfig. Each defaults to None meaning "not supplied"
+    # (the config default applies); to *disable* the approach look-ahead pass a
+    # full ``config=FrontGateConfig(approach_dh=None)`` rather than the legacy arg.
     level_hPa: int | None = None,
     step_km: float | None = None,
     proximity_km: float | None = None,
-    approach_dh: float | None = "__default__",  # sentinel: keep config value
+    approach_dh: float | None = None,
     gradient_min: float | None = None,
     delta_theta_e_min: float | None = None,
     advection_min: float | None = None,
@@ -1122,13 +1139,7 @@ def analyze_route_fronts(
     crossings = decisions_to_crossings(decisions, config.merge_km)
     nearest = find_nearby_fronts(
         source, model, waypoints, hour,
-        level_hPa=config.level_hPa, terrain_mask=terrain_mask,
-        proximity_km=config.proximity_km, step_km=config.step_km,
-        gradient_min=config.gradient_min,
-        delta_theta_e_min=config.delta_theta_e_min, anomaly_min=config.anomaly_min,
-        airmass_window_km=config.airmass_window_km,
-        use_anomaly_filter=config.use_anomaly_filter,
-        approach_dh=config.approach_dh,
+        config=config, terrain_mask=terrain_mask,
     )
     return RouteFrontAnalysis(
         model=model, hour=float(hour), crossings=crossings, nearest=nearest,
@@ -1138,14 +1149,8 @@ def analyze_route_fronts(
 
 def _build_config_from_legacy_kwargs(**kw) -> FrontGateConfig:
     """Build a :class:`FrontGateConfig` from the legacy per-gate keyword args,
-    dropping any left at their ``None`` sentinel so config defaults apply.
+    dropping any left at ``None`` (not supplied) so the config defaults apply.
     """
+    overrides = {name: value for name, value in kw.items() if value is not None}
     base = FrontGateConfig()
-    overrides: dict = {}
-    approach = kw.pop("approach_dh", "__default__")
-    if approach != "__default__":
-        overrides["approach_dh"] = approach
-    for name, value in kw.items():
-        if value is not None:
-            overrides[name] = value
     return base.with_overrides(**overrides) if overrides else base

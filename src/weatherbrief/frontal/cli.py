@@ -2298,6 +2298,11 @@ def _cmd_front_calibrate(args: argparse.Namespace) -> None:
     )
     from weatherbrief.frontal.sources import CaseFieldSource
 
+    if args.draw and not args.chart:
+        print("Error: --chart <dwd_chart.png> is required when --draw is given",
+              file=sys.stderr)
+        sys.exit(2)
+
     case = load_case(Path(args.case))
     model = args.model or case.models[0]
     if model not in case.models:
