@@ -166,7 +166,7 @@
   "digest.generating": "Zusammenfassung wird erstellt…",
   "digest.notAvailable": "Synoptische Übersicht nicht verfügbar. Führen Sie eine Aktualisierung durch, um sie zu generieren.",
   "digest.failed": "Zusammenfassung konnte nicht geladen werden.",
-  "digest.profileMismatch": "Diese Zusammenfassung wurde mit Profil \"{name}\" erstellt. Das aktuelle Profil ist anders — neu berechnen, um zu aktualisieren.",
+  "digest.profileMismatch": "Die Hinweise unten wurden für das aktuelle Profil neu berechnet, doch diese KI-Zusammenfassung wurde für Profil \"{name}\" erstellt. Aktualisieren Sie das Briefing, um die Zusammenfassung neu zu erstellen.",
   "dwd.originalGerman": "Deutsches Original",
   "dwd.header": "DWD Synoptische Übersicht — ",
   "gramet.noCreds": "Kein GRAMET verfügbar. Um es zu aktivieren, verknüpfen Sie Ihr Autorouter-Konto in den <a href=\"/settings.html\">Kontoeinstellungen</a>.",

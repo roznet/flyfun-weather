@@ -166,7 +166,7 @@
   "digest.generating": "Generando resumen…",
   "digest.notAvailable": "Sinopsis no disponible. Ejecute una actualización para generarla.",
   "digest.failed": "Error al cargar el resumen.",
-  "digest.profileMismatch": "Este resumen fue generado con el perfil \"{name}\". El perfil actual es diferente — recalcule para actualizar.",
+  "digest.profileMismatch": "Los avisos de abajo se han recalculado para el perfil actual, pero este resumen de IA se redactó para el perfil \"{name}\". Actualice el briefing para regenerar el resumen.",
   "dwd.originalGerman": "Alemán original",
   "dwd.header": "Resumen sinóptico DWD — ",
   "gramet.noCreds": "GRAMET no disponible. Para activarlo, vincule su cuenta de Autorouter en la <a href=\"/settings.html\">Configuración de cuenta</a>.",

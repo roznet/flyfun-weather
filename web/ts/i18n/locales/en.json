@@ -219,7 +219,7 @@
   "digest.generating": "Generating summary…",
   "digest.notAvailable": "Synopsis not available. Trigger a refresh to generate.",
   "digest.failed": "Failed to load digest.",
-  "digest.profileMismatch": "This summary was generated with profile \"{name}\". The current profile is different \u2014 recalculate to update.",
+  "digest.profileMismatch": "The advisories below have been recalculated for the current profile, but this AI summary was written for profile \"{name}\". Refresh the briefing to regenerate the summary.",
 
   "dwd.originalGerman": "Original German",
   "dwd.header": "DWD Synoptic Overview — ",

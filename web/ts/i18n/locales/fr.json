@@ -166,7 +166,7 @@
   "digest.generating": "Génération du résumé…",
   "digest.notAvailable": "Résumé synoptique non disponible. Lancez une actualisation pour le générer.",
   "digest.failed": "Échec du chargement du résumé.",
-  "digest.profileMismatch": "Ce résumé a été généré avec le profil \"{name}\". Le profil actuel est différent — recalculez pour mettre à jour.",
+  "digest.profileMismatch": "Les conseils ci-dessous ont été recalculés pour le profil actuel, mais ce résumé IA a été rédigé pour le profil \"{name}\". Actualisez le briefing pour régénérer le résumé.",
   "dwd.originalGerman": "Original en allemand",
   "dwd.header": "Aperçu synoptique DWD — ",
   "gramet.noCreds": "GRAMET non disponible. Pour l'activer, associez votre compte Autorouter dans les <a href=\"/settings.html\">paramètres du compte</a>.",
