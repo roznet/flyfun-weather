@@ -80,7 +80,17 @@ class RouteFrontsManifest(BaseModel):
     ``per_model`` maps each detected model to one
     :class:`RouteFrontAnalysisModel` per stored pressure level (the level
     nearest cruise is ``primary_level_hPa``; the others are kept so Part 2's
-    cross-section bands have data). ``gate_config`` is the active recipe stamp.
+    cross-section bands have data).
+
+    **Consumers must match each analysis by its ``level_hPa`` field, not by
+    position.** ``levels`` is the union across all models; a model whose
+    snapshot is partial may contribute fewer entries, so ``per_model[m]`` is
+    *not* guaranteed to align positionally with ``levels``.
+
+    ``gate_config`` is the active recipe stamp. Detection currently runs every
+    level with the same threshold gates (only ``level_hPa`` varies), so this
+    single dict describes all of them; if per-level presets land it would need
+    keying by level.
     """
 
     schema_version: int = 1
@@ -90,7 +100,7 @@ class RouteFrontsManifest(BaseModel):
     levels: list[int] = Field(default_factory=list)
     gate_config: dict = Field(default_factory=dict)
     models: list[str] = Field(default_factory=list)
-    # model → [analysis per level], ordered as ``levels``.
+    # model → analyses (one per level the model has; match by level_hPa).
     per_model: dict[str, list[RouteFrontAnalysisModel]] = Field(default_factory=dict)
     # Models requested but with no precompute snapshot (degraded gracefully).
     models_without_snapshot: list[str] = Field(default_factory=list)
