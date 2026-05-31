@@ -14,6 +14,86 @@
       <h1>Flyfun Weather</h1>
       <p class="login-subtitle">Aviation weather briefings for GA pilots</p>
 
+      <!-- GRAMET mini cross-section hero. Uses the app's real GRAMET theme
+           colors (sky #2B5DA8, terrain #8B6914/#6B5010, soft white clouds,
+           cruise/freezing reference lines, hatched convective tower) so it
+           reads as a genuine weather cross-section rather than clip-art. -->
+      <div class="login-hero">
+        <svg viewBox="0 0 336 168" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <!-- feather for GRAMET soft clouds -->
+            <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="3.2"/>
+            </filter>
+            <!-- 45° diagonal hatch, 8px spacing — matches drawHatching() -->
+            <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="8" stroke="rgba(200,40,40,0.40)" stroke-width="1"/>
+            </pattern>
+            <clipPath id="box"><rect x="0" y="0" width="336" height="168" rx="6"/></clipPath>
+          </defs>
+
+          <g clip-path="url(#box)">
+            <!-- GRAMET sky -->
+            <rect x="0" y="0" width="336" height="168" fill="#2B5DA8"/>
+
+            <!-- cruise altitude reference — GRAMET light gray, dashed [8,4] -->
+            <line x1="0" y1="56" x2="336" y2="56" stroke="#e0e0e0" stroke-width="2.5" stroke-dasharray="8 4"/>
+            <rect x="4" y="45" width="44" height="14" rx="2" fill="#2B5DA8" opacity="0.87"/>
+            <text x="8" y="55" font-family="-apple-system, system-ui, sans-serif" font-size="10" fill="#e0e0e0" font-weight="700">Cruise</text>
+
+            <!-- freezing level (0°C) — GRAMET red, dashed -->
+            <line x1="0" y1="84" x2="336" y2="84" stroke="#FF4444" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.85"/>
+            <text x="6" y="79" font-family="sans-serif" font-size="9" fill="#FF6A6A" font-weight="600">0°C</text>
+
+            <!-- soft stratiform clouds (BKN/SCT) on the left -->
+            <g filter="url(#soft)" fill="#ffffff">
+              <ellipse cx="60"  cy="50" rx="40" ry="12" opacity="0.65"/>
+              <ellipse cx="104" cy="44" rx="28" ry="9"  opacity="0.45"/>
+              <ellipse cx="34"  cy="56" rx="24" ry="8"  opacity="0.45"/>
+              <ellipse cx="150" cy="92" rx="34" ry="9"  opacity="0.45"/>
+            </g>
+
+            <!-- convective tower (CB) — stylised like the app's thermo-convective
+                 layer: hatched column + anvil strip + CB pill. GRAMET "high" risk. -->
+            <g>
+              <!-- faint full-height background wash -->
+              <rect x="224" y="0" width="40" height="168" fill="rgba(220,53,69,0.10)"/>
+              <!-- tower body fill (base→top); base raised off terrain -->
+              <rect x="224" y="44" width="40" height="60" fill="rgba(220,53,69,0.30)"/>
+              <!-- diagonal hatching within tower bounds -->
+              <rect x="224" y="44" width="40" height="60" fill="url(#hatch)"/>
+              <!-- tower edge outline -->
+              <rect x="224.5" y="44.5" width="39" height="59" fill="none" stroke="rgba(200,40,40,0.6)" stroke-width="1.5"/>
+              <!-- anvil strip at top (extends beyond column each side) -->
+              <rect x="216" y="44" width="56" height="5" fill="rgba(220,53,69,0.85)"/>
+              <!-- CB label pill (sky-colored bg, GRAMET CB-label red) -->
+              <rect x="233" y="63" width="22" height="14" rx="3" fill="#2B5DA8" opacity="0.9"/>
+              <text x="244" y="73" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="10" font-weight="700" fill="#FF503C">CB</text>
+            </g>
+
+            <!-- GRAMET terrain: golden ochre with darker outline -->
+            <path d="M0,134 L42,126 L84,130 L126,116 L168,124 L210,118 L252,128 L294,114 L336,122 L336,168 L0,168 Z"
+                  fill="#8B6914" stroke="#6B5010" stroke-width="1.5"/>
+          </g>
+        </svg>
+      </div>
+
+      <!-- Compact "what you get" bullets -->
+      <ul class="login-features">
+        <li>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 L9 8 L14 14 L21 5"/></svg>
+          Route cross-sections, GRAMET &amp; Skew-T along your flight
+        </li>
+        <li>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L3 21 H21 Z"/><path d="M12 9 V14"/><circle cx="12" cy="17.5" r=".6" fill="currentColor"/></svg>
+          Convective, icing &amp; front advisories for your route
+        </li>
+        <li>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 H8 L10 6 L14 18 L16 12 H20"/></svg>
+          Multi-model: ECMWF, GFS &amp; ICON, side by side
+        </li>
+      </ul>
+
       <div id="pending-message" class="pending-message" style="display: none;">
         Your account is currently inactive. Please contact the administrator if you believe this is an error.
       </div>
@@ -75,6 +155,12 @@
           the link will open a new session.
         </p>
       </div>
+
+      <!-- Reassurance — pilots are cautious about OAuth -->
+      <p class="login-reassure">
+        We only use your sign-in to identify you — no posting, no spam.
+        Email digests are opt-in. Free to try.
+      </p>
     </div>
   </div>
 
