@@ -21,7 +21,13 @@ export interface FrontCrossing {
   delta_theta_e: number;     // θe jump across the window, K
   kind: FrontKind;
   intensity: FrontIntensity;
+  // Relevance enrichment (present on current artifacts; optional for back-compat).
+  co_location?: FrontCoLocation | null;
+  weather_top_ft?: number | null;   // cloud/convective top at the crossing, ft
+  persistence?: number | null;      // [0,1] fraction of ±window frames the gate holds
 }
+
+export type FrontCoLocation = 'dry' | 'partly' | 'wet' | 'convective';
 
 export interface FrontProximity {
   distance_km: number;
