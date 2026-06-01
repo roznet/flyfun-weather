@@ -156,6 +156,8 @@ def _front_context(
     pack_dir: Path | None,
     enabled_ids: set[str] | None,
     advisory_enabled: dict[str, bool] | None = None,
+    *,
+    filename: str = "route_fronts.json",
 ) -> tuple[RouteFrontsManifest | None, set[str] | None]:
     """Load the front artifact (if any) and decide whether its advisory runs.
 
@@ -178,7 +180,7 @@ def _front_context(
         return None, enabled_ids
     from weatherbrief.tasks.artifacts import load_route_fronts
 
-    route_fronts = load_route_fronts(pack_dir)
+    route_fronts = load_route_fronts(pack_dir, filename=filename)
     if route_fronts is None:
         return None, enabled_ids
 
@@ -618,9 +620,30 @@ def run_alt_from_pack(
     try:
         from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
 
-        # Reuse the primary briefing's front artifact (fronts are not re-run per
-        # alt departure time — the smooth advective fields tolerate the offset).
-        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids, advisory_enabled)
+        # Re-run front detection at the ALT ETAs. The alt analyses carry shifted
+        # ``interpolated_time`` (re-analysed at ``alt_departure_time``), so over a
+        # multi-hour offset a fast front sits at a different route position than at
+        # the primary departure — reusing the primary artifact would grade the alt
+        # scenario against stale fronts. Re-sampling the same snapshot at the alt
+        # hours costs ~nothing. Gated on the primary artifact's presence (= the
+        # ``auto_front_detection`` master was on at briefing time).
+        if pack_dir is not None and (pack_dir / "route_fronts.json").exists():
+            try:
+                from weatherbrief.tasks.fronts import run_fronts
+
+                run_fronts(
+                    rp_analyses,
+                    route_name=route.name,
+                    cruise_altitude_ft=route.cruise_altitude_ft,
+                    advisory_models=advisory_models,
+                    pack_dir=pack_dir,
+                    out_name="route_fronts_alt.json",
+                )
+            except Exception:
+                logger.warning("Alt front detection failed", exc_info=True)
+        route_fronts, enabled_ids = _front_context(
+            pack_dir, enabled_ids, advisory_enabled, filename="route_fronts_alt.json",
+        )
 
         ctx = RouteContext(
             analyses=rp_analyses,

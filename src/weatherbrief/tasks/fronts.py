@@ -334,12 +334,16 @@ def run_fronts(
     gate_preset: str = "default",
     pack_dir: Path | None = None,
     output_dir: Path | None = None,
+    out_name: str = "route_fronts.json",
 ) -> RouteFrontsManifest | None:
     """Detect fronts from in-memory route-point analyses; write the artifact.
 
     Returns ``None`` (and writes nothing) when the route lacks ≥2 ETA-stamped
     waypoints. ``output_dir`` overrides the snapshot root (defaults to
-    ``${DATA_DIR}/hewson``); ``pack_dir`` is where ``route_fronts.json`` lands.
+    ``${DATA_DIR}/hewson``); ``pack_dir`` is where the artifact lands.
+    ``out_name`` defaults to ``route_fronts.json``; the alt-departure re-run
+    passes ``route_fronts_alt.json`` so the alt grade reads fronts sampled at
+    the alt ETAs rather than the primary briefing's.
     """
     extracted = _waypoints_with_eta(route_point_analyses)
     if extracted is None:
@@ -356,7 +360,7 @@ def run_fronts(
     if pack_dir is not None:
         from weatherbrief.tasks.artifacts import save_front_artifacts
 
-        save_front_artifacts(pack_dir, manifest)
+        save_front_artifacts(pack_dir, manifest, filename=out_name)
     logger.info(
         "Front detection: %d model(s) with snapshots, %d without; primary level %d hPa",
         len(manifest.models), len(manifest.models_without_snapshot),

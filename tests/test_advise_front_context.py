@@ -31,7 +31,7 @@ def with_artifact(monkeypatch):
     """Pretend ``route_fronts.json`` is on disk (i.e. the master was on)."""
     manifest = _manifest()
     monkeypatch.setattr(
-        "weatherbrief.tasks.artifacts.load_route_fronts", lambda _pack: manifest,
+        "weatherbrief.tasks.artifacts.load_route_fronts", lambda _pack, **_kw: manifest,
     )
     return manifest
 
@@ -44,7 +44,7 @@ def test_no_pack_dir_is_noop():
 
 def test_missing_artifact_is_noop(monkeypatch):
     monkeypatch.setattr(
-        "weatherbrief.tasks.artifacts.load_route_fronts", lambda _pack: None,
+        "weatherbrief.tasks.artifacts.load_route_fronts", lambda _pack, **_kw: None,
     )
     fronts, enabled = advise._front_context(Path("/x"), {"icing"})
     assert fronts is None

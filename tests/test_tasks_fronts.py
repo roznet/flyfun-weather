@@ -185,6 +185,25 @@ class TestRunFronts:
         assert loaded.models == ["ecmwf"]
         assert loaded.per_model["ecmwf"]
 
+    def test_alt_out_name_writes_separate_artifact(self, tmp_path):
+        # The alt-departure re-run writes route_fronts_alt.json without touching
+        # the primary artifact, and load_route_fronts(filename=...) reads it back.
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir)
+        pack_dir = tmp_path / "pack"
+        pack_dir.mkdir()
+
+        manifest = run_fronts(
+            _route_analyses(), route_name="r", cruise_altitude_ft=5000,
+            advisory_models=["ecmwf"], pack_dir=pack_dir, output_dir=out_dir,
+            out_name="route_fronts_alt.json",
+        )
+        assert manifest is not None
+        assert (pack_dir / "route_fronts_alt.json").exists()
+        assert not (pack_dir / "route_fronts.json").exists()
+        assert load_route_fronts(pack_dir, filename="route_fronts_alt.json") is not None
+        assert load_route_fronts(pack_dir) is None  # primary untouched
+
     def test_skips_route_without_etas(self, tmp_path):
         out_dir = tmp_path / "hewson"
         _write_front_snapshot(out_dir)

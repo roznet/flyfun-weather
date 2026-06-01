@@ -176,17 +176,25 @@ def save_advisory_artifacts(
 def save_front_artifacts(
     pack_dir: Path,
     manifest: "RouteFrontsManifest",
+    *,
+    filename: str = "route_fronts.json",
 ) -> None:
-    """Persist the front-detection artifact (``route_fronts.json``) to *pack_dir*."""
+    """Persist the front-detection artifact to *pack_dir*.
+
+    ``filename`` defaults to the primary ``route_fronts.json``; the alt-departure
+    re-run writes ``route_fronts_alt.json`` (fronts re-sampled at the alt ETAs).
+    """
     pack_dir.mkdir(parents=True, exist_ok=True)
-    (pack_dir / "route_fronts.json").write_text(manifest.model_dump_json(indent=2))
+    (pack_dir / filename).write_text(manifest.model_dump_json(indent=2))
 
 
-def load_route_fronts(pack_dir: Path) -> "RouteFrontsManifest | None":
-    """Load the front-detection manifest, returning *None* if missing."""
+def load_route_fronts(
+    pack_dir: Path, *, filename: str = "route_fronts.json",
+) -> "RouteFrontsManifest | None":
+    """Load a front-detection manifest, returning *None* if missing."""
     from weatherbrief.models import RouteFrontsManifest
 
-    fr_path = pack_dir / "route_fronts.json"
+    fr_path = pack_dir / filename
     if not fr_path.exists():
         return None
     return RouteFrontsManifest.model_validate_json(fr_path.read_text())
