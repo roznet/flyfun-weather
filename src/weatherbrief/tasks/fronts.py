@@ -27,6 +27,7 @@ acceptable for the smooth advective fields.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,6 +118,107 @@ def _cumulative_km(waypoints: Sequence[tuple[float, float]]) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Relevance enrichment — co-location (is the boundary "wet"?) + persistence
+# (does the gate hold over time, or flicker?). These turn a bare θe zero-crossing
+# into something gradeable: a dry, flickering crossing (orographic artifact, e.g.
+# the 2026-05-31 Alpine case) is demoted; a wet/convective, persistent one (the
+# Dijon cold front the same day) is kept. The θe boundary's *level* is not the
+# weather's *level* — weather_top_ft is the cloud/convective top a pilot meets,
+# so an overflown front with towering convection still reads as relevant.
+# ---------------------------------------------------------------------------
+
+_SIGNIFICANT_COVERAGE = {"bkn", "ovc"}
+_PARTLY_COVERAGE = {"few", "sct"}
+_CONVECTIVE_RISK = {"moderate", "high", "extreme"}
+_PERSIST_OFFSETS_H = (-6, -3, 0, 3, 6)
+
+
+def _attr(obj, name, default=None):
+    """getattr/dict-get that tolerates pydantic objects or raw dicts (or None)."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _enum_val(x):
+    return getattr(x, "value", x)
+
+
+def _colocate(analyses, model: str, dist_km: float, level_hpa: int):
+    """Weather co-located with a crossing → (category, weather_top_ft).
+
+    category ∈ {"dry","partly","wet","convective"}; ``(None, None)`` when the
+    per-model column for this point/model isn't available (degrade gracefully).
+    """
+    if not analyses:
+        return None, None
+    nm = dist_km / 1.852
+    a = min(analyses, key=lambda x: abs((_attr(x, "distance_from_origin_nm", 0.0) or 0.0) - nm))
+    sounding = _attr(a, "sounding", None) or {}
+    s = sounding.get(model) if hasattr(sounding, "get") else None
+    if s is None:
+        return None, None
+    layers = _attr(s, "cloud_layers", None) or []
+    conv = _attr(s, "convective", None)
+    risk = _enum_val(_attr(conv, "risk_level", None)) if conv is not None else None
+
+    cloud_top = max((_attr(cl, "top_ft", None) or 0.0 for cl in layers), default=0.0)
+    conv_top = None
+    if conv is not None:
+        conv_top = _attr(conv, "top_ft", None) or _attr(conv, "el_altitude_ft", None)
+    tops = [v for v in (cloud_top or None, conv_top) if v]
+    weather_top_ft = float(max(tops)) if tops else None
+
+    def _covers(level: int) -> bool:
+        for cl in layers:
+            bp, tp = _attr(cl, "base_pressure_hpa", None), _attr(cl, "top_pressure_hpa", None)
+            if bp and tp and tp <= level <= bp and _enum_val(_attr(cl, "coverage", None)) in _SIGNIFICANT_COVERAGE:
+                return True
+        return False
+
+    precip_obj = _attr(s, "precipitation", None)
+    precip = precip_obj is not None and _enum_val(_attr(precip_obj, "surface_intensity", "none")) != "none"
+
+    if risk in _CONVECTIVE_RISK:
+        category = "convective"
+    elif _covers(level_hpa) or precip:
+        category = "wet"
+    elif any(_enum_val(_attr(cl, "coverage", None)) in _PARTLY_COVERAGE for cl in layers):
+        category = "partly"
+    else:
+        category = "dry"
+    return category, weather_top_ft
+
+
+def _persistence(source, model, lat, lon, level_hpa, eta_hour, gradient_min):
+    """Fraction of ±window frames where the gated gradient holds at the cell.
+
+    A real front persists; an orographic/grid artifact flickers. ``None`` when
+    no frames are samplable (e.g. single-timestep historical snapshot)."""
+    avail = set(source.available_hours(model))
+    if not avail:
+        return None
+    stride = source.stride_hours or 3
+    li = int(np.argmin(np.abs(source.lat - lat)))
+    lj = int(np.argmin(np.abs(source.lon - lon)))
+    hits = tot = 0
+    for dh in _PERSIST_OFFSETS_H:
+        h = int(round((eta_hour + dh) / stride) * stride)
+        if h not in avail:
+            continue
+        g = source.gradient_at_hour(model, h, level_hpa)
+        if g is None:
+            continue
+        tot += 1
+        v = g[li, lj]
+        if np.isfinite(v) and v >= gradient_min:
+            hits += 1
+    return (hits / tot) if tot else None
+
+
 def _analyze_one(
     source: SnapshotFieldSource,
     model: str,
@@ -124,6 +226,7 @@ def _analyze_one(
     eta_hours: list[float],
     mid_hour: float,
     config: FrontGateConfig,
+    analyses=None,
 ) -> RouteFrontAnalysis:
     """Detect fronts for one model/level.
 
@@ -152,6 +255,21 @@ def _analyze_one(
     decisions = apply_gate_config(candidates, config)
     crossings = decisions_to_crossings(decisions, config.merge_km)
 
+    # Attach relevance enrichment: each crossing is sampled at its own ETA
+    # (consistent with the per-point time-march above).
+    if crossings:
+        enriched = []
+        for c in crossings:
+            eta_h = float(np.interp(c.distance_km, dense_cum, dense_hours))
+            co_loc, weather_top = _colocate(analyses, model, c.distance_km, config.level_hPa)
+            pers = _persistence(
+                source, model, c.lat, c.lon, config.level_hPa, eta_h, config.gradient_min,
+            )
+            enriched.append(dataclasses.replace(
+                c, co_location=co_loc, weather_top_ft=weather_top, persistence=pers,
+            ))
+        crossings = enriched
+
     nearest = find_nearby_fronts(source, model, waypoints, mid_hour, config=config)
     return RouteFrontAnalysis(
         model=model, hour=float(mid_hour), crossings=crossings, nearest=nearest,
@@ -176,6 +294,8 @@ def _to_analysis_model(a: RouteFrontAnalysis) -> RouteFrontAnalysisModel:
                 advection=c.advection, tfp_before=c.tfp_before,
                 tfp_after=c.tfp_after, delta_theta_e=c.delta_theta_e,
                 kind=c.kind, intensity=c.intensity,
+                co_location=c.co_location, weather_top_ft=c.weather_top_ft,
+                persistence=c.persistence,
             )
             for c in a.crossings
         ],
@@ -217,8 +337,15 @@ def compute_route_fronts(
     gate_preset: str = "default",
     output_dir: Path | None = None,
     now: datetime | None = None,
+    route_point_analyses=None,
 ) -> RouteFrontsManifest:
-    """Build the :class:`RouteFrontsManifest` (no I/O). Shared by both surfaces."""
+    """Build the :class:`RouteFrontsManifest` (no I/O). Shared by both surfaces.
+
+    ``route_point_analyses`` (the per-model sounding column along the route) is
+    optional; when present, crossings are enriched with cloud/convection
+    co-location so the advisory and cross-section can gate on weather, not just
+    the θe gradient.
+    """
     from weatherbrief.frontal.gates import get_preset
 
     now = now or datetime.now(timezone.utc)
@@ -283,6 +410,7 @@ def compute_route_fronts(
             try:
                 result = _analyze_one(
                     source, model, waypoints, eta_hours, mid_hour, cfg,
+                    analyses=route_point_analyses,
                 )
             except Exception:
                 logger.warning(
@@ -355,7 +483,7 @@ def run_fronts(
         waypoints, etas,
         route_name=route_name, cruise_altitude_ft=cruise_altitude_ft,
         advisory_models=advisory_models, gate_preset=gate_preset,
-        output_dir=output_dir,
+        output_dir=output_dir, route_point_analyses=route_point_analyses,
     )
     if pack_dir is not None:
         from weatherbrief.tasks.artifacts import save_front_artifacts
@@ -407,6 +535,7 @@ def run_fronts_from_pack(
         waypoints, etas,
         route_name=manifest_in.route_name, cruise_altitude_ft=cruise,
         advisory_models=models, gate_preset=gate_preset, output_dir=output_dir,
+        route_point_analyses=manifest_in.analyses,
     )
     from weatherbrief.tasks.artifacts import save_front_artifacts
 
