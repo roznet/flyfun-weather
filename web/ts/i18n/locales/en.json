@@ -526,7 +526,7 @@
   "viz.layer.cruise-altitude": "Cruise / Ceiling",
   "viz.layer.surface-obscuration-bands": "Surface obscuration",
   "viz.layer.current-conditions": "Current conditions",
-  "viz.layer.fronts-markers": "Fronts (experimental)",
+  "viz.layer.fronts-markers": "Air-mass boundary",
 
   "viz.group.terrain": "Terrain",
   "viz.group.temperature": "Temperature",

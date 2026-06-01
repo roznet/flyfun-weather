@@ -441,7 +441,7 @@
   "viz.layer.cruise-altitude": "Croisière / Plafond",
   "viz.layer.surface-obscuration-bands": "Obscurcissement de surface",
   "viz.layer.current-conditions": "Conditions actuelles",
-  "viz.layer.fronts-markers": "Fronts (exp\u00e9rimental)",
+  "viz.layer.fronts-markers": "Limite de masse d'air",
   "viz.group.terrain": "Terrain",
   "viz.group.temperature": "Température",
   "viz.group.clouds": "Nuages",
