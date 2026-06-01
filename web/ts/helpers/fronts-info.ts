@@ -14,14 +14,22 @@ function escapeAttr(s: string): string {
 
 const NAME = 'Front detection (experimental)';
 
-// Fits the "… In particular, {llm_prompt}." template in info-popup.ts.
+// The AI-discussion subject is the *meteorological method*, not our feature
+// label — "(experimental)" is about our code, irrelevant to the chat. Naming
+// Hewson + TFP + θe points the model straight at the right technique. This
+// fills the "Tell me more about {metric} …" slot in info-popup.ts.
+const AI_TOPIC =
+  'the Hewson Thermal Front Parameter (TFP) method for locating fronts from '
+  + 'equivalent potential temperature (θe)';
+
+// Fits the "… In particular, {llm_prompt}." continuation.
 const LLM_PROMPT =
-  'explain in practical flying terms what an equivalent-potential-temperature '
-  + '(θe) front is and what crossing one means for a light aircraft; how to read '
-  + 'cold vs warm vs quasi-stationary crossings; why ECMWF, GFS and ICON can '
-  + 'disagree about the same boundary; and the method’s blind spots — orographic '
-  + 'θe gradients over mountains that masquerade as fronts, dry boundaries that '
-  + 'carry no weather, and that an 850 hPa θe field cannot see low cloud or fog';
+  'explain in practical flying terms what crossing such a front means for a '
+  + 'light aircraft; how to read cold vs warm vs quasi-stationary crossings; '
+  + 'why ECMWF, GFS and ICON can disagree about the same boundary; and the '
+  + 'method’s blind spots — orographic θe gradients over mountains that '
+  + 'masquerade as fronts, dry boundaries that carry no weather, and that an '
+  + '850 hPa θe field cannot see low cloud or fog';
 
 export function renderFrontsInfo(): string {
   return `
@@ -85,7 +93,7 @@ export function renderFrontsInfo(): string {
         <p style="margin:0.4rem 0 0;font-size:0.85em;opacity:0.8">Method: Hewson, T. D. (1998), “Objective fronts”, <em>Meteorological Applications</em> 5(1), 37–65. There is no dedicated Wikipedia page for the Hewson method; the links above cover the underlying concepts.</p>
       </div>
 
-      <div class="popup-section popup-discuss-ai" data-metric-name="${escapeAttr(NAME)}" data-llm-prompt="${escapeAttr(LLM_PROMPT)}">
+      <div class="popup-section popup-discuss-ai" data-metric-name="${escapeAttr(AI_TOPIC)}" data-llm-prompt="${escapeAttr(LLM_PROMPT)}">
         <div class="popup-discuss-header">
           <span class="popup-discuss-label">Discuss with AI</span>
           <span class="popup-discuss-hint">A prompt is copied to clipboard — just paste it in the new chat</span>
