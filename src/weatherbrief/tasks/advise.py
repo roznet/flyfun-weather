@@ -23,6 +23,7 @@ from weatherbrief.models import (
     RouteAdvisoriesManifest,
     RouteConfig,
     RouteCrossSection,
+    RouteFrontsManifest,
     RoutePointAnalysis,
     RouteWindOverlay,
 )
@@ -151,7 +152,9 @@ def _compute_advisory_model_names(
     return filtered if filtered else model_names
 
 
-def _front_context(pack_dir: Path | None, enabled_ids: set[str] | None):
+def _front_context(
+    pack_dir: Path | None, enabled_ids: set[str] | None,
+) -> tuple[RouteFrontsManifest | None, set[str] | None]:
     """Load the front artifact (if any) and ensure its advisory is enabled.
 
     Returns ``(route_fronts, enabled_ids)``. The experimental front advisory is

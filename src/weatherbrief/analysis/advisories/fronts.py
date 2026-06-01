@@ -71,8 +71,13 @@ def _describe(
     prefix = adv_t("fronts.sharp", loc) if worst.intensity == "sharp" else ""
     kind = adv_t(_KIND_KEY.get(worst.kind, "fronts.kind.quasi"), loc)
     where = adv_t(_where_key(worst.distance_km, total_km), loc)
-    key = "fronts.crossing_multi" if n_crossings > 1 else "fronts.crossing"
-    detail = adv_t(key, loc, prefix=prefix, kind=kind, where=where, count=n_crossings)
+    if n_crossings > 1:
+        detail = adv_t(
+            "fronts.crossing_multi", loc,
+            prefix=prefix, kind=kind, where=where, count=n_crossings,
+        )
+    else:
+        detail = adv_t("fronts.crossing", loc, prefix=prefix, kind=kind, where=where)
     # Warm/cold advection tail (§2.5) — the most flight-relevant nuance.
     if worst.advection > 1.0:
         detail += adv_t("fronts.tail.deteriorating", loc)

@@ -2439,9 +2439,13 @@ def recalculate_advisories(
             logger.warning("Front detection recompute failed during recalculate", exc_info=True)
     else:
         # Pref off → drop any stale artifact so the advisory disappears.
-        stale = pack_dir / "route_fronts.json"
-        if stale.exists():
-            stale.unlink()
+        # Tolerate races / permission issues — a leftover artifact is not fatal.
+        try:
+            (pack_dir / "route_fronts.json").unlink(missing_ok=True)
+        except OSError:
+            logger.warning(
+                "Could not remove stale route_fronts.json in %s", pack_dir, exc_info=True,
+            )
 
     advisory_result = run_advisories_from_pack(
         pack_dir,
