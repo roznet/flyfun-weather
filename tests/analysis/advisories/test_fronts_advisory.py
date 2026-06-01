@@ -27,12 +27,16 @@ def _crossing(
     intensity: str = "classical",
     advection: float = 0.0,
     gradient: float = 9.0,
+    co_location: str | None = None,
+    weather_top_ft: float | None = None,
+    persistence: float | None = None,
 ) -> FrontCrossingModel:
     return FrontCrossingModel(
         lat=48.0, lon=2.0, distance_km=distance_km,
         gradient=gradient, neg_laplacian=1.0, advection=advection,
         tfp_before=0.5, tfp_after=-0.5, delta_theta_e=8.0,
         kind=kind, intensity=intensity,
+        co_location=co_location, weather_top_ft=weather_top_ft, persistence=persistence,
     )
 
 
@@ -152,8 +156,9 @@ def test_multiple_crossings_picks_worst_and_counts():
     assert "2" in result.aggregate_detail  # count surfaced
 
 
-def test_matches_primary_level_not_position():
-    """Analyses are matched by level_hPa, not list order."""
+def test_grades_fronts_at_non_primary_level():
+    """A front below cruise (non-primary level) still grades — the Dijon
+    false-GREEN fix. Primary 850 is empty; a sharp 700 crossing must still RED."""
     a700 = RouteFrontAnalysisModel(
         model="gfs", level_hPa=700, hour=12.0,
         crossings=[_crossing(intensity="sharp", gradient=14.0)],
@@ -164,11 +169,66 @@ def test_matches_primary_level_not_position():
     manifest = RouteFrontsManifest(
         generated_at=datetime(2026, 5, 31, tzinfo=timezone.utc),
         primary_level_hPa=850, levels=[700, 850], models=["gfs"],
-        per_model={"gfs": [a700, a850]},  # 700 first on purpose
+        per_model={"gfs": [a700, a850]},
     )
     result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
-    # Must grade the 850 (primary) analysis → GREEN, ignoring the sharp 700.
+    assert result.aggregate_status == AdvisoryStatus.RED
+
+
+# --- Relevance gating: co-location + persistence + flight-band (the Alpine
+# false-RED / Dijon false-GREEN fixes). cruise=8000 ft, buffer=2000 → weather
+# is "relevant" when its top reaches >= 6000 ft.
+
+def test_dry_boundary_demoted_to_green():
+    """A sharp but DRY boundary (clear air) is a wind-shift only → GREEN
+    (the Alpine orographic false-RED fix)."""
+    manifest = _manifest(crossings=[_crossing(
+        intensity="sharp", gradient=18.0, co_location="dry", weather_top_ft=None,
+    )])
+    result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
     assert result.aggregate_status == AdvisoryStatus.GREEN
+    assert "boundary" in result.aggregate_detail.lower()
+
+
+def test_flickering_crossing_demoted_to_green():
+    """Low persistence → likely artifact → GREEN even if wet+sharp."""
+    manifest = _manifest(crossings=[_crossing(
+        intensity="sharp", gradient=18.0, co_location="wet",
+        weather_top_ft=30000.0, persistence=0.2,
+    )])
+    result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
+    assert result.aggregate_status == AdvisoryStatus.GREEN
+
+
+def test_weather_below_flight_is_green():
+    """Wet boundary but its cloud tops out below cruise → overflown → GREEN."""
+    manifest = _manifest(crossings=[_crossing(
+        intensity="sharp", co_location="wet", weather_top_ft=3000.0, persistence=0.8,
+    )])
+    result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
+    assert result.aggregate_status == AdvisoryStatus.GREEN
+
+
+def test_convective_reaching_flight_is_red_with_tail():
+    """Convective tops through/above the flight band → RED + towers tail."""
+    manifest = _manifest(crossings=[_crossing(
+        kind="warm", intensity="classical", co_location="convective",
+        weather_top_ft=33000.0, persistence=0.8,
+    )])
+    result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
+    assert result.aggregate_status == AdvisoryStatus.RED
+    assert "fl330" in result.aggregate_detail.lower()
+
+
+def test_wet_sharp_reaching_is_red_classical_is_amber():
+    red = _manifest(crossings=[_crossing(
+        intensity="sharp", co_location="wet", weather_top_ft=20000.0, persistence=0.8,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(red), _PARAMS).aggregate_status == AdvisoryStatus.RED
+    amber = _manifest(crossings=[_crossing(
+        intensity="classical", co_location="wet", weather_top_ft=20000.0, persistence=0.8,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(amber), _PARAMS).aggregate_status == AdvisoryStatus.AMBER
 
 
 def test_default_disabled_in_catalog():
