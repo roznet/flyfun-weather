@@ -3,7 +3,7 @@
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets } from '../store/types';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
 import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts } from './types';
-import type { RouteFrontsManifest } from '../types/fronts';
+import type { FrontCrossing, FrontProximity, RouteFrontsManifest } from '../types/fronts';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
 
@@ -103,14 +103,41 @@ function buildFronts(
   if (!manifest) return null;
   const analyses = manifest.per_model[model];
   if (!analyses || analyses.length === 0) return null;
-  const primary = manifest.primary_level_hPa;
-  const analysis = analyses.find((a) => a.level_hPa === primary) ?? analyses[0];
-  if (analysis.crossings.length === 0 && !analysis.nearest) return null;
-  return {
-    crossings: analysis.crossings,
-    nearest: analysis.nearest ?? null,
-    primaryLevelHpa: analysis.level_hPa,
-  };
+
+  // Merge crossings across ALL stored levels, not just the nearest-cruise one:
+  // a front can sit below cruise (so the primary level has none) yet still
+  // matter — its cloud/convection lofts through the flight (the Dijon case).
+  // Dedupe the same front seen at multiple levels into ~25 km bins, keeping the
+  // most relevant version (convective > wet > partly > dry, then by intensity)
+  // so the marker reflects the worst the column carries.
+  const RELEVANCE: Record<string, number> = { convective: 3, wet: 2, partly: 1, dry: 0 };
+  const INTENSITY: Record<string, number> = { sharp: 3, classical: 2, significant: 1 };
+  const score = (c: FrontCrossing): number =>
+    (RELEVANCE[c.co_location ?? ''] ?? 0) * 10 + (INTENSITY[c.intensity] ?? 0);
+  const byBin = new Map<number, FrontCrossing>();
+  for (const a of analyses) {
+    for (const c of a.crossings) {
+      const bin = Math.round(c.distance_km / 25);
+      const cur = byBin.get(bin);
+      if (!cur || score(c) > score(cur)) byBin.set(bin, c);
+    }
+  }
+  const crossings = [...byBin.values()].sort((a, b) => a.distance_km - b.distance_km);
+
+  // Nearest: prefer an on-track gated front, else the closest off-track one,
+  // across levels.
+  let nearest: FrontProximity | null = null;
+  for (const a of analyses) {
+    const nf = a.nearest;
+    if (!nf) continue;
+    const better = !nearest
+      || (nf.on_track && !nearest.on_track)
+      || (nf.on_track === nearest.on_track && nf.distance_km < nearest.distance_km);
+    if (better) nearest = nf;
+  }
+
+  if (crossings.length === 0 && !nearest) return null;
+  return { crossings, nearest, primaryLevelHpa: manifest.primary_level_hPa };
 }
 
 /**
