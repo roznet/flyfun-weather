@@ -32,6 +32,12 @@ class FrontCrossingModel(BaseModel):
     delta_theta_e: float       # θe jump across the window, K
     kind: str                  # "cold" | "warm" | "quasi-stationary"
     intensity: str             # "significant" | "classical" | "sharp"
+    # Relevance enrichment (None until the pipeline stage attaches it). The θe
+    # boundary's level is not the weather's level — ``weather_top_ft`` is what a
+    # pilot actually encounters (e.g. convective towers above an overflown front).
+    co_location: str | None = None       # "dry"|"partly"|"wet"|"convective"
+    weather_top_ft: float | None = None  # cloud/convective top at the crossing, ft
+    persistence: float | None = None     # [0,1] fraction of ±window frames the gate holds
 
 
 class FrontProximityModel(BaseModel):

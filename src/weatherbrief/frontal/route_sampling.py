@@ -318,6 +318,11 @@ class FrontCrossing:
     delta_theta_e: float   # θe(after) − θe(before) across the window, K
     kind: str              # "cold" | "warm" | "quasi-stationary"
     intensity: str         # "significant" | "classical" | "sharp"
+    # Relevance enrichment (attached post-detection by the pipeline stage; the
+    # bare detector leaves these None). See tasks/fronts.py:_colocate / _persistence.
+    co_location: str | None = None      # "dry" | "partly" | "wet" | "convective" — weather on the boundary
+    weather_top_ft: float | None = None # vertical extent of that weather (cloud/convective top), ft
+    persistence: float | None = None    # fraction [0,1] of ±window frames the gated gradient holds
 
 
 def _intensity_label(gradient: float) -> str:

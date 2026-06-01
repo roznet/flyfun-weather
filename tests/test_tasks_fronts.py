@@ -11,6 +11,8 @@ import pytest
 from weatherbrief.models import RoutePointAnalysis
 from weatherbrief.tasks.artifacts import load_route_fronts
 from weatherbrief.tasks.fronts import (
+    _colocate,
+    _persistence,
     compute_route_fronts,
     nearest_cruise_level,
     run_fronts,
@@ -84,6 +86,68 @@ def _route_analyses():
             forecast_hour=6 + i, track_deg=90.0,
         ))
     return out
+
+
+class TestColocate:
+    """Cloud/convection co-location classification (the wet/dry/convective gate)."""
+
+    @staticmethod
+    def _an(cloud_layers, convective, precip=None):
+        return [{
+            "distance_from_origin_nm": 0.0,
+            "sounding": {"ecmwf": {
+                "cloud_layers": cloud_layers,
+                "convective": convective,
+                "precipitation": precip,
+            }},
+        }]
+
+    def test_dry_blue_sky(self):
+        # No cloud, low convection → demote (the Alpine-artifact case).
+        assert _colocate(self._an([], {"risk_level": "low"}), "ecmwf", 0.0, 850) == ("dry", None)
+
+    def test_wet_cloud_spans_level(self):
+        cl = [{"top_ft": 18000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 700, "coverage": "ovc"}]
+        cat, top = _colocate(self._an(cl, {"risk_level": "none"}), "ecmwf", 0.0, 850)
+        assert cat == "wet" and top == 18000.0
+
+    def test_convective_uses_el_for_vertical_extent(self):
+        # Overflown boundary but convective towers far above (the Dijon case):
+        # weather_top must reflect the convective EL, not the shallow cloud layer.
+        cl = [{"top_ft": 9000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 850, "coverage": "sct"}]
+        conv = {"risk_level": "moderate", "el_altitude_ft": 33000.0}
+        cat, top = _colocate(self._an(cl, conv), "ecmwf", 0.0, 850)
+        assert cat == "convective" and top == 33000.0
+
+    def test_missing_model_degrades_gracefully(self):
+        assert _colocate(self._an([], {"risk_level": "low"}), "gfs", 0.0, 850) == (None, None)
+
+
+class _StubSource:
+    """Minimal SnapshotFieldSource stand-in for persistence testing."""
+
+    def __init__(self, grid_by_hour, stride=3):
+        self.lat = np.array([47.0])
+        self.lon = np.array([0.0])
+        self.stride_hours = stride
+        self._g = grid_by_hour
+
+    def available_hours(self, model):
+        return sorted(self._g)
+
+    def gradient_at_hour(self, model, hour, level):
+        return self._g.get(hour)
+
+
+class TestPersistence:
+    def test_fraction_over_window(self):
+        # eta_hour=3, offsets ±6/3/0 → hours -3,0,3,6,9; only {0,3,6} exist.
+        g = {0: np.array([[10.0]]), 3: np.array([[2.0]]), 6: np.array([[10.0]])}
+        p = _persistence(_StubSource(g), "ecmwf", 47.0, 0.0, 850, eta_hour=3.0, gradient_min=6.0)
+        assert abs(p - 2 / 3) < 1e-6  # 0h & 6h hold (10≥6), 3h does not (2<6)
+
+    def test_none_when_no_frames(self):
+        assert _persistence(_StubSource({}), "ecmwf", 47.0, 0.0, 850, 3.0, 6.0) is None
 
 
 class TestNearestCruiseLevel:
