@@ -527,7 +527,6 @@
   "viz.layer.surface-obscuration-bands": "Surface obscuration",
   "viz.layer.current-conditions": "Current conditions",
   "viz.layer.fronts-markers": "Fronts (experimental)",
-  "viz.frontsInfo": "<strong>Fronts (experimental)</strong><br>Air-mass boundaries (Hewson \u03b8e) your route crosses \u2014 one marker per model where you cross a front; colour shows type (cold / warm / quasi-stationary).<br><br>Relevance is read from the weather on the boundary in the cross-section below it: a dry boundary is a wind-shift only, while wet or convective boundaries can bring cloud, precipitation and shear \u2014 and convective fronts can throw towers far above the boundary, so a front you overfly may still matter.<br><br>Advisory only \u2014 not official SIGWX, and a free-atmosphere signal that does not capture low cloud or fog.",
 
   "viz.group.terrain": "Terrain",
   "viz.group.temperature": "Temperature",
