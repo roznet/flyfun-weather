@@ -153,15 +153,26 @@ def _compute_advisory_model_names(
 
 
 def _front_context(
-    pack_dir: Path | None, enabled_ids: set[str] | None,
+    pack_dir: Path | None,
+    enabled_ids: set[str] | None,
+    advisory_enabled: dict[str, bool] | None = None,
 ) -> tuple[RouteFrontsManifest | None, set[str] | None]:
-    """Load the front artifact (if any) and ensure its advisory is enabled.
+    """Load the front artifact (if any) and decide whether its advisory runs.
 
-    Returns ``(route_fronts, enabled_ids)``. The experimental front advisory is
-    ``default_enabled=False``, so it would never run on its own; whenever the
-    ``route_fronts.json`` artifact is present (i.e. the ``auto_front_detection``
-    preference was on) we inject its id into the enabled set so it surfaces —
-    the artifact's presence *is* the enable signal (issue #196 §1).
+    Returns ``(route_fronts, enabled_ids)``. Two independent per-profile
+    controls gate the experimental front feature (issue #196, model B):
+
+    * ``auto_front_detection`` is the *master* — it generates ``route_fronts.json``
+      and drives the map / cross-section overlays. Its artifact being on disk is
+      what we detect here.
+    * the ``fronts`` advisory toggle independently gates whether the front *grade*
+      (the GREEN/AMBER/RED card that can move the overall assessment) surfaces.
+
+    The advisory is ``default_enabled=False`` in the catalog, so it never runs on
+    its own. When the artifact is present we inject it **by default** (so it is
+    discoverable the moment the master is on), but we honor an *explicit* disable
+    in the per-profile map — letting a pilot keep the overlays for situational
+    awareness while opting out of the experimental grade.
     """
     if pack_dir is None:
         return None, enabled_ids
@@ -172,6 +183,12 @@ def _front_context(
         return None, enabled_ids
 
     from weatherbrief.analysis.advisories.fronts import FRONTS_ADVISORY_ID
+
+    # Explicit per-profile opt-out: overlays stay (artifact still returned), but
+    # the advisory grade is suppressed. ``is False`` so that an absent key or an
+    # explicit ``True`` both fall through to the default-on injection below.
+    if advisory_enabled is not None and advisory_enabled.get(FRONTS_ADVISORY_ID) is False:
+        return route_fronts, enabled_ids
 
     if enabled_ids is None:
         # Materialize the default set so we don't accidentally disable the
@@ -227,6 +244,7 @@ def run_advisories(
     advisory_models: list[str] | None = None,
     airports_db_path: str | None = None,
     enabled_ids: set[str] | None = None,
+    advisory_enabled: dict[str, bool] | None = None,
     user_params: dict | None = None,
     aggregation: AdvisoryAggregation | None = None,
     pack_dir: Path | None = None,
@@ -260,7 +278,7 @@ def run_advisories(
 
         # Front artifact (experimental) — written before advisories in the
         # pipeline, so it is on disk by the time we get here when the pref is on.
-        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids)
+        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids, advisory_enabled)
 
         ctx = RouteContext(
             analyses=rp_analyses,
@@ -309,6 +327,7 @@ def run_advisories_from_pack(
     flight_ceiling_ft: int | None = None,
     advisory_models: list[str] | None = None,
     enabled_ids: set[str] | None = None,
+    advisory_enabled: dict[str, bool] | None = None,
     user_params: dict | None = None,
     aggregation: AdvisoryAggregation | None = None,
     airports_db_path: str | None = None,
@@ -372,7 +391,7 @@ def run_advisories_from_pack(
     try:
         from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
 
-        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids)
+        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids, advisory_enabled)
 
         ctx = RouteContext(
             analyses=analyses,
@@ -532,6 +551,7 @@ def run_alt_from_pack(
     *,
     advisory_models: list[str] | None = None,
     enabled_ids: set[str] | None = None,
+    advisory_enabled: dict[str, bool] | None = None,
     user_params: dict | None = None,
     aggregation: AdvisoryAggregation | None = None,
     airports_db_path: str | None = None,
@@ -600,7 +620,7 @@ def run_alt_from_pack(
 
         # Reuse the primary briefing's front artifact (fronts are not re-run per
         # alt departure time — the smooth advective fields tolerate the offset).
-        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids)
+        route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids, advisory_enabled)
 
         ctx = RouteContext(
             analyses=rp_analyses,

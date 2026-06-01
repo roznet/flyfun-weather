@@ -6,8 +6,12 @@ produced by Part 1 / #195) into a route advisory. It reads
 experimental ``auto_front_detection`` preference was on at generation time — so
 the evaluator returns ``UNAVAILABLE`` (and the advisory disappears) whenever the
 feature is off. ``default_enabled=False`` keeps it out of the default catalog
-run; ``tasks/advise.py`` auto-enables it whenever the artifact is present, so no
-separate user enable flag is needed (issue #196 §1 gating design).
+run; ``tasks/advise.py`` (``_front_context``) enables it *by default* whenever
+the artifact is present, but honors an explicit per-profile ``fronts: false``
+opt-out — two independent controls (issue #196, model B): ``auto_front_detection``
+is the master (data + overlays) and this advisory toggle independently gates the
+grade, so a pilot can keep the overlays without letting the experimental signal
+move the overall assessment.
 
 Grading (design doc §2–3, qualitative per §8):
   * a **sharp** crossing (|∇θe| > 12, SIGMET-worthy) → RED

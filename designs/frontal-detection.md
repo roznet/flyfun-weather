@@ -58,6 +58,17 @@ gated by the experimental `auto_front_detection` preference (default off); the
 artifact is served at `GET .../packs/{ts}/route-fronts`. The 2-D extractor is
 served at `GET /api/hewson-map/fronts` and overlaid on the synoptic map.
 
+**Two independent per-profile controls (#196, model B).** `auto_front_detection`
+is the *master*: it generates `route_fronts.json` and drives the map / cross-section
+overlays. The `fronts` advisory toggle (in the per-profile advisory catalog)
+*independently* gates whether the GREEN/AMBER/RED grade surfaces — which can move
+the overall flight assessment. `tasks/advise.py:_front_context` enables the advisory
+by default when the artifact is present (discoverable the moment the master is on)
+but honors an explicit `advisories.enabled["fronts"] = false` opt-out, so a pilot
+can keep the overlays for situational awareness without letting the experimental
+grade affect the badge. The settings UI defaults the `fronts` checkbox to the
+master state and disables it while the master is off.
+
 The zone-aggregation path (zones.py + tracking.py) is the original calibration
 target; `route_sampling.py` is the newer per-leg Hewson direction (see Key Choices /
 the pivot noted under Calibration). Both share the grid + detect primitives.
