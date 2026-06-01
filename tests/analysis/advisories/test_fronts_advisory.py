@@ -94,6 +94,12 @@ def test_classical_crossing_is_amber():
     assert result.aggregate_status == AdvisoryStatus.AMBER
 
 
+def test_significant_crossing_is_amber():
+    manifest = _manifest(crossings=[_crossing(intensity="significant", gradient=6.5)])
+    result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+
+
 def test_warm_advection_adds_deteriorating_tail():
     manifest = _manifest(crossings=[_crossing(kind="warm", advection=2.0)])
     result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)

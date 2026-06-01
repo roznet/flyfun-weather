@@ -49,11 +49,13 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   catBandsLayer,
   eShearBandsLayer,
   inversionBandsLayer,
-  frontsMarkersLayer,
   terrainFillLayer,
   // Current conditions sits above terrain (columns rest on the surface) but
   // below the temperature/stability/reference lines so those stay readable.
   currentConditionsLayer,
+  // Front markers are vertical lines (not bands) — draw above terrain fill so
+  // the marker stays visible over mountainous cross-sections.
+  frontsMarkersLayer,
   freezingLevelLayer,
   minus10cLayer,
   minus20cLayer,
