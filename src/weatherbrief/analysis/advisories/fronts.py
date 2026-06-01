@@ -72,14 +72,27 @@ _STATUS_RANK = {
 
 def _grade_crossing(
     c: FrontCrossingModel,
+    level_hpa: int,
+    primary_level: int,
     cruise_ft: int,
     persistence_min: float,
     buffer_ft: float,
+    convective_deep_ft: float,
 ) -> tuple[AdvisoryStatus, str]:
-    """Grade one crossing → (status, reason), gating on persistence + co-located
-    weather. The θe boundary's *level* is not the weather's *level*: relevance is
-    judged by whether the front's cloud/convective top reaches the flight band,
-    not by which pressure level the gradient sits at."""
+    """Grade one crossing → (status, reason).
+
+    Two altitude facts matter, not just the gradient:
+      * **does the weather reach the flight?** — judged by the cloud/convective
+        top vs the flight band, since the θe boundary's level is not the
+        weather's level;
+      * **is the sharp part at the flight level?** — a sharp boundary *below*
+        cruise (``level_hpa > primary_level``) is one you overfly: its core
+        never touches you, so it caps at AMBER. Only convective towers, which
+        grow up through your level, can still RED from below — and then only
+        when deep (tops ≥ cruise + ``convective_deep_ft``); modest build-ups are
+        AMBER. (Calibrated on the 2026-05-31 Dijon flight: a sharp 925 hPa cold
+        front overflown at FL100 is AMBER, not RED.)
+    """
     # Flickering across the window → orographic / grid artifact, not a real front.
     if c.persistence is not None and c.persistence < persistence_min:
         return AdvisoryStatus.GREEN, "flicker"
@@ -93,10 +106,14 @@ def _grade_crossing(
     reaches = c.weather_top_ft is None or c.weather_top_ft >= cruise_ft - buffer_ft
     if not reaches:
         return AdvisoryStatus.GREEN, "below"          # weather stays below cruise — overflown
+    overflown = level_hpa > primary_level             # boundary lower than cruise → you fly over its core
     if co == "convective":
-        return AdvisoryStatus.RED, "convective"       # towers through / above the flight level
+        deep = c.weather_top_ft is not None and c.weather_top_ft >= cruise_ft + convective_deep_ft
+        return (AdvisoryStatus.RED, "convective") if deep else (AdvisoryStatus.AMBER, "convective")
     if co == "wet":
-        return (AdvisoryStatus.RED, "wet_sharp") if c.intensity == "sharp" else (AdvisoryStatus.AMBER, "wet")
+        if c.intensity == "sharp" and not overflown:
+            return AdvisoryStatus.RED, "wet_sharp"    # sharp front at/above the flight level
+        return AdvisoryStatus.AMBER, "wet"
     return AdvisoryStatus.AMBER, "partly"             # few/sct cloud band
 
 
@@ -204,6 +221,21 @@ class FrontsEvaluator:
                     max=10000,
                     step=500,
                 ),
+                AdvisoryParameterDef(
+                    key="convective_deep_ft",
+                    label="Deep-convection height",
+                    description=(
+                        "A convective front reaching the flight is RED only when its "
+                        "tops are at least this far above cruise (deep towers); "
+                        "shallower build-ups are AMBER"
+                    ),
+                    type="number",
+                    unit="ft",
+                    default=15000,
+                    min=5000,
+                    max=30000,
+                    step=1000,
+                ),
             ],
         )
 
@@ -214,6 +246,7 @@ class FrontsEvaluator:
         closing_within_km = params.get("closing_within_km", 300)
         persistence_min = params.get("persistence_min", 0.5)
         buffer_ft = params.get("altitude_buffer_ft", 2000)
+        convective_deep_ft = params.get("convective_deep_ft", 15000)
         cruise_ft = ctx.cruise_altitude_ft
 
         # Gating: no artifact → experimental feature was off → UNAVAILABLE.
@@ -224,6 +257,7 @@ class FrontsEvaluator:
             return _unavailable(params, loc)
 
         total_km = ctx.total_distance_nm * _KM_PER_NM
+        primary = manifest.primary_level_hPa
 
         # Honor the user's advisory model selection; fall back to whatever the
         # artifact carries (front models are always a subset of ecmwf/gfs/icon).
@@ -239,7 +273,10 @@ class FrontsEvaluator:
             # below cruise yet loft weather through it (the Dijon case) — and keep
             # the worst. Nearest off-track closing front handled separately.
             graded = [
-                (*_grade_crossing(c, cruise_ft, persistence_min, buffer_ft), c)
+                (*_grade_crossing(
+                    c, a.level_hPa, primary, cruise_ft,
+                    persistence_min, buffer_ft, convective_deep_ft,
+                ), c)
                 for a in analyses for c in a.crossings
             ]
             closing = min(

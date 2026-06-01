@@ -220,6 +220,41 @@ def test_convective_reaching_flight_is_red_with_tail():
     assert "fl330" in result.aggregate_detail.lower()
 
 
+def test_sharp_front_below_flight_capped_to_amber():
+    """A sharp wet front whose core sits BELOW cruise is overflown → AMBER, not
+    RED (the Dijon FL100-over-a-925-hPa-front fix). Flight high (primary 700),
+    sharp crossing at 925."""
+    a925 = RouteFrontAnalysisModel(
+        model="gfs", level_hPa=925, hour=12.0,
+        crossings=[_crossing(intensity="sharp", gradient=14.0, co_location="wet",
+                             weather_top_ft=30000.0, persistence=0.8)],
+    )
+    manifest = RouteFrontsManifest(
+        generated_at=datetime(2026, 5, 31, tzinfo=timezone.utc),
+        primary_level_hPa=700, levels=[700, 925], models=["gfs"],
+        per_model={"gfs": [a925]},
+    )
+    ctx = RouteContext(
+        analyses=[], cross_sections=[], elevation=None, models=["gfs"],
+        cruise_altitude_ft=10000, flight_ceiling_ft=18000, total_distance_nm=200.0,
+        route_fronts=manifest,
+    )
+    assert FrontsEvaluator.evaluate(ctx, _PARAMS).aggregate_status == AdvisoryStatus.AMBER
+
+
+def test_shallow_convective_is_amber_deep_is_red():
+    """Convective tops just above cruise → AMBER (isolated build-ups); deep
+    towers → RED. cruise=8000, convective_deep_ft=15000 → RED at >= FL230."""
+    shallow = _manifest(crossings=[_crossing(
+        kind="warm", co_location="convective", weather_top_ft=18000.0, persistence=0.8,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(shallow), _PARAMS).aggregate_status == AdvisoryStatus.AMBER
+    deep = _manifest(crossings=[_crossing(
+        kind="warm", co_location="convective", weather_top_ft=33000.0, persistence=0.8,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(deep), _PARAMS).aggregate_status == AdvisoryStatus.RED
+
+
 def test_wet_sharp_reaching_is_red_classical_is_amber():
     red = _manifest(crossings=[_crossing(
         intensity="sharp", co_location="wet", weather_top_ft=20000.0, persistence=0.8,
