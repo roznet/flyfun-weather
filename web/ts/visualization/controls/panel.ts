@@ -11,6 +11,7 @@ import {
 import { getDdSubstituteId } from '../cross-section/nwp-fallback';
 import { getComparableLayerGroups, getComparableLayer } from '../cross-section/compare-layers';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
+import { renderFrontsInfo } from '../../helpers/fronts-info';
 import { modelLabel } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
@@ -286,7 +287,7 @@ function wireLayerInfoButtons(container: HTMLElement): void {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      showPopupContent(t('viz.frontsInfo'));
+      showPopupContent(renderFrontsInfo());
     });
   });
 }
