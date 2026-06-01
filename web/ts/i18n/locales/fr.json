@@ -441,6 +441,8 @@
   "viz.layer.cruise-altitude": "Croisière / Plafond",
   "viz.layer.surface-obscuration-bands": "Obscurcissement de surface",
   "viz.layer.current-conditions": "Conditions actuelles",
+  "viz.layer.fronts-markers": "Fronts (exp\u00e9rimental)",
+  "viz.frontsInfo": "<strong>Fronts (exp\u00e9rimental)</strong><br>Limites de masses d'air (\u03b8e de Hewson) que votre route traverse \u2014 un rep\u00e8re par mod\u00e8le l\u00e0 o\u00f9 vous franchissez un front ; la couleur indique le type (froid / chaud / quasi-stationnaire).<br><br>La pertinence se lit d'apr\u00e8s la m\u00e9t\u00e9o sur la limite, affich\u00e9e dans la coupe en dessous : une limite s\u00e8che n'est qu'un changement de vent, tandis qu'une limite humide ou convective peut apporter nuages, pr\u00e9cipitations et cisaillement \u2014 et les fronts convectifs peuvent g\u00e9n\u00e9rer des d\u00e9veloppements bien au-dessus de la limite, donc un front survol\u00e9 peut tout de m\u00eame compter.<br><br>\u00c0 titre indicatif seulement \u2014 ce n'est pas un SIGWX officiel, et c'est un signal de l'atmosph\u00e8re libre qui ne capte pas les nuages bas ni le brouillard.",
   "viz.group.terrain": "Terrain",
   "viz.group.temperature": "Température",
   "viz.group.clouds": "Nuages",

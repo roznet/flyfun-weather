@@ -441,6 +441,8 @@
   "viz.layer.cruise-altitude": "Reiseflughöhe / Gipfelhöhe",
   "viz.layer.surface-obscuration-bands": "Bodensichttrübung",
   "viz.layer.current-conditions": "Aktuelle Bedingungen",
+  "viz.layer.fronts-markers": "Fronten (experimentell)",
+  "viz.frontsInfo": "<strong>Fronten (experimentell)</strong><br>Luftmassengrenzen (Hewson \u03b8e), die Ihre Route kreuzt \u2014 eine Markierung pro Modell dort, wo Sie eine Front \u00fcberqueren; die Farbe zeigt den Typ (Kalt- / Warm- / quasistation\u00e4re Front).<br><br>Die Relevanz ergibt sich aus dem Wetter an der Grenze, unten im Querschnitt dargestellt: eine trockene Grenze ist nur ein Winddreher, w\u00e4hrend feuchte oder konvektive Grenzen Wolken, Niederschlag und Scherung bringen k\u00f6nnen \u2014 und konvektive Fronten k\u00f6nnen Aufbauten weit \u00fcber die Grenze hinaus erzeugen, sodass eine \u00fcberflogene Front trotzdem relevant sein kann.<br><br>Nur als Hinweis \u2014 kein offizielles SIGWX und ein Signal der freien Atmosph\u00e4re, das tiefe Bew\u00f6lkung oder Nebel nicht erfasst.",
   "viz.group.terrain": "Gelände",
   "viz.group.temperature": "Temperatur",
   "viz.group.clouds": "Wolken",
