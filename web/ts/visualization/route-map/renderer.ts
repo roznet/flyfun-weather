@@ -5,7 +5,7 @@ import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
 import { isDarkTheme } from '../interaction-utils';
-import { frontColor, frontTooltip, FRONT_INTENSITY_WEIGHT } from '../front-style';
+import { frontColor, frontTooltip, frontOfftrackTooltip, FRONT_INTENSITY_WEIGHT } from '../front-style';
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -246,7 +246,6 @@ export class RouteMapRenderer {
     // Off-track nearest front, only when it is closing on the route.
     const n = fronts.nearest;
     if (n && !n.on_track && n.trend === 'closing') {
-      const rate = n.closing_km_per_h != null ? ` ${n.closing_km_per_h.toFixed(0)} km/h` : '';
       const marker = L.circleMarker([n.lat, n.lon], {
         radius: 6,
         color: '#6b7280',
@@ -256,7 +255,7 @@ export class RouteMapRenderer {
         dashArray: '3,3',
       });
       marker.bindTooltip(
-        `Front ${n.distance_km.toFixed(0)} km off-track, closing${rate}`,
+        frontOfftrackTooltip(n.distance_km, n.closing_km_per_h),
         { direction: 'top', offset: [0, -8], className: 'map-waypoint-tooltip' },
       );
       this.frontsGroup.addLayer(marker);

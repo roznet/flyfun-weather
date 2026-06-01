@@ -342,6 +342,13 @@
   "viz.color": "Color:",
   "viz.width": "Width:",
   "viz.fronts": "Fronts",
+  "fronts.kind.cold": "Cold front",
+  "fronts.kind.warm": "Warm front",
+  "fronts.kind.quasi": "Quasi-stationary front",
+  "fronts.trend.deteriorating": "deteriorating",
+  "fronts.trend.improving": "improving",
+  "fronts.tooltip.crossing": "{kind} ({intensity}) · Δθe {dtheta} K · {adv} K/h{tail}",
+  "fronts.tooltip.offtrack": "Front {dist} km off-track, closing{rate}",
 
   "viz.cloudMethods": "<h3>Cloud Sources and Styles</h3><p>The clouds row has two independent axes: where cloud zones come from (Source), and how they are drawn (Style).</p><h4>Sources</h4><ul><li><strong>NWP</strong> — derived from the numerical weather prediction model's cloud cover parameterisation (low / mid / high bands). Shows where the model itself predicts clouds.</li><li><strong>DD</strong> — derived from dewpoint depression in the sounding profile. When the gap between temperature and dewpoint is small (DD &lt; 2°C), air is near saturation and cloud is likely. Sounding-based, independent of the model's cloud scheme.</li></ul><p>Both sources can be enabled simultaneously for comparison. They often agree in moist layers but may differ where NWP sub-grid clouds or local moisture are present.</p><h4>Styles</h4><ul><li><strong>Soft</strong> — feathered gradient fills with coverage-proportional opacity (GRAMET-like).</li><li><strong>Layer</strong> — classic hatched look. Hatch line spacing/width also varies by coverage class.</li><li><strong>Square</strong> — solid filled cells per zone with no hatching, opacity from the same DD/cover% scale as Layer.</li></ul>",
   "viz.convectionMethods": "<h3>Convective Methods</h3><p>The cross-section offers two convective risk overlays:</p><ul><li><strong>Thermo</strong> — risk from thermodynamic indices (CAPE, CIN). Tower bounds from LFC/LCL (base) and EL (top). Zero risk when CAPE is zero, even if the NWP model parameterises convective clouds.</li><li><strong>NWP</strong> — risk from the NWP model's native convective cloud parameterisation (GFS convective cover %). Tower bounds are model-computed convective base/top. This typically matches what GRAMET shows.</li></ul><p>Enable both to compare. The advisory system uses whichever method you select in your profile settings.</p>",
