@@ -2231,7 +2231,7 @@ def compute_alt_advisories(
     route = _build_route_config(flight, db_path)
 
     # Load advisory profile
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, _auto_front_detection = \
+    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, _auto_front_detection = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     advisory_result = run_alt_from_pack(
@@ -2240,6 +2240,7 @@ def compute_alt_advisories(
         route=route,
         advisory_models=adv_models,
         enabled_ids=enabled_ids,
+        advisory_enabled=enabled_map,
         user_params=user_params,
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
@@ -2347,9 +2348,14 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     """Load advisory profile settings and build a recompute-conditions callback.
 
     Shared by recalculate_advisories and altitude_table endpoints.
-    Returns (enabled_ids, user_params, aggregation, adv_models, icing_method,
-    cloud_method, convective_method, recompute_conds_callback, locale,
-    auto_front_detection).
+    Returns (enabled_ids, enabled_map, user_params, aggregation, adv_models,
+    icing_method, cloud_method, convective_method, recompute_conds_callback,
+    locale, auto_front_detection).
+
+    ``enabled_map`` is the raw ``{id: bool}`` map (``None`` when the profile has
+    no advisory customization). It is threaded through to the front advisory so
+    an explicit ``fronts: false`` opt-out is honored independently of the
+    ``auto_front_detection`` master (issue #196, model B).
     """
     from weatherbrief.api.preferences import load_user_locale
     from weatherbrief.api.profiles import load_profile_settings
@@ -2381,7 +2387,7 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
             db_path=db_path, models=advisory_model_names,
         )
 
-    return enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, auto_front_detection
+    return enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, auto_front_detection
 
 
 class RecalculateAdvisoriesResponse(BaseModel):
@@ -2419,13 +2425,15 @@ def recalculate_advisories(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available for recalculation")
 
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, auto_front_detection = \
+    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, auto_front_detection = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     # Experimental front detection (#196): keep route_fronts.json in sync with
-    # the pref so the front advisory appears/disappears on recalc. Recompute
-    # reads the precomputed Hewson snapshot — no re-fetch. The advisory task
-    # then picks up (or no longer finds) the artifact.
+    # the auto_front_detection master so the overlays + advisory data follow the
+    # pref on recalc. Recompute reads the precomputed Hewson snapshot — no
+    # re-fetch. The advisory task then picks up (or no longer finds) the artifact;
+    # whether the *grade* surfaces from a present artifact is then decided by the
+    # independent per-profile fronts toggle (enabled_map, model B).
     if auto_front_detection:
         try:
             from weatherbrief.tasks.fronts import run_fronts_from_pack
@@ -2453,6 +2461,7 @@ def recalculate_advisories(
         flight_ceiling_ft=flight.flight_ceiling_ft,
         advisory_models=adv_models,
         enabled_ids=enabled_ids,
+        advisory_enabled=enabled_map,
         user_params=user_params,
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
@@ -2493,7 +2502,7 @@ def altitude_table(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
 
-    enabled_ids, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, _auto_front_detection = \
+    enabled_ids, _enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, _auto_front_detection = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     result = run_altitude_table_from_pack(

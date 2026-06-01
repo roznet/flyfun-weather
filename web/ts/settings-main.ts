@@ -59,6 +59,9 @@ const CATEGORY_KEYS: [string, string][] = [
   ['model', 'settings.cat.model'],
 ];
 
+/** Advisory id of the experimental front advisory (mirrors FRONTS_ADVISORY_ID in the backend). */
+const FRONTS_ADVISORY_ID = 'fronts';
+
 let catalog: AdvisoryCatalogEntry[] = [];
 let profiles: ProfileResponse[] = [];
 let activeProfileId: number | null = null;
@@ -235,7 +238,7 @@ function populateProfileForm(profile: ProfileResponse): void {
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
   if (aggSelect) aggSelect.value = advPrefs.aggregation ?? 'majority';
-  renderAdvisorySettings(catalog, advPrefs);
+  renderAdvisorySettings(catalog, advPrefs, s.auto_front_detection ?? false);
 }
 
 function switchProfile(profileId: number): void {
@@ -534,6 +537,17 @@ async function init(): Promise<void> {
   document.getElementById('btn-delete-profile')?.addEventListener('click', handleDeleteProfile);
   document.getElementById('btn-reset-profile')?.addEventListener('click', handleResetProfile);
 
+  // Auto Front Detection master ⇄ front advisory row: re-render the advisory
+  // list when the master flips so the front advisory enables/defaults live
+  // (issue #196, model B). Re-render from the *current* form state to preserve
+  // other unsaved edits; drop the fronts entry so it re-defaults to the master.
+  document.getElementById('toggle-auto-front-detection')?.addEventListener('change', (e) => {
+    const masterOn = (e.target as HTMLInputElement).checked;
+    const current = collectAdvisoryPrefs();
+    if (current.enabled) delete current.enabled[FRONTS_ADVISORY_ID];
+    renderAdvisorySettings(catalog, current, masterOn);
+  });
+
   // Save button
   const form = document.getElementById('settings-form') as HTMLFormElement;
   form?.addEventListener('submit', async (e) => {
@@ -684,6 +698,7 @@ function populateAccountForm(prefs: PreferencesResponse): void {
 function renderAdvisorySettings(
   entries: AdvisoryCatalogEntry[],
   userAdvisories: AdvisoryPreferences,
+  autoFrontDetection: boolean = false,
 ): void {
   const container = document.getElementById('advisory-settings');
   if (!container) return;
@@ -718,17 +733,29 @@ function renderAdvisorySettings(
     html += `<div class="advisory-category-title">${catLabel}</div>`;
 
     for (const entry of catEntries) {
-      const isEnabled = enabledMap[entry.id] ?? entry.default_enabled;
+      // The experimental front advisory is gated by the Auto Front Detection
+      // master (issue #196, model B): the master generates the data + overlays,
+      // this toggle independently controls the GREEN/AMBER/RED grade. Default it
+      // *on* when the master is on (so it is discoverable), but let the pilot opt
+      // out. When the master is off there is no artifact, so the advisory can
+      // never surface — disable the row and explain the dependency.
+      const isFronts = entry.id === FRONTS_ADVISORY_ID;
+      const defaultEnabled = isFronts ? autoFrontDetection : entry.default_enabled;
+      const isEnabled = enabledMap[entry.id] ?? defaultEnabled;
+      const frontsDisabled = isFronts && !autoFrontDetection;
       const userParams = paramsMap[entry.id] ?? {};
 
       html += `<div class="advisory-setting">`;
       html += `<div class="advisory-header">`;
       html += `<label class="checkbox-label">`;
-      html += `<input type="checkbox" data-advisory-id="${entry.id}" ${isEnabled ? 'checked' : ''}>`;
+      html += `<input type="checkbox" data-advisory-id="${entry.id}" ${isEnabled ? 'checked' : ''}${frontsDisabled ? ' disabled' : ''}>`;
       html += ` ${entry.name}`;
       html += `<span class="advisory-desc">${entry.short_description}</span>`;
       html += `<button class="metric-info-btn advisory-settings-info-btn" data-advisory-id="${entry.id}" title="Advisory details" aria-label="Advisory details">i</button>`;
       html += `</label>`;
+      if (frontsDisabled) {
+        html += `<span class="advisory-desc muted">Requires Auto Front Detection (enable it above).</span>`;
+      }
       html += `</div>`;
 
       if (entry.parameters.length > 0) {
@@ -879,6 +906,13 @@ async function handleSave(): Promise<void> {
   const convectiveMethod = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo';
   const digestGuidance = (document.getElementById('input-digest-guidance') as HTMLSelectElement)?.value || 'balanced';
   const advisories = collectAdvisoryPrefs();
+  // The front advisory enable is only meaningful when the master is on; when it
+  // is off the checkbox is disabled and reads false. Don't persist that stale
+  // false (issue #196, model B) — drop it so the advisory re-defaults to on if
+  // the master is later enabled.
+  if (!autoFrontDetection && advisories.enabled) {
+    delete advisories.enabled[FRONTS_ADVISORY_ID];
+  }
 
   // Build profile settings
   const profileSettings: Partial<ProfileSettings> = {
