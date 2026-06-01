@@ -39,6 +39,29 @@ export function frontColor(kind: FrontKind): string {
   return FRONT_KIND_COLOR[kind] ?? FRONT_KIND_COLOR['quasi-stationary'];
 }
 
+/** Marker opacity from persistence: a front that holds across the time window
+ *  draws solid; a flickering one (likely an orographic / grid artifact) draws
+ *  faint, so the eye trusts it less. Unknown persistence → near-solid. */
+export function frontAlpha(c: FrontCrossing): number {
+  const p = c.persistence;
+  if (p == null) return 0.9;
+  return Math.max(0.35, Math.min(1, 0.35 + 0.65 * p));
+}
+
+/** Dash from co-location: a boundary carrying real weather (wet / convective)
+ *  draws solid; a dry or partly one — a wind shift more than a weather event —
+ *  draws dashed and de-emphasized. Mirrors the advisory's wet/dry gate. */
+export function frontDash(c: FrontCrossing): number[] {
+  return c.co_location === 'wet' || c.co_location === 'convective' ? [] : [6, 4];
+}
+
+/** Convective boundaries get an extra glyph — towers can punch through / above
+ *  an overflown front, so the cross-section flags them even when the line reads
+ *  benign at the crossing level. */
+export function frontIsConvective(c: FrontCrossing): boolean {
+  return c.co_location === 'convective';
+}
+
 export function frontKindLabel(kind: FrontKind): string {
   return t(FRONT_KIND_I18N[kind] ?? FRONT_KIND_I18N['quasi-stationary']);
 }

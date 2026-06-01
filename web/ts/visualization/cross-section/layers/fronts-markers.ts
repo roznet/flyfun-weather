@@ -9,7 +9,10 @@
  *  altitude θe bands; this layer is the discrete-marker precursor. */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
-import { frontColor, frontKindLabel, FRONT_INTENSITY_DASH, FRONT_INTENSITY_WEIGHT } from '../../front-style';
+import {
+  frontColor, frontKindLabel, frontAlpha, frontDash, frontIsConvective,
+  FRONT_INTENSITY_WEIGHT,
+} from '../../front-style';
 
 const KM_PER_NM = 1.852;
 
@@ -30,13 +33,18 @@ export const frontsMarkersLayer: CrossSectionLayer = {
     const yBottom = top + height;
 
     ctx.save();
+    // Visual encoding (matches the advisory gate so the picture reads like the
+    // grade): colour = kind, line weight = intensity, SOLID vs DASHED = wet/dry
+    // co-location, OPACITY = persistence (faint = flickering/uncertain), and a
+    // small triangle flags convective boundaries (towers above an overflown front).
     for (const c of fronts.crossings) {
       const x = transform.distanceToX(c.distance_km / KM_PER_NM);
       const color = frontColor(c.kind);
+      ctx.globalAlpha = frontAlpha(c);
 
       ctx.strokeStyle = color;
       ctx.lineWidth = FRONT_INTENSITY_WEIGHT[c.intensity] ?? 2;
-      ctx.setLineDash(FRONT_INTENSITY_DASH[c.intensity] ?? []);
+      ctx.setLineDash(frontDash(c));
       ctx.beginPath();
       ctx.moveTo(x, yTop);
       ctx.lineTo(x, yBottom);
@@ -56,6 +64,19 @@ export const frontsMarkersLayer: CrossSectionLayer = {
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
       ctx.fillText(label, x, yTop + chipH / 2);
+
+      // Convective glyph: a small upward triangle below the chip = towers.
+      if (frontIsConvective(c)) {
+        const ty = yTop + chipH + 2;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(x, ty);
+        ctx.lineTo(x - 5, ty + 8);
+        ctx.lineTo(x + 5, ty + 8);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
     }
     ctx.restore();
   },
