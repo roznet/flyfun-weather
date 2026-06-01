@@ -441,6 +441,8 @@
   "viz.layer.cruise-altitude": "Crucero / Techo",
   "viz.layer.surface-obscuration-bands": "Oscurecimiento de superficie",
   "viz.layer.current-conditions": "Condiciones actuales",
+  "viz.layer.fronts-markers": "Frentes (experimental)",
+  "viz.frontsInfo": "<strong>Frentes (experimental)</strong><br>L\u00edmites de masas de aire (\u03b8e de Hewson) que cruza su ruta \u2014 una marca por modelo donde cruza un frente; el color indica el tipo (fr\u00edo / c\u00e1lido / cuasiestacionario).<br><br>La relevancia se lee del tiempo en el l\u00edmite, mostrado en el corte inferior: un l\u00edmite seco es solo un cambio de viento, mientras que los l\u00edmites h\u00famedos o convectivos pueden traer nubes, precipitaci\u00f3n y cizalladura \u2014 y los frentes convectivos pueden generar desarrollos muy por encima del l\u00edmite, por lo que un frente sobrevolado puede importar igualmente.<br><br>Solo orientativo \u2014 no es un SIGWX oficial, y es una se\u00f1al de la atm\u00f3sfera libre que no capta nubes bajas ni niebla.",
   "viz.group.terrain": "Terreno",
   "viz.group.temperature": "Temperatura",
   "viz.group.clouds": "Nubes",

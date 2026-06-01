@@ -132,10 +132,23 @@ function layerTogglesHtml(
   opts: LayerTogglesOptions = {},
 ): string {
   const { displayMode, preferredMethods, unavailableLayers, cloudStyle, substitutedLayers, hiddenGroups } = opts;
+  // Single-layer "feature/context" groups hide entirely when their lone layer is
+  // unavailable — front detection off or no on-track crossing for this model;
+  // current conditions on a non-D-0 flight. A disabled solitary checkbox is just
+  // noise. (Other groups keep their layers visible-but-dimmed so alternative
+  // methods stay discoverable.)
+  const HIDE_GROUP_WHEN_UNAVAILABLE: Partial<Record<LayerGroup, string>> = {
+    fronts: 'fronts-markers',
+    conditions: 'current-conditions',
+  };
+  const effectiveHidden = new Set<LayerGroup>(hiddenGroups ?? []);
+  for (const [grp, layerId] of Object.entries(HIDE_GROUP_WHEN_UNAVAILABLE)) {
+    if (unavailableLayers?.has(layerId)) effectiveHidden.add(grp as LayerGroup);
+  }
   const groups = getLayerGroups();
   let html = '<div class="viz-layer-toggles">';
   for (const group of groups) {
-    if (hiddenGroups?.has(group.group)) continue;
+    if (effectiveHidden.has(group.group)) continue;
     const isCompactCollapse = displayMode === 'compact' && COMPACT_GROUPS.has(group.group);
     const layersToRender = isCompactCollapse
       ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group])]
@@ -175,6 +188,10 @@ function layerTogglesHtml(
       html += `</label>`;
       if (layer.metricId) {
         html += `<button class="viz-layer-info-btn" data-layer-info="${layer.id}" data-metric-id="${layer.metricId}" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
+      } else if (layer.id === 'fronts-markers') {
+        // Fronts have no metric registry entry — show the experimental-feature
+        // explainer instead of metric info.
+        html += `<button class="viz-layer-info-btn" data-front-info="1" title="${t('viz.moreInfo')}" aria-label="${t('viz.moreInfo')}">ⓘ</button>`;
       }
     }
     html += '</div>';
@@ -263,6 +280,13 @@ function wireLayerInfoButtons(container: HTMLElement): void {
       const groupKey = (btn as HTMLElement).dataset.groupInfo!;
       const infoFn = GROUP_INFO[groupKey];
       if (infoFn) showPopupContent(infoFn());
+    });
+  });
+  container.querySelectorAll('[data-front-info]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showPopupContent(t('viz.frontsInfo'));
     });
   });
 }
