@@ -441,7 +441,7 @@
   "viz.layer.cruise-altitude": "Reiseflughöhe / Gipfelhöhe",
   "viz.layer.surface-obscuration-bands": "Bodensichttrübung",
   "viz.layer.current-conditions": "Aktuelle Bedingungen",
-  "viz.layer.fronts-markers": "Fronten (experimentell)",
+  "viz.layer.fronts-markers": "Luftmassengrenze",
   "viz.group.terrain": "Gelände",
   "viz.group.temperature": "Temperatur",
   "viz.group.clouds": "Wolken",
