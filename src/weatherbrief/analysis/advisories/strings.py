@@ -358,6 +358,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "spät auf der Strecke",
         "es": "al final de la ruta",
     },
+    # NOTE: this is an inline prefix spliced before the kind noun in
+    # ``fronts.crossing{,_multi}`` ("{prefix}{kind} {where}"), so each value
+    # MUST carry its own trailing separator (space / "colon space"). Empty
+    # prefix (non-sharp) yields just "{kind} {where}".
     "fronts.sharp": {
         "en": "sharp ",
         "fr": "marqué : ",
