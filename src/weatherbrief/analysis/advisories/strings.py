@@ -398,6 +398,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Front {dist} km abseits der Strecke und näher kommend",
         "es": "Frente a {dist} km fuera de ruta y acercándose",
     },
+    "fronts.tail.convective": {
+        "en": " — convective tops to FL{top}, expect build-ups / deviation",
+        "fr": " — sommets convectifs au FL{top}, prévoir des développements / déroutements",
+        "de": " — konvektive Obergrenzen bis FL{top}, mit Aufbauten / Ausweichen rechnen",
+        "es": " — topes convectivos a FL{top}, prever desarrollos / desvíos",
+    },
+    "fronts.benign": {
+        "en": "Air-mass boundary on route, but little active weather on it",
+        "fr": "Limite de masse d'air sur la route, mais peu de météo active",
+        "de": "Luftmassengrenze auf der Strecke, aber kaum aktives Wetter",
+        "es": "Límite de masa de aire en la ruta, pero con poco tiempo activo",
+    },
 
     # --- shared airport labels ---
     "airport.dep": {

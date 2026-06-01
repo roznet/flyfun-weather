@@ -13,11 +13,21 @@ is the master (data + overlays) and this advisory toggle independently gates the
 grade, so a pilot can keep the overlays without letting the experimental signal
 move the overall assessment.
 
-Grading (design doc §2–3, qualitative per §8):
-  * a **sharp** crossing (|∇θe| > 12, SIGMET-worthy) → RED
-  * a **classical / significant** crossing → AMBER
-  * the nearest off-track front **closing** within ``closing_within_km`` → AMBER
-  * otherwise → GREEN
+Grading is gated by the weather *on* the boundary, not the θe gradient alone —
+so a dry orographic ribbon doesn't false-RED and a front you overfly whose cloud
+lofts through your level doesn't false-GREEN. Each crossing (at every stored
+level) is graded:
+  * **flickering** (low persistence across the time window) → demote: likely an
+    orographic / grid artifact, not a front you'll meet.
+  * **dry** boundary (clear air on it) → GREEN: a wind shift only.
+  * weather **below** the flight (top doesn't reach cruise − buffer) → GREEN:
+    overflown cleanly.
+  * **convective** boundary reaching the flight band → RED: towers through / above
+    your level (deviation / turbulence).
+  * **wet** boundary reaching the flight: sharp → RED, else AMBER.
+  * nearest off-track front **closing** within ``closing_within_km`` → AMBER.
+The per-model status is the worst graded crossing. (No co-location enrichment →
+falls back to the bare intensity grade so fronts are never silently hidden.)
 
 Free-atmosphere only: 850 hPa θe does not see low IMC / fog (§10a.2). Positions
 are described qualitatively (early / mid / late route), never as exact
@@ -53,6 +63,41 @@ _KIND_KEY = {
 
 # Intensity → severity rank (higher = worse) so we can pick the "worst" crossing.
 _INTENSITY_RANK = {"significant": 1, "classical": 2, "sharp": 3}
+_STATUS_RANK = {
+    AdvisoryStatus.GREEN: 0,
+    AdvisoryStatus.AMBER: 1,
+    AdvisoryStatus.RED: 2,
+}
+
+
+def _grade_crossing(
+    c: FrontCrossingModel,
+    cruise_ft: int,
+    persistence_min: float,
+    buffer_ft: float,
+) -> tuple[AdvisoryStatus, str]:
+    """Grade one crossing → (status, reason), gating on persistence + co-located
+    weather. The θe boundary's *level* is not the weather's *level*: relevance is
+    judged by whether the front's cloud/convective top reaches the flight band,
+    not by which pressure level the gradient sits at."""
+    # Flickering across the window → orographic / grid artifact, not a real front.
+    if c.persistence is not None and c.persistence < persistence_min:
+        return AdvisoryStatus.GREEN, "flicker"
+    co = c.co_location
+    if co is None:
+        # No enrichment (older artifact / no analyses) → bare intensity grade,
+        # rather than silently hiding the front.
+        return (AdvisoryStatus.RED, "sharp") if c.intensity == "sharp" else (AdvisoryStatus.AMBER, "classical")
+    if co == "dry":
+        return AdvisoryStatus.GREEN, "dry"            # boundary aloft, clear → wind shift only
+    reaches = c.weather_top_ft is None or c.weather_top_ft >= cruise_ft - buffer_ft
+    if not reaches:
+        return AdvisoryStatus.GREEN, "below"          # weather stays below cruise — overflown
+    if co == "convective":
+        return AdvisoryStatus.RED, "convective"       # towers through / above the flight level
+    if co == "wet":
+        return (AdvisoryStatus.RED, "wet_sharp") if c.intensity == "sharp" else (AdvisoryStatus.AMBER, "wet")
+    return AdvisoryStatus.AMBER, "partly"             # few/sct cloud band
 
 
 def _where_key(distance_km: float, total_km: float) -> str:
@@ -67,11 +112,12 @@ def _where_key(distance_km: float, total_km: float) -> str:
 
 def _describe(
     worst: FrontCrossingModel,
+    reason: str,
     n_crossings: int,
     total_km: float,
     loc: str | None,
 ) -> str:
-    """Build the localized detail for the worst on-track crossing."""
+    """Build the localized detail for the worst graded crossing."""
     prefix = adv_t("fronts.sharp", loc) if worst.intensity == "sharp" else ""
     kind = adv_t(_KIND_KEY.get(worst.kind, "fronts.kind.quasi"), loc)
     where = adv_t(_where_key(worst.distance_km, total_km), loc)
@@ -82,8 +128,11 @@ def _describe(
         )
     else:
         detail = adv_t("fronts.crossing", loc, prefix=prefix, kind=kind, where=where)
-    # Warm/cold advection tail (§2.5) — the most flight-relevant nuance.
-    if worst.advection > 1.0:
+    # Tail: convective tops (most flight-relevant for an overflown front) take
+    # priority, else the warm/cold advection tendency (§2.5).
+    if reason == "convective" and worst.weather_top_ft:
+        detail += adv_t("fronts.tail.convective", loc, top=int(round(worst.weather_top_ft / 100)))
+    elif worst.advection > 1.0:
         detail += adv_t("fronts.tail.deteriorating", loc)
     elif worst.advection < -1.0:
         detail += adv_t("fronts.tail.improving", loc)
@@ -125,6 +174,36 @@ class FrontsEvaluator:
                     max=600,
                     step=50,
                 ),
+                AdvisoryParameterDef(
+                    key="persistence_min",
+                    label="Min front persistence",
+                    description=(
+                        "Demote a crossing to GREEN when the gradient holds in fewer "
+                        "than this fraction of the time-window frames (flickering = "
+                        "likely orographic / grid artifact, not a real front)"
+                    ),
+                    type="number",
+                    unit="",
+                    default=0.5,
+                    min=0.0,
+                    max=1.0,
+                    step=0.1,
+                ),
+                AdvisoryParameterDef(
+                    key="altitude_buffer_ft",
+                    label="Flight-band buffer",
+                    description=(
+                        "A front's weather is 'relevant' when its cloud/convective "
+                        "top reaches cruise minus this buffer (so weather entirely "
+                        "below the aircraft is overflown, not graded)"
+                    ),
+                    type="number",
+                    unit="ft",
+                    default=2000,
+                    min=0,
+                    max=10000,
+                    step=500,
+                ),
             ],
         )
 
@@ -133,6 +212,9 @@ class FrontsEvaluator:
         loc = ctx.locale
         manifest = ctx.route_fronts
         closing_within_km = params.get("closing_within_km", 300)
+        persistence_min = params.get("persistence_min", 0.5)
+        buffer_ft = params.get("altitude_buffer_ft", 2000)
+        cruise_ft = ctx.cruise_altitude_ft
 
         # Gating: no artifact → experimental feature was off → UNAVAILABLE.
         # Build the result directly (not via from_per_model): the aggregation
@@ -141,7 +223,6 @@ class FrontsEvaluator:
         if manifest is None or not manifest.per_model:
             return _unavailable(params, loc)
 
-        primary = manifest.primary_level_hPa
         total_km = ctx.total_distance_nm * _KM_PER_NM
 
         # Honor the user's advisory model selection; fall back to whatever the
@@ -153,28 +234,39 @@ class FrontsEvaluator:
             analyses = manifest.per_model.get(model)
             if not analyses:
                 continue
-            # Match the analysis at the primary (nearest-cruise) level by its
-            # level_hPa field, not by position (manifest contract).
-            analysis = next((a for a in analyses if a.level_hPa == primary), analyses[0])
 
-            crossings = list(analysis.crossings)
-            nearest = analysis.nearest
+            # Grade every crossing at every stored level — the boundary may sit
+            # below cruise yet loft weather through it (the Dijon case) — and keep
+            # the worst. Nearest off-track closing front handled separately.
+            graded = [
+                (*_grade_crossing(c, cruise_ft, persistence_min, buffer_ft), c)
+                for a in analyses for c in a.crossings
+            ]
+            closing = min(
+                (a.nearest for a in analyses
+                 if a.nearest is not None and not a.nearest.on_track
+                 and a.nearest.trend == "closing" and a.nearest.distance_km <= closing_within_km),
+                key=lambda nf: nf.distance_km, default=None,
+            )
 
-            if crossings:
-                worst = max(crossings, key=lambda c: _INTENSITY_RANK.get(c.intensity, 0))
-                status = (
-                    AdvisoryStatus.RED if worst.intensity == "sharp"
-                    else AdvisoryStatus.AMBER
+            if graded:
+                status, reason, worst = max(
+                    graded, key=lambda g: (_STATUS_RANK[g[0]], _INTENSITY_RANK.get(g[2].intensity, 0)),
                 )
-                detail = _describe(worst, len(crossings), total_km, loc)
-            elif (
-                nearest is not None
-                and not nearest.on_track
-                and nearest.trend == "closing"
-                and nearest.distance_km <= closing_within_km
-            ):
+                if status != AdvisoryStatus.GREEN:
+                    # Distinct relevant crossings (dedup the same front seen at
+                    # multiple levels into ~50 km bins).
+                    n = len({round(c.distance_km / 50.0) for st, _r, c in graded if st != AdvisoryStatus.GREEN})
+                    detail = _describe(worst, reason, n, total_km, loc)
+                elif closing is not None:
+                    status = AdvisoryStatus.AMBER
+                    detail = adv_t("fronts.closing", loc, dist=int(round(closing.distance_km)))
+                else:
+                    # Crossings existed but all demoted (dry / below / flicker).
+                    detail = adv_t("fronts.benign", loc)
+            elif closing is not None:
                 status = AdvisoryStatus.AMBER
-                detail = adv_t("fronts.closing", loc, dist=int(round(nearest.distance_km)))
+                detail = adv_t("fronts.closing", loc, dist=int(round(closing.distance_km)))
             else:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("fronts.none", loc)
