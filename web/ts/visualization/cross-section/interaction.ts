@@ -82,12 +82,14 @@ export function attachInteraction(
 
   // pointerdown gives instant feedback on a touch tap (no hover phase on touch).
   function handlePointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return; // ignore right/middle on desktop; touch reports 0
     renderAt(e);
   }
 
   // pointerup selects the nearest point — equivalent to the old mouse click,
   // and the tap-to-select gesture on touch.
   function handlePointerUp(e: PointerEvent): void {
+    if (e.button !== 0) return; // left-click / tap only, matching the old click handler
     const transform = renderer.createTransform();
     if (!transform) return;
 
@@ -105,6 +107,13 @@ export function attachInteraction(
     // Mouse hover-out clears the crosshair. On touch, lifting the finger should
     // leave the crosshair/tooltip pinned where the user tapped.
     if (e.pointerType === 'mouse') clearOverlay();
+  }
+
+  // The OS can cancel a touch mid-gesture (notification shade, home-swipe, too
+  // many contacts) — pointercancel fires instead of pointerleave, so clear here
+  // too or the touch-pinned crosshair would stay stuck.
+  function handlePointerCancel(): void {
+    clearOverlay();
   }
 
   function showTooltip(
@@ -211,6 +220,7 @@ export function attachInteraction(
   canvas.addEventListener('pointerdown', handlePointerDown);
   canvas.addEventListener('pointerup', handlePointerUp);
   canvas.addEventListener('pointerleave', handlePointerLeave);
+  canvas.addEventListener('pointercancel', handlePointerCancel);
 
   return {
     update(newData) {
@@ -221,6 +231,7 @@ export function attachInteraction(
       canvas.removeEventListener('pointerdown', handlePointerDown);
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('pointerleave', handlePointerLeave);
+      canvas.removeEventListener('pointercancel', handlePointerCancel);
       if (tooltip) { tooltip.remove(); tooltip = null; }
       canvas.style.pointerEvents = '';
       canvas.style.cursor = '';

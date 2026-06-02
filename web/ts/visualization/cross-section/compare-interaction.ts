@@ -72,10 +72,12 @@ export function attachCompareInteraction(
   }
 
   function handlePointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return; // ignore right/middle on desktop; touch reports 0
     renderAt(e);
   }
 
   function handlePointerUp(e: PointerEvent): void {
+    if (e.button !== 0) return; // left-click / tap only, matching the old click handler
     const transform = renderer.createTransform();
     if (!transform || currentDatasets.length === 0) return;
 
@@ -93,6 +95,12 @@ export function attachCompareInteraction(
   function handlePointerLeave(e: PointerEvent): void {
     // On touch, leave the crosshair/tooltip pinned where the user tapped.
     if (e.pointerType === 'mouse') clearOverlay();
+  }
+
+  // OS-cancelled touch (notification shade, home-swipe) fires pointercancel
+  // instead of pointerleave — clear here too so the pin doesn't get stuck.
+  function handlePointerCancel(): void {
+    clearOverlay();
   }
 
   function showTooltip(
@@ -161,6 +169,7 @@ export function attachCompareInteraction(
   canvas.addEventListener('pointerdown', handlePointerDown);
   canvas.addEventListener('pointerup', handlePointerUp);
   canvas.addEventListener('pointerleave', handlePointerLeave);
+  canvas.addEventListener('pointercancel', handlePointerCancel);
 
   return {
     update(newDatasets, newLayer) {
@@ -172,6 +181,7 @@ export function attachCompareInteraction(
       canvas.removeEventListener('pointerdown', handlePointerDown);
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('pointerleave', handlePointerLeave);
+      canvas.removeEventListener('pointercancel', handlePointerCancel);
       if (tooltip) { tooltip.remove(); tooltip = null; }
       canvas.style.pointerEvents = '';
       canvas.style.cursor = '';

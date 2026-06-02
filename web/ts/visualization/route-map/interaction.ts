@@ -115,8 +115,13 @@ export function attachMapInteraction(
   }
 
   function detachListeners(): void {
-    // Drop the tapped reference — segments are recreated on metric change.
-    tappedLayer = null;
+    // Reset the tapped segment's style before dropping the reference — if the
+    // caller updates data without recreating layers, it would otherwise stay
+    // highlighted permanently.
+    if (tappedLayer) {
+      resetSegment(tappedLayer);
+      tappedLayer = null;
+    }
     segmentGroup!.eachLayer((layer: any) => {
       layer.off('mouseover', onSegmentMouseOver);
       layer.off('mouseout', onSegmentMouseOut);
