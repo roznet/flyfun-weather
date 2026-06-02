@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from euro_aip.storage.database_storage import DatabaseStorage
 from timezonefinder import TimezoneFinder
 
 from weatherbrief.models import RunwayEnd, Waypoint
+
+if TYPE_CHECKING:
+    from euro_aip.briefing.models.route import Route
 
 
 RejectReason = Literal["detour", "unknown"]
@@ -64,7 +67,7 @@ def is_known_waypoint(code: str, db_path: str) -> bool:
     return resolver.resolve_point(code.upper()) is not None
 
 
-def resolve_route(codes: list[str], db_path: str):
+def resolve_route(codes: list[str], db_path: str) -> Route:
     """Resolve waypoint codes to a euro_aip ``Route`` with coordinates.
 
     Unlike :func:`resolve_waypoints` (which flattens to a single ``Waypoint``
