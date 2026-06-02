@@ -64,6 +64,42 @@ def is_known_waypoint(code: str, db_path: str) -> bool:
     return resolver.resolve_point(code.upper()) is not None
 
 
+def resolve_route(codes: list[str], db_path: str):
+    """Resolve waypoint codes to a euro_aip ``Route`` with coordinates.
+
+    Unlike :func:`resolve_waypoints` (which flattens to a single ``Waypoint``
+    list), this returns the richer ``euro_aip.briefing.models.route.Route``
+    object the resolver builds: explicit ``departure``/``destination`` endpoints,
+    intermediate ``waypoints`` (middle tokens only), resolved coordinates, and
+    ``rejected_waypoints``. That ``Route`` is the type ``FlightExchange`` wraps,
+    so this is the entry point for emitting a cross-app flight payload.
+
+    Args:
+        codes: Ordered waypoint codes (min 2); ``codes[0]`` is the departure,
+            ``codes[-1]`` the destination.
+        db_path: Path to the euro_aip SQLite database.
+
+    Returns:
+        The resolved ``Route``. Timing/altitude/aircraft are NOT set here —
+        those live on weather's ``Flight`` and are layered on by the caller.
+
+    Raises:
+        KeyError: If the departure or destination can't be placed on the map.
+    """
+    from euro_aip.models.route_resolver import RouteResolver
+
+    model = _load_airport_model(db_path)
+    resolver = RouteResolver(model)
+    route = resolver.resolve(" ".join(codes))
+
+    if not route.departure_coords:
+        raise KeyError(f"We did not find in our database: {codes[0]}")
+    if not route.destination_coords:
+        raise KeyError(f"We did not find in our database: {codes[-1]}")
+
+    return route
+
+
 def resolve_waypoints(
     codes: list[str], db_path: str
 ) -> tuple[list[Waypoint], list[RejectedWaypoint]]:
