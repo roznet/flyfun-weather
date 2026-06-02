@@ -143,6 +143,17 @@ class TestColocate:
         cat, top = _colocate(self._an(cl, {"risk_level": "none"}), "ecmwf", 0.0, 850)
         assert cat == "wet" and top == 12000.0
 
+    def test_drizzle_below_front_is_wet(self):
+        # Surface precip at a detected boundary, but the precipitating cloud is
+        # shallow and does NOT span the 850 hPa front. surface_intensity is
+        # column-wide (not level-gated), so category is "wet" and weather_top_ft
+        # is None (no spanning layer). _grade_crossing then treats None as
+        # "reaches" — a deliberate conservative bias (PR #200 review #1).
+        cl = [{"top_ft": 4000.0, "base_pressure_hpa": 960, "top_pressure_hpa": 940, "coverage": "sct"}]
+        precip = {"surface_intensity": "light"}
+        cat, top = _colocate(self._an(cl, {"risk_level": "none"}, precip), "ecmwf", 0.0, 850)
+        assert cat == "wet" and top is None
+
     def test_missing_model_degrades_gracefully(self):
         assert _colocate(self._an([], {"risk_level": "low"}), "gfs", 0.0, 850) == (None, None)
 

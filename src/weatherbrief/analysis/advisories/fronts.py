@@ -103,6 +103,9 @@ def _grade_crossing(
         return (AdvisoryStatus.RED, "sharp") if c.intensity == "sharp" else (AdvisoryStatus.AMBER, "classical")
     if co == "dry":
         return AdvisoryStatus.GREEN, "dry"            # boundary aloft, clear → wind shift only
+    # Unknown top (None) → assume it reaches: a "wet" boundary with no spanning
+    # cloud layer (surface-precip-only) leaves weather_top_ft None, and we'd
+    # rather flag it than silently overfly. Conservative by design — see _colocate.
     reaches = c.weather_top_ft is None or c.weather_top_ft >= cruise_ft - buffer_ft
     if not reaches:
         return AdvisoryStatus.GREEN, "below"          # weather stays below cruise — overflown

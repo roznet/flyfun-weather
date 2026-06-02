@@ -134,7 +134,7 @@ _CONVECTIVE_RISK = {"moderate", "high", "extreme"}
 _PERSIST_OFFSETS_H = (-6, -3, 0, 3, 6)
 
 
-def _attr(obj, name, default=None):
+def _attr(obj: object, name: str, default: object = None) -> object:
     """getattr/dict-get that tolerates pydantic objects or raw dicts (or None)."""
     if obj is None:
         return default
@@ -143,7 +143,8 @@ def _attr(obj, name, default=None):
     return getattr(obj, name, default)
 
 
-def _enum_val(x):
+def _enum_val(x: object) -> object:
+    """Unwrap an enum to its ``.value`` (passthrough for plain strings/None)."""
     return getattr(x, "value", x)
 
 
@@ -184,6 +185,13 @@ def _colocate(analyses, model: str, dist_km: float, level_hpa: int):
     weather_top_ft = float(max(tops)) if tops else None
 
     precip_obj = _attr(s, "precipitation", None)
+    # surface_intensity is a column-wide surface reading, NOT level-gated like the
+    # cloud checks below. So a real boundary at the level + any surface precip →
+    # "wet" even if the precipitating cloud doesn't span the level (then there is
+    # no spanning layer, so weather_top_ft is None → _grade_crossing treats it as
+    # reaching cruise). This is a deliberate conservative bias: surface precip at a
+    # detected boundary is weather worth flagging, and erring to AMBER never hides
+    # a real front. See test_drizzle_below_front_is_wet.
     precip = precip_obj is not None and _enum_val(_attr(precip_obj, "surface_intensity", "none")) != "none"
 
     # Cloud must span the frontal level to count — a high cirrus deck unrelated
@@ -232,7 +240,7 @@ def _analyze_one(
     eta_hours: list[float],
     mid_hour: float,
     config: FrontGateConfig,
-    analyses=None,
+    analyses: list | None = None,
 ) -> RouteFrontAnalysis:
     """Detect fronts for one model/level.
 
@@ -343,7 +351,7 @@ def compute_route_fronts(
     gate_preset: str = "default",
     output_dir: Path | None = None,
     now: datetime | None = None,
-    route_point_analyses=None,
+    route_point_analyses: list | None = None,
 ) -> RouteFrontsManifest:
     """Build the :class:`RouteFrontsManifest` (no I/O). Shared by both surfaces.
 
