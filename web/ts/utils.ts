@@ -43,16 +43,36 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
       })
       .join('\n');
 
+    // The hamburger toggle is desktop-hidden via CSS; under ~700px it reveals
+    // the .nav-menu as a dropdown. On desktop .nav-menu is a normal flex row,
+    // so the wide layout is unchanged (issue #205).
     container.innerHTML = `
-      ${links}
-      <span class="user-name">${escapeHtml(user.name)}</span>
-      <button class="btn-logout" id="logout-btn">${t('nav.signOut')}</button>
+      <button type="button" class="nav-toggle" id="nav-toggle"
+              aria-label="${t('nav.menu')}" aria-expanded="false" aria-controls="nav-menu">☰</button>
+      <div class="nav-menu" id="nav-menu">
+        ${links}
+        <span class="user-name">${escapeHtml(user.name)}</span>
+        <button class="btn-logout" id="logout-btn">${t('nav.signOut')}</button>
+      </div>
     `;
     document.getElementById('logout-btn')?.addEventListener('click', () => logout());
+
+    const toggle = document.getElementById('nav-toggle');
+    const menu = document.getElementById('nav-menu');
+    toggle?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = menu?.classList.toggle('open') ?? false;
+      toggle.setAttribute('aria-expanded', String(open));
+    });
   };
 
   // Initial render (no PIREP tab)
   renderNav(currentPage === 'pireps');
+
+  // Close the mobile menu on outside-click / Escape. Attached once per page;
+  // the handlers re-query the DOM so they survive nav re-renders. A no-op on
+  // desktop where the menu is never in the `.open` state.
+  setupNavDismiss();
 
   // Fire-and-forget: check pirep permission and re-render if enabled
   checkPirepNav(currentPage).then(enabled => {
@@ -61,6 +81,33 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
 
   // Fire-and-forget: check for unseen messages and show badge
   checkMessagesBadge();
+}
+
+let _navDismissBound = false;
+
+/** Wire outside-click and Escape to close the mobile nav dropdown. Idempotent —
+ *  safe to call on every render; the listeners attach to `document` only once. */
+function setupNavDismiss(): void {
+  if (_navDismissBound) return;
+  _navDismissBound = true;
+
+  const close = () => {
+    const ui = document.getElementById('user-info');
+    const menu = ui?.querySelector('.nav-menu');
+    if (!menu || !menu.classList.contains('open')) return;
+    menu.classList.remove('open');
+    ui?.querySelector('.nav-toggle')?.setAttribute('aria-expanded', 'false');
+  };
+
+  document.addEventListener('click', (e) => {
+    const ui = document.getElementById('user-info');
+    // Clicks on the toggle (stopPropagation) and on links inside the menu
+    // (which navigate) are handled elsewhere; close only for clicks outside.
+    if (ui && !ui.contains(e.target as Node)) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+  });
 }
 
 /** Check if the user has PIREP viewing enabled. */

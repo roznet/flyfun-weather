@@ -2084,6 +2084,80 @@ label {
   color: var(--text);
 }
 
+/* --- Mobile nav (hamburger) ---
+   Desktop: toggle hidden, .nav-menu is a normal flex row matching the prior
+   #user-info layout (gap 0.5rem) so the wide layout is unchanged. The mobile
+   dropdown lives in the @media block below (issue #205). */
+.nav-toggle {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.3rem;
+  line-height: 1;
+  border-radius: var(--radius);
+}
+
+.nav-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+@media (max-width: 700px) {
+  .nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  #user-info {
+    position: relative;
+  }
+
+  .nav-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    z-index: 100;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    min-width: 12rem;
+    padding: 0.25rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  }
+
+  .nav-menu.open {
+    display: flex;
+  }
+
+  /* Roomy tap targets inside the dropdown. */
+  .nav-menu .btn-settings,
+  .nav-menu .btn-logout {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.95rem;
+    text-align: left;
+    width: 100%;
+  }
+
+  .nav-menu .user-name {
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--border);
+    margin-top: 0.25rem;
+  }
+}
+
 /* --- Nav notification dot --- */
 
 .nav-dot {
