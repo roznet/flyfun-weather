@@ -404,7 +404,12 @@ def _format_model_agreement(snapshot: ForecastSnapshot) -> list[str]:
         lines.append(f"  {analysis.waypoint.icao}:")
         if poor:
             for d in poor:
-                models_str = ", ".join(f"{k}={v:.1f}" for k, v in d.model_values.items())
+                # A model absent at the point reads back as None on pack
+                # round-trips (#202) — render "N/A", don't format None as float.
+                models_str = ", ".join(
+                    f"{k}={v:.1f}" if v is not None else f"{k}=N/A"
+                    for k, v in d.model_values.items()
+                )
                 lines.append(f"    POOR {d.variable}: spread {d.spread:.1f} ({models_str})")
         if moderate:
             names = ", ".join(d.variable for d in moderate)
