@@ -63,13 +63,26 @@ def circular_spread(values: list[float]) -> tuple[float, float]:
 
 
 def compare_models(
-    variable: str, model_values: dict[str, float]
+    variable: str, model_values: dict[str, float | None]
 ) -> ModelDivergence:
     """Compare a variable across models and score agreement.
 
     model_values: e.g. {'gfs': 12.3, 'ecmwf': 11.8, 'icon': 12.1}
+
+    A model may be absent at a point (``None``); those are skipped rather than
+    averaged in. With no values left the divergence is empty (``mean=None``,
+    spread 0, good agreement) so the metric reads as "absent", not divergent.
     """
-    values = list(model_values.values())
+    values = [v for v in model_values.values() if v is not None]
+
+    if not values:
+        return ModelDivergence(
+            variable=variable,
+            model_values=model_values,
+            mean=None,
+            spread=0.0,
+            agreement=AgreementLevel.GOOD,
+        )
 
     if variable in CIRCULAR_VARIABLES:
         mean, spread = circular_spread(values)

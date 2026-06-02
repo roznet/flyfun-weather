@@ -285,12 +285,19 @@ class FrontsEvaluator:
             if not analyses:
                 continue
 
+            # Grade against *this* model's nearest-cruise level, not a single
+            # manifest-wide value — a partial snapshot may expose different
+            # levels per model, so a shared primary would mis-grade overflown
+            # vs. crossed (#203). Falls back to the representative level on
+            # pre-#203 packs that lack the per-model map.
+            model_primary = manifest.per_model_primary_hPa.get(model, primary)
+
             # Grade every crossing at every stored level — the boundary may sit
             # below cruise yet loft weather through it (the Dijon case) — and keep
             # the worst. Nearest off-track closing front handled separately.
             graded = [
                 (*_grade_crossing(
-                    c, a.level_hPa, primary, cruise_ft,
+                    c, a.level_hPa, model_primary, cruise_ft,
                     persistence_min, buffer_ft, convective_deep_ft,
                 ), c)
                 for a in analyses for c in a.crossings

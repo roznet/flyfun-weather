@@ -66,3 +66,20 @@ def test_three_models():
     assert result.mean == 35.0
     assert result.spread == 10.0
     assert result.agreement == AgreementLevel.GOOD  # <15% spread
+
+
+def test_skips_none_value_not_averaged():
+    """A model absent at a point (None) is skipped, not averaged in (#202)."""
+    result = compare_models("temperature_c", {"gfs": 10.0, "ecmwf": 12.0, "icon": None})
+    assert result.model_values == {"gfs": 10.0, "ecmwf": 12.0, "icon": None}
+    assert result.mean == 11.0          # icon=None excluded from the mean
+    assert result.spread == 2.0
+
+
+def test_all_none_reads_as_absent():
+    """No model supplied a value → mean None, not a crash (#202)."""
+    result = compare_models("temperature_c", {"gfs": None, "ecmwf": None})
+    assert result.mean is None
+    assert result.spread == 0.0
+    assert result.agreement == AgreementLevel.GOOD
+    assert result.model_values == {"gfs": None, "ecmwf": None}

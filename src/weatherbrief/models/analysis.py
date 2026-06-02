@@ -729,11 +729,17 @@ class AgreementLevel(str, Enum):
 
 
 class ModelDivergence(BaseModel):
-    """Comparison of a single variable across models."""
+    """Comparison of a single variable across models.
+
+    ``model_values`` may carry ``None`` for a model that lacks the metric at a
+    point, and ``mean`` is ``None`` when no model supplied a value. The artifact
+    is *written* with these nulls, so the schema must read them back — consumers
+    treat ``None`` as "metric absent for that model" (skip, don't average).
+    """
 
     variable: str
-    model_values: dict[str, float]
-    mean: float
+    model_values: dict[str, float | None]
+    mean: float | None = None
     spread: float
     agreement: AgreementLevel
 

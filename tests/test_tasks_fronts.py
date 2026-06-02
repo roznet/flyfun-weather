@@ -28,8 +28,19 @@ _STRIDE = 3
 _N_TIME = 9  # 0..24 h
 
 
-def _write_front_snapshot(out_dir: Path, model: str = "ecmwf") -> Path:
-    """A snapshot with a meridional θe front (cold front, eastward flow)."""
+def _write_front_snapshot(
+    out_dir: Path,
+    model: str = "ecmwf",
+    *,
+    init_dt: datetime = _INIT_DT,
+    levels: tuple[int, ...] = _LEVELS,
+) -> Path:
+    """A snapshot with a meridional θe front (cold front, eastward flow).
+
+    ``init_dt`` lets a test plant snapshots at several model inits (#201); the
+    ``levels`` override lets it plant a partial snapshot — fewer pressure levels
+    for one model — to exercise the per-model primary level (#203).
+    """
     from weatherbrief.frontal.detect import compute_hewson_diagnostics
     from weatherbrief.hewson.precompute import (
         snapshot_path,
@@ -37,12 +48,13 @@ def _write_front_snapshot(out_dir: Path, model: str = "ecmwf") -> Path:
         write_snapshot,
     )
 
+    init_unix = int(init_dt.timestamp())
     lat = np.linspace(45.0, 52.0, 29)
     lon = np.linspace(-2.0, 6.0, 33)
     _, lon_grid = np.meshgrid(lat, lon, indexing="ij")
 
     per_level: dict[int, dict] = {}
-    for L in _LEVELS:
+    for L in levels:
         m = {
             k: np.full((_N_TIME, lat.size, lon.size), np.nan, dtype=np.float32)
             for k in ("theta_e", "gradient", "neg_laplacian", "tfp", "advection")
@@ -62,14 +74,14 @@ def _write_front_snapshot(out_dir: Path, model: str = "ecmwf") -> Path:
         per_level[L] = m
 
     valid_times = np.array(
-        [np.datetime64(_INIT_DT.replace(tzinfo=None) + timedelta(hours=h * _STRIDE))
+        [np.datetime64(init_dt.replace(tzinfo=None) + timedelta(hours=h * _STRIDE))
          for h in range(_N_TIME)],
         dtype="datetime64[ns]",
     )
-    path = snapshot_path(model, _INIT_UNIX, output_dir=out_dir)
+    path = snapshot_path(model, init_unix, output_dir=out_dir)
     write_snapshot(
-        path, init_time_unix=_INIT_UNIX, valid_times=valid_times,
-        lat=lat, lon=lon, levels=list(_LEVELS), stride_hours=_STRIDE,
+        path, init_time_unix=init_unix, valid_times=valid_times,
+        lat=lat, lon=lon, levels=list(levels), stride_hours=_STRIDE,
         per_level=per_level,
     )
     return path
@@ -396,3 +408,102 @@ class TestRunFronts:
             advisory_models=["ecmwf"], pack_dir=pack_dir, output_dir=out_dir,
         ) is None
         assert not (pack_dir / "route_fronts.json").exists()
+
+
+class TestSnapshotForWindow:
+    """Valid-time snapshot selection (#201) — pick the init that brackets the
+    flight window, not merely the newest."""
+
+    def test_prefers_latest_init_that_brackets(self, tmp_path):
+        from weatherbrief.hewson.precompute import snapshot_for_window
+        out_dir = tmp_path / "hewson"
+        # Two inits 12 h apart; both cover [15Z, 18Z]. Expect the newer (12Z).
+        _write_front_snapshot(out_dir, init_dt=_INIT_DT)
+        _write_front_snapshot(out_dir, init_dt=_INIT_DT + timedelta(hours=12))
+        sel = snapshot_for_window(
+            "ecmwf", _INIT_DT + timedelta(hours=15), _INIT_DT + timedelta(hours=18),
+            output_dir=out_dir,
+        )
+        assert sel is not None
+        assert sel.stem == "2026-05-31T12:00:00Z"
+
+    def test_none_when_window_before_all_inits(self, tmp_path):
+        from weatherbrief.hewson.precompute import snapshot_for_window
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir, init_dt=_INIT_DT)
+        # A past flight: window precedes the only init → no bracketing snapshot.
+        assert snapshot_for_window(
+            "ecmwf", _INIT_DT - timedelta(hours=6), _INIT_DT - timedelta(hours=3),
+            output_dir=out_dir,
+        ) is None
+
+    def test_none_when_window_past_horizon(self, tmp_path):
+        from weatherbrief.hewson.precompute import snapshot_for_window
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir, init_dt=_INIT_DT)  # covers 0..24 h
+        assert snapshot_for_window(
+            "ecmwf", _INIT_DT + timedelta(hours=30), _INIT_DT + timedelta(hours=33),
+            output_dir=out_dir,
+        ) is None
+
+    def test_missing_model_dir(self, tmp_path):
+        from weatherbrief.hewson.precompute import snapshot_for_window
+        assert snapshot_for_window(
+            "ecmwf", _INIT_DT, _INIT_DT + timedelta(hours=1),
+            output_dir=tmp_path / "empty",
+        ) is None
+
+
+class TestWindowSelectionInCompute:
+    """compute_route_fronts wires snapshot-by-window with a logged fallback (#201)."""
+
+    def test_picks_bracketing_init_over_newest(self, tmp_path):
+        out_dir = tmp_path / "hewson"
+        # Older init brackets the flight; a much newer init does NOT (starts +48h).
+        _write_front_snapshot(out_dir, init_dt=_INIT_DT)
+        _write_front_snapshot(out_dir, init_dt=_INIT_DT + timedelta(hours=48))
+        analyses = _route_analyses()  # flight at init + 6 h
+        manifest = compute_route_fronts(
+            [(a.lat, a.lon) for a in analyses],
+            [a.interpolated_time for a in analyses],
+            route_name="r", cruise_altitude_ft=5000,
+            advisory_models=["ecmwf"], output_dir=out_dir,
+        )
+        # latest_snapshot would have picked the +48h init; window selection
+        # picks the older init that actually brackets the flight.
+        assert manifest.snapshot_inits["ecmwf"] == "2026-05-31T00:00:00Z"
+
+    def test_falls_back_to_latest_with_note(self, tmp_path):
+        out_dir = tmp_path / "hewson"
+        # Only a future init exists; the flight precedes it → no bracket → fall
+        # back to the latest available init and note the approximation.
+        _write_front_snapshot(out_dir, init_dt=_INIT_DT + timedelta(hours=48))
+        analyses = _route_analyses()  # flight at _INIT_DT + 6 h (before the init)
+        manifest = compute_route_fronts(
+            [(a.lat, a.lon) for a in analyses],
+            [a.interpolated_time for a in analyses],
+            route_name="r", cruise_altitude_ft=5000,
+            advisory_models=["ecmwf"], output_dir=out_dir,
+        )
+        assert manifest.snapshot_inits["ecmwf"] == "2026-06-02T00:00:00Z"
+        assert any("latest available init" in n for n in manifest.notes)
+
+
+class TestPerModelPrimaryLevel:
+    """primary_level_hPa is tracked per model, not last-model-wins (#203)."""
+
+    def test_partial_snapshot_gets_own_primary(self, tmp_path):
+        out_dir = tmp_path / "hewson"
+        # ecmwf carries all three levels; gfs is a partial snapshot (850 only).
+        _write_front_snapshot(out_dir, model="ecmwf", levels=(925, 850, 700))
+        _write_front_snapshot(out_dir, model="gfs", levels=(850,))
+        analyses = _route_analyses()
+        manifest = compute_route_fronts(
+            [(a.lat, a.lon) for a in analyses],
+            [a.interpolated_time for a in analyses],
+            route_name="r", cruise_altitude_ft=11000,  # nearest cruise → 700
+            advisory_models=["ecmwf", "gfs"], output_dir=out_dir,
+        )
+        # ecmwf has 700 (nearest to FL110); gfs only exposes 850, so its own
+        # nearest-cruise primary is 850 — not flattened to ecmwf's 700.
+        assert manifest.per_model_primary_hPa == {"ecmwf": 700, "gfs": 850}

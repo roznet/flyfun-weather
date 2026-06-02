@@ -120,6 +120,63 @@ def latest_snapshot(
     return snaps[-1] if snaps else None
 
 
+def _snapshot_valid_window(path: Path) -> tuple[int, int] | None:
+    """``(init_unix, last_valid_unix)`` a snapshot covers, or None if unreadable.
+
+    Reads only the lightweight scalars (``init_time_unix``, ``valid_times`` shape,
+    ``stride_hours``) — np.load is lazy over the zip members, so this does not
+    materialise the metric stacks.
+    """
+    try:
+        with np.load(path) as npz:
+            init = int(npz["init_time_unix"])
+            n_time = int(npz["valid_times"].shape[0])
+            stride = (
+                int(npz["stride_hours"])
+                if "stride_hours" in npz.files
+                else DEFAULT_STRIDE_HOURS
+            )
+    except Exception:
+        return None
+    if n_time <= 0:
+        return None
+    last = init + (n_time - 1) * stride * 3600
+    return init, last
+
+
+def snapshot_for_window(
+    model: str,
+    start: datetime,
+    end: datetime,
+    output_dir: Path | None = None,
+) -> Path | None:
+    """Latest snapshot whose forecast hours bracket ``[start, end]``, else None.
+
+    The front stage samples a flight at snapshot-relative hours; the *newest*
+    init (:func:`latest_snapshot`) is wrong when the flight window falls outside
+    it — a past flight lands at negative offsets and a far-future one past the
+    horizon. This scans available snapshots newest-first and returns the most
+    recent init whose valid-time span fully contains ``[start, end]``.
+
+    Returns ``None`` when no retained snapshot brackets the window (the caller
+    falls back to :func:`latest_snapshot` and notes the approximation).
+    """
+    subdir = resolve_output_dir(output_dir) / model
+    if not subdir.exists():
+        return None
+    start_u = int(start.timestamp())
+    end_u = int(end.timestamp())
+    # ISO-8601-Z filenames sort chronologically; reverse → newest init first.
+    for path in sorted(subdir.glob("*.npz"), reverse=True):
+        window = _snapshot_valid_window(path)
+        if window is None:
+            continue
+        init_u, last_u = window
+        if init_u <= start_u and end_u <= last_u:
+            return path
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Terrain-mask caching
 # ---------------------------------------------------------------------------
