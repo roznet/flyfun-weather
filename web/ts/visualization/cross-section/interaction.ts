@@ -36,12 +36,16 @@ export function attachInteraction(
   const canvas = renderer.getCanvas();
   canvas.style.pointerEvents = 'auto';
   canvas.style.cursor = 'crosshair';
+  // Suppress browser scroll/zoom gestures so pointermove fires during a touch
+  // drag — without this, touch panning eats the events and no crosshair shows.
+  canvas.style.touchAction = 'none';
 
   // Mutable state that can be swapped via update()
   let currentData = data;
   let tooltip: HTMLElement | null = null;
 
-  function handleMouseMove(e: MouseEvent): void {
+  /** Render crosshair + tooltip at the event position (shared by move/down). */
+  function renderAt(e: PointerEvent): void {
     const transform = renderer.createTransform();
     if (!transform) return;
 
@@ -50,10 +54,7 @@ export function attachInteraction(
     const { plotArea } = transform;
 
     if (x < plotArea.left || x > plotArea.left + plotArea.width) {
-      renderer.renderOverlay();
-      hideTooltipEl(tooltip);
-      callbacks.onHover?.(undefined);
-      callbacks.onHoverAltitude?.(undefined);
+      clearOverlay();
       return;
     }
 
@@ -68,7 +69,25 @@ export function attachInteraction(
     showTooltip(e, point, idx, distanceNm, hoverAltFt);
   }
 
-  function handleClick(e: MouseEvent): void {
+  function clearOverlay(): void {
+    renderer.renderOverlay();
+    hideTooltipEl(tooltip);
+    callbacks.onHover?.(undefined);
+    callbacks.onHoverAltitude?.(undefined);
+  }
+
+  function handlePointerMove(e: PointerEvent): void {
+    renderAt(e);
+  }
+
+  // pointerdown gives instant feedback on a touch tap (no hover phase on touch).
+  function handlePointerDown(e: PointerEvent): void {
+    renderAt(e);
+  }
+
+  // pointerup selects the nearest point — equivalent to the old mouse click,
+  // and the tap-to-select gesture on touch.
+  function handlePointerUp(e: PointerEvent): void {
     const transform = renderer.createTransform();
     if (!transform) return;
 
@@ -82,15 +101,14 @@ export function attachInteraction(
     callbacks.onSelectPoint(idx);
   }
 
-  function handleMouseLeave(): void {
-    renderer.renderOverlay();
-    hideTooltipEl(tooltip);
-    callbacks.onHover?.(undefined);
-    callbacks.onHoverAltitude?.(undefined);
+  function handlePointerLeave(e: PointerEvent): void {
+    // Mouse hover-out clears the crosshair. On touch, lifting the finger should
+    // leave the crosshair/tooltip pinned where the user tapped.
+    if (e.pointerType === 'mouse') clearOverlay();
   }
 
   function showTooltip(
-    e: MouseEvent, point: VizPoint, idx: number,
+    e: PointerEvent, point: VizPoint, idx: number,
     distanceNm: number, hoverAltFt: number,
   ): void {
     tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
@@ -189,21 +207,24 @@ export function attachInteraction(
     positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
-  canvas.addEventListener('mousemove', handleMouseMove);
-  canvas.addEventListener('click', handleClick);
-  canvas.addEventListener('mouseleave', handleMouseLeave);
+  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointerdown', handlePointerDown);
+  canvas.addEventListener('pointerup', handlePointerUp);
+  canvas.addEventListener('pointerleave', handlePointerLeave);
 
   return {
     update(newData) {
       currentData = newData;
     },
     destroy() {
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('click', handleClick);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerdown', handlePointerDown);
+      canvas.removeEventListener('pointerup', handlePointerUp);
+      canvas.removeEventListener('pointerleave', handlePointerLeave);
       if (tooltip) { tooltip.remove(); tooltip = null; }
       canvas.style.pointerEvents = '';
       canvas.style.cursor = '';
+      canvas.style.touchAction = '';
     },
   };
 }

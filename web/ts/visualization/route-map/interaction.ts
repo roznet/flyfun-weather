@@ -34,15 +34,17 @@ export function attachMapInteraction(
     return { update() {}, destroy() {} };
   }
 
-  function onSegmentMouseOver(e: L.LeafletEvent): void {
-    const layer = e.target as any;
+  // The segment currently showing a tapped (touch) tooltip, so we can reset it
+  // when another segment is tapped — touch has no mouseout to clean up after.
+  let tappedLayer: any = null;
+
+  /** Highlight a segment and open its metric tooltip. Shared by hover + tap. */
+  function highlightSegment(layer: any): void {
     const idx: number | undefined = layer._segmentIndex;
     if (idx === undefined) return;
 
-    // Highlight the segment
     layer.setStyle({ weight: (layer.options.weight ?? 4) + 3, opacity: 1 });
 
-    // Show tooltip with metric values
     const p1 = currentData.points[idx];
     const p2 = currentData.points[idx + 1];
     if (!p1 || !p2) return;
@@ -66,25 +68,38 @@ export function attachMapInteraction(
     }
 
     layer.bindTooltip(lines.join('<br>'), { sticky: true, direction: 'top', offset: [0, -10] }).openTooltip();
-
     callbacks.onHover(idx);
   }
 
-  function onSegmentMouseOut(e: L.LeafletEvent): void {
-    const layer = e.target as any;
-    // Reset style
+  /** Reset a segment's style and tear down its tooltip. */
+  function resetSegment(layer: any): void {
     layer.setStyle({ weight: layer.options._originalWeight ?? 4, opacity: 0.9 });
     layer.closeTooltip();
     layer.unbindTooltip();
+  }
+
+  function onSegmentMouseOver(e: L.LeafletEvent): void {
+    highlightSegment(e.target as any);
+  }
+
+  function onSegmentMouseOut(e: L.LeafletEvent): void {
+    resetSegment(e.target as any);
     callbacks.onHover(undefined);
   }
 
   function onSegmentClick(e: L.LeafletEvent): void {
     const layer = e.target as any;
     const idx: number | undefined = layer._segmentIndex;
-    if (idx !== undefined) {
-      callbacks.onSelectPoint(idx);
-    }
+    if (idx === undefined) return;
+
+    // On touch there is no hover phase, so a tap must surface the segment's
+    // tooltip itself. Reset any previously-tapped segment first, then show this
+    // one. (On desktop mouseover already showed it — re-showing is harmless.)
+    if (tappedLayer && tappedLayer !== layer) resetSegment(tappedLayer);
+    highlightSegment(layer);
+    tappedLayer = layer;
+
+    callbacks.onSelectPoint(idx);
   }
 
   // Attach event listeners to all segment layers
@@ -100,6 +115,8 @@ export function attachMapInteraction(
   }
 
   function detachListeners(): void {
+    // Drop the tapped reference — segments are recreated on metric change.
+    tappedLayer = null;
     segmentGroup!.eachLayer((layer: any) => {
       layer.off('mouseover', onSegmentMouseOver);
       layer.off('mouseout', onSegmentMouseOut);
