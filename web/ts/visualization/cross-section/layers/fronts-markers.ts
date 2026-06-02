@@ -40,6 +40,7 @@ export const frontsMarkersLayer: CrossSectionLayer = {
     for (const c of fronts.crossings) {
       const x = transform.distanceToX(c.distance_km / KM_PER_NM);
       const color = frontColor(c.kind);
+      const savedAlpha = ctx.globalAlpha;
       ctx.globalAlpha = frontAlpha(c);
 
       ctx.strokeStyle = color;
@@ -76,7 +77,7 @@ export const frontsMarkersLayer: CrossSectionLayer = {
         ctx.closePath();
         ctx.fill();
       }
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = savedAlpha;
     }
     ctx.restore();
   },

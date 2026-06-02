@@ -157,8 +157,10 @@ def test_multiple_crossings_picks_worst_and_counts():
 
 
 def test_grades_fronts_at_non_primary_level():
-    """A front below cruise (non-primary level) still grades — the Dijon
-    false-GREEN fix. Primary 850 is empty; a sharp 700 crossing must still RED."""
+    """A front at a NON-PRIMARY level still grades — the Dijon false-GREEN fix.
+    Here the primary 850 hPa is empty and the sharp crossing is at 700 hPa
+    (~10,000 ft, ABOVE 850); it must still RED. The below-cruise case (a 925 hPa
+    front overflown) is covered by test_sharp_front_below_flight_capped_to_amber."""
     a700 = RouteFrontAnalysisModel(
         model="gfs", level_hPa=700, hour=12.0,
         crossings=[_crossing(intensity="sharp", gradient=14.0)],

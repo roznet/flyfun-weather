@@ -114,10 +114,12 @@ function buildFronts(
   const INTENSITY: Record<string, number> = { sharp: 3, classical: 2, significant: 1 };
   const score = (c: FrontCrossing): number =>
     (RELEVANCE[c.co_location ?? ''] ?? 0) * 10 + (INTENSITY[c.intensity] ?? 0);
+  // 50 km bins — same width the advisory uses to count distinct crossings
+  // (analysis/advisories/fronts.py), so marker count and "N fronts" text agree.
   const byBin = new Map<number, FrontCrossing>();
   for (const a of analyses) {
     for (const c of a.crossings) {
-      const bin = Math.round(c.distance_km / 25);
+      const bin = Math.round(c.distance_km / 50);
       const cur = byBin.get(bin);
       if (!cur || score(c) > score(cur)) byBin.set(bin, c);
     }

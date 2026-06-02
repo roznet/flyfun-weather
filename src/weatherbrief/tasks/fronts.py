@@ -172,21 +172,24 @@ def _colocate(analyses, model: str, dist_km: float, level_hpa: int):
     tops = [v for v in (cloud_top or None, conv_top) if v]
     weather_top_ft = float(max(tops)) if tops else None
 
-    def _covers(level: int) -> bool:
+    def _covers(level: int, coverages: set[str]) -> bool:
+        """True if a cloud layer of one of ``coverages`` physically spans ``level``."""
         for cl in layers:
             bp, tp = _attr(cl, "base_pressure_hpa", None), _attr(cl, "top_pressure_hpa", None)
-            if bp and tp and tp <= level <= bp and _enum_val(_attr(cl, "coverage", None)) in _SIGNIFICANT_COVERAGE:
+            if bp and tp and tp <= level <= bp and _enum_val(_attr(cl, "coverage", None)) in coverages:
                 return True
         return False
 
     precip_obj = _attr(s, "precipitation", None)
     precip = precip_obj is not None and _enum_val(_attr(precip_obj, "surface_intensity", "none")) != "none"
 
+    # Cloud must span the frontal level to count — a high cirrus deck unrelated
+    # to a low front is neither "wet" nor "partly" (it would otherwise false-AMBER).
     if risk in _CONVECTIVE_RISK:
         category = "convective"
-    elif _covers(level_hpa) or precip:
+    elif _covers(level_hpa, _SIGNIFICANT_COVERAGE) or precip:
         category = "wet"
-    elif any(_enum_val(_attr(cl, "coverage", None)) in _PARTLY_COVERAGE for cl in layers):
+    elif _covers(level_hpa, _PARTLY_COVERAGE):
         category = "partly"
     else:
         category = "dry"
@@ -201,7 +204,7 @@ def _persistence(source, model, lat, lon, level_hpa, eta_hour, gradient_min):
     avail = set(source.available_hours(model))
     if not avail:
         return None
-    stride = source.stride_hours or 3
+    stride = getattr(source, "stride_hours", None) or 3
     li = int(np.argmin(np.abs(source.lat - lat)))
     lj = int(np.argmin(np.abs(source.lon - lon)))
     hits = tot = 0
