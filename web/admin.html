@@ -29,6 +29,15 @@
       text-align: center;
       font-variant-numeric: tabular-nums;
     }
+    /* Narrow screens: let wide admin tables scroll horizontally instead of
+       overflowing the viewport (issue #205). */
+    @media (max-width: 700px) {
+      .admin-table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+    }
     .summary-bar {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

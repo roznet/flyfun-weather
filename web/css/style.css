@@ -228,6 +228,15 @@ label {
 
 .form-group.grow { flex: 1; }
 
+/* Flight-creation field widths — previously inline on index.html; moved to CSS
+   so the mobile breakpoint can make them fluid while desktop stays identical
+   (issue #205). Scoped to .create-panel to avoid touching other forms. */
+.create-panel #input-aircraft { width: 160px; }
+.create-panel #input-profile { width: 140px; }
+.create-panel #input-altitude,
+.create-panel #input-ceiling { width: 100px; }
+.create-panel #input-duration { width: 80px; }
+
 .label-row {
   display: flex;
   align-items: baseline;
@@ -4163,6 +4172,27 @@ label {
 
 /* --- Responsive --- */
 
+/* Mobile form / panel / slider sweep (issue #205) — narrow-screen only. */
+@media (max-width: 700px) {
+  /* Flight form: stack each field full-width so nothing overflows at 375px. */
+  .create-panel .form-group { flex: 1 1 100%; }
+  .create-panel #input-aircraft,
+  .create-panel #input-profile,
+  .create-panel #input-altitude,
+  .create-panel #input-ceiling,
+  .create-panel #input-duration { width: 100%; }
+
+  /* Layer-toggle panel grows very tall when every group wraps — cap + scroll. */
+  .viz-layer-toggles { max-height: 45vh; overflow-y: auto; }
+
+  /* Altitude slider: wrap rather than compress label + range onto one line. */
+  .map-altitude-slider { flex-wrap: wrap; }
+  .map-altitude-slider input[type="range"] { max-width: none; }
+
+  /* Debrief accuracy rows: tighter fixed columns so the bar keeps room. */
+  .debrief-acc-row { grid-template-columns: 90px 1fr 64px; gap: 6px; }
+}
+
 @media (max-width: 800px) {
   .viz-layout-wrapper.layout-split {
     flex-direction: column;
@@ -4176,7 +4206,10 @@ label {
 @media (max-width: 640px) {
   .flight-header { flex-wrap: wrap; }
   .briefing-toolbar { flex-direction: column; align-items: stretch; }
-  .skewt-card { width: 220px; }
+  /* Fluid so a card fits the viewport instead of forcing horizontal scroll
+     at 375px; the large single card fills the width (issue #205). */
+  .skewt-card { width: min(88vw, 320px); }
+  .skewt-card-large { width: 100%; }
   .skewt-pair { flex-direction: column; }
   .skewt-pair .skewt-hodo-img { width: 60%; }
   .metric-popup { max-width: 95vw; padding: 1rem; }
