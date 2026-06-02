@@ -247,6 +247,21 @@ class TestVerticalCoherence:
         assert early.vertical_levels == 1
         assert late_925.vertical_levels == 2 and late_850.vertical_levels == 2
 
+    def test_complete_linkage_prevents_chaining(self):
+        # 925@250, 850@300, 700@360: single-linkage would chain all three
+        # (gaps 50, 60) into one 110 km cluster → every crossing vlev=3, inflating
+        # a shallow 250 km feature. Complete-linkage caps the span at tolerance:
+        # {250, 300} cluster (span 50), and 360 splits off alone.
+        analyses = [
+            _analysis(925, _xing(250.0)),
+            _analysis(850, _xing(300.0)),
+            _analysis(700, _xing(360.0)),
+        ]
+        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
+        assert analyses[0].crossings[0].vertical_levels == 2  # 925@250 with 850@300
+        assert analyses[1].crossings[0].vertical_levels == 2  # 850@300
+        assert analyses[2].crossings[0].vertical_levels == 1  # 700@360 not chained
+
     def test_empty_is_noop(self):
         _stamp_vertical_coherence([], tolerance_km=60.0)  # no crash
 

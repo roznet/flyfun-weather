@@ -216,9 +216,16 @@ def _stamp_vertical_coherence(
     A genuine front slopes through several pressure levels, so the same crossing
     appears at ~the same along-route distance on 850 *and* 925 (and maybe 700).
     A shallow / artifactual boundary shows on one level only. We cluster all
-    crossings across levels by along-route distance (single-linkage within
-    ``tolerance_km`` — the same "same physical front" distance as ``merge_km``)
-    and stamp every member with how many distinct levels its cluster spans.
+    crossings across levels by along-route distance and stamp every member with
+    how many distinct levels its cluster spans.
+
+    Clustering is **complete-linkage**: a crossing joins a cluster only if it is
+    within ``tolerance_km`` of the cluster's *first* (nearest) member, so the
+    whole cluster span stays ≤ ``tolerance_km``. Single-linkage (compare to the
+    last member) would let a shallow feature chain into a distant front through
+    intermediate crossings and inherit a multi-level count it doesn't deserve —
+    the false-positive this signal exists to suppress. ``tolerance_km`` is the
+    same "same physical front" distance as ``merge_km``.
     """
     items = sorted(
         ((a.level_hPa, c) for a in analyses for c in a.crossings),
@@ -229,7 +236,8 @@ def _stamp_vertical_coherence(
     cluster: list = [items[0]]
     clusters: list[list] = [cluster]
     for lvl_c in items[1:]:
-        if lvl_c[1].distance_km - cluster[-1][1].distance_km <= tolerance_km:
+        # vs cluster[0] (the nearest member) → bounds total span ≤ tolerance_km.
+        if lvl_c[1].distance_km - cluster[0][1].distance_km <= tolerance_km:
             cluster.append(lvl_c)
         else:
             cluster = [lvl_c]
