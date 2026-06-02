@@ -30,6 +30,7 @@ def _crossing(
     co_location: str | None = None,
     weather_top_ft: float | None = None,
     persistence: float | None = None,
+    vertical_levels: int | None = None,
 ) -> FrontCrossingModel:
     return FrontCrossingModel(
         lat=48.0, lon=2.0, distance_km=distance_km,
@@ -37,6 +38,7 @@ def _crossing(
         tfp_before=0.5, tfp_after=-0.5, delta_theta_e=8.0,
         kind=kind, intensity=intensity,
         co_location=co_location, weather_top_ft=weather_top_ft, persistence=persistence,
+        vertical_levels=vertical_levels,
     )
 
 
@@ -266,6 +268,40 @@ def test_wet_sharp_reaching_is_red_classical_is_amber():
         intensity="classical", co_location="wet", weather_top_ft=20000.0, persistence=0.8,
     )])
     assert FrontsEvaluator.evaluate(_ctx(amber), _PARAMS).aggregate_status == AdvisoryStatus.AMBER
+
+
+def test_single_level_wet_sharp_capped_to_amber():
+    """Vertical coherence: a sharp wet front seen on ONE level only is shallow →
+    AMBER, not RED. The same crossing on ≥2 levels stays RED."""
+    shallow = _manifest(crossings=[_crossing(
+        intensity="sharp", co_location="wet", weather_top_ft=20000.0,
+        persistence=0.8, vertical_levels=1,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(shallow), _PARAMS).aggregate_status == AdvisoryStatus.AMBER
+    coherent = _manifest(crossings=[_crossing(
+        intensity="sharp", co_location="wet", weather_top_ft=20000.0,
+        persistence=0.8, vertical_levels=2,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(coherent), _PARAMS).aggregate_status == AdvisoryStatus.RED
+
+
+def test_single_level_convective_still_red_when_deep():
+    """Vertical coherence does NOT suppress convection: deep towers on a single
+    θe level are graded by depth, not level count → still RED."""
+    deep = _manifest(crossings=[_crossing(
+        kind="warm", co_location="convective", weather_top_ft=33000.0,
+        persistence=0.8, vertical_levels=1,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(deep), _PARAMS).aggregate_status == AdvisoryStatus.RED
+
+
+def test_unknown_coherence_treated_as_coherent():
+    """vertical_levels None (older artifact) must not suppress — stays RED."""
+    m = _manifest(crossings=[_crossing(
+        intensity="sharp", co_location="wet", weather_top_ft=20000.0,
+        persistence=0.8, vertical_levels=None,
+    )])
+    assert FrontsEvaluator.evaluate(_ctx(m), _PARAMS).aggregate_status == AdvisoryStatus.RED
 
 
 def test_default_disabled_in_catalog():

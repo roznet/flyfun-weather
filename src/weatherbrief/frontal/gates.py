@@ -43,13 +43,15 @@ class FrontGateConfig:
     * **acceptance gates** — decide IS-a-front. ``gradient_min`` (the air-mass
       boundary must be a real |∇θe| ridge) and ``delta_theta_e_min`` (the θe jump
       across the boundary must be a genuine change of air mass, not a col).
-      ``anomaly_min`` is the off-track-only gradient-above-background gate that
-      rejects persistent orographic / sea-land gradients.
+      ``anomaly_min`` is the gradient-above-background gate that rejects
+      persistent orographic / sea-land gradients — applied on the 2-D map, the
+      off-track scan, and (when a background + grid axes are supplied) the
+      on-track route locator.
     * **classification** — ``advection_min`` labels cold vs warm vs
       quasi-stationary; it *rejects nothing*.
     * **geometry / sampling** — route step, merge distance, the ±window the θe
       jump is measured across, the off-track proximity radius, the approach
-      look-ahead, and whether the off-track anomaly filter runs.
+      look-ahead, and whether the anomaly filter runs.
 
     All thresholds default to the values validated on the 2026-05-31 Channel
     cold front (the historical module constants). Construct presets with
@@ -62,7 +64,7 @@ class FrontGateConfig:
     # --- acceptance gates (decide IS-a-front) ---
     gradient_min: float = 6.0          # K/100km — significant (>4) .. classical (>8)
     delta_theta_e_min: float = 5.0     # K — |θe jump| across the ±window (air-mass contrast)
-    anomaly_min: float = 2.0           # K/100km — off-track gradient above background
+    anomaly_min: float = 2.0           # K/100km — gradient above time-mean background
 
     # --- classification (labels only, rejects nothing) ---
     advection_min: float = 0.5         # K/h — below this: quasi-stationary

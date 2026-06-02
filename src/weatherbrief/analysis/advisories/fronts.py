@@ -92,15 +92,28 @@ def _grade_crossing(
         when deep (tops ≥ cruise + ``convective_deep_ft``); modest build-ups are
         AMBER. (Calibrated on the 2026-05-31 Dijon flight: a sharp 925 hPa cold
         front overflown at FL100 is AMBER, not RED.)
+
+    A third fact gates RED: **vertical coherence** — a RED needs a boundary seen
+    on ≥2 pressure levels (``c.vertical_levels``). A single-level detection is
+    shallow/suspect and caps at AMBER; convective towers are exempt (graded by
+    depth, not θe-level count).
     """
     # Flickering across the window → orographic / grid artifact, not a real front.
     if c.persistence is not None and c.persistence < persistence_min:
         return AdvisoryStatus.GREEN, "flicker"
+    # Vertical coherence: a RED demands a front that slopes through ≥2 levels.
+    # A single-level (shallow) detection is held at AMBER — it may be real but is
+    # not the deep, coherent boundary a RED implies. Unknown (None, older
+    # artifact) is treated as coherent so we never suppress on missing data.
+    # Convective towers are exempt: they're flagged by depth, not θe-level count.
+    coherent = c.vertical_levels is None or c.vertical_levels >= 2
     co = c.co_location
     if co is None:
         # No enrichment (older artifact / no analyses) → bare intensity grade,
         # rather than silently hiding the front.
-        return (AdvisoryStatus.RED, "sharp") if c.intensity == "sharp" else (AdvisoryStatus.AMBER, "classical")
+        if c.intensity == "sharp" and coherent:
+            return AdvisoryStatus.RED, "sharp"
+        return AdvisoryStatus.AMBER, "classical"
     if co == "dry":
         return AdvisoryStatus.GREEN, "dry"            # boundary aloft, clear → wind shift only
     # Unknown top (None) → assume it reaches: a "wet" boundary with no spanning
@@ -114,8 +127,8 @@ def _grade_crossing(
         deep = c.weather_top_ft is not None and c.weather_top_ft >= cruise_ft + convective_deep_ft
         return (AdvisoryStatus.RED, "convective") if deep else (AdvisoryStatus.AMBER, "convective")
     if co == "wet":
-        if c.intensity == "sharp" and not overflown:
-            return AdvisoryStatus.RED, "wet_sharp"    # sharp front at/above the flight level
+        if c.intensity == "sharp" and not overflown and coherent:
+            return AdvisoryStatus.RED, "wet_sharp"    # sharp, coherent front at/above the flight level
         return AdvisoryStatus.AMBER, "wet"
     return AdvisoryStatus.AMBER, "partly"             # few/sct cloud band
 
