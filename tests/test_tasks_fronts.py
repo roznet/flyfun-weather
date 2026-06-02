@@ -131,6 +131,18 @@ class TestColocate:
         cat, _ = _colocate(self._an(cl, {"risk_level": "none"}), "ecmwf", 0.0, 850)
         assert cat == "dry"
 
+    def test_weather_top_excludes_unrelated_cirrus(self):
+        # Low OVC spanning an 850 hPa front (top 12000) + unrelated cirrus at
+        # 300 hPa (top 38000). Category is "wet" from the OVC; weather_top must
+        # come from the spanning layer only — else the cirrus false-AMBERs a
+        # front that's well below cruise (PR #200 review finding #1).
+        cl = [
+            {"top_ft": 12000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 700, "coverage": "ovc"},
+            {"top_ft": 38000.0, "base_pressure_hpa": 300, "top_pressure_hpa": 250, "coverage": "sct"},
+        ]
+        cat, top = _colocate(self._an(cl, {"risk_level": "none"}), "ecmwf", 0.0, 850)
+        assert cat == "wet" and top == 12000.0
+
     def test_missing_model_degrades_gracefully(self):
         assert _colocate(self._an([], {"risk_level": "low"}), "gfs", 0.0, 850) == (None, None)
 

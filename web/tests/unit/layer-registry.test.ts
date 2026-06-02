@@ -154,6 +154,18 @@ describe('getLayerGroups', () => {
       expect(g.layers.length).toBeGreaterThan(0);
     }
   });
+
+  it("'fronts' and 'conditions' stay single-layer (HIDE_GROUP_WHEN_UNAVAILABLE assumption)", () => {
+    // panel.ts hides these whole groups when their lone layer is unavailable,
+    // assuming each has exactly ONE layer. If a second layer is added here it
+    // would be silently hidden — gate per-layer in panel.ts instead.
+    const groups = getLayerGroups();
+    for (const id of ['fronts', 'conditions'] as const) {
+      const grp = groups.find((g) => g.group === id);
+      expect(grp, `group ${id} not registered`).toBeDefined();
+      expect(grp!.layers.length, `group ${id} must stay single-layer`).toBe(1);
+    }
+  });
 });
 
 describe('presets', () => {
