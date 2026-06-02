@@ -307,3 +307,38 @@ def test_unknown_coherence_treated_as_coherent():
 def test_default_disabled_in_catalog():
     """Front advisory must not run by default — gated by artifact presence."""
     assert FrontsEvaluator.catalog_entry().default_enabled is False
+
+
+def test_per_model_primary_level_not_flattened():
+    """A model's own cruise-level crossing must grade against *its* primary (#203).
+
+    GFS exposes only 850 hPa (its nearest-cruise level) while the manifest-wide
+    ``primary_level_hPa`` reflects another model's 700. A sharp, coherent wet GFS
+    crossing at 850 reaches the flight: graded against 850 it is at-cruise → RED;
+    graded against the wrong manifest-wide 700 it would read as overflown →
+    capped AMBER. ``per_model_primary_hPa`` keeps it RED.
+    """
+    xing = _crossing(
+        kind="cold", intensity="sharp", co_location="wet",
+        weather_top_ft=None, persistence=1.0, vertical_levels=2,
+    )
+    analysis = RouteFrontAnalysisModel(
+        model="gfs", level_hPa=850, hour=12.0, crossings=[xing],
+    )
+    manifest = RouteFrontsManifest(
+        generated_at=datetime(2026, 5, 31, tzinfo=timezone.utc),
+        primary_level_hPa=700,                       # another model's level
+        per_model_primary_hPa={"gfs": 850},          # gfs's own nearest-cruise
+        levels=[700, 850],
+        models=["gfs"],
+        per_model={"gfs": [analysis]},
+    )
+    result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
+    assert result.aggregate_status == AdvisoryStatus.RED
+
+    # Without the per-model map (pre-#203 pack), the same crossing falls back to
+    # the manifest-wide 700 → 850 reads as overflown → capped AMBER. This is the
+    # latent mis-grade the field fixes.
+    manifest_old = manifest.model_copy(update={"per_model_primary_hPa": {}})
+    result_old = FrontsEvaluator.evaluate(_ctx(manifest_old), _PARAMS)
+    assert result_old.aggregate_status == AdvisoryStatus.AMBER

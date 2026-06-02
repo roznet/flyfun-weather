@@ -107,7 +107,15 @@ class RouteFrontsManifest(BaseModel):
     schema_version: int = 1
     route_name: str = ""
     generated_at: datetime
-    primary_level_hPa: int                       # level nearest cruise altitude
+    # Representative (modal) nearest-cruise level across models — kept for
+    # display / back-compat. Per-model grading must use ``per_model_primary_hPa``
+    # instead: a partial snapshot may expose different levels per model, so a
+    # single manifest-wide value would mis-grade a model whose cruise level
+    # differs (e.g. GFS 850 judged "overflown" against ECMWF's 700).
+    primary_level_hPa: int                       # representative level nearest cruise
+    # model → that model's own nearest-cruise level. Empty on pre-#203 packs;
+    # consumers fall back to ``primary_level_hPa`` then.
+    per_model_primary_hPa: dict[str, int] = Field(default_factory=dict)
     levels: list[int] = Field(default_factory=list)
     gate_config: dict = Field(default_factory=dict)
     models: list[str] = Field(default_factory=list)

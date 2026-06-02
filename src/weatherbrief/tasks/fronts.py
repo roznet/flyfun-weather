@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -51,6 +52,7 @@ from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
     latest_snapshot,
     resolve_output_dir,
+    snapshot_for_window,
 )
 from weatherbrief.models import (
     FrontCrossingModel,
@@ -431,14 +433,28 @@ def compute_route_fronts(
     terrain_mask = _load_cached_terrain_mask(output_dir)
 
     per_model: dict[str, list[RouteFrontAnalysisModel]] = {}
+    per_model_primary: dict[str, int] = {}
     snapshot_inits: dict[str, str] = {}
     missing: list[str] = []
+    fell_back: list[str] = []
     levels_seen: list[int] = []
     primary_level = 850
     base_config = get_preset(gate_preset)
 
+    # The flight's valid-time window — pick each model's snapshot to bracket it
+    # rather than always the newest init, so past/far-future flights sample at
+    # real (non-negative, in-horizon) forecast hours (#201).
+    win_start = min(etas) if etas else now
+    win_end = max(etas) if etas else now
+
     for model in models:
-        snap_path = latest_snapshot(model, output_dir)
+        snap_path = snapshot_for_window(model, win_start, win_end, output_dir)
+        if snap_path is None:
+            # No retained snapshot brackets the window — fall back to the latest
+            # init (timing may be off for past/far-future flights; noted below).
+            snap_path = latest_snapshot(model, output_dir)
+            if snap_path is not None:
+                fell_back.append(model)
         if snap_path is None:
             missing.append(model)
             continue
@@ -477,7 +493,10 @@ def compute_route_fronts(
         # Accumulate across models — a partial snapshot could expose a subset,
         # and manifest.levels must describe everything actually in per_model.
         levels_seen = sorted(set(levels_seen) | set(levels))
-        primary_level = nearest_cruise_level(cruise_altitude_ft, levels)
+        # Per-model nearest-cruise level — a partial snapshot may expose a
+        # different level set per model, so the advisory must grade each model's
+        # crossings against *its own* primary, not one manifest-wide value (#203).
+        model_primary = nearest_cruise_level(cruise_altitude_ft, levels)
 
         analyses: list[RouteFrontAnalysisModel] = []
         for level in levels:
@@ -500,12 +519,24 @@ def compute_route_fronts(
         _stamp_vertical_coherence(analyses, base_config.merge_km)
         if analyses:
             per_model[model] = analyses
+            per_model_primary[model] = model_primary
+
+    # Representative manifest-wide primary (display / back-compat): the modal
+    # per-model value, falling back to the legacy default when nothing detected.
+    if per_model_primary:
+        primary_level = Counter(per_model_primary.values()).most_common(1)[0][0]
 
     notes: list[str] = []
     if missing:
         notes.append(
             "No precompute snapshot for: " + ", ".join(missing)
             + " — front data unavailable for those models."
+        )
+    if fell_back:
+        notes.append(
+            "No snapshot brackets the flight window for: " + ", ".join(fell_back)
+            + " — used the latest available init (timing may be approximate for "
+            "past or far-future flights)."
         )
     notes.append(
         "Free-atmosphere fronts only; 850 hPa θe does not see low IMC / fog. "
@@ -517,6 +548,7 @@ def compute_route_fronts(
         route_name=route_name,
         generated_at=now,
         primary_level_hPa=primary_level,
+        per_model_primary_hPa=per_model_primary,
         levels=levels_seen,
         gate_config=base_config.with_overrides(level_hPa=primary_level).to_dict(),
         models=list(per_model.keys()),
