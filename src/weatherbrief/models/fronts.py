@@ -38,6 +38,11 @@ class FrontCrossingModel(BaseModel):
     co_location: str | None = None       # "dry"|"partly"|"wet"|"convective"
     weather_top_ft: float | None = None  # cloud/convective top at the crossing, ft
     persistence: float | None = None     # [0,1] fraction of ±window frames the gate holds
+    # Vertical coherence: how many of this model's stored levels (925/850/700)
+    # detect this same along-route feature. A real front slopes through several
+    # levels; a single-level (==1) detection is shallow/suspect. Stamped across
+    # levels by the pipeline (compute_route_fronts); None on the bare detector.
+    vertical_levels: int | None = None
 
 
 class FrontProximityModel(BaseModel):
@@ -63,7 +68,7 @@ class FrontDecisionModel(BaseModel):
     delta_theta_e: float
     advection: float
     accepted: bool
-    rejected_by: str | None = None     # "gradient" | "delta_theta_e" | None
+    rejected_by: str | None = None     # "gradient"|"anomaly"|"terrain"|"delta_theta_e"|None
     kind: str
     intensity: str
     margins: dict[str, float] = Field(default_factory=dict)

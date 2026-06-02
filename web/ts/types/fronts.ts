@@ -25,6 +25,7 @@ export interface FrontCrossing {
   co_location?: FrontCoLocation | null;
   weather_top_ft?: number | null;   // cloud/convective top at the crossing, ft
   persistence?: number | null;      // [0,1] fraction of ±window frames the gate holds
+  vertical_levels?: number | null;  // # of this model's levels detecting the feature (1=shallow)
 }
 
 export type FrontCoLocation = 'dry' | 'partly' | 'wet' | 'convective';

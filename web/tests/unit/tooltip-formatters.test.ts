@@ -48,6 +48,9 @@ describe('LAYER_TOOLTIPS registry — structural integrity', () => {
       'lcl', 'lfc', 'el',
       'cruise-altitude',
       'current-conditions',
+      // Discrete vertical markers at along-route distances, not per-VizPoint
+      // zones — the route map binds their tooltip (frontTooltip) directly.
+      'fronts-markers',
     ]);
 
     const layerIds = getAllLayers()

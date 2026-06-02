@@ -10,9 +10,11 @@ import pytest
 
 from weatherbrief.models import RoutePointAnalysis
 from weatherbrief.tasks.artifacts import load_route_fronts
+from weatherbrief.models.fronts import FrontCrossingModel, RouteFrontAnalysisModel
 from weatherbrief.tasks.fronts import (
     _colocate,
     _persistence,
+    _stamp_vertical_coherence,
     compute_route_fronts,
     nearest_cruise_level,
     run_fronts,
@@ -183,6 +185,70 @@ class TestPersistence:
 
     def test_none_when_no_frames(self):
         assert _persistence(_StubSource({}), "ecmwf", 47.0, 0.0, 850, 3.0, 6.0) is None
+
+
+def _xing(distance_km: float, **kw) -> FrontCrossingModel:
+    base = dict(
+        lat=48.0, lon=4.0, distance_km=distance_km, gradient=10.0,
+        neg_laplacian=0.0, advection=-1.0, tfp_before=1.0, tfp_after=-1.0,
+        delta_theta_e=-12.0, kind="cold", intensity="classical",
+    )
+    base.update(kw)
+    return FrontCrossingModel(**base)
+
+
+def _analysis(level: int, *crossings: FrontCrossingModel) -> RouteFrontAnalysisModel:
+    return RouteFrontAnalysisModel(
+        model="ecmwf", level_hPa=level, hour=9.0, crossings=list(crossings),
+    )
+
+
+class TestVerticalCoherence:
+    """Cross-level stamping: a real front slopes through several levels; a
+    single-level detection is shallow/suspect (vertical_levels == 1)."""
+
+    def test_same_feature_across_two_levels_is_coherent(self):
+        # Cold front seen at 850 (387 km) and 925 (355 km) — 32 km apart, within
+        # merge_km (60) → one feature spanning 2 levels.
+        analyses = [_analysis(850, _xing(387.0)), _analysis(925, _xing(355.0))]
+        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
+        assert analyses[0].crossings[0].vertical_levels == 2
+        assert analyses[1].crossings[0].vertical_levels == 2
+
+    def test_single_level_feature_is_shallow(self):
+        # A 925-only boundary far from any other-level crossing → vertical_levels 1.
+        analyses = [_analysis(925, _xing(84.0)), _analysis(850, _xing(387.0))]
+        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
+        shallow = analyses[0].crossings[0]
+        deep = analyses[1].crossings[0]
+        assert shallow.vertical_levels == 1
+        assert deep.vertical_levels == 1  # 850 one is also alone here
+
+    def test_three_levels_cluster_together(self):
+        analyses = [
+            _analysis(925, _xing(350.0)),
+            _analysis(850, _xing(370.0)),
+            _analysis(700, _xing(390.0)),
+        ]
+        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
+        assert all(a.crossings[0].vertical_levels == 3 for a in analyses)
+
+    def test_two_distinct_features_not_merged(self):
+        # An early 925 feature (84 km) and a late front on 850+925 (~355-387):
+        # early stays single-level, late spans 2.
+        analyses = [
+            _analysis(925, _xing(84.0), _xing(355.0)),
+            _analysis(850, _xing(387.0)),
+        ]
+        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
+        early = analyses[0].crossings[0]
+        late_925 = analyses[0].crossings[1]
+        late_850 = analyses[1].crossings[0]
+        assert early.vertical_levels == 1
+        assert late_925.vertical_levels == 2 and late_850.vertical_levels == 2
+
+    def test_empty_is_noop(self):
+        _stamp_vertical_coherence([], tolerance_km=60.0)  # no crash
 
 
 class TestNearestCruiseLevel:

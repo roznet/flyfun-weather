@@ -32,13 +32,17 @@ export function frontColor(kind: FrontKind): string {
   return FRONT_KIND_COLOR[kind] ?? FRONT_KIND_COLOR['quasi-stationary'];
 }
 
-/** Marker opacity from persistence: a front that holds across the time window
- *  draws solid; a flickering one (likely an orographic / grid artifact) draws
- *  faint, so the eye trusts it less. Unknown persistence → near-solid. */
+/** Marker opacity from confidence: a front that holds across the time window
+ *  (persistence) AND slopes through multiple levels (vertical_levels) draws
+ *  solid; a flickering one (likely an orographic / grid artifact) or a
+ *  single-level shallow one draws faint, so the eye trusts it less. Unknown →
+ *  near-solid. The two factors multiply: weak on either axis de-emphasizes. */
 export function frontAlpha(c: FrontCrossing): number {
   const p = c.persistence;
-  if (p == null) return 0.9;
-  return Math.max(0.35, Math.min(1, 0.35 + 0.65 * p));
+  const persistAlpha = p == null ? 0.9 : Math.max(0.35, Math.min(1, 0.35 + 0.65 * p));
+  // Single-level detections are shallow/suspect → dim; ≥2 levels → no penalty.
+  const coherenceFactor = c.vertical_levels != null && c.vertical_levels < 2 ? 0.6 : 1;
+  return Math.max(0.3, persistAlpha * coherenceFactor);
 }
 
 /** Dash from co-location: a boundary carrying real weather (wet / convective)

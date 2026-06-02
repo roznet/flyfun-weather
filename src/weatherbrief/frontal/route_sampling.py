@@ -401,7 +401,8 @@ class FrontDecision:
     """The verdict of one :class:`FrontGateConfig` on one :class:`FrontCandidate`.
 
     ``rejected_by`` is the *first* acceptance gate the candidate failed
-    (``"gradient"`` or ``"delta_theta_e"``), or ``None`` when accepted.
+    (``"gradient"``, ``"anomaly"``, ``"terrain"`` or ``"delta_theta_e"``), or
+    ``None`` when accepted.
     ``margins`` gives each gate's signed slack (value − threshold; ≥ 0 means
     the gate passed) so a calibrator can read "rejected: Δθe 4.2 K vs 5.0 gate"
     straight off the trace. ``kind`` / ``intensity`` are always populated (they
@@ -490,37 +491,81 @@ def _classify_kind(advection: float, advection_min: float) -> str:
     return "quasi-stationary"
 
 
+def _on_high_terrain(
+    terrain_mask: np.ndarray,
+    lat_axis: np.ndarray,
+    lon_axis: np.ndarray,
+    lat: float,
+    lon: float,
+) -> bool:
+    """True if (lat, lon) sits on a masked (high-terrain) cell — orographic θe,
+    not a synoptic front. Mirrors the 2-D map gate (:func:`_gate_vertex`)."""
+    valid = bilinear_sample(terrain_mask.astype(np.float64), lat_axis, lon_axis, lat, lon)
+    return bool(np.isfinite(valid) and valid < 0.5)
+
+
 def apply_gate_config(
     candidates: Sequence[FrontCandidate],
     config: FrontGateConfig,
+    *,
+    background: np.ndarray | None = None,
+    terrain_mask: np.ndarray | None = None,
+    lat_axis: np.ndarray | None = None,
+    lon_axis: np.ndarray | None = None,
 ) -> list[FrontDecision]:
     """Score each candidate against ``config`` → one :class:`FrontDecision` each.
 
-    Acceptance is the AND of the magnitude gate (|∇θe| ≥ ``gradient_min`` — a
-    significant air-mass boundary) and the air-mass-jump gate (|Δθe| ≥
-    ``delta_theta_e_min`` — a genuine change of air mass, not a gradient col).
-    The first failing gate is recorded in ``rejected_by``. Classification
-    (``advection_min``) and intensity (from |∇θe|) are labels only and reject
-    nothing.
+    Acceptance is the AND of: the magnitude gate (|∇θe| ≥ ``gradient_min`` — a
+    significant air-mass boundary); the gradient-anomaly gate (|∇θe| above the
+    time-mean ``background`` by ≥ ``anomaly_min`` — rejects *persistent*
+    orographic / sea-land gradients); the high-terrain gate (the cell is not
+    masked out); and the air-mass-jump gate (|Δθe| ≥ ``delta_theta_e_min`` — a
+    genuine change of air mass, not a gradient col). The first failing gate is
+    recorded in ``rejected_by``. Classification (``advection_min``) and intensity
+    (from |∇θe|) are labels only and reject nothing.
+
+    The anomaly and terrain gates only fire when ``background`` / ``terrain_mask``
+    (and the grid ``lat_axis`` / ``lon_axis`` to sample them) are supplied — the
+    same machinery the 2-D map and off-track paths use (:func:`_gate_vertex`,
+    :func:`extract_gated_fronts`). Without them this is the legacy magnitude-only
+    behaviour, so existing callers/tests are unaffected. Wiring them in lets the
+    on-track locator reject the orographic θe gradients the other surfaces
+    already reject (e.g. a shallow 925 hPa "boundary" pinned to a mountain range).
 
     The −∇²θe "sharpness" gate was deliberately *not* reinstated: −∇²θe ≈ 0 at
     the TFP zero by construction, so gating on it there suppresses real fronts
     (verified on the 2026-05-31 Channel front). It is still reported per
     candidate as a diagnostic.
     """
+    can_sample = lat_axis is not None and lon_axis is not None
     decisions: list[FrontDecision] = []
     for c in candidates:
         delta = c.delta_theta_e
+        anomaly = float("nan")
+        if config.use_anomaly_filter and background is not None and can_sample:
+            bg = bilinear_sample(background, lat_axis, lon_axis, c.lat, c.lon)
+            if np.isfinite(bg):
+                anomaly = c.gradient - bg
         margins = {
             "gradient": c.gradient - config.gradient_min,
             "delta_theta_e": (
                 abs(delta) - config.delta_theta_e_min
                 if np.isfinite(delta) else float("nan")
             ),
+            "anomaly": (
+                anomaly - config.anomaly_min if np.isfinite(anomaly) else float("nan")
+            ),
         }
         rejected_by: str | None = None
         if c.gradient < config.gradient_min:
             rejected_by = "gradient"
+        elif np.isfinite(anomaly) and anomaly < config.anomaly_min:
+            rejected_by = "anomaly"
+        elif (
+            terrain_mask is not None and can_sample
+            and _on_high_terrain(terrain_mask, lat_axis, lon_axis, c.lat, c.lon)
+        ):
+            rejected_by = "terrain"
         elif not np.isfinite(delta) or abs(delta) < config.delta_theta_e_min:
             rejected_by = "delta_theta_e"
         decisions.append(
@@ -559,6 +604,10 @@ def detect_front_crossings(
     merge_km: float = _DEFAULT_MERGE_KM,
     airmass_window_km: float = _DEFAULT_AIRMASS_WINDOW_KM,
     config: FrontGateConfig | None = None,
+    background: np.ndarray | None = None,
+    terrain_mask: np.ndarray | None = None,
+    lat_axis: np.ndarray | None = None,
+    lon_axis: np.ndarray | None = None,
 ) -> list[FrontCrossing]:
     """Locate accepted front crossings in a densely-sampled route series.
 
@@ -568,6 +617,10 @@ def detect_front_crossings(
     a named recipe, or rely on the individual keyword gates (kept for backward
     compatibility with existing callers/tests). When both are given the explicit
     ``config`` wins.
+
+    ``background`` / ``terrain_mask`` (+ ``lat_axis`` / ``lon_axis``) enable the
+    anomaly and high-terrain gates — see :func:`apply_gate_config`. Omit them for
+    the legacy magnitude-only gating.
     """
     if config is None:
         config = FrontGateConfig(
@@ -580,7 +633,11 @@ def detect_front_crossings(
     candidates = generate_front_candidates(
         samples, airmass_window_km=config.airmass_window_km,
     )
-    decisions = apply_gate_config(candidates, config)
+    decisions = apply_gate_config(
+        candidates, config,
+        background=background, terrain_mask=terrain_mask,
+        lat_axis=lat_axis, lon_axis=lon_axis,
+    )
     return decisions_to_crossings(decisions, config.merge_km)
 
 

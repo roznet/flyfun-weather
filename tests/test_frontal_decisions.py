@@ -10,6 +10,7 @@ import numpy as np
 
 from weatherbrief.frontal.gates import FrontGateConfig
 from weatherbrief.frontal.route_sampling import (
+    FrontCandidate,
     apply_gate_config,
     decisions_to_crossings,
     generate_front_candidates,
@@ -147,3 +148,87 @@ class TestDecisionsToCrossings:
         assert len(crossings) == 1
         assert crossings[0].kind == "cold"
         assert crossings[0].gradient == 7.0
+
+
+class TestAnomalyTerrainGates:
+    """On-track anomaly + high-terrain gates (issue: route detector was gated
+    more loosely than the 2-D map / off-track paths, letting orographic θe
+    gradients through). Same machinery as :func:`_gate_vertex`."""
+
+    LAT = np.arange(45.0, 50.0, 0.25)
+    LON = np.arange(2.0, 9.0, 0.25)
+
+    @staticmethod
+    def _cand(lat, lon, gradient):
+        # delta_theta_e well above the 5 K gate so only anomaly/terrain decide.
+        return FrontCandidate(
+            lat=lat, lon=lon, distance_km=100.0, gradient=gradient,
+            neg_laplacian=0.0, advection=-1.0, tfp_before=1.0, tfp_after=-1.0,
+            delta_theta_e=10.0, airmass_window_km=75.0,
+        )
+
+    def _background(self):
+        # Broad persistent (orographic) high-gradient region east of 5.5° lon.
+        bg = np.full((self.LAT.size, self.LON.size), 2.0)
+        bg[:, self.LON >= 5.5] = 8.0
+        return bg
+
+    def _terrain(self):
+        # Valid everywhere except a broad high-terrain band south of 46.5° lat.
+        tm = np.ones((self.LAT.size, self.LON.size), dtype=bool)
+        tm[self.LAT <= 46.5, :] = False
+        return tm
+
+    def test_persistent_gradient_rejected_by_anomaly(self):
+        # grad 9 over background 8 → anomaly 1 < anomaly_min 2 → rejected.
+        cfg = FrontGateConfig(level_hPa=925)
+        d = apply_gate_config(
+            [self._cand(48.0, 6.5, 9.0)], cfg,
+            background=self._background(), lat_axis=self.LAT, lon_axis=self.LON,
+        )[0]
+        assert d.accepted is False
+        assert d.rejected_by == "anomaly"
+
+    def test_transient_front_passes_anomaly(self):
+        # grad 9 over background 2 → anomaly 7 → accepted.
+        cfg = FrontGateConfig(level_hPa=925)
+        d = apply_gate_config(
+            [self._cand(48.0, 3.5, 9.0)], cfg,
+            background=self._background(), lat_axis=self.LAT, lon_axis=self.LON,
+        )[0]
+        assert d.accepted is True
+
+    def test_high_terrain_rejected(self):
+        cfg = FrontGateConfig(level_hPa=925)
+        d = apply_gate_config(
+            [self._cand(45.5, 3.5, 12.0)], cfg,
+            terrain_mask=self._terrain(), lat_axis=self.LAT, lon_axis=self.LON,
+        )[0]
+        assert d.accepted is False
+        assert d.rejected_by == "terrain"
+
+    def test_gradient_gate_precedes_anomaly_and_terrain(self):
+        # A sub-threshold gradient is rejected by "gradient" first, regardless.
+        cfg = FrontGateConfig(level_hPa=925)
+        d = apply_gate_config(
+            [self._cand(45.5, 6.5, 4.0)], cfg,
+            background=self._background(), terrain_mask=self._terrain(),
+            lat_axis=self.LAT, lon_axis=self.LON,
+        )[0]
+        assert d.rejected_by == "gradient"
+
+    def test_no_inputs_is_legacy_magnitude_only(self):
+        # Without background/terrain/axes the gate is the old gradient+Δθe only,
+        # so a persistent-region candidate that the new gates would drop passes.
+        cfg = FrontGateConfig(level_hPa=925)
+        d = apply_gate_config([self._cand(48.0, 6.5, 9.0)], cfg)[0]
+        assert d.accepted is True
+        assert "anomaly" in d.margins  # margin still reported (NaN), no gate
+
+    def test_anomaly_disabled_by_config_flag(self):
+        cfg = FrontGateConfig(level_hPa=925, use_anomaly_filter=False)
+        d = apply_gate_config(
+            [self._cand(48.0, 6.5, 9.0)], cfg,
+            background=self._background(), lat_axis=self.LAT, lon_axis=self.LON,
+        )[0]
+        assert d.accepted is True  # anomaly gate skipped when flag off
