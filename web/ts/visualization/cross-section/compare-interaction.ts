@@ -30,12 +30,15 @@ export function attachCompareInteraction(
   const canvas = renderer.getCanvas();
   canvas.style.pointerEvents = 'auto';
   canvas.style.cursor = 'crosshair';
+  // Suppress browser scroll/zoom gestures so pointermove fires during touch drag.
+  canvas.style.touchAction = 'none';
 
   let currentDatasets = datasets;
   let currentLayer = layer;
   let tooltip: HTMLElement | null = null;
 
-  function handleMouseMove(e: MouseEvent): void {
+  /** Render crosshair + tooltip at the event position (shared by move/down). */
+  function renderAt(e: PointerEvent): void {
     const transform = renderer.createTransform();
     if (!transform || currentDatasets.length === 0) return;
 
@@ -44,9 +47,7 @@ export function attachCompareInteraction(
     const { plotArea } = transform;
 
     if (x < plotArea.left || x > plotArea.left + plotArea.width) {
-      renderer.renderOverlay();
-      hideTooltipEl(tooltip);
-      callbacks.onHover?.(undefined);
+      clearOverlay();
       return;
     }
 
@@ -60,7 +61,21 @@ export function attachCompareInteraction(
     showTooltip(e, idx, distanceNm, hoverAltFt);
   }
 
-  function handleClick(e: MouseEvent): void {
+  function clearOverlay(): void {
+    renderer.renderOverlay();
+    hideTooltipEl(tooltip);
+    callbacks.onHover?.(undefined);
+  }
+
+  function handlePointerMove(e: PointerEvent): void {
+    renderAt(e);
+  }
+
+  function handlePointerDown(e: PointerEvent): void {
+    renderAt(e);
+  }
+
+  function handlePointerUp(e: PointerEvent): void {
     const transform = renderer.createTransform();
     if (!transform || currentDatasets.length === 0) return;
 
@@ -75,14 +90,13 @@ export function attachCompareInteraction(
     callbacks.onSelectPoint(idx);
   }
 
-  function handleMouseLeave(): void {
-    renderer.renderOverlay();
-    hideTooltipEl(tooltip);
-    callbacks.onHover?.(undefined);
+  function handlePointerLeave(e: PointerEvent): void {
+    // On touch, leave the crosshair/tooltip pinned where the user tapped.
+    if (e.pointerType === 'mouse') clearOverlay();
   }
 
   function showTooltip(
-    e: MouseEvent, idx: number, distanceNm: number, hoverAltFt: number,
+    e: PointerEvent, idx: number, distanceNm: number, hoverAltFt: number,
   ): void {
     tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
     const sections: string[] = [];
@@ -143,9 +157,10 @@ export function attachCompareInteraction(
     positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
-  canvas.addEventListener('mousemove', handleMouseMove);
-  canvas.addEventListener('click', handleClick);
-  canvas.addEventListener('mouseleave', handleMouseLeave);
+  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointerdown', handlePointerDown);
+  canvas.addEventListener('pointerup', handlePointerUp);
+  canvas.addEventListener('pointerleave', handlePointerLeave);
 
   return {
     update(newDatasets, newLayer) {
@@ -153,12 +168,14 @@ export function attachCompareInteraction(
       currentLayer = newLayer;
     },
     destroy() {
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('click', handleClick);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerdown', handlePointerDown);
+      canvas.removeEventListener('pointerup', handlePointerUp);
+      canvas.removeEventListener('pointerleave', handlePointerLeave);
       if (tooltip) { tooltip.remove(); tooltip = null; }
       canvas.style.pointerEvents = '';
       canvas.style.cursor = '';
+      canvas.style.touchAction = '';
     },
   };
 }

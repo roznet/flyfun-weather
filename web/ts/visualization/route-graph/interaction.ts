@@ -32,6 +32,8 @@ export function attachRouteGraphInteraction(
   const canvas = renderer.getCanvas();
   canvas.style.pointerEvents = 'auto';
   canvas.style.cursor = 'crosshair';
+  // Suppress browser scroll/zoom gestures so pointermove fires during touch drag.
+  canvas.style.touchAction = 'none';
 
   // Mutable state that can be swapped via update()
   let currentData = data;
@@ -45,16 +47,15 @@ export function attachRouteGraphInteraction(
     return ((x - plotArea.left) / plotArea.width) * currentData.totalDistanceNm;
   }
 
-  function handleMouseMove(e: MouseEvent): void {
+  /** Render crosshair + tooltip at the event position (shared by move/down). */
+  function renderAt(e: PointerEvent): void {
     const plotArea = renderer.getPlotArea();
     if (!plotArea) return;
 
     const x = getCanvasX(e, canvas);
 
     if (x < plotArea.left || x > plotArea.left + plotArea.width) {
-      renderer.renderOverlay();
-      hideTooltipEl(tooltip);
-      callbacks.onHover(undefined);
+      clearOverlay();
       return;
     }
 
@@ -67,7 +68,21 @@ export function attachRouteGraphInteraction(
     showTooltip(e, point, idx);
   }
 
-  function handleClick(e: MouseEvent): void {
+  function clearOverlay(): void {
+    renderer.renderOverlay();
+    hideTooltipEl(tooltip);
+    callbacks.onHover(undefined);
+  }
+
+  function handlePointerMove(e: PointerEvent): void {
+    renderAt(e);
+  }
+
+  function handlePointerDown(e: PointerEvent): void {
+    renderAt(e);
+  }
+
+  function handlePointerUp(e: PointerEvent): void {
     const plotArea = renderer.getPlotArea();
     if (!plotArea) return;
 
@@ -79,10 +94,9 @@ export function attachRouteGraphInteraction(
     callbacks.onSelectPoint(idx);
   }
 
-  function handleMouseLeave(): void {
-    renderer.renderOverlay();
-    hideTooltipEl(tooltip);
-    callbacks.onHover(undefined);
+  function handlePointerLeave(e: PointerEvent): void {
+    // On touch, leave the crosshair/tooltip pinned where the user tapped.
+    if (e.pointerType === 'mouse') clearOverlay();
   }
 
   function formatMetricLine(metric: RouteGraphMetric, point: VizPoint): string {
@@ -93,7 +107,7 @@ export function attachRouteGraphInteraction(
     return `<span style="color:${metric.color}">${getMetricLabel(metric.id)}: ${fmt}</span>`;
   }
 
-  function showTooltip(e: MouseEvent, point: VizPoint, idx: number): void {
+  function showTooltip(e: PointerEvent, point: VizPoint, idx: number): void {
     tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
     const lines: string[] = [];
 
@@ -109,9 +123,10 @@ export function attachRouteGraphInteraction(
     positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
-  canvas.addEventListener('mousemove', handleMouseMove);
-  canvas.addEventListener('click', handleClick);
-  canvas.addEventListener('mouseleave', handleMouseLeave);
+  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointerdown', handlePointerDown);
+  canvas.addEventListener('pointerup', handlePointerUp);
+  canvas.addEventListener('pointerleave', handlePointerLeave);
 
   return {
     update(newData, newLeft, newRight) {
@@ -120,12 +135,14 @@ export function attachRouteGraphInteraction(
       currentRight = newRight;
     },
     destroy() {
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('click', handleClick);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerdown', handlePointerDown);
+      canvas.removeEventListener('pointerup', handlePointerUp);
+      canvas.removeEventListener('pointerleave', handlePointerLeave);
       if (tooltip) { tooltip.remove(); tooltip = null; }
       canvas.style.pointerEvents = '';
       canvas.style.cursor = '';
+      canvas.style.touchAction = '';
     },
   };
 }

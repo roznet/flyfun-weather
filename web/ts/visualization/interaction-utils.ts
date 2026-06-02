@@ -2,14 +2,18 @@
 
 import type { PlotArea, VizRouteData, VizPoint } from './types';
 
-/** Get the CSS-space X coordinate of a mouse event relative to an element. */
-export function getCanvasX(e: MouseEvent, el: HTMLElement): number {
+/** Minimal viewport-position shape shared by MouseEvent and PointerEvent.
+ *  Lets the canvas helpers work with either input source on one code path. */
+export type PointerPosition = Pick<MouseEvent, 'clientX' | 'clientY'>;
+
+/** Get the CSS-space X coordinate of a pointer/mouse event relative to an element. */
+export function getCanvasX(e: PointerPosition, el: HTMLElement): number {
   const rect = el.getBoundingClientRect();
   return e.clientX - rect.left;
 }
 
-/** Get the CSS-space Y coordinate of a mouse event relative to an element. */
-export function getCanvasY(e: MouseEvent, el: HTMLElement): number {
+/** Get the CSS-space Y coordinate of a pointer/mouse event relative to an element. */
+export function getCanvasY(e: PointerPosition, el: HTMLElement): number {
   const rect = el.getBoundingClientRect();
   return e.clientY - rect.top;
 }
@@ -49,10 +53,10 @@ export function ensureTooltip(
   return tip;
 }
 
-/** Position a tooltip relative to a mouse event within a container, flipping if near the right edge. */
+/** Position a tooltip relative to a pointer/mouse event within a container, flipping if near the right edge. */
 export function positionTooltip(
   tip: HTMLElement,
-  e: MouseEvent,
+  e: PointerPosition,
   canvas: HTMLElement,
   containerWidth: number,
 ): void {
