@@ -232,3 +232,14 @@ class TestAnomalyTerrainGates:
             background=self._background(), lat_axis=self.LAT, lon_axis=self.LON,
         )[0]
         assert d.accepted is True  # anomaly gate skipped when flag off
+
+    def test_terrain_gate_fires_independently_of_anomaly_flag(self):
+        # The terrain gate is not tied to use_anomaly_filter — a high-terrain
+        # candidate is rejected even with the anomaly filter off.
+        cfg = FrontGateConfig(level_hPa=925, use_anomaly_filter=False)
+        d = apply_gate_config(
+            [self._cand(45.5, 3.5, 12.0)], cfg,
+            terrain_mask=self._terrain(), lat_axis=self.LAT, lon_axis=self.LON,
+        )[0]
+        assert d.accepted is False
+        assert d.rejected_by == "terrain"

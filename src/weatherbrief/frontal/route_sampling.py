@@ -492,15 +492,19 @@ def _classify_kind(advection: float, advection_min: float) -> str:
 
 
 def _on_high_terrain(
-    terrain_mask: np.ndarray,
+    terrain_float: np.ndarray,
     lat_axis: np.ndarray,
     lon_axis: np.ndarray,
     lat: float,
     lon: float,
 ) -> bool:
     """True if (lat, lon) sits on a masked (high-terrain) cell — orographic θe,
-    not a synoptic front. Mirrors the 2-D map gate (:func:`_gate_vertex`)."""
-    valid = bilinear_sample(terrain_mask.astype(np.float64), lat_axis, lon_axis, lat, lon)
+    not a synoptic front. Mirrors the 2-D map gate (:func:`_gate_vertex`).
+
+    ``terrain_float`` is the boolean mask pre-cast to float (1.0 valid / 0.0
+    masked); the cast is hoisted to the caller so it happens once per gate run,
+    not once per candidate."""
+    valid = bilinear_sample(terrain_float, lat_axis, lon_axis, lat, lon)
     return bool(np.isfinite(valid) and valid < 0.5)
 
 
@@ -538,6 +542,12 @@ def apply_gate_config(
     candidate as a diagnostic.
     """
     can_sample = lat_axis is not None and lon_axis is not None
+    # Cast the boolean terrain mask to float ONCE (bilinear_sample needs float),
+    # not once per candidate — the copy is ~150 KB on the European grid.
+    terrain_float = (
+        terrain_mask.astype(np.float64)
+        if (terrain_mask is not None and can_sample) else None
+    )
     decisions: list[FrontDecision] = []
     for c in candidates:
         delta = c.delta_theta_e
@@ -562,8 +572,8 @@ def apply_gate_config(
         elif np.isfinite(anomaly) and anomaly < config.anomaly_min:
             rejected_by = "anomaly"
         elif (
-            terrain_mask is not None and can_sample
-            and _on_high_terrain(terrain_mask, lat_axis, lon_axis, c.lat, c.lon)
+            terrain_float is not None
+            and _on_high_terrain(terrain_float, lat_axis, lon_axis, c.lat, c.lon)
         ):
             rejected_by = "terrain"
         elif not np.isfinite(delta) or abs(delta) < config.delta_theta_e_min:
