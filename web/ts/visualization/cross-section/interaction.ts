@@ -76,10 +76,6 @@ export function attachInteraction(
     callbacks.onHoverAltitude?.(undefined);
   }
 
-  function handlePointerMove(e: PointerEvent): void {
-    renderAt(e);
-  }
-
   // pointerdown gives instant feedback on a touch tap (no hover phase on touch).
   function handlePointerDown(e: PointerEvent): void {
     if (e.button !== 0) return; // ignore right/middle on desktop; touch reports 0
@@ -216,7 +212,7 @@ export function attachInteraction(
     positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
-  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointermove', renderAt);
   canvas.addEventListener('pointerdown', handlePointerDown);
   canvas.addEventListener('pointerup', handlePointerUp);
   canvas.addEventListener('pointerleave', handlePointerLeave);
@@ -227,7 +223,7 @@ export function attachInteraction(
       currentData = newData;
     },
     destroy() {
-      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointermove', renderAt);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('pointerleave', handlePointerLeave);

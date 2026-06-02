@@ -93,9 +93,11 @@ export function attachMapInteraction(
     if (idx === undefined) return;
 
     // On touch there is no hover phase, so a tap must surface the segment's
-    // tooltip itself. Reset any previously-tapped segment first, then show this
-    // one. (On desktop mouseover already showed it — re-showing is harmless.)
-    if (tappedLayer && tappedLayer !== layer) resetSegment(tappedLayer);
+    // tooltip itself. Always reset the previously-tapped segment first — even
+    // when it's this same layer — or re-tapping it would re-add +3 weight each
+    // time (no mouseout on touch to undo it). (On desktop mouseover already
+    // showed it — re-showing is harmless.)
+    if (tappedLayer) resetSegment(tappedLayer);
     highlightSegment(layer);
     tappedLayer = layer;
 

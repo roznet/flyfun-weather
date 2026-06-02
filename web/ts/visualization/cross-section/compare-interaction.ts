@@ -67,10 +67,6 @@ export function attachCompareInteraction(
     callbacks.onHover?.(undefined);
   }
 
-  function handlePointerMove(e: PointerEvent): void {
-    renderAt(e);
-  }
-
   function handlePointerDown(e: PointerEvent): void {
     if (e.button !== 0) return; // ignore right/middle on desktop; touch reports 0
     renderAt(e);
@@ -165,7 +161,7 @@ export function attachCompareInteraction(
     positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
-  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointermove', renderAt);
   canvas.addEventListener('pointerdown', handlePointerDown);
   canvas.addEventListener('pointerup', handlePointerUp);
   canvas.addEventListener('pointerleave', handlePointerLeave);
@@ -177,7 +173,7 @@ export function attachCompareInteraction(
       currentLayer = newLayer;
     },
     destroy() {
-      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointermove', renderAt);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('pointerleave', handlePointerLeave);

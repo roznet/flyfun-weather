@@ -74,10 +74,6 @@ export function attachRouteGraphInteraction(
     callbacks.onHover(undefined);
   }
 
-  function handlePointerMove(e: PointerEvent): void {
-    renderAt(e);
-  }
-
   function handlePointerDown(e: PointerEvent): void {
     if (e.button !== 0) return; // ignore right/middle on desktop; touch reports 0
     renderAt(e);
@@ -131,7 +127,7 @@ export function attachRouteGraphInteraction(
     positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
-  canvas.addEventListener('pointermove', handlePointerMove);
+  canvas.addEventListener('pointermove', renderAt);
   canvas.addEventListener('pointerdown', handlePointerDown);
   canvas.addEventListener('pointerup', handlePointerUp);
   canvas.addEventListener('pointerleave', handlePointerLeave);
@@ -144,7 +140,7 @@ export function attachRouteGraphInteraction(
       currentRight = newRight;
     },
     destroy() {
-      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointermove', renderAt);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       canvas.removeEventListener('pointerup', handlePointerUp);
       canvas.removeEventListener('pointerleave', handlePointerLeave);
