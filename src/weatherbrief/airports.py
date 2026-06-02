@@ -133,15 +133,10 @@ def resolve_waypoints(
             on the map — those are mandatory. Missing middles go into
             ``rejected`` instead.
     """
-    from euro_aip.models.route_resolver import RouteResolver
-
-    model = _load_airport_model(db_path)
-    resolver = RouteResolver(model)
-
-    # Use the full route resolver which disambiguates by proximity and
-    # filters points whose detour from the route is too large.
-    route_string = " ".join(codes)
-    route = resolver.resolve(route_string)
+    # resolve_route handles the resolver setup (proximity disambiguation +
+    # detour filtering) and the departure/destination coord guards, raising
+    # KeyError if an endpoint can't be placed on the map.
+    route = resolve_route(codes, db_path)
 
     # euro_aip emits detour-rejected entries as dicts: {"name", "reason",
     # "detour_nm", "leg_nm", "threshold_nm"}. Older releases lack the field
@@ -150,11 +145,6 @@ def resolve_waypoints(
         RejectedWaypoint(name=str(r["name"]), reason="detour")
         for r in getattr(route, "rejected_waypoints", [])
     ]
-
-    if not route.departure_coords:
-        raise KeyError(f"We did not find in our database: {codes[0]}")
-    if not route.destination_coords:
-        raise KeyError(f"We did not find in our database: {codes[-1]}")
 
     # Middle tokens that the resolver neither placed nor rejected: the
     # resolver silently dropped them because no DB entry matched under

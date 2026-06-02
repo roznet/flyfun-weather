@@ -101,9 +101,8 @@ class TestExchangeEnvelope:
                 destination_coords=(43.18, 0.0),
             )
 
-        monkeypatch.setattr(flights_api, "resolve_route", _fake_resolve_route, raising=False)
-        # The adapter imports resolve_route from weatherbrief.airports at call
-        # time, so patch it at the source module too.
+        # flight_to_exchange imports resolve_route from weatherbrief.airports
+        # at call time, so patching the source module is what takes effect.
         import weatherbrief.airports as airports_mod
 
         monkeypatch.setattr(airports_mod, "resolve_route", _fake_resolve_route)
@@ -260,8 +259,11 @@ def _seed(app_db, flight: Flight) -> Flight:
     return flight
 
 
-@needs_nav_db
 class TestExportEndpoint:
+    # Only the two tests that resolve coordinates need nav.db; the 404/422
+    # cases exit before the resolver, so they run in any CI environment.
+
+    @needs_nav_db
     def test_export_returns_flightexchange(self, client, app_db):
         f = _seed(app_db, _make_flight(30, share_code="Exp0rtAA"))
         resp = client.get(f"/api/flights/{f.id}/export")
@@ -277,6 +279,7 @@ class TestExportEndpoint:
             "share_code": "Exp0rtAA",
         }
 
+    @needs_nav_db
     def test_export_includes_owned_aircraft_registration(self, client, app_db):
         s = app_db()
         ac = UserAircraftRow(
