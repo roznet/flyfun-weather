@@ -138,6 +138,9 @@ function layerTogglesHtml(
   // current conditions on a non-D-0 flight. A disabled solitary checkbox is just
   // noise. (Other groups keep their layers visible-but-dimmed so alternative
   // methods stay discoverable.)
+  // NB: assumes each listed group has exactly ONE layer (the named id) — hiding
+  // the group hides that layer. If a second layer is ever added to 'fronts' or
+  // 'conditions', gate per-layer instead, or it would be silently hidden too.
   const HIDE_GROUP_WHEN_UNAVAILABLE: Partial<Record<LayerGroup, string>> = {
     fronts: 'fronts-markers',
     conditions: 'current-conditions',

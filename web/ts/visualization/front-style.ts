@@ -22,13 +22,6 @@ export const FRONT_INTENSITY_WEIGHT: Record<FrontIntensity, number> = {
   sharp: 4.5,
 };
 
-/** Dash pattern by intensity; sharp is solid, weaker boundaries dashed. */
-export const FRONT_INTENSITY_DASH: Record<FrontIntensity, number[]> = {
-  significant: [4, 4],
-  classical: [8, 4],
-  sharp: [],
-};
-
 const FRONT_KIND_I18N: Record<FrontKind, string> = {
   cold: 'fronts.kind.cold',
   warm: 'fronts.kind.warm',

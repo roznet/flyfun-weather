@@ -119,6 +119,18 @@ class TestColocate:
         cat, top = _colocate(self._an(cl, conv), "ecmwf", 0.0, 850)
         assert cat == "convective" and top == 33000.0
 
+    def test_partly_cloud_at_level_is_partly(self):
+        cl = [{"top_ft": 12000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 700, "coverage": "sct"}]
+        cat, _ = _colocate(self._an(cl, {"risk_level": "none"}), "ecmwf", 0.0, 850)
+        assert cat == "partly"
+
+    def test_high_cirrus_unrelated_to_front_is_dry(self):
+        # few/sct cirrus at 300 hPa does NOT span an 850 hPa front → dry, not
+        # "partly" (the false-AMBER the level-gate prevents).
+        cl = [{"top_ft": 38000.0, "base_pressure_hpa": 300, "top_pressure_hpa": 250, "coverage": "sct"}]
+        cat, _ = _colocate(self._an(cl, {"risk_level": "none"}), "ecmwf", 0.0, 850)
+        assert cat == "dry"
+
     def test_missing_model_degrades_gracefully(self):
         assert _colocate(self._an([], {"risk_level": "low"}), "gfs", 0.0, 850) == (None, None)
 
