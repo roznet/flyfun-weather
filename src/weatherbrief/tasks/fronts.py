@@ -165,20 +165,23 @@ def _colocate(analyses, model: str, dist_km: float, level_hpa: int):
     conv = _attr(s, "convective", None)
     risk = _enum_val(_attr(conv, "risk_level", None)) if conv is not None else None
 
-    cloud_top = max((_attr(cl, "top_ft", None) or 0.0 for cl in layers), default=0.0)
+    def _spans(cl, level: int) -> bool:
+        bp, tp = _attr(cl, "base_pressure_hpa", None), _attr(cl, "top_pressure_hpa", None)
+        return bool(bp and tp and tp <= level <= bp)
+
+    def _covers(level: int, coverages: set[str]) -> bool:
+        """True if a cloud layer of one of ``coverages`` physically spans ``level``."""
+        return any(_spans(cl, level) and _enum_val(_attr(cl, "coverage", None)) in coverages for cl in layers)
+
+    # Cloud top must come from layers spanning the frontal level, not the whole
+    # column — else unrelated high cirrus inflates weather_top_ft and false-AMBERs
+    # a low wet/partly front (the category is already level-gated via _covers).
+    cloud_top = max((_attr(cl, "top_ft", None) or 0.0 for cl in layers if _spans(cl, level_hpa)), default=0.0)
     conv_top = None
     if conv is not None:
         conv_top = _attr(conv, "top_ft", None) or _attr(conv, "el_altitude_ft", None)
     tops = [v for v in (cloud_top or None, conv_top) if v]
     weather_top_ft = float(max(tops)) if tops else None
-
-    def _covers(level: int, coverages: set[str]) -> bool:
-        """True if a cloud layer of one of ``coverages`` physically spans ``level``."""
-        for cl in layers:
-            bp, tp = _attr(cl, "base_pressure_hpa", None), _attr(cl, "top_pressure_hpa", None)
-            if bp and tp and tp <= level <= bp and _enum_val(_attr(cl, "coverage", None)) in coverages:
-                return True
-        return False
 
     precip_obj = _attr(s, "precipitation", None)
     precip = precip_obj is not None and _enum_val(_attr(precip_obj, "surface_intensity", "none")) != "none"
@@ -207,11 +210,11 @@ def _persistence(source, model, lat, lon, level_hpa, eta_hour, gradient_min):
     stride = getattr(source, "stride_hours", None) or 3
     li = int(np.argmin(np.abs(source.lat - lat)))
     lj = int(np.argmin(np.abs(source.lon - lon)))
+    # Dedupe snapped hours: with stride > 3 h several offsets round to the same
+    # frame (banker's rounding), which would triple-count that frame in tot.
+    hours = sorted({int(round((eta_hour + dh) / stride) * stride) for dh in _PERSIST_OFFSETS_H} & avail)
     hits = tot = 0
-    for dh in _PERSIST_OFFSETS_H:
-        h = int(round((eta_hour + dh) / stride) * stride)
-        if h not in avail:
-            continue
+    for h in hours:
         g = source.gradient_at_hour(model, h, level_hpa)
         if g is None:
             continue
