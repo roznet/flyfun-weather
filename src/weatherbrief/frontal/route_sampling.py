@@ -542,6 +542,14 @@ def apply_gate_config(
     candidate as a diagnostic.
     """
     can_sample = lat_axis is not None and lon_axis is not None
+    if (background is not None or terrain_mask is not None) and not can_sample:
+        # The anomaly/terrain gates need the grid axes to sample background /
+        # terrain at the candidate. Without them they'd silently no-op, which
+        # reads as "gate passed" — warn rather than quietly skip.
+        logger.warning(
+            "apply_gate_config: background/terrain_mask supplied without "
+            "lat_axis/lon_axis — anomaly/terrain gates skipped."
+        )
     # Cast the boolean terrain mask to float ONCE (bilinear_sample needs float),
     # not once per candidate — the copy is ~150 KB on the European grid.
     terrain_float = (
@@ -567,15 +575,19 @@ def apply_gate_config(
             ),
         }
         rejected_by: str | None = None
+        # Terrain is checked before anomaly: it's the harder, categorical rule
+        # (even a transient synoptic front over high terrain is excluded), so a
+        # cell that is both on terrain AND low-anomaly should read "terrain" in
+        # the calibration trace, not "anomaly".
         if c.gradient < config.gradient_min:
             rejected_by = "gradient"
-        elif np.isfinite(anomaly) and anomaly < config.anomaly_min:
-            rejected_by = "anomaly"
         elif (
             terrain_float is not None
             and _on_high_terrain(terrain_float, lat_axis, lon_axis, c.lat, c.lon)
         ):
             rejected_by = "terrain"
+        elif np.isfinite(anomaly) and anomaly < config.anomaly_min:
+            rejected_by = "anomaly"
         elif not np.isfinite(delta) or abs(delta) < config.delta_theta_e_min:
             rejected_by = "delta_theta_e"
         decisions.append(

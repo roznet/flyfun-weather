@@ -207,6 +207,17 @@ class TestAnomalyTerrainGates:
         assert d.accepted is False
         assert d.rejected_by == "terrain"
 
+    def test_terrain_label_precedes_anomaly(self):
+        # A cell both on high terrain AND in the persistent-background region:
+        # terrain is the harder categorical rule, so the trace reads "terrain".
+        cfg = FrontGateConfig(level_hPa=925)
+        d = apply_gate_config(
+            [self._cand(45.5, 6.5, 9.0)], cfg,  # lat<46.5 (terrain) & lon>5.5 (bg 8)
+            background=self._background(), terrain_mask=self._terrain(),
+            lat_axis=self.LAT, lon_axis=self.LON,
+        )[0]
+        assert d.rejected_by == "terrain"
+
     def test_gradient_gate_precedes_anomaly_and_terrain(self):
         # A sub-threshold gradient is rejected by "gradient" first, regardless.
         cfg = FrontGateConfig(level_hPa=925)

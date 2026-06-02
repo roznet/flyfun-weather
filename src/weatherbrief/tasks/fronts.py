@@ -226,15 +226,21 @@ def _stamp_vertical_coherence(
     intermediate crossings and inherit a multi-level count it doesn't deserve —
     the false-positive this signal exists to suppress. ``tolerance_km`` is the
     same "same physical front" distance as ``merge_km``.
+
+    ``vertical_levels`` counts only **successfully analyzed** levels: if a level
+    raised in ``compute_route_fronts`` (bad grid, NaN field) it isn't in
+    ``analyses``, so a genuinely multi-level front can read as single-level. The
+    effect is conservative (caps to AMBER, never inflates a RED) and the failure
+    is logged upstream.
     """
-    items = sorted(
+    items: list[tuple[int, FrontCrossingModel]] = sorted(
         ((a.level_hPa, c) for a in analyses for c in a.crossings),
         key=lambda lc: lc[1].distance_km,
     )
     if not items:
         return
-    cluster: list = [items[0]]
-    clusters: list[list] = [cluster]
+    cluster: list[tuple[int, FrontCrossingModel]] = [items[0]]
+    clusters: list[list[tuple[int, FrontCrossingModel]]] = [cluster]
     for lvl_c in items[1:]:
         # vs cluster[0] (the nearest member) → bounds total span ≤ tolerance_km.
         if lvl_c[1].distance_km - cluster[0][1].distance_km <= tolerance_km:
