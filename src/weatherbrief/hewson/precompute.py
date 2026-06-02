@@ -125,27 +125,25 @@ def latest_snapshot(
 def _snapshot_valid_window(path: Path) -> tuple[int, int] | None:
     """``(init_unix, last_valid_unix)`` a snapshot covers, or None if unreadable.
 
-    Touches only the small header members — ``init_time_unix``, ``valid_times``
-    (a tiny 1-D timestamp array, read to count steps), and ``stride_hours``. The
+    Touches only the header members — ``init_time_unix`` and ``valid_times`` (a
+    small 1-D timestamp array). The last valid time is read directly off
+    ``valid_times[-1]`` rather than reconstructed from ``stride_hours``, so the
+    window stays correct even for a non-uniform or stride-less snapshot. The
     large per-level metric stacks are never materialised, since np.load loads
     zip members lazily on access.
     """
     try:
         with np.load(path) as npz:
             init = int(npz["init_time_unix"])
-            n_time = int(npz["valid_times"].shape[0])
-            stride = (
-                int(npz["stride_hours"])
-                if "stride_hours" in npz.files
-                else DEFAULT_STRIDE_HOURS
-            )
-    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile, zlib.error):
+            valid_times = npz["valid_times"]
+            if valid_times.ndim != 1 or valid_times.shape[0] == 0:
+                return None
+            last = int(valid_times[-1].astype("datetime64[s]").astype(np.int64))
+    except (OSError, ValueError, KeyError, EOFError, IndexError,
+            zipfile.BadZipFile, zlib.error):
         # Missing/corrupt/partially-written snapshot during a filesystem scan —
         # skip it, but don't swallow unrelated bugs (e.g. a programming error).
         return None
-    if n_time <= 0:
-        return None
-    last = init + (n_time - 1) * stride * 3600
     return init, last
 
 

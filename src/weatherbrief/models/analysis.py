@@ -735,6 +735,12 @@ class ModelDivergence(BaseModel):
     point, and ``mean`` is ``None`` when no model supplied a value. The artifact
     is *written* with these nulls, so the schema must read them back — consumers
     treat ``None`` as "metric absent for that model" (skip, don't average).
+
+    Note: an all-absent metric reads as ``mean=None`` **and**
+    ``agreement=GOOD`` — ``GOOD`` here means "nothing to disagree about", not
+    "models agreed". ``mean is None`` is the canonical "metric absent" signal:
+    a consumer that branches on ``agreement`` alone must also check ``mean`` to
+    avoid mistaking an absent metric for unanimous agreement.
     """
 
     variable: str
