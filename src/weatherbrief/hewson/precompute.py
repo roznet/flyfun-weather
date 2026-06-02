@@ -32,6 +32,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+import zipfile
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -123,9 +125,10 @@ def latest_snapshot(
 def _snapshot_valid_window(path: Path) -> tuple[int, int] | None:
     """``(init_unix, last_valid_unix)`` a snapshot covers, or None if unreadable.
 
-    Reads only the lightweight scalars (``init_time_unix``, ``valid_times`` shape,
-    ``stride_hours``) — np.load is lazy over the zip members, so this does not
-    materialise the metric stacks.
+    Touches only the small header members — ``init_time_unix``, ``valid_times``
+    (a tiny 1-D timestamp array, read to count steps), and ``stride_hours``. The
+    large per-level metric stacks are never materialised, since np.load loads
+    zip members lazily on access.
     """
     try:
         with np.load(path) as npz:
@@ -136,7 +139,9 @@ def _snapshot_valid_window(path: Path) -> tuple[int, int] | None:
                 if "stride_hours" in npz.files
                 else DEFAULT_STRIDE_HOURS
             )
-    except Exception:
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile, zlib.error):
+        # Missing/corrupt/partially-written snapshot during a filesystem scan —
+        # skip it, but don't swallow unrelated bugs (e.g. a programming error).
         return None
     if n_time <= 0:
         return None
