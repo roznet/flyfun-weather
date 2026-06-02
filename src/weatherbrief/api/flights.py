@@ -245,6 +245,60 @@ def _resolve_aircraft_info(
     )
 
 
+def flight_to_exchange(
+    flight: Flight, db: Session, db_path: str, *, viewer_id: str
+):
+    """Map a weather ``Flight`` to a cross-app ``FlightExchange`` envelope.
+
+    Weather stores a route as a single ``waypoints`` list with implicit
+    endpoints, and keeps timing/altitude/aircraft alongside it on the flight
+    row. The shared ``FlightExchange`` format (and the ``Route`` it wraps) uses
+    explicit endpoints, so weather is the side that adapts on emit:
+
+    - resolve ``waypoints`` → a ``Route`` with split endpoints + coordinates
+    - layer on ``departure_time``, derived ``arrival_time``, cruise altitude
+    - resolve ``aircraft_id`` → ICAO type + registration
+    - wrap with provenance (``source`` = weather, native id, share code)
+
+    The aircraft registration is only emitted to the aircraft's owner — it is
+    semi-personal, the same privacy gate :func:`_resolve_aircraft_info` applies
+    to ``tail_number``.
+
+    Raises:
+        KeyError: If the departure or destination can't be resolved (caller
+            maps this to a 422). Callers should pre-check ``len(waypoints) >= 2``.
+    """
+    from euro_aip.briefing.models.flight_exchange import FlightExchange
+    from weatherbrief.airports import resolve_route
+    from weatherbrief.db.models import UserAircraftRow
+
+    route = resolve_route(flight.waypoints, db_path)
+
+    route.departure_time = flight.departure_time
+    if flight.flight_duration_hours:
+        route.arrival_time = flight.departure_time + timedelta(
+            hours=flight.flight_duration_hours
+        )
+    route.cruise_altitude_ft = flight.cruise_altitude_ft
+
+    registration = None
+    if flight.aircraft_id is not None:
+        ac = db.get(UserAircraftRow, flight.aircraft_id)
+        if ac is not None:
+            route.aircraft_type = ac.icao_type
+            if ac.user_id == viewer_id:
+                registration = ac.tail_number
+
+    return FlightExchange(
+        route=route,
+        name=flight.route_name or None,
+        aircraft_registration=registration,
+        source_app="weather",
+        source_flight_id=flight.id,
+        source_share_code=flight.share_code,
+    )
+
+
 def _resolve_owner_display_name(db: Session, owner_id: str) -> str | None:
     """Look up a flight owner's display name for the subscriber/non-owner view.
 
@@ -1361,6 +1415,41 @@ def get_flight(
     """Get flight details. Any authenticated user can view public flights."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     return _flight_to_response(flight, db, viewer_id=user_id)
+
+
+@router.get("/{flight_id}/export")
+def export_flight(
+    flight_id: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Export a flight as a cross-app ``FlightExchange`` JSON payload.
+
+    The shared interchange format other flyfun apps (forms, brief) consume to
+    import a flight's route/time/aircraft — see euro_aip's ``FlightExchange``.
+    Authenticated, and respects the same visibility as ``GET /{flight_id}``:
+    the owner always, plus any viewer for a non-private flight. Distinct from
+    the public ``/s/{code}`` share link, which redirects humans to the briefing
+    page and stays unchanged.
+    """
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+
+    if len(flight.waypoints) < 2:
+        raise HTTPException(
+            status_code=422, detail=f"Flight '{flight_id}' has no route to export"
+        )
+
+    db_path = getattr(request.app.state, "db_path", "")
+    if not db_path:
+        raise HTTPException(status_code=503, detail="Airport database unavailable")
+
+    try:
+        exchange = flight_to_exchange(flight, db, db_path, viewer_id=user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=exc.args[0])
+
+    return exchange.to_dict()
 
 
 class SubscribeResponse(BaseModel):
