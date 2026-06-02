@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
@@ -41,6 +41,9 @@ router = APIRouter(prefix="/flights", tags=["flights"])
 logger = logging.getLogger(__name__)
 
 from weatherbrief.api.validation import WAYPOINT_RE, is_valid_waypoint
+
+if TYPE_CHECKING:
+    from euro_aip.briefing.models.flight_exchange import FlightExchange
 
 
 class CreateFlightRequest(BaseModel):
@@ -247,7 +250,7 @@ def _resolve_aircraft_info(
 
 def flight_to_exchange(
     flight: Flight, db: Session, db_path: str, *, viewer_id: str
-):
+) -> FlightExchange:
     """Map a weather ``Flight`` to a cross-app ``FlightExchange`` envelope.
 
     Weather stores a route as a single ``waypoints`` list with implicit
@@ -1447,7 +1450,8 @@ def export_flight(
     try:
         exchange = flight_to_exchange(flight, db, db_path, viewer_id=user_id)
     except KeyError as exc:
-        raise HTTPException(status_code=422, detail=exc.args[0])
+        detail = exc.args[0] if exc.args else "Route could not be resolved"
+        raise HTTPException(status_code=422, detail=detail)
 
     return exchange.to_dict()
 
