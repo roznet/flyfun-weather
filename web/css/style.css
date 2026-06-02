@@ -3950,6 +3950,51 @@ label {
   background: var(--bg);
 }
 
+/* --- Mobile touch targets (~44px, WCAG) — issue #205 ---
+   Inline icon badges keep their visual size but gain an invisible centered
+   44px hit overlay; standalone controls grow to a real 44px minimum. Scoped
+   to narrow screens so desktop renders identically. */
+@media (max-width: 700px) {
+  .freshness-info-btn,
+  .metric-info-btn {
+    position: relative;
+  }
+  .freshness-info-btn::after,
+  .metric-info-btn::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+  /* Regime cells pack several info badges tightly — a 44px overlay there would
+     overlap neighbours and make taps ambiguous, so leave those at icon size. */
+  .regime-cell .metric-info-btn::after {
+    display: none;
+  }
+
+  .btn-chip {
+    min-height: 44px;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.85rem;
+  }
+
+  .metric-popup-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .section.collapsible > h3 {
+    min-height: 44px;
+  }
+}
+
 /* Compare layer selector inline with toolbar */
 .viz-compare-layer-selector {
   display: flex;
