@@ -239,6 +239,18 @@ private struct RefreshBannerView: View {
             .padding(.horizontal)
             .padding(.vertical, 6)
             .background(.green.opacity(0.1))
+        case .noRefresh(let message):
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.seal")
+                    .foregroundStyle(.secondary)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+            .background(.regularMaterial)
         case .error(let message):
             HStack {
                 Image(systemName: "exclamationmark.triangle.fill")

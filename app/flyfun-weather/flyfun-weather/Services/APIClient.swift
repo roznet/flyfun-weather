@@ -71,60 +71,53 @@ actor APIClient {
         }
     }
 
-    /// Stream SSE events from the server.
+    /// Stream SSE events from the server's refresh endpoint.
     ///
-    /// SSE uses `URLSession.bytes(for:)` which `RollingBearerSession` doesn't
-    /// wrap, so we attach the Bearer token directly from the store. 401 here
-    /// surfaces as `serverError(401, ...)` rather than going through the
-    /// rolling session's `onUnauthorized` callback — acceptable because the
-    /// stream is short-lived and its caller already handles errors per event.
+    /// We deliberately use a delegate-based `URLSessionDataTask` rather than
+    /// `URLSession.bytes(for:)`. On-device, `bytes(for:)` buffered the entire
+    /// `text/event-stream` response and delivered *zero* lines until the server
+    /// closed the connection — verified in production logs as "SSE stream ended
+    /// after 0 events" across a full 3-minute refresh the server definitely
+    /// streamed. `urlSession(_:dataTask:didReceive:)` delivers each chunk as it
+    /// arrives, which is what SSE requires.
+    ///
+    /// The Bearer token is attached directly from the store (the delegate
+    /// session isn't wrapped by `RollingBearerSession`); a non-2xx surfaces as
+    /// `serverError`, which the caller already handles.
     func streamSSE(_ path: String, method: String = "POST") -> AsyncThrowingStream<RefreshEvent, Error> {
         let url = baseURL.appendingPathComponent(path)
-        let store = tokenStore
-        let currentSession = session
+        let token = tokenStore.token
 
         return AsyncThrowingStream { continuation in
-            Task {
-                var request = URLRequest(url: url)
-                request.httpMethod = method
-                if let token = store.token {
-                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                }
-                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                request.timeoutInterval = 300
-
-                let decoder = JSONDecoder()
-                decoder.keyDecodingStrategy = .convertFromSnakeCase
-
-                do {
-                    let (bytes, response) = try await currentSession.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                        continuation.finish(throwing: APIError.serverError(code, "SSE stream failed"))
-                        return
-                    }
-
-                    var buffer = ""
-                    for try await line in bytes.lines {
-                        if line.hasPrefix("data: ") {
-                            buffer = String(line.dropFirst(6))
-                        } else if line.isEmpty && !buffer.isEmpty {
-                            if let data = buffer.data(using: .utf8),
-                               let event = try? decoder.decode(RefreshEvent.self, from: data) {
-                                continuation.yield(event)
-                                if event.type == "complete" || event.type == "error" {
-                                    continuation.finish()
-                                    return
-                                }
-                            }
-                            buffer = ""
-                        }
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: APIError.networkError(error))
-                }
+            var request = URLRequest(url: url)
+            request.httpMethod = method
+            if let token {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            request.timeoutInterval = 300
+
+            // Own ephemeral session per stream so the long idle windows between
+            // pipeline phases don't tear the connection down, and so the delegate
+            // (and its retain cycle with the session) is released on invalidate.
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 300    // idle between SSE events
+            config.timeoutIntervalForResource = 3600  // whole-stream ceiling
+            config.requestCachePolicy = .reloadIgnoringLocalCacheData
+            config.waitsForConnectivity = true
+
+            let delegate = SSEStreamDelegate(continuation: continuation, path: path, logger: Self.logger)
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1   // serialize delegate callbacks
+            let session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
+            let task = session.dataTask(with: request)
+
+            continuation.onTermination = { _ in
+                task.cancel()
+                session.invalidateAndCancel()
+            }
+            task.resume()
         }
     }
 
@@ -304,6 +297,127 @@ private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate,
             continuation.resume(throwing: APIError.notFound)
         default:
             continuation.resume(throwing: APIError.serverError(http.statusCode, String(data: buffer, encoding: .utf8)))
+        }
+    }
+}
+
+/// Delegate that turns an SSE (`text/event-stream`) response into a stream of
+/// `RefreshEvent`s, parsing frames incrementally as data arrives.
+///
+/// Callbacks are serialized on a single-concurrency delegate queue, so the
+/// mutable parse state (`buffer`, `eventCount`, `finished`) needs no extra
+/// locking — hence the `@unchecked Sendable` conformance.
+private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<RefreshEvent, Error>.Continuation
+    private let path: String
+    private let logger: Logger
+    private let decoder: JSONDecoder
+    private var buffer = Data()
+    private var eventCount = 0
+    private var finished = false
+
+    /// SSE frames are separated by a blank line, i.e. a double newline.
+    private static let frameSeparator = Data([0x0a, 0x0a]) // "\n\n"
+
+    init(
+        continuation: AsyncThrowingStream<RefreshEvent, Error>.Continuation,
+        path: String,
+        logger: Logger
+    ) {
+        self.continuation = continuation
+        self.path = path
+        self.logger = logger
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        self.decoder = decoder
+        super.init()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200...299).contains(code) else {
+            logger.error("SSE stream failed: HTTP \(code) for \(self.path, privacy: .public)")
+            finish(throwing: APIError.serverError(code, "SSE stream failed"))
+            completionHandler(.cancel)
+            return
+        }
+        logger.info("SSE connected (HTTP \(code)) for \(self.path, privacy: .public)")
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        buffer.append(data)
+        while let range = buffer.range(of: Self.frameSeparator) {
+            let frame = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
+            buffer.removeSubrange(buffer.startIndex..<range.upperBound)
+            handleFrame(frame)
+            if finished { return }
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        defer { session.finishTasksAndInvalidate() }
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            finish(throwing: nil) // consumer stopped iterating — not an error
+            return
+        }
+        if let error {
+            logger.error("SSE network error for \(self.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            finish(throwing: APIError.networkError(error))
+        } else {
+            logger.info("SSE stream ended after \(self.eventCount) event(s) for \(self.path, privacy: .public)")
+            finish(throwing: nil)
+        }
+    }
+
+    /// Parse one SSE frame: keep the last `data:` payload, decode, and yield.
+    private func handleFrame(_ frame: Data) {
+        guard let text = String(data: frame, encoding: .utf8) else { return }
+        var payload = ""
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            guard line.hasPrefix("data:") else { continue } // ignore `event:`/`: ping`
+            let rest = line.dropFirst(5)
+            payload = rest.first == " " ? String(rest.dropFirst()) : String(rest)
+        }
+        guard !payload.isEmpty, let data = payload.data(using: .utf8) else { return }
+        do {
+            let event = try decoder.decode(RefreshEvent.self, from: data)
+            eventCount += 1
+            logger.debug("SSE event #\(self.eventCount) type=\(event.type, privacy: .public) stage=\(event.stage ?? "-", privacy: .public)")
+            continuation.yield(event)
+            if event.type == "complete" || event.type == "error" {
+                finish(throwing: nil)
+            }
+        } catch {
+            // Never silently swallow a frame. Log the raw payload, and if it was
+            // a terminal frame whose nested `pack` failed to decode, still end the
+            // stream so the UI doesn't hang on the spinner forever.
+            logger.error("SSE decode failed: \(error.localizedDescription, privacy: .public) raw=\(payload, privacy: .public)")
+            if let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let type = obj["type"] as? String,
+               type == "complete" || type == "error" {
+                continuation.yield(RefreshEvent(
+                    type: type, stage: nil, detail: nil, label: nil, progress: nil,
+                    pack: nil, elapsedSeconds: nil, refreshDecision: nil,
+                    message: obj["message"] as? String))
+                finish(throwing: nil)
+            }
+        }
+    }
+
+    private func finish(throwing error: Error?) {
+        guard !finished else { return }
+        finished = true
+        if let error {
+            continuation.finish(throwing: error)
+        } else {
+            continuation.finish()
         }
     }
 }

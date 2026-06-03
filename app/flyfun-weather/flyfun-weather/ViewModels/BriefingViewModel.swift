@@ -14,6 +14,11 @@ enum RefreshState: Equatable {
     case idle
     case refreshing(stage: String, detail: String?, progress: Double)
     case completed(elapsedSeconds: Double)
+    /// The server's refresh gate decided a full refresh wasn't warranted yet
+    /// (e.g. not enough covering model runs updated for the lead time). Carries
+    /// the human-readable reason to show the user — same idea as the web's
+    /// "Up to date / waiting on <models>" freshness message.
+    case noRefresh(message: String)
     case error(String)
 
     var isRefreshing: Bool {
@@ -194,7 +199,15 @@ final class BriefingViewModel {
                         progress: event.progress ?? 0
                     )
                 case "complete":
-                    refreshState = .completed(elapsedSeconds: event.elapsedSeconds ?? 0)
+                    // The tiered gate may decide no full refresh is warranted yet
+                    // (`mode == "none"`): the stream sends only this single event,
+                    // carrying the reason. Surface it instead of a misleading
+                    // "Refreshed in Xs", but still adopt the (unchanged) pack.
+                    if let decision = event.refreshDecision, decision.mode == "none" {
+                        refreshState = .noRefresh(message: Self.noRefreshMessage(decision))
+                    } else {
+                        refreshState = .completed(elapsedSeconds: event.elapsedSeconds ?? 0)
+                    }
                     if let newPack = event.pack {
                         pack = newPack
                         selectedPackTimestamp = newPack.fetchTimestamp
@@ -202,21 +215,41 @@ final class BriefingViewModel {
                         await loadPackHistory()
                         await loadPackData(timestamp: newPack.fetchTimestamp)
                     }
-                    // Clear completed state after a delay
+                    // Clear the transient banner after a delay.
                     try? await Task.sleep(for: .seconds(10))
-                    if case .completed = refreshState {
-                        refreshState = .idle
+                    switch refreshState {
+                    case .completed, .noRefresh: refreshState = .idle
+                    default: break
                     }
                 case "error":
                     refreshState = .error(event.message ?? "Refresh failed")
                 default:
+                    // e.g. "briefing_ready" — provisional pack; no UI change needed.
                     break
                 }
+            }
+            // The stream ended without a terminal `complete`/`error` event (the
+            // server closed it, or a frame was dropped). Never leave the spinner
+            // running forever — fall back to idle and let the user retry.
+            if case .refreshing = refreshState {
+                Self.logger.warning("Refresh stream ended without a terminal event — resetting to idle")
+                refreshState = .idle
             }
         } catch {
             refreshState = .error(error.localizedDescription)
             Self.logger.error("Refresh stream error: \(error)")
         }
+    }
+
+    /// Build the user-facing message for a gated no-op refresh. Prefer the
+    /// server's reason (a complete sentence like "Only 1 of 3 covering model(s)
+    /// updated for a D-3 flight — no refresh needed"); fall back to a generic
+    /// line if it's ever absent.
+    private static func noRefreshMessage(_ decision: RefreshDecision) -> String {
+        if let reason = decision.reason, !reason.isEmpty {
+            return reason
+        }
+        return "Already up to date — no refresh needed."
     }
 
     /// Check if a refresh is already running (started from web or another device).

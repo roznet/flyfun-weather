@@ -5,7 +5,7 @@ import OSLog
 ///
 /// Persisted in UserDefaults so the app has last-known flags available
 /// immediately at launch (including offline). Refreshed opportunistically
-/// from `/user/preferences` when online; writes to prefs happen via the web.
+/// from `/api/user/preferences` when online; writes to prefs happen via the web.
 @MainActor
 @Observable
 final class UserPreferencesStore {
@@ -27,7 +27,7 @@ final class UserPreferencesStore {
     /// Silent no-op on transient network errors — cached value is preserved.
     func refresh(using client: APIClient) async {
         do {
-            let fresh: PreferencesResponse = try await client.request("/user/preferences")
+            let fresh: PreferencesResponse = try await client.request("/api/user/preferences")
             preferences = fresh
             if let data = try? JSONEncoder().encode(fresh) {
                 UserDefaults.standard.set(data, forKey: Self.defaultsKey)
