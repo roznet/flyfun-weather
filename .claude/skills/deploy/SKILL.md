@@ -211,8 +211,9 @@ This runs a single full cycle (fetch forecasts + observations + score) and exits
    In the common case (local already in sync with `origin/main`), skip this step entirely.
 2. SSH to the server and deploy:
    ```
-   ssh <user>@<server> "cd flyfun-weather && git pull && docker compose up -d --build"
+   ssh <user>@<server> "cd flyfun-weather && git checkout main && git pull && docker compose up -d --build"
    ```
+   The explicit `git checkout main` is a no-op in the normal case (already on `main`) but is what returns the server to `main` after a `prod-prev` rollback (see "Track the deployed version" below) — without it, `git pull` on the rolled-back branch would re-deploy the bad commit.
    Container logs go to journald (see `docker-compose.yml` logging config), so they survive the rebuild — query with `journalctl CONTAINER_NAME=weatherbrief --until="<time-of-rebuild>" --since="-1h"` if you need to inspect the prior container's last logs after the fact.
 3. **If migrations were detected in pre-flight**, run them now:
    ```
@@ -226,6 +227,40 @@ This runs a single full cycle (fetch forecasts + observations + score) and exits
    ```
    curl -s -o /dev/null -w '%{http_code}' https://weather.flyfun.aero/health
    ```
+
+## Track the deployed version (prod / prod-prev branches)
+
+Maintain two long-lived **branches** that point at what's deployed, so a bad deploy can be rolled back to the last-known-good commit fast:
+- `prod` → the commit now running in production (`LOCAL_SHA`)
+- `prod-prev` → the commit that was running *before* this deploy (`SERVER_SHA`)
+
+> **Why branches, not tags:** branches are git's natural "moving pointer" (the environment-branch / GitLab-Flow pattern); tags are conventionally immutable markers. On a normal deploy both pointers only ever advance *forward* along `main`, so the push is a plain fast-forward — **no force needed.** Force is only required for the unusual case of deploying an *older* commit (a rollback deploy, which moves a pointer backward).
+
+Run this **only after the health check returns 200** — a failed deploy must not move `prod`. Uses the `SERVER_SHA` / `LOCAL_SHA` anchors captured in pre-flight (`SERVER_SHA` = what was running, `LOCAL_SHA` = what we just deployed). `git branch -f` resets the **local** branch ref (these branches aren't checked out — the deploy machine is on `main`); it is not a force-push:
+
+```bash
+# Move the local branch refs. Skip prod-prev on a re-deploy of the same commit.
+if [ "${SERVER_SHA}" != "${LOCAL_SHA}" ]; then
+  git branch -f prod-prev ${SERVER_SHA}   # previous prod — what we just replaced
+fi
+git branch -f prod ${LOCAL_SHA}           # new prod — what we just deployed
+
+# Normal deploys move both pointers forward along main → fast-forward, no force.
+git push origin prod prod-prev
+```
+
+If `git push` is rejected as non-fast-forward — which only happens on a **rollback deploy** (you deployed an older commit, so a pointer moved backward) — re-run with a lease so you don't clobber a concurrent update:
+```bash
+git push --force-with-lease origin prod prod-prev
+```
+
+### Reverting to the previous version
+
+If the deploy you just shipped is bad, roll the server back to the last-known-good commit:
+```bash
+ssh <user>@<server> "cd flyfun-weather && git fetch origin && git checkout -B prod-prev origin/prod-prev && docker compose up -d --build"
+```
+This leaves the server **on the `prod-prev` branch** (fine for an emergency revert). The normal Deploy step 2 below does `git checkout main && git pull`, so the next deploy automatically returns the server to `main` — no manual cleanup needed. **If migrations ran in the bad deploy**, decide whether they need an `alembic downgrade` *before* rolling back — schema changes are not undone by checking out an older commit.
 
 ## Close "Addresses" issues after deploy
 
@@ -285,6 +320,47 @@ Runs **only after** the health check returns 200 — never close issues if the d
 - No PRs in the deploy range (e.g. data-only changes): skip silently.
 - `gh auth status` fails: skip and tell the user so they can do it manually.
 - Deploy failed or health check didn't return 200: **do not close** — the issues aren't actually live for users yet.
+
+## Suggest a What's New entry (only with explicit confirmation)
+
+After the "Addresses" issues are closed, draft a **user-facing** What's New entry from the commits in this deploy and offer it for review. The release stream is the `system_messages` table, managed by the `python -m weatherbrief.release` CLI (shipped in PR #187). This step **writes nothing unless the user explicitly says yes** — treat it as a confirmation gate exactly like the deploy gate above.
+
+### Draft
+
+1. Read the commits in this deploy for source material (uses the pre-flight anchors):
+   ```bash
+   git log --format='%s%n%b%n---' ${SERVER_SHA}..${LOCAL_SHA}
+   ```
+2. Distill them into **one grouped, user-facing entry** — not one per PR/commit (rationale in `release-notes/STRUCTURE-COMPARISON.md`). Apply the tone/scope rules (memory: release-note copy style):
+   - **Honest about the real driver** (e.g. "we cut compute cost so we can do more", not user-flattery). Exclude internal details — refactors, CI, infra, test-only changes, file/PR numbers.
+   - **Only mention features that are actually live** for users in this deploy. If nothing is user-facing (infra/data-only deploy), say so and **skip** — do not invent an entry.
+   - Plain language a pilot understands — no commit-speak.
+3. Choose the metadata to propose:
+   - `--category`: `feature` (new capability), `change` (behaviour change), or `fix` (bug fix). Most grouped deploy entries are `feature`.
+   - `--highlight` (lights the notification dot): **default OFF.** Reserve the dot for a curated few; frequent low-key notes should land silently. Only propose `--highlight` for something you'd genuinely want every user to notice.
+
+### Confirm (HARD STOP)
+
+Show the user the proposed entry — **title, category, highlight yes/no, and the full markdown body** — and **end the turn.** Do NOT run the `add` command in the same message. Only an actual, readable "yes" counts; a cancelled question, empty result, or assumption is **not** confirmation. The user may also edit the draft or pick a different category/highlight before approving — apply their changes and re-show if the edits are substantial.
+
+### Add (only after the user says yes)
+
+The release CLI writes straight to the DB, so it must run against the **production** DB inside the container (prod DB is MySQL). Pass the body on stdin (`--body-file -`) so markdown survives SSH without shell-escaping — `docker exec -i` and `ssh` both forward stdin:
+```bash
+ssh <user>@<server> "docker exec -i weatherbrief python -m weatherbrief.release add \
+  --title 'TITLE HERE' --category feature --body-file -" <<'EOF'
+Full markdown body here.
+EOF
+```
+Add `--highlight` to the command only if the user approved highlighting. Then confirm it landed:
+```bash
+ssh <user>@<server> "docker exec weatherbrief python -m weatherbrief.release list" | head
+```
+
+### Skip conditions
+
+- Nothing user-facing in the deploy range: say so and skip (no draft to show).
+- User declines or doesn't confirm: do nothing — leave the release stream untouched.
 
 ## If something goes wrong
 
