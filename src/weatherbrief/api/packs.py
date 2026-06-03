@@ -448,6 +448,20 @@ _DIRECT_SOURCE_KEYS: dict[str, str] = {
     "icon": "icon_eu:dwd",
 }
 
+# Candidate (pack-model -> source) pairs used to evaluate a *from-scratch* pack
+# — one that recorded no model data because every model was out of horizon when
+# it was first built (e.g. a flight set up weeks ahead).  Such a pack has no
+# recorded model set to gate against, so the refresh gate would otherwise be
+# permanently stuck at "no model covers" even after a model comes into range.
+# We use the longest-horizon source per model so coverage isn't under-reported
+# (gfs:noaa 16d, ecmwf:openmeteo 10d, icon:openmeteo 7d).  See
+# ``_build_data_status``' from-scratch branch.
+_SCRATCH_CANDIDATES: dict[str, str] = {
+    "gfs": "gfs:noaa",
+    "ecmwf": "ecmwf:openmeteo",
+    "icon": "icon:openmeteo",
+}
+
 
 def model_for_source(source: str) -> str:
     """Return the model name keyed in the marker store for ``source``.
@@ -532,8 +546,16 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
     from weatherbrief.fetch.freshness.markers import get_store
 
     sources = _backfill_sources(pack)
-    if not sources:
-        return DataStatus(fresh=False)
+    from_scratch = not sources
+    if from_scratch:
+        # The pack recorded no model data — every model was out of horizon when
+        # it was first built.  There is no pack model set to gate against, so
+        # evaluate the candidate primaries against the current horizon instead.
+        # A covering run we have never fetched is treated as actionable
+        # ("stale") below, so the refresh gate runs a full from-scratch refresh
+        # once the flight comes into range — and still returns "none" (nothing
+        # eligible) while every model is still out of horizon.
+        sources = dict(_SCRATCH_CANDIDATES)
 
     flight_end = flight.departure_time + _td(hours=flight.flight_duration_hours or 0)
     store = get_store()
@@ -565,7 +587,15 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
         run_covers_flight = (init + horizon) >= flight_end
 
         if pack_init_ts is None:
-            state = "current"
+            if from_scratch and run_covers_flight:
+                # No data ever fetched for this model and a run now covers the
+                # flight — a full refresh will finally produce it.  Mark it
+                # actionable so the gate runs the pipeline from scratch.
+                state = "stale"
+                any_stale = True
+                stale_models.append(model)
+            else:
+                state = "current"
         elif int(init.timestamp()) > pack_init_ts and run_covers_flight:
             state = "stale"
             any_stale = True

@@ -349,3 +349,91 @@ class TestDecideRefresh:
         # pending_models is sorted by next_expected (soonest first): m2 (15:00)
         # then m1 (18:00); the stale m0 is excluded.
         assert d.pending_models == ["m2", "m1"]
+
+
+# --- _build_data_status from-scratch / empty-pack path ---
+
+
+class TestBuildDataStatusFromScratch:
+    """A pack created with no model data (every model out of horizon at build
+    time) must not be permanently un-refreshable.  Once the flight comes into a
+    model's horizon, the gate has to detect coverage from the candidate
+    primaries rather than the (empty) recorded model set.
+    """
+
+    def _store(self, init):
+        """MarkerStore with healthy markers for the scratch candidates."""
+        from weatherbrief.api.packs import _SCRATCH_CANDIDATES, model_for_source
+        from weatherbrief.fetch.freshness.markers import Marker, MarkerStore
+
+        store = MarkerStore()
+        for source in _SCRATCH_CANDIDATES.values():
+            store._markers[(source, model_for_source(source))] = Marker(
+                source=source, model=model_for_source(source),
+                init=init, next_expected=init + timedelta(hours=6),
+                last_check=datetime.now(timezone.utc),  # healthy heartbeat
+            )
+        return store
+
+    def _empty_pack(self, flight_id="test-flight"):
+        from weatherbrief.models import BriefingPackMeta
+
+        return BriefingPackMeta(
+            flight_id=flight_id,
+            fetch_timestamp=datetime.now(timezone.utc),
+            days_out=28,
+            model_init_times={}, grib_init_times={}, model_sources={},
+        )
+
+    def _flight(self, days_out):
+        from weatherbrief.models import Flight
+
+        return Flight(
+            id="test-flight", user_id="u", route_name="r",
+            departure_time=datetime.now(timezone.utc) + timedelta(days=days_out),
+            cruise_altitude_ft=8000, flight_duration_hours=4.0,
+            created_at=datetime.now(timezone.utc),
+        )
+
+    def _status(self, days_out):
+        from weatherbrief.api.packs import _build_data_status
+
+        init = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        store = self._store(init)
+        with patch(
+            "weatherbrief.fetch.freshness.markers.get_store", return_value=store
+        ):
+            return _build_data_status(self._empty_pack(), self._flight(days_out))
+
+    def test_in_horizon_empty_pack_is_actionable_full(self):
+        """D-8: GFS (16d) + ECMWF-OM (10d) cover -> covering models marked
+        stale -> the gate runs a full from-scratch refresh."""
+        from weatherbrief.api.packs import decide_refresh
+
+        status = self._status(days_out=8)
+        # gfs + ecmwf cover at D-8; icon (7d) does not.
+        eligible = {m for m, ms in status.models.items() if ms.covers_horizon}
+        assert eligible == {"gfs", "ecmwf"}
+        assert not status.fresh  # covering-but-unfetched models are actionable
+        assert set(status.stale_models) == {"gfs", "ecmwf"}
+        assert decide_refresh(status, 8).mode == "full"
+
+    def test_out_of_horizon_empty_pack_stays_none(self):
+        """D-20: no candidate covers -> nothing eligible -> no wasteful refresh
+        (scheduler/manual both see mode=none, as before the fix)."""
+        from weatherbrief.api.packs import decide_refresh
+
+        status = self._status(days_out=20)
+        assert all(not ms.covers_horizon for ms in status.models.values())
+        assert status.fresh
+        d = decide_refresh(status, 20)
+        assert d.mode == "none"
+        assert d.n_eligible == 0
+
+    def test_d0_empty_pack_is_full(self):
+        """D-0 empty pack: all candidates cover and none were ever fetched, so
+        the gate runs a full from-scratch refresh (not just realtime)."""
+        from weatherbrief.api.packs import decide_refresh
+
+        status = self._status(days_out=0)
+        assert decide_refresh(status, 0).mode == "full"
