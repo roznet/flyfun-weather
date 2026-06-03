@@ -46,6 +46,21 @@ class AdvisoryResult:
 # ---------------------------------------------------------------------------
 
 
+def _cloud_source_from_method(cloud_method: str | None) -> str | None:
+    """Extract the cloud *source* (``"dd"`` / ``"nwp"``) from a ``cloud_method``.
+
+    Profiles persist a combined ``<style>_<source>`` string written by the
+    settings page (e.g. ``soft_nwp``, ``square_dd``, ``natural_nwp``), while
+    legacy profiles carry the bare source (``dd`` / ``nwp``). The render *style*
+    is a frontend-only concern; backend cloud resolution only needs the source.
+    Any value ending in ``nwp`` selects the NWP layers; everything else
+    (``None``, bare/styled ``*_dd``) falls back to the DD source.
+    """
+    if not cloud_method:
+        return None
+    return "nwp" if cloud_method.endswith("nwp") else "dd"
+
+
 def _resolve_analyses(
     rp_analyses: list[RoutePointAnalysis],
     icing_method: str | None,
@@ -59,15 +74,18 @@ def _resolve_analyses(
     never mutated.
 
     Cloud resolution (``cloud_method``):
-        ``"nwp"`` → use ``nwp_cloud_layers`` (fall back to DD source if None).
+        source ``nwp`` (``"nwp"`` or any ``*_nwp`` styled form) → use
+        ``nwp_cloud_layers`` (fall back to DD source if None); ``dd`` / ``None``
+        keep the DD-derived base layers. See ``_cloud_source_from_method``.
     Icing resolution (``icing_method``):
         ``"ogimet_nwp"`` → use ``icing_ogimet_nwp_zones``.
         ``"sfip_nwp"``   → convert ``sfip_zones`` to ``IcingZone`` list.
     Convective resolution (``convective_method``):
         ``"nwp"`` → use ``convective_nwp`` (fall back to ``convective_thermo``).
     """
+    cloud_source = _cloud_source_from_method(cloud_method)
     swap_icing = icing_method and icing_method != "ogimet_dd"
-    swap_cloud = cloud_method and cloud_method != "dd"
+    swap_cloud = cloud_source == "nwp"
     swap_convective = convective_method and convective_method != "thermo"
     if not swap_icing and not swap_cloud and not swap_convective:
         return rp_analyses
@@ -81,7 +99,7 @@ def _resolve_analyses(
 
             # --- cloud resolution ---
             if swap_cloud:
-                if cloud_method == "nwp" and sounding.nwp_cloud_layers is not None:
+                if cloud_source == "nwp" and sounding.nwp_cloud_layers is not None:
                     updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
                     # Determine effective method from layer source tags
                     sources = {cl.source for cl in sounding.nwp_cloud_layers}

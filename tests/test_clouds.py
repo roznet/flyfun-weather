@@ -1,5 +1,7 @@
 """Tests for enhanced cloud layer detection (sounding/clouds.py)."""
 
+import pytest
+
 from weatherbrief.analysis.sounding.clouds import build_nwp_cloud_layers, detect_cloud_layers
 from weatherbrief.models import DerivedLevel, NWPCloudDiagnostics, NWPCloudLayerDiag
 from weatherbrief.models.analysis import CloudCoverage, EnhancedCloudLayer, SoundingAnalysis
@@ -436,4 +438,37 @@ def test_resolve_analyses_nwp_fallback():
     rpa, dd_layers, _ = _make_rpa_with_clouds()
     rpa.sounding["gfs"].nwp_cloud_layers = None
     result = _resolve_analyses([rpa], None, "nwp")
+    assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
+
+
+def test_cloud_source_from_method():
+    """Styled <style>_<source> forms and bare/None reduce to the right source."""
+    from weatherbrief.tasks.advise import _cloud_source_from_method
+    assert _cloud_source_from_method("nwp") == "nwp"
+    assert _cloud_source_from_method("soft_nwp") == "nwp"
+    assert _cloud_source_from_method("square_nwp") == "nwp"
+    assert _cloud_source_from_method("natural_nwp") == "nwp"
+    assert _cloud_source_from_method("dd") == "dd"
+    assert _cloud_source_from_method("natural_dd") == "dd"
+    assert _cloud_source_from_method("square_dd") == "dd"
+    assert _cloud_source_from_method(None) is None
+    assert _cloud_source_from_method("") is None
+
+
+@pytest.mark.parametrize("method", ["soft_nwp", "square_nwp", "natural_nwp"])
+def test_resolve_analyses_styled_nwp_swaps(method):
+    """Styled *_nwp forms resolve to NWP layers (regression: used to fall to DD)."""
+    from weatherbrief.tasks.advise import _resolve_analyses
+    rpa, _, _ = _make_rpa_with_clouds()
+    result = _resolve_analyses([rpa], None, method)
+    assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 5000
+    assert result[0].sounding["gfs"].cloud_layers[0].coverage == CloudCoverage.OVC
+
+
+@pytest.mark.parametrize("method", ["natural_dd", "square_dd", "soft_dd"])
+def test_resolve_analyses_styled_dd_keeps_dd(method):
+    """Styled *_dd forms keep the DD-derived base layers."""
+    from weatherbrief.tasks.advise import _resolve_analyses
+    rpa, _, _ = _make_rpa_with_clouds()
+    result = _resolve_analyses([rpa], None, method)
     assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
