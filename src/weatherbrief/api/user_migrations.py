@@ -47,13 +47,13 @@ def _register(key: str) -> Callable[[MigrationFn], MigrationFn]:
 def _migrate_method_defaults_v2(prefs: dict) -> dict:
     """Upgrade legacy analysis method values to GRAMET-aligned defaults.
 
-    dd       -> soft_nwp   (cloud method)
-    nwp      -> soft_nwp   (cloud method)
+    dd       -> square_nwp (cloud method)
+    nwp      -> square_nwp (cloud method)
     ogimet_dd -> ogimet_nwp (icing method)
     thermo   -> nwp        (convective method)
     """
     upgrades = {
-        "cloud_method": {"dd": "soft_nwp", "nwp": "soft_nwp"},
+        "cloud_method": {"dd": "square_nwp", "nwp": "square_nwp"},
         "icing_method": {"ogimet_dd": "ogimet_nwp"},
         "convective_method": {"thermo": "nwp"},
     }

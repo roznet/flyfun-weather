@@ -118,9 +118,9 @@ function cloudCompoundHtml(
   html += sourceCheckbox('nwp', 'NWP', nwpEnabled, nwpUnavail, false);
   html += sourceCheckbox('dd', 'DD', ddEnabled, ddUnavail, ddSubstituted);
   html += `<select class="viz-model-select" data-cloud-style>`;
-  html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>${t('viz.cloudStyle.soft')}</option>`;
-  html += `<option value="natural"${style === 'natural' ? ' selected' : ''}>${t('viz.cloudStyle.natural')}</option>`;
   html += `<option value="square"${style === 'square' ? ' selected' : ''}>${t('viz.cloudStyle.square')}</option>`;
+  html += `<option value="natural"${style === 'natural' ? ' selected' : ''}>${t('viz.cloudStyle.natural')}</option>`;
+  html += `<option value="soft"${style === 'soft' ? ' selected' : ''}>${t('viz.cloudStyle.soft')}</option>`;
   html += `</select>`;
   return html;
 }

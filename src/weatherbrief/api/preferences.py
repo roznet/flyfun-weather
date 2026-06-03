@@ -128,7 +128,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "llm_digest_enabled": data.get("llm_digest_enabled", True),
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
         "icing_method": data.get("icing_method", "ogimet_nwp"),
-        "cloud_method": data.get("cloud_method", "soft_nwp"),
+        "cloud_method": data.get("cloud_method", "square_nwp"),
         "convective_method": data.get("convective_method", "nwp"),
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
@@ -373,7 +373,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "soft_nwp", "convective_method": "nwp", "units_region": "auto", "defer_email_for_model_update": False}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "square_nwp", "convective_method": "nwp", "units_region": "auto", "defer_email_for_model_update": False}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 

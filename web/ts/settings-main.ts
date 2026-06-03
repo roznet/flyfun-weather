@@ -92,7 +92,7 @@ function parseCloudMethod(value: string): { source: 'dd' | 'nwp'; style: 'soft' 
 
 /** Compose source+style back into a cloud_method string for persistence.
  *  Uses `natural_<source>` for the natural style — avoids the bare `dd`/`nwp`
- *  form that the user_migration in api/user_migrations.py rewrites to soft_nwp. */
+ *  form that the user_migration in api/user_migrations.py rewrites to square_nwp. */
 function composeCloudMethod(source: string, style: string): string {
   return `${style}_${source}`;                   // 'soft_nwp', 'square_dd', 'natural_nwp', etc.
 }
