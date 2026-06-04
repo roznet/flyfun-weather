@@ -509,19 +509,19 @@
   },
   "icing_risk": {
     "name": "Icing Risk (Ogimet-DD)",
-    "unit": "",
+    "unit": "0–100",
     "vibe": "How fast ice will build on your airframe",
     "primary_goal": "Classify the icing severity in a cloud layer using dewpoint depression as the cloud signal.",
     "best_used_for": "Deciding whether to enter, avoid, or exit a cloud layer. Uses sounding-derived moisture (no NWP model cloud data needed).",
     "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to −14°C range (layered) or 0 to −20°C (convective). Relies on dewpoint depression which can miss sub-grid clouds that NWP models detect.",
-    "theory": "Uses the Ogimet continuous icing index, which peaks at −7°C matching where supercooled liquid water is most abundant. Cloud signal via continuous dewpoint depression attenuation — cosine taper from DD=0 (full index) to DD=2.0°C (zero). No NWP data used. The index blends a stratiform component (parabola over −14 to 0°C) with a convective component (vapor density difference from cloud base), weighted by CAPE. Index thresholds: >0 = light, ≥30 = moderate, ≥80 = severe.",
+    "theory": "Uses the Ogimet continuous icing index, which peaks at −7°C matching where supercooled liquid water is most abundant. Cloud signal via continuous dewpoint depression attenuation — cosine taper from DD=0 (full index) to DD=2.0°C (zero). No NWP data used. The index blends a stratiform component (parabola over −14 to 0°C) with a convective component (vapor density difference from cloud base), weighted by CAPE. Index thresholds: ≥10 = light, ≥30 = moderate, ≥80 = severe.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "llm_prompt": "explain how the Ogimet continuous icing index works with DD attenuation, why it peaks at −7°C, and how temperature bands classify icing type (clear, mixed, rime)",
     "thresholds": [
-      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
-      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
-      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+      { "min": null, "max": 10, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": 10, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
     ]
   },
   "ogimet_index": {
@@ -542,19 +542,19 @@
   },
   "icing_ogimet_nwp_risk": {
     "name": "Icing Risk (Ogimet-NWP)",
-    "unit": "",
+    "unit": "0–100",
     "vibe": "Ogimet icing scaled by NWP cloud cover",
     "primary_goal": "Classify icing severity using NWP model cloud cover percentage as the cloud signal.",
     "best_used_for": "Comparing against Ogimet-DD. This is the same approach used by Autorouter GRAMET — when cloud cover is 50%, the icing index is halved.",
     "limitations": "Does not account for droplet size (SLD). Relies on NWP cloud cover which may differ between models. ECMWF cloud fraction per level comes from direct GRIB (cc variable) over Europe and US out to ~7 days; outside that area/range we fall back to bulk NWP cloud cover.",
-    "theory": "Uses the Ogimet continuous icing index — a parabolic formula peaking at −7°C that maps temperature to icing severity across the 0 to −14°C range (layered) or 0 to −20°C (convective). The cloud signal comes from NWP model cloud cover percentage at the level's altitude — 50% cloud = 50% of index. This is the same approach used by Autorouter GRAMET. No dewpoint depression gating. Thresholds: effective index >0 = light, ≥30 = moderate, ≥80 = severe.",
+    "theory": "Uses the Ogimet continuous icing index — a parabolic formula peaking at −7°C that maps temperature to icing severity across the 0 to −14°C range (layered) or 0 to −20°C (convective). The cloud signal comes from NWP model cloud cover percentage at the level's altitude — 50% cloud = 50% of index. This is the same approach used by Autorouter GRAMET. No dewpoint depression gating. Thresholds: effective index ≥10 = light, ≥30 = moderate, ≥80 = severe.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "llm_prompt": "explain how the Ogimet-NWP icing method scales the icing index by NWP cloud cover percentage, and how it compares to the DD-attenuation approach",
     "thresholds": [
-      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
-      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
-      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+      { "min": null, "max": 10, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": 10, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
     ]
   },
   "sfip_risk": {
@@ -576,7 +576,7 @@
   },
   "ieng_icing_risk": {
     "name": "Icing Risk (IENG)",
-    "unit": "",
+    "unit": "0–100",
     "vibe": "CloudPath-style icing from temperature and cloud cover",
     "primary_goal": "Classify icing severity using the IENG formula: temperature-based index scaled directly by NWP cloud coverage fraction.",
     "best_used_for": "A simpler alternative to Ogimet-NWP. No glaciation correction — treats cloud fraction as a direct multiplier on icing potential. Matches the approach used by CloudPath.",
@@ -585,10 +585,10 @@
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
     "llm_prompt": "explain how the IENG icing index works — same temperature parabola as Ogimet but scaled directly by NWP cloud fraction without glaciation correction",
     "thresholds": [
-      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No icing concern." },
-      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
-      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+      { "min": null, "max": 10, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": 10, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
     ]
   },
   "sld_risk": {
@@ -614,14 +614,14 @@
     "primary_goal": "Predict Clear Air Turbulence from Richardson number.",
     "best_used_for": "Choosing a smooth flight level — or knowing which ones to avoid.",
     "limitations": "Only detects shear-driven turbulence. Blind to mountain waves, convective turbulence, and wake turbulence.",
-    "theory": "Clear Air Turbulence risk classified from the Richardson number (Ri) at each atmospheric layer. Ri measures whether wind shear can overcome atmospheric stability: when it does (Ri < 0.25), smooth airflow breaks down into turbulence through Kelvin-Helmholtz instability — like waves breaking on the ocean. CAT occurs in clear air with no visual warning, making it particularly dangerous.",
+    "theory": "Clear Air Turbulence risk classified from the Richardson number (Ri) at each atmospheric layer. Ri measures whether wind shear can overcome atmospheric stability: when it does, smooth airflow breaks down into turbulence through Kelvin-Helmholtz instability — like waves breaking on the ocean. The classical critical value is Ri < 0.25, but that applies to the true, local shear — and forecast models sample the atmosphere too coarsely (25–50 hPa between levels) to resolve the thin layers where turbulence actually forms, so model-derived Ri tends to read higher than reality. To catch turbulence the raw 0.25 cutoff would miss, the risk bands here are deliberately set higher as a tuning choice: severe below 0.5, moderate below 1.0, light below 2.0. These are pragmatic thresholds rather than calibrated values, so treat them as a guide. CAT occurs in clear air with no visual warning, making it particularly dangerous.",
     "wikipedia": "https://en.wikipedia.org/wiki/Clear-air_turbulence",
     "llm_prompt": "explain how the Richardson number (ratio of stability to wind shear) predicts Clear Air Turbulence, including the critical Ri < 0.25 threshold and Kelvin-Helmholtz instability",
     "thresholds": [
-      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "Smooth. Laminar flow." },
-      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Intermittent bumps possible." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Turbulence likely. Unsecured items will move." },
-      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Shear overwhelms stability — turbulent breakdown. Avoid this layer." }
+      { "min": 2.0, "max": null, "label": "None", "risk": "none", "meaning": "Smooth. Laminar flow." },
+      { "min": 1.0, "max": 2.0, "label": "Light", "risk": "low", "meaning": "Intermittent bumps possible." },
+      { "min": 0.5, "max": 1.0, "label": "Moderate", "risk": "moderate", "meaning": "Turbulence likely. Unsecured items will move." },
+      { "min": null, "max": 0.5, "label": "Severe", "risk": "severe", "meaning": "Shear overwhelms stability — turbulent breakdown. Avoid this layer." }
     ]
   },
   "e_shear_risk": {
@@ -635,10 +635,10 @@
     "wikipedia": "https://en.wikipedia.org/wiki/Clear-air_turbulence",
     "llm_prompt": "explain the E-parameter turbulence formula E = (5*HWS + VWS² + 42) / 4, how it combines vertical and horizontal wind shear, and how it compares to the Richardson number approach",
     "thresholds": [
-      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "Smooth. Minimal wind shear." },
-      { "min": null, "max": null, "label": "Light", "risk": "low", "meaning": "Minor shear. Occasional bumps." },
-      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant shear. Expect turbulence." },
-      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Extreme wind shear. Avoid this layer." }
+      { "min": null, "max": 40, "label": "None", "risk": "none", "meaning": "Smooth. Minimal wind shear." },
+      { "min": 40, "max": 80, "label": "Light", "risk": "low", "meaning": "Minor shear. Occasional bumps." },
+      { "min": 80, "max": 160, "label": "Moderate", "risk": "moderate", "meaning": "Significant shear. Expect turbulence." },
+      { "min": 160, "max": null, "label": "Severe", "risk": "severe", "meaning": "Extreme wind shear. Avoid this layer." }
     ]
   },
   "richardson_number": {

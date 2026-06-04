@@ -32,7 +32,11 @@ export function initInfoPopup(): void {
 export function showMetricInfo(metricId: string, value?: string): void {
   if (!popupEl || !backdropEl) return;
 
-  const numValue = value != null && value !== '' ? parseFloat(value) : undefined;
+  // value may be a numeric string (e.g. an icing index) or a risk label
+  // (e.g. "moderate"). Only keep it if it parses to a finite number — a
+  // non-numeric label would otherwise surface as "Current: NaN".
+  const parsed = value != null && value !== '' ? parseFloat(value) : NaN;
+  const numValue = Number.isFinite(parsed) ? parsed : undefined;
   popupEl.innerHTML = `
     <button class="metric-popup-close" aria-label="${t('popup.close')}">\u00d7</button>
     ${renderInfoPopupContent(metricId, numValue)}
