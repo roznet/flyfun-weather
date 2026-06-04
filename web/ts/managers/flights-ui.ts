@@ -144,6 +144,7 @@ export function renderFlightList(
   activeRefreshes: Record<string, RefreshEntry>,
   selectedIds: Set<string>,
   pastTotal: number,
+  loaded: boolean,
   onBriefing: (id: string) => void,
   onEdit: (id: string) => void,
   onDelete: (id: string) => void,
@@ -157,6 +158,14 @@ export function renderFlightList(
   if (!container) return;
 
   if (flights.length === 0) {
+    // Don't claim "no flights" until the list has actually been fetched —
+    // otherwise the empty-state flashes while the user's flights are still
+    // downloading. The loading spinner covers the pre-fetch window.
+    if (!loaded) {
+      container.innerHTML = '';
+      renderSelectionBar(0, [], [], selection);
+      return;
+    }
     container.innerHTML = `
       <div class="empty-state">
         <p>${t('flights.empty')}</p>

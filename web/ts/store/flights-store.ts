@@ -19,6 +19,7 @@ export interface FlightsState {
 
   // UI state
   loading: boolean;
+  loaded: boolean;  // a flights fetch has completed at least once
   loadingMore: boolean;  // a "Show more" past-page fetch is in flight
   error: string | null;
   selectedIds: Set<string>;  // flights ticked for bulk actions
@@ -53,6 +54,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   activeRefreshes: {},
   debriefStats: null,
   loading: false,
+  loaded: false,
   loadingMore: false,
   error: null,
   selectedIds: new Set(),
@@ -65,7 +67,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
       // page — no per-flight /packs/latest round-trips. Only the past section
       // is paginated; future + recent always come back in full.
       const { flights, pastTotal } = await api.fetchFlights({ pastLimit: PAST_PAGE_SIZE });
-      set({ flights, pastTotal, loading: false });
+      set({ flights, pastTotal, loading: false, loaded: true });
     } catch (err) {
       set({ loading: false, error: `Failed to load flights: ${err}` });
     }

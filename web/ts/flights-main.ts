@@ -560,13 +560,15 @@ async function init(): Promise<void> {
       state.pastTotal !== prev.pastTotal ||
       state.activeRefreshes !== prev.activeRefreshes ||
       state.selectedIds !== prev.selectedIds ||
-      state.debriefStats !== prev.debriefStats
+      state.debriefStats !== prev.debriefStats ||
+      state.loaded !== prev.loaded
     ) {
       ui.renderFlightList(
         state.flights,
         state.activeRefreshes,
         state.selectedIds,
         state.pastTotal,
+        state.loaded,
         (id) => navigateToBriefing(id),
         (id) => navigateToFlight(id),
         (id) => store.getState().deleteFlight(id),
