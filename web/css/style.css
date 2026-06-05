@@ -2981,6 +2981,22 @@ label {
   word-break: break-word;
 }
 
+/* Point-identity header rendered on a single line. */
+.viz-tooltip .tt-header {
+  white-space: nowrap;
+}
+
+/* Line-style key: a short bar matching a reference line's colour + dash so the
+   tooltip row can be tied back to the line on the chart. */
+.viz-tooltip .tt-line-swatch {
+  display: inline-block;
+  width: 22px;
+  height: 3px;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-radius: 1px;
+}
+
 /* --- Layer info button --- */
 
 .viz-layer-info-btn {
