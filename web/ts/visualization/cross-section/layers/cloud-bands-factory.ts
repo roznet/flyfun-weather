@@ -58,7 +58,7 @@ function avgDD(a: VizCloudLayer, b: VizCloudLayer | null): number | undefined {
   return a.meanDewpointDepressionC ?? b.meanDewpointDepressionC;
 }
 
-function coverageToPct(coverage: string): number {
+export function coverageToPct(coverage: string): number {
   switch (coverage.toUpperCase()) {
     case 'OVC': return 90;
     case 'BKN': return 65;
