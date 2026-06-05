@@ -154,7 +154,7 @@ export function attachInteraction(
         const line = def.formatLine(z, hoverAltFt);
         if (line === null) continue;
         const color = def.swatch?.(z) ?? null;
-        lines.push(color ? `${squareSwatch(color)}${line}` : line);
+        lines.push(color ? `${squareSwatch(color, theme.sky.background)}${line}` : line);
       }
       if (lines.length === 0) continue;
       const body = lines.join('<br>');
@@ -194,7 +194,7 @@ export function attachInteraction(
         const [d0, d1] = columnSpanNm(a.enrouteDistanceNm);
         if (distanceNm < d0 || distanceNm > d1) continue;
         if (hoverAltFt < a.baseFt || hoverAltFt > a.baseFt + COLUMN_HEIGHT_FT) continue;
-        const parts = [`${squareSwatch(flightCategoryColor(a.flightCategory))}<strong>${a.icao}</strong> ${a.flightCategory}`];
+        const parts = [`${squareSwatch(flightCategoryColor(a.flightCategory), theme.sky.background)}<strong>${a.icao}</strong> ${a.flightCategory}`];
         if (a.ceilingFt !== null) parts.push(`ceil ${fmtFL(a.ceilingFt)}`);
         if (a.visibilityM !== null) parts.push(`vis ${formatVisibility(a.visibilityM)}`);
         ccLines.push(parts.join(' · '));
@@ -266,9 +266,15 @@ function lineSwatch(style: LineStyle): string {
   return `<span class="tt-line-swatch" style="background:${bg}"></span>`;
 }
 
-/** Inline filled square mimicking a band/zone's on-chart fill colour. */
-function squareSwatch(color: string): string {
-  return `<span class="tt-square-swatch" style="background:${color}"></span>`;
+/** Inline filled square mimicking a band/zone's on-chart fill colour.
+ *  Band fills are semi-transparent and read on the chart as the fill
+ *  composited over the sky; we reproduce that by layering the (possibly
+ *  translucent) fill over the opaque theme sky colour, so the swatch shows
+ *  the perceived on-chart colour rather than the raw rgba dimmed over the
+ *  dark tooltip. */
+function squareSwatch(color: string, skyBg: string): string {
+  const bg = `linear-gradient(${color}, ${color}), ${skyBg}`;
+  return `<span class="tt-square-swatch" style="background:${bg}"></span>`;
 }
 
 /** Interpolate terrain elevation at a given distance. */

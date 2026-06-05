@@ -11,7 +11,8 @@ import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, Vi
 import { fmtFL } from '../interaction-utils';
 import { formatVisibility } from '../../units';
 import { getActiveTheme } from './theme';
-import { icingRiskColor, catRiskColor, convectiveRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from '../scales';
+import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from '../scales';
+import { coverageToPct } from './layers/cloud-bands-factory';
 
 export interface LayerTooltipDef {
   /** Primary layer id (the toggle that owns the data). */
@@ -96,7 +97,7 @@ const cloudNWP: LayerTooltipDef = {
       + extras([fmtCC(cl.meanCloudCoverPct), fmtT(cl.meanTemperatureC)])
       + tag;
   },
-  swatch: (cl: VizCloudLayer) => nwpCloudFill(cl.meanCloudCoverPct ?? 0),
+  swatch: (cl: VizCloudLayer) => nwpCloudFill(cl.meanCloudCoverPct ?? coverageToPct(cl.coverage)),
 };
 
 const icingOgimetDD: LayerTooltipDef = {
@@ -217,7 +218,7 @@ const thermoConv: LayerTooltipDef = {
     }
     return line;
   },
-  swatch: (z: ThermoConvZone) => convectiveRiskColor(z.risk),
+  swatch: (z: ThermoConvZone) => getActiveTheme().convective.towerFill[z.risk] ?? null,
 };
 
 interface NwpConvZone {
@@ -249,7 +250,7 @@ const nwpConv: LayerTooltipDef = {
     line += `<br>Tower: ${fmtFL(z.baseFt)}–${fmtFL(z.topFt)}${tag}`;
     return line;
   },
-  swatch: (z: NwpConvZone) => convectiveRiskColor(z.risk),
+  swatch: (z: NwpConvZone) => getActiveTheme().convective.towerFill[z.risk] ?? null,
 };
 
 const inversion: LayerTooltipDef = {
