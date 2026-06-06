@@ -17,6 +17,14 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+# Canonical per-axis labels for the nearest-improving picks, shared by the web
+# UI / text digest / LLM prompt so the wording can't drift between surfaces.
+ALT_AXIS_LABELS = {
+    "category": "better category",
+    "wind": "lower wind",
+    "crosswind": "lower crosswind",
+}
+
 
 class AlternateAirport(BaseModel):
     """One candidate divert airport with geometry, assessment and suitability."""

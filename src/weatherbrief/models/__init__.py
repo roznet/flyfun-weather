@@ -98,6 +98,7 @@ from weatherbrief.models.airport_conditions import (  # noqa: F401
     RunwayWind,
 )
 from weatherbrief.models.alternates import (  # noqa: F401
+    ALT_AXIS_LABELS,
     AlternateAirport,
     AlternateAxisPick,
     RouteAlternates,

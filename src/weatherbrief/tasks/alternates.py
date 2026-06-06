@@ -18,6 +18,7 @@ See ``designs/future/alternates.md`` for the full design and rationale.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 from weatherbrief.analysis.airport_consensus import consensus, enrich_wind, snap_to_dict
@@ -241,6 +242,16 @@ def run_alternates(
             "segment_distance_nm": item.get("segment_distance_nm"),
         }
 
+    # euro_aip loads the whole airport set into memory (no spatial index), so
+    # the radius query is a scan. Cheap bounding-box pre-filter first — skip the
+    # haversine for airports that can't possibly be within radius_nm. 1° lat ≈
+    # 60 NM; longitude degrees shrink by cos(lat) toward the poles.
+    lat_margin = radius_nm / 60.0
+    # Use cos at the worst-case (highest-|lat|) edge of the box so the longitude
+    # margin is never too tight — the box must not exclude a true in-radius
+    # airport; the haversine below still does the exact gating.
+    cos_lat = max(0.01, math.cos(math.radians(min(89.0, abs(dest.lat) + lat_margin))))
+    lon_margin = radius_nm / (60.0 * cos_lat)
     try:
         all_airports = model.airports.all()
     except Exception:
@@ -249,6 +260,10 @@ def run_alternates(
         if ap.ident in candidates:
             continue
         if ap.latitude_deg is None or ap.longitude_deg is None:
+            continue
+        if abs(ap.latitude_deg - dest.lat) > lat_margin:
+            continue
+        if abs(ap.longitude_deg - dest.lon) > lon_margin:
             continue
         d = _haversine_nm(dest.lat, dest.lon, ap.latitude_deg, ap.longitude_deg)
         if d <= radius_nm:
