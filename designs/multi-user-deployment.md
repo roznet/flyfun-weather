@@ -210,6 +210,19 @@ Autorouter credentials encrypted at rest using Fernet symmetric encryption.
 - Encrypt on write (settings save), decrypt on read (GRAMET fetch)
 - If key is lost, users re-enter credentials (no recovery needed)
 
+## Feedback Triage Sandbox
+
+The feedback-triage worker (`python -m weatherbrief.triage process`) feeds
+**attacker-authored** feedback text into `claude -p` with Read/Grep/Glob enabled.
+To contain prompt-injection (security-audit finding C1), it runs as a dedicated,
+OS-isolated `triage` system user on the droplet — NOT as the app user. Three
+layers: a sparse source checkout (no `.env`/`configs` beyond `configs/triage/`),
+a Unix user that can't read secrets outside its sandbox dir, and a scoped MySQL
+user (`weatherbrief_triage`) limited to `users` (read), `feedback` (read/update),
+`cost_ledger` (insert). Code tripwire `_assert_sandboxed()` refuses to run as any
+other UID unless `TRIAGE_ALLOW_UNSAFE=1`. Full droplet setup + ongoing-ops
+runbook lives in **[triage-sandbox.md](./triage-sandbox.md)**.
+
 ## Deploying to Server
 
 ### First-time setup
@@ -278,3 +291,4 @@ git pull && docker compose up -d --build
 - Architecture: [architecture.md](./architecture.md)
 - Data models: [data-models.md](./data-models.md)
 - Cost attribution: [cost-attribution-design.md](./cost-attribution-design.md)
+- Feedback triage sandbox (setup + ops runbook): [triage-sandbox.md](./triage-sandbox.md)

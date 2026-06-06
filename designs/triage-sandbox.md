@@ -182,8 +182,9 @@ the sandbox shows nothing.
 #!/bin/bash
 set -euo pipefail
 cd /mnt/flyfun_data/sandboxes/triage
+# CWD is the sandbox root, so `load_dotenv()` auto-loads ./.env (see §7) —
+# the wrapper sources nothing and passes no secrets via the environment.
 exec sudo -u triage --preserve-env= \
-    env $(grep -v '^#' /etc/triage/env | xargs) \
     /mnt/flyfun_data/sandboxes/triage/venv/bin/python \
     -m weatherbrief.triage "$@"
 ```
@@ -294,7 +295,7 @@ laptop checkout".
 | `flyfun-common/` editable source | Not needed to triage bug reports; keeps auth internals out of LLM view |
 | `.git/hooks/`, `.github/workflows/` | Not useful for the triage task |
 | `/home/brice/` | Developer's dotfiles, SSH keys, etc. |
-| Any other `/etc/...` secret files | Only `/etc/triage/env` is readable by triage user |
+| `/etc/...` secret files | Triage reads only its own in-sandbox `.env` (§7), 0400 `triage:triage` |
 
 ## Related
 
