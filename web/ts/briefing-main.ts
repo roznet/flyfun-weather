@@ -14,6 +14,12 @@ import { initInfoPopup, showMetricInfo, showPopupContent } from './components/in
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
+import {
+  isAdvisoryPreset,
+  getAdvisoryPreset,
+  getPresetForAdvisory,
+  resolveAdvisoryPreset,
+} from './visualization/cross-section/advisory-presets';
 import { applyNwpFallback, getSubstitutedLayers } from './visualization/cross-section/nwp-fallback';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
@@ -102,13 +108,44 @@ async function init(): Promise<void> {
   initSkewtViewTracking();
   document.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.metric-info-btn') as HTMLElement | null;
-    if (btn && !btn.classList.contains('advisory-info-btn')) {
+    // advisory-info-btn and advisory-view-btn reuse .metric-info-btn styling but
+    // have their own delegated handlers (in advisories-ui.ts) — skip them here.
+    if (btn && !btn.classList.contains('advisory-info-btn') && !btn.classList.contains('advisory-view-btn')) {
       e.preventDefault();
       showMetricInfo(btn.dataset.metric!, btn.dataset.value);
     }
   });
 
   const store = briefingStore;
+
+  // --- Preset wiring (#219) ---
+  // Generalized preset dropdown handler: advisory presets are method-resolved
+  // here (where `preferredMethods` is in scope) and applied via
+  // applyAdvisoryPreset; GRAMET / Custom fall through to setVizPreset.
+  function handlePresetChange(presetId: string | null): void {
+    if (presetId && isAdvisoryPreset(presetId)) {
+      const preset = getAdvisoryPreset(presetId);
+      if (preset) {
+        store.getState().applyAdvisoryPreset(presetId, resolveAdvisoryPreset(preset, preferredMethods));
+        return;
+      }
+    }
+    store.getState().setVizPreset(presetId);
+  }
+
+  // Advisory-card chip handler: resolve the advisory's preset (with any
+  // per-advisory override, e.g. FIKI) and apply it. The companion route-map
+  // metric is set in state (so it's "made" when the map is shown), but we keep
+  // the cross-section as the view rather than forcing split — except when the
+  // user is on the map-only layout, where we switch to split so the
+  // cross-section the preset configures is actually visible. Then scroll it in.
+  function handleAdvisoryChip(advisoryId: string): void {
+    const preset = getPresetForAdvisory(advisoryId);
+    if (!preset) return;
+    store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
+    if (store.getState().vizSettings.layout === 'map') store.getState().setLayout('split');
+    document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   // Get flight ID and optional pack timestamp from URL
   const params = new URLSearchParams(window.location.search);
@@ -210,7 +247,7 @@ async function init(): Promise<void> {
     // Re-render advisories now that profiles are available for the selector
     const s = store.getState();
     if (s.flight) {
-      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
+      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
     }
   }).catch(err => console.error('Failed to fetch profiles:', err));
 
@@ -675,7 +712,7 @@ async function init(): Promise<void> {
         onCompareModelToggle: (model, enabled) => store.getState().setCompareModel(model, enabled),
         onCompareBandModeChange: (mode) => store.getState().setCompareBandMode(mode),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
-        onPresetChange: (presetId) => store.getState().setVizPreset(presetId),
+        onPresetChange: (presetId) => handlePresetChange(presetId),
       }, availableModels);
 
       // Hide route graph controls in compare mode
@@ -888,7 +925,7 @@ async function init(): Promise<void> {
         onLayoutChange: (l) => store.getState().setLayout(l),
         onModelChange: (model) => store.getState().setSelectedModel(model),
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
-        onPresetChange: (presetId) => store.getState().setVizPreset(presetId),
+        onPresetChange: (presetId) => handlePresetChange(presetId),
         onCloudStyleChange: (style) => store.getState().setCloudStyle(style),
       }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable, substitutedLayers);
 
@@ -1024,7 +1061,7 @@ async function init(): Promise<void> {
       state.windOverlay !== prev.windOverlay
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories);
-      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
+      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip);
       ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
@@ -1075,7 +1112,7 @@ async function init(): Promise<void> {
       updateToggleButtons(state.displayMode);
       renderPointSections(state);
       if (state.displayMode !== prev.displayMode) {
-        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state));
+        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip);
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber).
@@ -1442,7 +1479,7 @@ async function init(): Promise<void> {
       track(EVENTS.BRIEFING_OPENED, { days_out: s.currentPack.days_out });
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories);
-    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s));
+    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
     ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
