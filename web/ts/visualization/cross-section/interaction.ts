@@ -8,6 +8,8 @@ import {
   fmtFL, altInBand, altNearLine,
 } from '../interaction-utils';
 import { LAYER_TOOLTIPS } from './tooltip-formatters';
+import { getActiveTheme, type LineStyle } from './theme';
+import { flightCategoryColor } from '../scales';
 import { columnSpanNm, sigmetSpanNm, COLUMN_HEIGHT_FT } from './layers/current-conditions';
 import { formatVisibility } from '../../units';
 import { escapeHtml } from '../../utils';
@@ -119,18 +121,20 @@ export function attachInteraction(
     tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
     const sections: string[] = [];
     const en = (id: string) => renderer.isLayerEnabled(id);
+    const theme = getActiveTheme();
 
-    // --- Header (always) ---
-    const headerLines: string[] = [];
+    // --- Header (always) — point identity on a single line to save vertical
+    //     space (plenty of horizontal room beside the chart). ---
+    const headerParts: string[] = [];
     const wp = findNearbyWaypoint(currentData, point);
-    headerLines.push(wp ? `<strong>${wp.icao}</strong>` : `<strong>Point ${idx}</strong>`);
-    headerLines.push(`${point.distanceNm.toFixed(0)} nm`);
+    headerParts.push(wp ? `<strong>${wp.icao}</strong>` : `<strong>Point ${idx}</strong>`);
+    headerParts.push(`${point.distanceNm.toFixed(0)} nm`);
     try {
       const d = new Date(point.time);
-      headerLines.push(d.toISOString().slice(11, 16) + 'Z');
+      headerParts.push(d.toISOString().slice(11, 16) + 'Z');
     } catch { /* skip */ }
-    headerLines.push(`${fmtFL(hoverAltFt)}`);
-    sections.push(headerLines.join('<br>'));
+    headerParts.push(`${fmtFL(hoverAltFt)}`);
+    sections.push(`<span class="tt-header">${headerParts.join(' · ')}</span>`);
 
     // --- Terrain ---
     if (en('terrain')) {
@@ -148,7 +152,9 @@ export function attachInteraction(
       for (const z of def.getZones(point)) {
         if (!altInBand(hoverAltFt, z.baseFt, z.topFt)) continue;
         const line = def.formatLine(z, hoverAltFt);
-        if (line !== null) lines.push(line);
+        if (line === null) continue;
+        const color = def.swatch?.(z) ?? null;
+        lines.push(color ? `${squareSwatch(color, theme.sky.background)}${line}` : line);
       }
       if (lines.length === 0) continue;
       const body = lines.join('<br>');
@@ -156,26 +162,28 @@ export function attachInteraction(
     }
 
     // --- Temperature lines (proximity-based) ---
+    // Each row is prefixed with a swatch matching the rendered line's colour +
+    // dash so overlapping reference lines can be told apart at a glance.
     const alt = point.altitudeLines;
     if (en('freezing-level') && alt.freezingLevelFt !== null && altNearLine(hoverAltFt, alt.freezingLevelFt)) {
-      sections.push(`0°C: ${fmt(alt.freezingLevelFt)} ft`);
+      sections.push(`${lineSwatch(theme.temperature.freezingLevel)}0°C: ${fmt(alt.freezingLevelFt)} ft`);
     }
     if (en('minus-10c') && alt.minus10cLevelFt !== null && altNearLine(hoverAltFt, alt.minus10cLevelFt)) {
-      sections.push(`-10°C: ${fmt(alt.minus10cLevelFt)} ft`);
+      sections.push(`${lineSwatch(theme.temperature.minus10c)}-10°C: ${fmt(alt.minus10cLevelFt)} ft`);
     }
     if (en('minus-20c') && alt.minus20cLevelFt !== null && altNearLine(hoverAltFt, alt.minus20cLevelFt)) {
-      sections.push(`-20°C: ${fmt(alt.minus20cLevelFt)} ft`);
+      sections.push(`${lineSwatch(theme.temperature.minus20c)}-20°C: ${fmt(alt.minus20cLevelFt)} ft`);
     }
 
     // --- Stability lines (proximity-based) ---
     if (en('lcl') && alt.lclAltitudeFt !== null && altNearLine(hoverAltFt, alt.lclAltitudeFt)) {
-      sections.push(`LCL: ${fmt(alt.lclAltitudeFt)} ft`);
+      sections.push(`${lineSwatch(theme.stability.lcl)}LCL: ${fmt(alt.lclAltitudeFt)} ft`);
     }
     if (en('lfc') && alt.lfcAltitudeFt !== null && altNearLine(hoverAltFt, alt.lfcAltitudeFt)) {
-      sections.push(`LFC: ${fmt(alt.lfcAltitudeFt)} ft`);
+      sections.push(`${lineSwatch(theme.stability.lfc)}LFC: ${fmt(alt.lfcAltitudeFt)} ft`);
     }
     if (en('el') && alt.elAltitudeFt !== null && altNearLine(hoverAltFt, alt.elAltitudeFt)) {
-      sections.push(`EL: ${fmt(alt.elAltitudeFt)} ft`);
+      sections.push(`${lineSwatch(theme.stability.el)}EL: ${fmt(alt.elAltitudeFt)} ft`);
     }
 
     // --- Current conditions (route-global; matched by X span + Y band, not per-point) ---
@@ -186,7 +194,7 @@ export function attachInteraction(
         const [d0, d1] = columnSpanNm(a.enrouteDistanceNm);
         if (distanceNm < d0 || distanceNm > d1) continue;
         if (hoverAltFt < a.baseFt || hoverAltFt > a.baseFt + COLUMN_HEIGHT_FT) continue;
-        const parts = [`<strong>${a.icao}</strong> ${a.flightCategory}`];
+        const parts = [`${squareSwatch(flightCategoryColor(a.flightCategory), theme.sky.background)}<strong>${a.icao}</strong> ${a.flightCategory}`];
         if (a.ceilingFt !== null) parts.push(`ceil ${fmtFL(a.ceilingFt)}`);
         if (a.visibilityM !== null) parts.push(`vis ${formatVisibility(a.visibilityM)}`);
         ccLines.push(parts.join(' · '));
@@ -242,6 +250,31 @@ export function attachInteraction(
 
 function fmt(n: number): string {
   return Math.round(n).toLocaleString();
+}
+
+/** Inline HTML swatch mimicking a reference line's colour + dash pattern, so a
+ *  tooltip row can be matched to the line drawn on the cross-section. */
+function lineSwatch(style: LineStyle): string {
+  const c = style.color;
+  let bg: string;
+  if (style.dash && style.dash.length >= 2) {
+    const [on, off] = style.dash;
+    bg = `repeating-linear-gradient(90deg, ${c} 0 ${on}px, transparent ${on}px ${on + off}px)`;
+  } else {
+    bg = c;
+  }
+  return `<span class="tt-line-swatch" style="background:${bg}"></span>`;
+}
+
+/** Inline filled square mimicking a band/zone's on-chart fill colour.
+ *  Band fills are semi-transparent and read on the chart as the fill
+ *  composited over the sky; we reproduce that by layering the (possibly
+ *  translucent) fill over the opaque theme sky colour, so the swatch shows
+ *  the perceived on-chart colour rather than the raw rgba dimmed over the
+ *  dark tooltip. */
+function squareSwatch(color: string, skyBg: string): string {
+  const bg = `linear-gradient(${color}, ${color}), ${skyBg}`;
+  return `<span class="tt-square-swatch" style="background:${bg}"></span>`;
 }
 
 /** Interpolate terrain elevation at a given distance. */

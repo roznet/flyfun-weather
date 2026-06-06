@@ -168,15 +168,25 @@
         <div class="section" id="mcp-section">
           <h3>MCP Access</h3>
           <p class="muted section-hint">
-            Generate API tokens to connect AI assistants (Claude Desktop, claude.ai) to your weather briefings via the
+            Connect AI assistants to your weather briefings via the
             <a href="https://modelcontextprotocol.io" target="_blank">Model Context Protocol</a>.
+          </p>
+          <h4 class="subsection-heading">Claude Desktop &amp; claude.ai</h4>
+          <p class="muted section-hint">
+            Add a custom connector with the URL <code>https://mcp.flyfun.aero/weather</code>. Claude will prompt
+            you to sign in to flyfun and authorise access — no token needed.
+          </p>
+          <h4 class="subsection-heading">Claude Code &amp; other tools</h4>
+          <p class="muted section-hint">
+            Tools that don't support OAuth sign-in (such as Claude Code) authenticate with an API token. Generate one
+            below and supply it to the same <code>https://mcp.flyfun.aero/weather</code> endpoint.
           </p>
           <div id="mcp-token-list"></div>
           <div id="mcp-new-token" style="margin-top:0.75rem">
             <div class="form-row" style="align-items:flex-end; gap:0.5rem">
               <div class="form-group grow">
                 <label for="mcp-token-name">Token Name</label>
-                <input type="text" id="mcp-token-name" placeholder="e.g. Claude Desktop" maxlength="256">
+                <input type="text" id="mcp-token-name" placeholder="e.g. Claude Code" maxlength="256">
               </div>
               <div class="form-group">
                 <label>&nbsp;</label>

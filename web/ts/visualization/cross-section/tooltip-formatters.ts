@@ -10,6 +10,10 @@
 import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
 import { fmtFL } from '../interaction-utils';
 import { formatVisibility } from '../../units';
+import { getActiveTheme } from './theme';
+import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from '../scales';
+import { coverageToPct } from './layers/cloud-bands-factory';
+import { sldRiskColor } from './layers/sld-bands';
 
 export interface LayerTooltipDef {
   /** Primary layer id (the toggle that owns the data). */
@@ -22,6 +26,16 @@ export interface LayerTooltipDef {
   getZones: (p: VizPoint) => Array<{ baseFt: number; topFt: number }>;
   /** Format one zone matched at hoverAltFt. Return null to skip. */
   formatLine: (zone: any, hoverAltFt: number) => string | null;
+  /** Optional fill colour for a small square swatch keyed to the band's
+   *  on-chart colour, so the row can be matched to the band on the canvas.
+   *  Return null/undefined to omit the swatch. */
+  swatch?: (zone: any) => string | null;
+}
+
+/** Inversion fill colour: theme base RGB at strength-scaled opacity. */
+function inversionSwatchColor(strengthC: number): string {
+  const [r, g, b] = getActiveTheme().inversion.baseRgb;
+  return `rgba(${r}, ${g}, ${b}, ${inversionOpacity(strengthC).toFixed(2)})`;
 }
 
 // ── format helpers ──────────────────────────────────────────────────
@@ -59,6 +73,7 @@ const cloudDD: LayerTooltipDef = {
     return `${fmtFL(cl.baseFt)}–${fmtFL(cl.topFt)} ${cl.coverage}`
       + extras([fmtDD(cl.meanDewpointDepressionC), fmtT(cl.meanTemperatureC)]);
   },
+  swatch: (cl: VizCloudLayer) => cloudFillFromDD(cl.meanDewpointDepressionC ?? undefined, cl.coverage),
 };
 
 const cloudNWP: LayerTooltipDef = {
@@ -71,6 +86,7 @@ const cloudNWP: LayerTooltipDef = {
       + extras([fmtCC(cl.meanCloudCoverPct), fmtT(cl.meanTemperatureC)])
       + tag;
   },
+  swatch: (cl: VizCloudLayer) => nwpCloudFill(cl.meanCloudCoverPct ?? coverageToPct(cl.coverage)),
 };
 
 const icingOgimetDD: LayerTooltipDef = {
@@ -82,6 +98,7 @@ const icingOgimetDD: LayerTooltipDef = {
       + extras([fmtIdx(z.meanIcingIndex), fmtT(z.meanTemperatureC)])
       + sldTag(z.sldRisk);
   },
+  swatch: (z: VizIcingZone) => icingRiskColor(z.risk),
 };
 
 const icingOgimetNWP: LayerTooltipDef = {
@@ -93,6 +110,7 @@ const icingOgimetNWP: LayerTooltipDef = {
       + extras([fmtIdx(z.meanIcingIndex), fmtT(z.meanTemperatureC)])
       + sldTag(z.sldRisk);
   },
+  swatch: (z: VizIcingZone) => icingRiskColor(z.risk),
 };
 
 const sfip: LayerTooltipDef = {
@@ -105,6 +123,7 @@ const sfip: LayerTooltipDef = {
       + extras([fmtT(z.meanTemperatureC)])
       + proxy;
   },
+  swatch: (z: VizSfipZone) => getActiveTheme().sfipIcing[z.risk] ?? 'transparent',
 };
 
 const ieng: LayerTooltipDef = {
@@ -116,6 +135,7 @@ const ieng: LayerTooltipDef = {
       + extras([fmtIdx(z.meanIcingIndex), fmtT(z.meanTemperatureC)])
       + sldTag(z.sldRisk);
   },
+  swatch: (z: VizIcingZone) => icingRiskColor(z.risk),
 };
 
 const sld: LayerTooltipDef = {
@@ -125,6 +145,7 @@ const sld: LayerTooltipDef = {
   formatLine: (z: VizSldZone) => {
     return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.mechanism}`;
   },
+  swatch: (z: VizSldZone) => sldRiskColor(z.risk),
 };
 
 const cat: LayerTooltipDef = {
@@ -134,6 +155,7 @@ const cat: LayerTooltipDef = {
     return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} CAT ${z.risk}`
       + extras([fmtRi(z.richardsonNumber)]);
   },
+  swatch: (z: VizCATLayer) => catRiskColor(z.risk),
 };
 
 const eShear: LayerTooltipDef = {
@@ -143,6 +165,7 @@ const eShear: LayerTooltipDef = {
     return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} E-Shear ${z.risk}`
       + extras([fmtRi(z.richardsonNumber)]);
   },
+  swatch: (z: VizCATLayer) => catRiskColor(z.risk),
 };
 
 /** Convective layers are per-point, not per-zone; we synthesize a single
@@ -184,6 +207,7 @@ const thermoConv: LayerTooltipDef = {
     }
     return line;
   },
+  swatch: (z: ThermoConvZone) => getActiveTheme().convective.towerFill[z.risk] ?? null,
 };
 
 interface NwpConvZone {
@@ -215,6 +239,7 @@ const nwpConv: LayerTooltipDef = {
     line += `<br>Tower: ${fmtFL(z.baseFt)}–${fmtFL(z.topFt)}${tag}`;
     return line;
   },
+  swatch: (z: NwpConvZone) => getActiveTheme().convective.towerFill[z.risk] ?? null,
 };
 
 const inversion: LayerTooltipDef = {
@@ -225,6 +250,7 @@ const inversion: LayerTooltipDef = {
     const sfc = inv.surfaceBased ? ' (sfc)' : '';
     return `${fmtFL(inv.baseFt)}–${fmtFL(inv.topFt)} +${inv.strengthC.toFixed(1)}°C${sfc}`;
   },
+  swatch: (inv: VizInversionLayer) => inversionSwatchColor(inv.strengthC),
 };
 
 const surfaceObscuration: LayerTooltipDef = {
@@ -246,6 +272,7 @@ const surfaceObscuration: LayerTooltipDef = {
       + extras([vis, `T/Td ${t}/${td}`, `RH ${rh}`])
       + ` [${z.reason}]`;
   },
+  swatch: (z: VizSurfaceObscuration) => getActiveTheme().obscuration[z.severity],
 };
 
 /** All band/zone-style tooltip definitions, in display order. */
