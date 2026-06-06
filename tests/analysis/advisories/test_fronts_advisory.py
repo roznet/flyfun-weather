@@ -311,6 +311,9 @@ def _lsgs_ctx(*, vertical_levels: int) -> RouteContext:
     manifest = RouteFrontsManifest(
         generated_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
         primary_level_hPa=700, levels=[700, 925], models=["gfs"],
+        # per_model_primary_hPa left empty → falls back to primary_level_hPa=700,
+        # the correct primary for this single-model case (cf.
+        # test_per_model_primary_level_not_flattened, which exercises the map).
         per_model={"gfs": [a925]},
     )
     return RouteContext(
@@ -330,7 +333,10 @@ def test_overflown_single_level_convective_capped_to_amber():
 
 def test_overflown_convective_reds_when_vertically_coherent():
     """The same overflown 925 hPa convective crossing, but seen on ≥2 levels, is a
-    real sloping boundary → RED restored (coherence gate, not a blanket cap)."""
+    real sloping boundary → RED restored (coherence gate, not a blanket cap).
+    weather_top 27233 sits 233 ft above the deep cutoff (cruise 12000 +
+    convective_deep 15000 = 27000) — real LSGS data, an intentionally tight
+    margin; tuning convective_deep_ft would flip this case."""
     result = FrontsEvaluator.evaluate(_lsgs_ctx(vertical_levels=2), _PARAMS)
     assert result.aggregate_status == AdvisoryStatus.RED
 

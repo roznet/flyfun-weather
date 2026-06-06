@@ -699,11 +699,12 @@ realized path**. Realized when:
 - there is positive evidence of usable instability — ML-CAPE ≥ 300 J/kg or a
   lifted index ≤ −2.
 
-A strongly-capped (CIN ≤ −50) thermo risk with positive evidence of *weak*
-instability falls through to the cloud-coverage category (wet/partly/dry) and the
-EL is never used as a realized top. This mirrors §4's realizable-CAPE logic, one
-level down: §4 stops surface CAPE over-reading the *route* convective tier; this
-stops the same potential CAPE over-reading a *front's* relevance.
+A strongly-capped (CIN ≤ −50) thermo risk falls through to the cloud-coverage
+category (wet/partly/dry) — and the EL is never used as a realized top — when both
+available instability signals confirm the air mass is *not* realizable (ML-CAPE <
+300 **and** LI > −2). This mirrors §4's realizable-CAPE logic, one level down: §4
+stops surface CAPE over-reading the *route* convective tier; this stops the same
+potential CAPE over-reading a *front's* relevance.
 
 ### Thresholds (front realized-gate)
 
