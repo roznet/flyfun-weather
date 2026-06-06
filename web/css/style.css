@@ -3669,6 +3669,19 @@ label {
   color: var(--text-secondary);
 }
 
+/* Per-axis improvement tags — distinct tints so the axis reads at a glance. */
+.alt-tag-cat {
+  background: rgba(13, 110, 139, 0.18);   /* teal — flight category */
+}
+
+.alt-tag-wind {
+  background: rgba(180, 134, 11, 0.18);   /* amber — wind speed */
+}
+
+.alt-tag-xw {
+  background: rgba(106, 90, 205, 0.18);   /* slate-blue — crosswind */
+}
+
 .alt-tag-dom {
   background: rgba(46, 125, 50, 0.3);
   font-weight: 600;

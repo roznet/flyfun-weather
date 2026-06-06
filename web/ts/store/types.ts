@@ -577,7 +577,7 @@ export interface AlternateAirport {
   distance_from_dest_nm: number;
   enroute_distance_nm: number | null;
   segment_distance_nm: number | null;
-  position: string; // "before" | "after"
+  position: 'before' | 'after';
   detour_early_nm: number | null;
   detour_late_nm: number | null;
   flight_category: string;
@@ -602,10 +602,10 @@ export interface AlternateAirport {
 
 /** The nearest improving alternate for one deficient axis. */
 export interface AlternateAxisPick {
-  axis: string; // "category" | "wind" | "crosswind"
+  axis: 'category' | 'wind' | 'crosswind';
   icao: string | null;
   distance_from_dest_nm: number | null;
-  position: string | null;
+  position: 'before' | 'after' | null;
 }
 
 /** Weather-based alternates for a route's destination (D-2 inward). */

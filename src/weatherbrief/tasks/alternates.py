@@ -65,7 +65,7 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return dist_nm
 
 
-def _is_scheduled_service(value) -> bool:
+def _is_scheduled_service(value: object) -> bool:
     """True when an airport advertises scheduled commercial service."""
     return str(value).strip().lower() == "yes"
 
@@ -211,7 +211,7 @@ def run_alternates(
         assessment could not be computed (caller degrades gracefully).
     """
     from weatherbrief.airports import _load_airport_model, get_runway_ends
-    from weatherbrief.tasks.route_weather import _compute_route_distances
+    from weatherbrief.analysis.route_geometry import compute_route_distances
 
     now = now or datetime.now(timezone.utc)
     eta_dt = _eta_hour(target_time, route.flight_duration_hours)
@@ -221,7 +221,7 @@ def run_alternates(
     dest = route.destination
     origin = route.origin
 
-    route_distances = _compute_route_distances(route)
+    route_distances = compute_route_distances(route)
     dest_enroute_nm = route_distances[-1] if route_distances else 0.0
     gc_dep_dest = _haversine_nm(origin.lat, origin.lon, dest.lat, dest.lon)
 
@@ -271,13 +271,14 @@ def run_alternates(
                 "airport": ap,
                 "enroute_distance_nm": None,
                 "segment_distance_nm": None,
+                "distance_from_dest_nm": d,  # already computed — reused below
             }
 
     # --- 2. Drop the destination and departure themselves ---
     candidates.pop(dest.icao, None)
     candidates.pop(origin.icao, None)
 
-    # --- 3+4. GA-appropriateness + runway suitability ---
+    # --- 3. GA-appropriateness + runway suitability ---
     filtered: list[dict] = []
     for c in candidates.values():
         ap = c["airport"]
@@ -295,12 +296,15 @@ def run_alternates(
             continue
         if ap.latitude_deg is None or ap.longitude_deg is None:
             continue
-        c["distance_from_dest_nm"] = _haversine_nm(
-            dest.lat, dest.lon, ap.latitude_deg, ap.longitude_deg,
-        )
+        # Radius candidates already carry distance_from_dest_nm; near-route ones
+        # don't, so compute it here only when absent.
+        if c.get("distance_from_dest_nm") is None:
+            c["distance_from_dest_nm"] = _haversine_nm(
+                dest.lat, dest.lon, ap.latitude_deg, ap.longitude_deg,
+            )
         filtered.append(c)
 
-    # --- 6. Cap to the nearest N by destination distance (log the cap) ---
+    # --- 4. Cap to the nearest N by destination distance (log the cap) ---
     filtered.sort(key=lambda c: c["distance_from_dest_nm"])
     capped = filtered[:max_candidates]
     if len(filtered) > max_candidates:
@@ -344,7 +348,14 @@ def run_alternates(
     alternates: list[AlternateAirport] = []
     for c in capped:
         ap = c["airport"]
-        assessed = _assess(ap.ident, by_icao, runways)
+        # Assessment reads fetched snapshots through the shared assembly; a
+        # single malformed airport must skip only that candidate, not abort the
+        # whole stage (the pipeline's catch would otherwise drop the section).
+        try:
+            assessed = _assess(ap.ident, by_icao, runways)
+        except Exception:
+            logger.debug("Alternates: assessment failed for %s", ap.ident, exc_info=True)
+            continue
         if assessed is None:
             continue
         per_model, cons = assessed

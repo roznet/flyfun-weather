@@ -53,19 +53,12 @@ def _find_nearest_waypoint(
     return route.waypoints[best_idx].icao
 
 
-def _compute_route_distances(route: RouteConfig) -> list[float]:
-    """Compute cumulative great-circle distance for each waypoint in NM."""
-    from euro_aip.models.navpoint import NavPoint
-
-    distances = [0.0]
-    for i in range(1, len(route.waypoints)):
-        prev = route.waypoints[i - 1]
-        curr = route.waypoints[i]
-        nav_a = NavPoint(latitude=prev.lat, longitude=prev.lon)
-        nav_b = NavPoint(latitude=curr.lat, longitude=curr.lon)
-        _, leg_nm = nav_a.haversine_distance(nav_b)
-        distances.append(distances[-1] + leg_nm)
-    return distances
+# Route-distance math now lives in analysis.route_geometry so the alternates
+# stage doesn't reach into this module's privates. Kept as a module-level alias
+# for the existing internal callers (and tests that import it from here).
+from weatherbrief.analysis.route_geometry import (  # noqa: E402
+    compute_route_distances as _compute_route_distances,
+)
 
 
 def _interpolate_airport_time(
