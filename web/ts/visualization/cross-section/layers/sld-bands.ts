@@ -4,7 +4,7 @@ import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../type
 import { getActiveTheme } from '../theme';
 import { renderMatchedZones, maxRisk } from './zone-matching';
 
-function sldRiskColor(risk: string): string {
+export function sldRiskColor(risk: string): string {
   const theme = getActiveTheme();
   const sldColors = (theme as any).sld;
   if (sldColors && sldColors[risk]) return sldColors[risk];
