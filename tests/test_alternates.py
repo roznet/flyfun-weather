@@ -181,39 +181,67 @@ def test_before_after_and_detour_pair():
 
 
 # ---------------------------------------------------------------------------
-# Instrument-approach gate (destination IFR/MVFR)
+# Per-candidate instrument-approach gate
 # ---------------------------------------------------------------------------
 
 
-def test_iap_gate_excludes_no_approach_when_dest_ifr():
+def test_per_candidate_approach_gate():
+    # The gate is per-candidate, by the candidate's OWN weather (not the
+    # destination's): a sub-VFR field with no approach is dropped; a VFR field
+    # with no approach is kept (visual divert); a sub-VFR field WITH an approach
+    # is kept.
     route = _route()
-    with_iap = _FakeAirport("EGAA", 54.66, -6.22, has_approach=True, best_approach="ILS")
-    no_iap = _FakeAirport("EGAE", 55.04, -7.16, has_approach=False, best_approach=None)
+    ifr_iap = _FakeAirport("EGAA", 54.66, -6.22, has_approach=True, best_approach="ILS")
+    ifr_no_iap = _FakeAirport("EGAE", 55.04, -7.16, has_approach=False, best_approach=None)
+    vfr_no_iap = _FakeAirport("EGAC", 54.62, -5.87, has_approach=False, best_approach=None)
     near = [
-        {"airport": with_iap, "enroute_distance_nm": 120.0, "segment_distance_nm": 10.0},
-        {"airport": no_iap, "enroute_distance_nm": 130.0, "segment_distance_nm": 15.0},
+        {"airport": ifr_iap, "enroute_distance_nm": 120.0, "segment_distance_nm": 10.0},
+        {"airport": ifr_no_iap, "enroute_distance_nm": 130.0, "segment_distance_nm": 15.0},
+        {"airport": vfr_no_iap, "enroute_distance_nm": 125.0, "segment_distance_nm": 12.0},
     ]
     snaps = {
-        # Destination IFR (low ceiling) → require_approach should trip.
-        "EGPF": _all_models("EGPF", ceiling=600.0),
-        "EGAA": _all_models("EGAA"),
-        "EGAE": _all_models("EGAE"),
+        "EGPF": _all_models("EGPF", ceiling=600.0),   # destination IFR (irrelevant to the gate)
+        "EGAA": _all_models("EGAA", ceiling=600.0),   # IFR + approach  → kept
+        "EGAE": _all_models("EGAE", ceiling=600.0),   # IFR + no approach → dropped
+        "EGAC": _all_models("EGAC", ceiling=5000.0),  # VFR + no approach → kept (visual divert)
     }
     result = _run(route, near, snaps)
     assert result is not None
-    assert result.require_approach is True
+    assert result.approach_filter_relaxed is False
     icaos = {a.icao for a in result.alternates}
-    assert "EGAA" in icaos
-    assert "EGAE" not in icaos  # no published approach → dropped when dest is IFR
-
-    egaa = next(a for a in result.alternates if a.icao == "EGAA")
-    assert egaa.has_instrument_approach is True
-    assert egaa.best_approach_type == "ILS"
+    assert icaos == {"EGAA", "EGAC"}  # IFR-no-approach dropped; VFR-no-approach kept
 
 
-def test_iap_gate_relaxed_when_no_candidate_has_approach_data():
-    # Destination IFR, but NO candidate has approach data (e.g. nav DB lacks
-    # procedure rows). Rather than going dark, the gate relaxes and flags it.
+def test_approach_gate_independent_of_destination_vfr():
+    # Even when the destination is VFR, a sub-VFR candidate with no approach is
+    # still unusable in its own conditions → dropped. A VFR candidate is kept.
+    # (An approach-bearing candidate is present so procedure data exists and the
+    # relaxation safety net does not trigger.)
+    route = _route()
+    ifr_iap = _FakeAirport("EGAA", 54.66, -6.22, has_approach=True, best_approach="ILS")
+    ifr_no_iap = _FakeAirport("EGAE", 55.04, -7.16, has_approach=False, best_approach=None)
+    vfr_no_iap = _FakeAirport("EGAC", 54.62, -5.87, has_approach=False, best_approach=None)
+    near = [
+        {"airport": ifr_iap, "enroute_distance_nm": 120.0, "segment_distance_nm": 10.0},
+        {"airport": ifr_no_iap, "enroute_distance_nm": 130.0, "segment_distance_nm": 15.0},
+        {"airport": vfr_no_iap, "enroute_distance_nm": 125.0, "segment_distance_nm": 12.0},
+    ]
+    snaps = {
+        "EGPF": _all_models("EGPF", ceiling=5000.0),  # destination VFR
+        "EGAA": _all_models("EGAA", ceiling=600.0),   # IFR + approach → kept
+        "EGAE": _all_models("EGAE", ceiling=600.0),   # IFR + no approach → dropped
+        "EGAC": _all_models("EGAC", ceiling=5000.0),  # VFR + no approach → kept
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    assert result.require_approach is False  # informational: destination is VFR
+    assert result.approach_filter_relaxed is False
+    assert {a.icao for a in result.alternates} == {"EGAA", "EGAC"}
+
+
+def test_approach_gate_relaxed_when_no_procedure_data():
+    # Sub-VFR candidates lack an approach AND no candidate has any approach data
+    # (procedure data absent from the airport DB) → don't go dark; keep them flagged.
     route = _route()
     a = _FakeAirport("EGKE", 51.10, -0.20, has_approach=False, best_approach=None)
     b = _FakeAirport("EGKH", 51.05, -0.30, has_approach=False, best_approach=None)
@@ -222,32 +250,15 @@ def test_iap_gate_relaxed_when_no_candidate_has_approach_data():
         {"airport": b, "enroute_distance_nm": 205.0, "segment_distance_nm": 9.0},
     ]
     snaps = {
-        "EGPF": _all_models("EGPF", ceiling=600.0),  # IFR
-        "EGKE": _all_models("EGKE"),
-        "EGKH": _all_models("EGKH"),
+        "EGPF": _all_models("EGPF", ceiling=600.0),
+        "EGKE": _all_models("EGKE", ceiling=600.0),  # IFR + no approach
+        "EGKH": _all_models("EGKH", ceiling=600.0),  # IFR + no approach
     }
     result = _run(route, near, snaps)
     assert result is not None
-    assert result.require_approach is True
     assert result.approach_filter_relaxed is True
-    # Candidates are still shown (flagged), not dropped.
+    # Both shown (flagged), not dropped — missing reference data, not a real gate.
     assert {a.icao for a in result.alternates} == {"EGKE", "EGKH"}
-
-
-def test_iap_gate_not_applied_when_dest_vfr():
-    route = _route()
-    no_iap = _FakeAirport("EGAE", 55.04, -7.16, has_approach=False, best_approach=None)
-    near = [
-        {"airport": no_iap, "enroute_distance_nm": 130.0, "segment_distance_nm": 15.0},
-    ]
-    snaps = {
-        "EGPF": _all_models("EGPF", ceiling=5000.0),  # VFR
-        "EGAE": _all_models("EGAE"),
-    }
-    result = _run(route, near, snaps)
-    assert result is not None
-    assert result.require_approach is False
-    assert {a.icao for a in result.alternates} == {"EGAE"}
 
 
 # ---------------------------------------------------------------------------

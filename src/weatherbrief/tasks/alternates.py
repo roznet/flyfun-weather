@@ -335,6 +335,9 @@ def run_alternates(
     dest_wind = dest_cons.get("wind_speed_kt")
     dest_crosswind = dest_cons.get("crosswind_kt")
     dest_idx = _cat_idx(dest_category)
+    # Informational only: is the destination itself MVFR/IFR/LIFR (i.e. you'd
+    # need an instrument approach to get into the *destination*). The candidate
+    # approach gate below is per-candidate and does NOT key off this.
     require_approach = dest_idx >= _REQUIRE_APPROACH_FROM
 
     # --- Build each alternate ---
@@ -430,25 +433,32 @@ def run_alternates(
             dominates_destination=dominates,
         ))
 
-    # Instrument-approach gate (applied here, not per-row, so it can degrade
-    # gracefully). When the destination is MVFR/IFR/LIFR, a field with no
-    # published approach is not a planning-grade IFR alternate — drop it. BUT if
-    # *no* candidate has approach data, the airport DB almost certainly lacks
-    # procedure data (the dev nav.db has zero procedure rows); going dark in that
-    # case is worse than showing weather-better fields with the approach column
-    # blank, so relax the gate and flag it.
+    # Per-candidate instrument-approach gate (always applied, by the
+    # candidate's *own* weather — not the destination's). A field that is
+    # itself MVFR/IFR/LIFR with no published approach can't be reached in those
+    # conditions, so drop it. A field forecast VFR is always kept: you divert
+    # there visually, no approach needed. Graceful degradation: if procedure
+    # data is absent entirely (no candidate has any approach) yet there are
+    # sub-VFR fields the gate *would* drop, going dark on missing reference
+    # data is worse than showing them flagged — so relax + flag instead.
+    def _needs_approach(a: AlternateAirport) -> bool:
+        return _cat_idx(a.flight_category) >= _REQUIRE_APPROACH_FROM
+
+    gated_out = [a for a in alternates if _needs_approach(a) and not a.has_instrument_approach]
+    any_approach_data = any(a.has_instrument_approach for a in alternates)
     approach_filter_relaxed = False
-    if require_approach:
-        with_iap = [a for a in alternates if a.has_instrument_approach]
-        if with_iap:
-            alternates = with_iap
-        elif alternates:
-            approach_filter_relaxed = True
-            logger.info(
-                "Alternates: destination %s is %s but no candidate has approach "
-                "data (procedure data likely absent) — showing %d unfiltered, flagged",
-                dest.icao, dest_category, len(alternates),
-            )
+    if gated_out and not any_approach_data:
+        approach_filter_relaxed = True
+        logger.info(
+            "Alternates: %d sub-VFR candidate(s) lack an approach but no procedure "
+            "data is present (likely absent from the airport DB) — showing unfiltered, flagged",
+            len(gated_out),
+        )
+    else:
+        alternates = [
+            a for a in alternates
+            if a.has_instrument_approach or not _needs_approach(a)
+        ]
 
     # Rank closest-first.
     alternates.sort(key=lambda a: a.distance_from_dest_nm)

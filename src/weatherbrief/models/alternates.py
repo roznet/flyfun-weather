@@ -85,8 +85,8 @@ class RouteAlternates(BaseModel):
     eta: datetime | None = None
     corridor_nm: float
     radius_nm: float
-    require_approach: bool = False  # whether the IAP filter was applied
-    approach_filter_relaxed: bool = False  # IAP filter dropped (no candidate had approach data)
+    require_approach: bool = False  # informational: destination itself is MVFR/IFR/LIFR
+    approach_filter_relaxed: bool = False  # per-candidate IAP gate skipped (no procedure data present)
     candidates_evaluated: int = 0
     alternates: list[AlternateAirport] = Field(default_factory=list)  # ranked, closest-first
     nearest_improving: list[AlternateAxisPick] = Field(default_factory=list)
