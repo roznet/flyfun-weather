@@ -228,7 +228,7 @@ Both cross-section and route-graph interaction modules import from this shared u
 Per-layer tooltip content lives in a declarative registry consumed by `interaction.ts`. Each entry:
 
 ```typescript
-{ id, enabledBy?, header?, getZones(p), formatLine(z) }
+{ id, enabledBy?, header?, getZones(p), formatLine(z), swatch?(z) }
 ```
 
 - `id` — primary layer toggle that owns the data.
@@ -236,6 +236,7 @@ Per-layer tooltip content lives in a declarative registry consumed by `interacti
 - `header` — optional section title above the lines (e.g. `Icing (Ogimet-DD)`).
 - `getZones` — returns the relevant zone array from `VizPoint` (or synthesizes a single pseudo-zone from per-point fields, used by Thermo/NWP convective).
 - `formatLine` — produces one tooltip line per zone, including any per-layer extras (DD, CC, T, icing index, Ri, SLD tag, source tag, etc.).
+- `swatch(zone)` — optional fill colour for a small square key drawn next to the row, **keyed to the band's risk/coverage so it matches the on-chart fill** (returns null to omit). Each entry reuses the *same* color function as the renderer (`cloudFillFromDD`, `nwpCloudFill`, `icingRiskColor`, `sldRiskColor`, `catRiskColor`, `inversionSwatchColor`, theme `sfipIcing`/`convective.towerFill`/`obscuration`) so the tooltip key never drifts from the chart. The header row also carries a line-style key, and the point header is rendered single-line.
 
 The registry includes 13 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SFIP, IENG, SLD, CAT (Ri), E-Shear, Thermo Convective, NWP Convective, Inversions, Surface obscuration. Adding a new layer = one new entry; changing what a layer shows = edit one `formatLine`.
 

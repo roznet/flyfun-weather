@@ -64,6 +64,11 @@ D-0 METAR/TAF integration: fetch observations from route corridor airports, comp
 Key exports: `run_route_weather`, `run_observation_comparison`, `compute_wind_advisory`, `compute_refresh_delta`, `RefreshDelta`, `RouteObservations`, `AirportObservation`, `run_route_sigmets`, `RouteSigmets`, `SigmetAlongRoute`, `RealtimeRefreshResult`
 → Full doc: metar-taf-route-weather.md
 
+### alternates
+Weather-based alternate airports (D-2 inward, gated by `compute_alternates` pref): for a marginal destination, surface the nearest divert candidates that fix a deficient axis (flight category, wind, best-runway crosswind), classified before/after along the route with a detour pair. Per-airport assessment shares `analysis/airport_consensus.py` with the forecast map (consistency guarantee). Per-candidate instrument-approach gate with graceful relaxation; ranked table + nearest-improving picks rendered in briefing UI and text digest (not yet in LLM prompt).
+Key exports: `run_alternates`, `RouteAlternates`, `AlternateAirport`, `AlternateAxisPick`, `best_ceiling`, `flight_category`, `enrich_wind`, `consensus`, `compute_route_distances`
+→ Full doc: alternates.md
+
 ### time-alignment
 Time and spatial alignment in the data pipeline: aware-UTC datetime convention, per-hour GRIB enrichment across flight windows, spatial index consistency, hour-matching merge logic, old pack backward compatibility.
 Key exports: `compute_flight_window_hours`, `compute_icon_eu_flight_window_hours`, `_forecast_hour_to_utc`, `_merge_cloud_water_into_sections`
@@ -124,6 +129,11 @@ Sync engine + forecast-driven prompting engine — largely Phase 3a/3b design in
 Pan-European weather overview map with per-airport forecast visualization (9 metrics incl. visibility and runway crosswind/headwind, consensus modes). Cache layer serves pre-computed JSON with staleness tracking; falls back to live queries. (The model accuracy heatmap was removed in #154; the replacement view consumes ``get_optimistic_bias_leaderboard`` from the verification stats module — see `metar-taf-accuracy.md`.)
 Key exports: `get_forecast_map_data`, `WeatherMap`, `fetchForecastMap`
 → Full doc: forecast-page.md
+
+### briefing-sidebar
+Opt-in, fully reversible alternative layout for the briefing page: fixed left rail (route identity, derived glance summary, scroll-spy section nav, freshness, controls) beside a scrollable main pane, with resizable rail and per-section focus mode. The rail owns no data — it derives its summary by reading the already-rendered DOM and is generated from `data-section` tags, so it adds/removes without touching any other manager.
+Key exports: `initBriefingLayout`, `getBriefingLayout`, `BriefingLayout`
+→ Full doc: briefing-sidebar.md
 
 ### metar-taf-accuracy [project]
 Dual-track METAR/TAF verification: flight-based collection (10-min poll during active flights) + standalone monitoring (~830 pan-European airports) via three decoupled loops — METAR ingest (every 30 min), forecast fetch + sounding enrichment (07/19 UTC), and scoring of existing snapshots (06/09/12/15/18 UTC). Monthly rollup aggregation, dashboard cache layer with staleness tracking, chunk-level retry, error recording, graceful degradation.
