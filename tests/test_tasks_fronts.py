@@ -453,6 +453,40 @@ class TestComputeRouteFronts:
         assert manifest.models == ["ecmwf"]
         assert manifest.per_model["ecmwf"]
 
+    def test_level_aware_terrain_masks_low_level_only(self, tmp_path):
+        """#216 Fix 3: terrain reaching the 925 hPa surface (~762 m) masks the
+        925 crossing while leaving the 850/700 hPa fronts intact. A planted
+        elevation grid (1200 m over the route's front-crossing region) is below
+        the 850/700 surfaces but above 925's."""
+        out_dir = tmp_path / "hewson"
+        _write_front_snapshot(out_dir, levels=(925, 850, 700))
+        lat = np.linspace(45.0, 52.0, 29)
+        lon = np.linspace(-2.0, 6.0, 33)
+        la_grid, lo_grid = np.meshgrid(lat, lon, indexing="ij")
+        elev = np.zeros((lat.size, lon.size))
+        # High terrain over the crossing neighbourhood (route lat 47, front lon ~2).
+        elev[(np.abs(la_grid - 47.0) < 2.0) & (np.abs(lo_grid - 2.0) < 2.5)] = 1200.0
+        out_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            out_dir / "terrain_mask.npz",
+            mask=np.ones((lat.size, lon.size), dtype=bool),  # flat fallback (unused)
+            lat=lat, lon=lon, elevation=elev,
+        )
+        analyses = _route_analyses()
+        manifest = compute_route_fronts(
+            [(a.lat, a.lon) for a in analyses],
+            [a.interpolated_time for a in analyses],
+            route_name="r", cruise_altitude_ft=5000,
+            advisory_models=["ecmwf"], output_dir=out_dir,
+        )
+
+        def n_cross(level: int) -> int:
+            return sum(len(a.crossings) for a in manifest.per_model["ecmwf"]
+                       if a.level_hPa == level)
+
+        assert n_cross(700) >= 1   # free-atmosphere front intact (not over-masked)
+        assert n_cross(925) == 0   # low-level crossing suppressed by level-aware mask
+
 
 class TestRunFronts:
     def test_writes_artifact_and_roundtrips(self, tmp_path):

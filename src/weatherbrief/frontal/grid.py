@@ -183,6 +183,59 @@ def build_terrain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     return mask
 
 
+def build_terrain_elevation(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Terrain elevation grid in metres (SRTM3 90 m); NaN where SRTM has no data.
+
+    The float counterpart of :func:`build_terrain_mask`: it retains the actual
+    heights so a *level-aware* mask can be derived per detection level (a 925 hPa
+    surface sits far lower than 850/700 hPa, so a single flat threshold both
+    under-masks low levels and over-masks high ones). Pair with
+    :func:`terrain_mask_for_level`. Static for a given grid — compute once, cache.
+    """
+    import srtm
+
+    from weatherbrief.fetch.elevation import SRTM_CACHE_DIR
+
+    elevation_data = srtm.get_data(
+        local_cache_dir=str(SRTM_CACHE_DIR), srtm3=True,
+    )
+    elev = np.full((len(lat), len(lon)), np.nan, dtype=np.float64)
+    for i, la in enumerate(lat):
+        for j, lo in enumerate(lon):
+            e = elevation_data.get_elevation(float(la), float(lo))
+            if e is not None:
+                elev[i, j] = float(e)
+
+    logger.info(
+        "Terrain elevation grid: %d of %d points have SRTM data",
+        int(np.isfinite(elev).sum()), elev.size,
+    )
+    return elev
+
+
+def terrain_mask_for_level(
+    elevation_m: np.ndarray, level_hPa: int, buffer_m: float = 0.0,
+) -> np.ndarray:
+    """Boolean mask (True = valid) for a detection level from an elevation grid.
+
+    A cell is masked (invalid) when terrain reaches the level's standard-atmosphere
+    height: the pressure surface is then at/below ground and its θe gradients are
+    orographic artefacts, not free-atmosphere fronts. This generalises the flat
+    1500 m (~850 hPa) threshold: 925 hPa masks terrain above ~762 m, 700 hPa only
+    above ~3012 m — so low-level Alpine artefacts are caught and genuine 700 hPa
+    fronts over moderate terrain are no longer wrongly hidden (#216 Fix 3).
+
+    NaN elevation (ocean / no SRTM) is treated as valid. ``buffer_m`` lowers the
+    threshold if a margin below the surface is wanted (0 = mask only at/above it).
+    """
+    from weatherbrief.models.analysis import pressure_hpa_to_altitude_m
+
+    threshold_m = pressure_hpa_to_altitude_m(level_hPa) - buffer_m
+    # NaN → -inf so unknown/ocean cells never exceed the threshold (stay valid).
+    elev = np.nan_to_num(elevation_m, nan=-np.inf)
+    return ~(elev > threshold_m)
+
+
 def fill_terrain(field: np.ndarray, terrain_mask: np.ndarray) -> np.ndarray:
     """Replace terrain-masked cells with values interpolated from valid neighbors.
 

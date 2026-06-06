@@ -43,8 +43,9 @@ import numpy as np
 from weatherbrief.frontal.detect import compute_hewson_diagnostics
 from weatherbrief.process_rss import log_memory
 from weatherbrief.frontal.grid import (
+    _TERRAIN_MASK_THRESHOLD_M,
     build_grid_coords,
-    build_terrain_mask,
+    build_terrain_elevation,
     fetch_grid_fields,
     reshape_to_fields,
 )
@@ -188,11 +189,13 @@ def snapshot_for_window(
 def _load_or_build_terrain_mask(
     lat: np.ndarray, lon: np.ndarray, output_dir: Path | None,
 ) -> np.ndarray:
-    """Return the terrain mask for the current grid.
+    """Return the flat terrain mask for the current grid (back-compat).
 
-    First invocation per environment builds via SRTM3 (~seconds) and caches
-    to ``{DATA_DIR}/hewson/terrain_mask.npz``. Subsequent calls load from
-    disk and verify the shape matches the active grid.
+    First invocation per environment builds via SRTM3 (~seconds) and caches the
+    elevation grid + the derived flat mask to ``{DATA_DIR}/hewson/terrain_mask.npz``.
+    Subsequent calls load from disk and verify the shape matches the active grid.
+    A cache missing the ``elevation`` array (pre-#216) is treated as stale and
+    rebuilt, so level-aware masking gets its data without a manual cache wipe.
     """
     cache_path = _terrain_mask_path(output_dir)
     if cache_path.exists():
@@ -200,20 +203,25 @@ def _load_or_build_terrain_mask(
             mask = npz["mask"]
             cached_lat = npz["lat"]
             cached_lon = npz["lon"]
+            has_elevation = "elevation" in npz.files
         if (
-            mask.shape == (len(lat), len(lon))
+            has_elevation
+            and mask.shape == (len(lat), len(lon))
             and np.allclose(cached_lat, lat)
             and np.allclose(cached_lon, lon)
         ):
             return mask
         logger.info(
-            "Terrain-mask cache at %s stale (grid changed) — rebuilding",
-            cache_path,
+            "Terrain-mask cache at %s stale (grid changed or pre-elevation) — "
+            "rebuilding", cache_path,
         )
 
-    mask = build_terrain_mask(lat, lon)
+    elevation = build_terrain_elevation(lat, lon)
+    # Flat ≤1500 m (~850 hPa) mask, derived from the same scan so the two never
+    # drift; level-aware consumers use the elevation grid via terrain_mask_for_level.
+    mask = ~(np.nan_to_num(elevation, nan=-np.inf) > _TERRAIN_MASK_THRESHOLD_M)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(cache_path, mask=mask, lat=lat, lon=lon)
+    np.savez_compressed(cache_path, mask=mask, lat=lat, lon=lon, elevation=elevation)
     return mask
 
 

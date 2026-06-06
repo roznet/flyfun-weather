@@ -142,6 +142,48 @@ def classify_regime(cape: float | None, cin: float | None) -> ConvectiveRegime |
     return ConvectiveRegime.WEAK_INSTABILITY
 
 
+# Lifted-index threshold for the realized-vs-potential gate. LI ≤ −2 marks
+# moderate+ instability (0…−2 = stable/weak), the standard weak/moderate boundary.
+LI_REALIZED = -2.0
+
+
+def convection_realized(
+    *,
+    method: str | None,
+    cin_jkg: float | None,
+    ml_cape_jkg: float | None,
+    lifted_index: float | None,
+) -> bool:
+    """True when convection is *realized*, not just CIN-capped potential (#216).
+
+    Distinct from the convective *tier* (``risk_level`` / :func:`classify_regime`):
+    the tier deliberately keeps a moderate cap's risk at its potential level —
+    WEAK_INSTABILITY only suppresses at CIN < ``CIN_CAP_THRESHOLD`` (−200) — because
+    a moderate-CAPE air mass is worth flagging on the route. A consumer that must
+    know whether convection is *actually realized* — e.g. front co-location, which
+    would otherwise read the parcel equilibrium level as a real tower a pilot meets
+    — needs a stricter bar: realized unless strongly capped (CIN ≤
+    ``REGIME_CIN_CAP``, −50) with no countervailing instability (ML-CAPE ≥
+    ``REGIME_CAPE_LOW`` (300) or a lifted index ≤ ``LI_REALIZED`` (−2)).
+
+    NWP convective cloud (``method`` != "thermo") is realized by construction.
+    Unknown data defaults to realized — we downgrade only on *positive* evidence
+    the instability is weak, so a real signal is never silently hidden. Callers own
+    data extraction (and any DD→NWP lifted-index fallback); this owns the logic and
+    the shared thresholds. See ``meteorology-decisions.md`` §4 (tier) and §6 (gate).
+    """
+    if (method or "thermo") != "thermo":
+        return True
+    if not (cin_jkg is not None and cin_jkg <= REGIME_CIN_CAP):
+        return True
+    if ml_cape_jkg is None and lifted_index is None:
+        return True
+    return (
+        (ml_cape_jkg is not None and ml_cape_jkg >= REGIME_CAPE_LOW)
+        or (lifted_index is not None and lifted_index <= LI_REALIZED)
+    )
+
+
 _RISK_LEVELS = tuple(ConvectiveRisk)
 
 
