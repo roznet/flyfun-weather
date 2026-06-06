@@ -673,3 +673,71 @@ Investigation only. Relevant code: `analysis/spatial_interpolation.py`
 `fetch/grib/fill.py` (time-axis interp + trailing forward-fill),
 `analysis/sounding/convective.py` (`assess_convective_nwp` vs
 `assess_convective_thermo`).
+
+---
+
+## 6. Front co-location: realized vs potential convection, and the parcel EL
+
+**Date:** 2026-06-06
+**Status:** Implemented (PR #217, #216).
+**Context:** The experimental `fronts` advisory red-flagged a stable
+high-pressure day (`lsgs_…_egtf-2026-06-07`) with "convective tops to FL272". A
+single GFS 925 hPa θe crossing over Alpine terrain was co-located as
+*convective* off a `risk_level="moderate"` that was CIN-capped potential CAPE
+(CIN −59.5, ML-CAPE 147 J/kg, NWP LI −1), and its `weather_top_ft` was taken as
+the **parcel equilibrium level** (27,233 ft) — clearing the deep-convection RED
+cutoff (cruise + 15,000 ft) by 233 ft. No convection existed; the EL is high
+simply because it's a deep summer troposphere.
+
+### The decision
+
+A front crossing is co-located as **convective only when convection is
+*realized***, and the parcel EL is used as a tower-depth proxy **only on that
+realized path**. Realized when:
+- NWP convective cloud is present (`method != "thermo"`), **or**
+- the cap is weak (CIN > −50 J/kg), **or**
+- there is positive evidence of usable instability — ML-CAPE ≥ 300 J/kg or a
+  lifted index ≤ −2.
+
+A strongly-capped (CIN ≤ −50) thermo risk with positive evidence of *weak*
+instability falls through to the cloud-coverage category (wet/partly/dry) and the
+EL is never used as a realized top. This mirrors §4's realizable-CAPE logic, one
+level down: §4 stops surface CAPE over-reading the *route* convective tier; this
+stops the same potential CAPE over-reading a *front's* relevance.
+
+### Thresholds (front realized-gate)
+
+- **CIN cap −50 J/kg** — moderate-cap boundary; ECMWF/GFS agree well at this scale.
+- **ML-CAPE 300 J/kg** — ESSL "appreciable convection" anchor (same value as §4's
+  MOD tier).
+- **LI −2** — weak/moderate instability boundary (0…−2 stable/weak; < −2 moderate+).
+
+Tuned on the single LSGS GFS case; revisit if a strong-front case disagrees.
+
+### Two conservative biases (don't silently hide a front)
+
+- **Unknown data → realized.** We downgrade only on *positive* evidence the
+  instability is weak. When CIN is the sole available signal (ML-CAPE and LI both
+  absent — e.g. ICON emits no lifted index), we keep the crossing convective.
+- **Vertical coherence for overflown convection.** A convective crossing seen
+  only on a single *below-cruise* θe level (the 925 hPa terrain case) needs a
+  second level to RED; a free-atmosphere detection at/above the primary level
+  still REDs single-level by depth.
+
+The LI fallback (DD-derived → `nwp_lifted_index`) deliberately crosses the §4
+DD/NWP tier separation: here LI is a binary gate signal, not a tier input, so the
+mixing is acceptable.
+
+### Real-world validation needed
+
+- A strong, genuinely active front (deep CAPE, weak cap) crossing the route at a
+  low level: confirm it still REDs and that the EL-as-top proxy isn't suppressed.
+- ICON / MeteoFrance partial-coverage points (CIN present, ML-CAPE/LI absent):
+  confirm the unknown-data-→-realized bias behaves as intended.
+
+### Files changed
+
+`analysis/advisories/fronts.py` (`_grade_crossing`: overflown-convective
+coherence gate), `tasks/fronts.py` (`_colocate` + `_convection_realized`: realized
+gate, EL only on realized path). Tests: `tests/test_tasks_fronts.py`,
+`tests/analysis/advisories/test_fronts_advisory.py`.

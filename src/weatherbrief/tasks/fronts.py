@@ -169,21 +169,29 @@ def _convection_realized(conv, indices) -> bool:
     not a cloud a pilot meets. Convection counts as realized when NWP convective
     cloud is present (``method`` != "thermo"), the inhibition is weak, or there is
     a countervailing instability signal (high ML-CAPE or a negative lifted index).
-    Unknown data defaults to realized so a real front is never silently hidden.
+    Unknown data defaults to realized so a real front is never silently hidden —
+    we downgrade only on *positive* evidence the instability is weak (caller
+    guarantees a non-None ``conv`` with a convective ``risk_level``).
     """
-    if conv is None:
-        return False
     if _attr(conv, "method", "thermo") != "thermo":
         return True  # NWP convective-cloud diagnostics fired → realized weather
     cin = _attr(conv, "cin_jkg", None)  # negative = inhibition
     strong_cap = cin is not None and cin <= _CIN_CAP_JKG
     if not strong_cap:
         return True
-    # Strongly capped: realized only with a countervailing instability signal.
+    # Strongly capped: downgrade to potential only with positive evidence the
+    # instability is weak. With CIN the sole available signal (ML-CAPE and LI both
+    # absent — e.g. ICON, which emits no lifted index), default to realized rather
+    # than silently hide a front. LI here is a binary gate signal, not a tier
+    # input, so falling back from the DD-derived to the NWP-native value is
+    # acceptable — the DD/NWP tier separation (meteorology-decisions.md §4) does
+    # not bind this realized/potential decision.
     ml_cape = _attr(indices, "cape_mixed_layer_jkg", None)
     li = _attr(conv, "lifted_index", None)
     if li is None:
         li = _attr(indices, "nwp_lifted_index", None)
+    if ml_cape is None and li is None:
+        return True
     return (
         (ml_cape is not None and ml_cape >= _ML_CAPE_REALIZED_JKG)
         or (li is not None and li <= _LI_REALIZED)

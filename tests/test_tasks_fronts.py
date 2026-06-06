@@ -179,6 +179,33 @@ class TestColocate:
         cat, top = _colocate(self._an_full(cl, conv, indices), "ecmwf", 0.0, 850)
         assert cat == "convective" and top == 36000.0
 
+    def test_cin_capped_but_negative_li_stays_convective(self):
+        # Symmetric to the ML-CAPE gate: a strong cap (CIN -80) with a negative
+        # lifted index (LI -4 <= -2) is realizable → still convective, EL kept.
+        cl = [{"top_ft": 9000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 850, "coverage": "sct"}]
+        conv = {
+            "risk_level": "moderate", "method": "thermo",
+            "cin_jkg": -80.0, "el_altitude_ft": 34000.0, "top_ft": 34000.0,
+            "lifted_index": -4.0,
+        }
+        indices = {"cape_mixed_layer_jkg": 120.0, "nwp_lifted_index": None}
+        cat, top = _colocate(self._an_full(cl, conv, indices), "ecmwf", 0.0, 850)
+        assert cat == "convective" and top == 34000.0
+
+    def test_cin_capped_no_instability_data_defaults_realized(self):
+        # Item #1 (PR #217 review): strong CIN but NO countervailing data — both
+        # ML-CAPE and LI absent (e.g. ICON, which emits no lifted index). We must
+        # NOT silently downgrade a real front on CIN alone → default to realized.
+        cl = [{"top_ft": 9000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 850, "coverage": "sct"}]
+        conv = {
+            "risk_level": "moderate", "method": "thermo",
+            "cin_jkg": -90.0, "el_altitude_ft": 30000.0, "top_ft": 30000.0,
+            "lifted_index": None,
+        }
+        indices = {"cape_mixed_layer_jkg": None, "nwp_lifted_index": None}
+        cat, top = _colocate(self._an_full(cl, conv, indices), "ecmwf", 0.0, 850)
+        assert cat == "convective" and top == 30000.0
+
     def test_nwp_convective_cloud_is_realized(self):
         # An NWP-method assessment (method != "thermo") reflects modeled
         # convective cloud → realized regardless of CIN; its NWP top is used.
@@ -189,6 +216,17 @@ class TestColocate:
         indices = {"cape_mixed_layer_jkg": 50.0, "nwp_lifted_index": 2.0}
         cat, top = _colocate(self._an_full([], conv, indices), "ecmwf", 0.0, 850)
         assert cat == "convective" and top == 25000.0
+
+    def test_wet_front_top_from_cloud_not_el(self):
+        # Item #5 (PR #217 review): a non-convective (wet) front must take its
+        # weather_top from the spanning cloud layer, never the parcel EL. Here a
+        # low OVC spans the 850 hPa front (top 11000) while the sounding still
+        # carries a high EL (28000); weather_top must be 11000, not the EL.
+        cl = [{"top_ft": 11000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 700, "coverage": "ovc"}]
+        conv = {"risk_level": "low", "method": "thermo", "el_altitude_ft": 28000.0, "top_ft": 28000.0}
+        indices = {"cape_mixed_layer_jkg": 80.0, "nwp_lifted_index": 1.0}
+        cat, top = _colocate(self._an_full(cl, conv, indices), "ecmwf", 0.0, 850)
+        assert cat == "wet" and top == 11000.0
 
     def test_partly_cloud_at_level_is_partly(self):
         cl = [{"top_ft": 12000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 700, "coverage": "sct"}]
