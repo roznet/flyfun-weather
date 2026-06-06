@@ -14,6 +14,9 @@
 
 export type BriefingLayout = 'classic' | 'sidebar';
 const STORAGE_KEY = 'wb_layout';
+const RAIL_WIDTH_KEY = 'wb_rail_width';
+const RAIL_MIN_WIDTH = 260;
+const RAIL_MAX_WIDTH = 560;
 
 export function getBriefingLayout(): BriefingLayout {
   const param = new URLSearchParams(location.search).get('layout');
@@ -205,6 +208,76 @@ function buildNav(nav: HTMLElement, shell: HTMLElement): void {
   setupScrollSpy(nav);
 }
 
+/**
+ * Draggable divider between the rail and the main pane. Dragging sets the
+ * `--rail-width` CSS var on the shell (clamped to [MIN, MAX] and never past
+ * half the shell width); the chosen width is persisted to localStorage and
+ * a double-click resets to the default. Hidden below 980px where the layout
+ * collapses to a single column (see CSS media query).
+ */
+function buildResizer(shell: HTMLElement): HTMLElement {
+  const handle = document.createElement('div');
+  handle.className = 'briefing-resizer';
+  handle.setAttribute('role', 'separator');
+  handle.setAttribute('aria-orientation', 'vertical');
+  handle.setAttribute('aria-label', 'Resize sidebar');
+
+  let dragging = false;
+
+  const onMove = (e: PointerEvent): void => {
+    if (!dragging) return;
+    const rect = shell.getBoundingClientRect();
+    const max = Math.min(RAIL_MAX_WIDTH, rect.width * 0.5);
+    const w = Math.max(RAIL_MIN_WIDTH, Math.min(max, e.clientX - rect.left));
+    shell.style.setProperty('--rail-width', `${Math.round(w)}px`);
+  };
+
+  const stop = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing-rail');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', stop);
+    try {
+      const w = shell.style.getPropertyValue('--rail-width').trim();
+      if (w) localStorage.setItem(RAIL_WIDTH_KEY, w);
+    } catch { /* ignore */ }
+  };
+
+  handle.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    document.body.classList.add('resizing-rail');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', stop);
+    e.preventDefault();
+  });
+
+  // Double-click restores the default width.
+  handle.addEventListener('dblclick', () => {
+    shell.style.removeProperty('--rail-width');
+    try { localStorage.removeItem(RAIL_WIDTH_KEY); } catch { /* ignore */ }
+  });
+
+  return handle;
+}
+
+/**
+ * Top-of-rail controls: the Standard/Details depth toggle, surfaced at the very
+ * top so it's the easiest thing to find and change (per user feedback).
+ */
+function buildRailControls(): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'rail-controls';
+  const depth = document.getElementById('display-mode-toggle');
+  if (depth) {
+    const lab = document.createElement('span');
+    lab.className = 'rail-controls-label';
+    lab.textContent = 'Detail';
+    row.append(lab, depth); // appendChild moves the toggle out of the toolbar
+  }
+  return row;
+}
+
 function buildRailFooter(): HTMLElement {
   const footer = document.createElement('div');
   footer.className = 'rail-footer';
@@ -217,17 +290,6 @@ function buildRailFooter(): HTMLElement {
     lab.className = 'rail-footer-label';
     lab.textContent = 'Briefing';
     row.append(lab, hist);
-    footer.appendChild(row);
-  }
-
-  const depth = document.getElementById('display-mode-toggle');
-  if (depth) {
-    const row = document.createElement('div');
-    row.className = 'rail-footer-row';
-    const lab = document.createElement('span');
-    lab.className = 'rail-footer-label';
-    lab.textContent = 'Detail';
-    row.append(lab, depth);
     footer.appendChild(row);
   }
 
@@ -281,6 +343,13 @@ export function initBriefingLayout(): void {
   main.className = 'briefing-main';
   shell.append(rail, main);
 
+  // Draggable divider so the rail width can be tuned (clamped, persisted).
+  shell.appendChild(buildResizer(shell));
+  try {
+    const w = localStorage.getItem(RAIL_WIDTH_KEY);
+    if (w) shell.style.setProperty('--rail-width', w);
+  } catch { /* ignore */ }
+
   const pageHeader = container.querySelector('.page-header');
   const loadingOverlay = document.getElementById('loading-overlay');
   if (pageHeader && pageHeader.nextSibling) {
@@ -318,6 +387,12 @@ export function initBriefingLayout(): void {
   rail.appendChild(buildFocusBar(shell));
   appendIfPresent(rail, '#briefing-header'); // route identity
 
+  // Depth toggle + freshness sit at the very top: the toggle is the control
+  // users reach for most, and the freshness bar carries the live "refreshing…"
+  // progress, which is key information that must be visible without scrolling.
+  rail.appendChild(buildRailControls());
+  appendIfPresent(rail, '#freshness-bar');
+
   const summary = document.createElement('div');
   summary.className = 'rail-summary';
   rail.appendChild(summary);
@@ -326,7 +401,6 @@ export function initBriefingLayout(): void {
   nav.className = 'rail-nav';
   rail.appendChild(nav);
 
-  appendIfPresent(rail, '#freshness-bar');
   rail.appendChild(buildRailFooter());
 
   buildNav(nav, shell);

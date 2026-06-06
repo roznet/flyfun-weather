@@ -461,6 +461,17 @@ function formatTimeUntil(isoStr: string): string {
   return `${mins}m`;
 }
 
+// Persisted expand/collapse state for the sidebar freshness disclosure. The
+// bar re-renders (innerHTML) on every freshness poll, so the chosen state must
+// survive in storage rather than the DOM. Collapsed by default.
+const FRESHNESS_EXPANDED_KEY = 'wb_freshness_expanded';
+function getFreshnessExpanded(): boolean {
+  try { return localStorage.getItem(FRESHNESS_EXPANDED_KEY) === '1'; } catch { return false; }
+}
+function setFreshnessExpanded(v: boolean): void {
+  try { localStorage.setItem(FRESHNESS_EXPANDED_KEY, v ? '1' : '0'); } catch { /* ignore */ }
+}
+
 export function renderFreshnessBar(
   freshness: DataStatus | null,
   freshnessLoading: boolean,
@@ -580,9 +591,16 @@ export function renderFreshnessBar(
   const gate = freshness.refresh_decision;
   const checkLinkHtml = `<a href="#" class="freshness-link" id="freshness-check-again">${t('freshness.checkAgain')}</a>`;
 
+  // Each non-refreshing branch contributes a status sentence + its action
+  // links; assembly happens once below (inline for the classic page, or a
+  // collapsible disclosure in the sidebar layout where rail space is tight).
+  let statusHtml = '';
+  let linksHtml = '';
+
   if (gate && gate.mode === 'realtime') {
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>${t('freshness.gatedRealtime')} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    statusHtml = t('freshness.gatedRealtime');
+    linksHtml = `${checkLinkHtml}${forceLink}`;
   } else if (gate && gate.mode === 'none') {
     // Below the lead-time threshold — a press won't run a full pipeline yet.
     // One consistent "up to date" message at every stage: it answers *when* a
@@ -591,15 +609,14 @@ export function renderFreshnessBar(
     // so the wording doesn't lurch as runs trickle in.
     el.className = 'freshness-bar freshness-current';
     const missing = (gate.pending_models ?? []).map((m) => modelLabel(m)).join(', ');
-    let msg: string;
     if (gate.eta_useful && missing) {
-      msg = t('freshness.gatedWaiting', { time: formatTimeUntil(gate.eta_useful), models: missing });
+      statusHtml = t('freshness.gatedWaiting', { time: formatTimeUntil(gate.eta_useful), models: missing });
     } else if (missing) {
-      msg = t('freshness.gatedWaitingNoEta', { models: missing });
+      statusHtml = t('freshness.gatedWaitingNoEta', { models: missing });
     } else {
-      msg = t('freshness.upToDate');
+      statusHtml = t('freshness.upToDate');
     }
-    el.innerHTML = `<span>${msg} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    linksHtml = `${checkLinkHtml}${forceLink}`;
   } else if (freshness.fresh) {
     let nextInfo = '';
     if (freshness.next_expected_update && freshness.next_expected_model) {
@@ -607,11 +624,29 @@ export function renderFreshnessBar(
       nextInfo = t('freshness.nextUpdate', { time: `${modelLabel(freshness.next_expected_model)} ${timeStr}` });
     }
     el.className = 'freshness-bar freshness-current';
-    el.innerHTML = `<span>${t('freshness.upToDate')}${nextInfo} ${checkLinkHtml}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    statusHtml = `${t('freshness.upToDate')}${nextInfo}`;
+    linksHtml = `${checkLinkHtml}${forceLink}`;
   } else {
     const staleStr = freshness.stale_models.map((m) => modelLabel(m)).join(', ');
     el.className = 'freshness-bar freshness-stale';
-    el.innerHTML = `<span>${t('freshness.updatesAvailable')}${staleStr}${forceLink}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    statusHtml = `${t('freshness.updatesAvailable')}${staleStr}`;
+    linksHtml = `${forceLink}`;
+  }
+
+  if (document.querySelector('.container.layout-sidebar')) {
+    // Collapsible disclosure: the status sentence stays visible with a caret;
+    // the action links, "Based on…" basis, diagnostics and the email opt-in are
+    // tucked into the expandable details. Collapsed by default; state persisted.
+    const expanded = getFreshnessExpanded();
+    const actions = linksHtml ? `<div class="freshness-actions">${linksHtml}</div>` : '';
+    const detailsHtml = `${actions}${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    el.innerHTML =
+      `<button type="button" class="freshness-toggle" id="freshness-toggle" aria-expanded="${expanded}">`
+      + `<span class="freshness-caret" aria-hidden="true">›</span>`
+      + `<span class="freshness-status">${statusHtml}</span></button>`
+      + `<div class="freshness-details" id="freshness-details"${expanded ? '' : ' hidden'}>${detailsHtml}</div>`;
+  } else {
+    el.innerHTML = `<span>${statusHtml} ${linksHtml}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
   }
 
   // Wire event handlers
@@ -632,6 +667,18 @@ export function renderFreshnessBar(
     sourcesInfoBtn.addEventListener('click', (e) => {
       e.preventDefault();
       showPopupContent(renderSourcesPopupContent(freshness.sources!));
+    });
+  }
+
+  // Sidebar layout: wire the collapsible disclosure toggle.
+  const fToggle = document.getElementById('freshness-toggle');
+  const fDetails = document.getElementById('freshness-details');
+  if (fToggle && fDetails) {
+    fToggle.addEventListener('click', () => {
+      const next = !getFreshnessExpanded();
+      setFreshnessExpanded(next);
+      fDetails.hidden = !next;
+      fToggle.setAttribute('aria-expanded', String(next));
     });
   }
 }
@@ -2705,7 +2752,14 @@ export function renderRefreshing(refreshing: boolean): void {
   const btn = $('refresh-btn') as HTMLButtonElement;
   if (btn) {
     btn.disabled = refreshing;
-    btn.textContent = refreshing ? t('btn.refreshing') : t('btn.refresh');
+    if (refreshing) {
+      // Drop any trailing ellipsis from the label and append an animated
+      // dots-spinner so the button visibly shows work in progress.
+      const label = t('btn.refreshing').replace(/[.…]+\s*$/, '');
+      btn.innerHTML = `${escapeHtml(label)}<span class="dots-spinner"></span>`;
+    } else {
+      btn.textContent = t('btn.refresh');
+    }
   }
 }
 
