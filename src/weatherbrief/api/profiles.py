@@ -40,6 +40,7 @@ class ProfileSettings(BaseModel):
     llm_digest_enabled: bool | None = None
     icing_severity_enhance: bool | None = None
     auto_front_detection: bool | None = None  # experimental front detection (#196)
+    compute_alternates: bool | None = None  # weather-based divert candidates, D-2 inward (#210)
     icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", or "sfip_nwp"
     cloud_method: str | None = None  # "dd" or "nwp"
     convective_method: str | None = None  # "thermo" or "nwp"

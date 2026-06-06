@@ -910,6 +910,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     do_llm_digest = True
     do_icing_enhance = True
     auto_front_detection = False  # experimental front-detection artifact (#195)
+    compute_alternates = False  # weather-based divert candidates, D-2 inward (#210)
     icing_method = None
     cloud_method = None
     convective_method = None
@@ -944,6 +945,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         do_llm_digest = profile_settings.get("llm_digest_enabled", True)
         do_icing_enhance = profile_settings.get("icing_severity_enhance", False)
         auto_front_detection = profile_settings.get("auto_front_detection", False)
+        compute_alternates = profile_settings.get("compute_alternates", False)
         icing_method = profile_settings.get("icing_method")
         cloud_method = profile_settings.get("cloud_method")
         convective_method = profile_settings.get("convective_method")
@@ -983,6 +985,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         airports_db_path=db_path,
         icing_severity_enhance=do_icing_enhance,
         auto_front_detection=auto_front_detection,
+        compute_alternates=compute_alternates,
         historical_mode=is_historical,
     )
     if as_of_time:

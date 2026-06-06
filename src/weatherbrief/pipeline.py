@@ -91,6 +91,7 @@ class BriefingOptions:
     advisory_enabled: dict[str, bool] | None = None  # {advisory_id: enabled}
     advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
     auto_front_detection: bool = False  # experimental: write route_fronts.json (#195)
+    compute_alternates: bool = False  # opt-in: weather-based divert candidates, D-2 inward (#210)
     historical_mode: bool = False  # Use archived NWP data for past departure times
     as_of_time: datetime | None = None  # For historical: the date "as of" which to fetch data
     alt_departure_time: datetime | None = None  # optional same-day alt departure for lite advisory re-run
@@ -118,6 +119,9 @@ class BriefingUsage:
     metar_taf_airports: int = 0
     sigmet_fetched: bool = False
     sigmet_count: int = 0
+    alternates_computed: bool = False
+    alternates_count: int = 0
+    alternates_candidates: int = 0
     elapsed_seconds: float | None = None
     queue_wait_seconds: float | None = None
     triggered_by: str | None = None
@@ -513,6 +517,32 @@ def execute_briefing(
         result_usage_metar = False
         result_usage_metar_airports = 0
 
+    # === 3.6 Weather-based alternates (D-2 inward, opt-in) ===
+    # Surfaces the closest divert candidates that fix the destination's
+    # specific problem (category/wind/crosswind), via the SAME shared assembly
+    # as the forecast map. Gated on the medium-range window (`days_out <= 2`)
+    # and the `compute_alternates` preference — a "fast brief" skips it.
+    alternates = None
+    if (
+        days_out <= 2
+        and options.compute_alternates
+        and options.airports_db_path
+        and not options.historical_mode
+    ):
+        _notify("alternates")
+        _t0 = perf_counter()
+        try:
+            from weatherbrief.tasks.alternates import run_alternates
+
+            alternates = run_alternates(
+                route=route,
+                target_time=target_dt,
+                airports_db_path=options.airports_db_path,
+            )
+        except Exception:
+            logger.warning("Alternates stage failed", exc_info=True)
+        stage_timings["alternates"] = perf_counter() - _t0
+
     # === 4. Build & save snapshot ===
     _t0 = perf_counter()
     snapshot = ForecastSnapshot(
@@ -526,6 +556,7 @@ def execute_briefing(
         cross_sections=fetch_result.cross_sections,
         route_observations=route_observations,
         route_sigmets=route_sigmets,
+        alternates=alternates,
     )
 
     if pack_dir:
@@ -557,6 +588,9 @@ def execute_briefing(
     result.usage.metar_taf_airports = result_usage_metar_airports
     result.usage.sigmet_fetched = result_usage_sigmet
     result.usage.sigmet_count = result_usage_sigmet_count
+    result.usage.alternates_computed = alternates is not None
+    result.usage.alternates_count = len(alternates.alternates) if alternates else 0
+    result.usage.alternates_candidates = alternates.candidates_evaluated if alternates else 0
     if fetch_result.elevation_profile and pack_dir:
         result.elevation_profile_path = pack_dir / "elevation_profile.json"
     if route_advisories_manifest and pack_dir:

@@ -1,0 +1,355 @@
+"""Tests for weather-based alternate airports (issue #210).
+
+Covers:
+- geometry: before/after classification + the detour pair
+- candidate filters: instrument-approach gate, large_airport / scheduled exclusion
+- consistency: the shared assembly yields the same category/crosswind as the
+  forecast map's ``map_queries`` wrappers for a fixed snapshot ("Seam 2").
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from weatherbrief.models.analysis import RouteConfig, Waypoint
+from weatherbrief.tasks import alternates as alt_mod
+from weatherbrief.tasks.alternates import run_alternates
+
+NOW = datetime(2026, 6, 5, 6, 0, 0, tzinfo=timezone.utc)
+DEPARTURE = datetime(2026, 6, 6, 8, 0, 0, tzinfo=timezone.utc)  # D-1 → stage gate ok
+
+
+# ---------------------------------------------------------------------------
+# Fake euro_aip model
+# ---------------------------------------------------------------------------
+
+
+class _FakeApproaches:
+    def __init__(self, exists: bool, best_type: str | None):
+        self._exists = exists
+        self._best_type = best_type
+
+    def exists(self) -> bool:
+        return self._exists
+
+    def most_precise(self):
+        if not self._exists:
+            return None
+        return SimpleNamespace(approach_type=self._best_type)
+
+
+class _FakeProceduresQuery:
+    def __init__(self, exists: bool, best_type: str | None):
+        self._approaches = _FakeApproaches(exists, best_type)
+
+    def approaches(self):
+        return self._approaches
+
+
+class _FakeAirport:
+    def __init__(
+        self, ident, lat, lon, *,
+        type="small_airport", scheduled_service="no",
+        has_hard_runway=True, longest_runway_length_ft=4000,
+        point_of_entry=False, has_approach=True, best_approach="ILS", name=None,
+    ):
+        self.ident = ident
+        self.latitude_deg = lat
+        self.longitude_deg = lon
+        self.type = type
+        self.scheduled_service = scheduled_service
+        self.has_hard_runway = has_hard_runway
+        self.longest_runway_length_ft = longest_runway_length_ft
+        self.point_of_entry = point_of_entry
+        self.name = name or ident
+        self._pq = _FakeProceduresQuery(has_approach, best_approach)
+
+    @property
+    def procedures_query(self):
+        return self._pq
+
+
+class _FakeAirportCollection:
+    def __init__(self, airports):
+        self._airports = airports
+
+    def all(self):
+        return self._airports
+
+    def get(self, icao):
+        return next((a for a in self._airports if a.ident == icao), None)
+
+
+class _FakeModel:
+    def __init__(self, near_results, all_airports=None):
+        self._near = near_results
+        self.airports = _FakeAirportCollection(all_airports or [])
+
+    def find_airports_near_route(self, route_icaos, distance_nm=50.0):
+        return self._near
+
+
+def _route():
+    return RouteConfig(
+        name="EGKK-EGPF",
+        waypoints=[
+            Waypoint(icao="EGKK", name="Gatwick", lat=51.15, lon=-0.18),
+            Waypoint(icao="EGPF", name="Glasgow", lat=55.87, lon=-4.43),
+        ],
+        flight_duration_hours=2.0,
+    )
+
+
+def _snap(icao, model, *, ceiling=5000.0, vis_m=9999.0, ws=8.0, wd=270.0):
+    """A column-keyed snapshot dict (keys == AirportForecastSnapshotRow columns)."""
+    return {
+        "icao": icao,
+        "model": model,
+        "model_init_time": NOW,
+        "forecast_hour": NOW,
+        "sounding_ceiling_ft": ceiling,
+        "nwp_ceiling_ft": None,
+        "cloud_base_ft": None,
+        "lcl_ft": None,
+        "visibility_m": vis_m,
+        "wind_speed_10m_kt": ws,
+        "wind_direction_10m_deg": wd,
+        "wind_gusts_10m_kt": None,
+        "cloud_cover_pct": 20.0,
+        "cape_jkg": 10.0,
+        "sounding_convective_risk": "none",
+        "temperature_2m_c": 14.0,
+    }
+
+
+def _all_models(icao, **kw):
+    return {m: _snap(icao, m, **kw) for m in ("gfs", "icon", "ecmwf")}
+
+
+def _run(route, near_results, snapshots_by_icao, *, all_airports=None, runways=None):
+    """Drive run_alternates with euro_aip + fetch fully mocked."""
+    model = _FakeModel(near_results, all_airports=all_airports)
+    with patch("weatherbrief.airports._load_airport_model", return_value=model), \
+         patch("weatherbrief.airports.get_runway_ends", return_value=runways or {}), \
+         patch.object(alt_mod, "_fetch_eta_snapshots", return_value=snapshots_by_icao):
+        return run_alternates(
+            route=route,
+            target_time=DEPARTURE,
+            airports_db_path="/fake/nav.db",
+            now=NOW,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Geometry: before / after + detour pair
+# ---------------------------------------------------------------------------
+
+
+def test_before_after_and_detour_pair():
+    route = _route()
+    # A "before" field near the departure, an "after" field near the destination.
+    before = _FakeAirport("EGTC", 51.50, -0.50)
+    after = _FakeAirport("EGPN", 55.50, -3.40)
+    near = [
+        {"airport": before, "enroute_distance_nm": 30.0, "segment_distance_nm": 8.0},
+        {"airport": after, "enroute_distance_nm": None, "segment_distance_nm": 12.0},
+    ]
+    snaps = {
+        "EGPF": _all_models("EGPF"),
+        "EGTC": _all_models("EGTC"),
+        "EGPN": _all_models("EGPN"),
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    by_icao = {a.icao: a for a in result.alternates}
+
+    assert by_icao["EGTC"].position == "before"
+    assert by_icao["EGPN"].position == "after"
+
+    # The whole point of the detour pair: a "before" field is cheap to divert to
+    # early but expensive late (you'd backtrack from the destination).
+    egtc = by_icao["EGTC"]
+    assert egtc.detour_early_nm < egtc.detour_late_nm
+
+    # Closest-first ranking.
+    dists = [a.distance_from_dest_nm for a in result.alternates]
+    assert dists == sorted(dists)
+
+
+# ---------------------------------------------------------------------------
+# Instrument-approach gate (destination IFR/MVFR)
+# ---------------------------------------------------------------------------
+
+
+def test_iap_gate_excludes_no_approach_when_dest_ifr():
+    route = _route()
+    with_iap = _FakeAirport("EGAA", 54.66, -6.22, has_approach=True, best_approach="ILS")
+    no_iap = _FakeAirport("EGAE", 55.04, -7.16, has_approach=False, best_approach=None)
+    near = [
+        {"airport": with_iap, "enroute_distance_nm": 120.0, "segment_distance_nm": 10.0},
+        {"airport": no_iap, "enroute_distance_nm": 130.0, "segment_distance_nm": 15.0},
+    ]
+    snaps = {
+        # Destination IFR (low ceiling) → require_approach should trip.
+        "EGPF": _all_models("EGPF", ceiling=600.0),
+        "EGAA": _all_models("EGAA"),
+        "EGAE": _all_models("EGAE"),
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    assert result.require_approach is True
+    icaos = {a.icao for a in result.alternates}
+    assert "EGAA" in icaos
+    assert "EGAE" not in icaos  # no published approach → dropped when dest is IFR
+
+    egaa = next(a for a in result.alternates if a.icao == "EGAA")
+    assert egaa.has_instrument_approach is True
+    assert egaa.best_approach_type == "ILS"
+
+
+def test_iap_gate_relaxed_when_no_candidate_has_approach_data():
+    # Destination IFR, but NO candidate has approach data (e.g. nav DB lacks
+    # procedure rows). Rather than going dark, the gate relaxes and flags it.
+    route = _route()
+    a = _FakeAirport("EGKE", 51.10, -0.20, has_approach=False, best_approach=None)
+    b = _FakeAirport("EGKH", 51.05, -0.30, has_approach=False, best_approach=None)
+    near = [
+        {"airport": a, "enroute_distance_nm": 200.0, "segment_distance_nm": 8.0},
+        {"airport": b, "enroute_distance_nm": 205.0, "segment_distance_nm": 9.0},
+    ]
+    snaps = {
+        "EGPF": _all_models("EGPF", ceiling=600.0),  # IFR
+        "EGKE": _all_models("EGKE"),
+        "EGKH": _all_models("EGKH"),
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    assert result.require_approach is True
+    assert result.approach_filter_relaxed is True
+    # Candidates are still shown (flagged), not dropped.
+    assert {a.icao for a in result.alternates} == {"EGKE", "EGKH"}
+
+
+def test_iap_gate_not_applied_when_dest_vfr():
+    route = _route()
+    no_iap = _FakeAirport("EGAE", 55.04, -7.16, has_approach=False, best_approach=None)
+    near = [
+        {"airport": no_iap, "enroute_distance_nm": 130.0, "segment_distance_nm": 15.0},
+    ]
+    snaps = {
+        "EGPF": _all_models("EGPF", ceiling=5000.0),  # VFR
+        "EGAE": _all_models("EGAE"),
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    assert result.require_approach is False
+    assert {a.icao for a in result.alternates} == {"EGAE"}
+
+
+# ---------------------------------------------------------------------------
+# GA-appropriateness filters
+# ---------------------------------------------------------------------------
+
+
+def test_large_airport_and_scheduled_service_excluded():
+    route = _route()
+    ok = _FakeAirport("EGPN", 55.50, -3.40)
+    large = _FakeAirport("EGPK", 55.51, -4.59, type="large_airport")
+    scheduled = _FakeAirport("EGPH", 55.95, -3.37, scheduled_service="yes")
+    near = [
+        {"airport": ok, "enroute_distance_nm": 200.0, "segment_distance_nm": 5.0},
+        {"airport": large, "enroute_distance_nm": 205.0, "segment_distance_nm": 6.0},
+        {"airport": scheduled, "enroute_distance_nm": 210.0, "segment_distance_nm": 7.0},
+    ]
+    snaps = {
+        "EGPF": _all_models("EGPF"),
+        "EGPN": _all_models("EGPN"),
+        "EGPK": _all_models("EGPK"),
+        "EGPH": _all_models("EGPH"),
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    assert {a.icao for a in result.alternates} == {"EGPN"}
+
+
+def test_short_runway_excluded():
+    route = _route()
+    short = _FakeAirport("EGPN", 55.50, -3.40, longest_runway_length_ft=1200)
+    ok = _FakeAirport("EGPT", 55.40, -3.50, longest_runway_length_ft=4000)
+    near = [
+        {"airport": short, "enroute_distance_nm": 200.0, "segment_distance_nm": 5.0},
+        {"airport": ok, "enroute_distance_nm": 195.0, "segment_distance_nm": 5.0},
+    ]
+    snaps = {
+        "EGPF": _all_models("EGPF"),
+        "EGPN": _all_models("EGPN"),
+        "EGPT": _all_models("EGPT"),
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    assert {a.icao for a in result.alternates} == {"EGPT"}
+
+
+# ---------------------------------------------------------------------------
+# Nearest-improving picks
+# ---------------------------------------------------------------------------
+
+
+def test_nearest_improving_category_pick():
+    route = _route()
+    # Destination IFR; a nearer VFR field and a farther VFR field.
+    near_vfr = _FakeAirport("EGPN", 55.60, -3.80)
+    far_vfr = _FakeAirport("EGAA", 54.66, -6.22)
+    near = [
+        {"airport": near_vfr, "enroute_distance_nm": 220.0, "segment_distance_nm": 5.0},
+        {"airport": far_vfr, "enroute_distance_nm": 150.0, "segment_distance_nm": 10.0},
+    ]
+    snaps = {
+        "EGPF": _all_models("EGPF", ceiling=600.0),  # IFR
+        "EGPN": _all_models("EGPN", ceiling=5000.0),  # VFR
+        "EGAA": _all_models("EGAA", ceiling=5000.0),  # VFR
+    }
+    result = _run(route, near, snaps)
+    assert result is not None
+    picks = {p.axis: p for p in result.nearest_improving}
+    cat_pick = picks["category"]
+    # The geographically nearer VFR field wins the category axis.
+    assert cat_pick.icao == "EGPN"
+    egpn = next(a for a in result.alternates if a.icao == "EGPN")
+    assert egpn.better_category is True
+
+
+# ---------------------------------------------------------------------------
+# Consistency: shared assembly == map_queries wrappers (Seam 2)
+# ---------------------------------------------------------------------------
+
+
+def test_shared_assembly_matches_map_queries():
+    from weatherbrief.analysis import airport_consensus as ac
+    from weatherbrief.models.airport_conditions import RunwayEnd
+    from weatherbrief.tasks import map_queries as mq
+
+    snap_dict = _snap("EGPF", "gfs", ceiling=800.0, vis_m=5000.0, ws=18.0, wd=240.0)
+    row = SimpleNamespace(**snap_dict)
+
+    # snap_to_dict: same lightweight per-model dict from a dict and from a row.
+    shared = ac.snap_to_dict(snap_dict)
+    via_row = mq._snap_to_dict(row)
+    assert shared == via_row
+
+    # enrich_wind: identical crosswind/headwind on the best runway.
+    runways = [RunwayEnd(id="05", heading_deg=50.0), RunwayEnd(id="23", heading_deg=230.0)]
+    d_shared = dict(shared)
+    d_row = dict(via_row)
+    ac.enrich_wind(d_shared, runways)
+    mq._enrich_wind(d_row, runways)
+    assert d_shared == d_row
+    assert d_shared["crosswind_kt"] == pytest.approx(d_row["crosswind_kt"])
+
+    # consensus: identical category + worst crosswind across models.
+    per_model = {"gfs": d_shared, "icon": dict(d_shared)}
+    assert ac.consensus(per_model) == mq._consensus(per_model)

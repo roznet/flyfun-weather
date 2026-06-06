@@ -277,15 +277,25 @@ def _fetch_forecasts_for_model(
     init_time: datetime,
     airports: list[WatchlistAirport],
     session: requests.Session,
+    sample_hours: list[int] | None = None,
 ) -> tuple[list[dict], int]:
     """Fetch Open-Meteo surface forecasts for all airports for one model.
 
     Returns (snapshots, api_call_count) — list of dicts with airport ICAO
-    and per-sample-hour values filtered to SAMPLE_HOURS_UTC, plus the number
+    and per-sample-hour values filtered to ``sample_hours``, plus the number
     of actual HTTP requests made.
+
+    ``sample_hours`` defaults to the module-level ``SAMPLE_HOURS_UTC`` so the
+    standalone verification cycle keeps its current behaviour; the route
+    alternates stage passes the flight's ETA hour to fetch off-grid hours
+    (issue #210, "Seam 1"). ``fetch_ecmwf_grib_snapshots`` already takes a
+    ``sample_hours`` argument, so this brings the GFS/ICON path in line.
     """
     from weatherbrief.models.analysis import ModelSource, RoutePoint
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
+
+    if sample_hours is None:
+        sample_hours = SAMPLE_HOURS_UTC
 
     model_source = ModelSource(model)
     forecast_days = MODEL_FORECAST_DAYS.get(model, 7)
@@ -359,7 +369,7 @@ def _fetch_forecasts_for_model(
             # Filter to sample hours only
             for hourly in wpf.hourly:
                 utc_hour = hourly.time.hour if hasattr(hourly.time, 'hour') else None
-                if utc_hour not in SAMPLE_HOURS_UTC:
+                if utc_hour not in sample_hours:
                     continue
 
                 # Compute LCL from T-Td

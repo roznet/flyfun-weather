@@ -6,6 +6,7 @@
 
 import type {
   AirportObservation,
+  AlternateAirport,
   AltitudeAdvisories,
   ConvectiveAssessment,
   DataStatus,
@@ -15,6 +16,7 @@ import type {
   ModelSourceDetail,
   ObservationComparison,
   PackMeta,
+  RouteAlternates,
   RouteAnalysesManifest,
   RouteObservations,
   RoutePointAnalysis,
@@ -1051,6 +1053,148 @@ export function renderRouteObservations(
         refreshBtn.disabled = false;
         refreshBtn.textContent = t('observations.refresh');
       });
+    }
+  });
+}
+
+// --- Weather-based alternates (D-2 inward) ---
+
+function detourLabel(apt: AlternateAirport): string {
+  if (apt.detour_early_nm == null && apt.detour_late_nm == null) return '—';
+  const early = apt.detour_early_nm != null ? `${apt.detour_early_nm >= 0 ? '+' : ''}${Math.round(apt.detour_early_nm)}` : '?';
+  const late = apt.detour_late_nm != null ? `+${Math.round(apt.detour_late_nm)}` : '?';
+  return `${early} / ${late}nm`;
+}
+
+function deltaTags(apt: AlternateAirport): string {
+  const tags: string[] = [];
+  if (apt.better_category) tags.push('<span class="alt-tag alt-tag-cat">cat</span>');
+  if (apt.better_wind) tags.push('<span class="alt-tag alt-tag-wind">wind</span>');
+  if (apt.better_crosswind) tags.push('<span class="alt-tag alt-tag-xw">xwind</span>');
+  if (apt.dominates_destination) tags.push('<span class="alt-tag alt-tag-dom" title="Better-or-equal on every axis">dominates</span>');
+  return tags.join(' ') || '—';
+}
+
+function renderAltPopup(apt: AlternateAirport): string {
+  const rows = Object.entries(apt.per_model).map(([model, d]) => {
+    const cat = (d['flight_category'] as string) ?? '—';
+    const wind = d['wind_speed_kt'] != null ? `${Math.round(d['wind_speed_kt'] as number)}kt` : '—';
+    const xw = d['crosswind_kt'] != null ? `${Math.round(d['crosswind_kt'] as number)}kt` : '—';
+    return `<tr><td>${escapeHtml(model.toUpperCase())}</td><td>${flightCatBadge(cat)}</td><td>${wind}</td><td>${xw}</td></tr>`;
+  }).join('');
+  const approach = apt.has_instrument_approach
+    ? (apt.best_approach_type ? escapeHtml(apt.best_approach_type) : 'yes')
+    : 'none';
+  const rwy = apt.longest_runway_ft != null ? `${apt.longest_runway_ft}ft${apt.has_hard_runway ? ' hard' : ''}` : '—';
+  const meta = [
+    `Distance from dest: ${Math.round(apt.distance_from_dest_nm)}nm (${escapeHtml(apt.position)})`,
+    `Detour early/late: ${detourLabel(apt)}`,
+    `Approach: ${approach}`,
+    `Longest runway: ${rwy}`,
+  ].join('\n');
+  return `
+    <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' — ' + escapeHtml(apt.name) : ''}</h3></div>
+    <pre class="obs-wind-summary">${meta}</pre>
+    <h4>Per-model</h4>
+    <table class="band-table"><thead><tr><th>Model</th><th>Cat</th><th>Wind</th><th>Xwind</th></tr></thead><tbody>${rows}</tbody></table>
+  `;
+}
+
+export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
+  const el = $('alternates-section');
+  const wrapper = $('alternates-wrapper');
+  if (!el) return;
+
+  const alt: RouteAlternates | null | undefined = snapshot?.alternates;
+  // Hidden unless populated — only appears D-2 inward (the stage gate).
+  if (!alt) {
+    if (wrapper) wrapper.style.display = 'none';
+    return;
+  }
+  if (wrapper) wrapper.style.display = '';
+
+  const destXw = alt.destination_crosswind_kt != null
+    ? `, ${Math.round(alt.destination_crosswind_kt)}kt xwind` : '';
+  const header = `Destination ${escapeHtml(alt.destination_icao)}: ${flightCatBadge(alt.destination_category)}${destXw}`;
+
+  // Nearest-improving picks ("nearest VFR: EGyy 22nm before")
+  const axisLabel: Record<string, string> = {
+    category: 'better category', wind: 'lower wind', crosswind: 'lower crosswind',
+  };
+  const picks = alt.nearest_improving
+    .filter((p) => p.icao)
+    .map((p) => {
+      const pos = p.position ? ` ${escapeHtml(p.position)}` : '';
+      return `<li>Nearest ${axisLabel[p.axis] ?? escapeHtml(p.axis)}: <strong>${escapeHtml(p.icao as string)}</strong> ${Math.round(p.distance_from_dest_nm as number)}nm${pos}</li>`;
+    })
+    .join('');
+  const picksHtml = picks
+    ? `<ul class="alt-picks">${picks}</ul>`
+    : `<p class="muted">No weather alternate improves on the destination across the evaluated candidates.</p>`;
+
+  const approachNote = alt.require_approach
+    ? (alt.approach_filter_relaxed ? ', approach data unavailable' : ', IFR approach required')
+    : '';
+  const summaryHtml = `<p class="obs-summary">${header} <span class="obs-fetch-time">${alt.candidates_evaluated} candidates within ${Math.round(alt.radius_nm)}nm${approachNote}</span></p>`;
+  const relaxedHtml = alt.approach_filter_relaxed
+    ? `<p class="muted alt-caption">⚠️ The destination is ${escapeHtml(alt.destination_category)} but no published-approach data is available for the candidates, so the instrument-approach filter was skipped — confirm an approach independently.</p>`
+    : '';
+
+  const rows = alt.alternates.map((apt) => {
+    const tip = windTooltip(apt.best_runway_id, apt.crosswind_kt);
+    const windStr = apt.wind_speed_kt != null ? `${Math.round(apt.wind_speed_kt)}kt` : '—';
+    const xwStr = apt.crosswind_kt != null
+      ? `<span${tip ? ` title="${escapeHtml(tip)}"` : ''}>${Math.round(apt.crosswind_kt)}kt</span>` : '—';
+    const approach = apt.has_instrument_approach
+      ? (apt.best_approach_type ? escapeHtml(apt.best_approach_type) : '✓') : '—';
+    const agreeCat = apt.agreement?.['flight_category'];
+    const agreeBadge = agreeCat ? ` <span class="alt-agree alt-agree-${agreeCat}">${escapeHtml(agreeCat)}</span>` : '';
+    return `
+      <tr>
+        <td class="obs-icao">${escapeHtml(apt.icao)} <button class="alt-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Details" aria-label="info">i</button></td>
+        <td>${Math.round(apt.distance_from_dest_nm)}nm</td>
+        <td>${escapeHtml(apt.position)} <span class="muted">(${detourLabel(apt)})</span></td>
+        <td>${flightCatBadge(apt.flight_category)}${agreeBadge}</td>
+        <td>${windStr}</td>
+        <td>${xwStr}</td>
+        <td>${approach}</td>
+        <td>${deltaTags(apt)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  el.innerHTML = `
+    ${summaryHtml}
+    <p class="muted alt-caption">Planning-grade divert candidates that improve on the destination weather — not an operational alternate (no fuel, minima, NOTAM, customs or PPR check).</p>
+    ${relaxedHtml}
+    ${picksHtml}
+    <div class="table-scroll">
+      <table class="band-table obs-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Weather alternate</th>
+            <th>From dest</th>
+            <th>Before/after (detour)</th>
+            <th>Category</th>
+            <th>Wind</th>
+            <th>Xwind</th>
+            <th>Approach</th>
+            <th>vs dest</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+
+  el.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    const infoBtn = target.closest('.alt-info-btn') as HTMLElement | null;
+    if (infoBtn) {
+      const icao = infoBtn.dataset.icao;
+      if (!icao) return;
+      const apt = alt.alternates.find((a) => a.icao === icao);
+      if (apt) showPopupContent(renderAltPopup(apt));
     }
   });
 }

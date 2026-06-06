@@ -1019,6 +1019,7 @@ async function init(): Promise<void> {
       ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
+      ui.renderRouteAlternates(state.snapshot);
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
       ui.renderDwdCharts(state.flight, state.currentPack, user.is_admin || !!state.currentPack?.metoffice_charts_public);
       ui.renderDWDOverview(state.flight, state.currentPack, user.is_admin);
@@ -1431,6 +1432,7 @@ async function init(): Promise<void> {
     ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
+    ui.renderRouteAlternates(s.snapshot);
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending);
     ui.renderDwdCharts(s.flight, s.currentPack, user.is_admin || !!s.currentPack?.metoffice_charts_public);
     ui.renderDWDOverview(s.flight, s.currentPack, user.is_admin);
