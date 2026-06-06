@@ -13,6 +13,7 @@ import { formatVisibility } from '../../units';
 import { getActiveTheme } from './theme';
 import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from '../scales';
 import { coverageToPct } from './layers/cloud-bands-factory';
+import { sldRiskColor } from './layers/sld-bands';
 
 export interface LayerTooltipDef {
   /** Primary layer id (the toggle that owns the data). */
@@ -29,18 +30,6 @@ export interface LayerTooltipDef {
    *  on-chart colour, so the row can be matched to the band on the canvas.
    *  Return null/undefined to omit the swatch. */
   swatch?: (zone: any) => string | null;
-}
-
-/** SLD fill colour, mirroring `sldRiskColor` in sld-bands.ts. */
-function sldSwatchColor(risk: string): string {
-  const sld = (getActiveTheme() as any).sld;
-  if (sld && sld[risk]) return sld[risk];
-  switch (risk) {
-    case 'light': return 'rgba(220, 53, 69, 0.25)';
-    case 'moderate': return 'rgba(220, 53, 69, 0.40)';
-    case 'severe': return 'rgba(220, 53, 69, 0.55)';
-    default: return 'transparent';
-  }
 }
 
 /** Inversion fill colour: theme base RGB at strength-scaled opacity. */
@@ -156,7 +145,7 @@ const sld: LayerTooltipDef = {
   formatLine: (z: VizSldZone) => {
     return `${fmtFL(z.baseFt)}–${fmtFL(z.topFt)} ${z.risk} ${z.mechanism}`;
   },
-  swatch: (z: VizSldZone) => sldSwatchColor(z.risk),
+  swatch: (z: VizSldZone) => sldRiskColor(z.risk),
 };
 
 const cat: LayerTooltipDef = {
