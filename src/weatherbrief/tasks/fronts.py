@@ -453,10 +453,9 @@ def compute_route_fronts(
     # Stable order: ecmwf, gfs, icon.
     models = [m for m in ("ecmwf", "gfs", "icon") if m in models]
 
-    terrain_mask = _load_cached_terrain_mask(output_dir)
     # Elevation grid enables level-aware masking (a 925 hPa surface sits far below
-    # 850/700 hPa). Absent on pre-#216 caches → fall back to the flat mask.
-    terrain_elevation = _load_cached_terrain_elevation(output_dir)
+    # 850/700 hPa); absent on pre-#216 caches → fall back to the flat mask.
+    terrain_mask, terrain_elevation = _load_terrain_cache(output_dir)
 
     per_model: dict[str, list[RouteFrontAnalysisModel]] = {}
     per_model_primary: dict[str, int] = {}
@@ -491,26 +490,27 @@ def compute_route_fronts(
                            exc_info=True)
             missing.append(model)
             continue
-        # Only apply the cached terrain mask if it matches this snapshot's grid
-        # — a stale mask (e.g. from a resolution change) would otherwise crash
-        # fill_terrain() on a shape mismatch. Mismatch → no masking (graceful).
+        # Terrain masking, only when the cache matches this snapshot's grid — a
+        # stale mask/elevation (e.g. from a resolution change) would otherwise
+        # crash fill_terrain() on a shape mismatch. Mismatch → no masking.
         grid_shape = (source.lat.size, source.lon.size)
-        if terrain_mask is not None and terrain_mask.shape == grid_shape:
-            source.terrain_mask = terrain_mask
-        elif terrain_mask is not None:
-            logger.warning(
-                "Front detection: terrain mask %s mismatches %s grid %s — "
-                "skipping terrain masking",
-                terrain_mask.shape, model, grid_shape,
-            )
-        # Level-aware masking (#216): when the elevation grid is available and
-        # matches the grid, derive a per-level mask inside the loop below instead
-        # of the flat one. Same shape-guard as the flat mask.
+        # Prefer level-aware masking (#216): with a matching elevation grid, a
+        # per-level mask is derived inside the loop below. The flat mask is only
+        # the fallback when no elevation is available (pre-#216 cache).
         model_elevation = (
             terrain_elevation
             if (terrain_elevation is not None and terrain_elevation.shape == grid_shape)
             else None
         )
+        if model_elevation is None:
+            if terrain_mask is not None and terrain_mask.shape == grid_shape:
+                source.terrain_mask = terrain_mask
+            elif terrain_mask is not None:
+                logger.warning(
+                    "Front detection: terrain mask %s mismatches %s grid %s — "
+                    "skipping terrain masking",
+                    terrain_mask.shape, model, grid_shape,
+                )
         snapshot_inits[model] = _iso_z(source.init_time_unix)
 
         # ETAs → snapshot-relative forecast hours.
@@ -701,28 +701,24 @@ def _iso_z(unix_seconds: int) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
-def _load_cached_terrain_mask(output_dir: Path | None) -> np.ndarray | None:
-    """Load the precompute's cached terrain mask, or ``None`` if absent."""
+def _load_terrain_cache(
+    output_dir: Path | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Load the precompute's cached terrain ``(mask, elevation)`` in a single open.
+
+    One ``np.load`` avoids doubled I/O and closes a TOCTOU window where a
+    concurrent precompute could swap the file between two reads, yielding a mask
+    and elevation from different cache versions. ``elevation`` is ``None`` on a
+    pre-#216 cache (callers fall back to the flat mask); ``(None, None)`` when the
+    cache is absent or unreadable."""
     path = resolve_output_dir(output_dir) / "terrain_mask.npz"
     if not path.exists():
-        return None
+        return None, None
     try:
         with np.load(path) as npz:
-            return npz["mask"]
+            mask = npz["mask"]
+            elevation = npz["elevation"] if "elevation" in npz.files else None
+            return mask, elevation
     except Exception:
-        logger.warning("Front detection: unreadable terrain mask %s", path)
-        return None
-
-
-def _load_cached_terrain_elevation(output_dir: Path | None) -> np.ndarray | None:
-    """Load the precompute's cached terrain elevation grid for level-aware masking,
-    or ``None`` if absent (pre-#216 cache) — callers fall back to the flat mask."""
-    path = resolve_output_dir(output_dir) / "terrain_mask.npz"
-    if not path.exists():
-        return None
-    try:
-        with np.load(path) as npz:
-            return npz["elevation"] if "elevation" in npz.files else None
-    except Exception:
-        logger.warning("Front detection: unreadable terrain elevation %s", path)
-        return None
+        logger.warning("Front detection: unreadable terrain cache %s", path)
+        return None, None

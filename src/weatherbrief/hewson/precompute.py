@@ -43,7 +43,7 @@ import numpy as np
 from weatherbrief.frontal.detect import compute_hewson_diagnostics
 from weatherbrief.process_rss import log_memory
 from weatherbrief.frontal.grid import (
-    _TERRAIN_MASK_THRESHOLD_M,
+    TERRAIN_MASK_THRESHOLD_M,
     build_grid_coords,
     build_terrain_elevation,
     fetch_grid_fields,
@@ -219,7 +219,7 @@ def _load_or_build_terrain_mask(
     elevation = build_terrain_elevation(lat, lon)
     # Flat ≤1500 m (~850 hPa) mask, derived from the same scan so the two never
     # drift; level-aware consumers use the elevation grid via terrain_mask_for_level.
-    mask = ~(np.nan_to_num(elevation, nan=-np.inf) > _TERRAIN_MASK_THRESHOLD_M)
+    mask = ~(np.nan_to_num(elevation, nan=-np.inf) > TERRAIN_MASK_THRESHOLD_M)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(cache_path, mask=mask, lat=lat, lon=lon, elevation=elevation)
     return mask

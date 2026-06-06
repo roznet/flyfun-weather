@@ -64,7 +64,7 @@ _GRID_CHUNK_SIZE = 500
 KT_TO_KMH = 1.852
 
 # 850hPa ≈ 1500m in standard atmosphere
-_TERRAIN_MASK_THRESHOLD_M = 1500
+TERRAIN_MASK_THRESHOLD_M = 1500
 
 
 def build_grid_coords() -> tuple[np.ndarray, np.ndarray]:
@@ -172,13 +172,13 @@ def build_terrain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     for i, la in enumerate(lat):
         for j, lo in enumerate(lon):
             elev = elevation_data.get_elevation(float(la), float(lo))
-            if elev is not None and elev > _TERRAIN_MASK_THRESHOLD_M:
+            if elev is not None and elev > TERRAIN_MASK_THRESHOLD_M:
                 mask[i, j] = False
 
     n_masked = int((~mask).sum())
     logger.info(
         "Terrain mask: %d of %d points above %dm",
-        n_masked, mask.size, _TERRAIN_MASK_THRESHOLD_M,
+        n_masked, mask.size, TERRAIN_MASK_THRESHOLD_M,
     )
     return mask
 

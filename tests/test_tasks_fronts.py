@@ -485,6 +485,7 @@ class TestComputeRouteFronts:
                        if a.level_hPa == level)
 
         assert n_cross(700) >= 1   # free-atmosphere front intact (not over-masked)
+        assert n_cross(850) >= 1   # 1200m < 850 hPa surface (~1457m) → not masked
         assert n_cross(925) == 0   # low-level crossing suppressed by level-aware mask
 
 
