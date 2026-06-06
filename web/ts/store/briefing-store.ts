@@ -9,6 +9,7 @@ import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled, getPreset } from '../visualization/cross-section/layer-registry';
+import type { ResolvedView } from '../visualization/cross-section/advisory-presets';
 import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
@@ -56,6 +57,7 @@ function loadVizSettings(): VizSettings {
     compareBandMode: 'consensus-outline',
     cloudStyle: 'square',
     mapFrontsVisible: false,
+    activePreset: null,
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
@@ -167,6 +169,10 @@ export interface BriefingState {
   initCompareModels: (models: string[]) => void;
   setVizTheme: (themeId: string) => void;
   setVizPreset: (presetId: string | null) => void;
+  /** Apply a pre-resolved advisory preset view (issue #219). The caller
+   *  resolves the preset → concrete layer IDs where preferredMethods is in
+   *  scope, and hands this a {@link ResolvedView}. Does not touch the theme. */
+  applyAdvisoryPreset: (presetId: string, view: ResolvedView) => void;
 }
 
 /** Build the SSE event handler shared by `refresh` and `forceRefresh`.
@@ -521,14 +527,19 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   toggleVizLayer: (layerId: string) => {
+    // User-initiated toggle → the view no longer matches any preset, so the
+    // dropdown reflects "Custom". (Programmatic batch updates use
+    // setLayersBatch, which deliberately preserves activePreset.)
     const current = get().vizSettings;
     const enabled = { ...current.enabledLayers, [layerId]: !(current.enabledLayers[layerId] !== false) };
-    const updated = { ...current, enabledLayers: enabled };
+    const updated = { ...current, enabledLayers: enabled, activePreset: null };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
 
   setLayersBatch: (overrides: Record<string, boolean>) => {
+    // Programmatic batch (e.g. compact-mode enforcement). Intentionally leaves
+    // activePreset untouched — this is not a user toggle.
     const current = get().vizSettings;
     const enabled = { ...current.enabledLayers, ...overrides };
     const updated = { ...current, enabledLayers: enabled };
@@ -539,7 +550,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   setCloudStyle: (style: 'natural' | 'soft' | 'square') => {
     const current = get().vizSettings;
     if (current.cloudStyle === style) return;
-    const updated = { ...current, cloudStyle: style };
+    // Changing the cloud style is a user-initiated view change → Custom.
+    const updated = { ...current, cloudStyle: style, activePreset: null };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
@@ -785,28 +797,48 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setVizPreset: (presetId: string | null) => {
+    // Reflection-label model: applying a preset sets activePreset so the
+    // dropdown sticks on it; selecting "Custom" (null) is a no-op label for the
+    // dirty state — it only clears activePreset and leaves layers/theme as-is
+    // (no factory reset).
     const current = get().vizSettings;
     if (!presetId) {
-      // Revert to default layers and standard theme
-      const updated = { ...current, enabledLayers: getDefaultEnabled(), vizTheme: 'standard' };
-      setActiveTheme('standard');
+      const updated = { ...current, activePreset: null };
       set({ vizSettings: updated });
       saveVizSettings(updated);
-      window.dispatchEvent(new Event('theme-changed'));
       return;
     }
     const preset = getPreset(presetId);
     if (!preset) return;
-    // Apply preset: override theme + layer enabled state
+    // Apply preset: override theme + layer enabled state, and record it.
     const themeId = preset.themeId as ThemeId;
     if (themeId in THEMES) {
       setActiveTheme(themeId);
     }
     const enabled = { ...current.enabledLayers, ...preset.enabledLayers };
-    const updated = { ...current, enabledLayers: enabled, vizTheme: preset.themeId };
+    const updated = { ...current, enabledLayers: enabled, vizTheme: preset.themeId, activePreset: presetId };
     set({ vizSettings: updated });
     saveVizSettings(updated);
     window.dispatchEvent(new Event('theme-changed'));
+  },
+
+  applyAdvisoryPreset: (presetId: string, view: ResolvedView) => {
+    // Apply a PRE-RESOLVED advisory view (method resolution already done by the
+    // caller, where preferredMethods is in scope). Dispatches over present
+    // directives only; does NOT touch the cross-section theme. New effect types
+    // slot in as additional `if (view.X)` branches — existing presets and call
+    // sites untouched.
+    const cur = get().vizSettings;
+    const next: VizSettings = { ...cur, activePreset: presetId };
+    if (view.enabledLayers) next.enabledLayers = { ...cur.enabledLayers, ...view.enabledLayers };
+    if (view.routeGraph?.left) next.routeGraphLeftMetric = view.routeGraph.left;
+    if (view.routeGraph?.right) next.routeGraphRightMetric = view.routeGraph.right;
+    if (view.map?.metric) next.mapColorMetric = view.map.metric;
+    if (view.map && 'altitudeFt' in view.map) next.mapAltitudeFt = view.map.altitudeFt ?? null;
+    // future directives: add a branch here, nothing else changes
+    set({ vizSettings: next });
+    saveVizSettings(next);
+    window.dispatchEvent(new Event('theme-changed')); // existing re-render trigger
   },
 }));
 

@@ -3,6 +3,7 @@
 import type { VizLayout, VizSettings, CompareBandMode, LayerGroup } from '../types';
 import type { DisplayMode } from '../../types/metrics';
 import { getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset } from '../cross-section/layer-registry';
+import { getAdvisoryPresets, getAdvisoryPreset, isAdvisoryPreset } from '../cross-section/advisory-presets';
 import {
   CLOUD_LAYER_BY_AXES,
   ALL_CLOUD_LAYER_IDS,
@@ -389,15 +390,26 @@ export function renderVizControls(
     html += `</select>`;
     html += `<button id="viz-theme-preview" class="viz-layer-info-btn" title="${t('viz.previewTheme')}">\u{1f441}</button>`;
     html += `</div>`;
-    // Preset selector
+    // Preset selector. Reflection-label model (#219): the dropdown reflects
+    // `settings.activePreset` via `selected`; "Custom" is selected (and is a
+    // non-actionable label for the dirty state) when no preset is active.
     const presets = getPresets();
-    if (presets.length > 0) {
+    const advisoryPresets = getAdvisoryPresets();
+    const active = settings.activePreset ?? null;
+    if (presets.length > 0 || advisoryPresets.length > 0) {
       html += `<div class="viz-theme-selector">`;
       html += `<span class="viz-toggle-label">${t('viz.preset')}</span>`;
       html += `<select id="viz-preset-select" class="viz-model-select">`;
-      html += `<option value="">${t('viz.presetCustom')}</option>`;
+      html += `<option value=""${active === null ? ' selected' : ''}>${t('viz.presetCustom')}</option>`;
       for (const preset of presets) {
-        html += `<option value="${preset.id}">${preset.label}</option>`;
+        html += `<option value="${preset.id}"${preset.id === active ? ' selected' : ''}>${preset.label}</option>`;
+      }
+      if (advisoryPresets.length > 0) {
+        html += `<optgroup label="${t('viz.presetGroupAdvisory')}">`;
+        for (const preset of advisoryPresets) {
+          html += `<option value="${preset.id}"${preset.id === active ? ' selected' : ''}>${preset.label}</option>`;
+        }
+        html += `</optgroup>`;
       }
       html += `</select></div>`;
     }
@@ -420,6 +432,15 @@ export function renderVizControls(
     });
   }
   html += '</div>'; // .viz-toolbar
+
+  // Advisory-preset caption (#219): a one-line note explaining the active view.
+  // Only emitted for advisory presets; absent for GRAMET/Custom (the panel
+  // re-renders on every settings change, so it clears itself). Caption text is
+  // a trusted static config literal — no user input to escape.
+  if (settings.layout !== 'map' && isAdvisoryPreset(settings.activePreset)) {
+    const ap = getAdvisoryPreset(settings.activePreset!);
+    if (ap) html += `<div class="viz-preset-caption">${ap.caption}</div>`;
+  }
 
   container.innerHTML = html;
 

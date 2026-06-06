@@ -7,6 +7,7 @@ import { renderAdvisoryPopup } from '../helpers/advisory-popup';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
 import { formatVisibility } from '../units';
+import { ADVISORY_TO_PRESET } from '../visualization/cross-section/advisory-presets';
 
 /** Visibility for an airport condition, region-aware.
  *  Prefers raw meters (visibility_m); falls back to legacy SM for old packs. */
@@ -257,7 +258,11 @@ function renderAirportConditions(conditions: AirportConditions, aggregation: 'wo
 }
 
 
-function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, AdvisoryCatalogEntry>): string {
+function renderAdvisoryCard(
+  adv: RouteAdvisoryResult,
+  catalog: Map<string, AdvisoryCatalogEntry>,
+  chipsEnabled: boolean,
+): string {
   const entry = catalog.get(adv.advisory_id);
   const name = entry ? escapeHtml(entry.name) : escapeHtml(adv.advisory_id);
   const desc = entry ? escapeHtml(entry.short_description) : '';
@@ -271,11 +276,18 @@ function renderAdvisoryCard(adv: RouteAdvisoryResult, catalog: Map<string, Advis
     ? `<button class="metric-info-btn advisory-info-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.advisoryInfo')}" aria-label="${t('advisories.advisoryInfo')}">i</button>`
     : '';
 
+  // Cross-section preset chip (#219): only for advisories with a mapped preset.
+  // Reuses .metric-info-btn styling; its own delegated handler fires onAdvisoryChip.
+  const chip = chipsEnabled && ADVISORY_TO_PRESET[adv.advisory_id]
+    ? `<button class="metric-info-btn advisory-view-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.showOnCrossSection')}" aria-label="${t('advisories.showOnCrossSection')}">\u{1F4C8}</button>`
+    : '';
+
   return `
     <div class="advisory-card advisory-${adv.aggregate_status}" data-advisory="${escapeHtml(adv.advisory_id)}">
       <div class="advisory-card-header">
         <span class="badge ${aggClass}">${statusLabel(adv.aggregate_status)}</span>
         <span class="advisory-name">${name}</span>
+        ${chip}
         ${infoBtn}
       </div>
       <div class="advisory-models">${modelBadges}</div>
@@ -381,6 +393,7 @@ export function renderAdvisories(
   onAltitudeTable?: () => Promise<void>,
   altTimeToggle?: AltTimeToggleConfig,
   profileSelector?: ProfileSelectorConfig,
+  onAdvisoryChip?: (advisoryId: string) => void,
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -485,7 +498,7 @@ export function renderAdvisories(
       </div>`;
   }
 
-  const cards = sorted.map(adv => renderAdvisoryCard(adv, catalog)).join('');
+  const cards = sorted.map(adv => renderAdvisoryCard(adv, catalog, !!onAdvisoryChip)).join('');
 
   el.innerHTML = `
     ${toggleHtml}
@@ -594,6 +607,17 @@ export function renderAdvisories(
     const adv = manifest.advisories.find(a => a.advisory_id === advId);
     showPopupContent(renderAdvisoryPopup(entry, adv?.parameters_used ?? {}, adv));
   });
+
+  // Wire advisory cross-section chips (#219, event delegation). Configures the
+  // cross-section for the advisory's preset and jumps to it.
+  if (onAdvisoryChip) {
+    el.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('.advisory-view-btn') as HTMLElement | null;
+      if (!btn) return;
+      const advId = btn.dataset.advisoryId;
+      if (advId) onAdvisoryChip(advId);
+    });
+  }
 
   // Wire runway info popups (event delegation)
   if (manifest.airport_conditions) {

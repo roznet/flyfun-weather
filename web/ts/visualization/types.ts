@@ -20,6 +20,13 @@ export interface VizSettings {
   compareModels: Record<string, boolean>;
   compareBandMode: CompareBandMode;
   vizTheme?: string;
+  /** Which preset the cross-section currently reflects, or `null` for the
+   *  "Custom" (dirty) state. Set when a preset is applied (GRAMET or an
+   *  advisory preset); cleared to `null` by any user-initiated layer toggle
+   *  or cloud-style change. Programmatic batch updates (compact-mode
+   *  enforcement) deliberately leave it untouched. Persisted with the rest
+   *  of vizSettings so the dropdown sticks across reloads. */
+  activePreset?: string | null;
   /** Last cloud style picked from the compound cloud control. Persisted
    *  so re-checking a cloud source after unchecking all keeps the user's
    *  choice instead of snapping back to the default. */
