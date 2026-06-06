@@ -36,7 +36,9 @@ from typing import Sequence
 
 import numpy as np
 
+from weatherbrief.analysis.sounding.convective import convection_realized
 from weatherbrief.frontal.gates import FrontGateConfig
+from weatherbrief.frontal.grid import terrain_mask_for_level
 from weatherbrief.frontal.route_sampling import (
     RouteFrontAnalysis,
     apply_gate_config,
@@ -135,17 +137,6 @@ _PARTLY_COVERAGE = {"few", "sct"}
 _CONVECTIVE_RISK = {"moderate", "high", "extreme"}
 _PERSIST_OFFSETS_H = (-6, -3, 0, 3, 6)
 
-# Realized-convection gate (#216). A thermo ``risk_level`` can be driven purely by
-# *potential* CAPE that a strong cap (CIN) never lets convect — and its ``top_ft``
-# is then the parcel equilibrium level, not a cloud a pilot meets. Treat
-# convection as realized unless it is strongly inhibited (CIN <= ``_CIN_CAP_JKG``)
-# with no countervailing instability (ML-CAPE >= ``_ML_CAPE_REALIZED_JKG`` or a
-# lifted index <= ``_LI_REALIZED``). Tuned to the 2026-06-07 LSGS false-RED
-# (CIN -59.5, ML-CAPE 147, LI -1) vs the realized Dijon front.
-_CIN_CAP_JKG = -50.0
-_ML_CAPE_REALIZED_JKG = 300.0
-_LI_REALIZED = -2.0
-
 
 def _attr(obj: object, name: str, default: object = None) -> object:
     """getattr/dict-get that tolerates pydantic objects or raw dicts (or None)."""
@@ -159,43 +150,6 @@ def _attr(obj: object, name: str, default: object = None) -> object:
 def _enum_val(x: object) -> object:
     """Unwrap an enum to its ``.value`` (passthrough for plain strings/None)."""
     return getattr(x, "value", x)
-
-
-def _convection_realized(conv, indices) -> bool:
-    """True when convection is *realized*, not just CIN-capped potential (#216).
-
-    A thermo ``risk_level`` can be driven by potential CAPE that a strong cap
-    (CIN) never lets convect; its ``top_ft`` is then the parcel equilibrium level,
-    not a cloud a pilot meets. Convection counts as realized when NWP convective
-    cloud is present (``method`` != "thermo"), the inhibition is weak, or there is
-    a countervailing instability signal (high ML-CAPE or a negative lifted index).
-    Unknown data defaults to realized so a real front is never silently hidden —
-    we downgrade only on *positive* evidence the instability is weak (caller
-    guarantees a non-None ``conv`` with a convective ``risk_level``).
-    """
-    if _attr(conv, "method", "thermo") != "thermo":
-        return True  # NWP convective-cloud diagnostics fired → realized weather
-    cin = _attr(conv, "cin_jkg", None)  # negative = inhibition
-    strong_cap = cin is not None and cin <= _CIN_CAP_JKG
-    if not strong_cap:
-        return True
-    # Strongly capped: downgrade to potential only with positive evidence the
-    # instability is weak. With CIN the sole available signal (ML-CAPE and LI both
-    # absent — e.g. ICON, which emits no lifted index), default to realized rather
-    # than silently hide a front. LI here is a binary gate signal, not a tier
-    # input, so falling back from the DD-derived to the NWP-native value is
-    # acceptable — the DD/NWP tier separation (meteorology-decisions.md §4) does
-    # not bind this realized/potential decision.
-    ml_cape = _attr(indices, "cape_mixed_layer_jkg", None)
-    li = _attr(conv, "lifted_index", None)
-    if li is None:
-        li = _attr(indices, "nwp_lifted_index", None)
-    if ml_cape is None and li is None:
-        return True
-    return (
-        (ml_cape is not None and ml_cape >= _ML_CAPE_REALIZED_JKG)
-        or (li is not None and li <= _LI_REALIZED)
-    )
 
 
 def _colocate(analyses, model: str, dist_km: float, level_hpa: int):
@@ -244,8 +198,21 @@ def _colocate(analyses, model: str, dist_km: float, level_hpa: int):
     # risk is not weather on the boundary, and its top_ft is the parcel EL — not a
     # tower a pilot meets. Realized convection keeps the EL as its tower-depth
     # proxy (the overflown-tower Dijon case); a potential-only risk falls through
-    # to the cloud-coverage category and the EL is never used as a top.
-    if risk in _CONVECTIVE_RISK and _convection_realized(conv, indices):
+    # to the cloud-coverage category and the EL is never used as a top. The
+    # realized/potential logic + thresholds live in the convective module (shared
+    # with the route convective tier); we own only the data extraction here,
+    # including the DD→NWP lifted-index fallback (LI is a binary gate signal, not a
+    # tier input, so the cross of the §4 DD/NWP boundary is acceptable).
+    li = _attr(conv, "lifted_index", None)
+    if li is None:
+        li = _attr(indices, "nwp_lifted_index", None)
+    realized = convection_realized(
+        method=_attr(conv, "method", "thermo"),
+        cin_jkg=_attr(conv, "cin_jkg", None),
+        ml_cape_jkg=_attr(indices, "cape_mixed_layer_jkg", None),
+        lifted_index=li,
+    )
+    if risk in _CONVECTIVE_RISK and realized:
         category = "convective"
         conv_top = _attr(conv, "top_ft", None) or _attr(conv, "el_altitude_ft", None)
         tops = [v for v in (cloud_top, conv_top) if v]
@@ -487,6 +454,9 @@ def compute_route_fronts(
     models = [m for m in ("ecmwf", "gfs", "icon") if m in models]
 
     terrain_mask = _load_cached_terrain_mask(output_dir)
+    # Elevation grid enables level-aware masking (a 925 hPa surface sits far below
+    # 850/700 hPa). Absent on pre-#216 caches → fall back to the flat mask.
+    terrain_elevation = _load_cached_terrain_elevation(output_dir)
 
     per_model: dict[str, list[RouteFrontAnalysisModel]] = {}
     per_model_primary: dict[str, int] = {}
@@ -524,17 +494,23 @@ def compute_route_fronts(
         # Only apply the cached terrain mask if it matches this snapshot's grid
         # — a stale mask (e.g. from a resolution change) would otherwise crash
         # fill_terrain() on a shape mismatch. Mismatch → no masking (graceful).
-        if (
-            terrain_mask is not None
-            and terrain_mask.shape == (source.lat.size, source.lon.size)
-        ):
+        grid_shape = (source.lat.size, source.lon.size)
+        if terrain_mask is not None and terrain_mask.shape == grid_shape:
             source.terrain_mask = terrain_mask
         elif terrain_mask is not None:
             logger.warning(
                 "Front detection: terrain mask %s mismatches %s grid %s — "
                 "skipping terrain masking",
-                terrain_mask.shape, model, (source.lat.size, source.lon.size),
+                terrain_mask.shape, model, grid_shape,
             )
+        # Level-aware masking (#216): when the elevation grid is available and
+        # matches the grid, derive a per-level mask inside the loop below instead
+        # of the flat one. Same shape-guard as the flat mask.
+        model_elevation = (
+            terrain_elevation
+            if (terrain_elevation is not None and terrain_elevation.shape == grid_shape)
+            else None
+        )
         snapshot_inits[model] = _iso_z(source.init_time_unix)
 
         # ETAs → snapshot-relative forecast hours.
@@ -557,6 +533,11 @@ def compute_route_fronts(
         analyses: list[RouteFrontAnalysisModel] = []
         for level in levels:
             cfg = base_config.with_overrides(level_hPa=level)
+            # Mask terrain against *this level's* standard-atmosphere height, so a
+            # 925 hPa surface masks far more terrain than 700 hPa — fixing both the
+            # low-level Alpine artefact and the high-level over-masking (#216).
+            if model_elevation is not None:
+                source.terrain_mask = terrain_mask_for_level(model_elevation, level)
             try:
                 result = _analyze_one(
                     source, model, waypoints, eta_hours, mid_hour, cfg,
@@ -730,4 +711,18 @@ def _load_cached_terrain_mask(output_dir: Path | None) -> np.ndarray | None:
             return npz["mask"]
     except Exception:
         logger.warning("Front detection: unreadable terrain mask %s", path)
+        return None
+
+
+def _load_cached_terrain_elevation(output_dir: Path | None) -> np.ndarray | None:
+    """Load the precompute's cached terrain elevation grid for level-aware masking,
+    or ``None`` if absent (pre-#216 cache) — callers fall back to the flat mask."""
+    path = resolve_output_dir(output_dir) / "terrain_mask.npz"
+    if not path.exists():
+        return None
+    try:
+        with np.load(path) as npz:
+            return npz["elevation"] if "elevation" in npz.files else None
+    except Exception:
+        logger.warning("Front detection: unreadable terrain elevation %s", path)
         return None

@@ -10,6 +10,7 @@ from weatherbrief.frontal.grid import (
     prepare_field,
     fill_terrain,
     compute_theta_e,
+    terrain_mask_for_level,
 )
 
 
@@ -136,6 +137,44 @@ class TestFillTerrain:
         result = fill_terrain(field, mask)
         # All valid cells should be unchanged
         np.testing.assert_array_equal(result[mask], field[mask])
+
+
+class TestTerrainMaskForLevel:
+    """Level-aware terrain masking (#216 Fix 3): mask a cell when terrain reaches
+    the level's standard-atmosphere height (925≈762m, 850≈1457m, 700≈3012m)."""
+
+    # lake (370m), pre-Alps (1102m), high Alps (2500m), ocean (NaN)
+    _ELEV = np.array([[370.0, 1102.0, 2500.0, np.nan]])
+
+    def test_925_masks_prealps_and_alps(self):
+        valid = terrain_mask_for_level(self._ELEV, 925)
+        np.testing.assert_array_equal(valid, [[True, False, False, True]])
+
+    def test_850_masks_only_high_alps(self):
+        valid = terrain_mask_for_level(self._ELEV, 850)
+        np.testing.assert_array_equal(valid, [[True, True, False, True]])
+
+    def test_700_keeps_all_terrain(self):
+        """700 hPa (~3012m) is above 2500m terrain → not masked (the over-masking
+        the flat 1500m threshold used to cause)."""
+        valid = terrain_mask_for_level(self._ELEV, 700)
+        np.testing.assert_array_equal(valid, [[True, True, True, True]])
+
+    def test_nan_elevation_is_valid(self):
+        """Ocean / no-SRTM cells (NaN) are always valid, never masked."""
+        valid = terrain_mask_for_level(np.array([[np.nan]]), 925)
+        assert valid.tolist() == [[True]]
+
+    def test_buffer_lowers_threshold(self):
+        """A positive buffer masks terrain a margin below the surface too."""
+        elev = np.array([[700.0]])  # below 925's ~762m → valid with no buffer
+        assert terrain_mask_for_level(elev, 925).tolist() == [[True]]
+        # 200m buffer → threshold ~562m → 700m now masked.
+        assert terrain_mask_for_level(elev, 925, buffer_m=200.0).tolist() == [[False]]
+
+    def test_shape_preserved(self):
+        elev = np.zeros((5, 7))
+        assert terrain_mask_for_level(elev, 850).shape == (5, 7)
 
 
 class TestComputeThetaE:

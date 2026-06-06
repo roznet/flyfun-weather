@@ -729,6 +729,19 @@ The LI fallback (DD-derived → `nwp_lifted_index`) deliberately crosses the §4
 DD/NWP tier separation: here LI is a binary gate signal, not a tier input, so the
 mixing is acceptable.
 
+### Where the logic lives (refactor, PR for #216 Fix 3)
+
+The realized/potential decision is a public `convection_realized()` in
+`analysis/sounding/convective.py`, reusing `REGIME_CIN_CAP` (−50) and
+`REGIME_CAPE_LOW` (300) — the same anchors `classify_regime` uses — rather than
+duplicating constants. This keeps it next to the convective tier and shareable.
+The two answer different questions and must not be conflated: the **tier**
+(`risk_level`) deliberately keeps a moderate cap's risk at its potential level
+(WEAK_INSTABILITY only suppresses at CIN < −200), because a moderate-CAPE air mass
+is worth flagging on the route; the **realized predicate** uses the stricter −50
+cap, because using the parcel EL as a cloud top demands more confidence. Callers
+own data extraction (incl. the DD→NWP LI fallback); the module owns logic + thresholds.
+
 ### Real-world validation needed
 
 - A strong, genuinely active front (deep CAPE, weak cap) crossing the route at a
@@ -739,6 +752,72 @@ mixing is acceptable.
 ### Files changed
 
 `analysis/advisories/fronts.py` (`_grade_crossing`: overflown-convective
-coherence gate), `tasks/fronts.py` (`_colocate` + `_convection_realized`: realized
-gate, EL only on realized path). Tests: `tests/test_tasks_fronts.py`,
-`tests/analysis/advisories/test_fronts_advisory.py`.
+coherence gate), `tasks/fronts.py` (`_colocate`: realized gate via shared
+predicate, EL only on realized path), `analysis/sounding/convective.py`
+(`convection_realized`). Tests: `tests/test_tasks_fronts.py`,
+`tests/analysis/advisories/test_fronts_advisory.py`, `tests/test_convective.py`.
+
+
+---
+
+## 7. Level-aware terrain masking for front detection
+
+**Date:** 2026-06-06
+**Status:** Implemented (PR for #216 Fix 3).
+**Context:** Front detection masks grid cells where terrain generates orographic
+θe gradients. The mask used a single flat threshold — terrain > **1500 m**
+(≈ the 850 hPa surface) — applied to *every* detection level (925 / 850 / 700 hPa).
+That is two-sided wrong, because the pressure surfaces sit at very different
+heights:
+
+| level | ISA height | flat-1500 m behaviour |
+|-------|-----------|------------------------|
+| 925 hPa | ~762 m  | **under-masks**: terrain 762–1500 m lets near-ground crossings through |
+| 850 hPa | ~1457 m | ≈ correct (the threshold was calibrated here) |
+| 700 hPa | ~3012 m | **over-masks**: terrain 1500–3012 m wrongly rejects genuine *free-atmosphere* fronts |
+
+The 700 hPa over-masking is the worse failure — a **false negative** that hides a
+real front, against this codebase's "never silently hide a front" bias.
+
+### The decision
+
+Mask a cell at level *P* when terrain reaches *P*'s standard-atmosphere height:
+`terrain_m > pressure_hpa_to_altitude_m(P)`. The flat boolean mask is replaced by
+a cached **elevation grid** (`terrain_mask_for_level(elevation, level)`), so the
+*same* upstream change makes both `fill_terrain` (θe smoothing before gradients)
+and the per-crossing terrain gate level-aware with no change to their logic.
+925 hPa now masks terrain above ~762 m; 700 hPa only above ~3012 m.
+
+NaN elevation (ocean / no SRTM) is always valid. A `buffer_m` knob can lower the
+threshold if a sub-surface margin is ever wanted (default 0 = mask only at/above
+the surface).
+
+### Note on the triggering LSGS case
+
+This does **not** change the 2026-06-07 LSGS crossing: it sits over Lake Geneva
+(SRTM 370 m), where 925 hPa is *above* ground — a real shallow lake/pre-Alps θe
+boundary, already handled by §6 (dry co-location → green). Fix 3 is an independent
+detector-correctness improvement, not the fix for that bug. Its value is the
+general 925 under-masking / 700 over-masking correction above.
+
+### Migration
+
+The precompute cache (`{DATA_DIR}/hewson/terrain_mask.npz`) now also stores the
+elevation grid; a pre-elevation cache is treated as stale and rebuilt on next
+precompute. Until rebuilt, the route path falls back to the flat mask (current
+behaviour) — graceful, no manual wipe required.
+
+### Real-world validation needed
+
+- A genuine 700 hPa front over the Alps (terrain 1500–3000 m): confirm it now
+  surfaces instead of being smoothed/rejected.
+- Spot-check that low-level (925) detections over real high terrain (not lakes)
+  are suppressed as intended.
+
+### Files changed
+
+`frontal/grid.py` (`build_terrain_elevation`, `terrain_mask_for_level`),
+`hewson/precompute.py` (cache elevation, auto-rebuild pre-elevation caches),
+`tasks/fronts.py` (per-level mask in the detection loop), `api/hewson_map.py`
+(level-aware overlay). Tests: `tests/test_frontal_grid.py`,
+`tests/test_tasks_fronts.py`, `tests/test_hewson_precompute.py`.

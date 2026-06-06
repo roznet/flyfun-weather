@@ -433,13 +433,17 @@ def get_all_metrics(
 # ---------------------------------------------------------------------------
 
 
-def _load_cached_terrain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray | None:
+def _load_cached_terrain_mask(
+    lat: np.ndarray, lon: np.ndarray, level_hPa: int | None = None,
+) -> np.ndarray | None:
     """Return the precompute's cached terrain mask if it matches this grid.
 
     The precompute loop writes ``${DATA_DIR}/hewson/terrain_mask.npz`` on first
-    run; reuse it so the front extractor rejects orographic θe ridges. Returns
-    ``None`` (no masking) when the cache is absent or grid-mismatched rather
-    than rebuilding from SRTM in the request path.
+    run; reuse it so the front extractor rejects orographic θe ridges. When the
+    cache carries an elevation grid and a ``level_hPa`` is given, return a
+    *level-aware* mask (#216) so the overlay matches the route detector; otherwise
+    fall back to the flat mask. Returns ``None`` (no masking) when the cache is
+    absent or grid-mismatched rather than rebuilding from SRTM in the request path.
     """
     path = resolve_output_dir() / "terrain_mask.npz"
     if not path.exists():
@@ -449,16 +453,20 @@ def _load_cached_terrain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray | 
             mask = npz["mask"]
             cached_lat = npz["lat"]
             cached_lon = npz["lon"]
+            elevation = npz["elevation"] if "elevation" in npz.files else None
     except (OSError, KeyError, ValueError, zipfile.BadZipFile, EOFError):
         logger.warning("Hewson fronts: unreadable terrain mask at %s", path)
         return None
-    if (
+    if not (
         mask.shape == (len(lat), len(lon))
         and np.allclose(cached_lat, lat)
         and np.allclose(cached_lon, lon)
     ):
-        return mask
-    return None
+        return None
+    if level_hPa is not None and elevation is not None and elevation.shape == mask.shape:
+        from weatherbrief.frontal.grid import terrain_mask_for_level
+        return terrain_mask_for_level(elevation, level_hPa)
+    return mask
 
 
 @router.get("/fronts")
@@ -504,7 +512,7 @@ def get_fronts(
     from weatherbrief.frontal.sources import SnapshotFieldSource
 
     source = SnapshotFieldSource(path, model_name=model)
-    terrain_mask = _load_cached_terrain_mask(source.lat, source.lon)
+    terrain_mask = _load_cached_terrain_mask(source.lat, source.lon, level)
     source.terrain_mask = terrain_mask
     grids = source.grids_at_hour(model, hour, level)
     if grids is None:

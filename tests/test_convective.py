@@ -6,6 +6,7 @@ from weatherbrief.analysis.sounding.convective import (
     assess_convective_nwp,
     assess_convective_thermo,
     classify_regime,
+    convection_realized,
     convective_cross_check,
     effective_cape,
 )
@@ -979,3 +980,76 @@ def test_cross_check_none_when_thermo_missing():
         risk_level=ConvectiveRisk.NONE, cover_pct=40.0, method="nwp"
     )
     assert convective_cross_check(None, nwp) is None
+
+
+# ---------------------------------------------------------------------------
+# convection_realized — the realized-vs-potential gate shared with front
+# co-location (#216). Tier-independent: stricter CIN bar than risk_level.
+# ---------------------------------------------------------------------------
+
+
+def test_realized_nwp_method_always_true():
+    """NWP convective cloud (method != thermo) is realized regardless of CIN."""
+    assert convection_realized(
+        method="nwp", cin_jkg=-300.0, ml_cape_jkg=10.0, lifted_index=5.0
+    ) is True
+
+
+def test_realized_weak_cap_is_true():
+    """Weak inhibition (CIN > -50) → realized even with low instability."""
+    assert convection_realized(
+        method="thermo", cin_jkg=-20.0, ml_cape_jkg=50.0, lifted_index=1.0
+    ) is True
+
+
+def test_potential_strong_cap_low_instability_is_false():
+    """The LSGS case: strong cap (CIN -59.5), ML-CAPE 147 < 300, LI -1 > -2 →
+    potential, not realized."""
+    assert convection_realized(
+        method="thermo", cin_jkg=-59.5, ml_cape_jkg=147.0, lifted_index=-1.0
+    ) is False
+
+
+def test_realized_strong_cap_high_ml_cape():
+    """Loaded gun: strong cap but ML-CAPE >= 300 → realized."""
+    assert convection_realized(
+        method="thermo", cin_jkg=-80.0, ml_cape_jkg=1200.0, lifted_index=None
+    ) is True
+
+
+def test_realized_strong_cap_negative_li():
+    """Strong cap but LI <= -2 → realized (symmetric to the ML-CAPE gate)."""
+    assert convection_realized(
+        method="thermo", cin_jkg=-80.0, ml_cape_jkg=120.0, lifted_index=-4.0
+    ) is True
+
+
+def test_strong_cap_no_instability_data_defaults_realized():
+    """Strong cap but ML-CAPE and LI both unknown (e.g. ICON, no lifted index) →
+    default to realized rather than silently hide a front."""
+    assert convection_realized(
+        method="thermo", cin_jkg=-90.0, ml_cape_jkg=None, lifted_index=None
+    ) is True
+
+
+def test_unknown_cin_is_realized():
+    """No CIN signal at all → not 'strongly capped' → realized."""
+    assert convection_realized(
+        method="thermo", cin_jkg=None, ml_cape_jkg=None, lifted_index=None
+    ) is True
+
+
+def test_threshold_boundaries_exclusive_inclusive():
+    """CIN == -50 is 'capped' (<=); ML-CAPE == 300 and LI == -2 are realized (>=/<=)."""
+    # CIN exactly at the cap, low instability → potential.
+    assert convection_realized(
+        method="thermo", cin_jkg=-50.0, ml_cape_jkg=299.0, lifted_index=-1.9
+    ) is False
+    # ML-CAPE exactly at the realized anchor → realized.
+    assert convection_realized(
+        method="thermo", cin_jkg=-50.0, ml_cape_jkg=300.0, lifted_index=None
+    ) is True
+    # LI exactly at the realized boundary → realized.
+    assert convection_realized(
+        method="thermo", cin_jkg=-50.0, ml_cape_jkg=None, lifted_index=-2.0
+    ) is True

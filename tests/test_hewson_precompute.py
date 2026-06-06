@@ -256,13 +256,14 @@ def patched_metadata():
 
 @pytest.fixture
 def patched_terrain_mask():
-    """Replace build_terrain_mask with all-True to avoid SRTM lookups."""
-    def _all_true(lat, lon):
-        return np.ones((len(lat), len(lon)), dtype=bool)
+    """Replace build_terrain_elevation with a flat sea-level grid to avoid SRTM
+    lookups (0 m → all-valid mask; elevation also cached for level-aware masking)."""
+    def _zeros(lat, lon):
+        return np.zeros((len(lat), len(lon)), dtype=np.float64)
 
     with patch(
-        "weatherbrief.hewson.precompute.build_terrain_mask",
-        side_effect=_all_true,
+        "weatherbrief.hewson.precompute.build_terrain_elevation",
+        side_effect=_zeros,
     ):
         yield
 
