@@ -7,6 +7,7 @@ from datetime import datetime
 from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.models import (
     AgreementLevel,
+    ALT_AXIS_LABELS,
     AltitudeAdvisories,
     ConvectiveRisk,
     ForecastSnapshot,
@@ -393,13 +394,6 @@ def _format_route_sigmets(sig: RouteSigmets) -> list[str]:
     return lines
 
 
-_ALT_AXIS_LABELS = {
-    "category": "better category",
-    "wind": "lower wind",
-    "crosswind": "lower crosswind",
-}
-
-
 def _format_route_alternates(alt: RouteAlternates) -> list[str]:
     """Format weather alternates for plain-text digest."""
     lines: list[str] = ["--- Weather Alternates ---"]
@@ -421,7 +415,7 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
     for p in alt.nearest_improving:
         if not p.icao:
             continue
-        label = _ALT_AXIS_LABELS.get(p.axis, p.axis)
+        label = ALT_AXIS_LABELS.get(p.axis, p.axis)
         pos = f" {p.position}" if p.position else ""
         dist = f" {p.distance_from_dest_nm:.0f}nm" if p.distance_from_dest_nm is not None else ""
         lines.append(f"  Nearest weather alternate ({label}): {p.icao}{dist}{pos}")

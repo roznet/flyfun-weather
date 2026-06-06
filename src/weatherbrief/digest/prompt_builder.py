@@ -9,6 +9,7 @@ from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.units import format_visibility
 from weatherbrief.models import (
+    ALT_AXIS_LABELS,
     AgreementLevel,
     ConvectiveRisk,
     ForecastSnapshot,
@@ -451,13 +452,6 @@ def _format_sigmets_context(sig: RouteSigmets) -> str:
     return "\n".join(lines)
 
 
-_ALT_AXIS_LABELS = {
-    "category": "better flight category",
-    "wind": "lower wind",
-    "crosswind": "lower crosswind",
-}
-
-
 def _format_alternates_context(alt: RouteAlternates) -> str:
     """Format weather alternates into a compact LLM context section.
 
@@ -476,17 +470,22 @@ def _format_alternates_context(alt: RouteAlternates) -> str:
         f", {alt.destination_crosswind_kt:.0f}kt crosswind"
         if alt.destination_crosswind_kt is not None else ""
     )
+    approach_note = ""
+    if alt.require_approach:
+        approach_note = (
+            ", approach data unavailable" if alt.approach_filter_relaxed
+            else ", IFR approach required"
+        )
     lines.append(
         f"Destination {alt.destination_icao}: {alt.destination_category}{dest_xw} "
-        f"({alt.candidates_evaluated} candidates evaluated"
-        f"{', IFR approach required' if alt.require_approach else ''})"
+        f"({alt.candidates_evaluated} candidates evaluated{approach_note})"
     )
 
     improving = [p for p in alt.nearest_improving if p.icao]
     if improving:
         lines.append("Nearest improving alternate per axis:")
         for p in improving:
-            label = _ALT_AXIS_LABELS.get(p.axis, p.axis)
+            label = ALT_AXIS_LABELS.get(p.axis, p.axis)
             pos = f" ({p.position})" if p.position else ""
             dist = f" {p.distance_from_dest_nm:.0f}nm from dest" if p.distance_from_dest_nm is not None else ""
             lines.append(f"  {label}: {p.icao}{dist}{pos}")

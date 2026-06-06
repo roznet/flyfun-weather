@@ -1234,7 +1234,9 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
     </div>
   `;
 
-  el.addEventListener('click', (e) => {
+  // Assign (not addEventListener) so repeated renders from the store
+  // subscription replace the handler rather than stacking duplicates.
+  el.onclick = (e) => {
     const target = e.target as HTMLElement;
     const infoBtn = target.closest('.alt-info-btn') as HTMLElement | null;
     if (infoBtn) {
@@ -1243,7 +1245,7 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
       const apt = alt.alternates.find((a) => a.icao === icao);
       if (apt) showPopupContent(renderAltPopup(apt));
     }
-  });
+  };
 }
 
 // --- Route SIGMETs (area hazards) ---
