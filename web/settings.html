@@ -380,6 +380,12 @@
               <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">⚠️ Experimental. Adds a front advisory plus map &amp; cross-section overlays from Hewson θe diagnostics (ECMWF / GFS / ICON only). These are <em>free-atmosphere air-mass boundaries</em> — advisory-only, not official SIGWX, and blind to low IMC / fog. Adds some compute and rendering per briefing.</span>
             </label>
           </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="toggle-compute-alternates"> Weather alternates (D-2 inward)
+              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">⚠️ Experimental. On day-of and the two days before, finds the closest airports that improve on the destination's weather (flight category, wind, crosswind) and shows them on the briefing. <em>Planning-grade weather candidates only</em> — not operational alternates (no fuel, minima, NOTAM, customs or PPR check). Adds some compute per briefing.</span>
+            </label>
+          </div>
           <div class="subsection">
             <h4 class="subsection-heading">Models</h4>
             <p class="muted section-hint">Select which briefing models are evaluated for advisories. Unchecked models are still available for cross-section and Skew-T.</p>

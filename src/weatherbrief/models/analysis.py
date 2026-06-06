@@ -9,6 +9,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from weatherbrief.models.alternates import RouteAlternates
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 
 
@@ -850,6 +851,9 @@ class ForecastSnapshot(BaseModel):
     cross_sections: list[RouteCrossSection] = Field(default_factory=list)
     route_observations: RouteObservations | None = None
     route_sigmets: RouteSigmets | None = None
+    # Weather-based divert candidates (D-2 inward, opt-in via compute_alternates).
+    # None outside that window so the web section stays hidden (#210).
+    alternates: RouteAlternates | None = None
     # Worsening summary from the last cheap real-time refresh (no digest re-run);
     # None after a full pipeline run (clean slate — the digest covers changes).
     last_refresh_delta: RefreshDelta | None = None

@@ -97,6 +97,11 @@ from weatherbrief.models.airport_conditions import (  # noqa: F401
     RunwayEnd,
     RunwayWind,
 )
+from weatherbrief.models.alternates import (  # noqa: F401
+    AlternateAirport,
+    AlternateAxisPick,
+    RouteAlternates,
+)
 from weatherbrief.models.observations import (  # noqa: F401
     AirportObservation,
     ObservationComparison,

@@ -15,6 +15,7 @@ from weatherbrief.models import (
     ModelDivergence,
     PrecipPhase,
     RouteAdvisoriesManifest,
+    RouteAlternates,
     RouteObservations,
     RouteSigmets,
     SoundingAnalysis,
@@ -192,6 +193,10 @@ def build_digest_context(
     # --- Route SIGMETs (D-0 only) ---
     if snapshot.route_sigmets and snapshot.route_sigmets.count:
         sections.append(_format_sigmets_context(snapshot.route_sigmets))
+
+    # NOTE: Weather alternates are intentionally NOT fed to the LLM prompt for
+    # now (#210) — they surface in the briefing UI only. Re-enable by appending
+    # _format_alternates_context(snapshot.alternates) here.
 
     # --- Text forecasts ---
     if dwd_translated:
@@ -442,6 +447,64 @@ def _format_sigmets_context(sig: RouteSigmets) -> str:
         lines.append("  " + ", ".join(parts))
         if s.raw_text:
             lines.append(f"    {s.raw_text}")
+
+    return "\n".join(lines)
+
+
+_ALT_AXIS_LABELS = {
+    "category": "better flight category",
+    "wind": "lower wind",
+    "crosswind": "lower crosswind",
+}
+
+
+def _format_alternates_context(alt: RouteAlternates) -> str:
+    """Format weather alternates into a compact LLM context section.
+
+    Leads with the nearest-improving pick per deficient axis (the actionable
+    "where to go instead") so the LLM can mention it in prose, then a short
+    ranked list. Advisory-grade: approach presence is a minima proxy, not a
+    guarantee.
+    """
+    lines: list[str] = [
+        "=== WEATHER ALTERNATES ===",
+        "(Weather-driven divert candidates that fix the destination's weather "
+        "problem — call these \"weather alternates\", NOT operational alternates: "
+        "no fuel, minima, NOTAM, customs or PPR has been checked.)",
+    ]
+    dest_xw = (
+        f", {alt.destination_crosswind_kt:.0f}kt crosswind"
+        if alt.destination_crosswind_kt is not None else ""
+    )
+    lines.append(
+        f"Destination {alt.destination_icao}: {alt.destination_category}{dest_xw} "
+        f"({alt.candidates_evaluated} candidates evaluated"
+        f"{', IFR approach required' if alt.require_approach else ''})"
+    )
+
+    improving = [p for p in alt.nearest_improving if p.icao]
+    if improving:
+        lines.append("Nearest improving alternate per axis:")
+        for p in improving:
+            label = _ALT_AXIS_LABELS.get(p.axis, p.axis)
+            pos = f" ({p.position})" if p.position else ""
+            dist = f" {p.distance_from_dest_nm:.0f}nm from dest" if p.distance_from_dest_nm is not None else ""
+            lines.append(f"  {label}: {p.icao}{dist}{pos}")
+    else:
+        lines.append("No alternate improves on the destination across the evaluated candidates.")
+
+    # Short ranked list (closest-first); cap to keep the prompt compact.
+    for a in alt.alternates[:8]:
+        bits = [f"{a.distance_from_dest_nm:.0f}nm", a.position, a.flight_category]
+        if a.wind_speed_kt is not None:
+            bits.append(f"wind {a.wind_speed_kt:.0f}kt")
+        if a.crosswind_kt is not None:
+            bits.append(f"xwind {a.crosswind_kt:.0f}kt")
+        if a.has_instrument_approach:
+            bits.append(a.best_approach_type or "approach")
+        if a.dominates_destination:
+            bits.append("dominates dest")
+        lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
     return "\n".join(lines)
 

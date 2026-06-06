@@ -568,6 +568,62 @@ export interface RealtimeRefreshResult {
   delta?: RefreshDelta | null;
 }
 
+/** One weather-based divert candidate (issue #210). */
+export interface AlternateAirport {
+  icao: string;
+  name: string | null;
+  lat: number;
+  lon: number;
+  distance_from_dest_nm: number;
+  enroute_distance_nm: number | null;
+  segment_distance_nm: number | null;
+  position: string; // "before" | "after"
+  detour_early_nm: number | null;
+  detour_late_nm: number | null;
+  flight_category: string;
+  wind_speed_kt: number | null;
+  crosswind_kt: number | null;
+  headwind_kt: number | null;
+  best_runway_id: string | null;
+  ceiling_ft: number | null;
+  visibility_m: number | null;
+  agreement: Record<string, string>;
+  per_model: Record<string, Record<string, unknown>>;
+  has_instrument_approach: boolean;
+  best_approach_type: string | null;
+  longest_runway_ft: number | null;
+  has_hard_runway: boolean;
+  point_of_entry: boolean;
+  better_category: boolean;
+  better_wind: boolean;
+  better_crosswind: boolean;
+  dominates_destination: boolean;
+}
+
+/** The nearest improving alternate for one deficient axis. */
+export interface AlternateAxisPick {
+  axis: string; // "category" | "wind" | "crosswind"
+  icao: string | null;
+  distance_from_dest_nm: number | null;
+  position: string | null;
+}
+
+/** Weather-based alternates for a route's destination (D-2 inward). */
+export interface RouteAlternates {
+  destination_icao: string;
+  destination_category: string;
+  destination_crosswind_kt: number | null;
+  eta: string | null;
+  corridor_nm: number;
+  radius_nm: number;
+  require_approach: boolean;
+  approach_filter_relaxed: boolean;
+  candidates_evaluated: number;
+  alternates: AlternateAirport[];
+  nearest_improving: AlternateAxisPick[];
+  computed_at: string | null;
+}
+
 export interface ForecastSnapshot {
   route: {
     name: string;
@@ -580,6 +636,7 @@ export interface ForecastSnapshot {
   analyses: WaypointAnalysis[];
   route_observations?: RouteObservations | null;
   route_sigmets?: RouteSigmets | null;
+  alternates?: RouteAlternates | null;
   last_refresh_delta?: RefreshDelta | null;
 }
 

@@ -214,6 +214,8 @@ function populateProfileForm(profile: ProfileResponse): void {
   if (icingEnhanceToggle) icingEnhanceToggle.checked = s.icing_severity_enhance ?? false;
   const autoFrontToggle = document.getElementById('toggle-auto-front-detection') as HTMLInputElement;
   if (autoFrontToggle) autoFrontToggle.checked = s.auto_front_detection ?? false;
+  const computeAlternatesToggle = document.getElementById('toggle-compute-alternates') as HTMLInputElement;
+  if (computeAlternatesToggle) computeAlternatesToggle.checked = s.compute_alternates ?? false;
 
   // Icing method selector
   const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;
@@ -899,6 +901,7 @@ async function handleSave(): Promise<void> {
   const llmDigestEnabled = (document.getElementById('toggle-llm-digest') as HTMLInputElement)?.checked ?? true;
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
   const autoFrontDetection = (document.getElementById('toggle-auto-front-detection') as HTMLInputElement)?.checked ?? false;
+  const computeAlternates = (document.getElementById('toggle-compute-alternates') as HTMLInputElement)?.checked ?? false;
   const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
   const cloudSourceValue = (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value || 'nwp';
   const cloudStyleValue = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'square';
@@ -926,6 +929,7 @@ async function handleSave(): Promise<void> {
     llm_digest_enabled: llmDigestEnabled,
     icing_severity_enhance: icingSeverityEnhance,
     auto_front_detection: autoFrontDetection,
+    compute_alternates: computeAlternates,
     icing_method: icingMethod,
     cloud_method: cloudMethod,
     convective_method: convectiveMethod,

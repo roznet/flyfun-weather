@@ -12,6 +12,7 @@ from weatherbrief.models import (
     ForecastSnapshot,
     IcingRisk,
     PrecipPhase,
+    RouteAlternates,
     RouteObservations,
     RouteSigmets,
     SoundingAnalysis,
@@ -69,6 +70,10 @@ def format_digest(
     # Route SIGMETs (D-0 only)
     if snapshot.route_sigmets and snapshot.route_sigmets.count:
         lines.extend(_format_route_sigmets(snapshot.route_sigmets))
+
+    # Weather-based alternates (D-2 inward, opt-in)
+    if snapshot.alternates and snapshot.alternates.alternates:
+        lines.extend(_format_route_alternates(snapshot.alternates))
 
     # Model agreement summary
     lines.extend(_format_model_agreement(snapshot))
@@ -383,6 +388,54 @@ def _format_route_sigmets(sig: RouteSigmets) -> list[str]:
         lines.append(f"  [{head}]{fir_str}{band_str}{span}")
         if s.raw_text:
             lines.append(f"    {s.raw_text}")
+
+    lines.append("")
+    return lines
+
+
+_ALT_AXIS_LABELS = {
+    "category": "better category",
+    "wind": "lower wind",
+    "crosswind": "lower crosswind",
+}
+
+
+def _format_route_alternates(alt: RouteAlternates) -> list[str]:
+    """Format weather alternates for plain-text digest."""
+    lines: list[str] = ["--- Weather Alternates ---"]
+    dest_xw = (
+        f", {alt.destination_crosswind_kt:.0f}kt xwind"
+        if alt.destination_crosswind_kt is not None else ""
+    )
+    approach_note = ""
+    if alt.require_approach:
+        approach_note = (
+            ", approach data unavailable" if alt.approach_filter_relaxed
+            else ", IFR approach required"
+        )
+    lines.append(
+        f"  Destination {alt.destination_icao}: {alt.destination_category}{dest_xw} "
+        f"({alt.candidates_evaluated} candidates{approach_note})"
+    )
+
+    for p in alt.nearest_improving:
+        if not p.icao:
+            continue
+        label = _ALT_AXIS_LABELS.get(p.axis, p.axis)
+        pos = f" {p.position}" if p.position else ""
+        dist = f" {p.distance_from_dest_nm:.0f}nm" if p.distance_from_dest_nm is not None else ""
+        lines.append(f"  Nearest weather alternate ({label}): {p.icao}{dist}{pos}")
+
+    lines.append("")
+    for a in alt.alternates[:8]:
+        bits = [f"{a.distance_from_dest_nm:.0f}nm", a.position, a.flight_category]
+        if a.crosswind_kt is not None:
+            bits.append(f"xwind {a.crosswind_kt:.0f}kt")
+        if a.has_instrument_approach and a.best_approach_type:
+            bits.append(a.best_approach_type)
+        if a.dominates_destination:
+            bits.append("dominates")
+        lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
     lines.append("")
     return lines
