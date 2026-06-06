@@ -5516,3 +5516,202 @@ label {
   padding: 6px 14px;
   font-size: 0.9rem;
 }
+
+/* ====================================================================== */
+/* Optional sidebar briefing layout (opt-in via wb_layout=sidebar)         */
+/* Default 'classic' layout is unaffected — none of these rules apply      */
+/* unless .container has .layout-sidebar.                                   */
+/* ====================================================================== */
+.container.layout-sidebar {
+  max-width: 1440px;
+}
+.briefing-shell {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.briefing-rail {
+  position: sticky;
+  top: 0.5rem;
+  align-self: start;
+  max-height: calc(100vh - 1rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.25rem 0.5rem 0.5rem 0.25rem;
+}
+.briefing-main {
+  min-width: 0; /* allow canvases to shrink within the grid track */
+}
+
+/* The action toolbar becomes a slim top bar inside the main pane */
+.layout-sidebar .briefing-main .briefing-toolbar {
+  margin-bottom: 0.75rem;
+}
+
+.briefing-rail #briefing-header { font-size: 0.95rem; }
+.briefing-rail .freshness-bar { margin: 0; font-size: 0.78rem; }
+
+/* Rail glance summary: overall chip + what-to-watch (derived, not moved) */
+.rail-summary { display: flex; flex-direction: column; gap: 0.6rem; }
+.rail-overall {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+.rail-overall:hover { border-color: var(--text-muted); }
+.rail-overall-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--border); flex: none; }
+.rail-overall-green .rail-overall-dot { background: var(--green); }
+.rail-overall-amber .rail-overall-dot { background: var(--amber); }
+.rail-overall-red .rail-overall-dot { background: var(--red); }
+.rail-overall-green { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+.rail-overall-amber { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
+.rail-overall-red { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.rail-overall-level { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-overall-hint { font-size: 0.72rem; font-weight: 400; color: var(--text-muted); flex: none; }
+
+.rail-watch { display: flex; flex-direction: column; gap: 2px; }
+.rail-watch-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.15rem;
+}
+.rail-watch-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.rail-watch-item:hover { background: color-mix(in srgb, var(--text-muted) 12%, transparent); }
+.rail-watch-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.rail-watch-item.sev-red .rail-watch-dot { background: var(--red); }
+.rail-watch-item.sev-amber .rail-watch-dot { background: var(--amber); }
+.rail-watch-item.sev-red .rail-watch-name { color: var(--red); }
+.rail-watch-item.sev-amber .rail-watch-name { color: var(--amber); }
+.rail-watch-clear, .rail-watch-allclear { font-size: 0.78rem; color: var(--text-muted); padding: 0.2rem 0.5rem; }
+.rail-watch-allclear { color: var(--green); }
+
+/* Flash a main-pane target when jumped to from the rail */
+.rail-flash { animation: rail-flash-kf 1.3s ease-out; border-radius: var(--radius); }
+@keyframes rail-flash-kf {
+  0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 60%, transparent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+
+/* SECTIONS nav */
+.rail-nav { display: flex; flex-direction: column; gap: 1px; }
+.rail-nav-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0.25rem 0 0.35rem;
+}
+.rail-group-title {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  opacity: 0.8;
+  margin: 0.6rem 0 0.15rem;
+}
+.rail-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.rail-nav-item:hover { background: color-mix(in srgb, var(--text-muted) 12%, transparent); }
+.rail-nav-item.active {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  font-weight: 600;
+}
+.rail-nav-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  flex: none;
+}
+.rail-nav-item.active .rail-nav-dot { background: var(--primary); }
+.rail-nav-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-nav-focus {
+  margin-left: auto;
+  flex: none;
+  opacity: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.rail-nav-item:hover .rail-nav-focus { opacity: 0.65; }
+.rail-nav-focus:hover { opacity: 1 !important; color: var(--primary); }
+
+/* Rail footer: history selector, depth toggle, layout switch */
+.rail-footer {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.rail-footer-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rail-footer-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.rail-footer #history-select { flex: 1 1 auto; min-width: 0; }
+.layout-switch-btn { font-size: 0.78rem; }
+
+/* Focus mode: show only the focused section in the main pane */
+.rail-focus-bar {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  border-radius: var(--radius);
+}
+.rail-focus-label { font-size: 0.82rem; font-weight: 600; }
+.briefing-shell[data-focus] .briefing-main > *:not([data-focus-target]) { display: none !important; }
+.briefing-shell[data-focus="cross-section"] .viz-canvas-container { height: min(62vh, 660px) !important; }
+.briefing-shell[data-focus="cross-section"] .map-container { height: min(62vh, 660px) !important; }
+
+/* Responsive: collapse to a single column on narrow viewports */
+@media (max-width: 980px) {
+  .briefing-shell { grid-template-columns: 1fr; }
+  .briefing-rail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.75rem;
+  }
+}
