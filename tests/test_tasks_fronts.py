@@ -128,10 +128,67 @@ class TestColocate:
     def test_convective_uses_el_for_vertical_extent(self):
         # Overflown boundary but convective towers far above (the Dijon case):
         # weather_top must reflect the convective EL, not the shallow cloud layer.
+        # No CIN/ML-CAPE/LI in the fixture → convection defaults to realized.
         cl = [{"top_ft": 9000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 850, "coverage": "sct"}]
         conv = {"risk_level": "moderate", "el_altitude_ft": 33000.0}
         cat, top = _colocate(self._an(cl, conv), "ecmwf", 0.0, 850)
         assert cat == "convective" and top == 33000.0
+
+    @staticmethod
+    def _an_full(cloud_layers, convective, indices, precip=None):
+        """Analysis fixture that also carries the sounding ``indices`` column
+        (ML-CAPE / NWP LI) needed by the realized-convection gate (#216)."""
+        return [{
+            "distance_from_origin_nm": 0.0,
+            "sounding": {"ecmwf": {
+                "cloud_layers": cloud_layers,
+                "convective": convective,
+                "indices": indices,
+                "precipitation": precip,
+            }},
+        }]
+
+    def test_cin_capped_potential_not_convective(self):
+        # LSGS 2026-06-07 regression (#216): GFS 925 hPa θe crossing over Alpine
+        # terrain. risk_level "moderate" is driven by CIN-capped potential CAPE
+        # (CIN -59.5, ML-CAPE 147, NWP LI -1) — convection is NOT realized. The
+        # only cloud is high cirrus (FL270+) that does NOT span 925, so the
+        # boundary is dry, and the parcel EL (27,233 ft) must NOT become a
+        # convective top. (Was the false-RED "convective tops to FL272".)
+        cl = [{"top_ft": 29298.0, "base_pressure_hpa": 400, "top_pressure_hpa": 300, "coverage": "ovc"}]
+        conv = {
+            "risk_level": "moderate", "method": "thermo",
+            "cin_jkg": -59.5, "el_altitude_ft": 27233.0, "top_ft": 27233.0,
+            "lifted_index": None,
+        }
+        indices = {"cape_mixed_layer_jkg": 147.3, "nwp_lifted_index": -1.0}
+        cat, top = _colocate(self._an_full(cl, conv, indices), "ecmwf", 0.0, 925)
+        assert cat == "dry"
+        assert top is None  # the parcel EL is never used as a realized top
+
+    def test_cin_capped_but_high_ml_cape_stays_convective(self):
+        # Guard the gate isn't over-aggressive: a strong cap (CIN -80) with a
+        # genuinely unstable air mass (ML-CAPE 1200) is realizable (loaded gun) →
+        # still convective, EL still its tower-depth proxy.
+        cl = [{"top_ft": 9000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 850, "coverage": "sct"}]
+        conv = {
+            "risk_level": "high", "method": "thermo",
+            "cin_jkg": -80.0, "el_altitude_ft": 36000.0, "top_ft": 36000.0,
+        }
+        indices = {"cape_mixed_layer_jkg": 1200.0, "nwp_lifted_index": -1.0}
+        cat, top = _colocate(self._an_full(cl, conv, indices), "ecmwf", 0.0, 850)
+        assert cat == "convective" and top == 36000.0
+
+    def test_nwp_convective_cloud_is_realized(self):
+        # An NWP-method assessment (method != "thermo") reflects modeled
+        # convective cloud → realized regardless of CIN; its NWP top is used.
+        conv = {
+            "risk_level": "moderate", "method": "nwp",
+            "cin_jkg": -90.0, "top_ft": 25000.0,
+        }
+        indices = {"cape_mixed_layer_jkg": 50.0, "nwp_lifted_index": 2.0}
+        cat, top = _colocate(self._an_full([], conv, indices), "ecmwf", 0.0, 850)
+        assert cat == "convective" and top == 25000.0
 
     def test_partly_cloud_at_level_is_partly(self):
         cl = [{"top_ft": 12000.0, "base_pressure_hpa": 900, "top_pressure_hpa": 700, "coverage": "sct"}]
