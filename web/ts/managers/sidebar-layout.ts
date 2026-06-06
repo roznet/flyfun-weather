@@ -72,7 +72,7 @@ function enterFocus(shell: HTMLElement, key: string): void {
   const el = sectionEl(key);
   if (!el) return;
   el.classList.remove('collapsed');
-  document.querySelectorAll('[data-focus-target]').forEach((n) => n.removeAttribute('data-focus-target'));
+  shell.querySelectorAll('[data-focus-target]').forEach((n) => n.removeAttribute('data-focus-target'));
   el.setAttribute('data-focus-target', '');
   shell.setAttribute('data-focus', key);
   focusKey = key;
@@ -83,7 +83,7 @@ function enterFocus(shell: HTMLElement, key: string): void {
 
 function exitFocus(shell: HTMLElement): void {
   shell.removeAttribute('data-focus');
-  document.querySelectorAll('[data-focus-target]').forEach((n) => n.removeAttribute('data-focus-target'));
+  shell.querySelectorAll('[data-focus-target]').forEach((n) => n.removeAttribute('data-focus-target'));
   focusKey = null;
   updateFocusBar(shell);
   requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
@@ -117,6 +117,9 @@ function updateFocusBar(shell: HTMLElement): void {
 }
 
 let spyObserver: IntersectionObserver | null = null;
+// Stable handle to the active scroll-spy recompute so scroll/resize can call it
+// directly instead of tearing down and rebuilding the observer each time.
+let spyRecompute: (() => void) | null = null;
 
 function setupScrollSpy(nav: HTMLElement): void {
   spyObserver?.disconnect();
@@ -132,8 +135,14 @@ function setupScrollSpy(nav: HTMLElement): void {
         if (!best || r.top < best.top) best = { key, top: r.top };
       }
     }
-    items.forEach((i) => i.classList.toggle('active', !!best && i.dataset.navKey === best.key));
+    items.forEach((i) => {
+      const active = !!best && i.dataset.navKey === best.key;
+      i.classList.toggle('active', active);
+      if (active) i.setAttribute('aria-current', 'true');
+      else i.removeAttribute('aria-current');
+    });
   };
+  spyRecompute = recompute;
   spyObserver = new IntersectionObserver(recompute, { threshold: [0, 1] });
   for (const item of items) {
     const el = sectionEl(item.dataset.navKey!);
@@ -176,8 +185,10 @@ function buildNav(nav: HTMLElement, shell: HTMLElement): void {
       lab.textContent = label;
       const focus = document.createElement('span');
       focus.className = 'rail-nav-focus';
+      focus.setAttribute('role', 'button');
+      focus.setAttribute('aria-label', `Focus ${label}`);
       focus.title = 'Focus this section';
-      focus.textContent = '⛶'; // ⛶
+      focus.textContent = '⛶';
       item.append(dot, lab, focus);
 
       item.addEventListener('click', (e) => {
@@ -279,12 +290,27 @@ export function initBriefingLayout(): void {
   }
 
   // Move all briefing content into MAIN (preserve order), skipping the
-  // page-header, the shell itself, and the loading overlay.
-  const keep = new Set<Node | null>([pageHeader, shell, loadingOverlay]);
+  // page-header, the shell itself, and the loading overlay. Error and
+  // stale-data banners are kept out of MAIN too so the focus-mode
+  // `display:none` rule can never suppress a freshness/error warning.
+  const keep = new Set<Node | null>([
+    pageHeader,
+    shell,
+    loadingOverlay,
+    document.getElementById('error-message'),
+    document.getElementById('stale-pack-banner'),
+  ]);
   Array.from(container.childNodes).forEach((node) => {
     if (keep.has(node)) return;
     main.appendChild(node);
   });
+
+  // Pin the error/stale banners full-width at the very top, above both panes,
+  // so a freshness/error warning is always visible (and outside focus-mode).
+  const staleBanner = document.getElementById('stale-pack-banner');
+  const errorBanner = document.getElementById('error-message');
+  if (staleBanner) container.insertBefore(staleBanner, shell);
+  if (errorBanner) container.insertBefore(errorBanner, shell);
 
   // Build the rail. The assessment + advisories stay in MAIN (rendered as
   // before); the rail carries the route identity, a derived glance summary,
@@ -318,8 +344,10 @@ export function initBriefingLayout(): void {
   if (banner) sumMo.observe(banner, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   if (advWrapper) sumMo.observe(advWrapper, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
 
-  // Keep scroll-spy honest during scroll/resize.
-  const onScroll = debounce(() => setupScrollSpy(nav), 0);
+  // Keep the active nav item honest during scroll/resize. Call the existing
+  // recompute directly (debounced) — the observer is only rebuilt when the
+  // nav items themselves change (via buildNav → setupScrollSpy).
+  const onScroll = debounce(() => spyRecompute?.(), 50);
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', onScroll, { passive: true });
 }
@@ -355,7 +383,7 @@ function buildSummary(container: HTMLElement): void {
   const level = readAssessmentLevel(banner);
   const overall = document.createElement('button');
   overall.type = 'button';
-  overall.className = `rail-overall rail-overall-${level || 'none'}`;
+  overall.className = level ? `rail-overall rail-overall-${level}` : 'rail-overall';
   const levelText = banner?.querySelector('strong')?.textContent?.trim() || (level ? level.toUpperCase() : '—');
   const dot = document.createElement('span');
   dot.className = 'rail-overall-dot';
