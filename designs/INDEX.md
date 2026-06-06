@@ -27,7 +27,7 @@ Key exports: `SOURCE_REGISTRY`, `MarkerStore`, `get_store`, `check_source`, `run
 → Full doc: freshness-markers.md
 
 ### analysis
-Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, DD/NWP cloud methods, four icing methods, inversions, convective, vertical motion/CAT), altitude advisories, model divergence scoring. Icing gated by `is_in_cloud_layer()`; icing/cloud methods user-selectable. Per-subsystem deep-dive audits (clouds, convective, icing, cross-cutting) are linked from the doc.
+Aviation-specific analysis: wind components, MetPy sounding analysis (thermodynamics, DD/NWP cloud methods, four icing methods, inversions, convective, vertical motion/CAT), altitude advisories, model divergence scoring. Icing gated by `is_in_cloud_layer()`; icing/cloud methods user-selectable. Per-subsystem deep-dive audits (clouds, convective, icing, cross-cutting) and an explicit meteorological-decisions log (reasoning + rejected options) are linked from the doc.
 Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`, `assess_vertical_motion`, `detect_inversions`
 → Full doc: analysis.md
 

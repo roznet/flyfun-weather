@@ -4,15 +4,17 @@
 
 _Code references verified against the repo on 2026-06-06._
 
-> ⚠️ **Pending rewrite (synthesized NWP layers):** a server-side synthesized-layer
-> fallback for Open-Meteo-only models was added then **reverted** (df4474ff) so
-> `nwp_cloud_layers` is now strictly model-native — Open-Meteo-only models
-> (GEM/UKMO/MétéoFr) return `None`, not synthesized bands. Several sections below
-> still describe `source="synthesized"` (per-model tables, pipeline summary) and
-> are stale. Related code smell: `advise.py:109` still labels any non-`grib`
-> NWP layer set `cloud_method_effective="nwp_synthesized"`, which now **mislabels
-> genuine `nwp_3d` layers** (ECMWF/ICON). Resolve the code question before the
-> doc rewrite — see session sync notes.
+> ⚠️ **Stale: synthesized NWP layers (pending doc rewrite).** A server-side
+> synthesized-layer fallback for Open-Meteo-only models was added then **reverted**
+> (df4474ff) so `nwp_cloud_layers` is now strictly model-native — Open-Meteo-only
+> models (GEM/UKMO/MétéoFr) return `None`, not synthesized bands. Several sections
+> below still describe `source="synthesized"` (per-model tables, pipeline summary)
+> and need a coherent rewrite.
+>
+> **Known minor item (code kept as-is, decision 2026-06-06):** `advise.py:109`
+> labels any non-`grib` NWP layer set `cloud_method_effective="nwp_synthesized"`,
+> which now mislabels genuine `nwp_3d` layers (ECMWF/ICON). Cosmetic — affects
+> only that metadata string; not corrected in code.
 
 ## Overview
 
@@ -225,7 +227,7 @@ This function (`icing_common.py:98-145`) is the shared altitude-aware cloud cove
 **Problem:** When GFS diagnostics are available, the function uses the GRIB diagnostic layer boundaries (base_ft/top_ft) for altitude matching but uses the Open-Meteo bulk percentage for the cloud cover value:
 
 ```python
-# icing_common.py:108
+# icing_common.py, in nwp_cloud_cover_at_altitude()
 pct = bulk_pct or 0.0  # Uses Open-Meteo cloud_cover_{low,mid,high}_pct
 ```
 
@@ -240,6 +242,8 @@ return diag[band].coverPct ?? 0;  // Uses GRIB diagnostic value
 ```
 
 **Impact:** Icing assessment (Ogimet-NWP, SFIP proxy) and cloud layer visualization can use different cloud cover values for the same band at the same location. The GRIB diagnostic `cover_pct` is the native model output; Open-Meteo values are post-processed and may diverge.
+
+**Status (2026-06-06):** Known minor inconsistency, **code kept as-is** by decision — not a briefing-correctness defect (both numbers are "cloud cover" from slightly different sources). A one-line fix (`pct = diag_layer.cover_pct or bulk_pct`) is available if calibration ever shows it matters.
 
 **Fix:** Prefer `diag_layer.cover_pct` when available, fall back to `bulk_pct`:
 ```python

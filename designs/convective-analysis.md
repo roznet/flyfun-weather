@@ -4,6 +4,8 @@
 
 _Code references verified against the repo on 2026-06-06._
 
+> 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [future/meteorology-decisions.md](./future/meteorology-decisions.md) §4–§5 — read before changing thresholds or the DD/NWP boundary.
+
 ## Overview
 
 Convective assessment flows through four stages: **fetch** (Open-Meteo API + GRIB2 enrichment), **analysis** (thermo + NWP dual-method assessment), **resolution** (user-selectable active method), and **output** (visualization towers + advisory evaluators). Two parallel assessment methods produce independent `ConvectiveAssessment` objects that the user can switch between.

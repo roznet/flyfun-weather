@@ -4,6 +4,8 @@
 
 _Code references verified against the repo on 2026-06-06._
 
+> 📐 The Ogimet icing-zone-width / convective-contribution decision (why Ogimet bands look "wide" vs GRAMET) is documented in [future/meteorology-decisions.md](./future/meteorology-decisions.md) §2 — read before re-investigating zone width.
+
 ## Overview
 
 WeatherBrief computes icing potential using four independent methods plus SLD detection, all running on every sounding:
@@ -144,7 +146,13 @@ Used by all four zone builders: Ogimet-DD, Ogimet-NWP, IENG, and SFIP.
 
 **Problem:** SFIP classified icing type using dry-bulb temperature with thresholds shifted ~1°C warmer than Ogimet's wet-bulb-based thresholds. Created inconsistent type reports between methods for the same level.
 
-**Fix:** SFIP now uses `classify_icing_type()` which prefers wet-bulb when available, same thresholds as Ogimet.
+**Fix (corrected 2026-06-06 — partial):** SFIP shares the unified cloud-lookup and
+zone-grouping utilities, but for icing **type** it **intentionally keeps its own
+dry-bulb thresholds** (`sfip.py:_classify_icing_type`, per Belo-Pereira 2015 /
+Morcrette et al. 2019) — it does **not** delegate to the wet-bulb
+`classify_icing_type()` that the Ogimet-family methods use. So type labels can
+still differ between SFIP and Ogimet by design; only Ogimet-DD/NWP/IENG were
+unified. (Earlier wording here claimed full unification — that was overstated.)
 
 ### 3. `icing_index` overwrite between methods
 
@@ -168,7 +176,12 @@ Used by all four zone builders: Ogimet-DD, Ogimet-NWP, IENG, and SFIP.
 
 **Problem:** `_is_near_cloud`, `_classify_icing_type`, `_nwp_cloud_for_altitude`/`_cloud_cover_for_level`, and zone grouping logic were duplicated between `icing.py` and `sfip.py` with subtle differences.
 
-**Fix:** Extracted to `icing_common.py`. Both modules delegate to shared implementations. Original private functions preserved as thin wrappers for backward compatibility.
+**Fix:** `_is_near_cloud`, the NWP cloud-altitude lookup, and zone grouping were
+extracted to `icing_common.py` and both modules use them (the `_is_near_cloud`
+wrappers have since been removed entirely). **Exception:** the icing-**type**
+classifier was *not* unified — `icing_common.classify_icing_type()` (wet-bulb) is
+used by the Ogimet-family methods only; SFIP retains its own dry-bulb
+`_classify_icing_type` by design (see Bug #2).
 
 ### 7. Icing zones bridging cloud-band gaps (PR #106)
 
