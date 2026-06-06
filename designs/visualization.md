@@ -73,7 +73,7 @@ Rendering order: **obscuration → clouds → convection → icing → CAT/E-She
 | SLD bands | SLD | icing | `sld-bands.ts` | off | SLD from warm-nose freezing rain (experimental, all models) |
 | CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | on | Richardson number turbulence |
 | E-Shear bands | CAT (E-Shear) | turbulence | `e-shear-bands.ts` | off | Vertical + horizontal wind shear E parameter (CloudPath method) |
-| Inversion bands | Inversions | turbulence | `inversion-bands.ts` | on | Purple bands by strength |
+| Inversion bands | Inversions | stability | `inversion-bands.ts` | on | Purple bands by strength |
 | Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | off† | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). †Default ON in airport-profile drawer, OFF on briefing — context-aware via `getDefaultEnabled('airport-profile')`. |
 | Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Current conditions | Current conditions | conditions | `current-conditions.ts` | off | D-0 overlay: METAR airport columns (flight-category color, ±2 nm, 5000 ft tall) + route SIGMET hatched zones; model-independent, projected from the snapshot |

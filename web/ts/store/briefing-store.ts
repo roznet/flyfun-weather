@@ -831,6 +831,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const cur = get().vizSettings;
     const next: VizSettings = { ...cur, activePreset: presetId };
     if (view.enabledLayers) next.enabledLayers = { ...cur.enabledLayers, ...view.enabledLayers };
+    // Route-graph metrics are set, but routeGraphVisible is intentionally left
+    // as the user had it — applying a preset shouldn't pop open a graph the user
+    // collapsed (mirrors the chip's "don't disrupt the user's layout" stance).
     if (view.routeGraph?.left) next.routeGraphLeftMetric = view.routeGraph.left;
     if (view.routeGraph?.right) next.routeGraphRightMetric = view.routeGraph.right;
     if (view.map?.metric) next.mapColorMetric = view.map.metric;

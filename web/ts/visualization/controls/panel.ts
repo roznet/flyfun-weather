@@ -13,7 +13,7 @@ import { getDdSubstituteId } from '../cross-section/nwp-fallback';
 import { getComparableLayerGroups, getComparableLayer } from '../cross-section/compare-layers';
 import { showLayerInfo, showPopupContent } from '../../components/info-popup';
 import { renderFrontsInfo } from '../../helpers/fronts-info';
-import { modelLabel } from '../../utils';
+import { modelLabel, escapeHtml } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
 import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
@@ -435,11 +435,12 @@ export function renderVizControls(
 
   // Advisory-preset caption (#219): a one-line note explaining the active view.
   // Only emitted for advisory presets; absent for GRAMET/Custom (the panel
-  // re-renders on every settings change, so it clears itself). Caption text is
-  // a trusted static config literal — no user input to escape.
+  // re-renders on every settings change, so it clears itself). Captions are
+  // trusted static config literals today, but escape defensively so a future
+  // i18n/API-sourced caption can't inject markup.
   if (settings.layout !== 'map' && isAdvisoryPreset(settings.activePreset)) {
     const ap = getAdvisoryPreset(settings.activePreset!);
-    if (ap) html += `<div class="viz-preset-caption">${ap.caption}</div>`;
+    if (ap) html += `<div class="viz-preset-caption">${escapeHtml(ap.caption)}</div>`;
   }
 
   container.innerHTML = html;

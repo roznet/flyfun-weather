@@ -218,8 +218,10 @@ export function resolveAdvisoryPreset(
     }
     // 3. explicit lines / extras.
     for (const id of preset.lines ?? []) enabled[id] = true;
-    // 4. always-on context.
-    enabled['terrain'] = true;
+    // 4. always-on context. Terrain is force-rendered at draw time
+    //    (briefing-main sets effectiveEnabled['terrain']=true regardless of
+    //    enabledLayers), so it needs no entry here. cruise-altitude IS
+    //    toggle-controlled, so force it on.
     enabled['cruise-altitude'] = true;
     view.enabledLayers = enabled;
   }

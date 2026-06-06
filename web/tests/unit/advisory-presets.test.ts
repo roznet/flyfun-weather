@@ -4,13 +4,17 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  ADVISORY_PRESETS, ADVISORY_TO_PRESET,
+  ADVISORY_PRESETS, ADVISORY_TO_PRESET, ADVISORY_OVERRIDES,
   getAdvisoryPreset, getAdvisoryPresets, isAdvisoryPreset,
   getPresetForAdvisory, resolveAdvisoryPreset,
 } from '../../ts/visualization/cross-section/advisory-presets';
 import { getAllLayers } from '../../ts/visualization/cross-section/layer-registry';
+import { ROUTE_GRAPH_METRICS, METRIC_NONE } from '../../ts/visualization/route-graph/metrics';
+import { MAP_METRICS, MAP_METRIC_NONE } from '../../ts/visualization/route-map/metrics';
 
 const ALL_IDS = new Set(getAllLayers().map((l) => l.id));
+const ROUTE_GRAPH_IDS = new Set<string>([METRIC_NONE, ...ROUTE_GRAPH_METRICS.map((m) => m.id)]);
+const MAP_METRIC_IDS = new Set<string>([MAP_METRIC_NONE, ...MAP_METRICS.map((m) => m.id)]);
 
 describe('config integrity', () => {
   it('has the six Phase-1 presets', () => {
@@ -31,6 +35,38 @@ describe('config integrity', () => {
       for (const id of p.lines ?? []) {
         expect(ALL_IDS.has(id), `preset ${p.id} references unknown layer ${id}`).toBe(true);
       }
+    }
+  });
+
+  it('every ADVISORY_OVERRIDES line id is a real layer', () => {
+    // getAdvisoryPresets() only covers the base presets — the per-advisory
+    // overrides (e.g. FIKI's extra warm-nose layers) need their own check, or a
+    // typo would silently no-op at render time.
+    for (const [advId, ovr] of Object.entries(ADVISORY_OVERRIDES)) {
+      for (const id of ovr.lines ?? []) {
+        expect(ALL_IDS.has(id), `ADVISORY_OVERRIDES[${advId}] references unknown layer ${id}`).toBe(true);
+      }
+      for (const g of ovr.groups ?? []) {
+        expect(getAllLayers().some((l) => l.group === g),
+          `ADVISORY_OVERRIDES[${advId}] references empty group ${g}`).toBe(true);
+      }
+    }
+  });
+
+  it('every preset routeGraph metric id is a real route-graph metric', () => {
+    for (const p of getAdvisoryPresets()) {
+      for (const id of [p.routeGraph?.left, p.routeGraph?.right]) {
+        if (id === undefined) continue;
+        expect(ROUTE_GRAPH_IDS.has(id), `preset ${p.id} references unknown route-graph metric ${id}`).toBe(true);
+      }
+    }
+  });
+
+  it('every preset map metric id is a real route-map metric', () => {
+    for (const p of getAdvisoryPresets()) {
+      const id = p.map?.metric;
+      if (id === undefined) continue;
+      expect(MAP_METRIC_IDS.has(id), `preset ${p.id} references unknown route-map metric ${id}`).toBe(true);
     }
   });
 
@@ -61,9 +97,10 @@ describe('resolveAdvisoryPreset — method resolution', () => {
     // clouds method → soft-nwp on, other cloud styles off
     expect(en['soft-nwp-cloud-bands']).toBe(true);
     expect(en['cloud-bands']).toBe(false);
-    // explicit line + always-on context
+    // explicit line + always-on context. terrain is NOT in the resolved view
+    // (force-rendered at draw time); cruise-altitude IS toggle-controlled.
     expect(en['freezing-level']).toBe(true);
-    expect(en['terrain']).toBe(true);
+    expect('terrain' in en).toBe(false);
     expect(en['cruise-altitude']).toBe(true);
   });
 
