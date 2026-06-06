@@ -23,6 +23,14 @@ const MARGIN_TOP = 24;
 const MARGIN_BOTTOM = 44;
 const PANEL_GAP = 8;
 const FL_LABEL_WIDTH = 40; // space between plot right edge and side panel for FL labels
+// Frozen plot-box aspect (width / height). The skew transform ties both the
+// 45° isotherm density and the temperature scale to the plot width, so an
+// unconstrained container width stretches the sounding horizontally. Clamping
+// the box to a fixed ratio keeps the diagram's proportions identical across
+// layouts; a wider container adds centred whitespace instead of distortion.
+// 1.8 matches the classic 960px layout's max aspect, so that layout is
+// unchanged while the wider sidebar layout is brought back to the same look.
+const PLOT_ASPECT = 1.8;
 
 export class SkewTRenderer {
   private container: HTMLElement;
@@ -110,16 +118,24 @@ export class SkewTRenderer {
       return;
     }
 
-    // Compute layout: Skew-T plot area + FL labels gap + side panel
+    // Compute layout: Skew-T plot area + FL labels gap + side panel.
+    // The plot box is clamped to PLOT_ASPECT so the sounding keeps its
+    // proportions regardless of container width; the [plot + side panel] block
+    // is centred, so excess width becomes whitespace rather than stretch.
     const hasSidePanel = !!this.primaryVarId;
     const sidePanelTotalW = hasSidePanel ? FL_LABEL_WIDTH + SIDE_PANEL_WIDTH + PANEL_GAP : FL_LABEL_WIDTH;
-    const skewtRight = cssW - MARGIN_RIGHT - sidePanelTotalW;
+
+    const plotHeight = cssH - MARGIN_TOP - MARGIN_BOTTOM;
+    const availW = cssW - MARGIN_LEFT - MARGIN_RIGHT - sidePanelTotalW;
+    const plotWidth = Math.min(availW, plotHeight * PLOT_ASPECT);
+    const left = MARGIN_LEFT + Math.max(0, (availW - plotWidth) / 2);
+    const skewtRight = left + plotWidth;
 
     const plotArea: PlotArea = {
-      left: MARGIN_LEFT,
+      left,
       top: MARGIN_TOP,
-      width: skewtRight - MARGIN_LEFT,
-      height: cssH - MARGIN_TOP - MARGIN_BOTTOM,
+      width: plotWidth,
+      height: plotHeight,
       right: skewtRight,
       bottom: cssH - MARGIN_BOTTOM,
     };
@@ -173,7 +189,7 @@ export class SkewTRenderer {
     }
 
     // Title
-    this.renderTitle(ctx, cssW, this.data);
+    this.renderTitle(ctx, plotArea.left, this.data);
   }
 
   private renderPlaceholder(ctx: CanvasRenderingContext2D, w: number, h: number): void {
@@ -185,7 +201,7 @@ export class SkewTRenderer {
     ctx.fillText('Click a point on the cross-section to view its Skew-T', w / 2, h / 2);
   }
 
-  private renderTitle(ctx: CanvasRenderingContext2D, width: number, data: SoundingProfileData): void {
+  private renderTitle(ctx: CanvasRenderingContext2D, leftX: number, data: SoundingProfileData): void {
     const dark = document.documentElement.dataset.theme === 'dark';
     ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.fillStyle = dark ? '#ddd' : '#333';
@@ -193,7 +209,7 @@ export class SkewTRenderer {
     ctx.textBaseline = 'top';
     const label = data.label || `Point ${data.point_index}`;
     const model = data.model.toUpperCase();
-    ctx.fillText(`${label} — ${model}`, MARGIN_LEFT, 4);
+    ctx.fillText(`${label} — ${model}`, leftX, 4);
   }
 
   /** Toggle an overlay layer and re-render. */

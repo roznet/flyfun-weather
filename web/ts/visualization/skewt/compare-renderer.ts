@@ -22,6 +22,8 @@ const MARGIN_TOP = 24;
 const MARGIN_BOTTOM = 44;
 const PANEL_GAP = 8;
 const FL_LABEL_WIDTH = 40;
+// Frozen plot-box aspect (width / height) — see renderer.ts for rationale.
+const PLOT_ASPECT = 1.8;
 
 export interface CompareModelDataset {
   model: string;
@@ -113,16 +115,21 @@ export class SkewTCompareRenderer {
       return;
     }
 
-    // Layout
+    // Layout — plot box clamped to PLOT_ASPECT and centred (see renderer.ts).
     const hasSidePanel = !!this.primaryVarId;
     const sidePanelTotalW = hasSidePanel ? FL_LABEL_WIDTH + SIDE_PANEL_WIDTH + PANEL_GAP : FL_LABEL_WIDTH;
-    const skewtRight = cssW - MARGIN_RIGHT - sidePanelTotalW;
+
+    const plotHeight = cssH - MARGIN_TOP - MARGIN_BOTTOM;
+    const availW = cssW - MARGIN_LEFT - MARGIN_RIGHT - sidePanelTotalW;
+    const plotWidth = Math.min(availW, plotHeight * PLOT_ASPECT);
+    const left = MARGIN_LEFT + Math.max(0, (availW - plotWidth) / 2);
+    const skewtRight = left + plotWidth;
 
     const plotArea: PlotArea = {
-      left: MARGIN_LEFT,
+      left,
       top: MARGIN_TOP,
-      width: skewtRight - MARGIN_LEFT,
-      height: cssH - MARGIN_TOP - MARGIN_BOTTOM,
+      width: plotWidth,
+      height: plotHeight,
       right: skewtRight,
       bottom: cssH - MARGIN_BOTTOM,
     };
@@ -219,13 +226,13 @@ export class SkewTCompareRenderer {
     const primary = this.datasets.find(d => d.isPrimary);
     const label = primary?.data.label || `Point ${primary?.data.point_index ?? '?'}`;
 
-    // Title
+    // Title — aligned with the (possibly centred) plot left edge
     ctx.fillStyle = dark ? '#ddd' : '#333';
-    ctx.fillText(`${label} — Compare`, MARGIN_LEFT, 4);
+    ctx.fillText(`${label} — Compare`, plotArea.left, 4);
 
     // Model legend (colored dots + names)
     ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif';
-    let x = MARGIN_LEFT + ctx.measureText(`${label} — Compare`).width + 16;
+    let x = plotArea.left + ctx.measureText(`${label} — Compare`).width + 16;
     for (const ds of this.datasets) {
       // Dot
       ctx.fillStyle = ds.color;
