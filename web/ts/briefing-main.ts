@@ -39,6 +39,7 @@ import { SkewTCompareRenderer, type CompareModelDataset as SkewtCompareModelData
 import { getActiveTheme } from './visualization/cross-section/theme';
 import { startBriefingTour, maybeAutoStartBriefingTour } from './tour/briefing-tour';
 import { maybeOfferTour } from './tour/tour-offer';
+import { initBriefingLayout } from './managers/sidebar-layout';
 
 
 async function loadFlightPireps(flightId: string): Promise<void> {
@@ -1383,6 +1384,11 @@ async function init(): Promise<void> {
       }
     }
   });
+
+  // --- Optional sidebar layout (opt-in, reversible) ---
+  // Reparents header/assessment/advisories/freshness into a rail and adds a
+  // scroll-spy section nav + focus mode. No-op in the default classic layout.
+  initBriefingLayout();
 
   // --- Wire image lightbox ---
   const lightbox = document.getElementById('lightbox');
