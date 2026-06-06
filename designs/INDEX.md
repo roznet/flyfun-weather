@@ -31,6 +31,10 @@ Aviation-specific analysis: wind components, MetPy sounding analysis (thermodyna
 Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_advisories`, `compare_models`, `assess_vertical_motion`, `detect_inversions`
 → Full doc: analysis.md
 
+### meteorology-decisions
+Dated log of explicit meteorological design decisions, each with context, reasoning, and rejected alternatives: ceiling DD-vs-NWP-adjusted, Ogimet icing-zone width / convective contribution at moderate CAPE, GFS cloud-diagnostics window-midpoint interp + RH/condensate gate, convective realizable-CAPE / regime discrimination / DD-stays-pure, NWP-cover vs CAPE-driven risk. Read before changing any weather calibration or threshold — the choice was likely made deliberately.
+→ Full doc: meteorology-decisions.md
+
 ### advisories
 Route advisory system: 13 deterministic evaluators across 6 categories (icing, cloud, turbulence, convective, airport conditions, feasibility/model-quality) with per-model severity grading, user-tunable params, registry auto-discovery, worst/majority aggregation, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`

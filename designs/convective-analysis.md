@@ -4,7 +4,7 @@
 
 _Code references verified against the repo on 2026-06-06._
 
-> 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [future/meteorology-decisions.md](./future/meteorology-decisions.md) §4–§5 — read before changing thresholds or the DD/NWP boundary.
+> 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [meteorology-decisions.md](./meteorology-decisions.md) §4–§5 — read before changing thresholds or the DD/NWP boundary.
 
 ## Overview
 

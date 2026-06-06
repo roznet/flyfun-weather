@@ -4,7 +4,7 @@
 
 _Code references verified against the repo on 2026-06-06._
 
-> 📐 The Ogimet icing-zone-width / convective-contribution decision (why Ogimet bands look "wide" vs GRAMET) is documented in [future/meteorology-decisions.md](./future/meteorology-decisions.md) §2 — read before re-investigating zone width.
+> 📐 The Ogimet icing-zone-width / convective-contribution decision (why Ogimet bands look "wide" vs GRAMET) is documented in [meteorology-decisions.md](./meteorology-decisions.md) §2 — read before re-investigating zone width.
 
 ## Overview
 

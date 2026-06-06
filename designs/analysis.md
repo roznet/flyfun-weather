@@ -10,7 +10,7 @@ Transform raw NWP data into aviation-relevant assessments. Each module is indepe
 
 > 📐 **Before changing or second-guessing any meteorological choice** (icing-zone
 > width, CAPE/convective thresholds, ceiling derivation, GFS cloud gating, DD-vs-NWP
-> boundaries), read **[future/meteorology-decisions.md](./future/meteorology-decisions.md)**.
+> boundaries), read **[meteorology-decisions.md](./meteorology-decisions.md)**.
 > It's a dated log of explicit decisions *with reasoning and what-was-rejected*,
 > written so the next reviewer doesn't re-investigate a choice that was already
 > made deliberately (e.g. §2 Ogimet icing width, §4 realizable-CAPE/DD-stays-pure,
@@ -195,7 +195,7 @@ Simplified Forecast Icing Potential — fuzzy-logic index (Belo-Pereira 2015, Mo
 **Fuzzy logic** — four membership functions (T, RH, CLW, vertical velocity) combined with weights:
 - **Six variants**: `full`/`full_no_vv` (SFIP_O, GFS/ICON-EU — has real CLW from GRIB) `0.35×T + 0.15×RH + 0.35×CLW + 0.15×VV`; `proxy`/`proxy_no_vv` (SFIP_4, other models) `0.40×T + 0.25×RH + 0.25×CLW_proxy + 0.10×VV`; `interp`/`interp_no_vv` (same as full but CLW spatially/vertically interpolated). The `_no_vv` suffix indicates omega is unavailable (M_VV = 0).
 - **Glaciation factor** (GFS/ICON-EU only): `CLW/(CLW+ICMR)` reduces icing when cloud is glaciated
-- **Icing type**: SFIP keeps its **own dry-bulb** thresholds (`_classify_icing_type`, Belo-Pereira 2015 / Morcrette 2019) — it does NOT use the shared wet-bulb `classify_icing_type()` that Ogimet/IENG use (deliberate; see [meteorology-decisions §2](./future/meteorology-decisions.md))
+- **Icing type**: SFIP keeps its **own dry-bulb** thresholds (`_classify_icing_type`, Belo-Pereira 2015 / Morcrette 2019) — it does NOT use the shared wet-bulb `classify_icing_type()` that Ogimet/IENG use (deliberate; see [meteorology-decisions §2](./meteorology-decisions.md))
 - Output: `sfip_raw` (0–1), `sfip_100` (0–100), severity, variant (one of six above)
 
 **Temperature membership (M_T):** Piecewise linear ramp to peak 1.0 in [−5, −14]°C, then exponential decay below −14°C: `exp(−k × (|T| − 14))` with `k=0.4` (`_TEMP_DECAY_K`). SLW concentration drops roughly exponentially with decreasing temperature as ice nucleation dominates. This aligns SFIP's effective range with the Ogimet layered formula (which cuts off at −14°C) while maintaining a smooth tail for mixed-phase icing. Reference values: −15°C → 0.67, −17°C → 0.30, −20°C → 0.09. Temperature gating: [0, −25]°C.
@@ -475,7 +475,7 @@ function/field details against current code. Fetch any with
 
 ## References
 
-- **Meteorological decisions (read first for any calibration/threshold question):** [future/meteorology-decisions.md](./future/meteorology-decisions.md)
+- **Meteorological decisions (read first for any calibration/threshold question):** [meteorology-decisions.md](./meteorology-decisions.md)
 - Input models: [data-models.md](./data-models.md)
 - Fetch layer: [fetch.md](./fetch.md)
 - Output consumers: [digest.md](./digest.md)
