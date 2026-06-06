@@ -444,6 +444,27 @@ Advisory model filtering: `advisory_models` preference excludes `best_match` by 
 - Pint units must not leak beyond sounding subpackage (causes Pydantic serialization issues)
 - `matplotlib.use("agg")` required in skewt.py for worker thread compatibility
 
+## Deep-dive analyses
+
+Per-subsystem audit docs that trace data source-by-source, compare the parallel
+methods, and flag consistency issues — deeper than this overview. They are
+**point-in-time audits** (as-of dates below), not living architecture; trust them
+for the *reasoning and the inconsistencies they surface*, but re-verify exact
+function/field details against current code. Fetch any with
+`get_design_doc(topic=…)`.
+
+- **cloud-layers-analysis** (as-of 2026-05-13) — per-model cloud pipeline: fetch
+  → detection (DD vs NWP) → output, source tracing, interpolation, consistency
+  across icing methods and visualization.
+- **convective-analysis** (as-of 2026-05-20) — per-model convective pipeline,
+  dual-method (thermo vs NWP) assessment, user-selectable active method, source
+  inconsistencies and recommendations.
+- **icing-models-analysis** (as-of 2026-05-03) — input audit for the four icing
+  methods + SLD: source tracing, interpolation, per-method consistency.
+- **cross-cutting-review** (as-of 2026-03-16) — icing × clouds × convection
+  interdependencies, method coupling, and simplification opportunities across the
+  three subsystems.
+
 ## References
 
 - Input models: [data-models.md](./data-models.md)
