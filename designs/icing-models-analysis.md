@@ -2,19 +2,21 @@
 
 > Per-model input audit, source tracing, interpolation methods, and consistency analysis for all three icing estimation methods.
 
+_Code references verified against the repo on 2026-06-06._
+
 ## Overview
 
 WeatherBrief computes icing potential using four independent methods plus SLD detection, all running on every sounding:
 
 | Method | Module | Signal Source | Index Range |
 |--------|--------|--------------|-------------|
-| **Ogimet-DD** | `sounding/icing.py` | Dewpoint depression attenuation | 0–100 |
-| **Ogimet-NWP** (default) | `sounding/icing.py` | NWP cloud fraction × glaciation | 0–100 |
-| **SFIP** | `sounding/sfip.py` | Fuzzy-logic membership functions | 0–100 |
-| **IENG** | `sounding/icing.py` | NWP cloud fraction (no glaciation) | 0–100 |
-| **SLD** | `sounding/sld.py` | Warm-nose freezing rain (all models) | moderate/severe |
+| **Ogimet-DD** | `analysis/sounding/icing.py` | Dewpoint depression attenuation | 0–100 |
+| **Ogimet-NWP** (default) | `analysis/sounding/icing.py` | NWP cloud fraction × glaciation | 0–100 |
+| **SFIP** | `analysis/sounding/sfip.py` | Fuzzy-logic membership functions | 0–100 |
+| **IENG** | `analysis/sounding/icing.py` | NWP cloud fraction (no glaciation) | 0–100 |
+| **SLD** | `analysis/sounding/sld.py` | Warm-nose freezing rain (all models) | moderate/severe |
 
-Shared utilities live in `sounding/icing_common.py`: cloud-proximity checks, NWP cloud altitude lookup, icing type classification, and zone grouping.
+Shared utilities live in `analysis/sounding/icing_common.py`: cloud-proximity checks, NWP cloud altitude lookup, icing type classification, and zone grouping.
 
 ---
 
@@ -24,9 +26,9 @@ Shared utilities live in `sounding/icing_common.py`: cloud-proximity checks, NWP
 
 | Input | Source | GFS | ECMWF | ICON | MétéoFr | UKMO | GEM |
 |-------|--------|-----|-------|------|---------|------|-----|
-| Temperature | Open-Meteo API | 28 lvls | 11 lvls | 12 lvls | 19 lvls | 20 lvls | 20 lvls |
-| Dewpoint | Open-Meteo API | 28 | 11 | 12 | 19 | 20 | 20 |
-| RH | Open-Meteo API | 28 | 11 | 12 | 19 | 20 | 20 |
+| Temperature | Open-Meteo API | 28 lvls | 13 lvls | 19 lvls | 19 lvls | 20 lvls | 20 lvls |
+| Dewpoint | Open-Meteo API | 28 | 13 | 19 | 19 | 20 | 20 |
+| RH | Open-Meteo API | 28 | 13 | 19 | 19 | 20 | 20 |
 | DD | Derived (T−Td) | all | all | all | all | all | all |
 | Wet-bulb | MetPy derived | all | all | all | all | all | all |
 | Omega (ω) | Open-Meteo API | yes | yes | **NO** | **NO** | yes | **NO** |
@@ -44,7 +46,7 @@ Shared utilities live in `sounding/icing_common.py`: cloud-proximity checks, NWP
 | 1. Spatial CLW/ICMR | `spatial_interpolation.py` | Linear in distance-space between route-point neighbors | Max 100nm gap. Preserves 0.0. Sets `clw_interpolated=True` |
 | 2. Vertical CLW/ICMR | `_interpolate_cloud_water()` in `__init__.py` | Linear in pressure-space between 50hPa GRIB levels | Fills 25hPa intermediate levels. Sets `clw_interpolated=True` |
 | 3. Volumetric LWC | `_enrich_lwc()` in `__init__.py` | Ideal gas law: `LWC = CLWMR × P/(Rd×T) × 1000` | Requires temperature; skipped if T missing |
-| 4. ICON model→pressure | GRIB enrichment | Log-pressure interpolation from model levels 35–74 | To 12 standard pressure levels |
+| 4. ICON model→pressure | GRIB enrichment | Log-pressure interpolation from model levels 35–74 | To 28 extended pressure levels (EXTENDED_PRESSURE_LEVELS) |
 
 ---
 

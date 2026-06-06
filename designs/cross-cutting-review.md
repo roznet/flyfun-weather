@@ -2,6 +2,8 @@
 
 > Pipeline interdependencies, method coupling, inconsistencies, and simplification opportunities across the three subsystems.
 
+_Code references verified against the repo on 2026-06-06._
+
 ## Pipeline Order & Data Flow
 
 ```
@@ -69,7 +71,7 @@ The icing formula underweights convective icing when SB-CAPE is low but elevated
 
 ### 2. Altitude advisories computed before method resolution ⚠️ Medium
 
-**Problem:** `compute_altitude_advisories()` is called in `analyze.py:153` during the analysis stage, **before** `_resolve_analyses()` runs in the advisory stage. The altitude advisories (vertical regimes, descend/climb advisories) always use:
+**Problem:** `compute_altitude_advisories()` is called in `analyze.py:149` during the analysis stage, **before** `_resolve_analyses()` runs in the advisory stage. The altitude advisories (vertical regimes, descend/climb advisories) always use:
 - DD cloud layers (default `cloud_layers`)
 - Ogimet-DD icing zones (default `icing_zones`)
 
@@ -152,8 +154,8 @@ Both convective assessments run at line 247-250. NWP CAPE is set at line 291. So
 
 Three places independently decide which CAPE to use:
 - **Convective:** `_effective_cape(indices)` → max(SB, MU, ML, NWP)
-- **Icing:** `indices.cape_surface_jkg` → SB only
-- **Cloud top uncertainty:** `indices.cape_surface_jkg` → SB only
+- **Icing:** now uses `effective_cape(indices)` (unified ✅)
+- **Cloud top uncertainty:** now uses `effective_cape(indices)` (unified ✅)
 
 Create a single `effective_cape` field on `ThermodynamicIndices` (computed once after NWP enrichment) and use it everywhere.
 
@@ -163,9 +165,9 @@ The "Raw NWP value preservation" block (lines 288-306) attaches `nwp_cape_jkg`, 
 
 Move it to right after `compute_indices()` (after line 180).
 
-### C. `_is_near_cloud` duplication
+### C. ~~`_is_near_cloud` duplication~~ ✅ DONE
 
-`icing.py:_is_near_cloud` and `sfip.py:_is_near_cloud` are thin wrappers around `icing_common.is_near_cloud` with different parameters. These could be inlined or the parameters could be passed directly at call sites, removing two wrapper functions.
+The `_is_near_cloud` wrappers in `icing.py` and `sfip.py` have been removed; all call sites now use `icing_common.is_near_cloud` directly.
 
 ---
 
@@ -191,4 +193,4 @@ Move it to right after `compute_indices()` (after line 180).
 | **4** | No icing/convective method_effective tracking | Low | Low |
 | **B** | ~~Move NWP enrichment earlier (fixes #6, enables #1 and #5)~~ | ~~**High**~~ | ✅ FIXED |
 | **A** | ~~Unify CAPE selection~~ (done via `_effective_cape()`) | ~~Medium~~ | ✅ FIXED |
-| **C** | Deduplicate `_is_near_cloud` wrappers | Low | Trivial |
+| **C** | ~~Deduplicate `_is_near_cloud` wrappers~~ | ~~Low~~ | ✅ DONE |

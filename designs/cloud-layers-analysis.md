@@ -2,6 +2,18 @@
 
 > Per-model cloud data pipeline, source tracing, interpolation methods, and consistency analysis across all icing methods and visualization.
 
+_Code references verified against the repo on 2026-06-06._
+
+> ⚠️ **Pending rewrite (synthesized NWP layers):** a server-side synthesized-layer
+> fallback for Open-Meteo-only models was added then **reverted** (df4474ff) so
+> `nwp_cloud_layers` is now strictly model-native — Open-Meteo-only models
+> (GEM/UKMO/MétéoFr) return `None`, not synthesized bands. Several sections below
+> still describe `source="synthesized"` (per-model tables, pipeline summary) and
+> are stale. Related code smell: `advise.py:109` still labels any non-`grib`
+> NWP layer set `cloud_method_effective="nwp_synthesized"`, which now **mislabels
+> genuine `nwp_3d` layers** (ECMWF/ICON). Resolve the code question before the
+> doc rewrite — see session sync notes.
+
 ## Overview
 
 Cloud layer data flows through three stages: **fetch** (Open-Meteo API + GRIB2 enrichment), **analysis** (cloud detection + icing gating), and **output** (visualization + advisories). Two parallel cloud detection methods produce independent cloud layer sets that the user can switch between.
@@ -118,13 +130,16 @@ Four-tier approach, tried in this preference order:
 
 **Tier 1 — GRIB bulk bands (GFS):** `_build_grib_layers()` uses GFS's native per-band boundaries (`HGHL/HGHM/HGHH` → base_ft/top_ft) and `LCDC/MCDC/HCDC` coverage. Each layer tagged `source="grib"`.
 
-**Tier 2 — Synthesized layers (Open-Meteo-only models):** When neither Tier 0 nor Tier 1 applies but Open-Meteo bulk `cloud_cover_*_pct` exists, synthesizes layers by narrowing ICAO bands using DD cloud envelope + inversion capping (≥2°C) + LCL floor. Minimum cover 25%. Tagged `source="synthesized"`.
+**(Historical) Synthesized layers — REMOVED (df4474ff):** a former fallback once
+synthesized layers for Open-Meteo-only models by narrowing ICAO bands (DD cloud
+envelope + inversion capping ≥2°C + LCL floor, min cover 25%, `source="synthesized"`).
+Reverted so `nwp_cloud_layers` is strictly model-native; the tier below now applies.
 
-**Tier 3 — No data:** Returns None only when no cloud cover data exists at all.
+**Tier 2 — No native source:** Returns None when neither 3D fraction nor GRIB bulk-band boundaries are available (Open-Meteo-only models GEM/UKMO/MétéoFr). Open-Meteo bulk % is intentionally NOT synthesized into layers here (the synth fallback was dropped in refactor df4474ff so nwp_cloud_layers is strictly model-native).
 
 - **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 classifies each level individually then splits on category change; Tiers 1–2 use bulk band %)
 - **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
-- **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib", "synthesized"}
+- **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib"} (the "synthesized" source was removed when nwp_cloud_layers became strictly model-native)
 - **Method tracking:** `cloud_method_effective` records "dd", "nwp" (grib or nwp_3d), or "nwp_synthesized"
 - **Quantitative metadata:** `EnhancedCloudLayer.mean_cloud_cover_pct` carries the underlying numeric — mean `cloud_area_fraction_pct` across the (homogeneous) deck for `nwp_3d`, the band's `cover_pct` for `grib` (incl. convective). Surfaced in the cross-section tooltip as `(CC nn%)`. Null for `dd` and `synthesized` (those use `mean_dewpoint_depression_c` instead).
 
@@ -190,7 +205,7 @@ Cloud fraction comes from `nwp_cloud_cover_at_altitude()`.
 
 ### `nwp_cloud_cover_at_altitude()` — Central Cloud Lookup
 
-This function (`icing_common.py:73-120`) is the shared altitude-aware cloud cover lookup used by Ogimet-NWP and SFIP proxy. Two paths:
+This function (`icing_common.py:98-145`) is the shared altitude-aware cloud cover lookup used by Ogimet-NWP and SFIP proxy. Two paths:
 
 **Path A — With diagnostics (GFS):**
 1. Checks low/mid/high diagnostic layers regardless of ICAO band
@@ -214,7 +229,7 @@ This function (`icing_common.py:73-120`) is the shared altitude-aware cloud cove
 pct = bulk_pct or 0.0  # Uses Open-Meteo cloud_cover_{low,mid,high}_pct
 ```
 
-Meanwhile, `build_nwp_cloud_layers()` in `clouds.py:163` correctly prefers the GRIB diagnostic cover_pct:
+Meanwhile, `_build_grib_layers()` in `clouds.py:573` correctly prefers the GRIB diagnostic cover_pct:
 ```python
 cover_pct = diag.cover_pct if diag.cover_pct is not None else fallback_pct
 ```
@@ -246,9 +261,9 @@ if nwp_cloud_diagnostics.convective_base_ft is not None and nwp_cloud_diagnostic
     ...
 ```
 
-### 3. `_nwp_cloud_for_zone` doesn't pass `nwp_cloud_high_pct`
+### 3. ~~`_nwp_cloud_for_zone` doesn't pass `nwp_cloud_high_pct`~~ ✓ FIXED
 
-**Problem:** The severity enhancement function `_nwp_cloud_for_zone` (icing.py:475-485) doesn't accept or pass `nwp_cloud_high_pct`. For models without diagnostics, icing zones at FL200+ get `None` for NWP cloud cover, preventing severity enhancement.
+**Was:** The function (now `_nwp_cloud_for_altitude`, icing.py:284) previously didn't accept or pass `nwp_cloud_high_pct`. It now takes and forwards `nwp_cloud_high_pct`, and `assess_icing_zones_ogimet_nwp`/`_ieng` thread it through. For models without diagnostics, icing zones at FL200+ get `None` for NWP cloud cover, preventing severity enhancement.
 
 ```python
 def _nwp_cloud_for_zone(
@@ -297,7 +312,7 @@ All three should prefer GRIB diagnostic cover_pct when available, falling back t
 
 ### 2. Ogimet-DD pass-2 NWP fallback uses different cloud source than Ogimet-NWP
 
-The Ogimet-DD two-pass approach (icing.py:413-443) has a pass-2 NWP fallback that uses `nwp_cloud_cover_at_altitude()` identically to how Ogimet-NWP uses it. But the two methods can produce different results because:
+(Historical) Ogimet-DD previously had a two-pass approach with a pass-2 NWP fallback using `nwp_cloud_cover_at_altitude()`. This was removed (see icing_common.py comment 'old pass-1/pass-2 hybrid, no longer'); current `assess_icing_zones_ogimet_dd` (icing.py:362) is single-pass, gated by `is_in_cloud_layer` + DD attenuation. But the two methods can produce different results because:
 
 - Ogimet-DD pass 1 uses cloud proximity (DD + EnhancedCloudLayer altitude check)
 - Ogimet-DD pass 2 uses NWP cloud cover as binary gate (> 50%)
@@ -434,9 +449,9 @@ SFIP proxy uses a wider gate (3°C, includes SCT) because it has no pass-2 NWP f
 
 ## Future Considerations
 
-### 1. ~~ICON-EU boundary estimation~~ ✓ DONE
+### 1. ICON-EU boundary estimation — solved via 3D fraction, synthesis reverted
 
-ICON-EU (and all models without GRIB boundaries) now get synthesized NWP cloud layers via `_synthesize_nwp_layers()` in `clouds.py`. The heuristic narrowing logic (DD envelope + inversion capping + LCL) was moved from the TypeScript frontend to the Python backend, producing `EnhancedCloudLayer` objects with `source="synthesized"`. This provides consistent cloud layers across all models for both visualization and advisory evaluation.
+ICON-EU gets real per-deck boundaries from its 3D `clc` field (Tier 0, `source="nwp_3d"`). A server-side synthesized-layer fallback for Open-Meteo-only models was added then deliberately reverted (commit df4474ff) so `nwp_cloud_layers` is strictly model-native; GEM/UKMO/MétéoFr now return `None` (no NWP layers) rather than synthesized bands.
 
 ### 2. Weight redistribution for missing high cloud in severity enhancement
 
