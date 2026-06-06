@@ -162,11 +162,17 @@ def consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any]
             else:
                 result[field] = round(sum(vals) / len(vals), 1)
 
-    # Crosswind/headwind consensus: worst (max) across models
-    for field in ("crosswind_kt", "headwind_kt"):
-        vals = [per_model[m].get(field) for m in models_with_data]
-        vals = [v for v in vals if v is not None]
-        if vals:
-            result[field] = round(max(vals), 1)
+    # Crosswind/headwind consensus: worst-case across models. For crosswind the
+    # worst case is the largest value (max). For headwind it's the *least*
+    # favourable, i.e. the weakest headwind / strongest tailwind (min) — a
+    # positive headwind helps, so the conservative pick is the smallest.
+    xw_vals = [per_model[m].get("crosswind_kt") for m in models_with_data]
+    xw_vals = [v for v in xw_vals if v is not None]
+    if xw_vals:
+        result["crosswind_kt"] = round(max(xw_vals), 1)
+    hw_vals = [per_model[m].get("headwind_kt") for m in models_with_data]
+    hw_vals = [v for v in hw_vals if v is not None]
+    if hw_vals:
+        result["headwind_kt"] = round(min(hw_vals), 1)
 
     return result
