@@ -286,13 +286,53 @@ def test_single_level_wet_sharp_capped_to_amber():
 
 
 def test_single_level_convective_still_red_when_deep():
-    """Vertical coherence does NOT suppress convection: deep towers on a single
-    θe level are graded by depth, not level count → still RED."""
+    """A deep convective tower at/above the flight's free-atmosphere (primary)
+    level still REDs on a single θe level — graded by depth, not level count.
+    (The overflown below-cruise case is held to coherence: see
+    test_overflown_single_level_convective_capped_to_amber.)"""
     deep = _manifest(crossings=[_crossing(
         kind="warm", co_location="convective", weather_top_ft=33000.0,
         persistence=0.8, vertical_levels=1,
     )])
     assert FrontsEvaluator.evaluate(_ctx(deep), _PARAMS).aggregate_status == AdvisoryStatus.RED
+
+
+def _lsgs_ctx(*, vertical_levels: int) -> RouteContext:
+    """LSGS 2026-06-07 shape: convective θe crossing only at 925 hPa (below the
+    700 hPa free-atmosphere primary, which is empty), cruise FL120, weather_top
+    FL272 (the parcel EL). ``vertical_levels`` flips coherence."""
+    a925 = RouteFrontAnalysisModel(
+        model="gfs", level_hPa=925, hour=55.5,
+        crossings=[_crossing(
+            kind="quasi-stationary", co_location="convective",
+            weather_top_ft=27233.0, persistence=0.6, vertical_levels=vertical_levels,
+        )],
+    )
+    manifest = RouteFrontsManifest(
+        generated_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        primary_level_hPa=700, levels=[700, 925], models=["gfs"],
+        per_model={"gfs": [a925]},
+    )
+    return RouteContext(
+        analyses=[], cross_sections=[], elevation=None, models=["gfs"],
+        cruise_altitude_ft=12000, flight_ceiling_ft=18000, total_distance_nm=486.0,
+        route_fronts=manifest,
+    )
+
+
+def test_overflown_single_level_convective_capped_to_amber():
+    """LSGS 2026-06-07 regression (#216): a convective θe crossing seen ONLY on a
+    single below-cruise level (925 hPa) over Alpine terrain must NOT RED on its
+    parcel EL alone — overflown convection needs vertical coherence. Caps AMBER."""
+    result = FrontsEvaluator.evaluate(_lsgs_ctx(vertical_levels=1), _PARAMS)
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+
+
+def test_overflown_convective_reds_when_vertically_coherent():
+    """The same overflown 925 hPa convective crossing, but seen on ≥2 levels, is a
+    real sloping boundary → RED restored (coherence gate, not a blanket cap)."""
+    result = FrontsEvaluator.evaluate(_lsgs_ctx(vertical_levels=2), _PARAMS)
+    assert result.aggregate_status == AdvisoryStatus.RED
 
 
 def test_unknown_coherence_treated_as_coherent():

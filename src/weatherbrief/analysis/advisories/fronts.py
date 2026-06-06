@@ -95,8 +95,11 @@ def _grade_crossing(
 
     A third fact gates RED: **vertical coherence** — a RED needs a boundary seen
     on ≥2 pressure levels (``c.vertical_levels``). A single-level detection is
-    shallow/suspect and caps at AMBER; convective towers are exempt (graded by
-    depth, not θe-level count).
+    shallow/suspect and caps at AMBER. Convective towers at/above the flight's
+    free-atmosphere (primary) level are exempt (graded by depth, not θe-level
+    count); an *overflown* convective crossing seen on a single below-cruise level
+    (e.g. a 925 hPa boundary over high terrain) is held to the coherence rule too,
+    so a lone terrain-driven crossing cannot RED on its parcel EL alone (#216).
     """
     # Flickering across the window → orographic / grid artifact, not a real front.
     if c.persistence is not None and c.persistence < persistence_min:
@@ -105,7 +108,8 @@ def _grade_crossing(
     # A single-level (shallow) detection is held at AMBER — it may be real but is
     # not the deep, coherent boundary a RED implies. Unknown (None, older
     # artifact) is treated as coherent so we never suppress on missing data.
-    # Convective towers are exempt: they're flagged by depth, not θe-level count.
+    # Convective towers at/above the primary level are exempt (flagged by depth);
+    # overflown below-cruise convection is held to this rule too (#216, below).
     coherent = c.vertical_levels is None or c.vertical_levels >= 2
     co = c.co_location
     if co is None:
@@ -125,7 +129,14 @@ def _grade_crossing(
     overflown = level_hpa > primary_level             # boundary lower than cruise → you fly over its core
     if co == "convective":
         deep = c.weather_top_ft is not None and c.weather_top_ft >= cruise_ft + convective_deep_ft
-        return (AdvisoryStatus.RED, "convective") if deep else (AdvisoryStatus.AMBER, "convective")
+        # Overflown convection needs vertical coherence to RED: a single
+        # below-cruise θe crossing (a 925 hPa boundary over high terrain) is
+        # shallow/suspect and caps at AMBER even when its parcel EL is deep. A
+        # free-atmosphere detection (at/above the primary level) or a boundary
+        # spanning ≥2 levels can still RED on depth. (#216)
+        if deep and (not overflown or coherent):
+            return AdvisoryStatus.RED, "convective"
+        return AdvisoryStatus.AMBER, "convective"
     if co == "wet":
         if c.intensity == "sharp" and not overflown and coherent:
             return AdvisoryStatus.RED, "wet_sharp"    # sharp, coherent front at/above the flight level
