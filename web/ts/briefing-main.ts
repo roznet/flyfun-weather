@@ -158,6 +158,19 @@ async function init(): Promise<void> {
     // Show the Skew-T section wrapper once we have route data
     const skewtWrapper = document.querySelector('[data-section="skewt"]') as HTMLElement | null;
     if (skewtWrapper) skewtWrapper.style.display = state.routeAnalyses ? '' : 'none';
+    // Hint nudging the user to click a point. We preview the first route point
+    // when nothing is selected yet, so the hint clears once they pick a point.
+    const skewtHint = document.getElementById('skewt-point-hint');
+    if (skewtHint) {
+      if (state.selectedPointIndex == null && state.routeAnalyses) {
+        const first = state.routeAnalyses.analyses[0];
+        const firstLabel = first?.waypoint_icao || (first ? `point ${first.point_index}` : '');
+        skewtHint.textContent = `Showing the first point${firstLabel ? ` ${firstLabel}` : ''}. Click any point on the cross-section above to show the Skew-T there.`;
+        skewtHint.style.display = '';
+      } else {
+        skewtHint.style.display = 'none';
+      }
+    }
     const effectiveCruiseAlt = getEffectiveCruiseOverride(state);
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers, effectiveCruiseAlt);
     // Dynamic Skew-T (canvas), compare, or static MetPy
@@ -397,12 +410,10 @@ async function init(): Promise<void> {
       return;
     }
 
-    // Find the selected point — any route point works
-    const idx = state.selectedPointIndex;
-    if (idx == null) {
-      ensureSkewtRenderer().clear();
-      return;
-    }
+    // Find the selected point — any route point works. When the user hasn't
+    // clicked a point yet (null), preview the first route point (departure)
+    // rather than showing nothing; a hint banner invites them to click.
+    const idx = state.selectedPointIndex ?? 0;
     const point = state.routeAnalyses.analyses[idx];
     if (!point) {
       ensureSkewtRenderer().clear();
@@ -471,11 +482,8 @@ async function init(): Promise<void> {
       return;
     }
 
-    const idx = state.selectedPointIndex;
-    if (idx == null) {
-      ensureSkewtCompareRenderer().clear();
-      return;
-    }
+    // Preview the first route point when nothing is selected yet (see loadSkewtData).
+    const idx = state.selectedPointIndex ?? 0;
     const point = state.routeAnalyses.analyses[idx];
     if (!point) {
       ensureSkewtCompareRenderer().clear();
