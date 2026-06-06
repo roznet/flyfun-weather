@@ -1118,7 +1118,7 @@ function deltaTags(apt: AlternateAirport): string {
   if (apt.better_category) tags.push('<span class="alt-tag alt-tag-cat">cat</span>');
   if (apt.better_wind) tags.push('<span class="alt-tag alt-tag-wind">wind</span>');
   if (apt.better_crosswind) tags.push('<span class="alt-tag alt-tag-xw">xwind</span>');
-  if (apt.dominates_destination) tags.push('<span class="alt-tag alt-tag-dom" title="Better-or-equal on every axis">dominates</span>');
+  if (apt.dominates_destination) tags.push('<span class="alt-tag alt-tag-dom" title="Better than the destination on at least one weather axis, and no worse on any">Better</span>');
   return tags.join(' ') || '—';
 }
 
@@ -1179,12 +1179,10 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
     ? `<ul class="alt-picks">${picks}</ul>`
     : `<p class="muted">No weather alternate improves on the destination across the evaluated candidates.</p>`;
 
-  const approachNote = alt.require_approach
-    ? (alt.approach_filter_relaxed ? ', approach data unavailable' : ', IFR approach required')
-    : '';
+  const approachNote = alt.approach_filter_relaxed ? ', approach data unavailable' : '';
   const summaryHtml = `<p class="obs-summary">${header} <span class="obs-fetch-time">${alt.candidates_evaluated} candidates within ${Math.round(alt.radius_nm)}nm${approachNote}</span></p>`;
   const relaxedHtml = alt.approach_filter_relaxed
-    ? `<p class="muted alt-caption">⚠️ The destination is ${escapeHtml(alt.destination_category)} but no published-approach data is available for the candidates, so the instrument-approach filter was skipped — confirm an approach independently.</p>`
+    ? `<p class="muted alt-caption">⚠️ No published-approach data is available for the candidates, so non-VFR fields could not be filtered by approach — confirm an approach independently.</p>`
     : '';
 
   const rows = alt.alternates.map((apt) => {
@@ -1212,7 +1210,7 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
 
   el.innerHTML = `
     ${summaryHtml}
-    <p class="muted alt-caption">Planning-grade divert candidates that improve on the destination weather — not an operational alternate (no fuel, minima, NOTAM, customs or PPR check).</p>
+    <p class="muted alt-caption">Planning-grade divert candidates that improve on the destination weather — not an operational alternate (no fuel, minima, NOTAM, customs or PPR check). Non-VFR fields are shown only with a published instrument approach.</p>
     ${relaxedHtml}
     ${picksHtml}
     <div class="table-scroll">

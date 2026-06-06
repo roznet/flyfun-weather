@@ -401,12 +401,7 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         f", {alt.destination_crosswind_kt:.0f}kt xwind"
         if alt.destination_crosswind_kt is not None else ""
     )
-    approach_note = ""
-    if alt.require_approach:
-        approach_note = (
-            ", approach data unavailable" if alt.approach_filter_relaxed
-            else ", IFR approach required"
-        )
+    approach_note = ", approach data unavailable" if alt.approach_filter_relaxed else ""
     lines.append(
         f"  Destination {alt.destination_icao}: {alt.destination_category}{dest_xw} "
         f"({alt.candidates_evaluated} candidates{approach_note})"
