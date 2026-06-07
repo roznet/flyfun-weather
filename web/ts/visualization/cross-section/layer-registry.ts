@@ -192,12 +192,48 @@ const GRAMET_ENABLED: Record<string, boolean> = {
   'cruise-altitude': true,
 };
 
+// Windy-style view: light cross-section theme, SFIP-NWP icing, Natural NWP
+// clouds, NWP convection. Mirrors GRAMET's overall layer set (CAT, freezing
+// level, terrain, cruise) but swaps the cloud/icing methods and the theme.
+const WINDY_ENABLED: Record<string, boolean> = {
+  'soft-nwp-cloud-bands': false,
+  'soft-cloud-bands': false,
+  'square-nwp-cloud-bands': false,
+  'square-cloud-bands': false,
+  'nwp-cloud-bands': true,        // Natural NWP clouds
+  'cloud-bands': false,
+  'thermo-convective-bg': false,
+  'nwp-convective-bg': true,      // NWP convection
+  'icing-bands': false,
+  'icing-ogimet-nwp-bands': false,
+  'sfip-bands': true,             // SFIP-NWP icing
+  'ieng-icing-bands': false,
+  'sld-bands': false,
+  'cat-bands': true,
+  'e-shear-bands': false,
+  'inversion-bands': false,
+  'terrain': true,
+  'freezing-level': true,
+  'minus-10c': false,
+  'minus-20c': false,
+  'lcl-line': false,
+  'lfc-line': false,
+  'el-line': false,
+  'cruise-altitude': true,
+};
+
 const PRESETS: Record<string, LayerPreset> = {
   gramet: {
     id: 'gramet',
     label: 'GRAMET',
     themeId: 'gramet',
     enabledLayers: GRAMET_ENABLED,
+  },
+  windy: {
+    id: 'windy',
+    label: 'Windy',
+    themeId: 'light',
+    enabledLayers: WINDY_ENABLED,
   },
 };
 
