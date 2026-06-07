@@ -3,12 +3,25 @@
  * Sibling of WeatherMap (visualization/weather-map.ts) but slim: no airport
  * markers, no per-metric color matrix — just the gridded canvas overlay.
  * Lives in the "Synoptic Forecast" tab on the forecast page.
+ *
+ * Two basemap modes:
+ *   - 'osm'   — OSM/CARTO tiles (default), Web Mercator.
+ *   - 'chart' — a DWD / Met Office surface chart as the basemap, via
+ *               `L.CRS.Simple` + an image overlay, with the Hewson grid and
+ *               front polylines re-projected into the chart's polar-stereo
+ *               pixel space so they line up with the chart's isobars/fronts.
+ *
+ * CRS.Simple note: with image-overlay bounds `[[0,0],[h,w]]`, a chart pixel
+ * `(x, y)` aligns with the image when fed to Leaflet as `L.latLng(h - y, x)`
+ * (the Y axis is flipped relative to image pixels). All chart-mode coordinate
+ * conversions go through `toLatLng` / the inverse in `handleMouseMove`.
  */
 
 import * as L from 'leaflet';
 import type { HewsonAllMetricsSlice, HewsonFront, HewsonSlice } from '../adapters/hewson-map-adapter';
 import { COLORMAPS, gradientCss, type HewsonMetric } from './hewson-colormaps';
 import { HewsonGridLayer } from './hewson-grid-layer';
+import type { ChartProjection } from './chart-projection';
 
 // Gate-detected front-axis colours (match the CLI DWD overlay: blue cold,
 // red warm, purple quasi-stationary).
@@ -34,16 +47,47 @@ function isDark(): boolean {
   return document.documentElement.dataset.theme === 'dark';
 }
 
+export type BasemapMode = 'osm' | 'chart';
+
+/** Everything SynopticMap needs to render a chart basemap. */
+export interface ChartBasemapSpec {
+  /** Chart image URL (PNG / GIF). */
+  url: string;
+  /** Forward/inverse projection + native pixel size for this chart type. */
+  projection: ChartProjection;
+  /** Attribution HTML for the chart source. */
+  attributionHtml: string;
+}
+
+interface GeoBounds {
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+}
+
 export class SynopticMap {
   private container: HTMLElement;
   private map: L.Map | null = null;
   private tileLayer: L.TileLayer | null = null;
+  private imageOverlay: L.ImageOverlay | null = null;
   private gridLayer: HewsonGridLayer | null = null;
   private frontsLayer: L.LayerGroup | null = null;
   private legendEl: HTMLElement | null = null;
+
+  private mode: BasemapMode = 'osm';
+  private chartSpec: ChartBasemapSpec | null = null;
+  private chartAttr: string | null = null;
+
+  // Re-applied across basemap rebuilds.
+  private lastSlice: { slice: HewsonSlice; vmin?: number; vmax?: number } | null = null;
+  private lastFronts: HewsonFront[] = [];
+  private opacity = 0.5;
+
   // Hover state — populated via setHoverGrid(); cleared when no grid is loaded.
   private hoverGrid: HewsonAllMetricsSlice | null = null;
   private hoverEl: HTMLElement | null = null;
+  private themeWired = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -51,76 +95,205 @@ export class SynopticMap {
 
   init(): void {
     if (this.map) return;
-
-    this.map = L.map(this.container, {
-      center: [48, 10],
-      zoom: 5,
-      zoomControl: true,
-    });
-
-    const dark = isDark();
-    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
-      attribution: dark ? DARK_ATTR : LIGHT_ATTR,
-      maxZoom: 18,
-    }).addTo(this.map);
-
-    this.gridLayer = new HewsonGridLayer();
-    this.gridLayer.addTo(this.map);
-
-    // Front polylines draw on top of the grid overlay.
-    this.frontsLayer = L.layerGroup().addTo(this.map);
-
-    // Cursor-following tooltip — wired once at init, hidden until hoverGrid
-    // is populated by setHoverGrid().
-    this.hoverEl = document.createElement('div');
-    this.hoverEl.className = 'synoptic-hover-tip';
-    this.hoverEl.style.display = 'none';
-    this.container.appendChild(this.hoverEl);
-
-    this.map.on('mousemove', this.handleMouseMove);
-    this.map.on('mouseout', this.hideHover);
-    // Mobile: tap to show the values at that point. The next mousemove
-    // (e.g. on map drag) re-positions; the next mouseout hides.
-    this.map.on('click', this.handleMouseMove);
-
-    document.addEventListener('theme-changed', () => {
-      if (!this.tileLayer || !this.map) return;
-      const dark = isDark();
-      this.tileLayer.setUrl(dark ? DARK_TILES : LIGHT_TILES);
-      // Update attribution on theme switch — getAttribution() override
-      // mirrors route-map-inset.ts so the control reflects the active tile
-      // provider after a swap.
-      this.tileLayer.getAttribution = () => dark ? DARK_ATTR : LIGHT_ATTR;
-      this.map.attributionControl.removeAttribution(LIGHT_ATTR);
-      this.map.attributionControl.removeAttribution(DARK_ATTR);
-      this.map.attributionControl.addAttribution(dark ? DARK_ATTR : LIGHT_ATTR);
-    });
+    if (!this.hoverEl) {
+      this.hoverEl = document.createElement('div');
+      this.hoverEl.className = 'synoptic-hover-tip';
+      this.hoverEl.style.display = 'none';
+      this.container.appendChild(this.hoverEl);
+    }
+    this.wireThemeOnce();
+    this.buildMap(null);
   }
 
   invalidateSize(): void {
     this.map?.invalidateSize();
   }
 
+  // -------------------------------------------------------------------------
+  // Basemap mode
+  // -------------------------------------------------------------------------
+
+  /** Switch basemap. Preserves the geographic area in view across the swap
+   * (Leaflet can't change CRS after init, so the map is rebuilt). For 'chart'
+   * mode a spec is required; switching the chart *image* within the same
+   * source should use {@link updateChartImage} (cheaper, no rebuild). */
+  setBasemap(mode: BasemapMode, spec?: ChartBasemapSpec): void {
+    if (mode === 'chart' && !spec) return;
+    const geo = this.getGeoBounds();
+    this.mode = mode;
+    this.chartSpec = mode === 'chart' ? spec! : null;
+    this.rebuild(geo);
+  }
+
+  /** Swap the chart image without rebuilding the map (e.g. on hour change
+   * within the same source). No-op outside chart mode. */
+  updateChartImage(url: string): void {
+    if (this.mode !== 'chart' || !this.chartSpec || !this.imageOverlay) return;
+    this.chartSpec = { ...this.chartSpec, url };
+    this.imageOverlay.setUrl(url);
+  }
+
+  /** Tear down and rebuild the Leaflet map for the current mode, re-applying
+   * the slice / fronts / opacity and fitting to `geo` (if given). */
+  private rebuild(geo: GeoBounds | null): void {
+    if (this.map) {
+      this.map.remove();
+      this.map = null;
+      this.tileLayer = null;
+      this.imageOverlay = null;
+      this.gridLayer = null;
+      this.frontsLayer = null;
+    }
+    this.removeLegend();
+    this.buildMap(geo);
+
+    // Re-apply rendered state onto the fresh layers.
+    if (this.lastSlice) {
+      this.gridLayer?.setSlice(this.lastSlice.slice, this.lastSlice.vmin, this.lastSlice.vmax);
+      this.renderLegend(this.lastSlice.slice.metric as HewsonMetric, this.lastSlice.vmin, this.lastSlice.vmax);
+    }
+    this.gridLayer?.setOpacity(this.opacity);
+    if (this.lastFronts.length) this.drawFronts(this.lastFronts);
+  }
+
+  private buildMap(geo: GeoBounds | null): void {
+    if (this.mode === 'chart' && this.chartSpec) {
+      this.buildChartMap(this.chartSpec, geo);
+    } else {
+      this.buildOsmMap(geo);
+    }
+
+    this.gridLayer = new HewsonGridLayer();
+    if (this.mode === 'chart' && this.chartSpec) {
+      const h = this.chartSpec.projection.nativeSize[1];
+      const proj = this.chartSpec.projection;
+      // Grid layer feeds L.latLng(p.y, p.x); flip Y here so it lands on the
+      // image (see CRS.Simple note at the top of the file).
+      this.gridLayer.setProjector((lat, lon) => {
+        const p = proj.forward(lat, lon);
+        return { x: p.x, y: h - p.y };
+      });
+    }
+    this.gridLayer.addTo(this.map!);
+
+    this.frontsLayer = L.layerGroup().addTo(this.map!);
+
+    this.map!.on('mousemove', this.handleMouseMove);
+    this.map!.on('mouseout', this.hideHover);
+    // Mobile: tap to show the values at that point.
+    this.map!.on('click', this.handleMouseMove);
+  }
+
+  private buildOsmMap(geo: GeoBounds | null): void {
+    this.map = L.map(this.container, { center: [48, 10], zoom: 5, zoomControl: true });
+    const dark = isDark();
+    this.tileLayer = L.tileLayer(dark ? DARK_TILES : LIGHT_TILES, {
+      attribution: dark ? DARK_ATTR : LIGHT_ATTR,
+      maxZoom: 18,
+    }).addTo(this.map);
+    if (geo) this.fitGeoBounds(geo);
+  }
+
+  private buildChartMap(spec: ChartBasemapSpec, geo: GeoBounds | null): void {
+    const [w, h] = spec.projection.nativeSize;
+    this.map = L.map(this.container, {
+      crs: L.CRS.Simple,
+      minZoom: -5,
+      maxZoom: 4,
+      zoomControl: true,
+    });
+    const bounds = L.latLngBounds([[0, 0], [h, w]]);
+    this.imageOverlay = L.imageOverlay(spec.url, bounds).addTo(this.map);
+    this.map.setMaxBounds(bounds.pad(0.5));
+
+    this.chartAttr = spec.attributionHtml;
+    this.map.attributionControl.addAttribution(this.chartAttr);
+
+    if (geo) this.fitGeoBounds(geo);
+    else this.map.fitBounds(bounds);
+  }
+
+  // -------------------------------------------------------------------------
+  // Coordinate helpers
+  // -------------------------------------------------------------------------
+
+  /** WGS84 (lat, lon) -> a Leaflet LatLng for the active CRS. */
+  private toLatLng(lat: number, lon: number): L.LatLng {
+    if (this.mode === 'chart' && this.chartSpec) {
+      const h = this.chartSpec.projection.nativeSize[1];
+      const p = this.chartSpec.projection.forward(lat, lon);
+      return L.latLng(h - p.y, p.x);
+    }
+    return L.latLng(lat, lon);
+  }
+
+  /** A Leaflet LatLng (active CRS) -> WGS84 {lat, lon}, or null if it doesn't
+   * map to a valid geographic point (chart edges). */
+  private fromLatLng(ll: L.LatLng): { lat: number; lon: number } | null {
+    if (this.mode === 'chart' && this.chartSpec) {
+      const h = this.chartSpec.projection.nativeSize[1];
+      const out = this.chartSpec.projection.inverse(ll.lng, h - ll.lat);
+      if (!Number.isFinite(out.lat) || !Number.isFinite(out.lon)) return null;
+      return out;
+    }
+    return { lat: ll.lat, lon: ll.lng };
+  }
+
+  private getGeoBounds(): GeoBounds | null {
+    if (!this.map) return null;
+    const b = this.map.getBounds();
+    const corners = [b.getNorthWest(), b.getNorthEast(), b.getSouthEast(), b.getSouthWest()];
+    const geos = corners
+      .map((c) => this.fromLatLng(c))
+      .filter((g): g is { lat: number; lon: number } => g !== null);
+    if (!geos.length) return null;
+    return {
+      minLat: Math.min(...geos.map((g) => g.lat)),
+      maxLat: Math.max(...geos.map((g) => g.lat)),
+      minLon: Math.min(...geos.map((g) => g.lon)),
+      maxLon: Math.max(...geos.map((g) => g.lon)),
+    };
+  }
+
+  private fitGeoBounds(geo: GeoBounds): void {
+    if (!this.map) return;
+    const corners: [number, number][] = [
+      [geo.minLat, geo.minLon],
+      [geo.minLat, geo.maxLon],
+      [geo.maxLat, geo.minLon],
+      [geo.maxLat, geo.maxLon],
+    ];
+    const lls = corners.map(([la, lo]) => this.toLatLng(la, lo));
+    this.map.fitBounds(L.latLngBounds(lls), { animate: false });
+  }
+
+  // -------------------------------------------------------------------------
+  // Slice / legend / fronts
+  // -------------------------------------------------------------------------
+
   /** Replace the rendered slice. Builds/refreshes the legend. */
   setSlice(slice: HewsonSlice, vmin?: number, vmax?: number): void {
+    this.lastSlice = { slice, vmin, vmax };
     if (!this.gridLayer) return;
     this.gridLayer.setSlice(slice, vmin, vmax);
     this.renderLegend(slice.metric as HewsonMetric, vmin, vmax);
   }
 
   setOpacity(o: number): void {
-    this.gridLayer?.setOpacity(o);
+    this.opacity = Math.max(0, Math.min(1, o));
+    this.gridLayer?.setOpacity(this.opacity);
   }
 
-  /** Update the (vmin, vmax) of the current slice without re-fetching.
-   * Refreshes both the canvas and the legend. ``metric`` is needed for the
-   * legend title / unit; pass the metric currently rendered. */
+  /** Update the (vmin, vmax) of the current slice without re-fetching. */
   setVRange(metric: HewsonMetric, vmin: number, vmax: number): void {
+    if (this.lastSlice) this.lastSlice = { ...this.lastSlice, vmin, vmax };
     this.gridLayer?.setVRange(vmin, vmax);
     this.renderLegend(metric, vmin, vmax);
   }
 
   clear(): void {
+    this.lastSlice = null;
+    this.lastFronts = [];
     this.gridLayer?.clear();
     this.clearFronts();
     this.removeLegend();
@@ -128,15 +301,18 @@ export class SynopticMap {
     this.hideHover();
   }
 
-  /** Draw gate-detected front polylines (replacing any already shown). Each
-   * front is a coloured Leaflet polyline with a tooltip summarising its
-   * kind / length / mean intensity. */
+  /** Draw gate-detected front polylines (replacing any already shown). */
   setFronts(fronts: HewsonFront[]): void {
+    this.lastFronts = fronts;
+    this.drawFronts(fronts);
+  }
+
+  private drawFronts(fronts: HewsonFront[]): void {
     if (!this.frontsLayer) return;
     this.frontsLayer.clearLayers();
     for (const f of fronts) {
-      // API gives GeoJSON [lon, lat]; Leaflet wants [lat, lon].
-      const latlngs = f.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]);
+      // API gives GeoJSON [lon, lat]; project into the active CRS.
+      const latlngs = f.coordinates.map(([lon, lat]) => this.toLatLng(lat, lon));
       if (latlngs.length < 2) continue;
       const color = FRONT_COLORS[f.kind] ?? FRONT_COLORS['quasi-stationary'];
       const line = L.polyline(latlngs, {
@@ -152,11 +328,11 @@ export class SynopticMap {
   }
 
   clearFronts(): void {
+    this.lastFronts = [];
     this.frontsLayer?.clearLayers();
   }
 
-  /** Cache the all-metrics grid for cursor-tooltip lookups. Pass null to
-   * disable hover (e.g. between hour changes while a refetch is in flight). */
+  /** Cache the all-metrics grid for cursor-tooltip lookups. */
   setHoverGrid(grid: HewsonAllMetricsSlice | null): void {
     this.hoverGrid = grid;
     if (!grid) this.hideHover();
@@ -170,12 +346,19 @@ export class SynopticMap {
     if (!this.hoverGrid || !this.hoverEl) return;
     const grid = this.hoverGrid;
 
+    // Recover WGS84 lat/lon — in chart mode e.latlng is chart-pixel space.
+    const geo = this.fromLatLng(e.latlng);
+    if (!geo) {
+      this.hideHover();
+      return;
+    }
+
     // Snap to the nearest grid cell. lat/lon arrays are uniform (0.25°
     // by default) so a direct linear index calculation is cheap and exact.
     const lat = grid.lat;
     const lon = grid.lon;
-    const i = Math.round((e.latlng.lat - lat[0]) / (lat[lat.length - 1] - lat[0]) * (lat.length - 1));
-    const j = Math.round((e.latlng.lng - lon[0]) / (lon[lon.length - 1] - lon[0]) * (lon.length - 1));
+    const i = Math.round((geo.lat - lat[0]) / (lat[lat.length - 1] - lat[0]) * (lat.length - 1));
+    const j = Math.round((geo.lon - lon[0]) / (lon[lon.length - 1] - lon[0]) * (lon.length - 1));
     if (i < 0 || i >= lat.length || j < 0 || j >= lon.length) {
       this.hideHover();
       return;
@@ -224,15 +407,11 @@ export class SynopticMap {
     this.hoverEl.innerHTML = `<div class="synoptic-hover-header">${header}</div>${rows}`;
     this.hoverEl.style.display = 'block';
 
-    // Position relative to the container — Leaflet's containerPoint is the
-    // cursor position in the map container's local coordinate system.
+    // Position relative to the container.
     const cp = e.containerPoint;
     const tipW = this.hoverEl.offsetWidth;
     const tipH = this.hoverEl.offsetHeight;
     const containerRect = this.container.getBoundingClientRect();
-    // Default offset: 12 px to the right and below the cursor. Flip when
-    // the cursor approaches the right or bottom edge so the tooltip stays
-    // fully visible.
     let x = cp.x + 12;
     let y = cp.y + 12;
     if (x + tipW > containerRect.width - 6) x = cp.x - 12 - tipW;
@@ -281,6 +460,21 @@ export class SynopticMap {
       this.legendEl.parentNode.removeChild(this.legendEl);
     }
     this.legendEl = null;
+  }
+
+  private wireThemeOnce(): void {
+    if (this.themeWired) return;
+    this.themeWired = true;
+    document.addEventListener('theme-changed', () => {
+      // Charts have no dark variant — only OSM tiles swap on theme change.
+      if (this.mode !== 'osm' || !this.tileLayer || !this.map) return;
+      const dark = isDark();
+      this.tileLayer.setUrl(dark ? DARK_TILES : LIGHT_TILES);
+      this.tileLayer.getAttribution = () => dark ? DARK_ATTR : LIGHT_ATTR;
+      this.map.attributionControl.removeAttribution(LIGHT_ATTR);
+      this.map.attributionControl.removeAttribution(DARK_ATTR);
+      this.map.attributionControl.addAttribution(dark ? DARK_ATTR : LIGHT_ATTR);
+    });
   }
 }
 
