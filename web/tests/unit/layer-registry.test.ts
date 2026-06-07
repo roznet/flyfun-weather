@@ -193,12 +193,34 @@ describe('presets', () => {
     expect(preset.enabledLayers['thermo-convective-bg']).toBe(false);
   });
 
+  it('Windy uses light theme, Natural NWP clouds and SFIP-NWP icing', () => {
+    const preset = getPreset('windy')!;
+    expect(preset.themeId).toBe('light');
+    expect(preset.enabledLayers['nwp-cloud-bands']).toBe(true);
+    expect(preset.enabledLayers['sfip-bands']).toBe(true);
+    expect(preset.enabledLayers['icing-ogimet-nwp-bands']).toBe(false);
+    expect(preset.enabledLayers['nwp-convective-bg']).toBe(true);
+  });
+
+  it('ForeFlight uses high-contrast theme, Square DD clouds and Ogimet-DD icing', () => {
+    const preset = getPreset('foreflight')!;
+    expect(preset.themeId).toBe('high-contrast');
+    expect(preset.enabledLayers['square-cloud-bands']).toBe(true);
+    expect(preset.enabledLayers['icing-bands']).toBe(true);
+    expect(preset.enabledLayers['cat-bands']).toBe(true);
+    // not the NWP cloud/icing layers
+    expect(preset.enabledLayers['nwp-cloud-bands']).toBe(false);
+    expect(preset.enabledLayers['sfip-bands']).toBe(false);
+  });
+
   it('getPreset returns undefined for unknown preset', () => {
     expect(getPreset('does-not-exist')).toBeUndefined();
   });
 
-  it('getPresets includes GRAMET', () => {
+  it('getPresets includes GRAMET, Windy and ForeFlight', () => {
     const ids = getPresets().map((p) => p.id);
     expect(ids).toContain('gramet');
+    expect(ids).toContain('windy');
+    expect(ids).toContain('foreflight');
   });
 });

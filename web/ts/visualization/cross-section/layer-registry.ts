@@ -222,6 +222,36 @@ const WINDY_ENABLED: Record<string, boolean> = {
   'cruise-altitude': true,
 };
 
+// ForeFlight-style view: high-contrast theme, Square DD clouds, Ogimet-DD
+// icing, CAT (Ri) turbulence. Mirrors the other presets' base layers (freezing
+// level, terrain, cruise) but uses the all-DD method set with square cloud cells.
+const FOREFLIGHT_ENABLED: Record<string, boolean> = {
+  'soft-nwp-cloud-bands': false,
+  'soft-cloud-bands': false,
+  'square-nwp-cloud-bands': false,
+  'square-cloud-bands': true,     // Square DD clouds
+  'nwp-cloud-bands': false,
+  'cloud-bands': false,
+  'thermo-convective-bg': false,
+  'nwp-convective-bg': true,
+  'icing-bands': true,            // Ogimet-DD icing
+  'icing-ogimet-nwp-bands': false,
+  'sfip-bands': false,
+  'ieng-icing-bands': false,
+  'sld-bands': false,
+  'cat-bands': true,              // CAT (Ri) turbulence
+  'e-shear-bands': false,
+  'inversion-bands': false,
+  'terrain': true,
+  'freezing-level': true,
+  'minus-10c': false,
+  'minus-20c': false,
+  'lcl-line': false,
+  'lfc-line': false,
+  'el-line': false,
+  'cruise-altitude': true,
+};
+
 const PRESETS: Record<string, LayerPreset> = {
   gramet: {
     id: 'gramet',
@@ -234,6 +264,12 @@ const PRESETS: Record<string, LayerPreset> = {
     label: 'Windy',
     themeId: 'light',
     enabledLayers: WINDY_ENABLED,
+  },
+  foreflight: {
+    id: 'foreflight',
+    label: 'ForeFlight',
+    themeId: 'high-contrast',
+    enabledLayers: FOREFLIGHT_ENABLED,
   },
 };
 
