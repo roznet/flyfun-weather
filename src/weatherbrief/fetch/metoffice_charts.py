@@ -7,9 +7,10 @@ on-disk cache. These are the same charts shown at
 isobars, H/L centres, and coloured fronts (warm=red, cold=blue,
 occluded=purple) over Europe + the NE Atlantic.
 
-Sibling of :mod:`weatherbrief.fetch.dwd_charts`; intentionally mirrors its
-shape (cache layout, conditional GETs, eviction, route overlay) so the two
-sources can share a single briefing UI panel with a source toggle.
+Sibling of :mod:`weatherbrief.fetch.dwd_charts`; both configure a
+:class:`~weatherbrief.fetch.chart_cache.ChartCache` for their source. The
+two differ only in cycle discovery, chart-id set, native size, calibration,
+file extension, and keep-count.
 
 Discovery
 ---------
@@ -23,8 +24,7 @@ Met Office publishes a JSON index that names the current run directly::
 The run token (``2026-05-29T0000``) lives in each product URI's path; we
 normalise it to the same ``YYYY-MM-DDThhZ`` key the DWD cache uses. The
 forecast offset (hours) is parsed from the ``FSXX<RR>T_<HH>.gif`` filename,
-where ``<RR>`` is the run hour (``00``/``12``) and ``<HH>`` the offset — so a
-12Z run delivers ``FSXX12T_24.gif`` for its +24h chart.
+where ``<RR>`` is the run hour (``00``/``12``) and ``<HH>`` the offset.
 
 Cache layout::
 
@@ -42,20 +42,22 @@ at 1930 UTC, so a 00Z run's index may legitimately omit them.
 
 from __future__ import annotations
 
-import email.utils
-import json
 import logging
 import os
 import re
-import shutil
-import tempfile
-import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+
+from weatherbrief.fetch.chart_cache import (
+    ChartCache,
+    ChartCalibration,
+    ChartFetchResult,  # re-exported for back-compat
+    RefreshReport,  # re-exported for back-compat
+    parse_run_cycle_dt,  # re-exported for back-compat
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +86,6 @@ _TIMEOUT_SECONDS = 30
 _DEFAULT_KEEP_CYCLES = 6  # ~3 days at 12h cadence
 _USER_AGENT = "flyfun-weather/1.0 (+https://weather.flyfun.aero)"
 
-_MAX_FETCH_ATTEMPTS = 3
-_RETRY_BACKOFF_SECONDS = 1.0
-
 # Native pixel sizes, used for client-side SVG overlay scaling. The colour
 # set is uniformly 800x540 across every offset (verified against the live
 # API), so a single calibration covers all tabs — unlike DWD which needed
@@ -95,24 +94,20 @@ CHART_NATIVE_SIZE: dict[str, tuple[int, int]] = {
     "colour": (800, 540),
 }
 
-# Calibration converting WGS84 lon/lat -> chart-pixel coordinates.
-#
-# ``proj`` is the polar-stereographic projection guess (consumed by pyproj);
-# ``homography`` is an 8-coefficient 2D projective transform fit from manually
-# identified control points via :mod:`weatherbrief.fetch.metoffice_calibrate`.
-#
-# PLACEHOLDER until the chart is calibrated. ``homography=None`` means the
-# route overlay is unavailable (endpoints degrade gracefully); the chart PNG
-# still renders. Run::
-#
-#     python -m weatherbrief.fetch.metoffice_calibrate <points.json>
-#
-# and paste the printed tuple in below, then drop the ``# noqa`` once real.
+# Calibration converting WGS84 lon/lat -> chart-pixel coordinates. ``proj`` is
+# the polar-stereographic projection spec (consumed by pyproj); ``homography``
+# is an 8-coefficient 2D projective transform fit from manually identified
+# control points via :mod:`weatherbrief.fetch.metoffice_calibrate`.
 #
 # Calibrated 2026-05-29 from 8 graticule crossings (lon -15..15, lat 30..60)
-# clicked on FSXX00T_00.gif: max error 1.33px, rms 0.58px. The sweep
-# confirmed the chart is polar-stereographic (lon_0 is absorbed by the
-# homography), so lon_0=0 is fine.
+# clicked on FSXX00T_00.gif: max error 1.33px, rms 0.58px. The sweep confirmed
+# the chart is polar-stereographic (lon_0 is absorbed by the homography), so
+# lon_0=0 is fine.
+#
+# Kept as a plain dict (not ChartCalibration objects) so it stays the literal
+# source of truth that ``scripts/dump_chart_calibrations.py`` reads to generate
+# the TypeScript projection constants. ``homography=None`` would mean the chart
+# is not yet calibrated (route overlay unavailable; chart PNG still renders).
 _CHART_CALIBRATIONS: dict[str, dict[str, object]] = {
     "colour": {
         "proj": {"proj": "stere", "lat_0": 90, "lat_ts": 60, "lon_0": 0},
@@ -138,32 +133,30 @@ def public_enabled() -> bool:
     )
 
 
-@dataclass
-class ChartFetchResult:
-    """Outcome of a single chart fetch."""
-
-    chart_id: str
-    status: str  # "downloaded" | "unchanged" | "failed"
-    last_modified: datetime | None = None
-    etag: str | None = None
-    content_length: int = 0
-    error: str | None = None
-
-
-@dataclass
-class RefreshReport:
-    """Summary of a :func:`refresh_charts` run."""
-
-    run_cycle: str | None = None
-    charts_refreshed: list[str] = field(default_factory=list)
-    charts_unchanged: list[str] = field(default_factory=list)
-    charts_failed: list[str] = field(default_factory=list)
-    evicted: list[str] = field(default_factory=list)
-    error: str | None = None  # set when refresh couldn't even determine a cycle
+_cache = ChartCache(
+    slug="metoffice",
+    display_name="Met Office",
+    subdir="metoffice_charts",
+    extension="gif",
+    chart_ids=CHART_IDS,
+    forecast_offsets_h=FORECAST_OFFSETS_H,
+    calibrations={
+        ct: ChartCalibration(
+            proj=cal["proj"],  # type: ignore[arg-type]
+            homography=cal.get("homography"),  # type: ignore[arg-type]
+            native_size=CHART_NATIVE_SIZE[ct],
+        )
+        for ct, cal in _CHART_CALIBRATIONS.items()
+    },
+    chart_type_for=lambda _cid: "colour",  # every offset shares one calibration
+    keep_cycles=_DEFAULT_KEEP_CYCLES,
+    user_agent=_USER_AGENT,
+    timeout=_TIMEOUT_SECONDS,
+)
 
 
 # ---------------------------------------------------------------------------
-# Discovery / index parsing
+# Discovery / index parsing (Met Office-specific)
 # ---------------------------------------------------------------------------
 
 _RUN_TOKEN_RE = re.compile(r"/(\d{4}-\d{2}-\d{2}T\d{4})/")
@@ -184,14 +177,6 @@ def run_token_to_cycle(token: str) -> str | None:
     except (TypeError, ValueError):
         return None
     return f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}T{dt.hour:02d}Z"
-
-
-def parse_run_cycle_dt(run_cycle: str) -> datetime | None:
-    """Inverse of :func:`run_token_to_cycle` for caption math."""
-    try:
-        return datetime.strptime(run_cycle, "%Y-%m-%dT%HZ").replace(tzinfo=timezone.utc)
-    except (TypeError, ValueError):
-        return None
 
 
 def _offset_to_chart_id(offset_h: int) -> str | None:
@@ -265,7 +250,7 @@ def _parse_iso_z(value: str | None) -> datetime | None:
 
 
 # ---------------------------------------------------------------------------
-# Selection helpers
+# Back-compat function surface (delegates to the shared ChartCache)
 # ---------------------------------------------------------------------------
 
 
@@ -277,227 +262,62 @@ def select_default_chart_id(
     """Pick the chart whose valid time best brackets the flight ETD.
 
     ETD within ~3h of issuance -> analysis; otherwise the nearest available
-    forecast offset (tie-break toward the earlier offset).
-
-    ``available_ids`` constrains the choice to charts that were actually
-    fetched. A run's index may legitimately omit the longest offsets (e.g.
-    +96h/+120h), so without this filter we could default to an offset whose GIF
-    was never cached — the renderer would then 410 and show a blank error.
-    Falls back to "ana" when no forecast charts are available.
+    forecast offset (tie-break toward the earlier offset). ``available_ids``
+    constrains the choice to charts actually fetched (a run's index may omit
+    the longest offsets).
     """
-    issued = parse_run_cycle_dt(run_cycle)
-    if issued is None:
-        return "ana"
-    delta_hours = (departure_time - issued).total_seconds() / 3600.0
-    if delta_hours < 3:
-        return "ana"
-    forecast_ids = tuple(
-        cid
-        for cid in CHART_IDS
-        if cid != "ana" and (available_ids is None or cid in available_ids)
-    )
-    if not forecast_ids:
-        return "ana"
-    return min(
-        forecast_ids,
-        key=lambda cid: (abs(FORECAST_OFFSETS_H[cid] - delta_hours), FORECAST_OFFSETS_H[cid]),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Cache paths / meta
-# ---------------------------------------------------------------------------
+    return _cache.select_default_chart_id(departure_time, run_cycle, available_ids)
 
 
 def cache_root(data_dir: Path) -> Path:
-    return data_dir / "metoffice_charts"
+    return _cache.cache_root(data_dir)
 
 
 def cycle_dir(data_dir: Path, run_cycle: str) -> Path:
-    return cache_root(data_dir) / run_cycle
+    return _cache.cycle_dir(data_dir, run_cycle)
 
 
 def list_cycles(data_dir: Path) -> list[str]:
-    root = cache_root(data_dir)
-    if not root.exists():
-        return []
-    return sorted(p.name for p in root.iterdir() if p.is_dir())
+    return _cache.list_cycles(data_dir)
 
 
-def _read_meta(cdir: Path) -> dict[str, dict]:
-    path = cdir / "meta.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+def chart_meta(data_dir: Path, run_cycle: str, chart_id: str) -> dict | None:
+    return _cache.chart_meta(data_dir, run_cycle, chart_id)
 
 
-def _write_meta(cdir: Path, meta: dict[str, dict]) -> None:
-    path = cdir / "meta.json"
-    cdir.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".meta.", suffix=".tmp", dir=cdir)
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(meta, f, indent=2, sort_keys=True)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def _parse_lm_header(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = email.utils.parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def _conditional_headers(existing_meta: dict | None) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    if not existing_meta:
-        return headers
-    etag = existing_meta.get("etag")
-    if etag:
-        headers["If-None-Match"] = etag
-    lm = existing_meta.get("last_modified")
-    if lm:
-        try:
-            lm_dt = datetime.fromisoformat(lm)
-            headers["If-Modified-Since"] = email.utils.format_datetime(lm_dt)
-        except (TypeError, ValueError):
-            pass
-    return headers
-
-
-# ---------------------------------------------------------------------------
-# Georeferencing
-# ---------------------------------------------------------------------------
+def resolve_chart_path(data_dir: Path, run_cycle: str, chart_id: str) -> Path | None:
+    return _cache.resolve_chart_path(data_dir, run_cycle, chart_id)
 
 
 def is_calibrated(chart_type: str = "colour") -> bool:
-    cal = _CHART_CALIBRATIONS.get(chart_type)
-    return bool(cal and cal.get("homography"))
+    return _cache.is_calibrated(chart_type)
 
 
 def lonlat_to_chart_pixel(lon: float, lat: float, chart_type: str = "colour") -> tuple[int, int]:
     """Project WGS84 lon/lat to native pixel coordinates on a Met Office chart.
 
-    Composes pyproj's polar-stereographic forward projection with a 2D
-    homography. Raises if the chart hasn't been calibrated yet (homography
-    is None) — callers building the route overlay should guard with
-    :func:`is_calibrated`.
+    Raises ``RuntimeError`` if the chart hasn't been calibrated yet; callers
+    building the route overlay should guard with :func:`is_calibrated`.
     """
-    cal = _CHART_CALIBRATIONS.get(chart_type)
-    if cal is None:
-        raise ValueError(f"Unknown Met Office chart type: {chart_type!r}")
-    homography = cal.get("homography")
-    if not homography:
-        raise RuntimeError(
-            f"Met Office chart {chart_type!r} is not calibrated yet "
-            "(run weatherbrief.fetch.metoffice_calibrate)"
-        )
-
-    import pyproj
-
-    proj = pyproj.Proj(**cal["proj"])  # type: ignore[arg-type]
-    a, b, c, d, e, f, g, h = homography  # type: ignore[misc]
-    x, y = proj(lon, lat)
-    denom = g * x + h * y + 1
-    px = (a * x + b * y + c) / denom
-    py = (d * x + e * y + f) / denom
-    return int(px), int(py)
+    return _cache.project(lon, lat, chart_type)
 
 
 def build_route_overlay(waypoints: list[tuple[str, float, float]]) -> dict:
     """Build the route-overlay JSON consumed by the frontend SVG renderer.
 
-    Args:
-        waypoints: ``[(icao, lat, lon), ...]`` in flight order.
-
-    Returns ``{"colour": {"native_size": [800, 540], "waypoints": [...]}}``.
-    Returns ``{}`` when the chart is not yet calibrated, so the frontend
-    simply renders the chart without an overlay.
+    Returns ``{"colour": {"native_size": [800, 540], "waypoints": [...]}}``, or
+    ``{}`` when the chart is not yet calibrated (frontend renders without an
+    overlay).
     """
-    if not is_calibrated("colour"):
-        return {}
-    out: dict[str, dict] = {}
-    for chart_type, native_size in CHART_NATIVE_SIZE.items():
-        projected = []
-        for icao, lat, lon in waypoints:
-            x, y = lonlat_to_chart_pixel(lon, lat, chart_type)
-            projected.append({"icao": icao, "lat": lat, "lon": lon, "x": x, "y": y})
-        out[chart_type] = {"native_size": list(native_size), "waypoints": projected}
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Read-only lookups
-# ---------------------------------------------------------------------------
-
-
-def resolve_chart_path(data_dir: Path, run_cycle: str, chart_id: str) -> Path | None:
-    if chart_id not in CHART_IDS:
-        return None
-    path = cycle_dir(data_dir, run_cycle) / f"{chart_id}.gif"
-    return path if path.exists() else None
-
-
-def chart_meta(data_dir: Path, run_cycle: str, chart_id: str) -> dict | None:
-    return _read_meta(cycle_dir(data_dir, run_cycle)).get(chart_id)
-
-
-# ---------------------------------------------------------------------------
-# Eviction
-# ---------------------------------------------------------------------------
+    return _cache.build_route_overlay(waypoints)
 
 
 def evict_old_cycles(data_dir: Path, *, keep: int = _DEFAULT_KEEP_CYCLES) -> list[str]:
-    cycles = list_cycles(data_dir)
-    if len(cycles) <= keep:
-        return []
-    to_evict = cycles[: len(cycles) - keep]
-    root = cache_root(data_dir)
-    evicted: list[str] = []
-    for name in to_evict:
-        try:
-            shutil.rmtree(root / name)
-            evicted.append(name)
-        except OSError:
-            logger.warning("Could not evict cycle %s", name, exc_info=True)
-    if evicted:
-        logger.info("Evicted %d old Met Office chart cycles: %s", len(evicted), ", ".join(evicted))
-    return evicted
+    return _cache.evict_old_cycles(data_dir, keep=keep)
 
 
 # ---------------------------------------------------------------------------
-# Refresh
+# Refresh (Met Office-specific orchestration)
 # ---------------------------------------------------------------------------
 
 
@@ -509,13 +329,14 @@ def refresh_charts(
 ) -> RefreshReport:
     """Resolve the current run from the index and conditional-GET each chart.
 
-    Cheap when the run hasn't rolled — the index call plus N conditional
-    GETs that all 304. Returns a :class:`RefreshReport`; the caller gates
-    eligibility (this function is dumb about flights).
+    Cheap when the run hasn't rolled — the index call plus N conditional GETs
+    that all 304. Returns a :class:`RefreshReport`; the caller gates eligibility
+    (this function is dumb about flights).
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     report = RefreshReport()
-    session = requests.Session()
-    session.headers.update({"User-Agent": _USER_AGENT})
+    session = _cache.make_session()
 
     index = fetch_index(session, timeout=timeout)
     if index.run_cycle is None:
@@ -524,15 +345,15 @@ def refresh_charts(
 
     run_cycle = index.run_cycle
     report.run_cycle = run_cycle
-    cdir = cycle_dir(data_dir, run_cycle)
+    cdir = _cache.cycle_dir(data_dir, run_cycle)
     cdir.mkdir(parents=True, exist_ok=True)
-    existing_meta = _read_meta(cdir)
+    existing_meta = _cache.read_meta(cdir)
     new_meta: dict[str, dict] = dict(existing_meta)
 
     with ThreadPoolExecutor(max_workers=max(1, len(index.entries))) as pool:
         futures = {
             entry.chart_id: pool.submit(
-                _fetch_one,
+                _cache.fetch_one,
                 session=session,
                 chart_id=entry.chart_id,
                 url=entry.uri,
@@ -544,91 +365,12 @@ def refresh_charts(
         }
         results = {cid: fut.result() for cid, fut in futures.items()}
 
-    for cid, res in results.items():
-        if res.status == "downloaded":
-            report.charts_refreshed.append(cid)
-            new_meta[cid] = {
-                "last_modified": res.last_modified.isoformat() if res.last_modified else None,
-                "etag": res.etag,
-                "content_length": res.content_length,
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-                "http_status": 200,
-            }
-        elif res.status == "unchanged":
-            report.charts_unchanged.append(cid)
-            prev = dict(new_meta.get(cid, {}))
-            prev["fetched_at"] = datetime.now(timezone.utc).isoformat()
-            prev["http_status"] = 304
-            new_meta[cid] = prev
-        else:
-            report.charts_failed.append(cid)
-
-    _write_meta(cdir, new_meta)
+    _cache.apply_results_to_meta(results, report, new_meta)
+    _cache.write_meta(cdir, new_meta)
 
     try:
-        report.evicted = evict_old_cycles(data_dir, keep=keep_cycles)
+        report.evicted = _cache.evict_old_cycles(data_dir, keep=keep_cycles)
     except Exception:
         logger.warning("Met Office chart eviction failed", exc_info=True)
 
     return report
-
-
-def _fetch_one(
-    *,
-    session: requests.Session,
-    chart_id: str,
-    url: str,
-    existing_meta: dict | None,
-    target_path: Path,
-    timeout: float,
-) -> ChartFetchResult:
-    """Conditional GET a single chart. On 200 writes bytes; on 304 leaves them."""
-    headers = _conditional_headers(existing_meta)
-
-    resp = None
-    last_exc: Exception | None = None
-    for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
-        try:
-            resp = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-            break
-        except requests.RequestException as e:
-            last_exc = e
-            if attempt < _MAX_FETCH_ATTEMPTS:
-                logger.debug(
-                    "Met Office chart fetch attempt %d/%d failed (%s): %s — retrying",
-                    attempt, _MAX_FETCH_ATTEMPTS, chart_id, e,
-                )
-                time.sleep(_RETRY_BACKOFF_SECONDS * attempt)
-    if resp is None:
-        logger.warning(
-            "Met Office chart fetch failed after %d attempts (%s): %s",
-            _MAX_FETCH_ATTEMPTS, chart_id, last_exc,
-        )
-        return ChartFetchResult(chart_id=chart_id, status="failed", error=str(last_exc))
-
-    if resp.status_code == 304:
-        return ChartFetchResult(
-            chart_id=chart_id,
-            status="unchanged",
-            last_modified=_parse_lm_header(resp.headers.get("Last-Modified")),
-            etag=resp.headers.get("ETag"),
-        )
-
-    if resp.status_code != 200:
-        msg = f"HTTP {resp.status_code}"
-        logger.warning("Met Office chart fetch failed (%s): %s", chart_id, msg)
-        return ChartFetchResult(chart_id=chart_id, status="failed", error=msg)
-
-    try:
-        _atomic_write_bytes(target_path, resp.content)
-    except OSError as e:
-        logger.warning("Met Office chart write failed (%s): %s", chart_id, e)
-        return ChartFetchResult(chart_id=chart_id, status="failed", error=str(e))
-
-    return ChartFetchResult(
-        chart_id=chart_id,
-        status="downloaded",
-        last_modified=_parse_lm_header(resp.headers.get("Last-Modified")),
-        etag=resp.headers.get("ETag"),
-        content_length=len(resp.content),
-    )
