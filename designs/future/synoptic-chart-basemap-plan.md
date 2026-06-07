@@ -173,6 +173,21 @@ the Hewson valid time is outside its chart horizon.
 7. maps-main 3-way picker, time-match, info bar, URL state, attribution.
 8. Polish + edge cases.
 
+## Implementation status (2026-06-07)
+
+Phases 0–5 implemented + committed on `feat/synoptic-chart-basemap`; all unit
+/ integration tests green (314 py chart/pipeline, 342 web incl. projection
+equivalence <1px). Phase 6 = in-browser visual verification (user-driven).
+
+Two items deferred from the plan, by choice:
+- **URL state `syn.base`** — skipped to stay consistent with the existing
+  decision that the synoptic tab's *inner* controls aren't deep-linked (only
+  `tab` is). Easy to add later if we deep-link the rest.
+- **Gap-based disable of far-out charts** — instead of disabling the toggle
+  when the Hewson valid time is beyond a source's horizon, we always render the
+  closest chart and surface the gap in the info line (`… 36 h gap from Hewson
+  valid time`). Simpler and still honest; revisit if the mismatch confuses.
+
 ## Open (non-blocking) questions
 
 - Met Office `colour` is 800×540 — blurry zoomed in; cap `maxZoom`. Same as DWD
