@@ -108,6 +108,44 @@ describe('applyNwpFallback — icing', () => {
     // No IENG-DD layer exists to inject.
     expect(getSubstitutedLayers(enabled, effective).size).toBe(0);
   });
+
+  it('SFIP-NWP unavailable + enabled → Ogimet-DD injected (Windy preset on no-NWP model)', () => {
+    const enabled = { 'sfip-bands': true };
+    const effective = applyNwpFallback(enabled, new Set(['sfip-bands']));
+    expect(effective['sfip-bands']).toBe(false);
+    expect(effective['icing-bands']).toBe(true);
+    expect(getSubstitutedLayers(enabled, effective).has('icing-bands')).toBe(true);
+  });
+
+  it('SFIP-NWP available: no Ogimet-DD injected', () => {
+    const enabled = { 'sfip-bands': true };
+    const effective = applyNwpFallback(enabled, new Set());
+    expect(effective['icing-bands']).toBeUndefined();
+    expect(getSubstitutedLayers(enabled, effective).size).toBe(0);
+  });
+});
+
+describe('applyNwpFallback — convective', () => {
+  it('NWP convective unavailable + enabled → thermodynamic injected (Convective preset)', () => {
+    const enabled = { 'nwp-convective-bg': true };
+    const effective = applyNwpFallback(enabled, new Set(['nwp-convective-bg']));
+    expect(effective['nwp-convective-bg']).toBe(false);
+    expect(effective['thermo-convective-bg']).toBe(true);
+    expect(getSubstitutedLayers(enabled, effective).has('thermo-convective-bg')).toBe(true);
+  });
+
+  it('NWP convective available: no thermo injected', () => {
+    const enabled = { 'nwp-convective-bg': true };
+    const effective = applyNwpFallback(enabled, new Set());
+    expect(effective['thermo-convective-bg']).toBeUndefined();
+  });
+
+  it('explicit thermo choice stays, not flagged substituted', () => {
+    const enabled = { 'nwp-convective-bg': true, 'thermo-convective-bg': true };
+    const effective = applyNwpFallback(enabled, new Set(['nwp-convective-bg']));
+    expect(effective['thermo-convective-bg']).toBe(true);
+    expect(getSubstitutedLayers(enabled, effective).has('thermo-convective-bg')).toBe(false);
+  });
 });
 
 describe('applyNwpFallback — invariants', () => {
@@ -138,8 +176,13 @@ describe('getDdSubstituteId', () => {
     expect(getDdSubstituteId('square-nwp-cloud-bands')).toBe('square-cloud-bands');
   });
 
-  it('maps Ogimet-NWP icing to Ogimet-DD', () => {
+  it('maps Ogimet-NWP and SFIP-NWP icing to Ogimet-DD', () => {
     expect(getDdSubstituteId('icing-ogimet-nwp-bands')).toBe('icing-bands');
+    expect(getDdSubstituteId('sfip-bands')).toBe('icing-bands');
+  });
+
+  it('maps NWP convective to the thermodynamic scheme', () => {
+    expect(getDdSubstituteId('nwp-convective-bg')).toBe('thermo-convective-bg');
   });
 
   it('returns null for DD layers, IENG, and non-cloud/icing layers', () => {
@@ -147,5 +190,6 @@ describe('getDdSubstituteId', () => {
     expect(getDdSubstituteId('ieng-icing-bands')).toBeNull();
     expect(getDdSubstituteId('cat-bands')).toBeNull();
     expect(getDdSubstituteId('terrain')).toBeNull();
+    expect(getDdSubstituteId('thermo-convective-bg')).toBeNull();
   });
 });
