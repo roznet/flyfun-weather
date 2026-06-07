@@ -20,6 +20,7 @@
 
 import type { LayerGroup } from '../types';
 import { getAllLayers, getPreferredLayerForGroup } from './layer-registry';
+import { t } from '../../i18n/i18n';
 
 export interface AdvisoryPreset {
   id: string;                 // 'icing','clouds','convective','turbulence','vfr','ifr'
@@ -146,6 +147,24 @@ export function getAdvisoryPresets(): AdvisoryPreset[] {
 /** True when `id` names an advisory preset (vs GRAMET / null / a layer preset). */
 export function isAdvisoryPreset(id: string | null | undefined): boolean {
   return !!id && id in ADVISORY_PRESETS;
+}
+
+/**
+ * Localized dropdown label for a preset. Looks up `viz.advisoryPreset.<id>.label`
+ * and falls back to the preset's English `label` literal when no translation key
+ * exists (so a missing key shows readable English, never the raw key).
+ */
+export function advisoryPresetLabel(p: AdvisoryPreset): string {
+  const key = `viz.advisoryPreset.${p.id}.label`;
+  const s = t(key);
+  return s === key ? p.label : s;
+}
+
+/** Localized chart caption for a preset; same key/fallback scheme as the label. */
+export function advisoryPresetCaption(p: AdvisoryPreset): string {
+  const key = `viz.advisoryPreset.${p.id}.caption`;
+  const s = t(key);
+  return s === key ? p.caption : s;
 }
 
 /**

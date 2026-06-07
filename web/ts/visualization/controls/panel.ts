@@ -3,7 +3,7 @@
 import type { VizLayout, VizSettings, CompareBandMode, LayerGroup } from '../types';
 import type { DisplayMode } from '../../types/metrics';
 import { getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset } from '../cross-section/layer-registry';
-import { getAdvisoryPresets, getAdvisoryPreset, isAdvisoryPreset } from '../cross-section/advisory-presets';
+import { getAdvisoryPresets, getAdvisoryPreset, isAdvisoryPreset, advisoryPresetLabel, advisoryPresetCaption } from '../cross-section/advisory-presets';
 import {
   CLOUD_LAYER_BY_AXES,
   ALL_CLOUD_LAYER_IDS,
@@ -407,7 +407,7 @@ export function renderVizControls(
       if (advisoryPresets.length > 0) {
         html += `<optgroup label="${t('viz.presetGroupAdvisory')}">`;
         for (const preset of advisoryPresets) {
-          html += `<option value="${preset.id}"${preset.id === active ? ' selected' : ''}>${preset.label}</option>`;
+          html += `<option value="${preset.id}"${preset.id === active ? ' selected' : ''}>${advisoryPresetLabel(preset)}</option>`;
         }
         html += `</optgroup>`;
       }
@@ -440,7 +440,7 @@ export function renderVizControls(
   // i18n/API-sourced caption can't inject markup.
   if (settings.layout !== 'map' && isAdvisoryPreset(settings.activePreset)) {
     const ap = getAdvisoryPreset(settings.activePreset!);
-    if (ap) html += `<div class="viz-preset-caption">${escapeHtml(ap.caption)}</div>`;
+    if (ap) html += `<div class="viz-preset-caption">${escapeHtml(advisoryPresetCaption(ap))}</div>`;
   }
 
   container.innerHTML = html;
