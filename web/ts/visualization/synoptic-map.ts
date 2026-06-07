@@ -203,7 +203,14 @@ export class SynopticMap {
       zoomControl: true,
     });
     const bounds = L.latLngBounds([[0, 0], [h, w]]);
-    this.imageOverlay = L.imageOverlay(spec.url, bounds).addTo(this.map);
+    // The chart image must sit *below* the Hewson grid pane (z 350) and the
+    // front polylines (overlayPane, z 400). Leaflet's default overlayPane (400)
+    // would paint the chart over the grid, so give it a dedicated low pane.
+    if (!this.map.getPane('chartBasemapPane')) {
+      const p = this.map.createPane('chartBasemapPane');
+      p.style.zIndex = '250';
+    }
+    this.imageOverlay = L.imageOverlay(spec.url, bounds, { pane: 'chartBasemapPane' }).addTo(this.map);
     this.map.setMaxBounds(bounds.pad(0.5));
 
     this.chartAttr = spec.attributionHtml;
@@ -217,12 +224,18 @@ export class SynopticMap {
   // Coordinate helpers
   // -------------------------------------------------------------------------
 
+  /** Chart pixel (x, y) -> Leaflet LatLng under CRS.Simple (Y flipped so it
+   * lands on the image overlay placed at bounds [[0,0],[h,w]]). */
+  private chartLatLng(x: number, y: number): L.LatLng {
+    const h = this.chartSpec!.projection.nativeSize[1];
+    return L.latLng(h - y, x);
+  }
+
   /** WGS84 (lat, lon) -> a Leaflet LatLng for the active CRS. */
   private toLatLng(lat: number, lon: number): L.LatLng {
     if (this.mode === 'chart' && this.chartSpec) {
-      const h = this.chartSpec.projection.nativeSize[1];
       const p = this.chartSpec.projection.forward(lat, lon);
-      return L.latLng(h - p.y, p.x);
+      return this.chartLatLng(p.x, p.y);
     }
     return L.latLng(lat, lon);
   }
@@ -243,9 +256,24 @@ export class SynopticMap {
     if (!this.map) return null;
     const b = this.map.getBounds();
     const corners = [b.getNorthWest(), b.getNorthEast(), b.getSouthEast(), b.getSouthWest()];
-    const geos = corners
-      .map((c) => this.fromLatLng(c))
-      .filter((g): g is { lat: number; lon: number } => g !== null);
+
+    let geos: { lat: number; lon: number }[];
+    if (this.mode === 'chart' && this.chartSpec) {
+      // Corners are chart-pixel space (lat=h-y, lng=x). Clamp to the chart
+      // extent before inverse-projecting — a view panned/zoomed past the chart
+      // edge would otherwise inverse-project to nonsense (e.g. lat near 0).
+      const [w, h] = this.chartSpec.projection.nativeSize;
+      const proj = this.chartSpec.projection;
+      geos = corners
+        .map((c) => {
+          const x = Math.max(0, Math.min(w, c.lng));
+          const y = Math.max(0, Math.min(h, h - c.lat));
+          return proj.inverse(x, y);
+        })
+        .filter((g) => Number.isFinite(g.lat) && Number.isFinite(g.lon));
+    } else {
+      geos = corners.map((c) => ({ lat: c.lat, lon: c.lng }));
+    }
     if (!geos.length) return null;
     return {
       minLat: Math.min(...geos.map((g) => g.lat)),
@@ -257,14 +285,41 @@ export class SynopticMap {
 
   private fitGeoBounds(geo: GeoBounds): void {
     if (!this.map) return;
-    const corners: [number, number][] = [
+    const cornersGeo: [number, number][] = [
       [geo.minLat, geo.minLon],
       [geo.minLat, geo.maxLon],
       [geo.maxLat, geo.minLon],
       [geo.maxLat, geo.maxLon],
     ];
-    const lls = corners.map(([la, lo]) => this.toLatLng(la, lo));
-    this.map.fitBounds(L.latLngBounds(lls), { animate: false });
+
+    if (this.mode === 'chart' && this.chartSpec) {
+      // Project the geo bbox to chart pixels and clamp to the chart extent, so
+      // a wide OSM view (Atlantic/Africa) doesn't shrink the chart to a dot —
+      // we never zoom out past the chart itself.
+      const [w, h] = this.chartSpec.projection.nativeSize;
+      const proj = this.chartSpec.projection;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const [la, lo] of cornersGeo) {
+        const p = proj.forward(la, lo);
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+      minX = Math.max(0, Math.min(w, minX)); maxX = Math.max(0, Math.min(w, maxX));
+      minY = Math.max(0, Math.min(h, minY)); maxY = Math.max(0, Math.min(h, maxY));
+      if (maxX - minX < 1 || maxY - minY < 1) {
+        // Geo bbox doesn't overlap the chart — show the whole chart.
+        this.map.fitBounds(L.latLngBounds([[0, 0], [h, w]]), { animate: false });
+        return;
+      }
+      const bb = L.latLngBounds([this.chartLatLng(minX, minY), this.chartLatLng(maxX, maxY)]);
+      this.map.fitBounds(bb, { animate: false });
+      return;
+    }
+
+    this.map.fitBounds(
+      L.latLngBounds([[geo.minLat, geo.minLon], [geo.maxLat, geo.maxLon]]),
+      { animate: false },
+    );
   }
 
   // -------------------------------------------------------------------------
