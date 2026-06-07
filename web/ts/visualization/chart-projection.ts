@@ -76,6 +76,10 @@ export interface ChartProjection {
  */
 export function makeChartProjection(key: ChartProjectionKey): ChartProjection {
   const c = CHART_PROJECTIONS[key];
+  // Guard an unknown key (e.g. backend ships a new chart_type before the
+  // generated constants catch up) — otherwise we'd destructure undefined and
+  // silently emit NaN pixels, sliding the whole grid off the chart.
+  if (!c) throw new Error(`Unknown chart projection key: ${key}`);
   const lon0 = c.lon_0 * DEG;
   const scale = rhoScale(c.lat_ts);
   const [a, b, cc, d, e, f, g, h] = c.homography;

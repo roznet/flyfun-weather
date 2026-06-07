@@ -146,8 +146,12 @@ def build_source_manifest(data_dir: Path, spec: ChartSourceSpec) -> dict[str, An
     run_cycle = cycles[-1]
     issued = parse_run_cycle_dt(run_cycle)
 
+    # Source issuance time = the analysis chart's last_modified. Resolved
+    # outside the loop so it doesn't depend on "ana" being first in CHART_IDS.
+    ana_meta = module.chart_meta(data_dir, run_cycle, "ana") or {}
+    issued_at: str | None = ana_meta.get("last_modified")
+
     charts: list[dict[str, Any]] = []
-    issued_at: str | None = None
     for chart_id in module.CHART_IDS:
         if module.resolve_chart_path(data_dir, run_cycle, chart_id) is None:
             continue
@@ -157,10 +161,6 @@ def build_source_manifest(data_dir: Path, spec: ChartSourceSpec) -> dict[str, An
         valid_time = None
         if issued is not None:
             valid_time = (issued + timedelta(hours=offset_h)).isoformat().replace("+00:00", "Z")
-        # Use the analysis chart's last_modified as the source issuance time.
-        if chart_id == "ana":
-            meta = module.chart_meta(data_dir, run_cycle, chart_id) or {}
-            issued_at = meta.get("last_modified") or issued_at
         charts.append({
             "id": chart_id,
             "offset_h": offset_h,

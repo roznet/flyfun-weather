@@ -177,3 +177,4 @@ def test_serve_metoffice_when_public(client, data_dir, monkeypatch):
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/gif"
     assert resp.content == _GIF
+    assert "immutable" in resp.headers["cache-control"]

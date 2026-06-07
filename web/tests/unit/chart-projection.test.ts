@@ -28,23 +28,23 @@ describe('chart projection forward equivalence with pyproj', () => {
     const proj = makeChartProjection(key);
     const pts = points.filter((p) => p.key === key);
 
-    it(`${key}: forward matches Python within 1 px (${pts.length} points)`, () => {
-      let worst = 0;
+    // Threshold is 1.5 px, not 1: the fixture stores Python's int()-truncated
+    // pixels (up to ~1 px below the true value), and the TS port keeps the
+    // sub-pixel fraction — so a faithful match differs by up to ~1 px.
+    it(`${key}: forward matches Python within 1.5 px (${pts.length} points)`, () => {
       for (const p of pts) {
         const out = proj.forward(p.lat, p.lon);
-        // Python casts to int() (truncation toward zero); allow that plus a
-        // sub-pixel numerical margin.
-        const dx = Math.abs(out.x - p.px);
-        const dy = Math.abs(out.y - p.py);
-        worst = Math.max(worst, dx, dy);
-        expect(dx, `dx at (${p.lat},${p.lon})`).toBeLessThan(1.5);
-        expect(dy, `dy at (${p.lat},${p.lon})`).toBeLessThan(1.5);
+        expect(Math.abs(out.x - p.px), `dx at (${p.lat},${p.lon})`).toBeLessThan(1.5);
+        expect(Math.abs(out.y - p.py), `dy at (${p.lat},${p.lon})`).toBeLessThan(1.5);
       }
-      // Sanity: the bulk should be essentially exact (the 1px-ish slack is only
-      // Python's int() truncation), so worst case stays small.
-      expect(worst).toBeLessThan(1.5);
     });
   }
+});
+
+describe('makeChartProjection guards', () => {
+  it('throws on an unknown projection key (no silent NaN)', () => {
+    expect(() => makeChartProjection('bogus-key' as ChartProjectionKey)).toThrow();
+  });
 });
 
 describe('chart projection inverse round-trip', () => {

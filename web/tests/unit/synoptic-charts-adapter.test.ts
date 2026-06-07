@@ -50,6 +50,14 @@ describe('pickChartForValidTime', () => {
     expect(pickChartForValidTime({ ...source, charts: [] }, Date.now())).toBeNull();
   });
 
+  it('returns null when every chart has no valid_time', () => {
+    const noTimes: SynopticChartSource = {
+      ...source,
+      charts: [entry('ana', 0, 'colour', null), entry('024', 24, 'colour', null)],
+    };
+    expect(pickChartForValidTime(noTimes, Date.now())).toBeNull();
+  });
+
   it('tie-breaks toward the earlier offset', () => {
     const twoSided: SynopticChartSource = {
       ...source,

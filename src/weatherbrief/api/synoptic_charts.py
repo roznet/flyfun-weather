@@ -21,11 +21,10 @@ additionally admin-gated until ``METOFFICE_CHARTS_PUBLIC=1``.
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
@@ -36,8 +35,6 @@ from weatherbrief.api._chart_serving import (
     serve_chart_bytes,
     source_allowed,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/synoptic-charts", tags=["synoptic-charts"])
 
@@ -82,7 +79,5 @@ def get_chart(
     spec = get_source_or_404(source)
     if not source_allowed(spec, request, db):
         # 404 (not 403) so a non-admin can't probe which sources exist.
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Unknown chart source")
     return serve_chart_bytes(_data_dir(), spec, run_cycle, chart_id)

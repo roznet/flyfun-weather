@@ -829,7 +829,9 @@ async function initSynopticTab(): Promise<void> {
   }
   // Discover available chart basemaps in the background; the Base picker shows
   // only "Map" until this lands, then gains a button per allowed source.
-  ensureChartsManifest().then(repopulateBasemapPicker);
+  ensureChartsManifest().then(repopulateBasemapPicker).catch((err) => {
+    console.warn('basemap picker init failed:', err);
+  });
   loadSynoptic();
 }
 
