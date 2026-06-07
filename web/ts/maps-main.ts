@@ -13,6 +13,12 @@ import {
 import { WeatherMap, type ForecastMetric } from './visualization/weather-map';
 import { AirportProfilePanel } from './visualization/airport-profile-panel';
 import { SynopticMap } from './visualization/synoptic-map';
+import {
+  fetchSynopticChartsManifest, synopticChartUrl, projectionKeyFor,
+  pickChartForValidTime,
+  type SynopticChartsManifest, type SynopticChartSource, type SynopticChartEntry,
+} from './adapters/synoptic-charts-adapter';
+import { makeChartProjection } from './visualization/chart-projection';
 import { ClimatologyTab } from './visualization/climatology-tab';
 import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
@@ -56,6 +62,17 @@ let synLoadToken = 0;
 function currentLoadKey(): string {
   return `${synModel}|${synInit}|${synLevel}|${synHour}`;
 }
+
+// Basemap state: 'osm' (tiles, default) or a chart source slug ('dwd' /
+// 'metoffice'). The charts manifest is fetched lazily on the first switch to a
+// chart basemap and cached for the session.
+let synBasemap: 'osm' | string = 'osm';
+let synChartsManifest: SynopticChartsManifest | null = null;
+// The ChartProjectionKey + chart-id currently shown, so an hour change can
+// decide between a cheap image swap (same projection) and a full rebuild
+// (chart_type changed, e.g. DWD ana<->icon).
+let synChartKey: string | null = null;
+let synChartId: string | null = null;
 
 // Forecast state
 let forecastData: ForecastMapResponse | null = null;
@@ -463,6 +480,9 @@ async function loadSynoptic(): Promise<void> {
   // --- 3. Optional front overlay (calibration). Independent of the canvas;
   //     fetched only when a gate preset is selected.
   loadFronts(myToken);
+
+  // --- 4. Keep the chart basemap (if active) time-matched to the new hour.
+  if (synBasemap !== 'osm') applyChartBasemap(false);
 }
 
 /** Fetch + render the gate-detected front axes for the current
@@ -589,6 +609,120 @@ function showSynopticInfo(): void {
   showPopupContent(renderHewsonInfo(synMetric));
 }
 
+// -------------------------------------------------------------------------
+// Basemap (OSM tiles vs DWD / Met Office chart)
+// -------------------------------------------------------------------------
+
+/** Hewson valid time (ms) for the current init + hour, or null if no init. */
+function hewsonValidMs(): number | null {
+  if (!synInit) return null;
+  return new Date(synInit).getTime() + synHour * 3_600_000;
+}
+
+/** Lazily fetch the synoptic-charts manifest (sources the user may use). */
+async function ensureChartsManifest(): Promise<SynopticChartsManifest> {
+  if (synChartsManifest) return synChartsManifest;
+  try {
+    synChartsManifest = await fetchSynopticChartsManifest();
+  } catch (err) {
+    console.warn('synoptic charts manifest fetch failed:', err);
+    synChartsManifest = { sources: [] };
+  }
+  return synChartsManifest;
+}
+
+/** Rebuild the Base picker: always "Map" (OSM), plus one button per available
+ * chart source from the manifest (DWD always; Met Office only when allowed). */
+function repopulateBasemapPicker(): void {
+  const group = $('syn-basemap-picker');
+  if (!group) return;
+  const sources = synChartsManifest?.sources ?? [];
+  const buttons: { base: string; label: string }[] = [{ base: 'osm', label: 'Map' }];
+  for (const s of sources) buttons.push({ base: s.slug, label: s.label });
+  // If the active source vanished (e.g. cache evicted), fall back to OSM.
+  if (synBasemap !== 'osm' && !sources.some((s) => s.slug === synBasemap)) {
+    synBasemap = 'osm';
+    synopticMap?.setBasemap('osm');
+    updateBasemapInfo(null);
+  }
+  group.innerHTML = '';
+  for (const b of buttons) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-toggle';
+    btn.dataset.base = b.base;
+    if (b.base === synBasemap) btn.classList.add('active');
+    btn.textContent = b.label;
+    group.appendChild(btn);
+  }
+}
+
+function onBasemapChange(value: string): void {
+  synBasemap = value;
+  if (value === 'osm') {
+    synChartKey = null;
+    synChartId = null;
+    synopticMap?.setBasemap('osm');
+    updateBasemapInfo(null);
+    return;
+  }
+  applyChartBasemap(true);
+}
+
+/** (Re)apply the chart basemap for the current source + Hewson valid time.
+ * When `forceRebuild` is false and the chart_type (projection) is unchanged,
+ * only the image is swapped — cheaper than a full map rebuild. */
+function applyChartBasemap(forceRebuild: boolean): void {
+  if (!synopticMap || synBasemap === 'osm') return;
+  const source = synChartsManifest?.sources.find((s) => s.slug === synBasemap);
+  if (!source) {
+    // Source no longer available — revert to OSM.
+    synBasemap = 'osm';
+    setActive('syn-basemap-picker', 'osm', 'base');
+    synopticMap.setBasemap('osm');
+    updateBasemapInfo(null);
+    return;
+  }
+  const targetMs = hewsonValidMs();
+  if (targetMs == null) return;
+  const pick = pickChartForValidTime(source, targetMs);
+  if (!pick) {
+    updateBasemapInfo(null);
+    return;
+  }
+  const key = projectionKeyFor(source.slug, pick.chart.chart_type);
+  const url = synopticChartUrl(source.slug, source.run_cycle, pick.chart.id);
+  if (!forceRebuild && key === synChartKey) {
+    if (pick.chart.id !== synChartId) synopticMap.updateChartImage(url);
+  } else {
+    synopticMap.setBasemap('chart', {
+      url,
+      projection: makeChartProjection(key),
+      attributionHtml: source.attribution_html,
+    });
+  }
+  synChartKey = key;
+  synChartId = pick.chart.id;
+  updateBasemapInfo({ source, chart: pick.chart, gapHours: pick.gapHours });
+}
+
+function updateBasemapInfo(
+  info: { source: SynopticChartSource; chart: SynopticChartEntry; gapHours: number } | null,
+): void {
+  const el = $('syn-basemap-info');
+  if (!el) return;
+  if (!info) { el.textContent = ''; return; }
+  const { source, chart, gapHours } = info;
+  const offsetLabel = chart.id === 'ana' ? 'analysis' : `+${chart.offset_h} h`;
+  const validLabel = chart.valid_time
+    ? new Date(chart.valid_time).toUTCString().slice(0, 22)
+    : '';
+  const gap = gapHours < 0.5
+    ? 'matched to Hewson valid time'
+    : `${gapHours < 10 ? gapHours.toFixed(1) : gapHours.toFixed(0)} h gap from Hewson valid time`;
+  el.textContent =
+    `Basemap: ${source.label} ${offsetLabel} · ${source.run_cycle} run · valid ${validLabel} · ${gap}`;
+}
+
 function wireSynopticControls(): void {
   wireButtonGroup('syn-model-picker', 'model', (v) => {
     synModel = v;
@@ -648,6 +782,10 @@ function wireSynopticControls(): void {
     showSynopticInfo();
   });
 
+  wireButtonGroup('syn-basemap-picker', 'base', (v) => {
+    onBasemapChange(v);
+  });
+
   wireButtonGroup('syn-scale-picker', 'scale', (v) => {
     synScale = v as ColorScale;
     // No refetch needed — just rescale the existing canvas + legend.
@@ -689,6 +827,9 @@ async function initSynopticTab(): Promise<void> {
     repopulateModelPicker();
     repopulateInitPicker();
   }
+  // Discover available chart basemaps in the background; the Base picker shows
+  // only "Map" until this lands, then gains a button per allowed source.
+  ensureChartsManifest().then(repopulateBasemapPicker);
   loadSynoptic();
 }
 

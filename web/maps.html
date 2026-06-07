@@ -511,12 +511,17 @@
           <option value="sensitive">sensitive gate</option>
           <option value="gradient-only">gradient-only gate</option>
         </select>
+        <label title="Render the overlay on top of a surface-analysis / front chart instead of the map tiles. The Hewson grid and front axes are re-projected to line up with the chart.">Base</label>
+        <div class="btn-group" id="syn-basemap-picker" title="Underlying basemap for the synoptic overlay">
+          <button class="btn-toggle active" data-base="osm">Map</button>
+        </div>
       </div>
 
       <div class="map-wrapper">
         <div id="map-container-synoptic" style="width:100%; height:calc(100vh - 280px); min-height:400px; border-radius:8px; border:1px solid var(--border); overflow:hidden; position:relative;"></div>
       </div>
       <div class="map-info" id="map-info-synoptic"></div>
+      <div class="map-info" id="syn-basemap-info"></div>
     </div>
 
     <!-- Tab: Climatology (observation climatology over the watchlist) -->
