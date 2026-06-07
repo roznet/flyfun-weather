@@ -178,6 +178,12 @@ def select_default_chart_id(
     return _cache.select_default_chart_id(departure_time, run_cycle, available_ids)
 
 
+def chart_type_for(chart_id: str) -> str:
+    """Which calibration a chart-id renders with (``analysis`` for ``ana``,
+    ``icon`` for every forecast offset)."""
+    return _cache.chart_type_for(chart_id)
+
+
 def cache_root(data_dir: Path) -> Path:
     return _cache.cache_root(data_dir)
 

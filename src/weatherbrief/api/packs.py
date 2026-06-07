@@ -2874,10 +2874,7 @@ def get_dwd_chart(
 
     Auth: any authenticated user can view (matches dwd-overview).
     """
-    from weatherbrief.fetch.dwd_charts import CHART_IDS, resolve_chart_path
-
-    if chart_id not in CHART_IDS:
-        raise HTTPException(status_code=400, detail="Invalid chart id")
+    from weatherbrief.api._chart_serving import SOURCES, serve_chart_bytes
 
     # Auth + flight/pack existence check. We don't need the pack_dir
     # itself — chart bytes live in the shared cache, not the pack — so
@@ -2890,16 +2887,9 @@ def get_dwd_chart(
             status_code=404, detail="DWD charts not available for this pack",
         )
 
-    import os as _os
-    data_dir = Path(_os.environ.get("DATA_DIR", "data"))
-    path = resolve_chart_path(data_dir, meta.dwd_charts_run_cycle, chart_id)
-    if path is None:
-        raise HTTPException(status_code=410, detail="Chart no longer cached")
-
-    return FileResponse(
-        path,
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=3600"},
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    return serve_chart_bytes(
+        data_dir, SOURCES["dwd"], meta.dwd_charts_run_cycle, chart_id, immutable=False,
     )
 
 
@@ -2963,14 +2953,9 @@ def _metoffice_charts_allowed(request: Request, db: Session) -> bool:
     Returns True if the public flag is set, or the caller is an admin (dev
     mode counts as admin). The caller must already be authenticated.
     """
-    if _metoffice_public():
-        return True
-    try:
-        from weatherbrief.api.admin import require_admin
-        require_admin(request, db=db)
-        return True
-    except HTTPException:
-        return False
+    from weatherbrief.api._chart_serving import metoffice_charts_allowed
+
+    return metoffice_charts_allowed(request, db)
 
 
 @router.get("/{timestamp}/metoffice-chart/{chart_id}")
@@ -2989,12 +2974,10 @@ def get_metoffice_chart(
     ``METOFFICE_CHARTS_PUBLIC=1`` (Met Office reuse authorisation pending).
     Returns 410 (Gone) when the cache has been evicted.
     """
-    from weatherbrief.fetch.metoffice_charts import CHART_IDS, resolve_chart_path
+    from weatherbrief.api._chart_serving import SOURCES, serve_chart_bytes
 
     if not _metoffice_charts_allowed(request, db):
         raise HTTPException(status_code=403, detail="Met Office charts not available")
-    if chart_id not in CHART_IDS:
-        raise HTTPException(status_code=400, detail="Invalid chart id")
 
     _load_flight_or_404(db, flight_id, viewer_id=user_id)
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
@@ -3005,16 +2988,9 @@ def get_metoffice_chart(
         )
 
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
-    path = resolve_chart_path(data_dir, meta.metoffice_charts_run_cycle, chart_id)
-    if path is None:
-        # Either never fetched for this run (a 00Z run may omit +72h/+84h)
-        # or evicted from the cache. Frontend renders a placeholder.
-        raise HTTPException(status_code=410, detail="Chart not available")
-
-    return FileResponse(
-        path,
-        media_type="image/gif",
-        headers={"Cache-Control": "public, max-age=3600"},
+    return serve_chart_bytes(
+        data_dir, SOURCES["metoffice"], meta.metoffice_charts_run_cycle, chart_id,
+        immutable=False,
     )
 
 
