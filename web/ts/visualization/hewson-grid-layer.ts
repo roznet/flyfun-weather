@@ -18,12 +18,26 @@ export interface RenderState {
   vmax: number;
 }
 
+/** Projects WGS84 (lat, lon) to native chart-pixel (x, y). When set, the grid
+ * is painted into a chart's polar-stereographic pixel space (DWD / Met Office
+ * basemap) instead of Web Mercator. */
+export type ChartProjector = (lat: number, lon: number) => { x: number; y: number };
+
 export class HewsonGridLayer extends L.Layer {
   private canvas: HTMLCanvasElement | null = null;
   private pane: HTMLElement | null = null;
   private state: RenderState | null = null;
   private opacity = 0.5;
   private map: L.Map | null = null;
+  private projector: ChartProjector | null = null;
+
+  /** Switch between Web-Mercator (null) and chart-pixel (projector) rendering.
+   * In chart mode the map is expected to use `L.CRS.Simple` with chart pixels
+   * fed as `L.latLng(y, x)` (matching the chart image overlay's bounds). */
+  setProjector(projector: ChartProjector | null): void {
+    this.projector = projector;
+    this.redraw();
+  }
 
   /** Replace the slice and trigger a redraw. */
   setSlice(slice: HewsonSlice, vmin?: number, vmax?: number): void {
@@ -124,6 +138,12 @@ export class HewsonGridLayer extends L.Layer {
     const halfLat = dLat / 2;
     const halfLon = dLon / 2;
 
+    // Chart-basemap mode: cells become polar-stereographic quadrilaterals.
+    if (this.projector) {
+      this.drawChartCells(ctx, map, size, halfLat, halfLon);
+      return;
+    }
+
     // Quick viewport cull — skip cells that are completely off-screen.
     const bounds = map.getBounds();
     const viewW = bounds.getWest() - dLon;
@@ -176,4 +196,65 @@ export class HewsonGridLayer extends L.Layer {
       }
     }
   };
+
+  /** Chart-pixel render path: each cell is a 4-corner quad projected through
+   * the active chart projection. Polar-stereo X depends on latitude, so the
+   * per-column precompute used in Web-Mercator mode doesn't apply; we project
+   * all four corners per cell. ~80k projections per full redraw, but in
+   * `L.CRS.Simple` Leaflet translates the pane on pan so this only fires on
+   * zoom/viewreset/resize/setSlice, not every pan frame. */
+  private drawChartCells(
+    ctx: CanvasRenderingContext2D,
+    map: L.Map,
+    size: L.Point,
+    halfLat: number,
+    halfLon: number,
+  ): void {
+    const project = this.projector!;
+    const { slice, vmin, vmax } = this.state!;
+    const { lat, lon, values } = slice;
+    const metric = slice.metric as HewsonMetric;
+
+    // Container point for a WGS84 (lat, lon): project to chart pixels, then let
+    // the CRS.Simple map place them (lat=y, lng=x — matches the image overlay).
+    const toPoint = (la: number, lo: number): L.Point => {
+      const p = project(la, lo);
+      return map.latLngToContainerPoint(L.latLng(p.y, p.x));
+    };
+
+    // Cull generously in container space: skip cells whose centre is well
+    // outside the viewport. A whole grid cell projects to at most a few px.
+    const margin = 32;
+    const minX = -margin;
+    const maxX = size.x + margin;
+    const minY = -margin;
+    const maxY = size.y + margin;
+
+    for (let i = 0; i < lat.length; i++) {
+      const la = lat[i];
+      const row = values[i];
+      for (let j = 0; j < lon.length; j++) {
+        const v = row[j];
+        if (v === null || !Number.isFinite(v)) continue;
+        const lo = lon[j];
+
+        const c = toPoint(la, lo);
+        if (c.x < minX || c.x > maxX || c.y < minY || c.y > maxY) continue;
+
+        const nw = toPoint(la + halfLat, lo - halfLon);
+        const ne = toPoint(la + halfLat, lo + halfLon);
+        const se = toPoint(la - halfLat, lo + halfLon);
+        const sw = toPoint(la - halfLat, lo - halfLon);
+
+        ctx.fillStyle = colorFor(metric, v, vmin, vmax);
+        ctx.beginPath();
+        ctx.moveTo(nw.x, nw.y);
+        ctx.lineTo(ne.x, ne.y);
+        ctx.lineTo(se.x, se.y);
+        ctx.lineTo(sw.x, sw.y);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+  }
 }
