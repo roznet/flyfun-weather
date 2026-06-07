@@ -110,7 +110,7 @@ The compact-mode invariant — *only* the preferred layer in each group is enabl
 
 Layer presets provide one-click configurations. Currently one preset:
 
-**GRAMET** — Autorouter-style: Soft NWP clouds + Ogimet-NWP icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise altitude. Also switches to the GRAMET theme. Selecting "Custom" reverts to user's previous layer state. (SLD is excluded from GRAMET — experimental.)
+**GRAMET** — Autorouter-style: Natural NWP clouds + Ogimet-NWP icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise altitude. Also switches to the GRAMET theme. (SLD is excluded from GRAMET — experimental.)
 
 Presets defined in `layer-registry.ts` as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides.
 

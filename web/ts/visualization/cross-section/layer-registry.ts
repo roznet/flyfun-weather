@@ -166,11 +166,11 @@ export interface LayerPreset {
 }
 
 const GRAMET_ENABLED: Record<string, boolean> = {
-  'soft-nwp-cloud-bands': true,
+  'soft-nwp-cloud-bands': false,
   'soft-cloud-bands': false,
   'square-nwp-cloud-bands': false,
   'square-cloud-bands': false,
-  'nwp-cloud-bands': false,
+  'nwp-cloud-bands': true,        // Natural NWP clouds
   'cloud-bands': false,
   'thermo-convective-bg': false,
   'nwp-convective-bg': true,

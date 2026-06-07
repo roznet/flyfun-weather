@@ -176,9 +176,10 @@ describe('presets', () => {
     expect(preset!.themeId).toBe('gramet');
   });
 
-  it('GRAMET enables soft NWP clouds and Ogimet-NWP icing', () => {
+  it('GRAMET enables Natural NWP clouds and Ogimet-NWP icing', () => {
     const preset = getPreset('gramet')!;
-    expect(preset.enabledLayers['soft-nwp-cloud-bands']).toBe(true);
+    expect(preset.enabledLayers['nwp-cloud-bands']).toBe(true);
+    expect(preset.enabledLayers['soft-nwp-cloud-bands']).toBe(false);
     expect(preset.enabledLayers['icing-ogimet-nwp-bands']).toBe(true);
     expect(preset.enabledLayers['nwp-convective-bg']).toBe(true);
     expect(preset.enabledLayers['cat-bands']).toBe(true);
