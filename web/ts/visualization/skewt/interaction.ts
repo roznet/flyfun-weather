@@ -11,7 +11,7 @@ import type { SkewTTransform } from './skewt-transform';
 import type { SoundingProfileData, SoundingProfileLevel } from './types';
 import type { CompareModelDataset } from './compare-renderer';
 import { isDarkTheme } from '../interaction-utils';
-import { altitudeToPressure, pressureToAltitudeFt } from './atmo-utils';
+import { altitudeToPressure, pressureToAltitudeFt } from '../../utils/atmo';
 
 export interface SkewTInteractionCallbacks {
   /** Called with altitude in ft when hovering, undefined when leaving. */
