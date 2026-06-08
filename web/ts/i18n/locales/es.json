@@ -621,6 +621,8 @@
   "page.settings.cruiseAltitude": "Altitud de crucero (ft)",
   "page.settings.flightCeiling": "Techo de vuelo (ft)",
   "page.settings.speed": "Velocidad de crucero (IAS en kt)",
+  "settings.cruiseSpeedInfoTitle": "Velocidad de crucero (IAS)",
+  "settings.cruiseSpeedInfoBody": "<p>Introduzca su velocidad de crucero como <strong>velocidad indicada (IAS)</strong> en nudos — el valor que lee en el anemómetro a potencia de crucero.</p><p>Para las estimaciones de tiempo y distancia convertimos la IAS en <strong>velocidad verdadera (TAS)</strong>, que es mayor en altitud (aproximadamente +2 % por cada 1000 ft). Usamos la <strong>atmósfera estándar ISA</strong> a la altitud de crucero seleccionada, por lo que cambiar la altitud actualiza la estimación.</p>",
   "page.settings.forecastModels": "Modelos de pronóstico",
   "page.settings.forecastModelsHint": "Seleccione qué modelos NWP usar para briefings con este perfil.",
   "page.settings.optionalServices": "Servicios opcionales",

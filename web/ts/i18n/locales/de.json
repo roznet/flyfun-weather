@@ -621,6 +621,8 @@
   "page.settings.cruiseAltitude": "Reiseflughöhe (ft)",
   "page.settings.flightCeiling": "Gipfelhöhe (ft)",
   "page.settings.speed": "Reisegeschwindigkeit (IAS in kt)",
+  "settings.cruiseSpeedInfoTitle": "Reisegeschwindigkeit (IAS)",
+  "settings.cruiseSpeedInfoBody": "<p>Geben Sie Ihre Reisegeschwindigkeit als <strong>angezeigte Geschwindigkeit (IAS)</strong> in Knoten ein — den Wert, den Sie bei Reiseleistung am Fahrtmesser ablesen.</p><p>Für Zeit- und Streckenschätzungen rechnen wir die IAS in die <strong>wahre Geschwindigkeit (TAS)</strong> um, die in der Höhe größer ist (etwa +2 % je 1.000 ft). Wir verwenden die <strong>ISA-Standardatmosphäre</strong> in der gewählten Reisehöhe; eine Änderung der Höhe aktualisiert daher die Schätzung.</p>",
   "page.settings.forecastModels": "Vorhersagemodelle",
   "page.settings.forecastModelsHint": "Wählen Sie die NWP-Modelle für Briefings mit diesem Profil.",
   "page.settings.optionalServices": "Optionale Dienste",

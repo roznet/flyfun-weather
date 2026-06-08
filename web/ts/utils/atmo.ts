@@ -1,7 +1,8 @@
 /**
- * Standard atmosphere conversion utilities shared across Skew-T modules.
+ * ISA standard-atmosphere conversion utilities.
  *
- * Barometric formula (troposphere, T0=288.15K, L=0.0065K/m).
+ * Barometric formula (troposphere, T0=288.15K, L=0.0065K/m). General-purpose —
+ * consumed by the Skew-T modules and by the flights duration estimate.
  */
 
 /** Altitude (ft) → pressure (hPa). Returns null for negative altitudes. */

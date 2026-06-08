@@ -22,7 +22,7 @@ import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup } from './components/info-popup';
-import { iasToTasISA } from './visualization/skewt/atmo-utils';
+import { iasToTasISA } from './utils/atmo';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';

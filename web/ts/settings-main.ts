@@ -568,9 +568,8 @@ async function init(): Promise<void> {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       showPopupContent(`
-        <h3 style="margin-top:0">Cruise Speed (IAS)</h3>
-        <p>Enter your cruise speed as <strong>indicated airspeed (IAS)</strong> in knots — the number you read off the ASI at cruise power.</p>
-        <p>For time and distance estimates we convert IAS to <strong>true airspeed (TAS)</strong>, which is higher at altitude (roughly +2% per 1,000 ft). We use the <strong>ISA standard atmosphere</strong> at your selected cruise altitude, so changing the altitude updates the estimate.</p>
+        <h3 style="margin-top:0">${t('settings.cruiseSpeedInfoTitle')}</h3>
+        ${t('settings.cruiseSpeedInfoBody')}
       `);
     });
   });

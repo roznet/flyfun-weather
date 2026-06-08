@@ -11,7 +11,7 @@
 import { SkewTTransform } from './skewt-transform';
 import { SoundingProfileData, PlotArea } from './types';
 import { isDarkTheme, cssVar } from '../interaction-utils';
-import { altitudeToPressure } from './atmo-utils';
+import { altitudeToPressure } from '../../utils/atmo';
 
 // Standard pressure levels to label on the Y-axis
 const PRESSURE_LABELS = [1000, 925, 850, 700, 500, 400, 300, 250];

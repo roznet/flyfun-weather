@@ -15,7 +15,7 @@ import type {
   IcingZone,
   InversionLayer,
 } from './types';
-import { altitudeToPressure } from './atmo-utils';
+import { altitudeToPressure } from '../../utils/atmo';
 
 // --- Cloud colors (matching cross-section theme) ---
 const CLOUD_DD_COLOR = 'rgba(140, 140, 150, ALPHA)';

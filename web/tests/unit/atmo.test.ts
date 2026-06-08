@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { iasToTasISA } from '../../ts/visualization/skewt/atmo-utils';
+import { iasToTasISA } from '../../ts/utils/atmo';
 
 describe('iasToTasISA', () => {
   it('returns IAS unchanged at sea level (ISA datum)', () => {

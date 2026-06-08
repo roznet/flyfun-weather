@@ -621,6 +621,8 @@
   "page.settings.cruiseAltitude": "Altitude de croisière (ft)",
   "page.settings.flightCeiling": "Plafond de vol (ft)",
   "page.settings.speed": "Vitesse de croisière (IAS en kt)",
+  "settings.cruiseSpeedInfoTitle": "Vitesse de croisière (IAS)",
+  "settings.cruiseSpeedInfoBody": "<p>Saisissez votre vitesse de croisière en <strong>vitesse indiquée (IAS)</strong> en nœuds — la valeur lue sur l'anémomètre à la puissance de croisière.</p><p>Pour les estimations de temps et de distance, nous convertissons l'IAS en <strong>vitesse vraie (TAS)</strong>, plus élevée en altitude (environ +2 % par 1 000 ft). Nous utilisons l'<strong>atmosphère standard ISA</strong> à l'altitude de croisière choisie ; modifier l'altitude met donc à jour l'estimation.</p>",
   "page.settings.forecastModels": "Modèles de prévision",
   "page.settings.forecastModelsHint": "Sélectionnez les modèles NWP à utiliser pour les briefings avec ce profil.",
   "page.settings.optionalServices": "Services optionnels",
