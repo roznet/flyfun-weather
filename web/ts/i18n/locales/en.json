@@ -728,7 +728,7 @@
   "page.settings.vfrOnly": "VFR only",
   "page.settings.cruiseAltitude": "Cruise Altitude (ft)",
   "page.settings.flightCeiling": "Flight Ceiling (ft)",
-  "page.settings.speed": "Speed (kt)",
+  "page.settings.speed": "Cruise Speed (IAS in kt)",
   "page.settings.forecastModels": "Forecast Models",
   "page.settings.forecastModelsHint": "Select which NWP models to use for briefings with this profile.",
   "page.settings.optionalServices": "Optional Services",

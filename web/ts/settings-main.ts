@@ -396,7 +396,13 @@ function translateStaticElements(): void {
   set('label[for="input-flight-rules"]', 'page.settings.flightRules');
   set('label[for="input-altitude"]', 'page.settings.cruiseAltitude');
   set('label[for="input-ceiling"]', 'page.settings.flightCeiling');
-  set('label[for="input-speed"]', 'page.settings.speed');
+  // Speed label carries an (i) info button child — set the text but keep the button.
+  const speedLabel = document.querySelector('label[for="input-speed"]');
+  if (speedLabel) {
+    const speedInfoBtn = speedLabel.querySelector('.cruise-speed-info-btn');
+    speedLabel.textContent = t('page.settings.speed') + ' ';
+    if (speedInfoBtn) speedLabel.appendChild(speedInfoBtn);
+  }
   // Forecast models section
   if (sections[2]) {
     const h3 = sections[2].querySelector('h3');
@@ -555,6 +561,18 @@ async function init(): Promise<void> {
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     await handleSave();
+  });
+
+  // Cruise speed (IAS) info popup — wired on both the aircraft and flight-default speed labels
+  document.querySelectorAll('.cruise-speed-info-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      showPopupContent(`
+        <h3 style="margin-top:0">Cruise Speed (IAS)</h3>
+        <p>Enter your cruise speed as <strong>indicated airspeed (IAS)</strong> in knots — the number you read off the ASI at cruise power.</p>
+        <p>For time and distance estimates we convert IAS to <strong>true airspeed (TAS)</strong>, which is higher at altitude (roughly +2% per 1,000 ft). We use the <strong>ISA standard atmosphere</strong> at your selected cruise altitude, so changing the altitude updates the estimate.</p>
+      `);
+    });
   });
 
   // Digest guidance info popup

@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-06-08",
+    "title": "Cruise speed is now indicated airspeed (IAS)",
+    "category": "change",
+    "highlight": true,
+    "body": "The cruise **Speed** field on your aircraft and flight-default profiles is now labelled **Cruise Speed (IAS in kt)** and read as **indicated airspeed**. For time and distance estimates we convert it to **true airspeed (TAS)** at your selected cruise altitude using the ISA standard atmosphere — TAS is higher than IAS aloft (roughly +2% per 1,000 ft), so estimates now respond when you change altitude.\n\nBecause existing stored speeds are reinterpreted as IAS, **auto-calculated durations get a little shorter** at typical cruise altitudes (~13% shorter at 8,000 ft). Manually entered durations are untouched. Tap the new (i) button next to the speed field for the details."
+  }
+]
