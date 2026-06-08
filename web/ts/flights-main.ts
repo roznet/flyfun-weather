@@ -22,6 +22,7 @@ import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup } from './components/info-popup';
+import { iasToTasISA } from './visualization/skewt/atmo-utils';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
@@ -41,6 +42,11 @@ let durationManuallyEdited = false;
 
 /** Cached waypoint info from the last route-distance response. */
 let lastWaypoints: WaypointInfo[] = [];
+
+/** Total route distance (nm) from the last route-distance response. Cached so the
+ *  duration estimate can be recomputed on altitude change without re-hitting the API
+ *  (distance is altitude-independent; only the IAS→TAS conversion is). */
+let lastTotalDistanceNm = 0;
 
 /** Build a reference Date from the currently selected date and UTC time selects. */
 function getRefDate(): Date {
@@ -126,22 +132,28 @@ async function fetchRouteAndUpdateUI(): Promise<void> {
 
     // Populate timezone dropdown from route waypoints
     populateTimezones(resp.waypoints);
+    lastTotalDistanceNm = resp.total_distance_nm;
 
-    // Auto-calculate duration from speed if not manually edited
-    if (!durationManuallyEdited) {
-      const profile = getSelectedProfile();
-      const speedKt = profile?.settings?.speed_kt;
-      if (speedKt && speedKt > 0) {
-        const durationHours = Math.ceil(resp.total_distance_nm / speedKt);
-        const durationInput = document.getElementById('input-duration') as HTMLInputElement;
-        if (durationInput) {
-          durationInput.value = String(durationHours);
-        }
-      }
-    }
+    recalcDurationEstimate();
   } catch (err) {
     console.error('Failed to fetch route distance:', err);
   }
+}
+
+/** Auto-calculate the duration field from the cached route distance and the
+ *  selected profile's cruise speed, unless the user has edited it manually.
+ *  speed_kt is the cruise IAS; we convert it to TAS at the selected cruise
+ *  altitude (ISA standard atmosphere) so distance ÷ TAS = still-air duration. */
+function recalcDurationEstimate(): void {
+  if (durationManuallyEdited || lastTotalDistanceNm <= 0) return;
+  const iasKt = getSelectedProfile()?.settings?.speed_kt;
+  if (!iasKt || iasKt <= 0) return;
+  const altFt = parseInt(
+    (document.getElementById('input-altitude') as HTMLInputElement)?.value || '8000', 10);
+  const tasKt = iasToTasISA(iasKt, altFt);
+  const durationHours = Math.ceil(lastTotalDistanceNm / tasKt);
+  const durationInput = document.getElementById('input-duration') as HTMLInputElement;
+  if (durationInput) durationInput.value = String(durationHours);
 }
 
 /** Populate the Recent Routes dropdown from the user's flight history.
@@ -765,6 +777,13 @@ async function init(): Promise<void> {
   durationInput?.addEventListener('input', () => {
     durationManuallyEdited = true;
   });
+
+  // --- Recompute the duration estimate when cruise altitude changes ---
+  // TAS (and therefore still-air duration) depends on altitude. Recompute from
+  // the cached route distance — no need to re-fetch (distance is altitude-independent).
+  // The recalc itself respects the durationManuallyEdited guard.
+  const altitudeInput = document.getElementById('input-altitude') as HTMLInputElement;
+  altitudeInput?.addEventListener('input', recalcDurationEstimate);
 
   // Update altitude/ceiling defaults and recalculate duration when profile changes
   const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;

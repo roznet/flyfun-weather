@@ -620,7 +620,7 @@
   "page.settings.vfrOnly": "Nur VFR",
   "page.settings.cruiseAltitude": "Reiseflughöhe (ft)",
   "page.settings.flightCeiling": "Gipfelhöhe (ft)",
-  "page.settings.speed": "Geschwindigkeit (kt)",
+  "page.settings.speed": "Reisegeschwindigkeit (IAS in kt)",
   "page.settings.forecastModels": "Vorhersagemodelle",
   "page.settings.forecastModelsHint": "Wählen Sie die NWP-Modelle für Briefings mit diesem Profil.",
   "page.settings.optionalServices": "Optionale Dienste",
