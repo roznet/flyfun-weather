@@ -19,9 +19,14 @@ export function pressureToAltitudeFt(pressureHPa: number): number {
 }
 
 /** Indicated airspeed (kt) → true airspeed (kt) under the ISA standard atmosphere at altFt.
- *  TAS = IAS / √(ρ/ρ₀), where ρ/ρ₀ = (1 − L·altM/T0)^4.2561 in the ISA troposphere. */
+ *  TAS = IAS / √(ρ/ρ₀), where ρ/ρ₀ = (1 − L·altM/T0)^4.2561 in the ISA troposphere.
+ *  The lapse-rate formula is only valid below the ISA tropopause (~36,089 ft /
+ *  11,000 m); above it density is isothermal, so we clamp altitude to the
+ *  tropopause to avoid over-predicting TAS. The clamp is conservative (slightly
+ *  understates TAS above FL360) but well within planning tolerance for the
+ *  altitudes this is used at. */
 export function iasToTasISA(iasKt: number, altFt: number): number {
-  const altM = Math.max(0, altFt) / 3.28084;
+  const altM = Math.min(Math.max(0, altFt) / 3.28084, 11000); // clamp to ISA tropopause
   const densityRatio = Math.pow(1 - 0.0065 * altM / 288.15, 4.2561);
   return iasKt / Math.sqrt(densityRatio);
 }

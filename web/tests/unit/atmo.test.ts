@@ -29,4 +29,14 @@ describe('iasToTasISA', () => {
   it('clamps negative altitudes to the sea-level datum', () => {
     expect(iasToTasISA(120, -500)).toBeCloseTo(120, 5);
   });
+
+  it('clamps above the ISA tropopause (~36,089 ft) to tropopause density', () => {
+    // The lapse-rate formula is only valid below the tropopause; FL400/FL450
+    // are clamped to the FL360 (11,000 m) value rather than over-predicting TAS.
+    const tasTropo = iasToTasISA(120, 36089);
+    expect(iasToTasISA(120, 40000)).toBeCloseTo(tasTropo, 1);
+    expect(iasToTasISA(120, 45000)).toBeCloseTo(tasTropo, 1);
+    // Still strictly greater than a mid-altitude value (monotonic up to the clamp).
+    expect(tasTropo).toBeGreaterThan(iasToTasISA(120, 12000));
+  });
 });
