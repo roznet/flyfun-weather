@@ -100,23 +100,29 @@ def compute_runway_winds(
     return results
 
 
+def best_runway_of(all_runways: list[RunwayWind]) -> RunwayWind | None:
+    """Pick the wind-best runway from precomputed winds: min crosswind, then max headwind.
+
+    Single source of truth for the selection criterion, so callers that already
+    have the per-runway winds (e.g. the airport-conditions table, which also
+    keeps ``all_runways``) don't recompute them.
+    """
+    if not all_runways:
+        return None
+    return min(all_runways, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
+
+
 def select_best_runway(
     runway_ends: list[RunwayEnd],
     wind_speed_kt: float | None,
     wind_direction_deg: float | None,
 ) -> RunwayWind | None:
-    """Pick the wind-best runway: minimise crosswind, then maximise headwind.
-
-    Shared by the airport-conditions table and the sun-glare analysis so both
-    agree on "the runway you'd actually use". Returns ``None`` when runway or
-    wind data is missing.
-    """
+    """Pick the wind-best runway from runway ends + wind. Returns ``None`` when
+    runway or wind data is missing. Convenience wrapper over
+    :func:`compute_runway_winds` + :func:`best_runway_of`."""
     if not runway_ends or wind_speed_kt is None or wind_direction_deg is None:
         return None
-    all_runways = compute_runway_winds(runway_ends, wind_speed_kt, wind_direction_deg)
-    if not all_runways:
-        return None
-    return min(all_runways, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
+    return best_runway_of(compute_runway_winds(runway_ends, wind_speed_kt, wind_direction_deg))
 
 
 def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
@@ -232,7 +238,7 @@ def _compute_for_airport(
         best_runway: RunwayWind | None = None
         if runway_ends and wind_speed_kt is not None and wind_direction_deg is not None:
             all_runways = compute_runway_winds(runway_ends, wind_speed_kt, wind_direction_deg)
-            best_runway = select_best_runway(runway_ends, wind_speed_kt, wind_direction_deg)
+            best_runway = best_runway_of(all_runways)
 
         conditions.append(AirportModelCondition(
             model=model,

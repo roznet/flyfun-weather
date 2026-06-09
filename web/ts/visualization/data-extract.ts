@@ -106,7 +106,7 @@ function buildNightIntervals(manifest: RouteAnalysesManifest): VizNightInterval[
 /** Extract the sun-side summary for the seating note. */
 function buildSunSide(manifest: RouteAnalysesManifest): VizSunSide | null {
   const sun = manifest.sun;
-  if (!sun || !sun.sun_side) return null;
+  if (!sun) return null;
   return {
     dominantSide: sun.sun_side.dominant_side,
     dominantSidePct: sun.sun_side.dominant_side_pct,

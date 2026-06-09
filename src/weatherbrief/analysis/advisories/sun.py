@@ -142,16 +142,20 @@ class SunEvaluator:
         parts: list[str] = []
 
         # --- Glare on the wind-best runway (always applies) ---
-        takeoff_glare = _glare_into_sun(sun.takeoff, glare_azimuth_deg, glare_elev_max_deg)
-        landing_glare = _glare_into_sun(sun.landing, glare_azimuth_deg, glare_elev_max_deg)
-        if takeoff_glare and sun.takeoff is not None:
+        # `is not None` first so the type checker narrows GlareAssessment | None
+        # before we read its fields; _glare_into_sun also no-ops on None.
+        if sun.takeoff is not None and _glare_into_sun(
+            sun.takeoff, glare_azimuth_deg, glare_elev_max_deg
+        ):
             status = AdvisoryStatus.AMBER
             parts.append(adv_t(
                 "sun.glare_takeoff", loc,
                 elev=round(sun.takeoff.sun_elevation_deg or 0),
                 runway=sun.takeoff.runway_ident or "?",
             ))
-        if landing_glare and sun.landing is not None:
+        if sun.landing is not None and _glare_into_sun(
+            sun.landing, glare_azimuth_deg, glare_elev_max_deg
+        ):
             status = AdvisoryStatus.AMBER
             parts.append(adv_t(
                 "sun.glare_landing", loc,
@@ -202,18 +206,19 @@ def _sun_side_note(sun_side, loc: str | None) -> str:
 
 
 def _near_dark(ctx: RouteContext, phase: str, margin_min: float) -> bool:
-    """True when a takeoff is near/before sunrise or a landing near/after sunset.
+    """True when a landing is near/after sunset or a takeoff near/before sunrise.
 
     Uses the route endpoint's lat/lon/time and the day's sunrise/sunset from the
-    euro_aip solar primitive. Polar day/night (no event) → not near-dark.
+    euro_aip solar primitive (fixed ``morning``/``evening`` keys). Polar day/night
+    (no event) → not near-dark. Deliberately does NOT short-circuit on the
+    endpoint's ``is_dark`` flag: a deep-night landing (hours past sunset) is dark
+    but is not "near sunset", and the margin check below correctly excludes it so
+    the "fading light near sunset" wording stays accurate.
     """
     sun = ctx.sun
     assessment = sun.landing if phase == "landing" else sun.takeoff
     if assessment is None or not ctx.analyses:
         return False
-    # Already past the horizon → unambiguously dark.
-    if assessment.is_dark:
-        return True
 
     point = ctx.analyses[-1] if phase == "landing" else ctx.analyses[0]
     try:
@@ -226,7 +231,7 @@ def _near_dark(ctx: RouteContext, phase: str, margin_min: float) -> bool:
     when = point.interpolated_time
     margin = timedelta(minutes=margin_min)
     if phase == "landing":
-        sunset = events.get("sunset")
+        sunset = events.get("evening")
         return sunset is not None and when >= sunset - margin
-    sunrise = events.get("sunrise")
+    sunrise = events.get("morning")
     return sunrise is not None and when <= sunrise + margin

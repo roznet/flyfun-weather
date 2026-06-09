@@ -127,6 +127,27 @@ class TestSunAdvisory:
         params = {**_defaults(), "warn_near_sunset": 0}
         assert SunEvaluator.evaluate(_ctx(sun, analyses=analyses), params).aggregate_status == AdvisoryStatus.AMBER
 
+    def test_deep_night_landing_no_misleading_sunset_amber(self):
+        # A landing at 02:00 UTC is dark but hours past sunset — NOT "near sunset".
+        # Must stay GREEN (no glare, no misleading dusk warning), even though the
+        # endpoint is_dark. Regression for the is_dark short-circuit.
+        start = datetime(2024, 6, 21, 0, 0, tzinfo=timezone.utc)
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=start + timedelta(minutes=i * 30),
+                forecast_hour=start, track_deg=90.0,
+            )
+            for i in range(5)  # last point at 02:00 UTC
+        ]
+        landing = GlareAssessment(
+            phase="landing", airport_icao="LFPG", runway_ident="09",
+            sun_elevation_deg=-15.0, is_dark=True, into_sun=False,
+        )
+        sun = RouteSunAnalysis(sun_side=_side("none", 0.0), landing=landing)
+        result = SunEvaluator.evaluate(_ctx(sun, analyses=analyses), _defaults())
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
     def test_side_swings_mentioned_when_segments_flip(self):
         sun = RouteSunAnalysis(sun_side=_side("right", 55.0, segments=[
             SunSideSegment(side="right", start_distance_nm=0, end_distance_nm=40),

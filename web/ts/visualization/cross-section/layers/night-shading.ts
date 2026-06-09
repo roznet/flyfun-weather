@@ -16,7 +16,7 @@ export const nightShadingLayer: CrossSectionLayer = {
   defaultEnabled: true,
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    if (!data.nightIntervals || data.nightIntervals.length === 0) return;
+    if (data.nightIntervals.length === 0) return;
 
     const { plotArea } = transform;
     const top = plotArea.top;
