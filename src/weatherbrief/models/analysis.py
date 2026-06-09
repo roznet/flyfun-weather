@@ -820,11 +820,21 @@ class GlareAssessment(BaseModel):
     is_dark: bool = False  # sun below horizon at that time
 
 
+class SunPoint(BaseModel):
+    """Per-route-point sun geometry, for the cross-section hover readout (#227)."""
+
+    distance_nm: float
+    elevation_deg: float  # above horizon; negative = below
+    azimuth_deg: float  # true degrees, clockwise from north
+    relative_bearing_deg: float  # signed sun az - track, +/-180; + = right of track
+
+
 class RouteSunAnalysis(BaseModel):
     """Precomputed solar readouts for the route: night shading, sun side, dep/arr glare."""
 
     night_intervals: list[NightInterval] = Field(default_factory=list)
     sun_side: SunSideSummary
+    points: list[SunPoint] = Field(default_factory=list)
     takeoff: GlareAssessment | None = None
     landing: GlareAssessment | None = None
 

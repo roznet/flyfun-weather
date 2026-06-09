@@ -138,9 +138,13 @@ function inversionLegend(): LegendEntry[] {
 
 function nightShadingLegend(): LegendEntry[] {
   const theme = getActiveTheme().nightShading;
+  // Shading + the sunset/sunrise boundary markers live in one layer. Marker
+  // colours match night-shading.ts (theme-independent: a sun reads as a sun).
   return [
     { label: t('legend.sun.twilight'), color: theme.twilight, meaning: t('legend.sun.twilightDesc') },
     { label: t('legend.sun.night'), color: theme.night, meaning: t('legend.sun.nightDesc') },
+    { label: 'Sunset / Sunrise', color: '#f4b740', meaning: 'Marker where the sun crosses the horizon (elevation 0°)' },
+    { label: 'Civil dusk / dawn', color: '#9aa7d0', meaning: 'Marker at sun 6° below the horizon — end/start of usable light' },
   ];
 }
 

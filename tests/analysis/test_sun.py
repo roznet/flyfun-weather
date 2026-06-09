@@ -109,6 +109,27 @@ class TestSunSide:
         assert rs.sun_side.dominant_side == "none"
 
 
+class TestSunPoints:
+    def test_one_point_per_analysis_with_aligned_geometry(self):
+        # Midday so the sun is up; eastbound (track 90) morning sun ~east.
+        start = datetime(2024, 6, 21, 7, 0, tzinfo=timezone.utc)
+        analyses = _route(start=start, n=6, lat0=48.0, lon0=2.0, dlat=0.0, dlon=0.3, track_deg=90.0)
+        rs = compute_route_sun(analyses)
+        # One SunPoint per route point, distances aligned.
+        assert len(rs.points) == len(analyses)
+        assert [round(p.distance_nm) for p in rs.points] == [
+            round(a.distance_from_origin_nm) for a in analyses
+        ]
+        # relative_bearing == normalize_180(azimuth - track); sun is up (el > 0).
+        for p, a in zip(rs.points, analyses):
+            assert -180.0 <= p.relative_bearing_deg < 180.0
+            assert abs(normalize_180(p.azimuth_deg - a.track_deg) - p.relative_bearing_deg) < 0.2
+            assert p.elevation_deg > 0.0
+
+    def test_empty_route_has_no_points(self):
+        assert compute_route_sun([]).points == []
+
+
 class TestGlare:
     def test_sunset_landing_onto_westerly_runway_is_into_sun(self):
         # Autumn equinox late afternoon: sun ~7.5deg up, azimuth ~262 (near due

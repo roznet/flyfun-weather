@@ -2,7 +2,7 @@
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets } from '../store/types';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
-import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts, VizNightInterval, VizSunSide } from './types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts, VizNightInterval, VizSunSide, VizSunAtPoint } from './types';
 import type { FrontCrossing, FrontProximity, RouteFrontsManifest } from '../types/fronts';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
@@ -55,12 +55,24 @@ export function extractVizData(
     }
   }
 
+  // Per-point sun geometry (#227) keyed by along-route distance — model-
+  // independent, so it is the same for every model selection.
+  const sunByDistance = new Map<number, VizSunAtPoint>();
+  for (const sp of manifest.sun?.points ?? []) {
+    sunByDistance.set(Math.round(sp.distance_nm * 10), {
+      elevationDeg: sp.elevation_deg,
+      azimuthDeg: sp.azimuth_deg,
+      relativeBearingDeg: sp.relative_bearing_deg,
+    });
+  }
+
   for (const rpa of manifest.analyses) {
     const sounding = rpa.sounding[model] ?? null;
     const wind = windOverlayByIndex.get(rpa.point_index) ?? rpa.wind_components[model] ?? null;
     const terrainFt = interpolateTerrainElevation(terrainProfile, rpa.distance_from_origin_nm);
+    const sun = sunByDistance.get(Math.round(rpa.distance_from_origin_nm * 10)) ?? null;
 
-    points.push(extractPoint(rpa, sounding, wind, model, terrainFt));
+    points.push(extractPoint(rpa, sounding, wind, model, terrainFt, sun));
 
     if (rpa.waypoint_icao) {
       waypointMarkers.push({
@@ -99,6 +111,8 @@ function buildNightIntervals(manifest: RouteAnalysesManifest): VizNightInterval[
   return sun.night_intervals.map((n) => ({
     startNm: n.start_distance_nm,
     endNm: n.end_distance_nm,
+    startTime: n.start_time,
+    endTime: n.end_time,
     phase: n.phase,
   }));
 }
@@ -222,6 +236,7 @@ function extractPoint(
   wind: { headwind_kt: number; crosswind_kt: number } | null,
   model: string,
   terrainElevationFt: number,
+  sun: VizSunAtPoint | null,
 ): VizPoint {
   const indices = sounding?.indices ?? null;
 
@@ -399,6 +414,7 @@ function extractPoint(
     precipitationMm,
     qnhHpa,
     surfaceObscuration,
+    sun,
   };
 }
 

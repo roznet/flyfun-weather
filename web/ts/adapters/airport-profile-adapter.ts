@@ -404,6 +404,8 @@ function synthesizeVizPoint(
     // has no source here — the route-graph metric renders empty for profiles.
     qnhHpa: null,
     surfaceObscuration,
+    // Single-airport time-axis view has no along-route sun geometry.
+    sun: null,
   };
 }
 

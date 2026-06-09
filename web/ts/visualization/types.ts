@@ -142,7 +142,18 @@ export interface VizRouteData {
 export interface VizNightInterval {
   startNm: number;
   endNm: number;
+  /** Boundary times (ISO-Z strings) — drive the sunset/sunrise marker labels. */
+  startTime: string;
+  endTime: string;
   phase: 'twilight' | 'night';
+}
+
+/** Sun geometry at one route point, for the cross-section hover readout. */
+export interface VizSunAtPoint {
+  elevationDeg: number;
+  azimuthDeg: number;
+  /** Signed sun azimuth − track, ±180; positive = right of track. */
+  relativeBearingDeg: number;
 }
 
 /** Which side the sun favours over the route (informational). */
@@ -287,6 +298,11 @@ export interface VizPoint {
    * analysis logic depends on it.
    */
   surfaceObscuration: VizSurfaceObscuration | null;
+  /**
+   * Sun geometry at this point (#227) for the hover readout — azimuth and
+   * angle relative to track. `null` on old packs (no `manifest.sun.points`).
+   */
+  sun: VizSunAtPoint | null;
 }
 
 export interface VizSurfaceObscuration {

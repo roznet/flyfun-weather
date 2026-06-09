@@ -696,9 +696,19 @@ export interface GlareAssessment {
   is_dark: boolean;
 }
 
+export interface SunPoint {
+  distance_nm: number;
+  elevation_deg: number;
+  azimuth_deg: number;
+  /** Signed sun azimuth − track, ±180; positive = right of track. */
+  relative_bearing_deg: number;
+}
+
 export interface RouteSunAnalysis {
   night_intervals: NightInterval[];
   sun_side: SunSideSummary;
+  /** Per-route-point sun geometry for the hover readout. Absent on old packs. */
+  points?: SunPoint[];
   takeoff: GlareAssessment | null;
   landing: GlareAssessment | null;
 }

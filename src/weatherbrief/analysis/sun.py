@@ -27,6 +27,7 @@ from weatherbrief.models import (
     NightInterval,
     RoutePointAnalysis,
     RouteSunAnalysis,
+    SunPoint,
     SunSideSegment,
     SunSideSummary,
 )
@@ -269,10 +270,22 @@ def compute_route_sun(
     if not analyses:
         return RouteSunAnalysis(sun_side=SunSideSummary(dominant_side="none", dominant_side_pct=0.0))
 
+    # One solar_position call per route point feeds both the night intervals
+    # (elevation crossings) and the per-point hover readout (azimuth + angle to
+    # track). sun_side keeps its own pass — it only contributes daylit segments.
+    positions = [solar_position(a.lat, a.lon, a.interpolated_time) for a in analyses]
     samples = [
-        (a.distance_from_origin_nm, a.interpolated_time,
-         solar_elevation(a.lat, a.lon, a.interpolated_time))
-        for a in analyses
+        (a.distance_from_origin_nm, a.interpolated_time, elev)
+        for a, (elev, _az) in zip(analyses, positions)
+    ]
+    points = [
+        SunPoint(
+            distance_nm=a.distance_from_origin_nm,
+            elevation_deg=round(elev, 1),
+            azimuth_deg=round(az, 1),
+            relative_bearing_deg=round(normalize_180(az - a.track_deg), 1),
+        )
+        for a, (elev, az) in zip(analyses, positions)
     ]
     night_intervals = _compute_night_intervals(samples)
     sun_side = _compute_sun_side(analyses)
@@ -287,6 +300,7 @@ def compute_route_sun(
     return RouteSunAnalysis(
         night_intervals=night_intervals,
         sun_side=sun_side,
+        points=points,
         takeoff=takeoff,
         landing=landing,
     )

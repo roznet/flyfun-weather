@@ -44,6 +44,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     RouteSunAnalysis,
     RouteWindOverlay,
     SfipZone,
+    SunPoint,
     SunSideSegment,
     SunSideSummary,
     SldZone,

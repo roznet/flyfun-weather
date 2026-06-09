@@ -275,6 +275,37 @@ const surfaceObscuration: LayerTooltipDef = {
   swatch: (z: VizSurfaceObscuration) => getActiveTheme().obscuration[z.severity],
 };
 
+/** Sun geometry at the hovered point (#227). Owned by the night-shading toggle.
+ *  Not altitude-bound — synthesize a full-height pseudo-zone so the row shows at
+ *  any cursor altitude. Shows azimuth + angle to track when the sun is up; depth
+ *  below the horizon otherwise. */
+interface SunZone {
+  baseFt: number;
+  topFt: number;
+  elevationDeg: number;
+  azimuthDeg: number;
+  relativeBearingDeg: number;
+}
+
+const sunAtPoint: LayerTooltipDef = {
+  id: 'night-shading',
+  header: 'Sun',
+  getZones: (p): SunZone[] =>
+    p.sun ? [{ baseFt: -1e6, topFt: 1e6, ...p.sun }] : [],
+  formatLine: (z: SunZone) => {
+    const az = `az ${Math.round(z.azimuthDeg)}°T`;
+    if (z.elevationDeg <= 0) {
+      return `${Math.abs(z.elevationDeg).toFixed(0)}° below horizon · ${az}`;
+    }
+    const mag = Math.abs(z.relativeBearingDeg);
+    const side = z.relativeBearingDeg >= 0 ? 'right' : 'left';
+    const aligned = mag <= 5 ? 'dead ahead'
+      : mag >= 175 ? 'dead astern'
+      : `${mag.toFixed(0)}° ${side} of track`;
+    return `${z.elevationDeg.toFixed(0)}° up · ${az} · ${aligned}`;
+  },
+};
+
 /** All band/zone-style tooltip definitions, in display order. */
 export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   cloudDD,
@@ -290,4 +321,5 @@ export const LAYER_TOOLTIPS: LayerTooltipDef[] = [
   nwpConv,
   inversion,
   surfaceObscuration,
+  sunAtPoint,
 ];
