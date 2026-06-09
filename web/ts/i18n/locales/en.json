@@ -553,6 +553,7 @@
   "viz.group.obscuration": "Obscuration",
   "viz.group.conditions": "Current conditions",
   "viz.group.fronts": "Fronts (experimental)",
+  "viz.group.sun": "Sun / Night",
   "viz.group.reference": "Reference",
 
   "viz.obscurationMethod": "<h3>Surface obscuration</h3><p>Cross-section pressure-level cloud detectors paint nothing for fog that lives below 1000 hPa (≈ a few hundred feet AGL at most inland fields). This layer synthesises a near-surface band whenever the surface forecast indicates reduced visibility or near-saturated low cloud — bridging the gap between the LIFR signal on the map and an empty pressure-level cross-section.</p><h4>Triggers</h4><ul><li><strong>Primary</strong> — surface visibility &lt; 5 km. Severity tiers: <strong>LIFR</strong> purple (FG, &lt;1 km), <strong>IFR</strong> red (BR/MIFG, 1–3 km), <strong>MVFR</strong> amber (BR, 3–5 km).</li><li><strong>Secondary</strong> — for models without a visibility forecast (ECMWF / Météo-France / GEM): low cloud cover ≥ 80% AND surface dewpoint depression &lt; 2°C. Severity grades by surface DD: &lt; 0.5°C → LIFR (saturated, fog), else IFR.</li></ul><p>Diagonal hatching is used (rather than horizontal cloud-style) to flag this as a <em>visibility</em> obstruction, not a cloud band.</p>",
@@ -619,6 +620,10 @@
   "legend.obscuration.ifrDesc": "Visibility 1\u20133 km \u2014 mist or shallow fog",
   "legend.obscuration.mvfr": "MVFR / BR",
   "legend.obscuration.mvfrDesc": "Visibility 3\u20135 km \u2014 mist",
+  "legend.sun.twilight": "Twilight",
+  "legend.sun.twilightDesc": "Civil twilight \u2014 sun 0\u00b0 to 6\u00b0 below the horizon",
+  "legend.sun.night": "Night",
+  "legend.sun.nightDesc": "Sun more than 6\u00b0 below the horizon \u2014 full darkness",
 
   "legend.conditions.vfr": "VFR",
   "legend.conditions.vfrDesc": "METAR ceiling > 3000 ft and visibility > 5 km",

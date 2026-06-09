@@ -112,6 +112,13 @@ export interface CrossSectionTheme {
     hatchLineWidth: number;
   };
 
+  /** Night/twilight column tint for the night-shading layer (#227). Drawn at
+   *  the back of the stack; twilight is a light wash, night is darker. */
+  nightShading: {
+    twilight: string;
+    night: string;
+  };
+
   /** Optional soft-cloud rendering config. When omitted the soft style
    *  falls back to defaults defined in the cloud-bands factory. */
   softClouds?: {
@@ -134,6 +141,10 @@ export type ThemeId = 'standard' | 'high-contrast' | 'gramet' | 'light';
 
 const STANDARD_THEME: CrossSectionTheme = {
   id: 'standard',
+  nightShading: {
+    twilight: 'rgba(40, 40, 90, 0.18)',
+    night: 'rgba(15, 15, 45, 0.38)',
+  },
   label: 'Standard',
 
   sky: {
@@ -295,6 +306,10 @@ const STANDARD_THEME: CrossSectionTheme = {
 const HIGH_CONTRAST_THEME: CrossSectionTheme = {
   ...STANDARD_THEME,
   id: 'high-contrast',
+  nightShading: {
+    twilight: 'rgba(10, 10, 30, 0.28)',
+    night: 'rgba(0, 0, 0, 0.48)',
+  },
   label: 'High Contrast',
 
   sky: {
@@ -444,6 +459,10 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
 const GRAMET_THEME: CrossSectionTheme = {
   ...STANDARD_THEME,
   id: 'gramet' as ThemeId,
+  nightShading: {
+    twilight: 'rgba(20, 20, 60, 0.20)',
+    night: 'rgba(5, 5, 30, 0.42)',
+  },
   label: 'GRAMET',
 
   sky: {
@@ -527,6 +546,10 @@ const GRAMET_THEME: CrossSectionTheme = {
 const LIGHT_THEME: CrossSectionTheme = {
   ...STANDARD_THEME,
   id: 'light' as ThemeId,
+  nightShading: {
+    twilight: 'rgba(60, 60, 110, 0.15)',
+    night: 'rgba(30, 30, 70, 0.32)',
+  },
   label: 'Light',
 
   sky: {

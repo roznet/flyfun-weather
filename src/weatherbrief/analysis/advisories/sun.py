@@ -1,0 +1,232 @@
+"""Sun advisory evaluator (issue #227).
+
+Thin classifier over the precomputed :class:`RouteSunAnalysis` on
+``ctx.sun``. Never a go/no-go: GREEN by default, AMBER only when a low sun sits
+roughly down the wind-best runway on takeoff/landing (glare), or — for
+day-VFR profiles — when the leg ends near/after sunset (gated by
+``warn_near_sunset``). The detail text always carries the sun-side seating note.
+
+Model-independent (the sun is not a weather model), so it returns a single
+``model="all"`` result, like :class:`ModelAgreementEvaluator`.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
+from weatherbrief.models import (
+    AdvisoryCatalogEntry,
+    AdvisoryParameterDef,
+    AdvisoryStatus,
+    GlareAssessment,
+    ModelAdvisoryResult,
+    RouteAdvisoryResult,
+)
+
+_SUN_ID = "sun"
+
+
+def _glare_into_sun(
+    g: GlareAssessment | None,
+    glare_azimuth_deg: float,
+    glare_elev_max_deg: float,
+) -> bool:
+    """Recompute the glare condition from the stored raw geometry + user params.
+
+    Done here (not read from ``g.into_sun``) so tuning the angle/elevation params
+    and recalculating actually changes the result.
+    """
+    if g is None or g.sun_elevation_deg is None or g.relative_bearing_deg is None:
+        return False
+    return (0.0 < g.sun_elevation_deg <= glare_elev_max_deg) and (
+        abs(g.relative_bearing_deg) <= glare_azimuth_deg
+    )
+
+
+@register
+class SunEvaluator:
+    """Sun glare + night-proximity advisory with an informational sun-side note."""
+
+    @staticmethod
+    def catalog_entry() -> AdvisoryCatalogEntry:
+        return AdvisoryCatalogEntry(
+            id=_SUN_ID,
+            name="Sun",
+            short_description="Low-sun glare on takeoff/landing + sun-side seating note",
+            description=(
+                "Informational, never a go/no-go. GREEN by default. Goes AMBER when a "
+                "low sun would sit roughly down the wind-best runway on takeoff or "
+                "landing (glare on the roll/flare), and — for day-VFR profiles — when "
+                "the leg ends near or after sunset. Always carries a sun-side seating "
+                "note (which side the sun is on, so passengers can pick the shaded / "
+                "better-photo side). Night-capable profiles can disable the dusk AMBER "
+                "via warn_near_sunset; glare AMBER always applies."
+            ),
+            category="sun",
+            default_enabled=True,
+            altitude_dependent=False,
+            parameters=[
+                AdvisoryParameterDef(
+                    key="glare_azimuth_deg",
+                    label="Glare cone half-angle",
+                    description="Sun within this many degrees of the runway heading counts as glare",
+                    type="number",
+                    unit="°",
+                    default=30,
+                    min=5,
+                    max=90,
+                    step=5,
+                ),
+                AdvisoryParameterDef(
+                    key="glare_elev_max_deg",
+                    label="Low-sun ceiling",
+                    description="Sun at or below this elevation counts as a low (glaring) sun",
+                    type="number",
+                    unit="°",
+                    default=15,
+                    min=2,
+                    max=30,
+                    step=1,
+                ),
+                AdvisoryParameterDef(
+                    key="warn_near_sunset",
+                    label="Warn near sunset/sunrise",
+                    description="Amber when landing near/after sunset or departing near/before sunrise (off for night-capable profiles)",
+                    type="boolean",
+                    default=1,
+                    min=0,
+                    max=1,
+                    step=1,
+                ),
+                AdvisoryParameterDef(
+                    key="sunset_margin_min",
+                    label="Sunset margin",
+                    description="Treat landing within this many minutes of sunset (or departure of sunrise) as near-dark",
+                    type="number",
+                    unit="min",
+                    default=30,
+                    min=0,
+                    max=120,
+                    step=5,
+                ),
+            ],
+        )
+
+    @staticmethod
+    def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
+        loc = ctx.locale
+        sun = ctx.sun
+
+        if sun is None:
+            # Old pack / sun unavailable. Follow the ModelAgreementEvaluator
+            # pattern: a single model="all" UNAVAILABLE entry. (The aggregate
+            # badge resolves to GREEN under MAJORITY, but the per-model entry and
+            # detail make the unavailability visible — and this keeps the
+            # aggregation-mode invariant the registry enforces.)
+            per_model = [ModelAdvisoryResult.build(
+                model="all", status=AdvisoryStatus.UNAVAILABLE,
+                detail=adv_t("sun.no_data", loc), affected=0, total=0,
+                total_distance_nm=ctx.total_distance_nm,
+            )]
+            return RouteAdvisoryResult.from_per_model(_SUN_ID, per_model, params)
+
+        glare_azimuth_deg = params.get("glare_azimuth_deg", 30)
+        glare_elev_max_deg = params.get("glare_elev_max_deg", 15)
+        warn_near_sunset = bool(params.get("warn_near_sunset", 1))
+        sunset_margin_min = params.get("sunset_margin_min", 30)
+
+        status = AdvisoryStatus.GREEN
+        parts: list[str] = []
+
+        # --- Glare on the wind-best runway (always applies) ---
+        takeoff_glare = _glare_into_sun(sun.takeoff, glare_azimuth_deg, glare_elev_max_deg)
+        landing_glare = _glare_into_sun(sun.landing, glare_azimuth_deg, glare_elev_max_deg)
+        if takeoff_glare and sun.takeoff is not None:
+            status = AdvisoryStatus.AMBER
+            parts.append(adv_t(
+                "sun.glare_takeoff", loc,
+                elev=round(sun.takeoff.sun_elevation_deg or 0),
+                runway=sun.takeoff.runway_ident or "?",
+            ))
+        if landing_glare and sun.landing is not None:
+            status = AdvisoryStatus.AMBER
+            parts.append(adv_t(
+                "sun.glare_landing", loc,
+                elev=round(sun.landing.sun_elevation_deg or 0),
+                runway=sun.landing.runway_ident or "?",
+            ))
+
+        # --- Near-sunset / near-sunrise (gated for night-capable profiles) ---
+        if warn_near_sunset:
+            if _near_dark(ctx, "landing", sunset_margin_min):
+                status = AdvisoryStatus.AMBER
+                icao = sun.landing.airport_icao if sun.landing else ""
+                parts.append(adv_t("sun.near_sunset", loc, icao=icao))
+            if _near_dark(ctx, "takeoff", sunset_margin_min):
+                status = AdvisoryStatus.AMBER
+                icao = sun.takeoff.airport_icao if sun.takeoff else ""
+                parts.append(adv_t("sun.near_sunrise", loc, icao=icao))
+
+        # --- Sun-side seating note (always present) ---
+        parts.append(_sun_side_note(sun.sun_side, loc))
+
+        detail = " · ".join(p for p in parts if p)
+
+        per_model = [ModelAdvisoryResult.build(
+            model="all", status=status, detail=detail,
+            affected=1 if status != AdvisoryStatus.GREEN else 0, total=1,
+            total_distance_nm=ctx.total_distance_nm,
+        )]
+        return RouteAdvisoryResult.from_per_model(_SUN_ID, per_model, params)
+
+
+def _sun_side_note(sun_side, loc: str | None) -> str:
+    """Build the informational sun-side seating note."""
+    if sun_side is None or sun_side.dominant_side == "none":
+        return adv_t("sun.side_none", loc)
+    side_word = adv_t(f"sun.{sun_side.dominant_side}", loc)
+    opposite = "left" if sun_side.dominant_side == "right" else "right"
+    opposite_word = adv_t(f"sun.{opposite}", loc)
+    note = adv_t(
+        "sun.side_note", loc,
+        side=side_word, opposite=opposite_word,
+        pct=round(sun_side.dominant_side_pct),
+    )
+    sides = {seg.side for seg in sun_side.segments}
+    if len(sides) > 1:
+        note += adv_t("sun.side_swings", loc)
+    return note
+
+
+def _near_dark(ctx: RouteContext, phase: str, margin_min: float) -> bool:
+    """True when a takeoff is near/before sunrise or a landing near/after sunset.
+
+    Uses the route endpoint's lat/lon/time and the day's sunrise/sunset from the
+    euro_aip solar primitive. Polar day/night (no event) → not near-dark.
+    """
+    sun = ctx.sun
+    assessment = sun.landing if phase == "landing" else sun.takeoff
+    if assessment is None or not ctx.analyses:
+        return False
+    # Already past the horizon → unambiguously dark.
+    if assessment.is_dark:
+        return True
+
+    point = ctx.analyses[-1] if phase == "landing" else ctx.analyses[0]
+    try:
+        from euro_aip.utils.solar import sun_events
+
+        events = sun_events(point.lat, point.lon, point.interpolated_time.date())
+    except Exception:
+        return False
+
+    when = point.interpolated_time
+    margin = timedelta(minutes=margin_min)
+    if phase == "landing":
+        sunset = events.get("sunset")
+        return sunset is not None and when >= sunset - margin
+    sunrise = events.get("sunrise")
+    return sunrise is not None and when <= sunrise + margin

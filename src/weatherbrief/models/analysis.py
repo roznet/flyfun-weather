@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -780,6 +780,55 @@ class RoutePointAnalysis(BaseModel):
     model_divergence: list[ModelDivergence] = Field(default_factory=list)
 
 
+class NightInterval(BaseModel):
+    """A contiguous twilight or night run along the route, for cross-section shading."""
+
+    start_distance_nm: float
+    end_distance_nm: float
+    start_time: datetime
+    end_time: datetime
+    phase: Literal["twilight", "night"]  # civil twilight (0..-6 deg) vs night (< -6 deg)
+
+
+class SunSideSegment(BaseModel):
+    """A stretch of route where the sun sits on one side of the aircraft."""
+
+    side: Literal["left", "right"]
+    start_distance_nm: float
+    end_distance_nm: float
+
+
+class SunSideSummary(BaseModel):
+    """Which side of the aircraft the sun favours over the route (passenger seating note)."""
+
+    dominant_side: Literal["left", "right", "none"]
+    dominant_side_pct: float  # the "X%" in the note
+    segments: list[SunSideSegment] = Field(default_factory=list)
+
+
+class GlareAssessment(BaseModel):
+    """Sun-vs-runway glare check for one takeoff or landing on the wind-best runway."""
+
+    phase: Literal["takeoff", "landing"]
+    airport_icao: str
+    runway_ident: str | None = None  # wind-best runway, e.g. "27"
+    runway_heading_true: float | None = None
+    sun_azimuth_true: float | None = None
+    sun_elevation_deg: float | None = None
+    relative_bearing_deg: float | None = None  # signed sun-vs-runway, normalized +/-180
+    into_sun: bool = False  # glare condition met
+    is_dark: bool = False  # sun below horizon at that time
+
+
+class RouteSunAnalysis(BaseModel):
+    """Precomputed solar readouts for the route: night shading, sun side, dep/arr glare."""
+
+    night_intervals: list[NightInterval] = Field(default_factory=list)
+    sun_side: SunSideSummary
+    takeoff: GlareAssessment | None = None
+    landing: GlareAssessment | None = None
+
+
 class RouteAnalysesManifest(BaseModel):
     """Container for all route point analyses, saved as route_analyses.json."""
 
@@ -791,6 +840,8 @@ class RouteAnalysesManifest(BaseModel):
     cruise_altitude_ft: int
     models: list[str]
     analyses: list[RoutePointAnalysis]
+    # Optional solar analysis (issue #227) — old packs deserialize fine without it.
+    sun: RouteSunAnalysis | None = None
 
 
 class RoutePointWindOverlay(BaseModel):

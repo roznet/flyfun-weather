@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 13 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, and feasibility categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 14 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, feasibility, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -29,7 +29,8 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register FlightCategoryEvaluator    # airport conditions
   ├── @register AirportWindEvaluator
   ├── @register VFRFeasibilityEvaluator    # composite go/no-go
-  └── @register IFRFeasibilityEvaluator
+  ├── @register IFRFeasibilityEvaluator
+  └── @register SunEvaluator               # sun (glare + night-proximity + seating note)
       ↓
 RouteAdvisoriesManifest (advisories + catalog + aggregation mode)
   → route_advisories.json
@@ -73,7 +74,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
-## The 13 Evaluators
+## The 14 Evaluators
 
 ### Icing
 
@@ -117,6 +118,14 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 |-----------|----------|-------|----------------|
 | `VFRFeasibilityEvaluator` | feasibility | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage). Worst of sub-assessments wins | `cloud_base_margin_ft`, `bkn_pct_amber`, `ovc_pct_red` |
 | `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (uses shared `has_relevant_icing()` helper aligned with FIKI advisory), convective risk along route | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_pct_amber`, `icing_pct_red`, `icing_altitude_buffer_ft` |
+
+### Sun
+
+| Evaluator | Category | Logic | Key Parameters |
+|-----------|----------|-------|----------------|
+| `SunEvaluator` | sun | Informational, never go/no-go. Thin classifier over the precomputed `RouteSunAnalysis` on `ctx.sun` (built by `analysis/sun.py:compute_route_sun`). Model-independent → single `per_model=["all"]` like `ModelAgreementEvaluator`. AMBER when a low sun sits roughly down the wind-best runway on takeoff/landing (glare, recomputed from stored geometry so params honour recalc), and — for day-VFR profiles — when the leg ends near/after sunset or starts near/before sunrise (gated by `warn_near_sunset`; glare AMBER always applies). Detail text always carries the sun-side seating note. UNAVAILABLE (per-model) on old packs / when `ctx.sun is None` | `glare_azimuth_deg` (30), `glare_elev_max_deg` (15), `warn_near_sunset` (true), `sunset_margin_min` (30) |
+
+**Sun pipeline (issue #227):** the heavy/airport-independent parts (night intervals + sun-side summary) are computed once in `tasks/analyze.py` and stored on `RouteAnalysesManifest.sun` (served to the client for cross-section night shading). The advise stage recomputes the full `RouteSunAnalysis` — adding dep/arr glare from the wind-best runway (shared `select_best_runway` helper in `airport_conditions.py`) — onto `RouteContext.sun`, where `run_advisories_from_pack` also rebuilds it so recalculation works. Solar math lives in the `euro_aip` solar primitive (`euro_aip/utils/solar.py`, astral-backed); azimuths and runway headings are both **true** degrees, so glare needs no magnetic conversion.
 
 ## Shared Helpers (`_helpers.py`)
 

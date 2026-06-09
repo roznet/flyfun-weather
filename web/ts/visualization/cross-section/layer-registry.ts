@@ -27,9 +27,13 @@ import { eShearBandsLayer } from './layers/e-shear-bands';
 import { surfaceObscurationBandsLayer } from './layers/surface-obscuration-bands';
 import { currentConditionsLayer } from './layers/current-conditions';
 import { frontsMarkersLayer } from './layers/fronts-markers';
+import { nightShadingLayer } from './layers/night-shading';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
-  // Rendering order: obscuration → clouds → convection → icing → other bands → terrain → lines → reference.
+  // Rendering order: night → obscuration → clouds → convection → icing → other bands → terrain → lines → reference.
+  // Night/twilight shading is first (very back of the stack) so it tints the
+  // whole column behind the weather; terrain later masks the below-surface tint.
+  nightShadingLayer,
   // Obscuration sits at the bottom of the stack so any DD/NWP cloud
   // bands that extend above the boundary layer overlay it cleanly.
   surfaceObscurationBandsLayer,
@@ -300,13 +304,14 @@ export function getLayerGroups(): LayerGroupInfo[] {
     obscuration: t('viz.group.obscuration'),
     conditions: t('viz.group.conditions'),
     fronts: t('viz.group.fronts'),
+    sun: t('viz.group.sun'),
     reference: t('viz.group.reference'),
   };
 
   // 'terrain' is intentionally omitted: terrain always renders (force-on at
   // render time), so it has no UI toggle. The terrainFillLayer stays in
   // ALL_LAYERS — only its panel group is dropped here.
-  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection', 'conditions', 'fronts'];
+  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection', 'conditions', 'sun', 'fronts'];
 
   return order
     .filter((g) => groupMap.has(g))

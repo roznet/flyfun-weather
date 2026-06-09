@@ -79,6 +79,7 @@ export type LayerGroup =
   | 'obscuration'
   | 'conditions'
   | 'fronts'
+  | 'sun'
   | 'reference';
 
 // --- Terrain ---
@@ -124,6 +125,30 @@ export interface VizRouteData {
    * (only ecmwf/gfs/icon do) — so the fronts layer/overlay grays out.
    */
   fronts: VizFronts | null;
+  /**
+   * Twilight/night bands along the route for the night-shading layer (#227),
+   * extracted from `manifest.sun.night_intervals`. Empty on old packs / daytime
+   * flights (the layer no-ops).
+   */
+  nightIntervals: VizNightInterval[];
+  /**
+   * Sun-side summary for the seating note (#227), from `manifest.sun.sun_side`.
+   * `null` when no sun analysis is present.
+   */
+  sunSide: VizSunSide | null;
+}
+
+/** A twilight or night stretch along the route (distance-based for shading). */
+export interface VizNightInterval {
+  startNm: number;
+  endNm: number;
+  phase: 'twilight' | 'night';
+}
+
+/** Which side the sun favours over the route (informational). */
+export interface VizSunSide {
+  dominantSide: 'left' | 'right' | 'none';
+  dominantSidePct: number;
 }
 
 /** Front crossings + nearest off-track front for the rendered model/level. */

@@ -262,6 +262,8 @@ export function snapshotToVizData(
     // No route-distance overlay in the single-airport, time-axis view.
     currentConditions: null,
     fronts: null,
+    nightIntervals: [],
+    sunSide: null,
   };
 }
 
