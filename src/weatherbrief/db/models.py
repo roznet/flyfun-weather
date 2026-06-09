@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date as date_t, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Double, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1027,5 +1027,40 @@ class VerificationCycleRow(Base):
     peak_rss_mb: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Peak total cgroup memory (parent + GRIB decode workers). Same caveat.
     peak_cgroup_mb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class EdrCalibrationAccumulatorRow(Base):
+    """Streaming ln-moment accumulator for the Sharman & Pearson (2017) EDR remap.
+
+    One row per ``(model, diagnostic, band)``. Holds running Welford-style sums
+    of ``ln(D)`` for a turbulence diagnostic ``D`` (for ``diagnostic=richardson``,
+    ``D = 1/max(Ri, RI_FLOOR)``), accumulated over standalone-verification
+    soundings. The remap coefficients ``a, b`` for ``EDR = exp(a + b·ln D)`` are
+    derived offline from these moments plus the published C1/C2 climatology;
+    individual samples are never stored. See
+    :mod:`weatherbrief.analysis.sounding.edr`.
+
+    ``sum_ln`` / ``sum_ln2`` are DOUBLE (not single-precision FLOAT): these sums
+    accumulate across every cycle indefinitely, so they outgrow FLOAT's ~7
+    significant digits on MySQL.
+    """
+
+    __tablename__ = "edr_calibration_accumulator"
+    __table_args__ = (
+        UniqueConstraint("model", "diagnostic", "band", name="uq_edr_calib_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model: Mapped[str] = mapped_column(String(20), nullable=False)  # gfs / icon / ecmwf
+    diagnostic: Mapped[str] = mapped_column(String(20), nullable=False)  # richardson (room for e_shear)
+    band: Mapped[str] = mapped_column(String(16), nullable=False)  # 0_10kft / 10_20kft / 20_45kft / all
+    n: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sum_ln: Mapped[float] = mapped_column(Double, nullable=False, default=0.0)
+    sum_ln2: Mapped[float] = mapped_column(Double, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
