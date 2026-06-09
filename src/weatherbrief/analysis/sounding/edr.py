@@ -80,7 +80,8 @@ ALTITUDE_BANDS = ("0_10kft", "10_20kft", "20_45kft")
 ALL_BAND = "all"
 
 # Lower-bound on variance so SD never collapses to 0 (and b never explodes).
-_VAR_EPS = 1e-12
+# Public so the CLI readout can floor its display SD identically.
+VAR_EPS = 1e-12
 
 
 def band_for_altitude_ft(altitude_ft: float | None) -> str | None:
@@ -123,13 +124,13 @@ def coefficients_from_accumulator(
         return None
     mean = sum_ln / n
     var = sum_ln2 / n - mean * mean
-    sd = math.sqrt(max(var, _VAR_EPS))
+    sd = math.sqrt(max(var, VAR_EPS))
     b = c2 / sd
     a = c1 - b * mean
     return a, b
 
 
-def diagnostic_to_edr(d: float, a: float, b: float) -> float | None:
+def diagnostic_to_edr(d: float | None, a: float, b: float) -> float | None:
     """Apply the frozen remap: ``EDR = exp(a + b·ln D)``, clipped to [0, 1].
 
     Returns ``None`` for non-positive / non-finite ``D``.
