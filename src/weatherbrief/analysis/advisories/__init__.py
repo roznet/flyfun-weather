@@ -23,6 +23,7 @@ from weatherbrief.models import (
     RouteCrossSection,
     RouteFrontsManifest,
     RoutePointAnalysis,
+    RouteSunAnalysis,
 )
 
 
@@ -44,6 +45,9 @@ class RouteContext:
     # the front advisory evaluator skips (UNAVAILABLE) when this is None, so the
     # advisory surfaces *only* when the experimental feature is enabled.
     route_fronts: RouteFrontsManifest | None = None
+    # Precomputed solar analysis (issue #227): night intervals + sun-side note +
+    # dep/arr glare. Read by SunEvaluator. None on old packs / when unavailable.
+    sun: RouteSunAnalysis | None = None
 
 
 @runtime_checkable

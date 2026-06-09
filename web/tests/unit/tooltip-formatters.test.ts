@@ -51,6 +51,9 @@ describe('LAYER_TOOLTIPS registry — structural integrity', () => {
       // Discrete vertical markers at along-route distances, not per-VizPoint
       // zones — the route map binds their tooltip (frontTooltip) directly.
       'fronts-markers',
+      // Full-column X-span tint behind the weather; no per-altitude data, so no
+      // tooltip row (handled like terrain/current-conditions).
+      'night-shading',
     ]);
 
     const layerIds = getAllLayers()

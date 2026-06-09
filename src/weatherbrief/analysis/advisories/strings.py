@@ -424,6 +424,58 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Ank",
         "es": "Lleg",
     },
+
+    # --- sun ---
+    "sun.no_data": {
+        "en": "No sun analysis available",
+        "fr": "Pas d'analyse solaire disponible",
+        "de": "Keine Sonnenanalyse verfügbar",
+        "es": "Sin análisis solar disponible",
+    },
+    "sun.side_note": {
+        "en": "Sun on your {side} for ~{pct}% of the sunlit route — seat passengers on the {opposite} (shade and the better-lit window for photos)",
+        "fr": "Soleil à {side} sur ~{pct}% de la route éclairée — placez les passagers à {opposite} (ombre et meilleure fenêtre pour les photos)",
+        "de": "Sonne {side} auf ~{pct}% der besonnten Strecke — Passagiere {opposite} setzen (Schatten und das besser belichtete Fenster für Fotos)",
+        "es": "Sol a su {side} en ~{pct}% de la ruta iluminada — siente a los pasajeros a la {opposite} (sombra y la ventana mejor iluminada para fotos)",
+    },
+    "sun.side_swings": {
+        "en": "; the sun side swings after the turn",
+        "fr": " ; le côté du soleil change après le virage",
+        "de": "; die Sonnenseite wechselt nach dem Kurswechsel",
+        "es": "; el lado del sol cambia tras el viraje",
+    },
+    "sun.side_none": {
+        "en": "Sun stays low or behind for the whole route — no strong sun side",
+        "fr": "Le soleil reste bas ou derrière toute la route — pas de côté marqué",
+        "de": "Sonne bleibt die ganze Strecke tief oder hinten — keine ausgeprägte Sonnenseite",
+        "es": "El sol permanece bajo o por detrás toda la ruta — sin lado marcado",
+    },
+    "sun.left": {"en": "left", "fr": "gauche", "de": "links", "es": "izquierda"},
+    "sun.right": {"en": "right", "fr": "droite", "de": "rechts", "es": "derecha"},
+    "sun.glare_takeoff": {
+        "en": "Low sun (~{elev}° up) nearly down RWY {runway} on takeoff — expect glare on the roll",
+        "fr": "Soleil bas (~{elev}° de hauteur) presque dans l'axe de la RWY {runway} au décollage — éblouissement probable au roulage",
+        "de": "Tiefe Sonne (~{elev}° hoch) fast in Achse der RWY {runway} beim Start — Blendung beim Startlauf erwarten",
+        "es": "Sol bajo (~{elev}° de altura) casi en el eje de la RWY {runway} al despegue — deslumbramiento probable en la carrera",
+    },
+    "sun.glare_landing": {
+        "en": "Low sun (~{elev}° up) nearly down RWY {runway} on landing — expect glare on the flare",
+        "fr": "Soleil bas (~{elev}° de hauteur) presque dans l'axe de la RWY {runway} à l'atterrissage — éblouissement probable à l'arrondi",
+        "de": "Tiefe Sonne (~{elev}° hoch) fast in Achse der RWY {runway} bei der Landung — Blendung beim Abfangen erwarten",
+        "es": "Sol bajo (~{elev}° de altura) casi en el eje de la RWY {runway} al aterrizar — deslumbramiento probable en la recogida",
+    },
+    "sun.near_sunset": {
+        "en": "Landing {icao} is near or after sunset — plan for fading light",
+        "fr": "Arrivée {icao} proche ou après le coucher du soleil — prévoir une lumière déclinante",
+        "de": "Landung {icao} nahe oder nach Sonnenuntergang — mit nachlassendem Licht rechnen",
+        "es": "Aterrizaje en {icao} cerca o tras la puesta de sol — prever luz menguante",
+    },
+    "sun.near_sunrise": {
+        "en": "Departing {icao} is near or before sunrise — plan for low light",
+        "fr": "Départ {icao} proche ou avant le lever du soleil — prévoir une faible lumière",
+        "de": "Abflug {icao} nahe oder vor Sonnenaufgang — mit wenig Licht rechnen",
+        "es": "Salida de {icao} cerca o antes del amanecer — prever poca luz",
+    },
 }
 # fmt: on
 

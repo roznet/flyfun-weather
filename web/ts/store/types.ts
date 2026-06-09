@@ -664,6 +664,45 @@ export interface RoutePointAnalysis {
   model_divergence: ModelDivergence[];
 }
 
+export interface NightInterval {
+  start_distance_nm: number;
+  end_distance_nm: number;
+  start_time: string;
+  end_time: string;
+  phase: 'twilight' | 'night';
+}
+
+export interface SunSideSegment {
+  side: 'left' | 'right';
+  start_distance_nm: number;
+  end_distance_nm: number;
+}
+
+export interface SunSideSummary {
+  dominant_side: 'left' | 'right' | 'none';
+  dominant_side_pct: number;
+  segments: SunSideSegment[];
+}
+
+export interface GlareAssessment {
+  phase: 'takeoff' | 'landing';
+  airport_icao: string;
+  runway_ident: string | null;
+  runway_heading_true: number | null;
+  sun_azimuth_true: number | null;
+  sun_elevation_deg: number | null;
+  relative_bearing_deg: number | null;
+  into_sun: boolean;
+  is_dark: boolean;
+}
+
+export interface RouteSunAnalysis {
+  night_intervals: NightInterval[];
+  sun_side: SunSideSummary;
+  takeoff: GlareAssessment | null;
+  landing: GlareAssessment | null;
+}
+
 export interface RouteAnalysesManifest {
   route_name: string;
   target_date: string;
@@ -673,6 +712,8 @@ export interface RouteAnalysesManifest {
   cruise_altitude_ft: number;
   models: string[];
   analyses: RoutePointAnalysis[];
+  /** Solar analysis (issue #227) — absent on old packs. */
+  sun?: RouteSunAnalysis | null;
 }
 
 export interface ElevationPoint {

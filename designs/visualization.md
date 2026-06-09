@@ -54,10 +54,11 @@ scales.ts          (shared color/opacity functions for all three renderers)
 
 Rendered back-to-front, per `ALL_LAYERS` order in `layer-registry.ts`:
 
-Rendering order: **obscuration → clouds → convection → icing → CAT/E-Shear/inversions → terrain (covers below-surface artifacts) → current conditions → lines → reference**.
+Rendering order: **night shading → obscuration → clouds → convection → icing → CAT/E-Shear/inversions → terrain (covers below-surface artifacts) → current conditions → lines → reference**.
 
 | Layer | Name | Group | File | Default | Description |
 |-------|------|-------|------|---------|-------------|
+| Night shading | Night / Twilight | sun | `night-shading.ts` | **on** | Full-height column tint behind the weather (#227): light wash for civil twilight, darker for night. Reads `VizRouteData.nightIntervals` (from `manifest.sun.night_intervals`); empty on daytime flights / old packs → no-op. Two tones from the theme's `nightShading` colours. Registered first (very back of the stack); terrain masks the below-surface tint. |
 | Soft NWP clouds | Soft NWP | clouds | `cloud-bands-factory.ts` | **on** | Gradient-edge fills with coverage-proportional opacity (GRAMET style) |
 | Soft DD clouds | Soft DD | clouds | `cloud-bands-factory.ts` | off | Same soft rendering using DD-derived cloud layers |
 | Natural NWP clouds | NWP Natural | clouds | `cloud-bands-factory.ts` | off | Flat-bottom puffs with bumpy tops; coverage encoded as horizontal fill fraction (SCT = gaps, OVC = continuous blanket) |
@@ -162,7 +163,7 @@ interface CoordTransform {
 Switchable visual themes for the cross-section via `cross-section/theme.ts`. Separate from the page-level dark/light theme.
 
 **Architecture:**
-- `CrossSectionTheme` interface controls all visualization colors: sky background, axes, terrain, temperature/stability/reference line styles, cloud colors + hatch config, icing/CAT/convective risk colors, inversion appearance
+- `CrossSectionTheme` interface controls all visualization colors: sky background, axes, terrain, temperature/stability/reference line styles, cloud colors + hatch config, icing/CAT/convective risk colors, inversion appearance, and `nightShading` (twilight/night column-tint colours for the night-shading layer, #227)
 - Themes registered in `THEMES` map, accessed via `getActiveTheme()` / `setActiveTheme(id)`
 - Theme selector dropdown + preview button in the controls panel (both standard and compare mode)
 - `'theme-changed'` window event triggers re-renders in all renderers

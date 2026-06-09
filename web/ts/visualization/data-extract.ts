@@ -2,7 +2,7 @@
 
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets } from '../store/types';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
-import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts } from './types';
+import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts, VizNightInterval, VizSunSide } from './types';
 import type { FrontCrossing, FrontProximity, RouteFrontsManifest } from '../types/fronts';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
@@ -87,6 +87,29 @@ export function extractVizData(
     terrainProfile,
     currentConditions: buildCurrentConditions(opts?.routeObservations, opts?.routeSigmets, terrainProfile),
     fronts: buildFronts(opts?.routeFronts, model),
+    nightIntervals: buildNightIntervals(manifest),
+    sunSide: buildSunSide(manifest),
+  };
+}
+
+/** Map the manifest's solar night intervals to distance-based shading bands. */
+function buildNightIntervals(manifest: RouteAnalysesManifest): VizNightInterval[] {
+  const sun = manifest.sun;
+  if (!sun || !sun.night_intervals) return [];
+  return sun.night_intervals.map((n) => ({
+    startNm: n.start_distance_nm,
+    endNm: n.end_distance_nm,
+    phase: n.phase,
+  }));
+}
+
+/** Extract the sun-side summary for the seating note. */
+function buildSunSide(manifest: RouteAnalysesManifest): VizSunSide | null {
+  const sun = manifest.sun;
+  if (!sun || !sun.sun_side) return null;
+  return {
+    dominantSide: sun.sun_side.dominant_side,
+    dominantSidePct: sun.sun_side.dominant_side_pct,
   };
 }
 

@@ -471,6 +471,17 @@ def run_analysis(
                 models=model_names,
                 analyses=rp_analyses,
             )
+            # Solar analysis (issue #227): night/twilight shading + sun-side note.
+            # Glare (takeoff/landing) needs airport wind, only available in the
+            # advise stage, so it is filled there onto RouteContext.sun. The
+            # cross-section shading reads night_intervals from this manifest, so
+            # compute the airport-independent parts here where the manifest lives.
+            try:
+                from weatherbrief.analysis.sun import compute_route_sun
+
+                route_analyses_manifest.sun = compute_route_sun(rp_analyses)
+            except Exception:
+                logger.warning("Route sun analysis failed", exc_info=True)
             logger.info("Route analyses: %d points", len(rp_analyses))
         except Exception:
             logger.warning("Route-point analysis failed", exc_info=True)

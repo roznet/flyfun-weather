@@ -254,6 +254,26 @@ def _compute_airport_conditions(
         return None
 
 
+def _compute_route_sun(
+    rp_analyses: list[RoutePointAnalysis],
+    airport_conds: AirportConditions | None,
+) -> "RouteSunAnalysis | None":
+    """Full route solar analysis (night + sun-side + dep/arr glare) for the advisory.
+
+    Unlike the analyze-stage call (which has no airport wind), this passes the
+    airport conditions so the wind-best-runway glare assessments are populated.
+    """
+    try:
+        from weatherbrief.analysis.sun import compute_route_sun
+
+        dep = airport_conds.departure if airport_conds else None
+        arr = airport_conds.arrival if airport_conds else None
+        return compute_route_sun(rp_analyses, dep, arr)
+    except Exception:
+        logger.warning("Route sun analysis failed", exc_info=True)
+        return None
+
+
 def run_advisories(
     rp_analyses: list[RoutePointAnalysis],
     cross_sections: list[RouteCrossSection],
@@ -311,6 +331,7 @@ def run_advisories(
             airport_conditions=airport_conds,
             locale=locale,
             route_fronts=route_fronts,
+            sun=_compute_route_sun(rp_analyses, airport_conds),
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -413,6 +434,13 @@ def run_advisories_from_pack(
 
         route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids, advisory_enabled)
 
+        # Prefer a freshly computed sun analysis (glare reflects recomputed airport
+        # conditions); fall back to the manifest's precomputed value from the
+        # original run when airport conditions are unavailable on recalc.
+        route_sun = _compute_route_sun(analyses, airport_conds)
+        if route_sun is None:
+            route_sun = manifest.sun
+
         ctx = RouteContext(
             analyses=analyses,
             cross_sections=cross_sections,
@@ -424,6 +452,7 @@ def run_advisories_from_pack(
             airport_conditions=airport_conds,
             locale=locale,
             route_fronts=route_fronts,
+            sun=route_sun,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)

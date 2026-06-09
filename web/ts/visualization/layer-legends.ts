@@ -136,6 +136,14 @@ function inversionLegend(): LegendEntry[] {
   ];
 }
 
+function nightShadingLegend(): LegendEntry[] {
+  const theme = getActiveTheme().nightShading;
+  return [
+    { label: t('legend.sun.twilight'), color: theme.twilight, meaning: t('legend.sun.twilightDesc') },
+    { label: t('legend.sun.night'), color: theme.night, meaning: t('legend.sun.nightDesc') },
+  ];
+}
+
 function obscurationLegend(): LegendEntry[] {
   const theme = getActiveTheme().obscuration;
   // Diagonal hatch overlay matches the canvas rendering's 45° hatching.
@@ -196,6 +204,7 @@ export function getLayerLegend(layerId: string): LegendEntry[] | null {
     'inversion-bands': inversionLegend,
     'surface-obscuration-bands': obscurationLegend,
     'current-conditions': currentConditionsLegend,
+    'night-shading': nightShadingLegend,
   };
 
   const bandBuilder = bandLegends[layerId];
