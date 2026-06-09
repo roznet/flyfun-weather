@@ -24,6 +24,7 @@ from weatherbrief.models import (
     GlareAssessment,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
+    SunSideSummary,
 )
 
 _SUN_ID = "sun"
@@ -187,7 +188,7 @@ class SunEvaluator:
         return RouteAdvisoryResult.from_per_model(_SUN_ID, per_model, params)
 
 
-def _sun_side_note(sun_side, loc: str | None) -> str:
+def _sun_side_note(sun_side: SunSideSummary | None, loc: str | None) -> str:
     """Build the informational sun-side seating note."""
     if sun_side is None or sun_side.dominant_side == "none":
         return adv_t("sun.side_none", loc)
@@ -206,14 +207,20 @@ def _sun_side_note(sun_side, loc: str | None) -> str:
 
 
 def _near_dark(ctx: RouteContext, phase: str, margin_min: float) -> bool:
-    """True when a landing is near/after sunset or a takeoff near/before sunrise.
+    """True when a landing is in the dusk-to-dark window or a takeoff in the
+    dark-to-dawn window.
 
     Uses the route endpoint's lat/lon/time and the day's sunrise/sunset from the
     euro_aip solar primitive (fixed ``morning``/``evening`` keys). Polar day/night
-    (no event) → not near-dark. Deliberately does NOT short-circuit on the
-    endpoint's ``is_dark`` flag: a deep-night landing (hours past sunset) is dark
-    but is not "near sunset", and the margin check below correctly excludes it so
-    the "fading light near sunset" wording stays accurate.
+    (no event) → not near-dark.
+
+    The landing check fires for any arrival at or after ``sunset - margin`` on
+    that date — i.e. the whole dusk-and-after-dark evening, not only the
+    immediate near-sunset minutes. (An early-morning arrival is compared against
+    that same date's later sunset, so it is not flagged here.) The advisory text
+    is worded for a low-light arrival rather than "fading light" so it stays
+    accurate for both dusk and fully-dark cases. The takeoff check is symmetric
+    around ``sunrise + margin``.
     """
     sun = ctx.sun
     assessment = sun.landing if phase == "landing" else sun.takeoff

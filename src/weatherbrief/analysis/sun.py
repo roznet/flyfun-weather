@@ -91,10 +91,9 @@ def _compute_night_intervals(
             if lo < thr < hi:
                 cuts.append(_interp_at(a, b, thr))
         cuts.append((dist_b, time_b))
-        # Order the cut points along the segment.
-        cuts.sort(key=lambda c: c[0]) if dist_b >= dist_a else cuts.sort(
-            key=lambda c: c[0], reverse=True
-        )
+        # Order the cut points along the segment (descending if the route
+        # happens to run backwards in distance).
+        cuts.sort(key=lambda c: c[0], reverse=(dist_b < dist_a))
 
         for c0, c1 in zip(cuts, cuts[1:]):
             mid_dist = (c0[0] + c1[0]) / 2.0

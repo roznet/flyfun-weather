@@ -112,19 +112,6 @@ def best_runway_of(all_runways: list[RunwayWind]) -> RunwayWind | None:
     return min(all_runways, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
 
 
-def select_best_runway(
-    runway_ends: list[RunwayEnd],
-    wind_speed_kt: float | None,
-    wind_direction_deg: float | None,
-) -> RunwayWind | None:
-    """Pick the wind-best runway from runway ends + wind. Returns ``None`` when
-    runway or wind data is missing. Convenience wrapper over
-    :func:`compute_runway_winds` + :func:`best_runway_of`."""
-    if not runway_ends or wind_speed_kt is None or wind_direction_deg is None:
-        return None
-    return best_runway_of(compute_runway_winds(runway_ends, wind_speed_kt, wind_direction_deg))
-
-
 def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
     """Extract ceiling: lowest BKN or OVC cloud layer base (LCL-corrected)."""
     if sounding.indices and sounding.indices.sounding_ceiling_ft is not None:

@@ -465,10 +465,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Sol bajo (~{elev}° de altura) casi en el eje de la RWY {runway} al aterrizar — deslumbramiento probable en la recogida",
     },
     "sun.near_sunset": {
-        "en": "Landing {icao} is near or after sunset — plan for fading light",
-        "fr": "Arrivée {icao} proche ou après le coucher du soleil — prévoir une lumière déclinante",
-        "de": "Landung {icao} nahe oder nach Sonnenuntergang — mit nachlassendem Licht rechnen",
-        "es": "Aterrizaje en {icao} cerca o tras la puesta de sol — prever luz menguante",
+        "en": "Landing {icao} is near or after sunset — plan for a low-light arrival",
+        "fr": "Arrivée {icao} proche ou après le coucher du soleil — prévoir une arrivée en faible lumière",
+        "de": "Landung {icao} nahe oder nach Sonnenuntergang — mit einer Ankunft bei wenig Licht rechnen",
+        "es": "Aterrizaje en {icao} cerca o tras la puesta de sol — prever una llegada con poca luz",
     },
     "sun.near_sunrise": {
         "en": "Departing {icao} is near or before sunrise — plan for low light",
