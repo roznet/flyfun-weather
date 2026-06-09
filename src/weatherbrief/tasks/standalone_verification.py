@@ -27,9 +27,11 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.analysis.sounding.edr import EdrAccumulator
 from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
 from weatherbrief.process_rss import current_rss_mb, log_memory
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
+from weatherbrief.tasks.edr_calibration import flush_accumulator
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +280,7 @@ def _fetch_forecasts_for_model(
     airports: list[WatchlistAirport],
     session: requests.Session,
     sample_hours: list[int] | None = None,
+    edr_acc: "EdrAccumulator | None" = None,
 ) -> tuple[list[dict], int]:
     """Fetch Open-Meteo surface forecasts for all airports for one model.
 
@@ -399,7 +402,7 @@ def _fetch_forecasts_for_model(
                 }
 
                 # Run sounding analysis on pressure levels (already fetched)
-                _enrich_with_sounding(snap, hourly, model)
+                _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
 
                 chunk_results.append(snap)
         return chunk_results, client._thread_call_count()
@@ -444,10 +447,17 @@ def _fetch_forecasts_for_model(
     return all_results, client.call_count
 
 
-def _enrich_with_sounding(snap: dict, hourly, model: str) -> None:
+def _enrich_with_sounding(
+    snap: dict, hourly, model: str, edr_acc: "EdrAccumulator | None" = None,
+) -> None:
     """Run sounding analysis on pressure-level data and store results in snap dict.
 
     Fails silently — surface data is preserved even if sounding analysis fails.
+
+    When ``edr_acc`` is supplied (standalone calibration path only), the full
+    per-level Richardson distribution is fed into the EDR calibration
+    accumulator (issue #221). The accumulation shares this function's
+    fail-silent try, so it can never break a forecast run.
     """
     if not getattr(hourly, "pressure_levels", None):
         return
@@ -482,6 +492,12 @@ def _enrich_with_sounding(snap: dict, hourly, model: str) -> None:
         # Convective risk
         if sounding.convective and sounding.convective.risk_level is not None:
             snap["sounding_convective_risk"] = sounding.convective.risk_level.value
+
+        # EDR calibration: harvest the full per-level Richardson distribution
+        # (already computed, otherwise discarded) into the streaming
+        # accumulator. Standalone-only — None on the per-user briefing path.
+        if edr_acc is not None and sounding.derived_levels:
+            edr_acc.observe_richardson_levels(model, sounding.derived_levels)
 
     except Exception:
         logger.warning(
@@ -605,6 +621,7 @@ def fetch_ecmwf_grib_snapshots(
     airports: list[WatchlistAirport],
     sample_hours: list[int],
     days: int,
+    edr_acc: "EdrAccumulator | None" = None,
 ) -> list[dict]:
     """Decode an ECMWF run on disk into standalone-snapshot dicts.
 
@@ -781,7 +798,7 @@ def fetch_ecmwf_grib_snapshots(
                             cloud_cover_low_pct=snap_fields.get("cloud_cover_low_pct"),
                             pressure_levels=levels,
                         )
-                        _enrich_with_sounding(snap, hourly, "ecmwf")
+                        _enrich_with_sounding(snap, hourly, "ecmwf", edr_acc=edr_acc)
 
                 snapshots.append(snap)
 
@@ -1188,6 +1205,12 @@ def run_standalone_cycle(
         _rss_log(f"start ({cycle_type})")
 
         if fetch_forecasts:
+            # EDR calibration accumulator (issue #221): harvests the per-level
+            # Richardson distribution already computed during sounding analysis
+            # into running ln-moments, flushed once after the fetch loop. Cheap
+            # (a few float ops per level) and fail-silent.
+            edr_acc = EdrAccumulator()
+
             # Phase A+B: Fetch and store forecasts per model. One model at a
             # time to bound memory — each model's snapshots are stored and
             # freed before the next fetch.
@@ -1237,6 +1260,7 @@ def run_standalone_cycle(
                         grib_run_files, airports,
                         SAMPLE_HOURS_UTC,
                         MODEL_FORECAST_DAYS.get(model, 4),
+                        edr_acc=edr_acc,
                     )
                     api_calls = 0
                     logger.info(
@@ -1247,7 +1271,7 @@ def run_standalone_cycle(
                     logger.info("Fetching %s forecasts (init %s) for %d airports",
                                 model, init_time, len(airports))
                     snapshots, api_calls = _fetch_forecasts_for_model(
-                        model, init_time, airports, session,
+                        model, init_time, airports, session, edr_acc=edr_acc,
                     )
                     total_api_calls += api_calls
                     logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
@@ -1262,6 +1286,10 @@ def run_standalone_cycle(
                 del snapshots
                 models_fetched += 1
                 _rss_log(f"after {model}")
+
+            # Single batched, additive upsert of this run's EDR ln-moments.
+            # Fail-silent inside flush_accumulator — never aborts the cycle.
+            flush_accumulator(db, edr_acc)
         else:
             logger.info("Skipping forecast fetch (score-only cycle)")
 
