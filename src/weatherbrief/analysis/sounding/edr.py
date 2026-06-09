@@ -157,16 +157,26 @@ class EdrAccumulator:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # key -> [n, sum_ln, sum_ln2]
+        # key -> [n, sum_ln, sum_ln2]. All three are stored as float for a
+        # uniform additive update path; n is an integer-valued float (exact up
+        # to 2**53) and is cast back to int at the persistence boundary in
+        # rows(), matching the BigInteger column.
         self._data: dict[tuple[str, str, str], list[float]] = {}
 
     def observe_richardson_levels(self, model: str, derived_levels) -> None:
         """Accumulate ln(D_ri) moments for every valid level of one sounding.
 
-        Samples the *full* distribution — every adjacent-level Ri, not only
-        layers flagged as turbulent — so the climatological mean is unbiased.
-        Each valid level contributes to both its altitude band and the ``all``
-        cross-check band. Non-finite / non-positive ``D`` levels are dropped.
+        Samples every adjacent-level Ri that ``compute_stability_indicators``
+        assigned — not just layers flagged as CAT risk (that threshold-only
+        sampling would bias the mean high; cf. issue #221). Note this is *not*
+        the full atmosphere: ``richardson_number`` is only set where N² ≥ 0 and
+        shear is non-trivial, so convectively unstable and near-calm layers are
+        excluded. That subset is consistent between calibration here and the
+        runtime remap (both apply only where Ri exists), so the coefficients
+        stay self-consistent — but they describe this sheared/stable subset,
+        not a global climatology. Each valid level contributes to both its
+        altitude band and the ``all`` cross-check band; non-finite / non-positive
+        ``D`` levels are dropped.
         """
         partials: dict[tuple[str, str, str], list[float]] = {}
         for lv in derived_levels:

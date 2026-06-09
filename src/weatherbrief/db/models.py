@@ -1032,8 +1032,9 @@ class VerificationCycleRow(Base):
 class EdrCalibrationAccumulatorRow(Base):
     """Streaming ln-moment accumulator for the Sharman & Pearson (2017) EDR remap.
 
-    One row per ``(model, diagnostic, band)``. Holds running Welford-style sums
-    of ``ln(D)`` for a turbulence diagnostic ``D`` (for ``diagnostic=richardson``,
+    One row per ``(model, diagnostic, band)``. Holds running two-pass sums
+    (n, Σ ln D, Σ (ln D)²) of ``ln(D)`` for a turbulence diagnostic ``D`` (for
+    ``diagnostic=richardson``,
     ``D = 1/max(Ri, RI_FLOOR)``), accumulated over standalone-verification
     soundings. The remap coefficients ``a, b`` for ``EDR = exp(a + b·ln D)`` are
     derived offline from these moments plus the published C1/C2 climatology;
