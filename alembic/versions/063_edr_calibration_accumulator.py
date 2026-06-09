@@ -34,7 +34,7 @@ def upgrade() -> None:
         sa.Column("n", sa.BigInteger, nullable=False, server_default="0"),
         sa.Column("sum_ln", sa.Double, nullable=False, server_default="0"),
         sa.Column("sum_ln2", sa.Double, nullable=False, server_default="0"),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("model", "diagnostic", "band", name="uq_edr_calib_key"),
     )
 

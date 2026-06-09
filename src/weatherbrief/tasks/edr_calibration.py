@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from weatherbrief.analysis.sounding.edr import (
     C1_C2_BY_BAND,
     DIAGNOSTIC_RICHARDSON,
+    VAR_EPS,
     EdrAccumulator,
     coefficients_from_accumulator,
     diagnostic_to_edr,
@@ -141,7 +142,10 @@ def _readout_rows(db: Session) -> list[dict]:
         sd = float("nan")
         if r.n >= 2:
             var = r.sum_ln2 / r.n - mean * mean
-            sd = math.sqrt(max(var, 0.0))
+            # Floor at VAR_EPS to match coefficients_from_accumulator, so the
+            # percentile readout below uses the same SD the a/b math does (else
+            # near-zero variance collapses p50/p90/p99 to equal values).
+            sd = math.sqrt(max(var, VAR_EPS))
         coeffs = (
             coefficients_from_accumulator(r.n, r.sum_ln, r.sum_ln2, *c1_c2)
             if c1_c2 else None
