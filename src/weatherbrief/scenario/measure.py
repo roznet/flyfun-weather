@@ -165,7 +165,7 @@ class LegSlot:
 
 
 def _next_weekday(now: datetime, weekday: str, hh: int, mm: int) -> datetime:
-    """Next occurrence (>= now) of *weekday* at HH:MM UTC."""
+    """Next occurrence (> now) of *weekday* at HH:MM UTC."""
     target = _WEEKDAY[weekday]
     days_ahead = (target - now.weekday()) % 7
     candidate = now.replace(hour=hh, minute=mm, second=0, microsecond=0) + timedelta(days=days_ahead)
@@ -186,12 +186,11 @@ def expand_leg_slots(trips: list[Trip], now: datetime, horizon_hours: float) -> 
     Returns ``(leg_slots, skipped)`` where *skipped* holds human-readable notes
     for slots that fall beyond the forecast horizon (no silent truncation).
     """
-    by_role: dict[tuple[str, str], Leg] = {}
     out: list[LegSlot] = []
     skipped: list[str] = []
     horizon = now + timedelta(hours=horizon_hours)
     for trip in trips:
-        by_role = {leg.role: leg for leg in trip.legs}
+        by_role: dict[str, Leg] = {leg.role: leg for leg in trip.legs}
         for role, slot in trip.slots:
             leg = by_role.get(role)
             if leg is None:
@@ -280,7 +279,8 @@ class LegMeasurement:
     grib_init_times: dict[str, int] = field(default_factory=dict)
     waypoints_resolved: int = 0
     waypoints_rejected: int = 0
-    error: str | None = None
+    error: str | None = None        # cold-pass failure
+    warm_error: str | None = None   # warm-pass failure (cold succeeded)
 
 
 def _build_options(leg_slot: LegSlot, out_dir: Path, airports_db: str | None):
@@ -330,8 +330,8 @@ def _run_one(leg_slot: LegSlot, out_dir: Path, airports_db: str | None,
 
 def _human_bytes(n: int) -> str:
     f = float(n)
-    for unit in ("B", "KB", "MB", "GB"):
-        if f < 1024 or unit == "GB":
+    for unit in ("B", "KB", "MB"):
+        if f < 1024:
             return f"{f:.0f}{unit}" if unit == "B" else f"{f:.1f}{unit}"
         f /= 1024
     return f"{f:.1f}GB"
@@ -354,7 +354,7 @@ def render_report(measurements: list[LegMeasurement], skipped: list[str],
     # Per-leg table.
     lines.append("## Per leg-slot")
     lines.append("")
-    hdr = ("| Leg-slot | Route | WPs | Cold s | Warm s | Δ% | Disk | OM calls | GRIB hit/wr |")
+    hdr = ("| Leg-slot | Route | WPs | Cold s | Warm s | Δ% | Disk | OM calls | GRIB hit/wr (cold) |")
     sep = ("|---|---|---:|---:|---:|---:|---:|---:|---:|")
     lines.append(hdr)
     lines.append(sep)
@@ -373,7 +373,7 @@ def render_report(measurements: list[LegMeasurement], skipped: list[str],
         disk_sum += m.disk_bytes
         om_sum += m.open_meteo_calls
         wps = f"{m.waypoints_resolved}" + (f"(-{m.waypoints_rejected})" if m.waypoints_rejected else "")
-        warm_str = "—" if warm is None else f"{warm:.0f}"
+        warm_str = "ERR" if m.warm_error else ("—" if warm is None else f"{warm:.0f}")
         lines.append(
             f"| {m.leg_slot.label} | `{m.leg_slot.leg.route}` | {wps} "
             f"| {cold:.0f} | {warm_str} | {delta or '—'} "
@@ -559,6 +559,7 @@ def main(argv: list[str] | None = None) -> int:
                             i + 1, len(measurements), elapsed, cache_counter.hits, cache_counter.writes)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("[warm %d/%d] FAILED: %s", i + 1, len(measurements), ls.label)
+                m.warm_error = f"{type(exc).__name__}: {exc}"
 
     total_wall = perf_counter() - harness_t0
     cache_logger.removeHandler(cache_counter)
