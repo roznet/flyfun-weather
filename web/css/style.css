@@ -3318,6 +3318,15 @@ label {
   font-size: 0.7rem;
   font-weight: 600;
 }
+/* Tappable per-model badge: outline on hover/focus signals "tap for detail". */
+.adv-model-badge--tappable {
+  cursor: pointer;
+}
+.adv-model-badge--tappable:hover,
+.adv-model-badge--tappable:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 1px;
+}
 .badge-muted { background: var(--bg); color: var(--text-muted); }
 
 .advisory-detail {

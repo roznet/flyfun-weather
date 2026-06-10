@@ -46,6 +46,15 @@ function flightCatBadgeClass(cat: FlightCategory): string {
   return `flight-cat-${cat.toLowerCase()}`;
 }
 
+/** Popup for a single per-model advisory badge: "ECMWF · Fronts" + status + detail. */
+function formatModelDetailPopup(advName: string, m: ModelAdvisoryResult): string {
+  return `
+    <div class="popup-header"><h3>${escapeHtml(modelLabel(m.model))} &middot; ${escapeHtml(advName)}</h3></div>
+    <p><span class="badge ${statusBadgeClass(m.status)}">${statusLabel(m.status)}</span></p>
+    <p class="advisory-detail">${escapeHtml(m.detail)}</p>
+  `;
+}
+
 function formatRunwayPopup(allRunways: RunwayWind[]): string {
   if (allRunways.length === 0) return '';
   const rows = allRunways.map(r =>
@@ -267,8 +276,15 @@ function renderAdvisoryCard(
   const name = entry ? escapeHtml(entry.name) : escapeHtml(adv.advisory_id);
   const desc = entry ? escapeHtml(entry.short_description) : '';
 
+  // Per-model badges are tappable (#fronts-clarity): native `title` only shows on
+  // desktop hover and never on touch (the iOS app), so the per-model reason was
+  // effectively invisible. A tap opens a popup with that model's detail; the
+  // `title` stays as a desktop hover bonus. `--tappable` carries the cursor +
+  // dotted-underline affordance hint.
   const modelBadges = adv.per_model.map((m: ModelAdvisoryResult) =>
-    `<span class="adv-model-badge ${statusBadgeClass(m.status)}" title="${escapeHtml(m.detail)}">${modelLabel(m.model)}</span>`
+    `<span class="adv-model-badge adv-model-badge--tappable ${statusBadgeClass(m.status)}"` +
+    ` data-advisory-id="${escapeHtml(adv.advisory_id)}" data-model="${escapeHtml(m.model)}"` +
+    ` role="button" tabindex="0" title="${escapeHtml(m.detail)}">${modelLabel(m.model)}</span>`
   ).join(' ');
 
   const aggClass = statusBadgeClass(adv.aggregate_status);
@@ -606,6 +622,31 @@ export function renderAdvisories(
     if (!entry) return;
     const adv = manifest.advisories.find(a => a.advisory_id === advId);
     showPopupContent(renderAdvisoryPopup(entry, adv?.parameters_used ?? {}, adv));
+  });
+
+  // Wire per-model badge popups (event delegation). Tap/click — or Enter/Space
+  // while focused — shows that model's detail, reliable on touch where the
+  // native `title` tooltip never fires.
+  const showModelDetail = (badge: HTMLElement): void => {
+    const advId = badge.dataset.advisoryId;
+    const model = badge.dataset.model;
+    if (!advId || !model) return;
+    const adv = manifest.advisories.find(a => a.advisory_id === advId);
+    const m = adv?.per_model.find(pm => pm.model === model);
+    if (!adv || !m) return;
+    const advName = catalog.get(advId)?.name ?? advId;
+    showPopupContent(formatModelDetailPopup(advName, m));
+  };
+  el.addEventListener('click', (e) => {
+    const badge = (e.target as HTMLElement).closest('.adv-model-badge--tappable') as HTMLElement | null;
+    if (badge) showModelDetail(badge);
+  });
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const badge = (e.target as HTMLElement).closest('.adv-model-badge--tappable') as HTMLElement | null;
+    if (!badge) return;
+    e.preventDefault();
+    showModelDetail(badge);
   });
 
   // Wire advisory cross-section chips (#219, event delegation). Configures the
