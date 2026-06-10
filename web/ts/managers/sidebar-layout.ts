@@ -1,8 +1,9 @@
 /**
  * Optional "sidebar" briefing layout — opt-in and fully reversible.
  *
- * Activated by `?layout=sidebar` or localStorage `wb_layout=sidebar`. The
- * default ('classic') leaves the page exactly as before. In sidebar mode we
+ * Sidebar is the default layout; classic is an explicit opt-out via the footer
+ * "Switch to classic layout" button (stored as `wb_layout=classic`) or
+ * `?layout=classic`. In sidebar mode we
  * build a two-column shell and REPARENT existing rendered nodes (route header,
  * assessment, advisories, freshness, history, depth toggle) into a sticky left
  * rail, generate a scroll-spy SECTIONS nav, and add a per-section focus mode.
@@ -22,9 +23,11 @@ export function getBriefingLayout(): BriefingLayout {
   const param = new URLSearchParams(location.search).get('layout');
   if (param === 'sidebar' || param === 'classic') return param;
   try {
-    if (localStorage.getItem(STORAGE_KEY) === 'sidebar') return 'sidebar';
+    // Sidebar is the default; only an explicit opt-out keeps classic.
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored === 'sidebar' || stored === 'classic') return stored;
   } catch { /* ignore */ }
-  return 'classic';
+  return 'sidebar';
 }
 
 function setBriefingLayout(layout: BriefingLayout): void {
@@ -313,8 +316,8 @@ function injectClassicOptIn(): void {
   btn.id = 'layout-optin-btn';
   btn.type = 'button';
   btn.className = 'btn btn-small layout-switch-btn';
-  btn.textContent = '▦ Try new layout';
-  btn.title = 'Preview the experimental sidebar layout';
+  btn.textContent = '▦ Switch to sidebar layout';
+  btn.title = 'Switch back to the sidebar layout';
   btn.addEventListener('click', () => {
     setBriefingLayout('sidebar');
     location.reload();
