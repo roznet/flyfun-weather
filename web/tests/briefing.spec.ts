@@ -130,3 +130,68 @@ test.describe('Briefing page', () => {
     await expect(page.locator('img[src*="gramet"]')).toHaveCount(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Sidebar layout — now the default. These assert the shell that
+// sidebar-layout.ts builds around the (unchanged) section rendering.
+// ---------------------------------------------------------------------------
+
+test.describe('Briefing sidebar layout', () => {
+
+  test.beforeEach(async ({ page }) => {
+    await mockBriefingApi(page);
+  });
+
+  test('is the default layout — builds the rail + main shell', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+
+    // The two-column shell is built and the container is tagged.
+    await expect(page.locator('.container.layout-sidebar')).toBeVisible();
+    await expect(page.locator('.briefing-shell .briefing-rail')).toBeVisible();
+    await expect(page.locator('.briefing-shell .briefing-main')).toBeVisible();
+
+    // The scroll-spy SECTIONS nav is generated in the rail.
+    await expect(page.locator('.rail-nav .rail-nav-title')).toHaveText('Sections');
+  });
+
+  test('rail surfaces the glance summary and a section nav item', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+
+    // Overall assessment chip mirrors the main-pane assessment (GREEN fixture).
+    // Auto-retrying assertion — the chip is (re)built by a MutationObserver once
+    // the assessment banner has rendered.
+    await expect(page.locator('.rail-summary .rail-overall')).toContainText('GREEN');
+
+    // The Synopsis section has a derived nav entry that can focus/scroll to it.
+    await expect(page.locator('.rail-nav-item[data-nav-key="synopsis"]')).toBeVisible();
+  });
+
+  test('focus mode isolates a section and can be exited', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+
+    const shell = page.locator('.briefing-shell');
+    await expect(shell).not.toHaveAttribute('data-focus', /.+/);
+
+    // Click the focus glyph on the Synopsis nav item.
+    await page.locator('.rail-nav-item[data-nav-key="synopsis"] .rail-nav-focus').click();
+    await expect(shell).toHaveAttribute('data-focus', 'synopsis');
+    await expect(page.locator('.rail-focus-bar')).toBeVisible();
+
+    // Exiting focus clears the attribute and hides the bar.
+    await page.locator('.rail-exit-focus').click();
+    await expect(shell).not.toHaveAttribute('data-focus', /.+/);
+    await expect(page.locator('.rail-focus-bar')).toBeHidden();
+  });
+
+  test('classic opt-out renders no sidebar shell', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}&layout=classic`);
+
+    // Wait for the briefing to render, then assert the shell was never built.
+    await expect(page.getByRole('heading', { name: 'Synopsis' })).toBeVisible();
+    await expect(page.locator('.briefing-shell')).toHaveCount(0);
+    await expect(page.locator('.container.layout-sidebar')).toHaveCount(0);
+
+    // The toolbar offers a way back to the sidebar layout.
+    await expect(page.locator('#layout-optin-btn')).toBeVisible();
+  });
+});
