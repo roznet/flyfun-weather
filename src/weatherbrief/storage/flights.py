@@ -204,6 +204,7 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.has_gramet = meta.has_gramet
     row.has_skewt = meta.has_skewt
     row.has_digest = meta.has_digest
+    row.llm_digest_requested = meta.llm_digest_requested
     row.assessment = meta.assessment
     row.assessment_reason = meta.assessment_reason
     row.artifact_path = meta.artifact_path
@@ -322,6 +323,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         has_gramet=row.has_gramet,
         has_skewt=row.has_skewt,
         has_digest=row.has_digest,
+        llm_digest_requested=row.llm_digest_requested,
         assessment=row.assessment,
         assessment_reason=row.assessment_reason,
         artifact_path=_resolve_artifact_path(row.artifact_path),

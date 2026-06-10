@@ -54,9 +54,10 @@ class TestSunAdvisory:
         sun = RouteSunAnalysis(night_intervals=[], sun_side=_side("right", 78.0))
         result = SunEvaluator.evaluate(_ctx(sun), _defaults())
         assert result.aggregate_status == AdvisoryStatus.GREEN
-        # Note always present, naming the dominant side and the seating side.
+        # Note always present, naming the dominant sun side + its share. The
+        # seating/photo guidance lives in the (i) description, not this line.
         assert "right" in result.aggregate_detail
-        assert "left" in result.aggregate_detail
+        assert "left" not in result.aggregate_detail
         assert "78" in result.aggregate_detail
 
     def test_amber_on_glare_landing(self):

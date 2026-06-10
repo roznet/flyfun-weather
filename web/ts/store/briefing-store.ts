@@ -147,6 +147,8 @@ export interface BriefingState {
   changeFlightProfile: (profileId: number) => Promise<void>;
   fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
+  /** Generate the AI summary on demand for a pack whose profile had AI off. */
+  generateDigest: () => Promise<void>;
   setNotifyEmail: (notify: boolean) => void;
   sendEmail: () => Promise<void>;
   loadAltAdvisories: () => Promise<void>;
@@ -634,6 +636,24 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       });
     } catch (err) {
       set({ error: `Observation refresh failed: ${err}` });
+    }
+  },
+
+  generateDigest: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    // Reuse digestPending so the synopsis renderer shows "Generating summary…"
+    // while the (paid) LLM call runs.
+    set({ digestPending: true, error: null });
+    try {
+      await api.generateDigest(flight.id, currentPack.fetch_timestamp);
+      // Reload the pack + digest JSON via the normal path so has_digest, the
+      // assessment, and the digest body all refresh together.
+      await get().selectPack(currentPack.fetch_timestamp);
+    } catch (err) {
+      set({ error: `Failed to generate summary: ${err}` });
+    } finally {
+      set({ digestPending: false });
     }
   },
 

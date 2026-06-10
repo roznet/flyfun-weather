@@ -852,6 +852,27 @@ label {
   font-weight: normal;
 }
 
+/* "AI summary off" / "unavailable" note + inline Generate button in the banner */
+.assessment-note {
+  font-weight: normal;
+  opacity: 0.85;
+}
+
+.assessment-generate-btn {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+.assessment-generate-btn:hover { background: rgba(127, 127, 127, 0.15); }
+.assessment-generate-btn:disabled { opacity: 0.5; cursor: default; }
+
 /* --- Alternate departure time banner (separate from main assessment) --- */
 
 .alt-assessment-banner {

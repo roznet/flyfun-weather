@@ -252,6 +252,8 @@ export function renderAssessment(
   flight?: FlightResponse | null,
   routeAdvisories?: RouteAdvisoriesManifest | null,
   altAdvisories?: RouteAdvisoriesManifest | null,
+  digestPending: boolean = false,
+  onGenerateDigest?: () => void,
 ): void {
   const el = $('assessment-banner');
   if (el) {
@@ -261,16 +263,33 @@ export function renderAssessment(
     } else {
       const level = pack.assessment.toUpperCase();
       el.className = `assessment-banner assessment-${level.toLowerCase()}`;
-      // Two independent guards:
-      //   has_digest=false       \u2192 AI summary still generating, show spinner.
-      //   assessment_reason=null \u2192 backend has no human sentence (e.g. the
-      //                            advisories error-path returned None);
-      //                            show only the level chip, no dash.
-      // Both must hold before we render the dash + reason text.
-      const reasonHtml = !pack.has_digest
-        ? ` <span class="assessment-pending">${escapeHtml(t('digest.generating'))}</span>`
-        : (pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : '');
-      el.innerHTML = `<strong>${level}</strong>${reasonHtml}`;
+      // The AI summary status lives here, next to the level chip \u2014 this is the
+      // line people actually read. Cases after the chip:
+      //   has_digest        \u2192 dash + the digest's reason sentence (or nothing).
+      //   digestPending     \u2192 still generating (refresh or on-demand) \u2014 spinner.
+      //   AI off for pack   \u2192 "AI summary off" + a Generate button (on demand).
+      //   requested+absent  \u2192 generation failed \u2192 say so + offer to retry.
+      let suffixHtml: string;
+      let showGenerate = false;
+      if (pack.has_digest) {
+        suffixHtml = pack.assessment_reason ? ` \u2014 ${escapeHtml(pack.assessment_reason)}` : '';
+      } else if (digestPending) {
+        suffixHtml = ` <span class="assessment-pending">${escapeHtml(t('digest.generating'))}</span>`;
+      } else if (pack.llm_digest_requested === false) {
+        suffixHtml = ` <span class="assessment-note">${escapeHtml(t('digest.disabled'))}</span>`;
+        showGenerate = true;
+      } else {
+        suffixHtml = ` <span class="assessment-note">${escapeHtml(t('digest.failedShort'))}</span>`;
+        showGenerate = true;
+      }
+      const btnHtml = (showGenerate && onGenerateDigest)
+        ? ` <button class="assessment-generate-btn" id="generate-digest-btn">${escapeHtml(t('digest.generate'))}</button>`
+        : '';
+      el.innerHTML = `<strong>${level}</strong>${suffixHtml}${btnHtml}`;
+      if (btnHtml) {
+        document.getElementById('generate-digest-btn')
+          ?.addEventListener('click', () => onGenerateDigest?.());
+      }
     }
   }
 
@@ -1464,10 +1483,18 @@ export function renderSynopsis(
   }
 
   // `digestPending` is set while the SSE refresh stream is between its
-  // briefing_ready and complete events — the visible briefing is rendered
-  // but the digest is still being generated in the background.
+  // briefing_ready and complete events — or while an on-demand generation is
+  // running. The visible briefing is up; the digest is being generated.
   if (digestPending) {
     el.innerHTML = `<p class="muted">${t('digest.generating')}</p>`;
+    return;
+  }
+
+  // AI summary was intentionally off for this pack's profile (e.g. a "quick
+  // refresh" profile). The actionable Generate button lives in the assessment
+  // banner at the top; here we just explain the empty section.
+  if (pack.llm_digest_requested === false) {
+    el.innerHTML = `<p class="muted">${t('digest.disabled')}</p>`;
     return;
   }
 

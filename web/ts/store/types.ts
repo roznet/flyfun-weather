@@ -188,6 +188,10 @@ export interface PackMeta {
   has_gramet: boolean;
   has_skewt: boolean;
   has_digest: boolean;
+  // False when the profile had the AI summary toggled off for this pack — the
+  // UI shows "AI summary off" + a Generate button instead of a spinner.
+  // Defaults true (legacy packs / older backends omit it).
+  llm_digest_requested?: boolean;
   has_advisories?: boolean;
   has_alt_advisories?: boolean;
   assessment: string | null;

@@ -1060,7 +1060,7 @@ async function init(): Promise<void> {
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride ||
       state.windOverlay !== prev.windOverlay
     ) {
-      ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories);
+      ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip);
       ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
@@ -1478,7 +1478,7 @@ async function init(): Promise<void> {
       setBriefingContext(s.flight.id, s.currentPack.fetch_timestamp);
       track(EVENTS.BRIEFING_OPENED, { days_out: s.currentPack.days_out });
     }
-    ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories);
+    ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories, s.digestPending, () => store.getState().generateDigest());
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
     ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);

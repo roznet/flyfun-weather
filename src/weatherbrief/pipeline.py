@@ -144,6 +144,12 @@ class BriefingResult:
     digest_path: Path | None = None
     digest_text: str | None = None
     digest: object | None = None  # WeatherDigest (lazy import avoids hard dep)
+    # Whether the LLM digest was *requested* for this run (profile toggle).
+    # Distinct from ``digest_path is not None`` (= it succeeded): a pack with
+    # ``llm_digest_requested=False`` skipped the digest on purpose (profile has
+    # AI off), so the UI shows "AI summary off" rather than a "generating"
+    # spinner. Set from ``options.generate_llm_digest`` at run start.
+    llm_digest_requested: bool = False
     text_digest: str | None = None
     grib_init_times: dict[str, int] = field(default_factory=dict)
     models_fetched: list[str] = field(default_factory=list)
@@ -573,6 +579,7 @@ def execute_briefing(
     logger.info("Snapshot saved: %s", snapshot_path)
 
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
+    result.llm_digest_requested = options.generate_llm_digest
     result.grib_init_times = fetch_result.grib_init_times
     result.models_fetched = fetch_result.models_fetched
     result.models_skipped_region = fetch_result.models_skipped_region

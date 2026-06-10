@@ -323,6 +323,10 @@ class PackMetaResponse(BaseModel):
     has_gramet: bool
     has_skewt: bool
     has_digest: bool
+    # True when the LLM digest was requested for this pack. False = the profile
+    # had AI off, so the UI shows "AI summary off" + a Generate button instead
+    # of a "generating" spinner. Defaults True for legacy packs.
+    llm_digest_requested: bool = True
     has_advisories: bool = False
     has_alt_advisories: bool = False
     assessment: str | None
@@ -369,6 +373,7 @@ def _meta_to_response(
         has_gramet=meta.has_gramet,
         has_skewt=meta.has_skewt,
         has_digest=meta.has_digest,
+        llm_digest_requested=meta.llm_digest_requested,
         has_advisories=has_advisories,
         has_alt_advisories=meta.has_alt_advisories,
         assessment=meta.assessment,
@@ -1166,6 +1171,7 @@ def _build_pack_meta(
         has_gramet=result.gramet_path is not None,
         has_skewt=len(result.skewt_paths) > 0,
         has_digest=has_digest,
+        llm_digest_requested=result.llm_digest_requested,
         assessment=assessment,
         assessment_reason=assessment_reason,
         artifact_path=str(pack_path),
@@ -2511,6 +2517,152 @@ def recalculate_advisories(
         manifest=advisory_result.manifest,
         wind_overlay=advisory_result.wind_overlay,
     )
+
+
+def _build_snapshot_from_pack(pack_dir: Path, briefing_data: dict):
+    """Reconstruct the full ForecastSnapshot (briefing + forecasts) from a pack.
+
+    Mirrors ``storage.snapshots.load_snapshot`` but keyed by an explicit pack
+    directory and a pre-loaded briefing dict. New packs split forecasts into
+    ``forecasts.json``; legacy packs keep everything in ``snapshot.json`` (which
+    both ``load_briefing`` and ``load_forecasts`` fall back to). Returns None
+    when the snapshot can't be validated.
+    """
+    from weatherbrief.models import ForecastSnapshot
+    from weatherbrief.tasks.artifacts import load_forecasts
+
+    merged = dict(briefing_data)
+    if not merged.get("forecasts"):
+        forecasts = load_forecasts(pack_dir)
+        if forecasts is not None:
+            merged["forecasts"] = forecasts.get("forecasts", [])
+    try:
+        return ForecastSnapshot.model_validate(merged)
+    except Exception:
+        logger.warning("Could not reconstruct snapshot from %s", pack_dir, exc_info=True)
+        return None
+
+
+@router.post("/{timestamp}/digest/generate", response_model=PackMetaResponse)
+def generate_digest(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Generate the AI summary for an existing pack on demand.
+
+    For packs whose profile had the AI summary toggled off (e.g. a "quick
+    refresh" profile), this runs ONLY the LLM digest against the
+    already-computed pack data — no re-fetch, no re-analysis. It's a paid LLM
+    call, so it's gated by the same per-user rate + daily service limits and
+    charged the same as a refresh digest.
+    """
+    from weatherbrief.api.usage import (
+        check_rate_limits,
+        check_service_limits,
+        log_briefing_usage,
+    )
+    from weatherbrief.tasks.artifacts import load_briefing
+    from weatherbrief.tasks.outputs import run_llm_digest
+
+    flight = _load_owned_flight(db, flight_id, user_id)  # authz: owner only
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    meta = _load_pack_meta_or_404(db, flight_id, timestamp)
+
+    # Already has a summary — nothing to do. Return current meta so the client
+    # simply re-renders (keeps the action idempotent).
+    if meta.has_digest:
+        return _meta_to_response(meta)
+
+    briefing_data = load_briefing(pack_dir)
+    if not briefing_data:
+        raise HTTPException(status_code=404, detail="Pack data not available for summary generation")
+    snapshot = _build_snapshot_from_pack(pack_dir, briefing_data)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Pack data not available for summary generation")
+
+    # Gate on the same limits as a refresh — this is a real (paid) LLM call.
+    check_rate_limits(db, user_id)
+    if not check_service_limits(db, user_id)["llm_digest"]:
+        raise HTTPException(status_code=429, detail="Daily AI summary limit reached. Try again tomorrow.")
+
+    # Profile context drives the guidance preset, flight rules, locale, units —
+    # mirror the subset of _prepare_refresh that the digest depends on.
+    from weatherbrief.api.preferences import load_units_region, load_user_locale
+    from weatherbrief.api.profiles import load_profile_context
+    from weatherbrief.fetch.variables import ModelRegion, detect_model_region
+    from weatherbrief.pipeline import BriefingUsage, _load_previous_digest
+    from weatherbrief.units import resolve_units_region
+
+    profile_ctx = load_profile_context(db, flight.profile_id, user_id)
+    flight_rules = profile_ctx.settings.get("flight_rules")
+    guidance_key = profile_ctx.settings.get("digest_guidance")
+    locale = load_user_locale(db, user_id)
+
+    db_path = getattr(request.app.state, "db_path", "")
+    route = _build_route_config(flight, db_path)
+    detected = "us" if detect_model_region(route) == ModelRegion.NORTH_AMERICA else "europe"
+    units_region = resolve_units_region(load_units_region(db, user_id), detected)
+
+    # Advisories + the prior day's digest enrich the prompt (both optional).
+    route_advisories = None
+    adv_path = pack_dir / "route_advisories.json"
+    if adv_path.exists():
+        try:
+            route_advisories = _RouteAdvisoriesManifest.model_validate_json(adv_path.read_text())
+        except Exception:
+            logger.warning("Could not load advisories for on-demand digest", exc_info=True)
+    previous_digest = _load_previous_digest(pack_dir, snapshot.days_out)
+
+    try:
+        target_time = _parse_target_time(briefing_data)
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=404, detail="Pack data not available for summary generation")
+
+    with generation_slot():
+        digest_result = run_llm_digest(
+            snapshot=snapshot,
+            target_time=target_time,
+            pack_dir=pack_dir,
+            route_advisories=route_advisories,
+            flight_rules=flight_rules,
+            previous_digest=previous_digest,
+            locale=locale,
+            units_region=units_region,
+            profile_id=flight.profile_id,
+            profile_name=profile_ctx.name,
+            guidance_key=guidance_key,
+        )
+
+    if digest_result.diagnostic is not None:
+        raise HTTPException(status_code=502, detail=digest_result.diagnostic.message)
+    if digest_result.path is None:
+        raise HTTPException(status_code=500, detail="Summary generation failed")
+
+    # Promote the pack to "has digest" and prefer the digest's assessment.
+    meta.has_digest = True
+    if digest_result.digest is not None:
+        meta.assessment = digest_result.digest.assessment
+        meta.assessment_reason = digest_result.digest.assessment_reason
+    update_pack_meta(db, meta)
+
+    # Log + charge the LLM call (same accounting as the refresh path). get_db
+    # commits on success.
+    usage = BriefingUsage(
+        llm_digest=bool(digest_result.llm_model),
+        llm_model=digest_result.llm_model,
+        llm_input_tokens=digest_result.llm_input_tokens,
+        llm_output_tokens=digest_result.llm_output_tokens,
+        triggered_by="user",
+    )
+    pack_size = _measure_pack_size(pack_dir)
+    usage_row_id = log_briefing_usage(db, user_id, flight_id, usage, result_size_bytes=pack_size)
+    _charge_briefing_cost(db, user_id, usage, pack_size, usage_row_id)
+
+    logger.info("On-demand digest generated for %s @ %s", flight_id, timestamp)
+    return _meta_to_response(meta)
 
 
 @router.post("/{timestamp}/advisories/altitude-table")

@@ -88,6 +88,12 @@ class BriefingPackMeta(BaseModel):
     has_gramet: bool = False
     has_skewt: bool = False
     has_digest: bool = False
+    # Whether the LLM digest was requested for this pack (profile toggle).
+    # Defaults True so legacy packs (no stored value) behave as before:
+    # has_digest=False reads as "still generating / failed", not "off". A pack
+    # built with the profile's AI toggle off carries False, which the UI uses
+    # to show "AI summary off for this profile" + a Generate button instead.
+    llm_digest_requested: bool = True
     assessment: Optional[str] = None  # GREEN/AMBER/RED from digest
     assessment_reason: Optional[str] = None
     artifact_path: str = ""  # path to pack directory

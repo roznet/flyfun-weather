@@ -130,6 +130,35 @@ class TestBriefingPacks:
         assert loaded.days_out == 2
         assert loaded.assessment == "GREEN"
         assert loaded.has_gramet is True
+        # Default: digest was requested (backward-compat for legacy packs).
+        assert loaded.llm_digest_requested is True
+
+    def test_llm_digest_requested_false_round_trips(
+        self, db_session, dev_user, sample_flight
+    ):
+        """A pack built with the profile's AI toggle off persists False."""
+        save_flight(db_session, sample_flight, dev_user)
+        meta = BriefingPackMeta(
+            flight_id=sample_flight.id,
+            fetch_timestamp=datetime(2026, 2, 20, 9, 0, 0, tzinfo=timezone.utc),
+            days_out=1,
+            has_digest=False,
+            llm_digest_requested=False,
+            assessment="AMBER",
+        )
+        save_pack_meta(db_session, meta)
+
+        loaded = load_pack_meta(db_session, meta.flight_id, meta.fetch_timestamp)
+        assert loaded.has_digest is False
+        assert loaded.llm_digest_requested is False
+
+        # Finalising on demand (digest generated later) flips has_digest True
+        # while the requested flag is irrelevant to the UI from then on.
+        meta.has_digest = True
+        assert update_pack_meta(db_session, meta) is True
+        reloaded = load_pack_meta(db_session, meta.flight_id, meta.fetch_timestamp)
+        assert reloaded.has_digest is True
+        assert reloaded.llm_digest_requested is False
 
     def test_list_packs_empty(self, db_session, dev_user, sample_flight):
         save_flight(db_session, sample_flight, dev_user)

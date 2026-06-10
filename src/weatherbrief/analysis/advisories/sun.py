@@ -4,7 +4,8 @@ Thin classifier over the precomputed :class:`RouteSunAnalysis` on
 ``ctx.sun``. Never a go/no-go: GREEN by default, AMBER only when a low sun sits
 roughly down the wind-best runway on takeoff/landing (glare), or — for
 day-VFR profiles — when the leg ends near/after sunset (gated by
-``warn_near_sunset``). The detail text always carries the sun-side seating note.
+``warn_near_sunset``). The detail text always carries the sun-side note (which
+side the sun is on for most of the route).
 
 Model-independent (the sun is not a weather model), so it returns a single
 ``model="all"`` result, like :class:`ModelAgreementEvaluator`.
@@ -56,15 +57,16 @@ class SunEvaluator:
         return AdvisoryCatalogEntry(
             id=_SUN_ID,
             name="Sun",
-            short_description="Low-sun glare on takeoff/landing + sun-side seating note",
+            short_description="Low-sun glare on takeoff/landing + which side the sun is on",
             description=(
                 "Informational, never a go/no-go. GREEN by default. Goes AMBER when a "
                 "low sun would sit roughly down the wind-best runway on takeoff or "
                 "landing (glare on the roll/flare), and — for day-VFR profiles — when "
-                "the leg ends near or after sunset. Always carries a sun-side seating "
-                "note (which side the sun is on, so passengers can pick the shaded / "
-                "better-photo side). Night-capable profiles can disable the dusk AMBER "
-                "via warn_near_sunset; glare AMBER always applies."
+                "the leg ends near or after sunset. It also always reports which side "
+                "the sun is on for most of the route — handy for deciding where to "
+                "seat a passenger (the shaded side) or which window gives the "
+                "better-lit shot for photos. Night-capable profiles can disable the "
+                "dusk AMBER via warn_near_sunset; glare AMBER always applies."
             ),
             category="sun",
             default_enabled=True,
@@ -175,7 +177,7 @@ class SunEvaluator:
                 icao = sun.takeoff.airport_icao if sun.takeoff else ""
                 parts.append(adv_t("sun.near_sunrise", loc, icao=icao))
 
-        # --- Sun-side seating note (always present) ---
+        # --- Sun-side note (always present) ---
         parts.append(_sun_side_note(sun.sun_side, loc))
 
         detail = " · ".join(p for p in parts if p)
@@ -189,15 +191,18 @@ class SunEvaluator:
 
 
 def _sun_side_note(sun_side: SunSideSummary | None, loc: str | None) -> str:
-    """Build the informational sun-side seating note."""
+    """Build the informational sun-side note.
+
+    Just the directional fact ("Sun on your left for ~90% of the route"). The
+    practical use — which side to seat a passenger / better window for photos —
+    lives in the advisory's (i) description, not on the advisory line itself.
+    """
     if sun_side is None or sun_side.dominant_side == "none":
         return adv_t("sun.side_none", loc)
     side_word = adv_t(f"sun.{sun_side.dominant_side}", loc)
-    opposite = "left" if sun_side.dominant_side == "right" else "right"
-    opposite_word = adv_t(f"sun.{opposite}", loc)
     note = adv_t(
         "sun.side_note", loc,
-        side=side_word, opposite=opposite_word,
+        side=side_word,
         pct=round(sun_side.dominant_side_pct),
     )
     sides = {seg.side for seg in sun_side.segments}

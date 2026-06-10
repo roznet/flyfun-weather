@@ -588,6 +588,21 @@ export async function fetchAltitudeTable(
   );
 }
 
+// --- On-demand AI summary (digest-only, no full refresh) ---
+
+/** Generate the AI summary for an existing pack whose profile had AI off.
+ *  Runs only the LLM digest against existing pack data; returns the updated
+ *  pack meta (has_digest=true). */
+export async function generateDigest(
+  flightId: string,
+  timestamp: string,
+): Promise<PackMeta> {
+  return apiFetch<PackMeta>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/digest/generate`,
+    { method: 'POST' },
+  );
+}
+
 // --- Observations + SIGMET refresh ---
 
 export async function refreshObservations(

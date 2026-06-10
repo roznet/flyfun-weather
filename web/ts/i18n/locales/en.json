@@ -219,6 +219,9 @@
   "digest.loading": "Loading digest...",
   "digest.generating": "Generating summary…",
   "digest.notAvailable": "Synopsis not available. Trigger a refresh to generate.",
+  "digest.disabled": "AI summary is disabled for this profile.",
+  "digest.failedShort": "AI summary unavailable",
+  "digest.generate": "Generate AI summary",
   "digest.failed": "Failed to load digest.",
   "digest.profileMismatch": "The advisories below have been recalculated for the current profile, but this AI summary was written for profile \"{name}\". Refresh the briefing to regenerate the summary.",
 

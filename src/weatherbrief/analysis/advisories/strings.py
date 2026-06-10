@@ -433,10 +433,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Sin análisis solar disponible",
     },
     "sun.side_note": {
-        "en": "Sun on your {side} for ~{pct}% of the sunlit route — seat passengers on the {opposite} (shade and the better-lit window for photos)",
-        "fr": "Soleil à {side} sur ~{pct}% de la route éclairée — placez les passagers à {opposite} (ombre et meilleure fenêtre pour les photos)",
-        "de": "Sonne {side} auf ~{pct}% der besonnten Strecke — Passagiere {opposite} setzen (Schatten und das besser belichtete Fenster für Fotos)",
-        "es": "Sol a su {side} en ~{pct}% de la ruta iluminada — siente a los pasajeros a la {opposite} (sombra y la ventana mejor iluminada para fotos)",
+        "en": "Sun on your {side} for ~{pct}% of the sunlit route",
+        "fr": "Soleil à {side} sur ~{pct}% de la route éclairée",
+        "de": "Sonne {side} auf ~{pct}% der besonnten Strecke",
+        "es": "Sol a su {side} en ~{pct}% de la ruta iluminada",
     },
     "sun.side_swings": {
         "en": "; the sun side swings after the turn",

@@ -216,6 +216,12 @@ class BriefingPackRow(Base):
     has_gramet: Mapped[bool] = mapped_column(Boolean, default=False)
     has_skewt: Mapped[bool] = mapped_column(Boolean, default=False)
     has_digest: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Profile AI toggle for this pack. server_default="1" so pre-existing rows
+    # read as "digest was requested" — preserves the old has_digest semantics
+    # for legacy packs (see BriefingPackMeta.llm_digest_requested).
+    llm_digest_requested: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1",
+    )
     assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_path: Mapped[str] = mapped_column(Text, default="")
