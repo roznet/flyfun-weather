@@ -108,8 +108,11 @@ test.describe('Briefing page', () => {
   test('displays digest sections', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
 
-    // The digest contains a synoptic overview and other sections
-    await expect(page.getByText('Synopsis', { exact: false })).toBeVisible();
+    // The digest contains a synoptic overview and other sections.
+    // Target the section heading specifically — in the sidebar layout (now the
+    // default) the scroll-spy nav also renders a "Synopsis" rail label, so a
+    // loose getByText would match two elements.
+    await expect(page.getByRole('heading', { name: 'Synopsis' })).toBeVisible();
   });
 
   test('shows advisories', async ({ page }) => {
