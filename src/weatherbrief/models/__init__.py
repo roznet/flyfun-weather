@@ -60,8 +60,10 @@ from weatherbrief.models.analysis import (  # noqa: F401
     altitude_to_pressure_hpa,
     bearing_between,
     bearing_between_coords,
+    isa_temperature_c,
     pressure_hpa_to_altitude_m,
     pressure_pa_to_altitude_ft,
+    temperature_at_pressure,
 )
 from weatherbrief.models.diagnostic import (  # noqa: F401
     DETAIL_MAX_BYTES,
