@@ -5,7 +5,7 @@ from datetime import datetime
 from weatherbrief.analysis.sounding.precipitation import (
     _classify_intensity,
     _compute_ice_fraction,
-    _detect_warm_nose,
+    detect_warm_nose,
     _determine_surface_phase,
     _level_phase_from_ice_fraction,
     _level_phase_from_wet_bulb,
@@ -323,7 +323,7 @@ def test_no_warm_nose_warm_surface():
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, wet_bulb_c=0.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, wet_bulb_c=-5.0),
     ]
-    fz_risk, base, top, ice = _detect_warm_nose(levels)
+    fz_risk, base, top, ice = detect_warm_nose(levels)
     assert fz_risk is False
     assert base is None
 
@@ -335,7 +335,7 @@ def test_no_warm_nose_monotone_cold():
         DerivedLevel(pressure_hpa=850, altitude_ft=5000, wet_bulb_c=-5.0),
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, wet_bulb_c=-10.0),
     ]
-    fz_risk, base, top, ice = _detect_warm_nose(levels)
+    fz_risk, base, top, ice = detect_warm_nose(levels)
     assert fz_risk is False
 
 

@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 15 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, feasibility, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 16 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, feasibility, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -19,6 +19,7 @@ RouteContext (immutable)
 Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register IcingEscapeEvaluator       # en-route icing
   ├── @register FIKIIcingEvaluator
+  ├── @register FreezingPrecipEvaluator
   ├── @register CloudTopEvaluator          # en-route cloud
   ├── @register VMCCruiseEvaluator
   ├── @register TurbulenceEvaluator        # en-route turbulence
@@ -75,7 +76,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
-## The 15 Evaluators
+## The 16 Evaluators
 
 ### Icing
 
@@ -83,6 +84,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 |-----------|----------|-------|----------------|
 | `IcingEscapeEvaluator` | icing | Non-FIKI: can we descend below freezing to escape icing? Checks FZ level vs terrain + margin. Altitude-aware: ignores icing above cruise + buffer. Any no-escape point → amber; `no_escape_pct_red` escalates to red. `icing_coverage_pct_amber` warns when escapable icing covers a significant portion of the route | `terrain_margin_ft`, `tight_margin_ft`, `icing_altitude_buffer_ft`, `icing_coverage_pct_amber` (20%), `no_escape_pct_red` (15%) |
 | `FIKIIcingEvaluator` | icing | FIKI-equipped: evaluates icing layer thickness and severity (transit OK, loiter not) | `thickness_amber_ft`, `thickness_red_ft`, `severe_is_red` |
+| `FreezingPrecipEvaluator` | icing | Freezing rain / ice pellets: active FZRA/PL surface phase anywhere → RED (exceeds all icing certification, incl. FIKI; below-cloud hazard invisible to in-cloud icing methods). Freezing-rain-shaped profile without active precip (warm nose over sub-zero surface, via `detect_warm_nose`) → AMBER above coverage threshold | `primed_pct_amber` (5%) |
 
 ### Cloud
 

@@ -903,3 +903,47 @@ cross-method comparison (§2's table) apples-to-apples.
   the expectation is fewer low-level VWS bands, occasional new jet-flank bands.
 - (c): verify elevated negative-Ri CAT layers appear above frontal surfaces
   and NOT at the surface on hot afternoons.
+
+---
+
+## 9. Freezing-precipitation advisory: binary RED on active FZRA/PL, primed-profile AMBER
+
+**Date:** 2026-06-11
+**Status:** Implemented (`analysis/advisories/freezing_precip.py`).
+**Context:** The review (§8's source) found the deadliest GA icing scenario —
+freezing rain below cloud — was computed (`precipitation.py` warm-nose
+detection, FZRA/PL surface phase) but surfaced by no advisory, and is
+*structurally invisible* to the in-cloud icing methods (all four gate on
+`is_in_cloud_layer`; FZRA happens beneath the deck).
+
+### Grading choices
+
+- **Any active FZRA/PL point → RED, no percentage threshold.** Freezing rain
+  exceeds every icing certification envelope including FIKI; areal coverage
+  doesn't temper it the way it does for in-cloud icing (one transit through a
+  freezing-rain shaft is sufficient to be unrecoverable). Ice pellets grade
+  identically: PL at the surface *proves* freezing rain in the layer above
+  (refreeze completed before the ground).
+- **Primed tier (AMBER)** — the freezing-rain profile *shape* (sub-zero
+  surface wet-bulb under a warm nose, ≥2 warm levels) without active precip,
+  re-checked from `derived_levels` via the now-public `detect_warm_nose`.
+  Needed because `assess_precipitation` early-returns on dry hours, so
+  `freezing_rain_risk` alone cannot warn about precip-onset timing risk.
+  Coverage-gated (`primed_pct_amber`, default 5% ≈ one point) — the shape
+  occurs benignly in dry warm-front pre-fields, so a single-point flicker
+  shouldn't amber a route, but a corridor of primed profiles should.
+- **UNAVAILABLE, never green-by-absence**, when a model has neither a
+  precipitation assessment nor derived levels (old packs).
+
+### Companion change
+
+`_descend_below_icing` (§8a) consults the same `freezing_rain_risk`: a model
+in FZRA has no descent escape.
+
+### Real-world validation needed
+
+- A verified FZRA event (e.g. METAR FZRA at an en-route airport) — confirm the
+  route grades RED and the primed tier ambered the preceding hours.
+- Winter inversion days without precip — confirm the 5% primed threshold
+  doesn't over-amber routine warm-nose-shaped dry profiles; raise the default
+  if it does.
