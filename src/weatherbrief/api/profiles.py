@@ -105,6 +105,23 @@ def list_user_profiles(
     return [_profile_to_response(p) for p in profiles]
 
 
+# Matches the FlightProfileRow.name column (String(100)).
+MAX_PROFILE_NAME_LENGTH = 100
+
+
+def _validated_profile_name(raw: str | None) -> str:
+    """Strip and length-check a profile name; 422 on empty or too long."""
+    name = (raw or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Profile name is required")
+    if len(name) > MAX_PROFILE_NAME_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Profile name must be at most {MAX_PROFILE_NAME_LENGTH} characters",
+        )
+    return name
+
+
 @router.post("", response_model=ProfileResponse, status_code=201)
 def create_profile(
     req: CreateProfileRequest,
@@ -112,13 +129,12 @@ def create_profile(
     db: Session = Depends(get_db),
 ):
     """Create a new profile."""
-    if not req.name or not req.name.strip():
-        raise HTTPException(status_code=422, detail="Profile name is required")
+    name = _validated_profile_name(req.name)
 
     # Check for duplicate names
     existing = list_profiles(db, user_id)
-    if any(p.name.lower() == req.name.strip().lower() for p in existing):
-        raise HTTPException(status_code=409, detail=f"Profile '{req.name.strip()}' already exists")
+    if any(p.name.lower() == name.lower() for p in existing):
+        raise HTTPException(status_code=409, detail=f"Profile '{name}' already exists")
 
     settings = req.settings.model_dump(exclude_none=True) if req.settings else {}
     from datetime import datetime, timezone
@@ -126,7 +142,7 @@ def create_profile(
     profile = FlightProfile(
         id=0,  # will be assigned by DB
         user_id=user_id,
-        name=req.name.strip(),
+        name=name,
         is_default=False,
         settings=settings,
         created_at=datetime.now(timezone.utc),
@@ -159,9 +175,7 @@ def update_user_profile(
 
     kwargs: dict = {}
     if req.name is not None:
-        name = req.name.strip()
-        if not name:
-            raise HTTPException(status_code=422, detail="Profile name cannot be empty")
+        name = _validated_profile_name(req.name)
         # Check for duplicate names (excluding this profile)
         existing = list_profiles(db, user_id)
         if any(p.name.lower() == name.lower() and p.id != profile_id for p in existing):
@@ -218,9 +232,7 @@ def duplicate_profile(
     """Duplicate an existing profile with a new name."""
     source = _load_owned_profile(db, profile_id, user_id)
 
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="Profile name is required")
+    name = _validated_profile_name(req.name)
 
     # Check for duplicate names
     existing = list_profiles(db, user_id)

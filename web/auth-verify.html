@@ -55,7 +55,10 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token');
-    const next = params.get('next');
+    // Only honor same-origin relative paths — an absolute URL (or a
+    // scheme-relative "//host") in ?next= would be an open redirect.
+    const rawNext = params.get('next');
+    const next = rawNext && rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : null;
 
     if (!token) {
       document.getElementById('initial-state').style.display = 'none';

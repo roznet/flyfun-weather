@@ -55,4 +55,9 @@ EXPOSE 8020
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"
 
-CMD ["uvicorn", "weatherbrief.api.app:app", "--host", "0.0.0.0", "--port", "8020"]
+# --proxy-headers: trust Caddy's X-Forwarded-Proto/X-Real-IP so request.base_url
+# is https and client IPs are real. Trusting all peers is safe because compose
+# binds the port to the host loopback only (127.0.0.1:8020) — nothing but the
+# local reverse proxy can reach uvicorn.
+CMD ["uvicorn", "weatherbrief.api.app:app", "--host", "0.0.0.0", "--port", "8020", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]
