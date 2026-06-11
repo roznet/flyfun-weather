@@ -1,11 +1,127 @@
 # Security Audit — Flyfun Weather
 
 **Initial audit:** 2026-02-26
-**Prior updates:** 2026-03-23, 2026-04-20 (fresh first-principles review)
-**Current audit:** 2026-05-20 (focused first-principles review of the new auth surface — magic-link email login, rolling JWT sessions, `SlidingSessionMiddleware` — plus full reconciliation of prior findings; model: Opus 4.7 / 1M)
+**Prior updates:** 2026-03-23, 2026-04-20 (fresh first-principles review), 2026-05-20 (magic-link / rolling-session auth surface)
+**Current audit:** 2026-06-11 (fresh full-stack review by five parallel independent workstreams — auth/sessions, API authorization/IDOR, injection/SSRF/prompt-injection, frontend/XSS, secrets/deploy/dependencies — run blind to this document, then reconciled against prior findings; model: Fable 5 / 1M)
 **Scope:** Full-stack review — FastAPI backend, shared `flyfun-common` auth library, SQLAlchemy/MySQL/SQLite storage, vanilla TypeScript frontend, Docker/Caddy deployment, MCP server, iOS sync endpoints, Claude-CLI feedback triage.
 
-> **Note on paths:** `flyfun-common` was restructured since the 2026-04-20 audit — its Python package now lives under `flyfun-common/python/src/flyfun_common/…` (the older sections of this document reference the pre-move `flyfun-common/src/flyfun_common/…` paths).
+> **Note on paths:** `flyfun-common` was restructured since the 2026-04-20 audit — its Python package now lives under `flyfun-common/python/src/flyfun_common/…` (the older sections of this document reference the pre-move `flyfun-common/src/flyfun_common/…` paths). The 2026-06-11 pass ran against a checkout **without** `flyfun-common` vendored or installed, so findings inside that library rest on call sites, tests, and design docs, and are flagged accordingly.
+
+---
+
+## 2026-06-11 Re-Audit
+
+### Summary
+
+This pass was a fresh first-principles review (auditors deliberately did not read this document before reporting) followed by reconciliation. The overall picture is consistent with prior passes: injection hygiene is excellent (no SQLi, no path traversal, no command injection, no SSRF, no unsafe deserialization — all re-verified from scratch), object-level authorization is strong and consistent across every router, admin gating was re-enumerated route-by-route with no gaps, and token hygiene is good.
+
+One **High** was found and **empirically confirmed in code**: a stored XSS via the flight-profile name rendered unescaped in the digest "profile mismatch" banner — notable because briefings are shareable, so the payload can fire in another user's (or an admin's) browser, and the CSP still allows `'unsafe-inline'` so it is not backstopped. A handful of new Mediums follow (open redirect in the magic-link verify page, digest LLM prompt-injection surface, request-body logging that can capture plaintext Autorouter passwords, and a reclassification of the MCP token verifier from "positive" to latent risk). Several long-standing High/Medium carry-forwards were re-verified as still open — notably H5 (pack-HMAC mismatch still served), H6 (still no Python lockfile), H7 (still no rate limit on `/api/tokens` et al.), M-new-9 (`/api/refresh/active` cross-tenant leak), and M-prior-8 (`viewer_id` fail-open default).
+
+### New findings (this pass)
+
+| ID | Sev | Headline |
+|----|-----|----------|
+| 2026-06-H1 | **High** | Stored XSS via flight-profile name in the digest profile-mismatch banner (`briefing-ui.ts`); reaches shared briefings; CSP `'unsafe-inline'` does not block it |
+| 2026-06-M1 | Medium | Open redirect: `auth-verify.html` falls back to `window.location.href = next` with no same-origin check |
+| 2026-06-M2 | Medium | LLM digest prompt injection: raw METAR/SIGMET text and waypoint names flow verbatim into the briefer prompt — integrity risk for safety-relevant advice (blast radius well-contained: structured output, no tools, escaped at the HTML sink) |
+| 2026-06-M3 | Medium | 422 validation handler logs raw request bodies — a malformed `PUT /api/user/preferences` writes the plaintext Autorouter password to journald |
+| 2026-06-M4 | Medium | MCP token verifier accepts any non-empty Bearer (reclassified from prior "positive"): safe only while every tool round-trips to the API; any future local-work tool is unauthenticated |
+| 2026-06-L1 | Low | Flight create/update accept `aircraft_id`/`profile_id` with no ownership validation (pireps already has the right helper); leaks only the foreign aircraft's ICAO type |
+| 2026-06-L2 | Low | Pack-HMAC key silently derives from `""` when `JWT_SECRET` is unset (`os.environ.get("JWT_SECRET", "")`) — should fail loudly (compounds H5) |
+| 2026-06-L3 | Low | API tokens never expire (no expiry column; revocation-only) and the per-user cap of 5 has a count-then-insert race |
+| 2026-06-L4 | Low | Dev-mode Autorouter credential manager persists plaintext credentials at fixed world-readable `/tmp/weatherbrief-dev-creds` |
+| 2026-06-L5 | Low | `.env.sample` ships `LANGCHAIN_TRACING_V2=true` — filling in a LangSmith key silently exports full LLM prompts (routes, dates, digest content) to a third party |
+| 2026-06-I1 | Info | Full TypeScript sources + sourcemaps + package manifests served publicly (`app.py` mounts all of `web/`; Dockerfile copies `web/ts/`) — recon surface, no secrets found |
+| 2026-06-I2 | Info | Uvicorn runs without `--proxy-headers` behind Caddy — client IPs in app logs are the proxy's; `base_url` scheme worked around manually |
+
+---
+
+### 2026-06-H1 (High) — Stored XSS via flight-profile name in the digest profile-mismatch banner
+
+**Locations:** `web/ts/managers/briefing-ui.ts:1513-1515` (`buildDigestProfileWarning`), reached from `renderSynopsis` (~`:1473`) and `fetchAndRenderDigestJson` (`:1527-1529`); interpolation helper `web/ts/i18n/i18n.ts:23-31` (`t()` does plain `split/join` substitution, no escaping); data source `src/weatherbrief/api/packs.py:939` (`profile_ctx.name` persisted into `digest.json` as `profile_name`).
+
+```ts
+const digestProfileName = digest.profile_name || `#${digest.profile_id}`;
+return `<div class="digest-profile-warning">${t('digest.profileMismatch', { name: digestProfileName })}</div>`;
+```
+
+`digest.profile_name` is the user-created flight-profile name, persisted at digest-generation time and returned in `digest.json`. It is interpolated into an `innerHTML` template **without `escapeHtml`**, and `t()` performs no escaping of params. Profile names are not length/charset-validated server-side (prior L9/L10 — still open), so the value is genuinely attacker-controlled: a profile named `<img src=x onerror=…>` executes whenever the mismatch banner renders. Because briefings are shareable (`/s/{code}`), the payload can fire in a victim's browser — including an admin viewing a shared briefing, whose identity is cookie-based. CSP does **not** mitigate: `script-src 'unsafe-inline'` (M-new-1, still open) permits the injected handler. This is a live instance of the drift M-new-19 warned about.
+
+**Remediation:** wrap the value — `t('digest.profileMismatch', { name: escapeHtml(digestProfileName) })` — and add server-side `max_length` + charset validation on profile names (closes L10 at the same time). Consider making `t()` escape params by default with an explicit opt-out, so the safe path is the default.
+
+### 2026-06-M1 (Medium) — Open redirect in magic-link verify page
+
+**Location:** `web/auth-verify.html:85` — `window.location.href = resp.url || (next || '/');` where `next` is read straight from the query string.
+
+The primary path uses `resp.url` (server-controlled; flyfun-common validates `next=` server-side per the 2026-05-20 pass), but the client-side fallback navigates to an attacker-supplied absolute URL when `resp.url` is falsy. A crafted link `/auth-verify.html?token=…&next=https://evil.example` lands the freshly-authenticated user on a phishing page. **Remediation:** only honor `next` when it starts with a single `/` (reject `//` and absolute URLs) — mirror the server-side rule client-side.
+
+### 2026-06-M2 (Medium) — LLM digest prompt injection via METAR/SIGMET/waypoint names
+
+**Locations:** `src/weatherbrief/digest/prompt_builder.py:409` (`apt.metar_raw` verbatim), `:449-450` (SIGMET `s.raw_text` verbatim), `:88` (user-influenced `wp.name`); LLM invocation `src/weatherbrief/digest/llm_digest.py:68,110-124`.
+
+Untrusted external text (raw METARs/SIGMETs from aviationweather.gov) and user-influenced waypoint names are embedded directly into the briefer prompt. Blast radius is well-contained by design — `with_structured_output(WeatherDigest)` pins the output shape, the graph binds **no tools**, and every digest field is `escapeHtml`'d at the render sink (`briefing-ui.ts:1451`) — so this cannot escalate to tool calls, exfiltration, or stored XSS. The residual risk is **advice integrity**: injected text could coax the model into downgrading an AMBER/RED assessment or inserting misleading prose, which for an aviation-safety tool is meaningful. This complements the fixed C1 (triage prompt injection); the digest path was not previously assessed. **Remediation:** delimit untrusted blocks (random-delimiter fencing, as triage already does) and add a system-prompt instruction that METAR/SIGMET/route-name content is data, not instructions.
+
+### 2026-06-M3 (Medium) — 422 handler logs raw request bodies, capturing plaintext credentials
+
+**Locations:** `src/weatherbrief/api/app.py:340-352` (`RequestValidationError` handler logs `body=%r`); `src/weatherbrief/api/preferences.py:266-269` (`PUT /api/user/preferences` carries `autorouter_username`/`autorouter_password`).
+
+Any malformed request to the preferences endpoint writes the plaintext Autorouter password into journald (compose uses the journald driver, retained host-side). This sits alongside the still-open M-new-14 (Autorouter token-body logging in flyfun-common). **Remediation:** redact known-sensitive keys before logging, or allowlist which paths get body logging.
+
+### 2026-06-M4 (Medium) — MCP token verifier accepts any non-empty Bearer (reclassification)
+
+**Location:** `src/weatherbrief/mcp/server.py:43-53` (`_WeatherbriefTokenVerifier.verify_token` returns a valid `AccessToken` with `scopes=["mcp"]`, `client_id="weatherbrief"` for any non-blank string); proxy at `mcp/client.py:30-36`.
+
+The 2026-04-20 pass listed this as a positive ("thin proxy — every real auth decision made by the downstream API"). That holds **only** while every tool round-trips to the API with the caller's token. The failure modes are latent: (1) any future MCP tool/resource doing local work (cached data, file reads) is silently unauthenticated; (2) garbage tokens pass the edge and burn API/DB work per call instead of being rejected; (3) FastMCP features keyed on verified identity cannot distinguish users. **Remediation:** have the verifier call `/auth/me` with short-lived caching, so invalid tokens die at the edge and identity is real.
+
+### 2026-06-L1..L5 / I1..I2 (Low / Info)
+
+- **2026-06-L1 — flight `aircraft_id`/`profile_id` not ownership-checked.** `flights.py:669` (create), `:1709,:1721-1722` (update/move) write the caller-supplied IDs with no ownership validation — contrast `pireps.py:250-264`, which validates. Exposure is small (privacy gating in `_resolve_aircraft_info` and `load_profile_settings` prevents tail-number/settings leak; only the foreign aircraft's ICAO **type** leaks, via integer-ID guessing) plus a dangling cross-user FK. Reuse the pireps `_validate_aircraft_ownership` pattern.
+- **2026-06-L2 — HMAC key empty-string fallback.** `storage/flights.py:144-147` does `os.environ.get("JWT_SECRET", "")` and derives the pack-HMAC key from `""` if unset, making integrity tags forgeable instead of failing loudly (the rest of the codebase raises on a missing secret). Compounds H5 (NULL-trusted, mismatch-served — re-verified still open at `:184`, `:648`, `:665`).
+- **2026-06-L3 — API tokens never expire; cap race.** `ApiTokenRow` has no expiry — only `revoked` + `last_used_at`; a leaked `ff_` token is valid forever until manually revoked. `create_token`'s count-then-insert (`api/tokens.py:57-76`) is not atomic, so concurrent requests can exceed `MAX_TOKENS_PER_USER=5` (cosmetic). Note SHA-256-at-rest is fine for 256-bit-entropy tokens, but verify legacy `wb_` tokens (L-new-11, still accepted) have equivalent entropy or force-rotate them. Consider optional expiries; `last_used_at` already supports a stale-token admin view.
+- **2026-06-L4 — dev credentials at a fixed `/tmp` path.** `api/preferences.py:300` — `AutorouterCredentialManager("/tmp/weatherbrief-dev-creds")`: predictable, world-readable location on shared dev machines. Dev-only (`is_dev_mode()`-gated); use `DATA_DIR` or `tempfile.mkdtemp` with `0700`.
+- **2026-06-L5 — LangSmith tracing default-on in `.env.sample`.** `LANGCHAIN_TRACING_V2=true` sits next to a blank `LANGCHAIN_API_KEY`; an operator filling in the key silently exports full LLM prompts (user routes, dates, digest content — PII) to LangSmith with no consent surface. Default to `false` with a comment.
+- **2026-06-I1 — client sources served publicly.** `app.py:534-536` mounts all of `web/` (Dockerfile copies `web/ts/`, manifests; esbuild targets ship `--sourcemap`). No secrets in any of it (verified) — recon surface only; mount `dist/` + html/css if unintentional.
+- **2026-06-I2 — uvicorn lacks `--proxy-headers`.** Caddy sends `X-Real-IP`/`X-Forwarded-Proto` but uvicorn isn't told to trust them; `request.base_url` is `http://` (manually worked around at `app.py:124-125`) and app-log client IPs are the proxy's. Add `--proxy-headers --forwarded-allow-ips=127.0.0.1` (pairs with L-new-6, which is otherwise improved on the weather side).
+
+---
+
+### Reconciliation — carry-forward statuses re-verified 2026-06-11
+
+Spot-verified against current source this pass (line numbers current):
+
+| Prior ID | Title | Status 2026-06-11 | Evidence |
+|----------|-------|-------------------|----------|
+| H3 | Single `JWT_SECRET` reuse | **PARTIAL (unchanged)** | Still signs JWTs + Starlette session (`app.py:312`) + approval-link HMAC (`admin.py:584-587`) + pack-HMAC (`storage/flights.py:144-147`); design doc still promises an `HMAC_SECRET` no code reads. |
+| H4 | `is_dev_mode()` fails open | **FIXED (intact), residual documented** | flyfun-common 0.4.2 fail-closed holds per tests/design doc (library not in checkout). Residual: a deliberately-set `ENVIRONMENT=development` on a prod box is still a single-var global bypass (no auth + everyone-admin via `admin.py:66-67` + `/auth/dev-token` at `app.py:437-444` + wildcard CORS). Consider a startup refusal when dev mode coincides with a public hostname / configured `ADMIN_EMAILS`. |
+| H5 | Pack-HMAC mismatch served; NULL trusted | **OPEN (re-verified)** | `storage/flights.py:648,:665` log-and-serve on mismatch; `:184` NULL trusted; column nullable. Plus new 2026-06-L2 (empty-key fallback). |
+| H6 | No Python lockfile / unpinned deps | **OPEN (re-verified)** | `pyproject.toml` all `>=` floors; Dockerfile `pip install -e .`; no requirements/constraints file exists. (npm side is correctly `npm ci --ignore-scripts` against a committed lockfile.) |
+| H7 | Rate limiting on auth/token endpoints | **OPEN (re-verified)** | `api/tokens.py` has no limiter; approval endpoint unthrottled (HMAC brute-force infeasible, so Info there); in-memory limiters in `throttle.py` remain per-process (L-new-10). |
+| M3 (old) / CSRF | CSRF posture | **HOLDS, but externally-pinned** | No CSRF middleware in this repo; several state-changing endpoints take no body (`admin.py:487,:546`, `tokens.py:111`) and are protected **only** by the `flyfun_auth` cookie's `SameSite=lax` set in flyfun-common (not in this checkout). The OAuth-state session cookie is deliberately `SameSite=none` (`app.py:310-315`); if `flyfun_auth` ever followed suit, admin endpoints become CSRF-able. Caddy's `form-action 'self'` does NOT help (it constrains forms on *our* pages, not the attacker's). Add a regression test in flyfun-common asserting the cookie attribute. |
+| M-new-3 | Approval link no one-time-use | **OPEN (re-verified)** | `admin.py:574-625`: `hmac.compare_digest` + TTL + negative-age check all good, but 7-day validity, no nonce, and the audit log records `admin_id="link"` — unattributable. |
+| M-new-9 | `/api/refresh/active` cross-tenant leak | **OPEN (re-verified)** | `packs.py:1889-1895` returns every user's active refresh entries to any authenticated user. |
+| M-new-10 / 2026-L4 | SSE raw exception text | **OPEN (re-verified)** | `packs.py:1826` and `airport_profile.py:695` still emit `str(exc)` unconditionally; `packs.py:3287` likewise in the email path (M-prior-6 residual). |
+| M-prior-8 | `_load_flight_or_404` fail-open default | **OPEN (re-verified)** | `flights.py:1799` still `viewer_id: str | None = None`. |
+| M-new-19 | Unescaped `innerHTML` drift | **PARTIAL — and the predicted drift happened** | Most sinks now escaped (re-verified across ~60 call sites incl. METAR/TAF, SIGMET, PIREP remarks, digest fields, admin replies); 2026-06-H1 is exactly the foreseen failure mode landing in new code. |
+| 2026-M3 | PIREP cross-flight enumeration | **FIXED (intact)** | Read path gates `flight_id`/`pack_id` through visibility; publish path validates aircraft/pack ownership (`pireps.py:250-264,:388-391,:429-440`). |
+| M-new-14 | Autorouter token-body logging | **OPEN** (library not in checkout; no contrary evidence) — now compounded by 2026-06-M3 on the weather side. |
+| F12-class | Admin = `ADMIN_EMAILS` mailbox | **By design, re-verified safe** | Case-folded both sides; agents created with `email=""` can never match; fail-safe (nobody admin) when unset; no endpoint in this repo mutates `UserRow.email`. |
+
+Positives re-confirmed from scratch this pass (independent of prior text): ORM-only DB access (sole raw `text()` is internal-value partition DDL in `tasks/retention.py:447,:483` — not reachable by user input); `safe_path_component()` + ICAO/model/chart-ID/run-cycle allowlists on every file-serving path; no `eval`/`exec`/`shell=True`/pickle/unsafe-yaml; no user-controlled outbound URL (no SSRF); admin gating present on **all** admin routes (16 in `admin.py` + credits/analytics/messages/profiles/feedback/hub routers — full enumeration); ownership helpers consistently applied across every user-resource router; `is_admin`/credits/PIREP-permission flags not client-settable (typed allowlist in `PreferencesUpdate`); token plaintext shown once, hashed at rest, never logged; iOS app stores the bearer in Keychain, no ATS exceptions; `/docs` disabled in prod; no secrets in repo or git history (re-swept); Caddy header suite + loopback-bound ports + non-root UID 2000 intact; markdown renderer escapes-then-formats with `https?://`-only links; magic-link frontend uses `textContent`; account deletion cleans artifacts and anonymizes PIREPs.
+
+### Updated priority roadmap (this pass)
+
+| # | Item | Effort | Reduces |
+|---|------|--------|---------|
+| 1 | **2026-06-H1**: `escapeHtml` the digest profile name (one line) + server-side `max_length`/charset on profile names (also closes L10); consider escape-by-default in `t()`. | ~1h | Stored XSS reaching shared briefings / admin sessions. |
+| 2 | **2026-06-M1**: same-origin check on the `next` fallback in `auth-verify.html`. | ~15min | Post-auth phishing redirect. |
+| 3 | **2026-06-M3**: redact sensitive fields from 422 body logging. | ~1h | Plaintext credentials in journald. |
+| 4 | **2026-06-M2**: fence METAR/SIGMET/route-name blocks in the digest prompt (reuse the triage sanitiser pattern). | ~half day | Manipulated safety advice. |
+| 5 | **2026-06-M4**: validate Bearer at the MCP edge via `/auth/me` + cache. | ~half day | Latent unauthenticated MCP surface. |
+| 6 | **2026-06-L2 + H5**: fail loudly on missing `JWT_SECRET` in `_pack_hmac_key`; reject on mismatch; backfill + `NOT NULL`. | ~half day | Silent integrity-check bypass. |
+| 7 | **2026-06-L1**: ownership-validate `aircraft_id`/`profile_id` on flight create/update. | ~1h | Cross-user FK linkage / type leak. |
+| 8 | **2026-06-L3/L4/L5 + I2**: token expiry option; move dev creds out of `/tmp`; default LangSmith tracing off; add `--proxy-headers`. | ~half day | Misc credential/PII hygiene. |
+
+Plus the highest-leverage carry-forwards, still: **H6** (lockfile), **H7** (auth/token rate limits), **H3** (split the master secret), **M-new-9** (refresh/active leak), **M-prior-8** (`viewer_id` required), **M-new-1** (drop `'unsafe-inline'` — which would also have backstopped 2026-06-H1).
 
 ---
 
