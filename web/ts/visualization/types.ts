@@ -287,7 +287,9 @@ export interface VizPoint {
   terrainElevationFt: number;
   // Route graph scalars (extracted from model_divergence)
   temperatureC: number | null;
-  /** Temperature (°C) at the elected cruise level for the selected model. */
+  /** Temperature (°C) at the elected cruise level for the selected model.
+   *  `isaDevC` is derived from this; kept as a separate field so a future
+   *  raw "cruise temperature" metric (or richer tooltip) needs no re-plumbing. */
   temperatureCruiseC: number | null;
   /** ISA deviation (°C) at the elected cruise level: actual − ISA standard.
    *  Positive = warmer than standard (higher density altitude / degraded

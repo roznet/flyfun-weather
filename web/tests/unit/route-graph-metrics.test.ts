@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ROUTE_GRAPH_METRICS, getMetricById, getMetricOptions, METRIC_NONE,
 } from '../../ts/visualization/route-graph/metrics';
+import { isaTemperatureC } from '../../ts/visualization/data-extract';
 import { makeVizPoint, makeAltitudeLines, makeNwpCloudDiag } from './fixtures/viz-point';
 
 function metric(id: string) {
@@ -148,5 +149,49 @@ describe('precipitation/cape/cloud-cover/temperature metrics', () => {
   it('temperature reads temperatureC, allows null', () => {
     expect(metric('temperature').getValue(makeVizPoint({ temperatureC: -3 }))).toBe(-3);
     expect(metric('temperature').getValue(makeVizPoint({ temperatureC: null }))).toBeNull();
+  });
+});
+
+describe('isaTemperatureC (standard atmosphere)', () => {
+  it('is 15°C at MSL', () => {
+    expect(isaTemperatureC(0)).toBe(15);
+  });
+
+  it('follows the troposphere lapse rate', () => {
+    expect(isaTemperatureC(8000)).toBeCloseTo(15 - 1.9812 * 8, 6);
+  });
+
+  it('is isothermal above the 36,089 ft tropopause', () => {
+    expect(isaTemperatureC(36089)).toBeCloseTo(-56.5, 2);
+    expect(isaTemperatureC(40000)).toBe(-56.5);
+  });
+
+  it('matches the Python twin at cruise (cross-impl guard)', () => {
+    // round-1.9812*alt — same constants as models/analysis.isa_temperature_c
+    expect(isaTemperatureC(10000)).toBeCloseTo(-4.812, 3);
+  });
+});
+
+describe('isa-dev metric', () => {
+  const m = () => metric('isa-dev');
+
+  it('reads isaDevC directly', () => {
+    expect(m().getValue(makeVizPoint({ isaDevC: 8 }))).toBe(8);
+    expect(m().getValue(makeVizPoint({ isaDevC: null }))).toBeNull();
+  });
+
+  it('formats positive deviation as ISA+N', () => {
+    expect(m().formatValue!(8.2)).toBe('ISA+8 (+8.2°C)');
+  });
+
+  it('formats negative deviation as ISA−N', () => {
+    expect(m().formatValue!(-4.6)).toBe('ISA−5 (−4.6°C)');
+  });
+
+  it('never renders ISA−0 for small negative deviations', () => {
+    // Rounds to zero in magnitude → shows ±0, not −0.
+    expect(m().formatValue!(-0.3)).toBe('ISA±0 (−0.3°C)');
+    expect(m().formatValue!(0.3)).toBe('ISA±0 (+0.3°C)');
+    expect(m().formatValue!(-0.04)).toBe('ISA±0 (±0.0°C)');
   });
 });

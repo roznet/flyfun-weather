@@ -82,6 +82,12 @@ def isa_temperature_c(altitude_ft: float) -> float:
     tropopause at 36,089 ft; isothermal −56.5 °C above. The reference for
     ISA-deviation at cruise (actual − ISA), which pilots use for density
     altitude / true-airspeed / climb performance.
+
+    Note: the live route-graph ISA deviation is computed client-side in
+    ``web/ts/visualization/data-extract.ts`` (the temperature is per-model and
+    the deviation is a presentation-edge transform). This server-side twin is
+    kept for unit-testing the formula and any future server-side deviation;
+    keep the two in sync if the standard ever changes.
     """
     if altitude_ft <= 36089.0:
         return 15.0 - 1.9812 * (altitude_ft / 1000.0)
@@ -108,13 +114,15 @@ def temperature_at_pressure(
         return levels[0].temperature_c
     if target_pressure_hpa >= levels[-1].pressure_hpa:
         return levels[-1].temperature_c
-    for lower, upper in zip(levels, levels[1:]):
-        if lower.pressure_hpa <= target_pressure_hpa <= upper.pressure_hpa:
+    # Within each adjacent pair `above` has the lower pressure (higher altitude)
+    # and `below` the higher pressure (lower altitude); the target sits between.
+    for above, below in zip(levels, levels[1:]):
+        if above.pressure_hpa <= target_pressure_hpa <= below.pressure_hpa:
             frac = (
-                math.log(target_pressure_hpa) - math.log(lower.pressure_hpa)
-            ) / (math.log(upper.pressure_hpa) - math.log(lower.pressure_hpa))
-            return lower.temperature_c + frac * (
-                upper.temperature_c - lower.temperature_c
+                math.log(target_pressure_hpa) - math.log(above.pressure_hpa)
+            ) / (math.log(below.pressure_hpa) - math.log(above.pressure_hpa))
+            return above.temperature_c + frac * (
+                below.temperature_c - above.temperature_c
             )
     return levels[-1].temperature_c  # defensive — unreachable given the clamps above
 
