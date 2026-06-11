@@ -2849,8 +2849,9 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     independent (distinct cache keys, atomic ``put_cached``), so they now run
     on a small outer pool. Each unit keeps its own inner per-level download
     pool, sized down so outer x inner stays within the session's connection
-    pool (4 x 4 = 16 <= _POOL_MAXSIZE). Memory stays bounded: at most
-    ``outer`` per-variable buffers in flight, written to disk on completion.
+    pool (_POOL_MAXSIZE) for any worker setting. Memory stays bounded: at
+    most ``outer`` per-variable buffers in flight, written to disk on
+    completion.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_VARIABLES,
@@ -2859,7 +2860,10 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     )
 
     outer = _icon_prefetch_workers()
-    inner = max(2, 16 // outer) if outer > 1 else 8
+    # Keep outer x inner within the session's connection pool for ALL outer
+    # values (default 4 x 5 = 20), not just the default — a user-set
+    # GRIB_ICON_PREFETCH_WORKERS must not silently exceed _POOL_MAXSIZE.
+    inner = max(1, _POOL_MAXSIZE // outer) if outer > 1 else 8
 
     def _fetch_var(fhour: int, var: str, ck: str) -> None:
         try:

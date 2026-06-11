@@ -15,8 +15,11 @@ max |delta| 2.4e-5 degC — zero disagreement after the 0.1 degC rounding
 applied by the only consumer (``DerivedLevel.wet_bulb_c``). Verified by
 tests/test_wet_bulb.py.
 
-If MetPy's private ``_nounit`` seam disappears in a future release, the
-public ``wet_bulb_degc`` falls back to ``mpcalc.wet_bulb_temperature``.
+If MetPy's private seams disappear in a future release (the ``nounit``
+constants namespace or ``saturation_mixing_ratio._nounit``), the public
+``wet_bulb_degc`` falls back to ``mpcalc.wet_bulb_temperature`` — both are
+resolved lazily so the failure surfaces as a logged fallback at call time,
+never as an import error.
 """
 
 from __future__ import annotations
@@ -25,7 +28,11 @@ import logging
 
 import metpy.calc as mpcalc
 import numpy as np
-from metpy.constants import nounit
+
+try:
+    from metpy.constants import nounit
+except ImportError:  # pragma: no cover — exercised only by future MetPy
+    nounit = None
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +56,8 @@ def _moist_lapse_dtdp(t_k: np.ndarray, p_pa: np.ndarray) -> np.ndarray:
 
 def _wet_bulb_fast(pressure, temperature, dewpoint) -> np.ndarray:
     """Vectorized wet bulb (degC ndarray) from pint-wrapped profile arrays."""
+    if nounit is None:
+        raise RuntimeError("metpy.constants.nounit unavailable")
     lcl_p, lcl_t = mpcalc.lcl(pressure, temperature, dewpoint)
 
     p_pa = np.atleast_1d(pressure.to("Pa").magnitude).astype(float)

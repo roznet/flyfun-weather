@@ -124,10 +124,13 @@ def test_cached_units_skipped(tmp_path, tracker):
 
 def test_units_run_concurrently(tmp_path, tracker, monkeypatch):
     monkeypatch.delenv("GRIB_ICON_PREFETCH_WORKERS", raising=False)
-    tracker["delay"] = 0.05
+    # 10 units (9 vars + diag) on a 4-worker outer pool, each sleeping 100ms:
+    # expected peak is 4. Assert only >= 2 (any overlap at all) so a starved
+    # CI host that staggers thread starts can't flake the test.
+    tracker["delay"] = 0.1
     ctx = _make_ctx(tmp_path, forecast_hours=[6])
     _prefetch_icon_eu_data_inner(ctx)
-    assert tracker["peak"] > 1  # outer pool overlapped units
+    assert tracker["peak"] >= 2  # outer pool overlapped units
 
 
 def test_serial_env_knob(tmp_path, tracker, monkeypatch):
