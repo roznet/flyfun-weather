@@ -655,6 +655,7 @@
   "graph.headwind": "Head/Tailwind",
   "graph.crosswind": "Crosswind",
   "graph.temperature": "Temperature (2m)",
+  "graph.isa-dev": "ISA Deviation (cruise)",
   "graph.precipitation": "Precipitation",
   "graph.cloud-cover": "Cloud Cover",
   "graph.cape": "CAPE",
@@ -667,6 +668,8 @@
   "graph.none": "None",
   "graph.headwindUp": "Headwind \u2191",
   "graph.tailwindDown": "Tailwind \u2193",
+  "graph.isaWarmer": "Warmer than ISA \u2191",
+  "graph.isaColder": "Colder than ISA \u2193",
 
   "map.cloud-cover-total": "Cloud Cover (Total)",
   "map.cloud-cover-low": "Cloud Cover (Low)",

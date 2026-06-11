@@ -287,6 +287,12 @@ export interface VizPoint {
   terrainElevationFt: number;
   // Route graph scalars (extracted from model_divergence)
   temperatureC: number | null;
+  /** Temperature (°C) at the elected cruise level for the selected model. */
+  temperatureCruiseC: number | null;
+  /** ISA deviation (°C) at the elected cruise level: actual − ISA standard.
+   *  Positive = warmer than standard (higher density altitude / degraded
+   *  performance); negative = colder. `null` when cruise temp is unavailable. */
+  isaDevC: number | null;
   precipitationMm: number | null;
   /** Mean sea-level pressure (hPa), used as the QNH proxy. Canonical hPa;
    *  display-unit conversion (hPa/inHg) happens at the route-graph edge. */

@@ -14,6 +14,8 @@ from weatherbrief.models import (
     WaypointForecast,
     bearing_between,
     altitude_to_pressure_hpa,
+    isa_temperature_c,
+    temperature_at_pressure,
 )
 
 
@@ -105,6 +107,43 @@ def test_altitude_to_pressure():
     # ~18000 ft ≈ 500 hPa
     p = altitude_to_pressure_hpa(18000)
     assert 490 < p < 510
+
+
+def test_isa_temperature_c():
+    """ISA standard temperature: 15°C at MSL, lapse to the tropopause, then flat."""
+    assert isa_temperature_c(0) == 15.0
+    # 8000 ft → 15 − 1.9812*8 ≈ -0.85°C
+    assert abs(isa_temperature_c(8000) - (15 - 1.9812 * 8)) < 1e-9
+    # The tropopause sits at ~36,089 ft where the lapse reaches ≈ −56.5°C ...
+    assert abs(isa_temperature_c(36089) - (-56.5)) < 0.01
+    # ... and above it the atmosphere is isothermal at exactly −56.5°C
+    assert isa_temperature_c(40000) == -56.5
+
+
+def test_temperature_at_pressure_interpolates():
+    """temperature_at_pressure log-interpolates and clamps outside the range."""
+    h = HourlyForecast(
+        time=datetime(2026, 2, 21, 9, 0),
+        pressure_levels=[
+            PressureLevelData(pressure_hpa=850, temperature_c=10.0),
+            PressureLevelData(pressure_hpa=700, temperature_c=0.0),
+            PressureLevelData(pressure_hpa=500, temperature_c=-20.0),
+        ],
+    )
+    # Exact level hit
+    assert temperature_at_pressure(h, 700) == 0.0
+    # Between 850 and 700 the value is strictly between their temperatures
+    mid = temperature_at_pressure(h, 775)
+    assert 0.0 < mid < 10.0
+    # Outside the reported range clamps to the nearest end
+    assert temperature_at_pressure(h, 900) == 10.0
+    assert temperature_at_pressure(h, 400) == -20.0
+    # No level carries a temperature → None
+    empty = HourlyForecast(
+        time=datetime(2026, 2, 21, 9, 0),
+        pressure_levels=[PressureLevelData(pressure_hpa=850)],
+    )
+    assert temperature_at_pressure(empty, 700) is None
 
 
 def test_hourly_level_at():
