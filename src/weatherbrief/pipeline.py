@@ -312,6 +312,7 @@ def execute_briefing(
         icing_severity_enhance=options.icing_severity_enhance,
         pack_dir=pack_dir,
         progress_callback=progress_callback,
+        elevation=fetch_result.elevation_profile,
     )
     stage_timings["analyze"] = perf_counter() - _t0
     rss = _current_rss_mb()

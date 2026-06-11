@@ -5,8 +5,8 @@ Computes the E parameter from combined vertical and horizontal wind shear:
     E = (5 * HWS + VWS² + 42) / 4
 
 Where:
-    VWS = vertical wind shear (kt/1000ft), central differences between levels
-    HWS = horizontal wind shear (kt/100nm), central differences between route points
+    VWS = vertical wind shear (kt/1000ft), differences between adjacent levels
+    HWS = horizontal wind shear (kt/100nm), differences between route points
 
 Thresholds:
     E ≥  80 → Moderate turbulence
@@ -26,9 +26,15 @@ _E_MODERATE = 80.0
 _E_SEVERE = 160.0
 _E_LIGHT = 40.0  # lower threshold for light turbulence detection
 
-# Scaling factors matching CloudPath's conventions
-_VWS_SCALE = 1e3   # shear per 1000 units (m → kt/1000ft approximation)
-_HWS_SCALE = 1e5   # shear per 100nm approximation
+# Unit conversions. The CloudPath E formula is calibrated with VWS in
+# kt/1000ft and HWS in kt/100nm; shear is computed here in SI (m/s per m),
+# so the scale factors are exact unit conversions, not round powers of ten.
+# (Previously 1e3/1e5, i.e. m/s-per-km and m/s-per-100km — that overstated
+# VWS ×1.69 (×2.85 after squaring) and understated HWS ×3.6 relative to the
+# formula's calibration units.)
+_MS_TO_KT = 1.94384
+_VWS_SCALE = _MS_TO_KT * 304.8     # (m/s per m) → kt per 1000 ft  (≈ 592.5)
+_HWS_SCALE = _MS_TO_KT * 185200.0  # (m/s per m) → kt per 100 nm   (≈ 360,000)
 
 # Min zone half-thickness for visibility
 _MIN_ZONE_HALF_FT = 500

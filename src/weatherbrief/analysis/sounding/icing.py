@@ -544,7 +544,9 @@ def assess_icing_zones_ieng(
         # Add convective component when CAPE is significant
         if cape_jkg is not None and cape_jkg > 100 and lv.dewpoint_c is not None:
             vd_base = _cloud_base_vapor_density(clouds, levels)
-            conv_index = _compute_convective_index(lv.temperature_c, 0.0, vd_base)
+            conv_index = _compute_convective_index(
+                lv.temperature_c, _vapor_density(lv.dewpoint_c), vd_base,
+            )
             if conv_index > 0:
                 conv_cover = 0.0
                 if nwp_cloud_diagnostics and nwp_cloud_diagnostics.convective_cover_pct:

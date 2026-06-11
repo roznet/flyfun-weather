@@ -108,17 +108,21 @@ is documented (docstring lines 8-9) with VWS in **kt/1000 ft** and HWS in
 **kt/100 nm**. The implementation computes shear in SI and scales by `1e3` /
 `1e5`, producing **m/s per km** and **m/s per 100 km**:
 
-- VWS: 1 m/s/km ≈ 0.59 kt/1000 ft → VWS understated ×1.69 vs the documented
-  unit; since VWS enters **squared**, the E contribution is understated ×2.9.
-- HWS: 1 m/s/100 km ≈ 0.28 kt/100 nm → understated ×3.6.
+- VWS: 1 m/s/km ≈ 0.59 kt/1000 ft → the m/s-per-km number is ×1.69 **larger**
+  than the same shear expressed in kt/1000 ft; since VWS enters **squared**,
+  the VWS contribution to E is **overstated ×2.85** vs a kt-calibrated formula.
+- HWS: 1 m/s/100 km ≈ 0.28 kt/100 nm → the HWS contribution is
+  **understated ×3.6**.
 
 If the empirical constants (5, 42, thresholds 40/80/160) come from a kt-based
-source, the implementation systematically under-calls E-Shear turbulence. As a
-sanity check: LIGHT (E ≥ 40) currently requires VWS ≈ 10.9 m/s/km ≈ 6.4
-kt/1000 ft with no HWS — already "moderate+" by classical vertical-shear rules
-of thumb (4–6 kt/1000 ft). Recommendation: audit against the CloudPath source
-and either convert units or re-state the thresholds; add a unit test pinning a
-known shear profile to a known E value.
+source, the implementation over-weights vertical shear and under-weights
+horizontal shear — over-calling E-Shear in VWS-dominated profiles and
+under-calling it where horizontal gradients dominate (jet flanks).
+Recommendation: convert the scale factors to the documented calibration units
+and add a unit test pinning a known shear profile to a known E value.
+
+*(Correction over the first published version of this section, which had the
+VWS direction inverted. Fixed in code — see meteorology-decisions §8.)*
 
 ### 2.6 Statically unstable layers are invisible to the Richardson CAT path
 

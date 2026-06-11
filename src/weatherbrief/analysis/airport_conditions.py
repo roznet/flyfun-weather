@@ -208,6 +208,9 @@ def _compute_for_airport(
         wind_speed_kt: float | None = None
         wind_direction_deg: float | None = None
         wind_gust_kt: float | None = None
+        temperature_c: float | None = None
+        dewpoint_c: float | None = None
+        qnh_hpa: float | None = None
 
         if hourly:
             if hourly.visibility_m is not None:
@@ -216,6 +219,9 @@ def _compute_for_airport(
             wind_speed_kt = hourly.wind_speed_10m_kt
             wind_direction_deg = hourly.wind_direction_10m_deg
             wind_gust_kt = hourly.wind_gusts_10m_kt
+            temperature_c = hourly.temperature_2m_c
+            dewpoint_c = hourly.dewpoint_2m_c
+            qnh_hpa = hourly.pressure_msl_hpa
 
         # Flight category
         flight_category = classify_flight_category(ceiling_ft, visibility_sm)
@@ -236,6 +242,9 @@ def _compute_for_airport(
             wind_speed_kt=round(wind_speed_kt, 1) if wind_speed_kt is not None else None,
             wind_direction_deg=round(wind_direction_deg) if wind_direction_deg is not None else None,
             wind_gust_kt=round(wind_gust_kt, 1) if wind_gust_kt is not None else None,
+            temperature_c=round(temperature_c, 1) if temperature_c is not None else None,
+            dewpoint_c=round(dewpoint_c, 1) if dewpoint_c is not None else None,
+            qnh_hpa=round(qnh_hpa, 1) if qnh_hpa is not None else None,
             best_runway=best_runway,
             all_runways=all_runways,
         ))

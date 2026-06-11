@@ -640,6 +640,7 @@ def run_alt_from_pack(
         duration_hours=route.flight_duration_hours,
         cruise_altitude_ft=route.cruise_altitude_ft,
         flight_ceiling_ft=route.flight_ceiling_ft,
+        elevation=elevation,
     )
 
     if not rp_analyses:

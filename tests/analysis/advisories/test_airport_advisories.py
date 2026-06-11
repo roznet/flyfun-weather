@@ -276,3 +276,93 @@ class TestAirportWindEvaluator:
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert "09L" in result.per_model[0].detail
         assert "LFPG" in result.per_model[0].detail
+
+
+# ---------------------------------------------------------------------------
+# DensityAltitudeEvaluator
+# ---------------------------------------------------------------------------
+
+from weatherbrief.analysis.advisories.density_altitude import (
+    DensityAltitudeEvaluator,
+    compute_density_altitude_ft,
+)
+from weatherbrief.models import ElevationPoint, ElevationProfile
+
+
+def _flat_elevation(elev_ft: float, total_nm: float = 200) -> ElevationProfile:
+    points = [
+        ElevationPoint(distance_nm=d, elevation_ft=elev_ft, lat=46.0, lon=7.0)
+        for d in (0.0, total_nm / 2, total_nm)
+    ]
+    return ElevationProfile(
+        route_name="test", points=points,
+        max_elevation_ft=elev_ft, total_distance_nm=total_nm,
+    )
+
+
+def _da_ctx(
+    temperature_c: float | None,
+    qnh_hpa: float | None = 1013.25,
+    elev_ft: float = 1500,
+    elevation: ElevationProfile | None = "default",
+) -> RouteContext:
+    cond = AirportModelCondition(
+        model="gfs", flight_category=FlightCategory.VFR,
+        temperature_c=temperature_c, qnh_hpa=qnh_hpa,
+    )
+    conditions = AirportConditions(
+        departure=AirportConditionsSummary(icao="LSGS", name="Sion", conditions=[cond]),
+        arrival=AirportConditionsSummary(icao="LSZH", name="Zurich", conditions=[cond]),
+    )
+    if elevation == "default":
+        elevation = _flat_elevation(elev_ft)
+    return RouteContext(
+        analyses=[], cross_sections=[], elevation=elevation,
+        models=["gfs"], cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+        total_distance_nm=200, airport_conditions=conditions,
+    )
+
+
+def test_density_altitude_isa_sea_level_is_zero():
+    da = compute_density_altitude_ft(0.0, 15.0, 1013.25)
+    assert abs(da) < 1.0
+
+
+def test_density_altitude_hot_high_field():
+    # 2000 ft field, +30°C, no QNH → ISA at 2000 ft = 11.04°C
+    # DA = 2000 + 118.8 × 18.96 ≈ 4253 ft
+    da = compute_density_altitude_ft(2000.0, 30.0, None)
+    assert da == pytest.approx(4253, abs=10)
+
+
+def test_density_altitude_green_cool_day():
+    result = DensityAltitudeEvaluator.evaluate(_da_ctx(temperature_c=10.0), {})
+    assert result.aggregate_status == AdvisoryStatus.GREEN
+
+
+def test_density_altitude_amber_hot_day():
+    # 1500 ft field, +35°C → DA ≈ 1500 + 118.8 × (35 − 12.03) ≈ 4229 ft
+    # below absolute amber (5000) but +2729 above field... below delta 3000.
+    # Push to +38°C → DA ≈ 4586, delta ≈ 3086 → AMBER via delta criterion.
+    result = DensityAltitudeEvaluator.evaluate(_da_ctx(temperature_c=38.0), {})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+
+
+def test_density_altitude_red_mountain_heat():
+    # 5000 ft field, +32°C → DA ≈ 5000 + 118.8 × (32 − 5.09) ≈ 8197 ft → RED
+    result = DensityAltitudeEvaluator.evaluate(
+        _da_ctx(temperature_c=32.0, elev_ft=5000), {},
+    )
+    assert result.aggregate_status == AdvisoryStatus.RED
+
+
+def test_density_altitude_unavailable_without_temperature():
+    result = DensityAltitudeEvaluator.evaluate(_da_ctx(temperature_c=None), {})
+    assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_density_altitude_unavailable_without_elevation():
+    result = DensityAltitudeEvaluator.evaluate(
+        _da_ctx(temperature_c=30.0, elevation=None), {},
+    )
+    assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE

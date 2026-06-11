@@ -821,3 +821,85 @@ behaviour) — graceful, no manual wipe required.
 `tasks/fronts.py` (per-level mask in the detection loop), `api/hewson_map.py`
 (level-aware overlay). Tests: `tests/test_frontal_grid.py`,
 `tests/test_tasks_fronts.py`, `tests/test_hewson_precompute.py`.
+
+---
+
+## 8. Review-driven fixes: descent escape, E-Shear units, negative Ri, IENG moisture
+
+**Date:** 2026-06-11
+**Status:** Implemented.
+**Context:** A full meteorological review of the advisory + cross-section
+approach ([meteorology-approach-review-2026-06.md](./meteorology-approach-review-2026-06.md))
+surfaced four computation bugs. Each fix changes a calibrated output, so the
+reasoning is recorded here.
+
+### (a) Descend-below-icing: max() not min(), terrain floor, freezing-rain guard
+
+`_descend_below_icing` computed `min(freezing_level, lowest icing-cloud base)
+− 500` despite its own docstring saying max. **Either** condition alone exits
+airframe icing — warm air (below the FZL, even in cloud) or clear air (below
+the lowest icing-bearing cloud base, even sub-zero) — so the *higher* of the
+two is the least-penalising valid escape; min() over-descended by thousands of
+feet in winter profiles. Two guards added:
+
+- **Terrain feasibility.** The per-point terrain elevation (SRTM profile,
+  plumbed `pipeline → run_analysis → analyze_all_route_points`) marks an
+  escape leaving < 1000 ft AGL as `feasible=False`. The meteorological
+  altitude is kept (still true), only flyability is flagged — consistent with
+  how `climb_above_icing` treats the service ceiling. The route-level
+  `IcingEscapeEvaluator` already did its own terrain check; the per-waypoint
+  advisory now agrees with it.
+- **Freezing-rain guard.** A model whose precipitation profile sets
+  `freezing_rain_risk` (warm nose over a sub-zero surface layer) has NO
+  descent escape — "below the freezing level" is the sub-zero layer *under*
+  supercooled rain, the worst place available. That model's escape is None;
+  when all models flag FZRA the advisory renders with no altitude and
+  `feasible=False` instead of a dangerous number.
+
+### (b) E-Shear scale factors converted to the formula's calibration units
+
+The CloudPath formula `E = (5·HWS + VWS² + 42)/4` is calibrated with VWS in
+kt/1000 ft and HWS in kt/100 nm. The implementation scaled SI shear by 1e3/1e5
+(m/s-per-km, m/s-per-100 km), which **overstated VWS ×1.69 (×2.85 squared) and
+understated HWS ×3.6** relative to those units. Scale factors are now exact
+conversions (≈592.5, ≈360 000) and `tests/test_e_shear.py` pins kt-unit
+profiles to expected severities. Net effect: fewer VWS-driven E-Shear bands,
+more weight on horizontal (jet-flank) shear — closer to the index's published
+intent. Thresholds (40/80/160) unchanged.
+
+### (c) Negative Richardson number stored; elevated unstable layers are CAT
+
+`compute_stability_indicators` skipped Ri when N² < 0, so statically unstable
+layers — classically Ri < 0.25 ⇒ turbulent, and N² < 0 the strongest case —
+read as *missing data* and produced no CAT layer. Now stored (negative) and
+classified **MODERATE**, with two deliberate caps:
+
+- **MODERATE, not SEVERE**: buoyancy-driven overturning intensity belongs to
+  the convective tier; the Ri path only asserts "turbulent layer here".
+- **Surface-adjacent layer excluded** (index ≤ 1): a negative-Ri lowest layer
+  is the routine daytime superadiabatic surface layer (thermals) — flagging it
+  as CAT would paint summer-afternoon noise at the bottom of every
+  cross-section.
+
+EDR calibration is unaffected: `richardson_to_d` floors at `RI_FLOOR`, so a
+negative Ri maps to the maximum diagnostic — consistent.
+
+### (d) IENG convective term uses the level's real vapor density
+
+`assess_icing_zones_ieng` passed `vapor_density=0.0` to
+`_compute_convective_index`, making the cloud-base moisture differential the
+maximum possible at every level — a constant convective inflation whenever
+CAPE > 100 and `convective_cover_pct` was present. It now passes
+`_vapor_density(lv.dewpoint_c)` like Ogimet-DD/NWP do, restoring the
+moisture-*decrease* semantics of the Ogimet convective formula and making the
+cross-method comparison (§2's table) apples-to-apples.
+
+### Real-world validation needed
+
+- (a): a winter stratus case (FZL well above cloud base) — confirm the new
+  escape sits just below the FZL and reads sane against GRAMET; an Alpine case
+  where the escape goes infeasible.
+- (b): compare E-Shear band frequency before/after on a jet-crossing route;
+  the expectation is fewer low-level VWS bands, occasional new jet-flank bands.
+- (c): verify elevated negative-Ri CAT layers appear above frontal surfaces
+  and NOT at the surface on hot afternoons.
