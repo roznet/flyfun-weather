@@ -78,6 +78,20 @@ def test_public_entry_falls_back_to_metpy(monkeypatch):
     np.testing.assert_allclose(out, ref, atol=1e-9)
 
 
+def test_missing_nounit_constants_fall_back(monkeypatch):
+    """A future MetPy dropping the nounit namespace must degrade to the
+    stock solver at call time, not break at import time."""
+    import weatherbrief.analysis.sounding.wet_bulb as wb_mod
+
+    monkeypatch.setattr(wb_mod, "nounit", None)
+    p = np.array([1000.0, 850.0]) * units.hPa
+    t = np.array([10.0, 0.0]) * units.degC
+    td = np.array([5.0, -5.0]) * units.degC
+    out = wet_bulb_degc(p, t, td)
+    ref = mpcalc.wet_bulb_temperature(p, t, td).to("degC").magnitude
+    np.testing.assert_allclose(out, ref, atol=1e-9)
+
+
 def test_derived_levels_wet_bulb_unchanged(sample_pressure_levels):
     """End-to-end: DerivedLevel.wet_bulb_c equals the MetPy-derived value."""
     from weatherbrief.analysis.sounding.prepare import prepare_profile
