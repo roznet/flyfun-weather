@@ -618,6 +618,13 @@ def create_flight(
     target_date_str = departure_time.strftime("%Y-%m-%d")
     target_hour = departure_time.hour
 
+    # A referenced aircraft/profile must belong to the caller — don't store
+    # a cross-user FK from a guessed integer ID.
+    if req.aircraft_id is not None:
+        _validate_aircraft_ownership(db, req.aircraft_id, user_id)
+    if req.profile_id is not None:
+        _validate_profile_ownership(db, req.profile_id, user_id)
+
     # Load defaults from the selected profile (or the user's default profile)
     profile_settings = load_profile_settings(db, req.profile_id, user_id)
     cruise_altitude_ft = (
@@ -1705,6 +1712,7 @@ def update_flight(
     if req.profile_id is not None and req.profile_id != original_flight.profile_id:
         from weatherbrief.api.profiles import load_profile_settings
 
+        _validate_profile_ownership(db, req.profile_id, user_id)
         profile_settings = load_profile_settings(db, req.profile_id, user_id)
         row.profile_id = req.profile_id
         profile_changed = True
@@ -1717,8 +1725,10 @@ def update_flight(
             row.flight_ceiling_ft = profile_settings["flight_ceiling_ft"]
             altitude_changed = True
 
-    # Aircraft change
+    # Aircraft change (0 is the "clear" sentinel — no ownership to check)
     if req.aircraft_id is not None and req.aircraft_id != original_flight.aircraft_id:
+        if req.aircraft_id != 0:
+            _validate_aircraft_ownership(db, req.aircraft_id, user_id)
         row.aircraft_id = req.aircraft_id if req.aircraft_id != 0 else None
 
     if req.departure_time is not None:
@@ -1823,3 +1833,21 @@ def _load_owned_row(db: Session, flight_id: str, user_id: str):
     if row is None or row.user_id != user_id:
         raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
     return row
+
+
+def _validate_aircraft_ownership(db: Session, aircraft_id: int, user_id: str) -> None:
+    """Raise 400 if aircraft_id doesn't belong to the caller (mirrors pireps)."""
+    from weatherbrief.db.models import UserAircraftRow
+
+    aircraft = db.get(UserAircraftRow, aircraft_id)
+    if aircraft is None or aircraft.user_id != user_id:
+        raise HTTPException(status_code=400, detail="Aircraft not found or not owned by you")
+
+
+def _validate_profile_ownership(db: Session, profile_id: int, user_id: str) -> None:
+    """Raise 400 if profile_id doesn't belong to the caller."""
+    from weatherbrief.db.models import FlightProfileRow
+
+    profile = db.get(FlightProfileRow, profile_id)
+    if profile is None or profile.user_id != user_id:
+        raise HTTPException(status_code=400, detail="Profile not found or not owned by you")

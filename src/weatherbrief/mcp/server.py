@@ -16,8 +16,10 @@ behind Caddy, or stdio for local development.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import os
+import time
 from typing import Annotated, Any
 
 import httpx
@@ -26,7 +28,7 @@ from fastmcp.server.auth import AccessToken, RemoteAuthProvider, TokenVerifier
 from fastmcp.server.dependencies import get_http_request
 from pydantic import AnyHttpUrl, Field
 
-from weatherbrief.mcp.client import WeatherbriefClient
+from weatherbrief.mcp.client import API_BASE, WeatherbriefClient
 
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -41,16 +43,57 @@ MCP_BASE_URL = os.getenv("MCP_BASE_URL", "https://mcp.flyfun.aero")
 
 
 class _WeatherbriefTokenVerifier(TokenVerifier):
-    """Accept any Bearer token — actual validation happens at the API layer."""
+    """Validate Bearer tokens against the weatherbrief API at the edge.
+
+    Every tool call still forwards the token to the API (which remains the
+    authority for auth, suspension, and revocation), but verifying here too
+    rejects garbage tokens before they burn API/DB work and ensures any
+    future tool that does local work without an API round-trip is not
+    silently unauthenticated. Results are cached briefly, keyed by token
+    hash so plaintext tokens are never held in the cache.
+    """
+
+    _CACHE_TTL_SECONDS = 60.0
+    _cache: dict[str, tuple[float, bool]] = {}
 
     async def verify_token(self, token: str) -> AccessToken | None:
         if not token or not token.strip():
+            return None
+        key = hashlib.sha256(token.encode()).hexdigest()
+        now = time.monotonic()
+        cached = self._cache.get(key)
+        if cached is not None and cached[0] > now:
+            valid = cached[1]
+        else:
+            valid = await self._check_with_api(token)
+            if valid is None:
+                # API unreachable — reject but don't cache, so a transient
+                # outage doesn't lock the token out for the full TTL.
+                return None
+            for stale in [k for k, (exp, _) in self._cache.items() if exp <= now]:
+                self._cache.pop(stale, None)
+            self._cache[key] = (now + self._CACHE_TTL_SECONDS, valid)
+        if not valid:
             return None
         return AccessToken(
             token=token,
             client_id="weatherbrief",
             scopes=["mcp"],
         )
+
+    @staticmethod
+    async def _check_with_api(token: str) -> bool | None:
+        """True/False for a definitive answer, None if the API is unreachable."""
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{API_BASE}/auth/me",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+        except httpx.HTTPError:
+            logger.warning("Token verification call to the weatherbrief API failed")
+            return None
+        return resp.status_code == 200
 
 
 def _build_auth() -> RemoteAuthProvider | None:

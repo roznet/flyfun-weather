@@ -142,9 +142,15 @@ def _row_to_profile(row: FlightProfileRow) -> FlightProfile:
 
 
 def _pack_hmac_key() -> bytes:
-    """Derive HMAC key from JWT_SECRET for pack integrity checks."""
-    secret = os.environ.get("JWT_SECRET", "")
-    return hashlib.sha256(f"pack-integrity:{secret}".encode()).digest()
+    """Derive HMAC key from JWT_SECRET for pack integrity checks.
+
+    Uses flyfun-common's ``get_jwt_secret`` rather than reading the env var
+    directly: it raises in production when the secret is missing, instead of
+    silently deriving a forgeable key from an empty string.
+    """
+    from flyfun_common.auth import get_jwt_secret
+
+    return hashlib.sha256(f"pack-integrity:{get_jwt_secret()}".encode()).digest()
 
 
 def _compute_pack_hmac(row: BriefingPackRow) -> str:

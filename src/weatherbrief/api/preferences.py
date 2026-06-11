@@ -297,7 +297,14 @@ def load_autorouter_token(db: Session, user_id: str) -> str | None:
             return None
         try:
             from euro_aip.utils.autorouter_credentials import AutorouterCredentialManager
-            mgr = AutorouterCredentialManager("/tmp/weatherbrief-dev-creds")
+            from weatherbrief.storage.flights import _data_dir
+
+            # Under DATA_DIR with 0700 perms — not a predictable,
+            # world-readable /tmp path on shared dev machines.
+            creds_dir = _data_dir() / "autorouter-dev-creds"
+            creds_dir.mkdir(parents=True, exist_ok=True)
+            creds_dir.chmod(0o700)
+            mgr = AutorouterCredentialManager(str(creds_dir))
             mgr.set_credentials(creds["username"], creds["password"])
             return mgr.get_token()
         except Exception:
