@@ -11,7 +11,6 @@ import logging
 
 import metpy.calc as mpcalc
 import numpy as np
-from metpy.units import units
 
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
 from weatherbrief.analysis.sounding.thermodynamics import M_TO_FT, _pressure_to_altitude_ft
@@ -65,7 +64,6 @@ def compute_stability_indicators(
     bv_freq_squared_per_s2 for each level (representing the layer below).
     """
     pressures = profile.pressure.to("hPa").magnitude
-    temps = profile.temperature.to("degC").magnitude
 
     if profile.height is not None:
         heights_m = profile.height.to("meter").magnitude
@@ -74,16 +72,15 @@ def compute_stability_indicators(
             _pressure_to_altitude_ft(p) / M_TO_FT for p in pressures
         ])
 
-    # Compute potential temperature at each level
-    theta = np.empty(len(pressures))
-    for i in range(len(pressures)):
-        try:
-            pt = mpcalc.potential_temperature(
-                pressures[i] * units.hPa, temps[i] * units.degC,
-            )
-            theta[i] = float(pt.to("kelvin").magnitude)
-        except Exception:
-            theta[i] = np.nan
+    # Compute potential temperature at each level (single vectorized call —
+    # MetPy propagates NaN per element, matching the old per-level guards)
+    try:
+        theta = mpcalc.potential_temperature(
+            profile.pressure, profile.temperature,
+        ).to("kelvin").magnitude
+    except Exception:
+        logger.debug("Potential temperature failed", exc_info=True)
+        theta = np.full(len(pressures), np.nan)
 
     # Compute wind components for shear calculation
     u_vals = np.full(len(pressures), np.nan)
