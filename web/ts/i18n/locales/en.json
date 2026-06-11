@@ -359,7 +359,7 @@
   "viz.right": "Right:",
   "viz.color": "Color:",
   "viz.width": "Width:",
-  "viz.fronts": "Fronts",
+  "viz.fronts": "Air-mass boundaries",
   "fronts.kind.cold": "Cold front",
   "fronts.kind.warm": "Warm front",
   "fronts.kind.quasi": "Quasi-stationary front",
@@ -556,7 +556,7 @@
   "viz.group.convection": "Convection",
   "viz.group.obscuration": "Obscuration",
   "viz.group.conditions": "Current conditions",
-  "viz.group.fronts": "Fronts (experimental)",
+  "viz.group.fronts": "Front",
   "viz.group.sun": "Sun",
   "viz.group.reference": "Reference",
 

@@ -55,6 +55,7 @@ export interface RouteFrontsManifest {
   route_name: string;
   generated_at: string;
   primary_level_hPa: number;       // level nearest cruise altitude
+  per_model_primary_hPa?: Record<string, number>;  // per-model nearest-cruise level (#203)
   levels: number[];
   gate_config: Record<string, unknown>;
   models: string[];

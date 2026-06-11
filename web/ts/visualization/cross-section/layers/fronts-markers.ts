@@ -18,7 +18,7 @@ const KM_PER_NM = 1.852;
 
 export const frontsMarkersLayer: CrossSectionLayer = {
   id: 'fronts-markers',
-  name: 'Fronts (experimental)',
+  name: 'Air-mass boundary (experimental)',
   group: 'fronts',
   defaultEnabled: false,
 

@@ -194,12 +194,11 @@ class FrontsEvaluator:
             name="Fronts (experimental)",
             short_description="Air-mass boundaries the route crosses",
             description=(
-                "Experimental. Grades free-atmosphere fronts derived from Hewson "
-                "θe diagnostics along the route: a sharp crossing flags RED, a "
-                "classical/significant crossing or an off-track front closing on "
-                "the route flags AMBER. Available only when 'Experimental Auto "
-                "Front Detection' is enabled. Advisory-only — not official SIGWX; "
-                "does not see low IMC / fog (free-atmosphere systems only)."
+                "This advisory looks for air-mass boundaries — which can be the "
+                "signal of a front — and grades them along the route or off-track. "
+                "They are graded by their intensity, the sharpness of the air-mass "
+                "change, and whether they are linked to bad weather: dry air is "
+                "benign, while wet or convective weather raises the grade."
             ),
             category="fronts",
             default_enabled=False,

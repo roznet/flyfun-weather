@@ -5,7 +5,31 @@ import type { VizRouteData } from '../types';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
 import { isDarkTheme } from '../interaction-utils';
-import { frontColor, frontTooltip, frontOfftrackTooltip, FRONT_INTENSITY_WEIGHT } from '../front-style';
+import { frontColor, frontKindLabel, frontTooltip, frontOfftrackTooltip, FRONT_INTENSITY_WEIGHT } from '../front-style';
+import type { HewsonFront } from '../../adapters/hewson-map-adapter';
+import type { FrontKind } from '../../types/fronts';
+
+/** A front-axis polyline tagged with the pressure level it was extracted at, so
+ *  the map can draw a model's boundaries across all stored levels (a low warm
+ *  front at 850/925 plus a mid cold front at 700) and style them by altitude. */
+export interface MapFrontLine extends HewsonFront {
+  level_hPa: number;
+}
+
+// Drop axes whose every vertex is farther than this from the route — keeps the
+// overlay to boundaries near the track, not the whole European domain.
+const FRONT_CORRIDOR_KM = 120;
+// Fainter with altitude so a 925 hPa warm front reads as lower than a 700 line.
+const FRONT_LEVEL_OPACITY: Record<number, number> = { 700: 0.9, 850: 0.72, 925: 0.6 };
+
+function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const toRad = (d: number): number => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLon = toRad(bLon - aLon);
+  const s = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(s)));
+}
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -26,6 +50,7 @@ export class RouteMapRenderer {
   private widthMetric: MapMetric | null = null;
   private altitudeFt = 0;
   private showFronts = false;
+  private frontLines: MapFrontLine[] | null = null;
   private selectedPointIndex = -1;
   private initialized = false;
   private currentTileTheme: 'light' | 'dark' = 'light';
@@ -54,6 +79,19 @@ export class RouteMapRenderer {
   /** Toggle the experimental Hewson front overlay (#196). */
   setShowFronts(show: boolean): void {
     this.showFronts = show;
+  }
+
+  /** Gated 2-D front axes for the selected model across all stored levels
+   *  (`GET /api/hewson-map/fronts`, same FrontGateConfig as the advisory).
+   *  Fetched async by briefing-main and handed in; `null` clears them. Call
+   *  `refreshFronts()` after to redraw. */
+  setFrontLines(lines: MapFrontLine[] | null): void {
+    this.frontLines = lines;
+  }
+
+  /** Redraw just the fronts layer (after `setFrontLines`), without a full render. */
+  refreshFronts(): void {
+    this.renderFronts();
   }
 
   setSelectedPointIndex(index: number): void {
@@ -221,10 +259,38 @@ export class RouteMapRenderer {
    *  (colored by kind, sized by intensity) plus an off-track marker for the
    *  nearest closing front. Advisory-only, free-atmosphere boundaries. */
   private renderFronts(): void {
-    if (!this.data || !this.frontsGroup || !this.map) return;
+    if (!this.frontsGroup || !this.map) return;
     this.frontsGroup.clearLayers();
-    const fronts = this.data.fronts;
-    if (!this.showFronts || !fronts) return;
+    if (!this.showFronts) return;
+
+    // Gated front axes (the 2-D TFP=0 extractor, same FrontGateConfig as the
+    // advisory) for the selected model, across all stored levels — so a low warm
+    // front (850/925) gets a line just like the mid cold front (700). Clipped to
+    // a corridor around the route to drop the rest of the European domain.
+    // Drawn first so the route-crossing markers sit on top; opacity fades with
+    // altitude (lower hPa = lighter). Switching the model re-fetches.
+    if (this.frontLines) {
+      for (const fl of this.frontLines) {
+        if (fl.coordinates.length < 2 || !this.lineNearRoute(fl.coordinates)) continue;
+        // Endpoint returns GeoJSON [lon, lat]; Leaflet wants [lat, lon].
+        const latlngs = fl.coordinates.map(([lon, lat]) => [lat, lon] as [number, number]);
+        const color = frontColor(fl.kind as FrontKind);
+        const line = L.polyline(latlngs, {
+          color,
+          weight: 3,
+          opacity: FRONT_LEVEL_OPACITY[fl.level_hPa] ?? 0.8,
+          dashArray: fl.kind === 'quasi-stationary' ? '6,5' : undefined,
+        });
+        line.bindTooltip(
+          `${frontKindLabel(fl.kind as FrontKind)} · ${fl.level_hPa} hPa · ${Math.round(fl.length_km)} km`,
+          { sticky: true, className: 'map-waypoint-tooltip' },
+        );
+        this.frontsGroup.addLayer(line);
+      }
+    }
+
+    const fronts = this.data?.fronts;
+    if (!fronts) return;
 
     for (const c of fronts.crossings) {
       const color = frontColor(c.kind);
@@ -260,6 +326,20 @@ export class RouteMapRenderer {
       );
       this.frontsGroup.addLayer(marker);
     }
+  }
+
+  /** True if any vertex of the axis is within FRONT_CORRIDOR_KM of any route
+   *  point — the corridor clip that keeps the overlay near the track. Without a
+   *  route (no points), don't filter. */
+  private lineNearRoute(coords: [number, number][]): boolean {
+    const pts = this.data?.points;
+    if (!pts || pts.length === 0) return true;
+    for (const [lon, lat] of coords) {
+      for (const p of pts) {
+        if (haversineKm(lat, lon, p.lat, p.lon) <= FRONT_CORRIDOR_KM) return true;
+      }
+    }
+    return false;
   }
 
   private renderWaypoints(): void {

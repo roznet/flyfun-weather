@@ -4,10 +4,21 @@ import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, Mode
 import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
 import { renderAdvisoryPopup } from '../helpers/advisory-popup';
+import { renderFrontsInfo } from '../helpers/fronts-info';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
 import { formatVisibility } from '../units';
 import { ADVISORY_TO_PRESET } from '../visualization/cross-section/advisory-presets';
+
+/** Live advisory catalog (names / descriptions / parameter defs) fetched from
+ *  `/advisories/catalog`, preferred over the pack-baked copy so the (i) popups
+ *  reflect current code rather than whatever was frozen into the pack at
+ *  generation time. Set once by briefing-main; null until it arrives, then we
+ *  fall back to the pack catalog. Grades/results stay pack-sourced. */
+let liveCatalog: AdvisoryCatalogEntry[] | null = null;
+export function setLiveAdvisoryCatalog(entries: AdvisoryCatalogEntry[]): void {
+  liveCatalog = entries;
+}
 
 /** Visibility for an airport condition, region-aware.
  *  Prefers raw meters (visibility_m); falls back to legacy SM for old packs. */
@@ -423,10 +434,17 @@ export function renderAdvisories(
 
   if (section) section.style.display = '';
 
-  // Build catalog lookup
+  // Build catalog lookup: pack copy first, then override by id with the live
+  // catalog so descriptions / parameter defs reflect current code. Per-advisory
+  // results (grades, params_used) come from `manifest.advisories`, untouched.
   const catalog = new Map<string, AdvisoryCatalogEntry>();
   for (const entry of manifest.catalog) {
     catalog.set(entry.id, entry);
+  }
+  if (liveCatalog) {
+    for (const entry of liveCatalog) {
+      catalog.set(entry.id, entry);
+    }
   }
 
   // In compact mode, filter out secondary advisories (e.g. model confidence)
@@ -621,7 +639,23 @@ export function renderAdvisories(
     const entry = catalog.get(advId);
     if (!entry) return;
     const adv = manifest.advisories.find(a => a.advisory_id === advId);
-    showPopupContent(renderAdvisoryPopup(entry, adv?.parameters_used ?? {}, adv));
+    let html = renderAdvisoryPopup(entry, adv?.parameters_used ?? {}, adv);
+    // The Fronts advisory grades air-mass boundaries; cross-link to the full
+    // detection write-up (the rich layer (i) content) rather than duplicating it.
+    if (advId === 'fronts') {
+      // English-only to match the linked content (fronts-info is English-only).
+      html += `<p class="popup-section popup-learn-more">`
+        + `You can read more on how they are computed and their impact `
+        + `<a href="#" data-show-fronts-info>here →</a></p>`;
+    }
+    showPopupContent(html);
+    if (advId === 'fronts') {
+      const link = document.querySelector('[data-show-fronts-info]') as HTMLElement | null;
+      link?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        showPopupContent(renderFrontsInfo());
+      });
+    }
   });
 
   // Wire per-model badge popups (event delegation). Tap/click — or Enter/Space

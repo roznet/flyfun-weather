@@ -6,8 +6,9 @@ import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
 import { renderPirepList } from './managers/pirep-ui';
-import { renderAdvisories, renderAltitudeTablePopup, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
+import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
+import { fetchAdvisoryCatalog } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
 import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
@@ -29,7 +30,9 @@ import { getComparableLayer } from './visualization/cross-section/compare-layers
 import { RouteGraphRenderer } from './visualization/route-graph/renderer';
 import { getMetricById, METRIC_NONE } from './visualization/route-graph/metrics';
 import { attachRouteGraphInteraction, type RouteGraphInteractionHandle } from './visualization/route-graph/interaction';
-import { RouteMapRenderer } from './visualization/route-map/renderer';
+import { RouteMapRenderer, type MapFrontLine } from './visualization/route-map/renderer';
+import { fetchHewsonFronts } from './adapters/hewson-map-adapter';
+import type { RouteFrontsManifest } from './types/fronts';
 import { getMapMetricById, MAP_METRIC_NONE } from './visualization/route-map/metrics';
 import { attachMapInteraction, type MapInteractionHandle } from './visualization/route-map/interaction';
 import { renderMapLegend } from './visualization/route-map/legend';
@@ -46,6 +49,77 @@ import { getActiveTheme } from './visualization/cross-section/theme';
 import { startBriefingTour, maybeAutoStartBriefingTour } from './tour/briefing-tour';
 import { maybeOfferTour } from './tour/tour-offer';
 import { initBriefingLayout } from './managers/sidebar-layout';
+
+
+// --- Route-map gated front lines (experimental #196) -----------------------
+// The 2-D TFP=0 front axes for the *selected* model, drawn on the route map when
+// the fronts layer is on. Reuses the same precomputed Hewson snapshot + the same
+// FrontGateConfig the advisory used (recorded in route_fronts.json), so the line
+// and the advisory grade share a gate. Drawn across ALL stored levels (so a low
+// warm front at 850/925 gets a line, not just the mid cold front at the primary
+// level) and clipped to the route corridor by the renderer. Switching the model
+// re-fetches.
+let lastFrontLinesKey = '';
+
+interface FrontLevelSpec { level: number; hour: number; }
+
+/** Resolve the per-level fetch plan for one model from the manifest, or null if
+ *  it can't pin a snapshot. One entry per stored level (each carries its own
+ *  forecast hour). */
+function frontLineSpec(
+  routeFronts: RouteFrontsManifest | null,
+  model: string,
+): { init: string; gate: string; levels: FrontLevelSpec[] } | null {
+  if (!routeFronts) return null;
+  const init = routeFronts.snapshot_inits?.[model];
+  if (!init) return null;
+  const analyses = routeFronts.per_model?.[model] ?? [];
+  if (analyses.length === 0) return null;
+  const gate = typeof routeFronts.gate_config?.name === 'string'
+    ? routeFronts.gate_config.name : 'default';
+  const levels = analyses.map(a => ({ level: a.level_hPa, hour: Math.round(a.hour) }));
+  return { init, gate, levels };
+}
+
+/** Fetch + draw the selected model's gated front lines across all stored levels
+ *  (cached by snapshot slice so unrelated re-renders don't refetch). Clears
+ *  stale lines on model switch. */
+function updateMapFrontLines(
+  routeFronts: RouteFrontsManifest | null,
+  model: string,
+  visible: boolean,
+  renderer: RouteMapRenderer,
+): void {
+  // Layer off: renderer.showFronts already suppresses drawing; keep any cached
+  // lines so re-enabling is instant (no refetch).
+  if (!visible) return;
+  const spec = frontLineSpec(routeFronts, model);
+  if (!spec) {
+    if (lastFrontLinesKey !== '') {
+      lastFrontLinesKey = '';
+      renderer.setFrontLines(null);
+      renderer.refreshFronts();
+    }
+    return;
+  }
+  const key = `${model}|${spec.init}|${spec.gate}|`
+    + spec.levels.map(l => `${l.level}@${l.hour}`).join(',');
+  if (key === lastFrontLinesKey) return;  // already fetched/drawn for this slice
+  lastFrontLinesKey = key;
+  renderer.setFrontLines(null);
+  renderer.refreshFronts();  // drop the previous model's lines immediately
+  // One request per level; tag each axis with its level for altitude styling.
+  Promise.all(spec.levels.map(l =>
+    fetchHewsonFronts({ model, init: spec.init, level: l.level, hour: l.hour, gate: spec.gate, minLengthKm: 150 })
+      .then(resp => resp.fronts.map((f): MapFrontLine => ({ ...f, level_hPa: l.level })))
+      .catch(() => [] as MapFrontLine[]),
+  )).then((perLevel) => {
+    if (lastFrontLinesKey !== key) return;  // superseded by a newer selection
+    const all = perLevel.flat();
+    renderer.setFrontLines(all.length ? all : null);
+    renderer.refreshFronts();
+  });
+}
 
 
 async function loadFlightPireps(flightId: string): Promise<void> {
@@ -250,6 +324,17 @@ async function init(): Promise<void> {
       renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
     }
   }).catch(err => console.error('Failed to fetch profiles:', err));
+
+  // Load the live advisory catalog so the (i) popups show current copy
+  // (descriptions / parameter defs) instead of whatever was baked into the pack
+  // at generation time. Fire-and-forget: re-render advisories when it arrives.
+  fetchAdvisoryCatalog().then(entries => {
+    setLiveAdvisoryCatalog(entries);
+    const s = store.getState();
+    if (s.flight) {
+      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
+    }
+  }).catch(err => console.error('Failed to fetch advisory catalog:', err));
 
   /** Build profile selector config for the advisory toolbar. */
   function getProfileSelectorConfig(state: BriefingState): ProfileSelectorConfig | undefined {
@@ -853,6 +938,13 @@ async function init(): Promise<void> {
       mapRenderer.setShowFronts(state.vizSettings.mapFrontsVisible ?? false);
       mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
       mapRenderer.render();
+      // Gated front axes for the selected model (async; redraws when ready).
+      updateMapFrontLines(
+        state.routeFronts,
+        state.selectedModel,
+        state.vizSettings.mapFrontsVisible ?? false,
+        mapRenderer,
+      );
 
       // Attach or update map interaction
       if (mapInteraction) {
