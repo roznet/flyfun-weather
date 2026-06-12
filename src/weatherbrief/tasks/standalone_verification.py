@@ -299,6 +299,7 @@ def _fetch_forecasts_for_model(
 
     if sample_hours is None:
         sample_hours = SAMPLE_HOURS_UTC
+    hour_filter = set(sample_hours)
 
     model_source = ModelSource(model)
     forecast_days = MODEL_FORECAST_DAYS.get(model, 7)
@@ -348,7 +349,7 @@ def _fetch_forecasts_for_model(
                 forecasts = client.fetch_multi_point(
                     points, model_source,
                     start_date=start_date, end_date=end_date,
-                    hour_filter=set(sample_hours),
+                    hour_filter=hour_filter,
                 )
                 break
             except Exception:

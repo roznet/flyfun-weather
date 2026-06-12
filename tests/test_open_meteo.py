@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
 import responses
 
 from weatherbrief.fetch.open_meteo import (
@@ -301,13 +302,10 @@ def test_fetch_multi_point_hour_filter_all_null_still_raises():
     )
 
     client = OpenMeteoClient()
-    try:
+    with pytest.raises(EmptyForecastError):
         client.fetch_multi_point(
             _make_route_points(), ModelSource.GFS, hour_filter={6, 9},
         )
-        assert False, "expected EmptyForecastError"
-    except EmptyForecastError:
-        pass
 
 
 @responses.activate
