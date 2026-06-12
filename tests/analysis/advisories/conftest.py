@@ -636,6 +636,87 @@ def vfr_imc_enroute_context() -> RouteContext:
 
 
 @pytest.fixture
+def vfr_bkn_corridor_context() -> RouteContext:
+    """VFR at airports + clear cruise, but a BKN deck below cruise in the
+    climb-out corridor (within 5nm of origin) — should be AMBER.
+
+    Mirrors the real EGNE→EGTF case: cruise 8000ft is clear, ceilings report
+    VFR, but a BKN 3500-5000ft deck sits in the surface-to-cruise climb path.
+    """
+    deck = EnhancedCloudLayer(base_ft=3500, top_ft=5000, coverage=CloudCoverage.BKN)
+    # Point 0 at 0nm is in the origin corridor; later points (20nm+) are clear.
+    analyses = [
+        _make_rpa(0, 0.0, sounding={"gfs": _make_sounding(cloud_layers=[deck])}),
+        *[
+            _make_rpa(i, i * 20.0, sounding={"gfs": _make_sounding()})
+            for i in range(1, 10)
+        ],
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=180,
+        airport_conditions=_make_airport_conditions(models=["gfs"]),
+    )
+
+
+@pytest.fixture
+def vfr_ovc_corridor_context() -> RouteContext:
+    """VFR at airports + clear cruise, but an OVC deck below cruise in the
+    climb-out corridor — should be RED (no holes to climb through)."""
+    deck = EnhancedCloudLayer(base_ft=3500, top_ft=5000, coverage=CloudCoverage.OVC)
+    analyses = [
+        _make_rpa(0, 0.0, sounding={"gfs": _make_sounding(cloud_layers=[deck])}),
+        *[
+            _make_rpa(i, i * 20.0, sounding={"gfs": _make_sounding()})
+            for i in range(1, 10)
+        ],
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=180,
+        airport_conditions=_make_airport_conditions(models=["gfs"]),
+    )
+
+
+@pytest.fixture
+def vfr_midroute_deck_context() -> RouteContext:
+    """OVC deck below cruise in the middle of the route, clear at both ends.
+
+    Cruise (8000ft) is above the deck and both corridors are clear, so VFR is
+    feasible — the corridor check must NOT flag a mid-route sub-cruise deck.
+    """
+    deck = EnhancedCloudLayer(base_ft=3500, top_ft=5000, coverage=CloudCoverage.OVC)
+    # Deck only at mid-route points (80-100nm); ends (0nm, 180nm) are clear.
+    analyses = [
+        _make_rpa(
+            i, i * 20.0,
+            sounding={"gfs": _make_sounding(cloud_layers=[deck] if 4 <= i <= 5 else [])},
+        )
+        for i in range(10)
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=180,
+        airport_conditions=_make_airport_conditions(models=["gfs"]),
+    )
+
+
+@pytest.fixture
 def ifr_normal_context() -> RouteContext:
     """IFR-normal: IFR at airports, no icing or convective issues."""
     n_points = 10

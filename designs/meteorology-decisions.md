@@ -947,3 +947,76 @@ in FZRA has no descent escape.
 - Winter inversion days without precip — confirm the 5% primed threshold
   doesn't over-amber routine warm-nose-shaped dry profiles; raise the default
   if it does.
+
+---
+
+## 10. VFR feasibility: climb-out / descent corridor check (vertical column vs cruise line)
+
+**Date:** 2026-06-12
+**Status:** Implemented (`analysis/advisories/vfr_feasibility.py`,
+`_check_corridor_vfr`).
+**Context:** The VFR feasibility advisory combined two checks — departure/arrival
+flight category (METAR/TAF ceiling+visibility buckets) and en-route cloud
+clearance **at cruise altitude** along the route. A real flight
+(EGNE→GAM→OLNEY→EGTF, cruise 8000ft) read **GREEN "VFR conditions throughout"**
+on all three models while both GFS and ECMWF showed a BKN/OVC deck around
+3800–5350ft — below cruise. Cruise was genuinely clear and both airport ceilings
+were just above the 3000ft VFR floor, so neither existing check fired.
+
+### The gap
+
+VFR is a *whole-flight, surface-to-cruise* constraint, not a cruise-line one. The
+old model only ever inspected:
+
+1. the airport ceiling **category** (a ground-level ceiling/vis bucket), and
+2. cloud **at the cruise altitude** horizontally along the route.
+
+Nothing checked whether the aircraft can physically **climb from the surface up
+to cruise, and descend back down, in VMC**. A solid deck sitting between the
+field and a clear cruise is invisible to both checks: the ceiling can still grade
+VFR (lowest BKN base > 3000ft) while that same BKN/OVC deck blocks the climb-out.
+
+### Decision
+
+Add a third sub-check, folded into the existing worst-of aggregation. Within a
+**terminal corridor** (`terminal_corridor_nm`, default **5nm**) of departure and
+arrival, scan the full vertical column for a BKN/OVC layer whose **base is below
+cruise and top is above field elevation** — a deck the flight must transit on
+climb-out or descent. Grading:
+
+- **OVC deck in a corridor → RED.** Overcast is >7/8 by definition — no holes to
+  climb or descend through legally VMC. Categorical, like cruise-in-cloud.
+- **BKN deck in a corridor → AMBER.** Broken usually has gaps; transit is often
+  possible at pilot discretion, so it degrades rather than blocks.
+- **SCT and below → no flag.** Scattered is VMC-transitable.
+
+The field-elevation floor (nearest terrain sample from the elevation profile)
+prevents a layer buried below the airport from false-triggering. The corridor is
+deliberately **terminal-only**: a sub-cruise deck mid-route is irrelevant to VFR
+because the aircraft cruises above it — only the climb and descent ends matter.
+
+### Rejected / deferred
+
+- **Replacing the cruise-line check** — no. The two measure different phases
+  (cruise vs terminal transit); both are kept and aggregated worst-of.
+- **OVC → AMBER (softer)** — rejected. An overcast deck is a hard VMC stop for
+  climb/descent; calling it amber would under-warn the exact case that motivated
+  this. Chosen explicitly: OVC=red, BKN=amber.
+- **Treating SCT as a partial block** — deferred. SCT is legally transitable;
+  revisit only if real cases show SCT decks routinely trap VFR climbs.
+
+### Note
+
+This is a deliberate sharpening: a flight that read GREEN can now read RED. On the
+motivating flight, GFS and ECMWF both go RED (OVC in the EGNE climb-out; GFS also
+BKN in the EGTF descent) while ICON — which shows no significant low cloud —
+stays GREEN, preserving the model-disagreement signal.
+
+### Real-world validation needed
+
+- A day with a known low overcast deck under a clear cruise — confirm the route
+  grades RED for climb-out and the digest/advisory names the blocking airport.
+- A scattered-only terminal deck — confirm it stays GREEN (no over-flagging of
+  routine VMC-transitable cumulus).
+- Tune `terminal_corridor_nm` if 5nm proves too tight/loose against the real
+  climb/descent footprint of GA profiles.

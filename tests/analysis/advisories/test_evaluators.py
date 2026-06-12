@@ -385,13 +385,37 @@ class TestVFRFeasibility:
         entry = VFRFeasibilityEvaluator.catalog_entry()
         assert entry.id == "vfr_feasibility"
         assert entry.category == "flight_rules"
-        assert len(entry.parameters) == 3
+        assert len(entry.parameters) == 4
 
     def test_tunable_clearance(self, vfr_marginal_clearance_context: RouteContext):
         """With 500ft clearance threshold, 800ft gap is comfortable → GREEN."""
         params = {**_VFR_DEFAULTS, "cloud_clearance_ft": 500}
         result = VFRFeasibilityEvaluator.evaluate(
             vfr_marginal_clearance_context, params,
+        )
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_amber_bkn_climb_corridor(self, vfr_bkn_corridor_context: RouteContext):
+        """Clear cruise + VFR airports but a BKN deck in the climb-out → AMBER."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_bkn_corridor_context, _VFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert "BKN" in result.aggregate_detail
+
+    def test_red_ovc_climb_corridor(self, vfr_ovc_corridor_context: RouteContext):
+        """Clear cruise + VFR airports but an OVC deck in the climb-out → RED."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_ovc_corridor_context, _VFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+        assert "OVC" in result.aggregate_detail
+
+    def test_midroute_subcruise_deck_stays_green(self, vfr_midroute_deck_context: RouteContext):
+        """An OVC deck below cruise in the MIDDLE of the route (not near either
+        airport) is irrelevant to VFR — you cruise above it → GREEN."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_midroute_deck_context, _VFR_DEFAULTS,
         )
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
