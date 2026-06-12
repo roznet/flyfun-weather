@@ -84,11 +84,14 @@ class DensityAltitudeEvaluator:
             description=(
                 "Computes density altitude at the departure and arrival airports "
                 "from forecast temperature and QNH at the expected times, using the "
-                "field elevation from the route terrain profile. Triggers on either "
-                "absolute density altitude (performance charts are DA-based) or on "
-                "DA exceeding the field elevation by a margin (hot-day performance "
-                "loss, relevant even at low airports). High DA reduces engine power, "
-                "propeller efficiency and lift — longer takeoff roll, weaker climb."
+                "field elevation from the route terrain profile. High DA reduces "
+                "engine power, propeller efficiency and lift — longer takeoff roll, "
+                "weaker climb. Amber/red when DA exceeds the absolute thresholds "
+                "(performance charts are DA-based) OR exceeds the field elevation "
+                "by the delta thresholds (hot-day performance loss, relevant even "
+                "at low-lying airports). Status is the worst of departure and "
+                "arrival; unavailable (not green) without forecast temperature or "
+                "terrain data."
             ),
             category="airport",
             parameters=[

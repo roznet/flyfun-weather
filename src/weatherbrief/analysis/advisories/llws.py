@@ -74,12 +74,16 @@ class LLWSEvaluator:
             short_description="Wind shear in the lowest 1000m at departure and arrival",
             description=(
                 "Grades approach/departure wind shear from the vertical wind "
-                "structure at the airports: 0–1km bulk shear from the sounding "
-                "(catches the nocturnal low-level jet — calm surface wind under "
-                "an inversion with strong flow just above, invisible to the "
-                "surface-wind advisory) and the gust factor (gust minus "
-                "sustained). Expect airspeed fluctuations crossing the shear "
-                "layer on final; consider a speed additive or different timing."
+                "structure at the airports — the hazard the surface-wind advisory "
+                "cannot see. Uses 0-1km bulk shear from the sounding (catches the "
+                "nocturnal low-level jet: calm surface wind under an inversion "
+                "with strong flow just above) and the gust factor (gust minus "
+                "sustained wind). Amber when either exceeds its threshold, red on "
+                "strong shear; status is the worst of departure and arrival. A "
+                "surface-based inversion is reported alongside significant shear "
+                "(the decoupled-flow signature). Expect airspeed fluctuations "
+                "crossing the shear layer on final — consider a speed additive, "
+                "or different timing (morning mixing erodes a nocturnal jet)."
             ),
             category="airport",
             parameters=[

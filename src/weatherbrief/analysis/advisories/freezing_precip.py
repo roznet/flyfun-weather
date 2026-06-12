@@ -48,15 +48,19 @@ class FreezingPrecipEvaluator:
             name="Freezing Precipitation",
             short_description="Freezing rain / ice pellets along the route",
             description=(
-                "Detects freezing-rain and ice-pellet conditions: a warm nose "
-                "aloft over a sub-zero surface layer turns falling rain into "
-                "supercooled drops that freeze on the airframe as clear ice — "
-                "below cloud, where in-cloud icing methods show nothing, and "
-                "where descending does NOT escape the icing. Any point with "
-                "active freezing precipitation is RED (it exceeds all icing "
-                "certification envelopes, FIKI included). A freezing-rain "
-                "profile without active precipitation yet (primed) is AMBER "
-                "when it covers enough of the route."
+                "Detects freezing rain and ice pellets: a warm layer aloft over a "
+                "sub-zero surface layer turns falling rain into supercooled drops "
+                "that freeze on the airframe as clear ice. This happens BELOW "
+                "cloud — where the in-cloud icing methods and cloud bands show "
+                "nothing — and it is the one icing scenario where descending does "
+                "NOT escape. Red when any model shows active freezing rain or ice "
+                "pellets at any point (deliberately no coverage threshold: one "
+                "transit exceeds all icing certification, FIKI included; ice "
+                "pellets prove freezing rain in the layer above). Amber when a "
+                "freezing-rain-shaped profile exists without active precipitation "
+                "yet (primed — onset or a timing shift turns it active) over "
+                "enough of the route. Unavailable (not green) on packs without "
+                "precipitation data."
             ),
             category="icing",
             parameters=[
