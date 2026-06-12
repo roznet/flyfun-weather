@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { iasToTasISA } from '../../ts/utils/atmo';
+import { iasToTasISA, resolveCruiseSpeedIAS } from '../../ts/utils/atmo';
 
 describe('iasToTasISA', () => {
   it('returns IAS unchanged at sea level (ISA datum)', () => {
@@ -38,5 +38,33 @@ describe('iasToTasISA', () => {
     expect(iasToTasISA(120, 45000)).toBeCloseTo(tasTropo, 1);
     // Still strictly greater than a mid-altitude value (monotonic up to the clamp).
     expect(tasTropo).toBeGreaterThan(iasToTasISA(120, 12000));
+  });
+});
+
+describe('resolveCruiseSpeedIAS', () => {
+  it('prefers the aircraft speed when both are set', () => {
+    expect(resolveCruiseSpeedIAS(140, 110)).toBe(140);
+  });
+
+  it('falls back to the profile speed when no aircraft speed', () => {
+    expect(resolveCruiseSpeedIAS(null, 110)).toBe(110);
+    expect(resolveCruiseSpeedIAS(undefined, 110)).toBe(110);
+  });
+
+  it('falls back to the profile speed when the aircraft speed is 0 or negative', () => {
+    // A 0/negative aircraft speed is not a usable cruise speed — skip it.
+    expect(resolveCruiseSpeedIAS(0, 110)).toBe(110);
+    expect(resolveCruiseSpeedIAS(-5, 110)).toBe(110);
+  });
+
+  it('uses the aircraft speed when the profile has none', () => {
+    expect(resolveCruiseSpeedIAS(140, null)).toBe(140);
+    expect(resolveCruiseSpeedIAS(140, undefined)).toBe(140);
+  });
+
+  it('returns undefined when neither yields a usable value', () => {
+    expect(resolveCruiseSpeedIAS(null, null)).toBeUndefined();
+    expect(resolveCruiseSpeedIAS(undefined, undefined)).toBeUndefined();
+    expect(resolveCruiseSpeedIAS(0, 0)).toBeUndefined();
   });
 });

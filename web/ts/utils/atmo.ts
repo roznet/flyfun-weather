@@ -30,3 +30,19 @@ export function iasToTasISA(iasKt: number, altFt: number): number {
   const densityRatio = Math.pow(1 - 0.0065 * altM / 288.15, 4.2561);
   return iasKt / Math.sqrt(densityRatio);
 }
+
+/** Resolve the cruise IAS (kt) to use for estimates, applying the app's
+ *  precedence: the selected aircraft's cruise speed first, then the
+ *  flight-default profile's speed. Both inputs are cruise IAS. Nullish or
+ *  non-positive candidates (unset / 0 / negative) are skipped, so a speedless
+ *  aircraft correctly falls back to the profile. Returns undefined if neither
+ *  yields a usable value. */
+export function resolveCruiseSpeedIAS(
+  aircraftSpeedKt: number | null | undefined,
+  profileSpeedKt: number | null | undefined,
+): number | undefined {
+  for (const candidate of [aircraftSpeedKt, profileSpeedKt]) {
+    if (candidate != null && candidate > 0) return candidate;
+  }
+  return undefined;
+}

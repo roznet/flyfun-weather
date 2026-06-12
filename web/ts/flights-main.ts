@@ -22,7 +22,7 @@ import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup } from './components/info-popup';
-import { iasToTasISA } from './utils/atmo';
+import { iasToTasISA, resolveCruiseSpeedIAS } from './utils/atmo';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
@@ -110,6 +110,23 @@ function getSelectedProfile(): ProfileResponse | undefined {
   return loadedProfiles.find(p => p.id === id);
 }
 
+function getSelectedAircraft(): AircraftResponse | undefined {
+  const aircraftSelect = document.getElementById('input-aircraft') as HTMLSelectElement;
+  if (!aircraftSelect?.value) return undefined;
+  const id = parseInt(aircraftSelect.value, 10);
+  return loadedAircraft.find(a => a.id === id);
+}
+
+/** Cruise IAS for the current form selection — aircraft first, profile fallback.
+ *  The precedence rule itself lives in resolveCruiseSpeedIAS (unit-tested); this
+ *  is just the DOM wiring. */
+function getCruiseSpeedIAS(): number | undefined {
+  return resolveCruiseSpeedIAS(
+    getSelectedAircraft()?.cruise_speed_kt,
+    getSelectedProfile()?.settings?.speed_kt,
+  );
+}
+
 /** Parse waypoints from the input field. Returns valid codes or empty array.
  *  Accepts ICAO airports (4 letters), navaids (2-3 chars), and fixes (5 chars). */
 function parseWaypoints(): string[] {
@@ -141,12 +158,13 @@ async function fetchRouteAndUpdateUI(): Promise<void> {
 }
 
 /** Auto-calculate the duration field from the cached route distance and the
- *  selected profile's cruise speed, unless the user has edited it manually.
- *  speed_kt is the cruise IAS; we convert it to TAS at the selected cruise
- *  altitude (ISA standard atmosphere) so distance ÷ TAS = still-air duration. */
+ *  resolved cruise speed (aircraft IAS first, then flight-default profile —
+ *  see getCruiseSpeedIAS), unless the user has edited it manually. The speed is
+ *  cruise IAS; we convert it to TAS at the selected cruise altitude (ISA
+ *  standard atmosphere) so distance ÷ TAS = still-air duration. */
 function recalcDurationEstimate(): void {
   if (durationManuallyEdited || lastTotalDistanceNm <= 0) return;
-  const iasKt = getSelectedProfile()?.settings?.speed_kt;
+  const iasKt = getCruiseSpeedIAS();
   if (!iasKt || iasKt <= 0) return;
   const altFt = parseInt(
     (document.getElementById('input-altitude') as HTMLInputElement)?.value || '8000', 10);
@@ -896,20 +914,19 @@ function populateAircraftSelector(aircraft: AircraftResponse[]): void {
     return `<option value="${ac.id}"${selected}>${escapeHtml(label + nickname + defaultTag)}</option>`;
   }).join('');
 
-  // When aircraft changes, pre-fill speed/ceiling from aircraft defaults
+  // When aircraft changes, re-resolve the cruise speed (getCruiseSpeedIAS now
+  // prefers the aircraft) and re-estimate duration. Done on every change —
+  // including switching to "None" or a speedless aircraft — so the estimate
+  // falls back to the flight-default profile speed. Pull the aircraft ceiling
+  // when one is set.
   select.addEventListener('change', () => {
     const acId = parseInt(select.value, 10);
     const ac = aircraft.find(a => a.id === acId);
-    if (ac) {
-      if (ac.cruise_speed_kt) {
-        // Recalculate duration if we have a route distance
-        durationManuallyEdited = false;
-        fetchRouteAndUpdateUI();
-      }
-      if (ac.ceiling_ft) {
-        const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
-        if (ceilInput) ceilInput.value = String(ac.ceiling_ft);
-      }
+    durationManuallyEdited = false;
+    fetchRouteAndUpdateUI();
+    if (ac?.ceiling_ft) {
+      const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
+      if (ceilInput) ceilInput.value = String(ac.ceiling_ft);
     }
   });
 }
