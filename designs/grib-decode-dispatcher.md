@@ -37,6 +37,7 @@ Propagation mirrors the existing `_GRIB_TIMER` pattern via a `ContextVar` `_DECO
   - `api/airport_profile.py`: `enrich_forecasts(priority=INTERACTIVE)`.
   - `scheduler.py` `_auto_refresh_one`: SCHEDULED. `_run_standalone_once`: BACKGROUND (runs in `asyncio.to_thread`, which copies the context).
   - `tasks/standalone_verification.py`: both `_dispatch_decode` calls pass `priority=BACKGROUND` explicitly (their decode runs off the standalone context).
+  - `tasks/standalone_grib.py`: the GFS/ICON cloud-diag adapter dispatches by cache path with `priority=BACKGROUND` (#236 — it previously called the decode functions directly in the orchestrating process, putting cfgrib/xarray full-grid decode on that process's heap). Note: scheduled standalone cycles now run in a subprocess with `GRIB_DECODE_WORKERS=0`, so these dispatches execute inline in the disposable child; the pool path still applies for in-process fallback (`STANDALONE_SUBPROCESS=0`) and manual CLI runs.
   - Precache (`scheduler.py`): download-only, no decode → nothing to prioritise.
 
 ## Dispatcher architecture
