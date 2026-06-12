@@ -242,6 +242,8 @@ During scoring (Phase D), `_build_sounding_proxy()` reconstructs a minimal `Soun
 
 Standalone fetches surface + pressure-level variables for ~830 airports per full cycle. Requests are chunked into batches of 100 airports per Open-Meteo call (`_OPEN_METEO_BATCH_SIZE`). Chunk-level retry: up to 3 attempts with exponential backoff.
 
+**Parse-time hour filtering (#236)**: the fetch passes `hour_filter=SAMPLE_HOURS_UTC` to `OpenMeteoClient.fetch_multi_point`, so only sample-hour slots are materialised as `HourlyForecast`/`PressureLevelData` objects. Without it, ~80% of the 4-day hourly response (28 pressure levels for GFS) was parsed into Pydantic objects only to be discarded — and stayed alive across the chunk's sounding analysis in up to 4 concurrent threads, dominating the fetch phase's transient memory. The wire payload still contains every hour; the filter bounds parse memory, not bandwidth.
+
 ### Scheduler Integration
 
 The standalone subsystem now runs as **three independent loops** (disable individually with the matching env flag):
@@ -251,6 +253,20 @@ The standalone subsystem now runs as **three independent loops** (disable indivi
 - **Verification** (`run_standalone_verification_loop`, `DISABLE_STANDALONE_VERIFICATION=1`) — fires at `VERIFICATION_HOURS_UTC = [6, 9, 12, 15, 18]`. Runs `run_standalone_cycle(fetch_forecasts=False, score_observations=True)`, scoring stored snapshots against whatever observations the ingest loop has persisted (most recent fetch wins).
 
 The hour-keyed loops compute the next fire hour and sleep until then (no polling), retry after 15 min on failure, use a 240 s startup delay, and trigger `cache_builder.rebuild_all` (after `rollup_today_and_pending`) on each successful verification cycle. The legacy combined cycle (`fetch_forecasts=True, score_observations=True`, cycle source `standalone_full`) is still callable from CLI/tests but is no longer scheduled.
+
+### Subprocess isolation (issue #236)
+
+Forecast and verification cycles run in a **short-lived child process**, not in the uvicorn process: `scheduler._run_standalone_cycle_supervised` spawns `python -m weatherbrief.verify standalone --forecast-only|--light --with-rollup --background` and waits on it. Why: the forecast cycle's transient working set (concurrent Open-Meteo chunk parsing + ~46K sounding analyses) ratcheted the uvicorn heap high-water mark; CPython/glibc never return that peak to the OS, so it became ~3 GB of permanent anon that the host swapped. The child returns the entire peak on exit.
+
+Mechanics worth knowing:
+
+- **Same code path as manual debugging** — the child *is* the CLI, so worktree reproduction is literally the production command.
+- `--with-rollup` runs `run_post_cycle_tasks` (daily-stats rollup + cache rebuild, shared with the in-process fallback) inside the child, keeping that memory out of the parent too.
+- `--background` renices the child and raises its `oom_score_adj`, so a cgroup OOM mid-cycle kills the disposable child, not the web process.
+- The child gets `GRIB_DECODE_WORKERS=0` (inline decode) — no second decode pool inside the cgroup; decode priority is moot since the child doesn't share a pool with interactive briefings.
+- Supervisor enforces a hard timeout (`STANDALONE_SUBPROCESS_TIMEOUT_S`, default 3 h) and records a failed `verification_cycles` row for children that die without writing one (SIGKILL/timeout never reach the in-cycle exception path); rows the child already wrote are not duplicated.
+- **Rollback switch**: `STANDALONE_SUBPROCESS=0` reverts to the old in-process `asyncio.to_thread` path.
+- `peak_rss_mb` on cycle rows now measures the child process (clean per-cycle attribution); `peak_cgroup_mb` semantics are unchanged. The 30-min METAR ingest stays in-process — too cheap to justify 48 spawns/day.
 
 ## Verification Stats & Digest
 

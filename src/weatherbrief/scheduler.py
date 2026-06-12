@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -885,10 +887,10 @@ async def run_forecast_fetch_loop(app_state) -> None:
             await asyncio.sleep(sleep_secs)
             await asyncio.sleep(_FORECAST_FETCH_HOUR_OFFSET_SECONDS)
             await _wait_for_marker_freshness(_FORECAST_FETCH_FRESHNESS_WAIT_MAX_SECONDS)
-            await asyncio.to_thread(
-                _run_standalone_once, app_state,
-                True,   # fetch_forecasts
-                False,  # score_observations
+            await _run_standalone_cycle_supervised(
+                app_state,
+                fetch_forecasts=True,
+                score_observations=False,
             )
             await asyncio.sleep(60)  # advance past the current hour
         except Exception:
@@ -960,10 +962,10 @@ async def run_standalone_verification_loop(app_state) -> None:
             # Offset by 15 min so the HH:00 METAR ingest (~30-60s fetch) has
             # fully landed before scoring picks the nearest obs.
             await asyncio.sleep(_VERIFICATION_HOUR_OFFSET_SECONDS)
-            await asyncio.to_thread(
-                _run_standalone_once, app_state,
-                False,  # fetch_forecasts
-                True,   # score_observations
+            await _run_standalone_cycle_supervised(
+                app_state,
+                fetch_forecasts=False,
+                score_observations=True,
             )
             await asyncio.sleep(60)  # advance past the current offset
         except Exception:
@@ -989,6 +991,172 @@ def _seconds_until_next_sample_hour(sample_hours: list[int]) -> float:
     return (candidate - now).total_seconds()
 
 
+# Hard ceiling on a standalone cycle subprocess. Generous — forecast cycles
+# run ~70 min in production — but finite: an in-process cycle that hung used
+# to wedge its thread invisibly forever; the subprocess gets killed and logged.
+_STANDALONE_SUBPROCESS_TIMEOUT_S = int(
+    os.environ.get("STANDALONE_SUBPROCESS_TIMEOUT_S", str(3 * 3600))
+)
+
+
+def _standalone_subprocess_enabled() -> bool:
+    """Rollback switch for subprocess cycle isolation (issue #236).
+
+    ``STANDALONE_SUBPROCESS=0`` reverts to running cycles in-process via
+    ``asyncio.to_thread`` — same pattern as ``GRIB_DECODE_PRIORITY_ENABLED``.
+    """
+    return os.environ.get("STANDALONE_SUBPROCESS", "").strip() not in ("0", "false")
+
+
+async def _run_standalone_cycle_supervised(
+    app_state,
+    *,
+    fetch_forecasts: bool,
+    score_observations: bool,
+) -> None:
+    """Run one standalone cycle, isolated in a child process when enabled.
+
+    Why a subprocess (issue #236): the forecast cycle's transient working set
+    (concurrent Open-Meteo chunk parsing + 46K sounding analyses) ratchets the
+    long-lived uvicorn process's heap high-water mark. CPython/glibc never
+    return that peak to the OS, so it became permanent anon memory (~3 GB)
+    that the host pushed to swap. A short-lived child returns the entire peak
+    on exit. Side benefits: a hung cycle is killable, and an OOM mid-cycle
+    kills the disposable child (which raises its own oom_score_adj via
+    ``--background``) instead of the web process.
+
+    The child is the existing CLI — ``python -m weatherbrief.verify
+    standalone`` — so the production code path and manual/worktree debugging
+    are literally the same command. Results flow through the DB exactly as
+    before; ``--with-rollup`` moves the post-cycle rollup + cache rebuild
+    into the child too, keeping their memory out of the parent as well.
+    """
+    db_path = getattr(app_state, "db_path", "")
+    if not db_path:
+        logger.warning("Standalone cycle: no AIRPORTS_DB configured")
+        return
+
+    if not _standalone_subprocess_enabled():
+        await asyncio.to_thread(
+            _run_standalone_once, app_state, fetch_forecasts, score_observations,
+        )
+        return
+
+    if fetch_forecasts and score_observations:
+        cycle_type, mode_flag = "full", None
+    elif fetch_forecasts:
+        cycle_type, mode_flag = "forecast", "--forecast-only"
+    else:
+        cycle_type, mode_flag = "light", "--light"
+
+    cmd = [
+        sys.executable, "-m", "weatherbrief.verify", "standalone",
+        "--with-rollup", "--background",
+    ]
+    if mode_flag:
+        cmd.append(mode_flag)
+
+    # The child needs no decode parallelism: it has a whole process to itself
+    # and exits after one cycle. Inline decode (workers=0) avoids spawning a
+    # second decode pool inside the cgroup next to the parent's.
+    env = {**os.environ, "GRIB_DECODE_WORKERS": "0"}
+
+    launched_at = datetime.now(timezone.utc)
+    t_start = time.monotonic()
+    logger.info(
+        "Standalone %s cycle: launching subprocess (%s)",
+        cycle_type, " ".join(cmd[2:]),
+    )
+    # stdout/stderr inherited — the child's log lines flow straight to the
+    # container's log stream alongside the parent's.
+    proc = await asyncio.create_subprocess_exec(*cmd, env=env)
+
+    error_message: str | None = None
+    try:
+        returncode = await asyncio.wait_for(
+            proc.wait(), timeout=_STANDALONE_SUBPROCESS_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        error_message = (
+            f"standalone {cycle_type} subprocess exceeded "
+            f"{_STANDALONE_SUBPROCESS_TIMEOUT_S}s, killed"
+        )
+        logger.error(error_message)
+        await _terminate_subprocess(proc)
+        returncode = proc.returncode
+    except asyncio.CancelledError:
+        # App shutdown: don't leave the cycle running against a stopping
+        # container. The cycle is idempotent end-to-end (UPSERT/dup-check),
+        # so the next fire simply re-does the truncated work.
+        await _terminate_subprocess(proc)
+        raise
+
+    if returncode == 0:
+        return
+
+    if error_message is None:
+        error_message = (
+            f"standalone {cycle_type} subprocess exited with code {returncode}"
+        )
+        logger.error(error_message)
+    _ensure_failed_cycle_recorded(cycle_type, launched_at, t_start, error_message)
+
+
+async def _terminate_subprocess(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a child, escalating to SIGKILL after a 30 s grace period."""
+    if proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+
+
+def _ensure_failed_cycle_recorded(
+    cycle_type: str,
+    launched_at: datetime,
+    t_start: float,
+    error_message: str,
+) -> None:
+    """Record a failed VerificationCycleRow unless the child already wrote one.
+
+    The cycle records its own failures from inside the child
+    (``_record_failed_cycle`` on the exception path), but a child killed by a
+    signal — OOM kill, supervisor timeout — never reaches that path. Without
+    this, such cycles would vanish from the ``verification_cycles`` audit
+    trail, which the memory-anomaly baseline and admin dashboard rely on.
+    """
+    from weatherbrief.db.models import VerificationCycleRow
+    from weatherbrief.tasks.standalone_verification import _record_failed_cycle
+
+    source = f"standalone_{cycle_type}"
+    try:
+        db = SessionLocal()
+        try:
+            # Aware-UTC comparison param — same convention as the
+            # _check_memory_anomaly baseline query on this table.
+            existing = db.execute(
+                select(VerificationCycleRow.id)
+                .where(VerificationCycleRow.source == source)
+                .where(VerificationCycleRow.started_at >= launched_at)
+                .limit(1)
+            ).scalar_one_or_none()
+        finally:
+            db.close()
+    except Exception:
+        logger.warning(
+            "Could not check for existing %s cycle row", source, exc_info=True,
+        )
+        return
+    if existing is not None:
+        return
+    _record_failed_cycle(
+        launched_at, t_start, cycle_type, 0, error_message=error_message,
+    )
+
+
 def _run_standalone_once(
     app_state,
     fetch_forecasts: bool,
@@ -996,8 +1164,9 @@ def _run_standalone_once(
 ) -> None:
     """Execute a single standalone cycle (called in a thread).
 
-    Used by both the forecast-fetch loop (fetch=True, score=False) and the
-    verification loop (fetch=False, score=True).
+    In-process fallback path (``STANDALONE_SUBPROCESS=0``) for
+    :func:`_run_standalone_cycle_supervised`; the scheduled default runs the
+    cycle in a subprocess instead.
     """
     db_path = getattr(app_state, "db_path", "")
     if not db_path:
@@ -1017,7 +1186,10 @@ def _run_standalone_once(
         get_configs_dir,
         load_watchlist_with_coords,
     )
-    from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+    from weatherbrief.tasks.standalone_verification import (
+        run_post_cycle_tasks,
+        run_standalone_cycle,
+    )
 
     try:
         airports = load_watchlist_with_coords(get_configs_dir(), db_path)
@@ -1046,55 +1218,9 @@ def _run_standalone_once(
         result["duration_ms"],
     )
 
-    # Roll up freshly-scored days into verification_daily_stats BEFORE the
-    # cache rebuild so the cache reflects today's scores. Idempotent — re-
-    # rolls "yesterday" once per cycle, plus any older missing days (first-
-    # deploy backfill of ~43 days). Cheap (~12K rows/day, pure SQL).
-    try:
-        from flyfun_common.db import SessionLocal
-        from weatherbrief.tasks.verification_daily_rollup import (
-            rollup_today_and_pending,
-        )
-
-        rollup_db = SessionLocal()
-        try:
-            n_rows = rollup_today_and_pending(rollup_db)
-            rollup_db.commit()
-            if n_rows:
-                logger.info(
-                    "Standalone %s cycle: %d daily-stats rows rolled up",
-                    result["cycle_type"], n_rows,
-                )
-        except Exception:
-            rollup_db.rollback()
-            raise
-        finally:
-            rollup_db.close()
-    except Exception:
-        logger.error("verification_daily_stats rollup failed", exc_info=True)
-
-    # Rebuild dashboard + map caches after cycle completes. Light (score-only)
-    # cycles don't touch forecast snapshots, so the forecast_map cache would be
-    # regenerated to identical content — skip it to halve the rebuild cost on
-    # the four hourly light cycles.
-    try:
-        from flyfun_common.db import SessionLocal
-        from weatherbrief.tasks.cache_builder import rebuild_all
-
-        cache_db = SessionLocal()
-        try:
-            cache_result = rebuild_all(
-                cache_db, db_path,
-                include_forecast_map=(result["cycle_type"] != "light"),
-            )
-            logger.info(
-                "Standalone %s cycle: cache rebuilt (%dms)",
-                result["cycle_type"], cache_result["duration_ms"],
-            )
-        finally:
-            cache_db.close()
-    except Exception:
-        logger.error("Cache rebuild failed", exc_info=True)
+    # Daily-stats rollup + dashboard cache rebuild. Shared with the CLI's
+    # --with-rollup so the subprocess path behaves identically.
+    run_post_cycle_tasks(db_path, result["cycle_type"])
 
 
 # ---------------------------------------------------------------------------
