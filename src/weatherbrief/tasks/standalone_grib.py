@@ -80,6 +80,12 @@ def fetch_gfs_cloud_diag(
                 logger.warning("GFS cloud diag fetch failed f%03d", fhour, exc_info=True)
                 continue
 
+        # TOCTOU: the decode worker re-reads the path, so a TTL expiry
+        # between is_cached and dispatch surfaces as FileNotFoundError here
+        # and skips this fhour (snapshot just lacks nwp_ceiling — same
+        # graceful degradation as any decode failure). TTLs are 12-24h, the
+        # window is milliseconds, and the briefing path
+        # (_fetch_cloud_diag_for_fhour) accepts the identical race.
         try:
             decoded = _dispatch_decode(
                 "decode_gfs_cloud_diag", str(run_dir / ck), lats, lons,
@@ -151,6 +157,7 @@ def fetch_icon_cloud_diag(
                 logger.warning("ICON cloud diag fetch failed f%03d", fhour, exc_info=True)
                 continue
 
+        # TOCTOU window accepted — see the GFS branch above.
         try:
             decoded = _dispatch_decode(
                 "decode_icon_cloud_diag", str(run_dir / ck), lats, lons,
