@@ -20,6 +20,9 @@ from weatherbrief.models import (
 _ICING_ORDER = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
 
 _ICING_MARGIN_FT = 500
+# Minimum clearance above terrain for a descent escape altitude to be flyable
+# (matches the IcingEscape route advisory's terrain_margin_ft default).
+_TERRAIN_CLEARANCE_FT = 1000
 
 # ICAO cloud level boundaries (feet AGL)
 _CLOUD_LOW_CEILING_FT = 6500
@@ -30,6 +33,7 @@ def compute_altitude_advisories(
     soundings: dict[str, SoundingAnalysis],
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
+    terrain_elevation_ft: float | None = None,
 ) -> AltitudeAdvisories:
     """Build vertical regimes and altitude advisories from sounding analyses.
 
@@ -37,6 +41,8 @@ def compute_altitude_advisories(
         soundings: model_key → SoundingAnalysis mapping.
         cruise_altitude_ft: Planned cruise altitude in feet.
         flight_ceiling_ft: Maximum altitude the aircraft can reach.
+        terrain_elevation_ft: Terrain elevation at this point (MSL), when
+            known — used to mark descent escapes below terrain as infeasible.
 
     Returns:
         AltitudeAdvisories with per-model regimes and cross-model advisories.
@@ -50,7 +56,7 @@ def compute_altitude_advisories(
     )
 
     advisories: list[AltitudeAdvisory] = []
-    descend = _descend_below_icing(soundings)
+    descend = _descend_below_icing(soundings, terrain_elevation_ft)
     if descend is not None:
         advisories.append(descend)
     climb = _climb_above_icing(soundings, flight_ceiling_ft)
@@ -523,12 +529,25 @@ def _cruise_icing_status(
 
 def _descend_below_icing(
     soundings: dict[str, SoundingAnalysis],
+    terrain_elevation_ft: float | None = None,
 ) -> AltitudeAdvisory | None:
     """Compute descend-below-icing advisory aggregated across models.
 
-    Per model: escape altitude = max(freezing_level, lowest_cloud_base) to exit
-    icing via warm air or clear air. Falls back to lowest icing zone base.
-    Subtract margin. Aggregate: min() across models.
+    Per model: escape altitude = max(freezing_level, lowest icing-cloud base)
+    − margin. Either condition alone exits airframe icing — warm air (below
+    the freezing level, even in cloud) or clear air (below the lowest
+    icing-bearing cloud base, even sub-zero) — so the *higher* of the two is
+    the least-penalising valid escape. Falls back to the lowest icing zone
+    base (clear-air exit) when neither is known. Aggregate: min() across
+    models (worst case).
+
+    Two guards:
+    - A model whose precipitation profile flags freezing rain (warm nose over
+      a sub-zero surface layer) has NO descent escape — below-cloud air
+      carries supercooled precipitation. Its escape is None.
+    - When terrain elevation is known and the aggregate escape leaves less
+      than ``_TERRAIN_CLEARANCE_FT`` above it, the advisory is kept (the
+      meteorological altitude is still true) but marked ``feasible=False``.
     """
     has_icing = any(
         len(sa.icing_zones) > 0 for sa in soundings.values()
@@ -537,10 +556,18 @@ def _descend_below_icing(
         return None
 
     per_model_ft: dict[str, float | None] = {}
+    fzra_models: list[str] = []
 
     for model_key, analysis in soundings.items():
         if not analysis.icing_zones:
             per_model_ft[model_key] = None
+            continue
+
+        # Freezing rain profile: descending stays in (or enters) icing.
+        precip = analysis.precipitation
+        if precip is not None and precip.freezing_rain_risk:
+            per_model_ft[model_key] = None
+            fzra_models.append(model_key)
             continue
 
         # Freezing level
@@ -560,7 +587,8 @@ def _descend_below_icing(
                         lowest_cloud_base = cl.base_ft
                     break
 
-        # Escape altitude: want to be below both freezing and cloud
+        # Escape altitude: below freezing (warm air) OR below cloud (clear
+        # air) — the higher of the two suffices.
         candidates: list[float] = []
         if fz_level is not None:
             candidates.append(fz_level)
@@ -568,7 +596,7 @@ def _descend_below_icing(
             candidates.append(lowest_cloud_base)
 
         if candidates:
-            escape = min(candidates) - _ICING_MARGIN_FT
+            escape = max(candidates) - _ICING_MARGIN_FT
         else:
             # Fallback: lowest icing zone base
             escape = min(z.base_ft for z in analysis.icing_zones) - _ICING_MARGIN_FT
@@ -576,16 +604,43 @@ def _descend_below_icing(
         per_model_ft[model_key] = max(escape, 0)
 
     valid_alts = [v for v in per_model_ft.values() if v is not None]
+
     if not valid_alts:
+        if fzra_models:
+            # Icing exists but every model's profile is freezing rain —
+            # there is no descent escape to offer.
+            return AltitudeAdvisory(
+                advisory_type="descend_below_icing",
+                altitude_ft=None,
+                feasible=False,
+                reason=(
+                    "Freezing precipitation profile (warm nose) — "
+                    "descending does not exit icing"
+                ),
+                per_model_ft=per_model_ft,
+            )
         return None
 
     worst_case = min(valid_alts)
 
+    feasible = True
+    reason = f"Descend below {worst_case:.0f}ft to exit icing conditions"
+    if terrain_elevation_ft is not None and (
+        worst_case < terrain_elevation_ft + _TERRAIN_CLEARANCE_FT
+    ):
+        feasible = False
+        reason += f" — below terrain clearance (terrain ~{terrain_elevation_ft:.0f}ft)"
+    if fzra_models:
+        reason += (
+            f" (no descent escape for {', '.join(fzra_models)}: "
+            "freezing precipitation profile)"
+        )
+
     return AltitudeAdvisory(
         advisory_type="descend_below_icing",
         altitude_ft=worst_case,
-        feasible=True,
-        reason=f"Descend below {worst_case:.0f}ft to exit icing conditions",
+        feasible=feasible,
+        reason=reason,
         per_model_ft=per_model_ft,
     )
 

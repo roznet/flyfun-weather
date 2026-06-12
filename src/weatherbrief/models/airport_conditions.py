@@ -66,6 +66,9 @@ class AirportModelCondition(BaseModel):
     wind_speed_kt: float | None = None
     wind_direction_deg: float | None = None
     wind_gust_kt: float | None = None
+    temperature_c: float | None = None  # 2m temperature at the expected time
+    dewpoint_c: float | None = None  # 2m dewpoint at the expected time
+    qnh_hpa: float | None = None  # mean-sea-level pressure (altimeter setting)
     best_runway: RunwayWind | None = None
     all_runways: list[RunwayWind] = Field(default_factory=list)
 

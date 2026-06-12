@@ -217,8 +217,8 @@ Physically-based continuous index peaking at −7°C, matching observed supercoo
 
 | Index range | Risk |
 |-------------|------|
-| ≤ 0 | NONE |
-| 0–30 | LIGHT |
+| < 10 | NONE |
+| 10–30 | LIGHT |
 | 30–80 | MODERATE |
 | ≥ 80 | SEVERE |
 
@@ -375,7 +375,7 @@ adv = compute_altitude_advisories(soundings, cruise_altitude_ft=8000, flight_cei
 4. Generate label: "Clear" / "In cloud" / "In cloud, icing MOD (mixed)"
 
 **Advisory types:**
-- `descend_below_icing`: Per model, escape = min(freezing level, lowest icing-overlapping cloud base) - 500ft. Aggregate: min() across models.
+- `descend_below_icing`: Per model, escape = max(freezing level, lowest icing-overlapping cloud base) - 500ft — warm air OR clear air each exit icing, so the higher suffices. Aggregate: min() across models. Guards: a model with `freezing_rain_risk` has no descent escape (None); when terrain elevation is known (plumbed from the elevation profile) an escape leaving <1000ft AGL is marked `feasible=False`. See [meteorology-decisions §8](./meteorology-decisions.md).
 - `climb_above_icing`: Per model, max(highest icing top, highest cloud top in icing temps) + 500ft. Aggregate: max() across models. `feasible` if ≤ flight_ceiling_ft.
 - `cat_turbulence`: CAT risk layers from Richardson number analysis, integrated into regimes.
 - `strong_vertical_motion`: Flags altitude bands where |w| > 200 fpm.

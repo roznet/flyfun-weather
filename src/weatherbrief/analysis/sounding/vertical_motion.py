@@ -115,7 +115,10 @@ def compute_stability_indicators(
             dv_dz = (v_vals[i + 1] - v_vals[i]) / dz
             shear_sq = du_dz**2 + dv_dz**2
 
-            if shear_sq > _MIN_SHEAR_SQ and n_sq >= 0:
+            # Negative Ri (N² < 0, statically unstable layer) is stored too:
+            # a convectively unstable shear layer is the most turbulent case
+            # and must not read as "no data" downstream.
+            if shear_sq > _MIN_SHEAR_SQ:
                 ri = n_sq / shear_sq
                 derived_levels[i + 1].richardson_number = round(float(ri), 2)
 
@@ -159,7 +162,15 @@ def classify_vertical_motion(
 
 
 def _classify_cat_risk(ri: float) -> CATRiskLevel:
-    """Classify CAT risk from Richardson number."""
+    """Classify CAT risk from Richardson number.
+
+    Negative Ri means N² < 0 — static (convective) instability rather than
+    shear-driven KH instability. Capped at MODERATE: turbulence intensity in
+    that regime is buoyancy-driven and owned by the convective tier, and
+    superadiabatic layers are common in daytime profiles.
+    """
+    if ri < 0:
+        return CATRiskLevel.MODERATE
     if ri < _RI_SEVERE:
         return CATRiskLevel.SEVERE
     if ri < _RI_MODERATE:
@@ -189,6 +200,11 @@ def _build_cat_layers(
     cat_levels: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = []
     for idx, lv in enumerate(derived_levels):
         if lv.richardson_number is None or lv.altitude_ft is None:
+            continue
+        # Negative Ri at the surface-adjacent layer is the daytime
+        # superadiabatic surface layer (thermals) — not CAT. Elevated
+        # statically-unstable layers (idx > 1) do qualify.
+        if lv.richardson_number < 0 and idx <= 1:
             continue
         risk = _classify_cat_risk(lv.richardson_number)
         if risk == CATRiskLevel.NONE:

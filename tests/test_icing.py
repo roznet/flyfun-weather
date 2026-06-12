@@ -659,3 +659,43 @@ def test_resolve_analyses_sfip_nwp_converts_without_mutation():
     assert converted.risk == IcingRisk.MODERATE
     assert converted.mean_icing_index == 45.0
     assert rpa.sounding["gfs"].icing_zones[0].risk == IcingRisk.LIGHT
+
+
+# --- IENG convective term must use the level's real vapor density ---
+
+
+def test_convective_index_zero_without_moisture_differential():
+    """No vapor-density decrease from cloud base → no convective icing index."""
+    from weatherbrief.analysis.sounding.icing import (
+        _compute_convective_index,
+        _vapor_density,
+    )
+
+    vd = _vapor_density(-7.5)
+    assert _compute_convective_index(-7.0, vd, vd) == 0.0
+
+
+def test_ieng_no_convective_inflation_without_moisture_differential():
+    """A single level (its own vapor density IS the cloud-base value) has zero
+    moisture differential — high CAPE + convective cover must not add any
+    convective contribution. Regression for the bug where the level vapor
+    density was hard-coded to 0, maximising the differential."""
+    from weatherbrief.analysis.sounding.icing import assess_icing_zones_ieng
+
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-7.5, dewpoint_depression_c=0.5),
+    ]
+    bands = [_cloud(8000, 11000)]
+    diag = NWPCloudDiagnostics(convective_cover_pct=100.0)
+
+    no_cape = assess_icing_zones_ieng(
+        levels, bands, cape_jkg=None, nwp_cloud_mid_pct=80.0,
+        nwp_cloud_diagnostics=diag,
+    )
+    high_cape = assess_icing_zones_ieng(
+        levels, bands, cape_jkg=2000.0, nwp_cloud_mid_pct=80.0,
+        nwp_cloud_diagnostics=diag,
+    )
+    assert len(no_cape) == 1 and len(high_cape) == 1
+    assert high_cape[0].mean_icing_index == no_cape[0].mean_icing_index

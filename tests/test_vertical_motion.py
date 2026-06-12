@@ -449,3 +449,69 @@ def test_backward_compat_no_cat_risk_in_regime():
     vr = VerticalRegime.model_validate_json(old_json)
     assert vr.cat_risk is None
     assert vr.strong_vertical_motion is False
+
+
+# --- Statically unstable layers (negative Ri, N² < 0) ---
+
+
+def test_negative_ri_elevated_layer_is_moderate_cat():
+    """An elevated statically-unstable shear layer (Ri < 0) must surface as
+    CAT, capped at MODERATE (buoyancy-driven turbulence, owned by the
+    convective tier for severity) — not vanish as missing data."""
+    levels = [
+        DerivedLevel(pressure_hpa=900, altitude_ft=3000),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, richardson_number=5.0),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, richardson_number=-0.4),
+        DerivedLevel(pressure_hpa=650, altitude_ft=12000, richardson_number=-1.2),
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert len(assessment.cat_risk_layers) == 1
+    layer = assessment.cat_risk_layers[0]
+    assert layer.risk == CATRiskLevel.MODERATE
+    assert layer.base_ft == 10000
+    assert layer.top_ft == 12000
+
+
+def test_negative_ri_surface_layer_skipped():
+    """Negative Ri on the surface-adjacent layer is the daytime superadiabatic
+    layer (thermals) — excluded from CAT to avoid summer-afternoon noise."""
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=300),
+        DerivedLevel(pressure_hpa=975, altitude_ft=1000, richardson_number=-0.5),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1800, richardson_number=8.0),
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert assessment.cat_risk_layers == []
+
+
+def test_stability_indicators_store_negative_ri():
+    """compute_stability_indicators stores Ri for N² < 0 layers (negative Ri),
+    so unstable layers are distinguishable from missing data."""
+    import numpy as np
+    from metpy.units import units as u
+
+    from weatherbrief.analysis.sounding.prepare import PreparedProfile
+
+    # Temperature increasing lapse over a strongly superadiabatic upper layer:
+    # 20°C at 950 hPa → 10°C at 900 hPa over ~480 m is far steeper than the
+    # dry adiabat → theta decreases with height → N² < 0.
+    profile = PreparedProfile(
+        pressure=np.array([1000.0, 950.0, 900.0]) * u.hPa,
+        temperature=np.array([22.0, 20.0, 10.0]) * u.degC,
+        dewpoint=np.array([10.0, 8.0, 0.0]) * u.degC,
+        height=np.array([110.0, 550.0, 1030.0]) * u.m,
+        wind_speed=np.array([5.0, 10.0, 15.0]) * u.knots,
+        wind_direction=np.array([270.0, 270.0, 270.0]) * u.degrees,
+        omega=None,
+        surface_pressure=None,
+        surface_temperature=None,
+        surface_dewpoint=None,
+    )
+    levels = [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=360),
+        DerivedLevel(pressure_hpa=950, altitude_ft=1800),
+        DerivedLevel(pressure_hpa=900, altitude_ft=3380),
+    ]
+    compute_stability_indicators(profile, levels)
+    assert levels[2].richardson_number is not None
+    assert levels[2].richardson_number < 0

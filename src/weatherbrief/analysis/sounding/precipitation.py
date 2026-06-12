@@ -65,7 +65,7 @@ def assess_precipitation(
 
     # Warm nose / freezing rain detection
     freezing_rain_risk, warm_nose_base, warm_nose_top, ice_pellets = (
-        _detect_warm_nose(levels)
+        detect_warm_nose(levels)
     )
 
     # Determine surface phase
@@ -162,10 +162,14 @@ def _classify_levels(
     return result
 
 
-def _detect_warm_nose(
+def detect_warm_nose(
     levels: list[DerivedLevel],
 ) -> tuple[bool, float | None, float | None, bool]:
     """Detect warm nose above a cold surface for freezing rain / ice pellets.
+
+    Pure profile-shape check (wet-bulb based) — independent of whether
+    precipitation is currently falling, so callers can also flag a *primed*
+    profile (freezing-rain shape without active precip yet).
 
     Returns:
         (freezing_rain_risk, warm_nose_base_ft, warm_nose_top_ft, ice_pellets)

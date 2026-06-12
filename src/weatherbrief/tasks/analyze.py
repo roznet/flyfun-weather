@@ -15,12 +15,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from weatherbrief.analysis.advisories._helpers import terrain_at_distance
 from weatherbrief.analysis.comparison import compare_models
 from weatherbrief.analysis.sounding import analyze_sounding
 from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
 from weatherbrief.analysis.wind import compute_wind_components, pick_wind_at_pressure
 from weatherbrief.models import (
     AltitudeAdvisories,
+    ElevationProfile,
     HourlyForecast,
     ModelDivergence,
     RouteAnalysesManifest,
@@ -66,6 +68,7 @@ def _run_point_analysis(
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
     icing_severity_enhance: bool = False,
+    terrain_elevation_ft: float | None = None,
 ) -> tuple[
     dict[str, WindComponent],
     dict[str, SoundingAnalysis],
@@ -156,7 +159,8 @@ def _run_point_analysis(
     altitude_advisories = None
     if soundings:
         altitude_advisories = compute_altitude_advisories(
-            soundings, cruise_altitude_ft, flight_ceiling_ft
+            soundings, cruise_altitude_ft, flight_ceiling_ft,
+            terrain_elevation_ft=terrain_elevation_ft,
         )
 
     # Model comparison
@@ -316,11 +320,14 @@ def analyze_all_route_points(
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
     icing_severity_enhance: bool = False,
+    elevation: ElevationProfile | None = None,
 ) -> list[RoutePointAnalysis]:
     """Analyze all route points across all models.
 
     For each route point, gathers the forecast from each model's cross-section
-    at the point's interpolated time, then runs the shared analysis.
+    at the point's interpolated time, then runs the shared analysis. When an
+    elevation profile is provided, per-point terrain elevation is passed down
+    so altitude advisories can flag descent escapes below terrain.
     """
     if not cross_sections or not route_points:
         return []
@@ -352,9 +359,12 @@ def analyze_all_route_points(
         if not forecasts_by_model:
             continue
 
+        terrain_ft = terrain_at_distance(elevation, rp.distance_from_origin_nm)
+
         wind_components, soundings, alt_advisories, divergences, cruise_temps = _run_point_analysis(
             forecasts_by_model, tracks[i], cruise_altitude_ft, flight_ceiling_ft,
             icing_severity_enhance=icing_severity_enhance,
+            terrain_elevation_ft=terrain_ft,
         )
 
         analyses.append(RoutePointAnalysis(
@@ -445,11 +455,18 @@ def run_analysis(
     icing_severity_enhance: bool = False,
     pack_dir: Path | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
+    elevation: ElevationProfile | None = None,
 ) -> AnalysisResult:
     """Run the analysis stage: waypoint + route-point analyses.
 
-    If *pack_dir* is set, persists analysis artifacts to disk.
+    If *pack_dir* is set, persists analysis artifacts to disk. When
+    *elevation* is not provided, it is loaded from *pack_dir* if available
+    (terrain feeds the altitude advisories' descent-feasibility check).
     """
+    if elevation is None and pack_dir is not None:
+        from weatherbrief.tasks.artifacts import load_elevation_profile
+
+        elevation = load_elevation_profile(pack_dir)
     def _notify(stage: str, detail: str | None = None) -> None:
         if progress_callback is not None:
             progress_callback(stage, detail)
@@ -471,6 +488,7 @@ def run_analysis(
                 route.flight_duration_hours, route.cruise_altitude_ft,
                 route.flight_ceiling_ft,
                 icing_severity_enhance=icing_severity_enhance,
+                elevation=elevation,
             )
             route_analyses_manifest = RouteAnalysesManifest(
                 route_name=route.name,
