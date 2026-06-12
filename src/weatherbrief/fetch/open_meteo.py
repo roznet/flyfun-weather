@@ -389,8 +389,11 @@ class OpenMeteoClient:
                     endpoint.pressure_levels,
                 )
                 for i, ts in enumerate(timestamps)
-                if hour_filter is None
-                or datetime.fromisoformat(ts).hour in hour_filter
+                # Slice instead of fromisoformat: timestamps are always ISO
+                # "YYYY-MM-DDTHH:MM" (timezone=UTC is hardcoded above), and
+                # this runs per timestamp per point — no need to allocate a
+                # datetime just to read the hour.
+                if hour_filter is None or int(ts[11:13]) in hour_filter
             ]
 
             # Build a synthetic Waypoint for this route point
