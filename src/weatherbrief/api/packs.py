@@ -2396,6 +2396,7 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     an explicit ``fronts: false`` opt-out is honored independently of the
     ``auto_front_detection`` master (issue #196, model B).
     """
+    from weatherbrief.analysis.advisories import resolve_enabled_ids
     from weatherbrief.api.preferences import load_user_locale
     from weatherbrief.api.profiles import load_profile_settings
     from weatherbrief.models import AdvisoryAggregation
@@ -2403,9 +2404,10 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     profile_settings = load_profile_settings(db, flight.profile_id, user_id)
     adv_config = profile_settings.get("advisories", {})
     enabled_map = adv_config.get("enabled")
-    enabled_ids = None
-    if enabled_map:
-        enabled_ids = {k for k, v in enabled_map.items() if v}
+    # Treat the saved map as overrides, not an allow-list: advisories absent from
+    # it fall back to default_enabled, matching the settings UI. Keeps new
+    # default-on advisories visible on customized profiles without a re-save.
+    enabled_ids = resolve_enabled_ids(enabled_map)
     user_params = adv_config.get("params") or {}
     aggregation = AdvisoryAggregation(adv_config.get("aggregation", "majority"))
 

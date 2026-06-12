@@ -760,6 +760,9 @@ function renderAdvisorySettings(
       // never surface — disable the row and explain the dependency.
       const isFronts = entry.id === FRONTS_ADVISORY_ID;
       const defaultEnabled = isFronts ? autoFrontDetection : entry.default_enabled;
+      // Absent key falls back to default_enabled. The backend MUST resolve the
+      // saved map the same way — keep in sync with resolve_enabled_ids()
+      // (src/weatherbrief/analysis/advisories/registry.py).
       const isEnabled = enabledMap[entry.id] ?? defaultEnabled;
       const frontsDisabled = isFronts && !autoFrontDetection;
       const userParams = paramsMap[entry.id] ?? {};

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from weatherbrief.analysis.advisories import RouteContext, evaluate_all, get_catalog
+from weatherbrief.analysis.advisories import (
+    RouteContext,
+    evaluate_all,
+    get_catalog,
+    resolve_enabled_ids,
+)
 from weatherbrief.models import AdvisoryStatus
 
 
@@ -40,6 +45,47 @@ def test_evaluate_all_user_params(clear_context: RouteContext):
         user_params={"icing_escape": {"terrain_margin_ft": 2000}},
     )
     assert results[0].parameters_used["terrain_margin_ft"] == 2000
+
+
+def test_resolve_enabled_ids_none_for_uncustomized():
+    """No saved customization -> None (caller applies default_enabled to all)."""
+    assert resolve_enabled_ids(None) is None
+    assert resolve_enabled_ids({}) is None
+
+
+def test_resolve_enabled_ids_absent_key_falls_back_to_default():
+    """An advisory absent from the saved map uses its catalog default_enabled.
+
+    This is the core fix: a profile customized before a new default-on advisory
+    existed still gets that advisory, because the saved map is overrides — not an
+    exhaustive allow-list. Mirrors the settings UI (`enabledMap[id] ?? default`).
+    """
+    catalog = {e.id: e for e in get_catalog()}
+    # Find a default-on and a default-off advisory to anchor the assertions.
+    default_on = next(e.id for e in catalog.values() if e.default_enabled)
+    default_off = next(e.id for e in catalog.values() if not e.default_enabled)
+
+    # Saved map mentions only one unrelated advisory; everything else is absent.
+    resolved = resolve_enabled_ids({"icing_escape": True})
+
+    # Absent default-on advisory is still evaluated...
+    assert default_on in resolved
+    # ...absent default-off advisory is still skipped.
+    assert default_off not in resolved
+
+
+def test_resolve_enabled_ids_honors_explicit_optout():
+    """An explicit `id: false` overrides default_enabled and is excluded."""
+    default_on = next(e.id for e in get_catalog() if e.default_enabled)
+    resolved = resolve_enabled_ids({default_on: False})
+    assert default_on not in resolved
+
+
+def test_resolve_enabled_ids_honors_explicit_optin():
+    """An explicit `id: true` includes a default-off advisory."""
+    default_off = next(e.id for e in get_catalog() if not e.default_enabled)
+    resolved = resolve_enabled_ids({default_off: True})
+    assert default_off in resolved
 
 
 def test_catalog_entries_have_required_fields():

@@ -34,6 +34,33 @@ def get_altitude_dependent_ids() -> set[str]:
     return {aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().altitude_dependent}
 
 
+def resolve_enabled_ids(enabled_map: dict[str, bool] | None) -> set[str] | None:
+    """Resolve a saved per-profile advisory enable map into the set to evaluate.
+
+    The saved ``{id: bool}`` map is treated as **overrides, not an exhaustive
+    allow-list**: an advisory the map does not mention falls back to its catalog
+    ``default_enabled``. This keeps the backend in lockstep with the settings UI,
+    which renders each toggle as ``enabledMap[id] ?? default_enabled`` (see
+    ``web/ts/settings-main.ts`` ``renderAdvisorySettings``). Without this merge a
+    newly added default-on advisory is invisible on every *customized* profile
+    until the pilot re-saves it (the old sparse ``{k for k, v in … if v}`` dropped
+    any id absent from the saved map). Explicit opt-outs (``id: false``) are
+    honored.
+
+    Returns ``None`` when the profile has no advisory customization, so callers
+    let :func:`evaluate_all` apply ``default_enabled`` to every evaluator — the
+    same result the merge would produce, kept as ``None`` to preserve the
+    "uncustomized profile" signal that the front-advisory gating relies on.
+    """
+    if not enabled_map:
+        return None
+    return {
+        entry.id
+        for entry in get_catalog()
+        if enabled_map.get(entry.id, entry.default_enabled)
+    }
+
+
 def evaluate_all(
     ctx: RouteContext,
     enabled_ids: set[str] | None = None,

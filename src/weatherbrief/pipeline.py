@@ -347,9 +347,11 @@ def execute_briefing(
         from weatherbrief.models import AdvisoryAggregation
         adv_aggregation = AdvisoryAggregation(options.advisory_aggregation)
 
-    adv_enabled_ids = None
-    if options.advisory_enabled is not None:
-        adv_enabled_ids = {k for k, v in options.advisory_enabled.items() if v}
+    # Treat the saved map as overrides, not an allow-list: advisories absent from
+    # it fall back to default_enabled (matches the settings UI), so new default-on
+    # advisories surface on customized profiles without a re-save.
+    from weatherbrief.analysis.advisories import resolve_enabled_ids
+    adv_enabled_ids = resolve_enabled_ids(options.advisory_enabled)
 
     route_advisories_manifest = None
     if analysis_result.route_analyses_manifest and analysis_result.route_analyses:
