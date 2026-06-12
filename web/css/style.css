@@ -3342,6 +3342,34 @@ label {
 .advisory-info-btn {
   margin-left: auto;
 }
+
+/* "All clear" block: unanimous-green + unavailable advisories as two-line
+   compact cards (header + detail, no per-model row) in a denser grid, so a long
+   consistent-green list doesn't dominate the section. */
+.advisory-allclear {
+  margin-top: 0.75rem;
+}
+.advisory-allclear-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+.advisory-grid--compact {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.5rem;
+}
+.advisory-card--compact {
+  padding: 0.5rem 0.6rem;
+}
+.advisory-card--compact .advisory-card-header {
+  margin-bottom: 0.2rem;
+}
+.advisory-card--compact .advisory-detail {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
 .advisory-popup-category {
   font-size: 0.8rem;
   color: var(--text-muted);

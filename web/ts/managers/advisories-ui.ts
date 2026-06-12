@@ -5,6 +5,7 @@ import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
 import { renderAdvisoryPopup } from '../helpers/advisory-popup';
 import { renderFrontsInfo } from '../helpers/fronts-info';
+import { advisoryBand, isCompactBand, compareAdvisories } from '../helpers/advisory-order';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
 import { formatVisibility } from '../units';
@@ -282,6 +283,7 @@ function renderAdvisoryCard(
   adv: RouteAdvisoryResult,
   catalog: Map<string, AdvisoryCatalogEntry>,
   chipsEnabled: boolean,
+  compact = false,
 ): string {
   const entry = catalog.get(adv.advisory_id);
   const name = entry ? escapeHtml(entry.name) : escapeHtml(adv.advisory_id);
@@ -308,6 +310,22 @@ function renderAdvisoryCard(
   const chip = chipsEnabled && ADVISORY_TO_PRESET[adv.advisory_id]
     ? `<button class="metric-info-btn advisory-view-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.showOnCrossSection')}" aria-label="${t('advisories.showOnCrossSection')}">\u{1F4C8}</button>`
     : '';
+
+  // Compact (two-line) variant for the all-clear band: header + the detail line,
+  // dropping the per-model badge row and the description to save space.
+  if (compact) {
+    return `
+    <div class="advisory-card advisory-card--compact advisory-${adv.aggregate_status}" data-advisory="${escapeHtml(adv.advisory_id)}">
+      <div class="advisory-card-header">
+        <span class="badge ${aggClass}">${statusLabel(adv.aggregate_status)}</span>
+        <span class="advisory-name">${name}</span>
+        ${chip}
+        ${infoBtn}
+      </div>
+      <div class="advisory-detail">${escapeHtml(adv.aggregate_detail)}</div>
+    </div>
+  `;
+  }
 
   return `
     <div class="advisory-card advisory-${adv.aggregate_status}" data-advisory="${escapeHtml(adv.advisory_id)}">
@@ -455,21 +473,27 @@ export function renderAdvisories(
       })
     : manifest.advisories;
 
-  // Sort: RED first, then AMBER, then GREEN, then UNAVAILABLE
-  const sorted = [...advisories].sort((a, b) => {
-    return STATUS_ORDER.indexOf(a.aggregate_status) - STATUS_ORDER.indexOf(b.aggregate_status);
-  });
+  // Sort into actionability bands: RED → AMBER → green-mixed (a model dissents)
+  // → green-clear (all models green) → UNAVAILABLE. green-mixed is ordered
+  // most-severe-dissent first. See helpers/advisory-order.
+  const sorted = [...advisories].sort(compareAdvisories);
 
   // Count by status for summary
   const counts = { green: 0, amber: 0, red: 0, unavailable: 0 };
+  let mixedGreen = 0;
   for (const adv of sorted) {
     counts[adv.aggregate_status]++;
+    if (advisoryBand(adv) === 'green-mixed') mixedGreen++;
   }
 
   const summaryParts: string[] = [];
   if (counts.red > 0) summaryParts.push(`<span class="badge badge-red">${counts.red} RED</span>`);
   if (counts.amber > 0) summaryParts.push(`<span class="badge badge-amber">${counts.amber} AMBER</span>`);
-  if (counts.green > 0) summaryParts.push(`<span class="badge badge-green">${counts.green} GREEN</span>`);
+  if (counts.green > 0) {
+    // Flag how many "green" cards actually hide model disagreement.
+    const mixedNote = mixedGreen > 0 ? ` (${mixedGreen} mixed)` : '';
+    summaryParts.push(`<span class="badge badge-green">${counts.green} GREEN${mixedNote}</span>`);
+  }
 
   const summary = summaryParts.length > 0
     ? `<div class="advisory-summary">${summaryParts.join(' ')}</div>`
@@ -532,7 +556,21 @@ export function renderAdvisories(
       </div>`;
   }
 
-  const cards = sorted.map(adv => renderAdvisoryCard(adv, catalog, !!onAdvisoryChip)).join('');
+  // Full cards for the actionable bands (red/amber/green-mixed); the boring
+  // bands (unanimous green, then unavailable) collapse into a compact pill grid.
+  const fullCards: RouteAdvisoryResult[] = [];
+  const compactCards: RouteAdvisoryResult[] = [];
+  for (const adv of sorted) {
+    (isCompactBand(advisoryBand(adv)) ? compactCards : fullCards).push(adv);
+  }
+  const cards = fullCards.map(adv => renderAdvisoryCard(adv, catalog, !!onAdvisoryChip)).join('');
+  const compact = compactCards.length > 0
+    ? `<div class="advisory-allclear">`
+      + `<div class="advisory-allclear-label">${t('advisories.allClear')}</div>`
+      + `<div class="advisory-grid advisory-grid--compact">`
+      + compactCards.map(adv => renderAdvisoryCard(adv, catalog, !!onAdvisoryChip, true)).join('')
+      + `</div></div>`
+    : '';
 
   el.innerHTML = `
     ${toggleHtml}
@@ -545,6 +583,7 @@ export function renderAdvisories(
     </div>
     ${airportHtml}
     <div class="advisory-grid">${cards}</div>
+    ${compact}
   `;
 
   // Wire profile selector
@@ -675,6 +714,7 @@ export function renderAdvisories(
     const badge = (e.target as HTMLElement).closest('.adv-model-badge--tappable') as HTMLElement | null;
     if (badge) showModelDetail(badge);
   });
+
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const badge = (e.target as HTMLElement).closest('.adv-model-badge--tappable') as HTMLElement | null;

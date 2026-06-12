@@ -291,6 +291,7 @@
   "skewt.tabNotAvailable": "Not available",
 
   "advisories.noAdvisories": "No advisories available",
+  "advisories.allClear": "All clear",
   "advisories.profile": "Profile",
   "advisories.recalculate": "Recalculate",
   "advisories.recalculating": "Recalculating...",
