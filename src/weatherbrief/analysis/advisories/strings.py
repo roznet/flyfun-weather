@@ -48,6 +48,14 @@ _STRINGS: dict[str, dict[str, str]] = {
 
     # --- flight_category ---
     # Uses "Dep {icao}: {cat}" pattern — Dep/Arr kept as compact labels
+    # Inline suffix appended to the per-airport part when terminal-area
+    # convective risk is MODERATE or worse.
+    "flight_category.conv": {
+        "en": ", convective {risk} nearby",
+        "fr": ", convectif {risk} à proximité",
+        "de": ", Konvektion {risk} in der Nähe",
+        "es": ", convectivo {risk} cercano",
+    },
 
     # --- convective ---
     "convective.risk_over": {
@@ -101,6 +109,31 @@ _STRINGS: dict[str, dict[str, str]] = {
         "fr": "Vents faibles près du relief ({speed}kt)",
         "de": "Schwache Winde nahe Gelände ({speed}kt)",
         "es": "Vientos débiles cerca del terreno ({speed}kt)",
+    },
+    "mountain_wind.wave_confirmed": {
+        "en": "Mountain wave conditions ({speed}kt near terrain, {signature}) over {extent}",
+        "fr": "Conditions d'onde de montagne ({speed}kt près du relief, {signature}) sur {extent}",
+        "de": "Gebirgswellenbedingungen ({speed}kt nahe Gelände, {signature}) über {extent}",
+        "es": "Condiciones de onda de montaña ({speed}kt cerca del terreno, {signature}) sobre {extent}",
+    },
+    # Inline suffix listing the wave signature(s) seen at strong-wind points.
+    "mountain_wind.sig_suffix": {
+        "en": " — {signature}",
+        "fr": " — {signature}",
+        "de": " — {signature}",
+        "es": " — {signature}",
+    },
+    "mountain_wind.sig_inversion": {
+        "en": "stable layer at ridge top",
+        "fr": "couche stable au sommet des crêtes",
+        "de": "stabile Schicht am Kammniveau",
+        "es": "capa estable en la cima",
+    },
+    "mountain_wind.sig_oscillating": {
+        "en": "wave-like vertical motion",
+        "fr": "mouvement vertical ondulatoire",
+        "de": "wellenartige Vertikalbewegung",
+        "es": "movimiento vertical ondulatorio",
     },
 
     # --- cloud_top ---
@@ -421,6 +454,52 @@ _STRINGS: dict[str, dict[str, str]] = {
         "fr": "Limite de masse d'air sur la route, mais peu de météo active",
         "de": "Luftmassengrenze auf der Strecke, aber kaum aktives Wetter",
         "es": "Límite de masa de aire en la ruta, pero con poco tiempo activo",
+    },
+
+    # --- enroute_precip ---
+    "enroute_precip.clear": {
+        "en": "No precipitation along route",
+        "fr": "Pas de précipitations le long de la route",
+        "de": "Kein Niederschlag entlang der Route",
+        "es": "Sin precipitación a lo largo de la ruta",
+    },
+    "enroute_precip.snow": {
+        "en": "Snow over {extent} — expect visibility to collapse in showers",
+        "fr": "Neige sur {extent} — visibilité s'effondrant dans les averses",
+        "de": "Schnee über {extent} — Sicht bricht in Schauern zusammen",
+        "es": "Nieve sobre {extent} — visibilidad colapsa en chubascos",
+    },
+    "enroute_precip.rain": {
+        "en": "Moderate+ rain over {extent}",
+        "fr": "Pluie modérée ou plus sur {extent}",
+        "de": "Mäßiger+ Regen über {extent}",
+        "es": "Lluvia moderada o más sobre {extent}",
+    },
+    "enroute_precip.light": {
+        "en": "Light precipitation over {extent}",
+        "fr": "Précipitations faibles sur {extent}",
+        "de": "Leichter Niederschlag über {extent}",
+        "es": "Precipitación ligera sobre {extent}",
+    },
+
+    # --- headwind ---
+    "headwind.summary": {
+        "en": "Avg {mean}kt headwind (max {max}kt) — about +{delta} min vs still air ({pct}%)",
+        "fr": "Vent de face moyen {mean}kt (max {max}kt) — environ +{delta} min vs air calme ({pct}%)",
+        "de": "Mittlerer Gegenwind {mean}kt (max {max}kt) — etwa +{delta} Min. ggü. ruhiger Luft ({pct}%)",
+        "es": "Viento en contra medio {mean}kt (máx {max}kt) — aprox +{delta} min vs aire en calma ({pct}%)",
+    },
+    "headwind.tailwind": {
+        "en": "Avg {mean}kt tailwind — about {delta} min saved",
+        "fr": "Vent arrière moyen {mean}kt — environ {delta} min gagnées",
+        "de": "Mittlerer Rückenwind {mean}kt — etwa {delta} Min. gespart",
+        "es": "Viento en cola medio {mean}kt — aprox {delta} min ahorrados",
+    },
+    "headwind.neutral": {
+        "en": "Light winds aloft — negligible trip impact",
+        "fr": "Vents faibles en altitude — impact négligeable sur le trajet",
+        "de": "Schwache Höhenwinde — vernachlässigbarer Einfluss",
+        "es": "Vientos débiles en altura — impacto insignificante",
     },
 
     # --- shared airport labels ---

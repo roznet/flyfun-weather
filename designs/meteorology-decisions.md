@@ -1020,3 +1020,86 @@ stays GREEN, preserving the model-disagreement signal.
   routine VMC-transitable cumulus).
 - Tune `terminal_corridor_nm` if 5nm proves too tight/loose against the real
   climb/descent footprint of GA profiles.
+
+---
+
+## 11. Four advisory additions: terminal convective, en-route precipitation, winds aloft, wave corroboration
+
+**Date:** 2026-06-12
+**Status:** Implemented.
+**Context:** Follow-ups from the second advisory review (after
+[meteorology-approach-review-2026-06.md](./meteorology-approach-review-2026-06.md)
+items landed): terminal-area convective dilution, the missing en-route
+visibility axis, no aggregation of the computed cruise headwind, and the
+speed-only mountain-wind grade.
+
+### (a) Terminal convective folded into Airport Weather, no coverage dilution
+
+The en-route `ConvectiveEvaluator` grades by %-of-route — right for "can I
+deviate around it", wrong at the airports where a deviation is not an option:
+one MODERATE cell over the destination is ~5% of a 20-point route → GREEN.
+`FlightCategoryEvaluator` now grades the worst convective risk within
+`conv_radius_nm` (default 25 nm) of each end with **no percentage
+threshold**: MODERATE → AMBER, HIGH/EXTREME → RED, no altitude filter (climb
+and approach traverse every level). Folded into the existing Airport Weather
+advisory (per product decision) rather than a separate card, so the airport
+line reads e.g. "Arr LSGS: VFR, convective MODERATE nearby". MARGINAL/LOW
+are ignored at the terminal — they amber half of summer otherwise.
+
+### (b) En-route precipitation as the visibility proxy (snow ≫ rain)
+
+No source provides visibility at altitude (parameterized vis is surface-only,
+3/7 models), so precipitation phase+intensity — available for **all** models
+via the existing per-sounding `PrecipitationAssessment` — is the honest
+en-route visibility signal. Grading reflects GA reality: any snow over ≥5%
+of the route → AMBER (vis collapses even in light snow showers; surface
+phase is column-representative below the melting layer), moderate+ snow over
+≥25% → RED, moderate+ rain over ≥30% → AMBER (rain capped at AMBER — it
+degrades but rarely prohibits). FZRA/PL count toward extent only; their
+severity stays owned by `freezing_precip` (§9) — no double-grading. The
+classifier is shared into the VFR feasibility composite **capped at AMBER**:
+a pilot VMC-on-top is not directly affected by surface rain, but widespread
+snow degrades every descent/divert option. UNAVAILABLE (never green) without
+precipitation data.
+
+### (c) Winds aloft / trip impact: informational, TAS as a parameter
+
+`RoutePointAnalysis.wind_components` (cruise headwind per point) fed only the
+route graph. New `HeadwindEvaluator` averages it route-wide and estimates the
+trip-time delta vs still air. Two deliberate choices:
+
+- **TAS is an advisory parameter** (default 110 kt), not plumbed from the
+  aircraft: keeps the advisory recalculable from a saved pack and tunable per
+  profile; the headwind numbers are model truth regardless of TAS.
+- **GREEN/AMBER-oriented** (AMBER at ≥20 kt mean, RED only ≥40 kt): wind is a
+  planning factor, not a hazard — the value is the number, not the colour.
+  Altitude-dependent (winds read from the cross-section at the evaluated
+  altitude), so the altitude table now shows the wind trade per level.
+
+### (d) Mountain wind: wave-signature corroboration, no fake cross-ridge term
+
+Speed-only grading cannot separate "windy ridge" from "rotor day". The
+evaluator now corroborates strong-wind mountain points with two signatures
+already computed per sounding: an **inversion overlapping ridge top**
+(−1000/+4000 ft band — the stable layer of the classical wave criteria) or an
+**OSCILLATING vertical-motion classification** (model resolving the wave).
+With a signature present, the RED bar drops from `wind_red_kt` (40) to
+`corroborated_red_kt` (default 30). Cross-ridge wind *direction* was
+considered and rejected: the elevation profile is 1-D along the route, ridge
+orientation is unknown, and inferring it from the along-track terrain
+gradient assumes perpendicular crossings — false precision. OSCILLATING
+finally feeds an advisory (was computed and unused).
+
+### Real-world validation needed
+
+- (a) A summer afternoon flight with an isolated MODERATE cell at the
+  destination ETA — confirm Airport Weather ambers while en-route convective
+  stays green; check 25 nm radius against typical cell spacing.
+- (b) A winter cold-sector day with scattered snow showers — confirm AMBER
+  and that the 5% threshold doesn't flicker on a single mixed-phase point; a
+  warm-sector stratiform rain day — confirm rain stays AMBER-bounded.
+- (c) A strong jet day — sanity-check the minutes-delta against a flight
+  planner for the same route/TAS.
+- (d) A documented Alpine föhn/wave day (e.g. strong S flow over the main
+  ridge) — confirm RED at 30-39 kt with the inversion signature, and that
+  ordinary windy-but-neutral days stay AMBER.

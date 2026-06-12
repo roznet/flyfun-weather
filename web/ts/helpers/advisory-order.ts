@@ -33,6 +33,7 @@ export const ADVISORY_PRIORITY: string[] = [
   'airport_wind',
   'cloud_top',
   'vmc_cruise',
+  'enroute_precip',      // En-route Precipitation (visibility)
   'convective',
   'fronts',
   'fiki_icing',
@@ -42,6 +43,7 @@ export const ADVISORY_PRIORITY: string[] = [
   'mountain_wind',
   'llws',                // Low-Level Wind Shear
   'density_altitude',
+  'headwind',            // Winds Aloft / trip impact
   'sun',
   'model_agreement',     // Forecast Confidence
   'dd_nwp_agreement',

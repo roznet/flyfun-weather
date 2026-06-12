@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 17 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, feasibility, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 20 hazard evaluators (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -22,17 +22,20 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register FreezingPrecipEvaluator
   ├── @register CloudTopEvaluator          # en-route cloud
   ├── @register VMCCruiseEvaluator
+  ├── @register EnroutePrecipEvaluator     # precipitation (en-route visibility proxy)
   ├── @register TurbulenceEvaluator        # en-route turbulence
   ├── @register MountainWindEvaluator
   ├── @register ConvectiveEvaluator        # convective
+  ├── @register HeadwindEvaluator          # wind (trip impact)
   ├── @register ModelAgreementEvaluator    # model quality (cross-model)
   ├── @register DDvsNWPAgreementEvaluator  # model quality (within-model)
-  ├── @register FlightCategoryEvaluator    # airport conditions
+  ├── @register FlightCategoryEvaluator    # airport conditions (+ terminal convective)
   ├── @register AirportWindEvaluator
   ├── @register DensityAltitudeEvaluator
   ├── @register LLWSEvaluator
   ├── @register VFRFeasibilityEvaluator    # composite go/no-go
   ├── @register IFRFeasibilityEvaluator
+  ├── @register FrontsEvaluator            # fronts (experimental, gated on artifact)
   └── @register SunEvaluator               # sun (glare + night-proximity + seating note)
       ↓
 RouteAdvisoriesManifest (advisories + catalog + aggregation mode)
@@ -77,7 +80,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
-## The 17 Evaluators
+## The 20 Evaluators
 
 ### Icing
 
@@ -94,18 +97,25 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | `CloudTopEvaluator` | cloud | Can we fly above the clouds? Only considers layers pilot would enter (base ≤ ceiling), ignores high cirrus | `margin_ft`, `pct_amber` |
 | `VMCCruiseEvaluator` | cloud | Cloud coverage at cruise altitude specifically (BKN/OVC percentage along route) | `bkn_pct_amber`, `ovc_pct_red` |
 
+### Precipitation
+
+| Evaluator | Category | Logic | Key Parameters |
+|-----------|----------|-------|----------------|
+| `EnroutePrecipEvaluator` | precipitation | Precipitation along the route as the en-route **visibility proxy** (no model forecasts visibility at altitude; surface phase/intensity from `PrecipitationAssessment` works for all 7 models). Snow is the VFR killer: any snow ≥ amber threshold → AMBER, widespread moderate+ snow → RED. Moderate+ rain → AMBER (capped — rain degrades, rarely prohibits). FZRA/PL count toward extent only; severity owned by `freezing_precip`. Shared classifier (`classify_enroute_precip`) feeds the VFR composite capped at AMBER | `snow_pct_amber` (5%), `snow_moderate_pct_red` (25%), `rain_pct_amber` (30%) |
+
 ### Turbulence
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `TurbulenceEvaluator` | turbulence | CAT layers at cruise + strong vertical motion. SEVERE CAT anywhere → RED | `route_pct_amber`, `strong_w_fpm` |
-| `MountainWindEvaluator` | turbulence | Wind speed near significant terrain (orographic/rotor risk). Only evaluates where terrain > threshold | `terrain_threshold_ft`, `altitude_margin_ft`, `wind_amber_kt`, `wind_red_kt` |
+| `MountainWindEvaluator` | turbulence | Wind speed near significant terrain corroborated by wave signatures: an inversion overlapping ridge top (−1000/+4000ft band) or an OSCILLATING vertical-motion classification. Signature present → RED bar drops from `wind_red_kt` to `corroborated_red_kt` ("rotor day" vs "windy ridge"). Cross-ridge direction deliberately NOT assessed (1-D terrain profile — ridge orientation unknown). Only evaluates where terrain > threshold | `terrain_threshold_ft`, `altitude_margin_ft`, `wind_amber_kt`, `wind_red_kt` (40), `corroborated_red_kt` (30) |
 
 ### Other
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `ConvectiveEvaluator` | convective | Route points with convective risk ≥ threshold. Altitude-aware: ignores convection whose tops are below `cruise_ft - top_clearance_ft`. HIGH/EXTREME → instant RED. LOW risk capped at AMBER (prevents false alarms for marginal instability) | `min_risk`, `affected_pct_amber`, `affected_pct_red`, `top_clearance_ft` (2000) |
+| `HeadwindEvaluator` | wind | Route-average cruise-level headwind + trip-time delta vs still air (TAS is an advisory **parameter**, not plumbed from the aircraft — keeps recalc-from-pack working). Altitude-aware (cross-section winds at the evaluated altitude → the altitude table shows the wind trade per level; falls back to precomputed `wind_components`). Informational bias: AMBER on mean ≥ 20kt, RED only ≥ 40kt; tailwinds report minutes saved | `cruise_tas_kt` (110), `mean_amber_kt` (20), `mean_red_kt` (40) |
 | `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). Evaluated once, not per-model. **Disabled by default** — user must enable via profile | `min_poor_vars` (3), `poor_pct_amber`, `poor_pct_red` |
 | `DDvsNWPAgreementEvaluator` | model | Within-model agreement: compares DD (thermodynamic) vs NWP tracks per model at each route point. Checks freezing-level delta, cloud layer Jaccard (only when NWP has real boundaries — `source="nwp_3d"` or `"grib"`, never `"synthesized"` which is circular), and convective risk category distance. Surfaces e.g. mid-level decks GFS sees that DD misses, or ECMWF cirrus ice-supersaturation that `cc` rejects. **Disabled by default** — dev/calibration signal, not pilot-facing | `freezing_delta_ft` (2000), `cloud_overlap_min` (30%), `amber_pct` (30), `red_pct` (60) |
 
@@ -113,7 +123,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
-| `FlightCategoryEvaluator` | airport | Ceiling/visibility at departure + arrival. OR logic: either metric below threshold triggers. Defaults match MVFR/IFR boundaries | `amber_ceiling_ft` (3000), `amber_vis_sm` (5), `red_ceiling_ft` (1000), `red_vis_sm` (3) |
+| `FlightCategoryEvaluator` | airport | Ceiling/visibility at departure + arrival (OR logic: either metric below threshold triggers; defaults match MVFR/IFR boundaries) PLUS terminal-area convective risk within `conv_radius_nm` of each end with **no coverage dilution** (a deviation is not an option on climb-out/approach): MODERATE → AMBER, HIGH/EXTREME → RED, no altitude filter | `amber_ceiling_ft` (3000), `amber_vis_sm` (5), `red_ceiling_ft` (1000), `red_vis_sm` (3), `conv_radius_nm` (25) |
 | `AirportWindEvaluator` | airport | Crosswind on best runway + gust severity at departure + arrival. Worst of dep/arr becomes the status | `xwind_green_kt`, `xwind_red_kt`, `gust_green_kt`, `gust_red_kt` |
 | `DensityAltitudeEvaluator` | airport | Density altitude at departure + arrival from forecast T/QNH at the expected times + field elevation (terrain profile). Triggers on absolute DA OR DA-above-field (hot-day performance loss). UNAVAILABLE without temperature/terrain — never green-by-absence | `da_amber_ft` (5000), `da_red_ft` (8000), `delta_amber_ft` (3000), `delta_red_ft` (5000) |
 | `LLWSEvaluator` | airport | Low-level wind shear at departure + arrival: 0–1km bulk shear from the airport-point sounding (catches the nocturnal LLJ AirportWind can't see) OR gust factor (gust − sustained). Surface-based inversion reported alongside significant shear. Worst of dep/arr | `shear_amber_kt` (20), `shear_red_kt` (30), `gust_factor_amber_kt` (15) |
@@ -122,7 +132,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
-| `VFRFeasibilityEvaluator` | feasibility | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage). Worst of sub-assessments wins | `cloud_base_margin_ft`, `bkn_pct_amber`, `ovc_pct_red` |
+| `VFRFeasibilityEvaluator` | feasibility | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage), climb-out/descent corridor decks (BKN/OVC fully below cruise within `terminal_corridor_nm` of either end — OVC→RED, BKN→AMBER, see meteorology-decisions §10), and en-route precipitation (shared `classify_enroute_precip`, capped at AMBER in the composite). Worst of sub-assessments wins | `cloud_clearance_ft`, `imc_pct_amber`, `imc_pct_red`, `terminal_corridor_nm` (5) |
 | `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (uses shared `has_relevant_icing()` helper aligned with FIKI advisory), convective risk along route | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_pct_amber`, `icing_pct_red`, `icing_altitude_buffer_ft` |
 
 ### Sun

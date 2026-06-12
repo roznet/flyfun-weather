@@ -1,13 +1,21 @@
 """VFR feasibility advisory — overall VFR flight viability assessment.
 
 Composite advisory combining airport conditions, en-route cloud clearance,
-and VMC compliance into a single go/no-go style assessment for VFR flights.
+VMC compliance, climb-out/descent corridor decks, and en-route precipitation
+into a single go/no-go style assessment for VFR flights.
+
+The precipitation axis (shared classifier with the en-route precipitation
+advisory) is capped at AMBER here: a pilot VMC-on-top is not directly
+affected by surface rain below, but widespread snow or heavy rain degrades
+visibility and every descent/divert option, which deserves a composite
+caution. The standalone advisory still grades it fully (snow can RED).
 """
 
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent
+from weatherbrief.analysis.advisories.enroute_precip import classify_enroute_precip
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -338,8 +346,20 @@ class VFRFeasibilityEvaluator:
                 elif affected > 0:
                     enroute_detail = adv_t("vfr.minor", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
 
-            # 5. Combine airport + en-route + corridor
-            status = _worst_status(airport_status, enroute_status, corridor_status)
+            # 5. En-route precipitation (visibility proxy) — capped at AMBER
+            # in the composite; the standalone advisory grades it fully.
+            precip_status, precip_detail, _, _, precip_signal = (
+                classify_enroute_precip(ctx, model)
+            )
+            if not precip_signal or precip_status == AdvisoryStatus.UNAVAILABLE:
+                precip_status, precip_detail = AdvisoryStatus.GREEN, ""
+            elif precip_status == AdvisoryStatus.RED:
+                precip_status = AdvisoryStatus.AMBER
+
+            # 6. Combine airport + en-route + corridor + precipitation
+            status = _worst_status(
+                airport_status, enroute_status, corridor_status, precip_status,
+            )
 
             detail_parts = []
             if airport_detail:
@@ -347,6 +367,8 @@ class VFRFeasibilityEvaluator:
             if enroute_detail:
                 detail_parts.append(enroute_detail)
             detail_parts.extend(corridor_parts)
+            if precip_status != AdvisoryStatus.GREEN and precip_detail:
+                detail_parts.append(precip_detail)
 
             if not detail_parts:
                 if total > 0:
