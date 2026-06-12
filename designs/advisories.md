@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 16 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, feasibility, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 17 hazard evaluators (grouped into icing, cloud, turbulence, convective, model, airport, feasibility, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -30,6 +30,7 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register FlightCategoryEvaluator    # airport conditions
   ├── @register AirportWindEvaluator
   ├── @register DensityAltitudeEvaluator
+  ├── @register LLWSEvaluator
   ├── @register VFRFeasibilityEvaluator    # composite go/no-go
   ├── @register IFRFeasibilityEvaluator
   └── @register SunEvaluator               # sun (glare + night-proximity + seating note)
@@ -76,7 +77,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
-## The 16 Evaluators
+## The 17 Evaluators
 
 ### Icing
 
@@ -115,6 +116,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | `FlightCategoryEvaluator` | airport | Ceiling/visibility at departure + arrival. OR logic: either metric below threshold triggers. Defaults match MVFR/IFR boundaries | `amber_ceiling_ft` (3000), `amber_vis_sm` (5), `red_ceiling_ft` (1000), `red_vis_sm` (3) |
 | `AirportWindEvaluator` | airport | Crosswind on best runway + gust severity at departure + arrival. Worst of dep/arr becomes the status | `xwind_green_kt`, `xwind_red_kt`, `gust_green_kt`, `gust_red_kt` |
 | `DensityAltitudeEvaluator` | airport | Density altitude at departure + arrival from forecast T/QNH at the expected times + field elevation (terrain profile). Triggers on absolute DA OR DA-above-field (hot-day performance loss). UNAVAILABLE without temperature/terrain — never green-by-absence | `da_amber_ft` (5000), `da_red_ft` (8000), `delta_amber_ft` (3000), `delta_red_ft` (5000) |
+| `LLWSEvaluator` | airport | Low-level wind shear at departure + arrival: 0–1km bulk shear from the airport-point sounding (catches the nocturnal LLJ AirportWind can't see) OR gust factor (gust − sustained). Surface-based inversion reported alongside significant shear. Worst of dep/arr | `shear_amber_kt` (20), `shear_red_kt` (30), `gust_factor_amber_kt` (15) |
 
 ### Feasibility (Composite)
 

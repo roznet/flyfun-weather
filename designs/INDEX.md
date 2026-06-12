@@ -36,7 +36,7 @@ Dated log of explicit meteorological design decisions, each with context, reason
 → Full doc: meteorology-decisions.md
 
 ### advisories
-Route advisory system: 16 deterministic evaluators across 8 categories (icing incl. freezing precipitation, cloud, turbulence, convective, airport conditions incl. density altitude, feasibility, model-quality, sun) with per-model severity grading, user-tunable params, registry auto-discovery, worst/majority aggregation, and recalculation without re-fetching.
+Route advisory system: 17 deterministic evaluators across 8 categories (icing incl. freezing precipitation, cloud, turbulence, convective, airport conditions incl. density altitude and LLWS, feasibility, model-quality, sun) with per-model severity grading, user-tunable params, registry auto-discovery, worst/majority aggregation, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
 → Full doc: advisories.md
 
