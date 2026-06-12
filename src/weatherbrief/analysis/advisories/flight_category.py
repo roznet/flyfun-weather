@@ -1,4 +1,14 @@
-"""Airport weather (flight category) advisory evaluator."""
+"""Airport weather (flight category + terminal convective) advisory evaluator.
+
+Besides ceiling/visibility category, this grades convective risk in the
+terminal area: the en-route convective advisory dilutes a single cell by
+percentage-of-route (one MODERATE cell over the destination is ~5% of a
+20-point route → GREEN), but at the airports a deviation is not an option —
+the cell must not be there at ETD/ETA. Terminal convection is therefore
+graded per airport with no coverage threshold: MODERATE within the terminal
+radius is AMBER, HIGH/EXTREME is RED, and no altitude filter applies (climb
+and approach traverse every level).
+"""
 
 from __future__ import annotations
 
@@ -9,10 +19,54 @@ from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    ConvectiveRisk,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
 from weatherbrief.models.airport_conditions import AirportModelCondition
+
+_CONV_ORDER = [
+    ConvectiveRisk.NONE,
+    ConvectiveRisk.MARGINAL,
+    ConvectiveRisk.LOW,
+    ConvectiveRisk.MODERATE,
+    ConvectiveRisk.HIGH,
+    ConvectiveRisk.EXTREME,
+]
+
+
+def _terminal_convective_risk(
+    ctx: RouteContext,
+    model: str,
+    end: str,
+    radius_nm: float,
+) -> ConvectiveRisk:
+    """Worst convective risk within *radius_nm* of one route end ("dep"/"arr")."""
+    worst = ConvectiveRisk.NONE
+    for rpa in ctx.analyses:
+        dist = rpa.distance_from_origin_nm
+        in_terminal = (
+            dist <= radius_nm if end == "dep"
+            else dist >= ctx.total_distance_nm - radius_nm
+        )
+        if not in_terminal:
+            continue
+        sounding = rpa.sounding.get(model)
+        conv = sounding.convective if sounding is not None else None
+        if conv is None:
+            continue
+        if _CONV_ORDER.index(conv.risk_level) > _CONV_ORDER.index(worst):
+            worst = conv.risk_level
+    return worst
+
+
+def _terminal_convective_status(risk: ConvectiveRisk) -> AdvisoryStatus:
+    """No coverage threshold at the terminal: MODERATE→AMBER, HIGH+→RED."""
+    if risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
+        return AdvisoryStatus.RED
+    if risk == ConvectiveRisk.MODERATE:
+        return AdvisoryStatus.AMBER
+    return AdvisoryStatus.GREEN
 
 
 def _classify_conditions(
@@ -50,12 +104,17 @@ class FlightCategoryEvaluator:
         return AdvisoryCatalogEntry(
             id="flight_category",
             name="Airport Weather",
-            short_description="Flight category at departure and arrival",
+            short_description="Flight category and convective risk at departure and arrival",
             description=(
                 "Checks visibility and ceiling at departure and arrival airports "
                 "against configurable thresholds. Defaults match standard MVFR/IFR "
                 "boundaries: amber when ceiling < 3000ft or visibility < 5sm, "
-                "red when ceiling < 1000ft or visibility < 3sm."
+                "red when ceiling < 1000ft or visibility < 3sm. Also grades "
+                "convective risk within the terminal radius of each airport with "
+                "no coverage dilution — a deviation is not an option on climb-out "
+                "or approach, so MODERATE convective risk near either airport is "
+                "amber and HIGH or above is red, regardless of how small a "
+                "fraction of the route it covers."
             ),
             category="airport",
             parameters=[
@@ -103,6 +162,20 @@ class FlightCategoryEvaluator:
                     max=5,
                     step=0.5,
                 ),
+                AdvisoryParameterDef(
+                    key="conv_radius_nm",
+                    label="Terminal radius",
+                    description=(
+                        "Convective risk is checked within this distance of "
+                        "departure and arrival (MODERATE = amber, HIGH+ = red)"
+                    ),
+                    type="number",
+                    unit="nm",
+                    default=25,
+                    min=10,
+                    max=50,
+                    step=5,
+                ),
             ],
         )
 
@@ -112,6 +185,7 @@ class FlightCategoryEvaluator:
         amber_vis_sm = params.get("amber_vis_sm", 5)
         red_ceiling_ft = params.get("red_ceiling_ft", 1000)
         red_vis_sm = params.get("red_vis_sm", 3)
+        conv_radius_nm = params.get("conv_radius_nm", 25)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -136,9 +210,9 @@ class FlightCategoryEvaluator:
 
             parts = []
             worst = AdvisoryStatus.GREEN
-            for label_key, icao, cond in [
-                ("airport.dep", dep.icao, dep_cond),
-                ("airport.arr", arr.icao, arr_cond),
+            for label_key, icao, cond, end in [
+                ("airport.dep", dep.icao, dep_cond, "dep"),
+                ("airport.arr", arr.icao, arr_cond, "arr"),
             ]:
                 if cond is None:
                     continue
@@ -148,7 +222,18 @@ class FlightCategoryEvaluator:
                 )
                 cat_label = cond.flight_category.value
                 label = adv_t(label_key, loc)
-                parts.append(f"{label} {icao}: {cat_label}")
+                part = f"{label} {icao}: {cat_label}"
+
+                conv_risk = _terminal_convective_risk(ctx, model, end, conv_radius_nm)
+                conv_status = _terminal_convective_status(conv_risk)
+                if conv_status != AdvisoryStatus.GREEN:
+                    part += adv_t(
+                        "flight_category.conv", loc,
+                        risk=conv_risk.value.upper(),
+                    )
+                    status = AdvisoryStatus.worst([status, conv_status])
+
+                parts.append(part)
                 worst = AdvisoryStatus.worst([worst, status])
 
             detail = " | ".join(parts)

@@ -116,7 +116,7 @@ class TestFlightCategoryEvaluator:
         entry = FlightCategoryEvaluator.catalog_entry()
         assert entry.id == "flight_category"
         assert entry.category == "airport"
-        assert len(entry.parameters) == 4
+        assert len(entry.parameters) == 5
 
     def test_vfr_both_airports(self):
         ac = _make_airport_conditions(
@@ -366,3 +366,97 @@ def test_density_altitude_unavailable_without_elevation():
         _da_ctx(temperature_c=30.0, elevation=None), {},
     )
     assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE
+
+
+# --- FlightCategoryEvaluator: terminal convective aspect ---
+
+def _conv_rpa(i: int, distance_nm: float, risk) -> RoutePointAnalysis:
+    from weatherbrief.models import ConvectiveAssessment, SoundingAnalysis, ThermodynamicIndices
+
+    conv = ConvectiveAssessment(risk_level=risk) if risk is not None else None
+    return RoutePointAnalysis(
+        point_index=i,
+        lat=48.0,
+        lon=2.0 + i * 0.5,
+        distance_from_origin_nm=distance_nm,
+        interpolated_time=datetime(2026, 6, 1, 12, 0),
+        forecast_hour=datetime(2026, 6, 1, 12, 0),
+        track_deg=90.0,
+        sounding={"gfs": SoundingAnalysis(indices=ThermodynamicIndices(), convective=conv)},
+    )
+
+
+def _terminal_conv_ctx(dep_risk, arr_risk, mid_risk=None) -> RouteContext:
+    """200nm route, 10 points: convective risk at the endpoints and optionally mid-route."""
+    from weatherbrief.models import ConvectiveRisk
+
+    analyses = []
+    for i in range(10):
+        d = i * 200.0 / 9
+        if d <= 25:
+            risk = dep_risk
+        elif d >= 175:
+            risk = arr_risk
+        else:
+            risk = mid_risk
+        analyses.append(_conv_rpa(i, d, risk))
+    conditions = _make_airport_conditions(
+        {"gfs": FlightCategory.VFR}, {"gfs": FlightCategory.VFR},
+    )
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=None,
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=200,
+        airport_conditions=conditions,
+    )
+
+
+class TestTerminalConvective:
+
+    def test_quiet_terminals_green(self):
+        from weatherbrief.models import ConvectiveRisk
+
+        ctx = _terminal_conv_ctx(ConvectiveRisk.LOW, ConvectiveRisk.NONE)
+        result = FlightCategoryEvaluator.evaluate(ctx, {})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_moderate_at_arrival_amber_despite_low_route_coverage(self):
+        from weatherbrief.models import ConvectiveRisk
+
+        # One MODERATE zone only at the arrival end — % -of-route dilution must
+        # not apply at the terminal.
+        ctx = _terminal_conv_ctx(ConvectiveRisk.NONE, ConvectiveRisk.MODERATE)
+        result = FlightCategoryEvaluator.evaluate(ctx, {})
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert "convective MODERATE" in result.per_model[0].detail
+
+    def test_high_at_departure_red(self):
+        from weatherbrief.models import ConvectiveRisk
+
+        ctx = _terminal_conv_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.NONE)
+        result = FlightCategoryEvaluator.evaluate(ctx, {})
+        assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_mid_route_convection_not_attributed_to_terminals(self):
+        from weatherbrief.models import ConvectiveRisk
+
+        ctx = _terminal_conv_ctx(
+            ConvectiveRisk.NONE, ConvectiveRisk.NONE, mid_risk=ConvectiveRisk.HIGH,
+        )
+        result = FlightCategoryEvaluator.evaluate(ctx, {})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_radius_parameter_widens_terminal(self):
+        from weatherbrief.models import ConvectiveRisk
+
+        # HIGH at ~89nm (mid-route point 4) is outside default 25nm radius but
+        # inside a 120nm one.
+        ctx = _terminal_conv_ctx(
+            ConvectiveRisk.NONE, ConvectiveRisk.NONE, mid_risk=ConvectiveRisk.HIGH,
+        )
+        result = FlightCategoryEvaluator.evaluate(ctx, {"conv_radius_nm": 120})
+        assert result.aggregate_status == AdvisoryStatus.RED

@@ -386,6 +386,8 @@
   "settings.cat.turbulence": "Turbulencia",
   "settings.cat.convective": "Convectivo",
   "settings.cat.airport": "Aeropuerto",
+  "settings.cat.precipitation": "Precipitación",
+  "settings.cat.wind": "Vientos",
   "settings.cat.model": "Pronóstico",
   "settings.selectOneModel": "Seleccione al menos un modelo de pronóstico.",
   "settings.profileCreated": "Perfil \"{name}\" creado.",

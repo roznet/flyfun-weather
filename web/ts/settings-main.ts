@@ -53,8 +53,10 @@ import { renderAdvisoryPopup } from './helpers/advisory-popup';
 const CATEGORY_KEYS: [string, string][] = [
   ['icing', 'settings.cat.icing'],
   ['cloud', 'settings.cat.cloud'],
+  ['precipitation', 'settings.cat.precipitation'],
   ['turbulence', 'settings.cat.turbulence'],
   ['convective', 'settings.cat.convective'],
+  ['wind', 'settings.cat.wind'],
   ['airport', 'settings.cat.airport'],
   ['model', 'settings.cat.model'],
 ];
