@@ -282,6 +282,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Flughäfen VFR, keine Streckendaten",
         "es": "Aeropuertos VFR, sin datos en ruta",
     },
+    "vfr.corridor_climb": {
+        "en": "{cov} deck in climb-out at {icao}",
+        "fr": "Couche {cov} en montée à {icao}",
+        "de": "{cov}-Schicht im Steigflug bei {icao}",
+        "es": "Capa {cov} en ascenso en {icao}",
+    },
+    "vfr.corridor_descent": {
+        "en": "{cov} deck in descent at {icao}",
+        "fr": "Couche {cov} en descente à {icao}",
+        "de": "{cov}-Schicht im Sinkflug bei {icao}",
+        "es": "Capa {cov} en descenso en {icao}",
+    },
 
     # --- ifr_feasibility ---
     "ifr.lifr_below_min": {
