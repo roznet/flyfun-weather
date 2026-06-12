@@ -297,6 +297,9 @@ function showFeedbackModal(): void {
       </select>
       <label for="feedback-comment" style="font-weight:500;font-size:0.85rem;">${t('feedback.commentLabel')}</label>
       <textarea id="feedback-comment" rows="4" style="width:100%;padding:0.4rem;margin:0.25rem 0 0;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit;" placeholder="${t('feedback.commentPlaceholder')}"></textarea>
+      <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;margin-top:0.5rem;cursor:pointer;">
+        <input type="checkbox" id="feedback-contact-ok"> ${t('feedback.contactOk')}
+      </label>
       <div id="feedback-error" style="color:#dc3545;font-size:0.8rem;min-height:1.2em;margin-top:0.25rem;"></div>
       <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-top:0.75rem;">
         <button class="btn" id="feedback-cancel">${t('feedback.cancel')}</button>
@@ -324,11 +327,14 @@ function showFeedbackModal(): void {
     try {
       submitBtn.disabled = true;
       submitBtn.textContent = t('feedback.submitting');
+      const contactOk = (document.getElementById('feedback-contact-ok') as HTMLInputElement | null)?.checked ?? false;
       await submitFeedback({
         flight_id: '',
         pack_timestamp: '',
         category: categoryEl.value,
         comment,
+        target: 'general',
+        contact_ok: contactOk,
       });
       const modal = overlay.querySelector('.feedback-modal')!;
       modal.innerHTML = `

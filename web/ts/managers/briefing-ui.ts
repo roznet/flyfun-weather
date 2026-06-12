@@ -1438,6 +1438,83 @@ const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; labelKey: string; icon:
 /** Digest section keys shown in compact mode (synoptic overview + trend only). */
 const COMPACT_DIGEST_KEYS: Set<keyof WeatherDigest> = new Set(['synoptic', 'trend']);
 
+/** Packs already thumb-rated in this page view (no read-back of prior ratings). */
+const ratedDigests = new Set<string>();
+
+function digestFeedbackHtml(flightId: string, packTimestamp: string): string {
+  if (ratedDigests.has(`${flightId}|${packTimestamp}`)) {
+    return `<div class="digest-feedback"><span class="digest-feedback-thanks">${t('feedback.thumbs.thanks')}</span></div>`;
+  }
+  return `
+    <div class="digest-feedback" id="digest-feedback">
+      <span class="digest-feedback-label">${t('feedback.thumbs.question')}</span>
+      <button type="button" class="digest-thumb-btn" id="digest-thumb-up" aria-label="${t('feedback.thumbs.up')}" title="${t('feedback.thumbs.up')}">👍</button>
+      <button type="button" class="digest-thumb-btn" id="digest-thumb-down" aria-label="${t('feedback.thumbs.down')}" title="${t('feedback.thumbs.down')}">👎</button>
+      <div class="digest-feedback-form" id="digest-feedback-form" style="display:none;">
+        <p class="digest-feedback-helper"><strong>${t('feedback.thumbs.helperTitle')}</strong><br>${t('feedback.thumbs.helperBody')}</p>
+        <textarea id="digest-feedback-comment" rows="3" maxlength="2000" placeholder="${t('feedback.thumbs.placeholder')}"></textarea>
+        <label class="digest-feedback-consent">
+          <input type="checkbox" id="digest-feedback-contact-ok"> ${t('feedback.contactOk')}
+        </label>
+        <div class="digest-feedback-actions">
+          <button type="button" class="btn btn-primary" id="digest-feedback-send">${t('feedback.thumbs.send')}</button>
+        </div>
+      </div>
+      <div class="digest-feedback-error" id="digest-feedback-error"></div>
+    </div>`;
+}
+
+function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: string): void {
+  const maybeWidget = el.querySelector<HTMLElement>('#digest-feedback');
+  if (!maybeWidget) return;
+  const widget = maybeWidget;
+
+  const upBtn = widget.querySelector<HTMLButtonElement>('#digest-thumb-up')!;
+  const downBtn = widget.querySelector<HTMLButtonElement>('#digest-thumb-down')!;
+  const form = widget.querySelector<HTMLElement>('#digest-feedback-form')!;
+  const errorEl = widget.querySelector<HTMLElement>('#digest-feedback-error')!;
+
+  async function post(sentiment: 'up' | 'down', comment: string, contactOk: boolean): Promise<void> {
+    errorEl.textContent = '';
+    upBtn.disabled = true;
+    downBtn.disabled = true;
+    try {
+      await api.submitFeedback({
+        flight_id: flightId,
+        pack_timestamp: packTimestamp,
+        category: 'digest_rating',
+        comment,
+        sentiment,
+        target: 'digest',
+        contact_ok: contactOk,
+      });
+      ratedDigests.add(`${flightId}|${packTimestamp}`);
+      widget.innerHTML = `<span class="digest-feedback-thanks">${t('feedback.thumbs.thanks')}</span>`;
+    } catch (err) {
+      errorEl.textContent = t('feedback.failedSubmit', { error: String(err) });
+      upBtn.disabled = false;
+      downBtn.disabled = false;
+    }
+  }
+
+  upBtn.addEventListener('click', () => {
+    void post('up', '', false);
+  });
+
+  downBtn.addEventListener('click', () => {
+    downBtn.classList.add('active');
+    upBtn.classList.remove('active');
+    form.style.display = '';
+    widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')?.focus();
+  });
+
+  widget.querySelector<HTMLButtonElement>('#digest-feedback-send')!.addEventListener('click', () => {
+    const comment = widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')!.value.trim();
+    const contactOk = widget.querySelector<HTMLInputElement>('#digest-feedback-contact-ok')!.checked;
+    void post('down', comment, contactOk);
+  });
+}
+
 function renderDigestHtml(digest: WeatherDigest, displayMode: DisplayMode): string {
   const sections = displayMode === 'compact'
     ? DIGEST_SECTIONS.filter(s => COMPACT_DIGEST_KEYS.has(s.key))
@@ -1472,7 +1549,8 @@ export function renderSynopsis(
   if (digest) {
     const warning = buildDigestProfileWarning(digest, flight.profile_id);
     const staleClass = warning ? ' digest-stale' : '';
-    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
+    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>${digestFeedbackHtml(flight.id, pack.fetch_timestamp)}`;
+    attachDigestFeedback(el, flight.id, pack.fetch_timestamp);
     return;
   }
 
@@ -1526,7 +1604,8 @@ async function fetchAndRenderDigestJson(
     const digest: WeatherDigest = await resp.json();
     const warning = buildDigestProfileWarning(digest, currentProfileId ?? null);
     const staleClass = warning ? ' digest-stale' : '';
-    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
+    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>${digestFeedbackHtml(flightId, timestamp)}`;
+    attachDigestFeedback(el, flightId, timestamp);
   } catch {
     el.innerHTML = `<p class="muted">${t('digest.failed')}</p>`;
   }

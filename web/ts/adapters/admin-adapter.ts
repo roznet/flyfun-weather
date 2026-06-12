@@ -251,6 +251,9 @@ export interface FeedbackEntry {
   pack_timestamp: string;
   category: string;
   comment: string;
+  sentiment: 'up' | 'down' | null;
+  target: string | null;
+  contact_ok: boolean;
   created_at: string | null;
   status: FeedbackStatus;
   classification: string | null;

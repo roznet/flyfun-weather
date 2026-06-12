@@ -1297,6 +1297,92 @@ label {
   line-height: 1.6;
 }
 
+/* --- Digest thumb feedback --- */
+
+.digest-feedback {
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.digest-feedback-label {
+  color: var(--text-muted);
+  margin-right: 0.5rem;
+}
+
+.digest-thumb-btn {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.2rem 0.6rem;
+  font-size: 1rem;
+  cursor: pointer;
+  margin-right: 0.25rem;
+}
+
+.digest-thumb-btn:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+.digest-thumb-btn.active {
+  border-color: var(--primary, #2563eb);
+}
+
+.digest-thumb-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.digest-feedback-form {
+  margin-top: 0.6rem;
+}
+
+.digest-feedback-helper {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem;
+}
+
+.digest-feedback-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.85rem;
+  background: var(--surface, #fff);
+  color: var(--text);
+}
+
+.digest-feedback-consent {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.digest-feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.digest-feedback-error {
+  color: #dc3545;
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
+.digest-feedback-thanks {
+  color: var(--text-muted);
+}
+
 /* --- GRAMET --- */
 
 .gramet-img {

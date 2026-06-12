@@ -1389,6 +1389,9 @@ async function init(): Promise<void> {
         </select>
         <label for="feedback-comment" style="font-weight:500;font-size:0.85rem;">${t('feedback.commentLabel')}</label>
         <textarea id="feedback-comment" rows="4" style="width:100%;padding:0.4rem;margin:0.25rem 0 0;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit;" placeholder="${t('feedback.commentPlaceholder')}"></textarea>
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;margin-top:0.5rem;cursor:pointer;">
+          <input type="checkbox" id="feedback-contact-ok"> ${t('feedback.contactOk')}
+        </label>
         <div id="feedback-error" style="color:#dc3545;font-size:0.8rem;min-height:1.2em;margin-top:0.25rem;"></div>
         <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
           <button class="btn" id="feedback-cancel">${t('feedback.cancel')}</button>
@@ -1426,11 +1429,14 @@ async function init(): Promise<void> {
       submitBtn.textContent = t('feedback.submitting');
 
       try {
+        const contactOk = (document.getElementById('feedback-contact-ok') as HTMLInputElement | null)?.checked ?? false;
         await api.submitFeedback({
           flight_id: flightId,
           pack_timestamp: packTimestamp,
           category: categoryEl.value,
           comment,
+          target: 'general',
+          contact_ok: contactOk,
         });
         // Show success state
         const modal = overlay.querySelector('.feedback-modal')!;
