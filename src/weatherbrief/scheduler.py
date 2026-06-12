@@ -1082,13 +1082,26 @@ async def _run_standalone_cycle_supervised(
             f"{_STANDALONE_SUBPROCESS_TIMEOUT_S}s, killed"
         )
         logger.error(error_message)
-        await _terminate_subprocess(proc)
+        try:
+            await _terminate_subprocess(proc)
+        except asyncio.CancelledError:
+            # Cancelled (app shutdown) while waiting out the SIGTERM grace
+            # period. A sibling `except CancelledError` would not catch this
+            # (each try matches once), and another awaiting cleanup would
+            # just re-open the race — escalate synchronously and re-raise.
+            if proc.returncode is None:
+                proc.kill()
+            raise
         returncode = proc.returncode
     except asyncio.CancelledError:
         # App shutdown: don't leave the cycle running against a stopping
-        # container. The cycle is idempotent end-to-end (UPSERT/dup-check),
-        # so the next fire simply re-does the truncated work.
-        await _terminate_subprocess(proc)
+        # container. terminate() is synchronous, so there is no window for a
+        # second cancellation; the child exits on SIGTERM unreaped (the OS /
+        # container teardown collects it), and the cycle is idempotent
+        # end-to-end (UPSERT/dup-check) so the next fire re-does the
+        # truncated work.
+        if proc.returncode is None:
+            proc.terminate()
         raise
 
     if returncode == 0:

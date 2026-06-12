@@ -209,6 +209,51 @@ async def test_timeout_kills_child_and_records_failure(monkeypatch):
     assert "exceeded" in rec.call_args[0][3]
 
 
+@pytest.mark.asyncio
+async def test_cancellation_terminates_child(monkeypatch):
+    """App shutdown mid-cycle must signal the child and propagate the cancel."""
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    proc = FakeProc(hang=True)
+    _patch_exec(monkeypatch, proc)
+
+    task = asyncio.ensure_future(_run_standalone_cycle_supervised(
+        _app_state(), fetch_forecasts=True, score_observations=False,
+    ))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert proc.terminated
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_timeout_grace_kills_child(monkeypatch):
+    """Cancellation arriving while the TimeoutError handler waits out the
+    SIGTERM grace period escapes that handler (a sibling `except
+    CancelledError` only matches the same try once) — the supervisor must
+    still escalate to SIGKILL synchronously and propagate the cancel."""
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    monkeypatch.setattr(scheduler, "_STANDALONE_SUBPROCESS_TIMEOUT_S", 0.05)
+
+    class StubbornProc(FakeProc):
+        def terminate(self):
+            self.terminated = True  # ignores SIGTERM — never completes wait()
+
+    proc = StubbornProc(hang=True)
+    _patch_exec(monkeypatch, proc)
+
+    task = asyncio.ensure_future(_run_standalone_cycle_supervised(
+        _app_state(), fetch_forecasts=True, score_observations=False,
+    ))
+    # Let the supervisor hit the timeout and enter the SIGTERM grace wait.
+    await asyncio.sleep(0.2)
+    assert proc.terminated
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert proc.killed
+
+
 # ---------------------------------------------------------------------------
 # _ensure_failed_cycle_recorded — dedup against child-written rows
 # ---------------------------------------------------------------------------
