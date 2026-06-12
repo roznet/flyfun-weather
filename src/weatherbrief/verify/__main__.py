@@ -310,11 +310,14 @@ def _enter_background_mode() -> None:
         os.nice(10)
     except OSError:
         log.warning("Could not renice background cycle", exc_info=True)
-    try:
-        with open("/proc/self/oom_score_adj", "w") as f:
-            f.write("500")
-    except OSError:
-        log.warning("Could not set oom_score_adj", exc_info=True)
+    # oom_score_adj is a Linux-only procfs knob; skip on macOS/other dev hosts
+    # rather than logging a spurious FileNotFoundError traceback every cycle.
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/self/oom_score_adj", "w") as f:
+                f.write("500")
+        except OSError:
+            log.warning("Could not set oom_score_adj", exc_info=True)
 
 
 def cmd_standalone(args):
