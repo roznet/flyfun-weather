@@ -296,8 +296,32 @@ def cmd_discover(args):
     print(f"\nSaved to {path}")
 
 
+def _enter_background_mode() -> None:
+    """Lower scheduling priority and prefer this process as the OOM victim.
+
+    Used by scheduler-spawned standalone cycles (issue #236): the cycle
+    competes less with interactive requests for CPU, and if the cgroup ever
+    OOMs mid-cycle the kernel kills this disposable child instead of the
+    uvicorn parent (the OOM killer favours higher oom_score_adj). Both are
+    best-effort — a restricted environment just runs at normal priority.
+    """
+    log = logging.getLogger(__name__)
+    try:
+        os.nice(10)
+    except OSError:
+        log.warning("Could not renice background cycle", exc_info=True)
+    try:
+        with open("/proc/self/oom_score_adj", "w") as f:
+            f.write("500")
+    except OSError:
+        log.warning("Could not set oom_score_adj", exc_info=True)
+
+
 def cmd_standalone(args):
     """Run a standalone verification cycle."""
+    if args.background:
+        _enter_background_mode()
+
     _init_db()
     load_dotenv()
 
@@ -315,15 +339,25 @@ def cmd_standalone(args):
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+    from weatherbrief.tasks.standalone_verification import (
+        run_post_cycle_tasks,
+        run_standalone_cycle,
+    )
 
-    result = run_standalone_cycle(watchlist, airports_db, fetch_forecasts=not args.light)
+    result = run_standalone_cycle(
+        watchlist, airports_db,
+        fetch_forecasts=not args.light,
+        score_observations=not args.forecast_only,
+    )
     print(f"\nStandalone verification cycle complete:")
     print(f"  Models fetched: {result.get('models_fetched', 0)}")
     print(f"  Snapshots stored: {result.get('snapshots_stored', 0)}")
     print(f"  Observations stored: {result.get('observations_stored', 0)}")
     print(f"  Scores created: {result.get('scores_created', 0)}")
     print(f"  Duration: {result.get('duration_ms', 0)}ms")
+
+    if args.with_rollup:
+        run_post_cycle_tasks(airports_db, result["cycle_type"])
 
 
 def cmd_rebuild_cache(args):
@@ -564,9 +598,25 @@ def main():
         "--once", action="store_true", default=True,
         help="Run a single cycle (default)",
     )
-    p_standalone.add_argument(
+    standalone_mode = p_standalone.add_mutually_exclusive_group()
+    standalone_mode.add_argument(
         "--light", action="store_true",
         help="Light cycle: observations + scoring only, skip forecast fetch",
+    )
+    standalone_mode.add_argument(
+        "--forecast-only", action="store_true",
+        help="Forecast cycle: fetch + store snapshots only, skip scoring "
+             "(what the scheduler's 07/19 UTC fetch loop runs)",
+    )
+    p_standalone.add_argument(
+        "--with-rollup", action="store_true",
+        help="After the cycle, run the daily-stats rollup + dashboard cache "
+             "rebuild (the scheduler loops' post-cycle work)",
+    )
+    p_standalone.add_argument(
+        "--background", action="store_true",
+        help="Renice and raise oom_score_adj — set by the scheduler when it "
+             "runs the cycle as an isolated subprocess",
     )
 
     # rebuild-cache

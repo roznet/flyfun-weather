@@ -145,6 +145,7 @@ def fetch_icon_eu_single_level(
     forecast_hours: list[int],
     variables: list[str] | None = None,
     session: requests.Session | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
 ) -> dict[int, bytes]:
     """Download ICON-EU single-level GRIB2 fields and return concatenated bytes per fhour.
 
@@ -157,6 +158,9 @@ def fetch_icon_eu_single_level(
         forecast_hours: Forecast hours to download.
         variables: Variable names (defaults to ICON_EU_CLOUD_DIAG_VARIABLES).
         session: Optional requests session.
+        max_workers: Per-call download thread count. Callers that already
+            run several fetches concurrently pass a smaller value so the
+            total connection count stays bounded.
 
     Returns:
         Dict of {forecast_hour: concatenated decompressed GRIB2 bytes}.
@@ -177,7 +181,7 @@ def fetch_icon_eu_single_level(
         downloaded = 0
         failures: dict[int | str, int] = {}
 
-        with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(_download_one_file, url, sess): url
                 for url in urls
@@ -485,11 +489,16 @@ def fetch_icon_eu_per_variable(
     levels: list[int],
     variables: list[str],
     session: requests.Session | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
 ) -> dict[str, bytes]:
     """Download ICON-EU GRIB2 fields per variable for memory-efficient decoding.
 
     Same as fetch_icon_eu_fields but returns separate bytes per variable,
     so callers can decode one variable at a time and free memory between.
+
+    ``max_workers`` bounds this call's download threads; callers running
+    several per-variable fetches concurrently pass a smaller value so the
+    total connection count stays bounded.
 
     Returns:
         {variable_name: concatenated_decompressed_grib2_bytes}.
@@ -507,7 +516,7 @@ def fetch_icon_eu_per_variable(
         downloaded = 0
         failures: dict[int | str, int] = {}
 
-        with ThreadPoolExecutor(max_workers=MAX_DOWNLOAD_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(_download_one_file, url, sess): url
                 for url in urls

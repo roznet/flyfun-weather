@@ -13,6 +13,7 @@ import metpy.calc as mpcalc
 import numpy as np
 
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
+from weatherbrief.analysis.sounding.wet_bulb import wet_bulb_degc
 from weatherbrief.models import DerivedLevel, ParcelPathPoint, ThermodynamicIndices
 from weatherbrief.models.analysis import pressure_hpa_to_altitude_m
 
@@ -361,9 +362,11 @@ def compute_derived_levels_extended(
 
     wb_vals = None
     try:
-        wb_vals = mpcalc.wet_bulb_temperature(
+        # Vectorized RK4 descent, same definition/integrand as MetPy's
+        # per-level ODE solve but ~6x faster — see wet_bulb.py.
+        wb_vals = wet_bulb_degc(
             profile.pressure, profile.temperature, profile.dewpoint,
-        ).to("degC").magnitude
+        )
     except Exception:
         logger.debug("Wet bulb computation failed", exc_info=True)
 

@@ -1512,7 +1512,7 @@ function buildDigestProfileWarning(
   if (digest.profile_id === currentProfileId) return '';
   // Profile mismatch
   const digestProfileName = digest.profile_name || `#${digest.profile_id}`;
-  return `<div class="digest-profile-warning">${t('digest.profileMismatch', { name: digestProfileName })}</div>`;
+  return `<div class="digest-profile-warning">${t('digest.profileMismatch', { name: escapeHtml(digestProfileName) })}</div>`;
 }
 
 async function fetchAndRenderDigestJson(

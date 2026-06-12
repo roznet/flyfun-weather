@@ -337,17 +337,60 @@ def create_app() -> FastAPI:
 
     _validation_logger = logging.getLogger("weatherbrief.api.validation")
 
+    # Request bodies can carry credentials (e.g. autorouter_password on
+    # PUT /api/user/preferences) — never write those to the log.
+    _sensitive_key_re = re.compile(
+        r"password|secret|token|api_key|apikey|authorization", re.IGNORECASE
+    )
+
+    def _redact_sensitive(value):
+        if isinstance(value, dict):
+            return {
+                k: ("[REDACTED]" if _sensitive_key_re.search(str(k)) else _redact_sensitive(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [_redact_sensitive(v) for v in value]
+        if isinstance(value, (str, bytes)):
+            # Unparsed bodies arrive as raw str/bytes; we can't redact
+            # per-field, so drop the whole thing if it looks sensitive.
+            text = value.decode("utf-8", "replace") if isinstance(value, bytes) else value
+            if _sensitive_key_re.search(text):
+                return "[REDACTED: body contains sensitive field]"
+        return value
+
+    def _redact_errors(errors):
+        # Pydantic v2 errors embed the offending value under "input" (and
+        # sometimes "ctx"); when the failing field is itself sensitive
+        # (loc ends in e.g. "autorouter_password"), drop the value.
+        out = []
+        for err in errors:
+            err = dict(err)
+            loc = "/".join(str(p) for p in err.get("loc", ()))
+            for key in ("input", "ctx"):
+                if key in err:
+                    err[key] = (
+                        "[REDACTED]" if _sensitive_key_re.search(loc)
+                        else _redact_sensitive(err[key])
+                    )
+            out.append(err)
+        return out
+
     @app.exception_handler(RequestValidationError)
     async def _log_validation_error(request: Request, exc: RequestValidationError):
         try:
-            body = exc.body
+            body = _redact_sensitive(exc.body)
         except Exception:
             body = None
+        try:
+            logged_errors = _redact_errors(exc.errors())
+        except Exception:
+            logged_errors = None
         _validation_logger.warning(
             "422 validation error path=%s method=%s errors=%s body=%r",
             request.url.path,
             request.method,
-            exc.errors(),
+            logged_errors,
             body,
         )
         # Use jsonable_encoder — pydantic v2 puts the raw exception object

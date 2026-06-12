@@ -72,7 +72,7 @@ export function extractVizData(
     const terrainFt = interpolateTerrainElevation(terrainProfile, rpa.distance_from_origin_nm);
     const sun = sunByDistance.get(Math.round(rpa.distance_from_origin_nm * 10)) ?? null;
 
-    points.push(extractPoint(rpa, sounding, wind, model, terrainFt, sun));
+    points.push(extractPoint(rpa, sounding, wind, model, terrainFt, sun, manifest.cruise_altitude_ft));
 
     if (rpa.waypoint_icao) {
       waypointMarkers.push({
@@ -230,6 +230,15 @@ function buildCurrentConditions(
   return { airports, sigmets: zones };
 }
 
+/**
+ * ISA standard-atmosphere temperature (°C) at a geopotential altitude (ft).
+ * Troposphere lapse rate ≈1.9812 °C per 1000 ft to the 36,089 ft tropopause,
+ * isothermal −56.5 °C above. Reference for ISA deviation at cruise.
+ */
+export function isaTemperatureC(altitudeFt: number): number {
+  return altitudeFt <= 36089 ? 15 - 1.9812 * (altitudeFt / 1000) : -56.5;
+}
+
 function extractPoint(
   rpa: RoutePointAnalysis,
   sounding: SoundingAnalysis | null,
@@ -237,6 +246,7 @@ function extractPoint(
   model: string,
   terrainElevationFt: number,
   sun: VizSunAtPoint | null,
+  cruiseAltitudeFt: number,
 ): VizPoint {
   const indices = sounding?.indices ?? null;
 
@@ -354,6 +364,15 @@ function extractPoint(
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
   const qnhHpa = divergenceValue(rpa, 'pressure_msl_hpa', model);
 
+  // Temperature at the elected cruise level (per-model dict; absent on old
+  // packs) and its ISA deviation. The backend interpolated cruise temp at
+  // `cruiseAltitudeFt`, so the ISA reference must use the same altitude.
+  const temperatureCruiseC = rpa.cruise_temperature_c?.[model] ?? null;
+  const isaDevC =
+    temperatureCruiseC == null
+      ? null
+      : temperatureCruiseC - isaTemperatureC(cruiseAltitudeFt);
+
   // Prefer NWP cloud layers when available so the obscuration band top
   // matches the cloud method drawn directly above it. `??` falls back
   // to DD only when NWP is unavailable (`null` — model has no native
@@ -411,6 +430,8 @@ function extractPoint(
     soundingCeilingFt: indices?.sounding_ceiling_ft ?? null,
     terrainElevationFt,
     temperatureC,
+    temperatureCruiseC,
+    isaDevC,
     precipitationMm,
     qnhHpa,
     surfaceObscuration,

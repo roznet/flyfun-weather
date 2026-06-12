@@ -399,6 +399,10 @@ function synthesizeVizPoint(
     soundingCeilingFt: indices?.sounding_ceiling_ft ?? surface?.ceiling_ft ?? null,
     terrainElevationFt: elevationFt,
     temperatureC: surface?.temperature_2m_c ?? null,
+    // Single-airport profile has no elected cruise level, so ISA deviation /
+    // cruise temperature have no source here — the metric renders empty.
+    temperatureCruiseC: null,
+    isaDevC: null,
     precipitationMm: surface?.precipitation_mm ?? null,
     // MSL pressure is not part of the airport-profile surface payload, so QNH
     // has no source here — the route-graph metric renders empty for profiles.

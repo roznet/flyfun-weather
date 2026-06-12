@@ -59,6 +59,8 @@ export function makeVizPoint(overrides: Partial<VizPoint> = {}): VizPoint {
     soundingCeilingFt: null,
     terrainElevationFt: 0,
     temperatureC: null,
+    temperatureCruiseC: null,
+    isaDevC: null,
     precipitationMm: null,
     surfaceObscuration: null,
     ...overrides,

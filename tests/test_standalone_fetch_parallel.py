@@ -74,7 +74,7 @@ def test_chunks_dispatch_concurrently(small_chunk_size, monkeypatch):
     monkeypatch.setattr(sv, "_OPEN_METEO_CONCURRENCY", 4)
     barrier = threading.Barrier(len(airports), timeout=15.0)
 
-    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None, hour_filter=None):
         barrier.wait()  # raises BrokenBarrierError on timeout
         self._record_call()
         return [_empty_forecast(p.waypoint_icao) for p in points]
@@ -102,7 +102,7 @@ def test_aggregated_snapshot_count_matches_sequential(small_chunk_size, monkeypa
     airports = _airports(4)
     monkeypatch.setattr(sv, "_OPEN_METEO_CONCURRENCY", 4)
 
-    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None, hour_filter=None):
         self._record_call()
         return [_forecast_with_one_sample(p.waypoint_icao) for p in points]
 
@@ -131,7 +131,7 @@ def test_partial_chunk_failure_does_not_abort_others(small_chunk_size, monkeypat
     # Don't actually wait between retries.
     monkeypatch.setattr(sv.time, "sleep", lambda _: None)
 
-    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None, hour_filter=None):
         if any(p.waypoint_icao == "EG02" for p in points):
             self._record_call()
             raise RuntimeError("simulated 500")
@@ -172,7 +172,7 @@ def test_concurrency_capped_to_chunk_count(small_chunk_size, monkeypatch):
         sv.concurrent.futures, "ThreadPoolExecutor", CapturingExecutor,
     )
 
-    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None, hour_filter=None):
         return [_empty_forecast(p.waypoint_icao) for p in points]
 
     with patch(
@@ -195,7 +195,7 @@ def test_empty_airport_list_returns_no_snapshots(monkeypatch):
     """Empty input must short-circuit cleanly without spinning up an executor."""
     monkeypatch.setattr(sv, "_OPEN_METEO_CONCURRENCY", 4)
 
-    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None, hour_filter=None):
         raise AssertionError("fetch_multi_point must not be called for empty input")
 
     with patch(

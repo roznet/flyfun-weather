@@ -75,6 +75,58 @@ def pressure_hpa_to_altitude_m(hpa: float) -> float:
     return (T0 / L) * (1 - (hpa / P0) ** exp)
 
 
+def isa_temperature_c(altitude_ft: float) -> float:
+    """ISA standard-atmosphere temperature (°C) at a geopotential altitude (ft).
+
+    Troposphere lapse rate 6.5 K/km (≈1.9812 °C per 1000 ft) up to the
+    tropopause at 36,089 ft; isothermal −56.5 °C above. The reference for
+    ISA-deviation at cruise (actual − ISA), which pilots use for density
+    altitude / true-airspeed / climb performance.
+
+    Note: the live route-graph ISA deviation is computed client-side in
+    ``web/ts/visualization/data-extract.ts`` (the temperature is per-model and
+    the deviation is a presentation-edge transform). This server-side twin is
+    kept for unit-testing the formula and any future server-side deviation;
+    keep the two in sync if the standard ever changes.
+    """
+    if altitude_ft <= 36089.0:
+        return 15.0 - 1.9812 * (altitude_ft / 1000.0)
+    return -56.5
+
+
+def temperature_at_pressure(
+    hourly: "HourlyForecast", target_pressure_hpa: float
+) -> Optional[float]:
+    """Interpolate temperature (°C) to *target_pressure_hpa* from a sounding.
+
+    Linear in log-pressure between the two bracketing levels that carry a
+    temperature; clamps to the nearest end when the target lies outside the
+    reported range. Returns ``None`` when no level has a temperature. Mirrors
+    :func:`weatherbrief.analysis.wind.pick_wind_at_pressure` but interpolates
+    rather than snapping to the nearest level, since temperature varies
+    smoothly and the cruise level rarely lands exactly on a reported level.
+    """
+    levels = [lvl for lvl in hourly.pressure_levels if lvl.temperature_c is not None]
+    if not levels:
+        return None
+    levels.sort(key=lambda lvl: lvl.pressure_hpa)  # ascending pressure (high→low alt)
+    if target_pressure_hpa <= levels[0].pressure_hpa:
+        return levels[0].temperature_c
+    if target_pressure_hpa >= levels[-1].pressure_hpa:
+        return levels[-1].temperature_c
+    # Within each adjacent pair `above` has the lower pressure (higher altitude)
+    # and `below` the higher pressure (lower altitude); the target sits between.
+    for above, below in zip(levels, levels[1:]):
+        if above.pressure_hpa <= target_pressure_hpa <= below.pressure_hpa:
+            frac = (
+                math.log(target_pressure_hpa) - math.log(above.pressure_hpa)
+            ) / (math.log(below.pressure_hpa) - math.log(above.pressure_hpa))
+            return above.temperature_c + frac * (
+                below.temperature_c - above.temperature_c
+            )
+    return levels[-1].temperature_c  # defensive — unreachable given the clamps above
+
+
 def pressure_pa_to_altitude_ft(pa: float) -> float:
     """Convert pressure in Pascals to altitude in feet using standard atmosphere."""
     return pressure_hpa_to_altitude_m(pa / 100.0) * 3.28084
@@ -760,6 +812,8 @@ class WaypointAnalysis(BaseModel):
     sounding: dict[str, SoundingAnalysis] = Field(default_factory=dict)
     altitude_advisories: Optional[AltitudeAdvisories] = None
     model_divergence: list[ModelDivergence] = Field(default_factory=list)
+    # model -> temperature (°C) at the elected cruise level (see RoutePointAnalysis).
+    cruise_temperature_c: dict[str, float] = Field(default_factory=dict)
 
 
 class RoutePointAnalysis(BaseModel):
@@ -778,6 +832,9 @@ class RoutePointAnalysis(BaseModel):
     sounding: dict[str, SoundingAnalysis] = Field(default_factory=dict)
     altitude_advisories: Optional[AltitudeAdvisories] = None
     model_divergence: list[ModelDivergence] = Field(default_factory=list)
+    # model -> temperature (°C) at the elected cruise level, interpolated from
+    # that model's sounding. The route graph derives ISA deviation from it.
+    cruise_temperature_c: dict[str, float] = Field(default_factory=dict)
 
 
 class NightInterval(BaseModel):

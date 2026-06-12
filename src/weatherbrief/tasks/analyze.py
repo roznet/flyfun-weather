@@ -38,6 +38,7 @@ from weatherbrief.models import (
     WindComponent,
     altitude_to_pressure_hpa,
     bearing_between_coords,
+    temperature_at_pressure,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ def _run_point_analysis(
     dict[str, SoundingAnalysis],
     Optional[AltitudeAdvisories],
     list[ModelDivergence],
+    dict[str, float],
 ]:
     """Core analysis logic shared between waypoint and route-point paths.
 
@@ -83,10 +85,13 @@ def _run_point_analysis(
         flight_ceiling_ft: Flight ceiling for advisory computation.
 
     Returns:
-        (wind_components, soundings, altitude_advisories, model_divergence)
+        (wind_components, soundings, altitude_advisories, model_divergence,
+         cruise_temperature_c) — the last maps model_key -> temperature (°C)
+        at the cruise level, used downstream for ISA deviation.
     """
     wind_components: dict[str, WindComponent] = {}
     soundings: dict[str, SoundingAnalysis] = {}
+    cruise_temps: dict[str, float] = {}
 
     # Comparison accumulators
     comp: dict[str, dict[str, float]] = {
@@ -102,6 +107,10 @@ def _run_point_analysis(
     target_pressure = altitude_to_pressure_hpa(cruise_altitude_ft)
     for model_key, hourly in forecasts_by_model.items():
         cruise_wind = pick_wind_at_pressure(hourly, target_pressure)
+
+        cruise_temp = temperature_at_pressure(hourly, target_pressure)
+        if cruise_temp is not None:
+            cruise_temps[model_key] = round(cruise_temp, 1)
 
         if cruise_wind and cruise_wind.wind_speed_kt is not None:
             wc = compute_wind_components(
@@ -160,7 +169,7 @@ def _run_point_analysis(
         if len(values) >= 2:
             divergences.append(compare_models(var_name, values))
 
-    return wind_components, soundings, altitude_advisories, divergences
+    return wind_components, soundings, altitude_advisories, divergences, cruise_temps
 
 
 def _collect_opt(
@@ -190,7 +199,7 @@ def analyze_waypoint(
         if hourly:
             forecasts_by_model[wf.model.value] = hourly
 
-    wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
+    wind_components, soundings, alt_advisories, divergences, cruise_temps = _run_point_analysis(
         forecasts_by_model, track_deg, cruise_altitude_ft, flight_ceiling_ft,
         icing_severity_enhance=icing_severity_enhance,
     )
@@ -202,6 +211,7 @@ def analyze_waypoint(
         sounding=soundings,
         altitude_advisories=alt_advisories,
         model_divergence=divergences,
+        cruise_temperature_c=cruise_temps,
     )
 
 
@@ -351,7 +361,7 @@ def analyze_all_route_points(
 
         terrain_ft = terrain_at_distance(elevation, rp.distance_from_origin_nm)
 
-        wind_components, soundings, alt_advisories, divergences = _run_point_analysis(
+        wind_components, soundings, alt_advisories, divergences, cruise_temps = _run_point_analysis(
             forecasts_by_model, tracks[i], cruise_altitude_ft, flight_ceiling_ft,
             icing_severity_enhance=icing_severity_enhance,
             terrain_elevation_ft=terrain_ft,
@@ -371,6 +381,7 @@ def analyze_all_route_points(
             sounding=soundings,
             altitude_advisories=alt_advisories,
             model_divergence=divergences,
+            cruise_temperature_c=cruise_temps,
         ))
 
     # Post-processing: compute E-Shear turbulence using horizontal wind shear

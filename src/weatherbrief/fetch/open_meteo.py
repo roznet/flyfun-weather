@@ -284,6 +284,7 @@ class OpenMeteoClient:
         start_date: str | None = None,
         end_date: str | None = None,
         chunk_size: int | None = None,
+        hour_filter: set[int] | None = None,
     ) -> list[WaypointForecast]:
         """Fetch forecast for multiple points, chunking to avoid URL limits.
 
@@ -294,6 +295,14 @@ class OpenMeteoClient:
         ``chunk_size`` overrides the default max points per request.  Callers
         with short parameter lists (e.g. a single pressure level) can safely
         use larger chunks since URL length is the real constraint.
+
+        ``hour_filter`` keeps only hourly slots whose UTC hour is in the set,
+        applied *before* parsing — skipped hours never materialise as
+        ``HourlyForecast``/``PressureLevelData`` objects. The standalone
+        verification cycle samples 5 of every 24 hours, and parsing the full
+        response into Pydantic models was the dominant transient memory cost
+        of its fetch phase (issue #236). The wire payload still contains every
+        hour; this bounds parse memory, not bandwidth.
 
         Returns one ``WaypointForecast`` per input point, in the same order.
         """
@@ -320,6 +329,7 @@ class OpenMeteoClient:
             chunk_results = self._fetch_multi_point_chunk(
                 chunk, model, endpoint,
                 start_date=start_date, end_date=end_date,
+                hour_filter=hour_filter,
             )
             results.extend(chunk_results)
 
@@ -339,6 +349,7 @@ class OpenMeteoClient:
         *,
         start_date: str | None = None,
         end_date: str | None = None,
+        hour_filter: set[int] | None = None,
     ) -> list[WaypointForecast]:
         """Fetch forecast for a single chunk of points."""
         hourly_params = build_hourly_params(endpoint)
@@ -378,6 +389,11 @@ class OpenMeteoClient:
                     endpoint.pressure_levels,
                 )
                 for i, ts in enumerate(timestamps)
+                # Slice instead of fromisoformat: timestamps are always ISO
+                # "YYYY-MM-DDTHH:MM" (timezone=UTC is hardcoded above), and
+                # this runs per timestamp per point — no need to allocate a
+                # datetime just to read the hour.
+                if hour_filter is None or int(ts[11:13]) in hour_filter
             ]
 
             # Build a synthetic Waypoint for this route point

@@ -666,6 +666,8 @@ export interface RoutePointAnalysis {
   sounding: Record<string, SoundingAnalysis>;
   altitude_advisories: AltitudeAdvisories | null;
   model_divergence: ModelDivergence[];
+  /** model -> temperature (°C) at the elected cruise level. Absent on old packs. */
+  cruise_temperature_c?: Record<string, number>;
 }
 
 export interface NightInterval {

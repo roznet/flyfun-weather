@@ -64,6 +64,27 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     formatValue: (v) => `${v.toFixed(1)}°C`,
   },
   {
+    id: 'isa-dev',
+    unit: '°C',
+    renderType: 'line',
+    color: '#ea580c',
+    // ISA deviation at the elected cruise level (actual − ISA standard).
+    // Zero line = on-ISA; above = warmer than standard (higher density
+    // altitude, degraded TAS/climb), below = colder. Useful for performance.
+    showZeroLine: true,
+    get zeroLineLabels(): [string, string] { return [t('graph.isaWarmer'), t('graph.isaColder')]; },
+    getValue: (p) => p.isaDevC,
+    // Derive the sign from the *rounded* value so a small negative deviation
+    // (e.g. −0.3) reads "ISA±0", never "ISA−0"; same guard for the °C part.
+    formatValue: (v) => {
+      const dev = Math.round(v);
+      const isa = dev === 0 ? '±0' : `${dev > 0 ? '+' : '−'}${Math.abs(dev)}`;
+      const c = Math.abs(v).toFixed(1);
+      const cSign = c === '0.0' ? '±' : v > 0 ? '+' : '−';
+      return `ISA${isa} (${cSign}${c}°C)`;
+    },
+  },
+  {
     id: 'precipitation',
     unit: 'mm',
     renderType: 'bar',

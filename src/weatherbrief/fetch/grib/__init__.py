@@ -2828,50 +2828,99 @@ def _prefetch_icon_eu_data(ctx: _IconEuContext) -> None:
         _prefetch_icon_eu_data_inner(ctx)
 
 
+def _icon_prefetch_workers() -> int:
+    """Concurrent (fhour, variable) prefetch units. ``GRIB_ICON_PREFETCH_WORKERS``
+    overrides; ``1`` restores the previous strictly-serial behaviour."""
+    raw = os.environ.get("GRIB_ICON_PREFETCH_WORKERS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            logger.warning("Invalid GRIB_ICON_PREFETCH_WORKERS=%r, defaulting to 4", raw)
+    return 4
+
+
 def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
+    """Download all uncached ICON-EU units for this run.
+
+    Cold-cache fetch tail fix: the per-(fhour, variable) downloads used to run
+    strictly one after another — 45 sequential units of ~1-3.5s each put the
+    fetch stage's 130-226s prod tail almost entirely in this loop. Units are
+    independent (distinct cache keys, atomic ``put_cached``), so they now run
+    on a small outer pool. Each unit keeps its own inner per-level download
+    pool, sized down so outer x inner stays within the session's connection
+    pool (_POOL_MAXSIZE) for any worker setting. Memory stays bounded: at
+    most ``outer`` per-variable buffers in flight, written to disk on
+    completion.
+    """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_VARIABLES,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
     )
 
+    outer = _icon_prefetch_workers()
+    # Keep outer x inner within the session's connection pool for ALL outer
+    # values (default 4 x 5 = 20), not just the default — a user-set
+    # GRIB_ICON_PREFETCH_WORKERS must not silently exceed _POOL_MAXSIZE.
+    inner = max(1, _POOL_MAXSIZE // outer) if outer > 1 else 8
+
+    def _fetch_var(fhour: int, var: str, ck: str) -> None:
+        try:
+            with _grib_time("icon_prefetch_var"):
+                per_var = fetch_icon_eu_per_variable(
+                    ctx.init_date, ctx.init_hour, fhour,
+                    levels=ctx.levels,
+                    variables=[var],
+                    session=ctx.session,
+                    max_workers=inner,
+                )
+            data = per_var.get(var)
+            if data:
+                put_cached(ctx.run_dir, ck, data)
+        except Exception:
+            logger.warning("Prefetch ICON-EU f%03d %s failed", fhour, var, exc_info=True)
+
+    def _fetch_diag(fhour: int, ck: str) -> None:
+        try:
+            with _grib_time("icon_prefetch_cloud_diag"):
+                fetched = fetch_icon_eu_single_level(
+                    ctx.init_date, ctx.init_hour, [fhour],
+                    session=ctx.session,
+                    max_workers=inner,
+                )
+            grib_bytes = fetched.get(fhour)
+            if grib_bytes:
+                put_cached(ctx.run_dir, ck, grib_bytes)
+        except Exception:
+            logger.warning("Prefetch ICON-EU cloud diag f%03d failed", fhour, exc_info=True)
+
+    jobs: list[tuple] = []
     for fhour in ctx.forecast_hours:
         # Model-level data (P, QC, QI) — per variable
         legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
-        if is_cached(ctx.run_dir, legacy_ck):
-            continue  # legacy cache hit, skip per-var download
-
-        for var in ICON_EU_VARIABLES:
-            ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
-            if is_cached(ctx.run_dir, ck):
-                continue
-            try:
-                with _grib_time("icon_prefetch_var"):
-                    per_var = fetch_icon_eu_per_variable(
-                        ctx.init_date, ctx.init_hour, fhour,
-                        levels=ctx.levels,
-                        variables=[var],
-                        session=ctx.session,
-                    )
-                data = per_var.get(var)
-                if data:
-                    put_cached(ctx.run_dir, ck, data)
-            except Exception:
-                logger.warning("Prefetch ICON-EU f%03d %s failed", fhour, var, exc_info=True)
+        if not is_cached(ctx.run_dir, legacy_ck):  # legacy cache hit skips per-var download
+            for var in ICON_EU_VARIABLES:
+                ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
+                if not is_cached(ctx.run_dir, ck):
+                    jobs.append((_fetch_var, fhour, var, ck))
 
         # Single-level cloud diagnostics
         diag_ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
         if not is_cached(ctx.run_dir, diag_ck):
-            try:
-                with _grib_time("icon_prefetch_cloud_diag"):
-                    fetched = fetch_icon_eu_single_level(
-                        ctx.init_date, ctx.init_hour, [fhour], session=ctx.session,
-                    )
-                grib_bytes = fetched.get(fhour)
-                if grib_bytes:
-                    put_cached(ctx.run_dir, diag_ck, grib_bytes)
-            except Exception:
-                logger.warning("Prefetch ICON-EU cloud diag f%03d failed", fhour, exc_info=True)
+            jobs.append((_fetch_diag, fhour, diag_ck))
+
+    if not jobs:
+        return
+    if outer == 1 or len(jobs) == 1:
+        for fn, *args in jobs:
+            fn(*args)
+        return
+
+    with ThreadPoolExecutor(max_workers=outer, thread_name_prefix="icon-prefetch") as pool:
+        futures = [_submit_with_context(pool, fn, *args) for fn, *args in jobs]
+        for fut in futures:
+            fut.result()  # job functions never raise; .result() surfaces bugs
 
 
 def _decode_and_merge_icon_eu(

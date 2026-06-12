@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
 import responses
 
 from weatherbrief.fetch.open_meteo import (
@@ -231,6 +232,80 @@ def test_fetch_multi_point_parses_list_response():
     assert len(results) == 3
     assert all(r.model == ModelSource.GFS for r in results)
     assert all(len(r.hourly) == 2 for r in results)
+
+
+@responses.activate
+def test_fetch_multi_point_hour_filter_skips_parsing_other_hours():
+    """hour_filter keeps only hourly slots whose UTC hour is in the set.
+
+    Issue #236: the standalone cycle samples 5 of every 24 hours; parsing
+    the rest into Pydantic objects only to discard them dominated the fetch
+    phase's transient memory.
+    """
+    hourly = {
+        "time": ["2026-02-21T06:00", "2026-02-21T07:00",
+                 "2026-02-21T09:00", "2026-02-21T12:00"],
+        "temperature_2m": [5.0, 6.0, 7.0, 8.0],
+    }
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=[{"hourly": hourly}, {"hourly": hourly}, {"hourly": hourly}],
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    results = client.fetch_multi_point(
+        _make_route_points(), ModelSource.GFS, hour_filter={6, 9},
+    )
+
+    assert len(results) == 3
+    for r in results:
+        assert [h.time.hour for h in r.hourly] == [6, 9]
+    assert results[0].hourly[0].temperature_2m_c == 5.0
+    assert results[0].hourly[1].temperature_2m_c == 7.0
+
+
+@responses.activate
+def test_fetch_multi_point_hour_filter_none_keeps_all_hours():
+    """Default behaviour (no filter) is unchanged."""
+    hourly = {
+        "time": ["2026-02-21T06:00", "2026-02-21T07:00"],
+        "temperature_2m": [5.0, 6.0],
+    }
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=[{"hourly": hourly}, {"hourly": hourly}, {"hourly": hourly}],
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    results = client.fetch_multi_point(_make_route_points(), ModelSource.GFS)
+
+    assert all(len(r.hourly) == 2 for r in results)
+
+
+@responses.activate
+def test_fetch_multi_point_hour_filter_all_null_still_raises():
+    """The empty-forecast guard operates on the filtered slots."""
+    hourly = {
+        "time": ["2026-02-21T06:00", "2026-02-21T09:00"],
+        "temperature_2m": [None, None],
+        "wind_speed_10m": [None, None],
+    }
+    responses.add(
+        responses.GET,
+        "https://api.open-meteo.com/v1/gfs",
+        json=[{"hourly": hourly}, {"hourly": hourly}, {"hourly": hourly}],
+        status=200,
+    )
+
+    client = OpenMeteoClient()
+    with pytest.raises(EmptyForecastError):
+        client.fetch_multi_point(
+            _make_route_points(), ModelSource.GFS, hour_filter={6, 9},
+        )
 
 
 @responses.activate
