@@ -339,9 +339,16 @@ def _fetch_forecasts_for_model(
         forecasts = None
         for attempt in range(3):
             try:
+                # hour_filter drops non-sample hours at parse time — without
+                # it, ~80% of the response (a 4-day hourly horizon at up to
+                # 28 pressure levels) was materialised as Pydantic objects
+                # only to be discarded by the loop below, and those objects
+                # stayed alive across the chunk's sounding analysis in up to
+                # _OPEN_METEO_CONCURRENCY threads at once (issue #236).
                 forecasts = client.fetch_multi_point(
                     points, model_source,
                     start_date=start_date, end_date=end_date,
+                    hour_filter=set(sample_hours),
                 )
                 break
             except Exception:
@@ -1459,19 +1466,85 @@ def run_metar_ingest_cycle(
         db.close()
 
 
+def run_post_cycle_tasks(airports_db_path: str, cycle_type: str) -> None:
+    """Daily-stats rollup + dashboard cache rebuild after a standalone cycle.
+
+    Shared by the scheduler's in-process fallback path and the CLI
+    (``--with-rollup``) so the subprocess path (#236) keeps post-cycle
+    behaviour identical. Each step is independently fail-safe — a rollup
+    failure must not block the cache rebuild, and neither failure marks
+    the cycle itself as failed.
+    """
+    from flyfun_common.db import SessionLocal
+
+    # Roll up freshly-scored days into verification_daily_stats BEFORE the
+    # cache rebuild so the cache reflects today's scores. Idempotent — re-
+    # rolls "yesterday" once per cycle, plus any older missing days. Cheap
+    # (~12K rows/day, pure SQL).
+    try:
+        from weatherbrief.tasks.verification_daily_rollup import (
+            rollup_today_and_pending,
+        )
+
+        rollup_db = SessionLocal()
+        try:
+            n_rows = rollup_today_and_pending(rollup_db)
+            rollup_db.commit()
+            if n_rows:
+                logger.info(
+                    "Standalone %s cycle: %d daily-stats rows rolled up",
+                    cycle_type, n_rows,
+                )
+        except Exception:
+            rollup_db.rollback()
+            raise
+        finally:
+            rollup_db.close()
+    except Exception:
+        logger.error("verification_daily_stats rollup failed", exc_info=True)
+
+    # Light (score-only) cycles don't touch forecast snapshots, so the
+    # forecast_map cache would be regenerated to identical content — skip it
+    # to halve the rebuild cost on the hourly light cycles.
+    try:
+        from weatherbrief.tasks.cache_builder import rebuild_all
+
+        cache_db = SessionLocal()
+        try:
+            cache_result = rebuild_all(
+                cache_db, airports_db_path,
+                include_forecast_map=(cycle_type != "light"),
+            )
+            logger.info(
+                "Standalone %s cycle: cache rebuilt (%dms)",
+                cycle_type, cache_result["duration_ms"],
+            )
+        finally:
+            cache_db.close()
+    except Exception:
+        logger.error("Cache rebuild failed", exc_info=True)
+
+
 def _record_failed_cycle(
     started_at: datetime,
     t_start: float,
     cycle_type: str,
     airport_count: int,
+    error_message: str | None = None,
 ) -> None:
-    """Commit a VerificationCycleRow with error info using a fresh session."""
+    """Commit a VerificationCycleRow with error info using a fresh session.
+
+    ``error_message`` overrides the default traceback capture — used by the
+    scheduler's subprocess supervisor (#236), which records failures for
+    child cycles that died without reaching their own exception path (e.g.
+    SIGKILL from the OOM killer, or a supervisor timeout).
+    """
     import traceback
 
     from flyfun_common.db import SessionLocal
 
     duration_ms = int((time.monotonic() - t_start) * 1000)
-    error_msg = traceback.format_exc()[-500:]  # last 500 chars
+    error_msg = (error_message or traceback.format_exc())[-500:]  # last 500 chars
 
     # New metar_ingest cycle keeps its bare source name; the legacy
     # standalone cycles prefix it for backward-compat with existing queries.
