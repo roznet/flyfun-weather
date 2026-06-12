@@ -777,6 +777,9 @@ export interface FeedbackRequest {
   pack_timestamp: string;
   category: string;
   comment: string;
+  sentiment?: 'up' | 'down' | null;
+  target?: 'digest' | 'general' | null;
+  contact_ok?: boolean;
 }
 
 export async function submitFeedback(req: FeedbackRequest): Promise<{ id: number; status: string }> {

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
@@ -22,15 +22,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
-ALLOWED_CATEGORIES = {"data_issue", "too_conservative", "too_optimistic", "incorrect_interpretation", "other"}
+ALLOWED_CATEGORIES = {"data_issue", "too_conservative", "too_optimistic", "incorrect_interpretation", "other", "digest_rating"}
 ALLOWED_STATUSES = {"pending", "ready", "replied", "ignored"}
+ALLOWED_SENTIMENTS = {"up", "down"}
+ALLOWED_TARGETS = {"digest", "general"}
 
 
 class FeedbackRequest(BaseModel):
     flight_id: str = Field("", max_length=256)
     pack_timestamp: str = Field("", max_length=64)
     category: str = Field(max_length=32)
-    comment: str = Field(max_length=2000)
+    comment: str = Field("", max_length=2000)
+    sentiment: Optional[str] = Field(None, max_length=8)
+    target: Optional[str] = Field(None, max_length=16)
+    contact_ok: bool = False
 
     @field_validator("category")
     @classmethod
@@ -42,12 +47,28 @@ class FeedbackRequest(BaseModel):
     @field_validator("comment")
     @classmethod
     def validate_comment(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("comment must not be empty")
-        if len(v) > 5000:
-            raise ValueError("comment must not exceed 5000 characters")
+        return v.strip()
+
+    @field_validator("sentiment")
+    @classmethod
+    def validate_sentiment(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ALLOWED_SENTIMENTS:
+            raise ValueError(f"sentiment must be one of: {', '.join(sorted(ALLOWED_SENTIMENTS))}")
         return v
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ALLOWED_TARGETS:
+            raise ValueError(f"target must be one of: {', '.join(sorted(ALLOWED_TARGETS))}")
+        return v
+
+    @model_validator(mode="after")
+    def require_comment_unless_thumb(self) -> "FeedbackRequest":
+        # A bare thumb rating is valid; the traditional form needs text.
+        if self.sentiment is None and not self.comment:
+            raise ValueError("comment must not be empty")
+        return self
 
 
 class StatusUpdate(BaseModel):
@@ -107,6 +128,9 @@ def submit_feedback(
         pack_timestamp=pack_ts,
         category=body.category,
         comment=body.comment,
+        sentiment=body.sentiment,
+        target=body.target,
+        contact_ok=body.contact_ok,
     )
     db.add(row)
     db.flush()
@@ -156,6 +180,9 @@ def _serialize_feedback(fb: FeedbackRow, email: str, name: str) -> dict:
         "pack_timestamp": fb.pack_timestamp.isoformat() if fb.pack_timestamp else "",
         "category": fb.category,
         "comment": fb.comment,
+        "sentiment": fb.sentiment,
+        "target": fb.target,
+        "contact_ok": fb.contact_ok,
         "created_at": fb.created_at.isoformat() if fb.created_at else None,
         "status": fb.status,
         "classification": fb.classification,
@@ -233,6 +260,8 @@ def send_feedback_reply_email(
 ):
     """Send the reply email to the user and mark feedback as replied."""
     row = _get_feedback_or_404(db, feedback_id)
+    if not row.contact_ok:
+        raise HTTPException(403, "User did not consent to be contacted")
     user = db.query(UserRow).filter(UserRow.id == row.user_id).first()
     if not user or not user.email:
         raise HTTPException(400, "User has no email address")

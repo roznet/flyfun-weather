@@ -299,6 +299,14 @@ class FeedbackRow(Base):
     )
     category: Mapped[str] = mapped_column(String(32))
     comment: Mapped[str] = mapped_column(Text)
+    # 'up'/'down' for quick thumb ratings; NULL for the traditional form
+    sentiment: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # 'digest' for thumb ratings; NULL/'general' for the traditional form
+    target: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # User consented to be emailed about this feedback
+    contact_ok: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="0", default=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

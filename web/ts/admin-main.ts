@@ -103,6 +103,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   too_optimistic: 'Too Optimistic',
   incorrect_interpretation: 'Incorrect Interpretation',
   other: 'Other Bug/Issue',
+  digest_rating: 'Digest Rating',
 };
 
 const STATUS_BADGES: Record<FeedbackStatus, { label: string; color: string }> = {
@@ -172,6 +173,12 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
   const classificationBadge = fb.classification
     ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface);color:var(--primary);border:1px solid var(--border);margin-left:6px;">${CLASSIFICATION_LABELS[fb.classification] ?? fb.classification}</span>`
     : '';
+  const sentimentBadge = fb.sentiment
+    ? `<span title="${fb.sentiment === 'up' ? 'Thumbs up' : 'Thumbs down'}${fb.target ? ` on ${fb.target}` : ''}" style="font-size:14px;">${fb.sentiment === 'up' ? '👍' : '👎'}</span>`
+    : '';
+  const consentBadge = fb.contact_ok
+    ? '<span title="User consented to be contacted" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#dcfce7;color:#166534;">✉️ contactable</span>'
+    : '<span title="User did not consent to be contacted" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">🔕 no contact</span>';
   const confidenceText = fb.confidence != null
     ? `<span style="font-size:11px;color:var(--text-muted);margin-left:6px;">${Math.round(fb.confidence * 100)}% confidence</span>`
     : '';
@@ -222,9 +229,12 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
   // Action buttons
   let actionsHtml = '';
   if (!isArchived) {
+    const sendBtn = fb.contact_ok
+      ? `<button class="fb-send btn-sm" data-id="${fb.id}" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;font-weight:500;">Send Reply</button>`
+      : '<button class="btn-sm" disabled title="User did not consent to be contacted" style="background:var(--bg);color:var(--text-muted);border:none;border-radius:6px;padding:6px 16px;cursor:not-allowed;font-size:13px;">Send Reply</button>';
     actionsHtml = `
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="fb-send btn-sm" data-id="${fb.id}" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;font-weight:500;">Send Reply</button>
+        ${sendBtn}
         <button class="fb-mark-replied btn-sm" data-id="${fb.id}" style="background:var(--bg);color:var(--text);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Mark Replied</button>
         <button class="fb-ignore btn-sm" data-id="${fb.id}" style="background:var(--bg);color:var(--text-muted);border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;">Ignore</button>
         <span class="fb-action-status" data-id="${fb.id}" style="font-size:12px;align-self:center;"></span>
@@ -241,6 +251,8 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
     <details class="fb-card" style="border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden;">
       <summary style="padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         ${renderStatusBadge(fb.status)}
+        ${sentimentBadge}
+        ${consentBadge}
         ${classificationBadge}
         ${confidenceText}
         <span style="font-weight:500;">${escapeHtml(userName)}</span>
