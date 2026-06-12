@@ -689,6 +689,34 @@ def vfr_ovc_corridor_context() -> RouteContext:
 
 
 @pytest.fixture
+def vfr_short_route_overlap_context() -> RouteContext:
+    """Short route where climb and descent corridors would overlap.
+
+    8nm route with a 5nm corridor: the midpoint point (4nm) is within 5nm of
+    BOTH airports. An OVC deck there must be attributed to the climb-out only
+    (nearer half), not double-counted as a descent deck at the far airport.
+    """
+    deck = EnhancedCloudLayer(base_ft=3500, top_ft=5000, coverage=CloudCoverage.OVC)
+    analyses = [
+        _make_rpa(
+            i, i * 2.0,
+            sounding={"gfs": _make_sounding(cloud_layers=[deck] if i == 2 else [])},
+        )
+        for i in range(5)  # 0, 2, 4, 6, 8 nm
+    ]
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=_make_elevation(),
+        models=["gfs"],
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=18000,
+        total_distance_nm=8,
+        airport_conditions=_make_airport_conditions(models=["gfs"]),
+    )
+
+
+@pytest.fixture
 def vfr_midroute_deck_context() -> RouteContext:
     """OVC deck below cruise in the middle of the route, clear at both ends.
 

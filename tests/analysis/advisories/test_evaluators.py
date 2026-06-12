@@ -328,6 +328,7 @@ _VFR_DEFAULTS = {
     "cloud_clearance_ft": 1000,
     "imc_pct_amber": 15,
     "imc_pct_red": 30,
+    "terminal_corridor_nm": 5,
 }
 
 
@@ -410,6 +411,17 @@ class TestVFRFeasibility:
         )
         assert result.aggregate_status == AdvisoryStatus.RED
         assert "OVC" in result.aggregate_detail
+
+    def test_short_route_no_corridor_double_count(self, vfr_short_route_overlap_context: RouteContext):
+        """On a short route, a midpoint deck is attributed to the climb-out only,
+        not double-counted as a descent deck at the far airport."""
+        result = VFRFeasibilityEvaluator.evaluate(
+            vfr_short_route_overlap_context, _VFR_DEFAULTS,
+        )
+        assert result.aggregate_status == AdvisoryStatus.RED
+        detail = result.aggregate_detail
+        assert "climb-out" in detail
+        assert "descent" not in detail  # not misattributed to the arrival end
 
     def test_midroute_subcruise_deck_stays_green(self, vfr_midroute_deck_context: RouteContext):
         """An OVC deck below cruise in the MIDDLE of the route (not near either

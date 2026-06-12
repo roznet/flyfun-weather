@@ -139,9 +139,11 @@ def _check_corridor_vfr(
     BKN/OVC deck still sits between the surface and cruise near an airport — a
     layer the flight must climb up through or descend down through to remain
     VMC. Within ``corridor_nm`` of the origin (climb-out) and destination
-    (descent), a BKN/OVC layer whose base is below cruise and whose top is
-    above field elevation is such a deck. OVC -> RED (no holes to climb/descend
-    through), BKN -> AMBER (likely gaps, pilot judgement).
+    (descent), a BKN/OVC layer lying entirely between field elevation and cruise
+    (``floor < top_ft < cruise``) is such a deck. A layer whose top reaches
+    cruise is cruise-in-cloud and is left to ``_check_enroute_vfr`` rather than
+    double-counted here. OVC -> RED (no holes to climb/descend through),
+    BKN -> AMBER (likely gaps, pilot judgement).
 
     Returns (worst_status, detail_fragments).
     """
@@ -164,7 +166,14 @@ def _check_corridor_vfr(
         has_bkn = False
         for rpa in ctx.analyses:
             d = rpa.distance_from_origin_nm or 0.0
-            in_corridor = d <= corridor_nm if phase == "climb" else d >= total - corridor_nm
+            # Distance to this phase's airport, plus a nearer-half tiebreak so the
+            # climb and descent corridors stay mutually exclusive when they would
+            # otherwise overlap (short routes / large terminal_corridor_nm). A
+            # point exactly at the midpoint is attributed to the climb-out.
+            if phase == "climb":
+                in_corridor = d <= corridor_nm and d <= total / 2
+            else:
+                in_corridor = (total - d) <= corridor_nm and d > total / 2
             if not in_corridor:
                 continue
             sounding = rpa.sounding.get(model)
@@ -174,8 +183,10 @@ def _check_corridor_vfr(
             for cl in sounding.cloud_layers:
                 if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
                     continue
-                # A deck we must transit: base below cruise AND top above the field.
-                if cl.base_ft < cruise and cl.top_ft > floor:
+                # A deck we must transit on climb/descent: lies entirely between
+                # the field and cruise. A layer whose top reaches cruise is
+                # cruise-in-cloud — left to _check_enroute_vfr, not double-counted.
+                if floor < cl.top_ft < cruise:
                     if cl.coverage == CloudCoverage.OVC:
                         has_ovc = True
                     else:
