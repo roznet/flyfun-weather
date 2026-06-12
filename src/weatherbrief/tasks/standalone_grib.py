@@ -2,6 +2,13 @@
 
 Thin wrapper around existing GRIB fetch/decode to extract ceiling and cloud base
 at airport coordinates. Reuses the shared GRIB cache — no duplicate downloads.
+
+Decode goes through ``_dispatch_decode`` by cache path, same as the briefing
+path (``_fetch_cloud_diag_for_fhour``) — never in this process. cfgrib/xarray
+decode of full-domain grids in the orchestrating process was a parent-RSS
+contributor before issue #236 (the dispatcher exists precisely to keep that
+out of the parent). With ``GRIB_DECODE_WORKERS=0`` (the subprocess cycle's
+setting) the dispatch runs inline, which is fine — that process is disposable.
 """
 
 from __future__ import annotations
@@ -14,7 +21,7 @@ from pathlib import Path
 
 import requests
 
-from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, get_cached, put_cached
+from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, is_cached, put_cached
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +49,8 @@ def fetch_gfs_cloud_diag(
         Dict mapping forecast_hour → list of AirportCeilingData (same order as lats/lons).
         Missing hours are omitted from the dict.
     """
-    from weatherbrief.fetch.grib.decode import build_cloud_diagnostics, decode_cloud_diag_per_point
+    from weatherbrief.fetch.grib import DecodePriority, _dispatch_decode
+    from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
     from weatherbrief.fetch.grib.gfs_idx import plan_cloud_diag_byte_ranges
     from weatherbrief.fetch.grib.grib_fetch import fetch_cloud_diag_ranges, fetch_idx
 
@@ -56,9 +64,8 @@ def fetch_gfs_cloud_diag(
 
     for fhour in forecast_hours:
         ck = cache_key(fhour, "CLOUD_DIAG")
-        grib_bytes = get_cached(run_dir, ck)
 
-        if grib_bytes is None:
+        if not is_cached(run_dir, ck):
             try:
                 idx_text = fetch_idx(init_date, init_hour, fhour, session=session)
                 ranges = plan_cloud_diag_byte_ranges(idx_text)
@@ -68,17 +75,19 @@ def fetch_gfs_cloud_diag(
                     init_date, init_hour, fhour, ranges, session=session,
                 )
                 put_cached(run_dir, ck, grib_bytes)
+                del grib_bytes
             except Exception:
                 logger.warning("GFS cloud diag fetch failed f%03d", fhour, exc_info=True)
                 continue
 
         try:
-            decoded = decode_cloud_diag_per_point(grib_bytes, lats, lons)
+            decoded = _dispatch_decode(
+                "decode_gfs_cloud_diag", str(run_dir / ck), lats, lons,
+                priority=DecodePriority.BACKGROUND,
+            )
         except Exception:
             logger.warning("GFS cloud diag decode failed f%03d", fhour, exc_info=True)
             continue
-        finally:
-            del grib_bytes
 
         if not decoded:
             continue
@@ -113,10 +122,8 @@ def fetch_icon_cloud_diag(
 
     Same interface as fetch_gfs_cloud_diag but uses DWD ICON-EU data source.
     """
-    from weatherbrief.fetch.grib.decode import (
-        build_icon_cloud_diagnostics,
-        decode_icon_eu_cloud_diag_per_point,
-    )
+    from weatherbrief.fetch.grib import DecodePriority, _dispatch_decode
+    from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
 
     if data_dir is None:
@@ -129,30 +136,29 @@ def fetch_icon_cloud_diag(
 
     for fhour in forecast_hours:
         ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
-        grib_bytes = get_cached(run_dir, ck)
 
-        if grib_bytes is None:
+        if not is_cached(run_dir, ck):
             try:
                 fetched = fetch_icon_eu_single_level(
                     init_date, init_hour, [fhour], session=session,
                 )
                 grib_bytes = fetched.get(fhour)
-                if grib_bytes:
-                    put_cached(run_dir, ck, grib_bytes)
+                if not grib_bytes:
+                    continue
+                put_cached(run_dir, ck, grib_bytes)
+                del grib_bytes
             except Exception:
                 logger.warning("ICON cloud diag fetch failed f%03d", fhour, exc_info=True)
                 continue
 
-        if not grib_bytes:
-            continue
-
         try:
-            decoded = decode_icon_eu_cloud_diag_per_point(grib_bytes, lats, lons)
+            decoded = _dispatch_decode(
+                "decode_icon_cloud_diag", str(run_dir / ck), lats, lons,
+                priority=DecodePriority.BACKGROUND,
+            )
         except Exception:
             logger.warning("ICON cloud diag decode failed f%03d", fhour, exc_info=True)
             continue
-        finally:
-            del grib_bytes
 
         if not decoded:
             continue
