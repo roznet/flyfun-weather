@@ -70,7 +70,8 @@ class CriterionAssessment(BaseModel):
     forecast: float | None
     required_min: float  # best-case plate requirement (band low end)
     required_max: float  # worst-case (conservative) requirement; == min for FAA
-    verdict: str  # BandVerdict or TriggerVerdict value
+    # A BandVerdict value (qualification) or a TriggerVerdict value (trigger).
+    verdict: Literal["likely", "marginal", "unlikely", "not_required", "required"]
 
 
 class RegAlternateTrigger(BaseModel):

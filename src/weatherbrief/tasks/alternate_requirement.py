@@ -89,7 +89,9 @@ def _trend_to_view(obj, *, is_base: bool) -> TrendView:
         cavok=bool(getattr(obj, "cavok", False)),
         # The base group is always the prevailing line (trend_type None).
         trend_type=None if is_base else getattr(obj, "trend_type", None),
-        probability=getattr(obj, "probability", None),
+        # The base group never has a PROB; don't let a stray attribute on the
+        # parent WeatherReport misclassify it as a temporary group (#250 review).
+        probability=None if is_base else getattr(obj, "probability", None),
         validity_start=_coerce_dt(getattr(obj, "validity_start", None)),
     )
 
@@ -120,7 +122,12 @@ def _taf_instant_trends(taf, sample_times, applicable_trends_fn=None) -> list[li
     return instants
 
 
-def _build_destination_window(taf_raw: str | None, eta: datetime, nwp_ceiling, nwp_vis):
+def _build_destination_window(
+    taf_raw: str | None,
+    eta: datetime,
+    nwp_ceiling: float | None,
+    nwp_vis: float | None,
+):
     """Build the destination window: prefer a TAF that covers the ETA, else NWP."""
     if taf_raw:
         try:

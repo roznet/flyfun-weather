@@ -468,7 +468,10 @@ def _build_trigger(
         regime=regime,
         status=status,
         reason=reason,
-        source=window.source if window.source in ("taf", "nwp") else "nwp",
+        # Invariant: a forecast-present window's source is "taf" or "nwp" (the
+        # "none" source only reaches the no-forecast branch above). Pydantic's
+        # Literal validation makes a broken invariant loud rather than silent.
+        source=window.source,
         triggered_by_tempo=window.triggered_by_tempo,
         ceiling=ceiling_c,
         visibility=vis_c,
