@@ -889,6 +889,41 @@ def _build_route_config(flight, db_path):
     )
 
 
+def _resolve_cruise_ias_kt(db, flight, profile_speed_kt=None):
+    """Resolve the flight's cruise IAS (kt) for the headwind advisory's TAS.
+
+    Reuses the app precedence (``weatherbrief.atmo.resolve_cruise_speed_ias``):
+    the selected aircraft's cruise speed first, then the flight-default profile
+    speed. *profile_speed_kt* lets callers that already loaded the profile skip
+    a reload; otherwise it's looked up. Returns ``None`` when nothing usable is
+    known (no DB, speedless aircraft + profile), and the advisory keeps its
+    generic default.
+    """
+    from weatherbrief.atmo import resolve_cruise_speed_ias
+
+    aircraft_speed = None
+    if db is not None and getattr(flight, "aircraft_id", None) is not None:
+        try:
+            from weatherbrief.db.models import UserAircraftRow
+
+            ac = db.query(UserAircraftRow).filter(UserAircraftRow.id == flight.aircraft_id).first()
+            if ac is not None:
+                aircraft_speed = ac.cruise_speed_kt
+        except Exception:
+            logger.debug("cruise IAS: aircraft lookup failed", exc_info=True)
+
+    if profile_speed_kt is None and db is not None and getattr(flight, "profile_id", None) is not None:
+        try:
+            from weatherbrief.api.profiles import load_profile_context
+
+            pctx = load_profile_context(db, flight.profile_id, flight.user_id)
+            profile_speed_kt = pctx.settings.get("speed_kt")
+        except Exception:
+            logger.debug("cruise IAS: profile lookup failed", exc_info=True)
+
+    return resolve_cruise_speed_ias(aircraft_speed, profile_speed_kt)
+
+
 def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False, as_of_time=None):
     """Shared setup for both sync and streaming refresh endpoints.
 
@@ -923,6 +958,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     locale = None
     units_region = "auto"
     profile_name_for_digest = None
+    profile_settings: dict = {}
     if db is not None:
         from weatherbrief.api.preferences import (
             load_autorouter_token,
@@ -1029,6 +1065,9 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     options.units_region = resolve_units_region(units_region, detected)
     options.profile_id = flight.profile_id
     options.profile_name = profile_name_for_digest
+    options.cruise_speed_ias_kt = _resolve_cruise_ias_kt(
+        db, flight, profile_speed_kt=profile_settings.get("speed_kt"),
+    )
     if digest_guidance:
         options.guidance_key = digest_guidance
 
@@ -2513,6 +2552,8 @@ def recalculate_advisories(
         cloud_method=cloud_method,
         convective_method=convective_method,
         locale=locale,
+        cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
+        flight_duration_hours=flight.flight_duration_hours,
     )
 
     if advisory_result.manifest is None:
@@ -2709,6 +2750,8 @@ def altitude_table(
         cloud_method=cloud_method,
         convective_method=convective_method,
         locale=locale,
+        cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
+        flight_duration_hours=flight.flight_duration_hours,
     )
 
     return result.model_dump()

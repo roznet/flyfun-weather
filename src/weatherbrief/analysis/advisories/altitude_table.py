@@ -36,6 +36,8 @@ def compute_altitude_table(
     user_params: dict[str, dict[str, float]] | None = None,
     aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
     locale: str | None = None,
+    cruise_speed_ias_kt: float | None = None,
+    flight_duration_hours: float = 0.0,
 ) -> AltitudeTableResult:
     """Sweep altitude-dependent advisories across a range of altitudes.
 
@@ -104,6 +106,8 @@ def compute_altitude_table(
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conditions,
             locale=locale,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            flight_duration_hours=flight_duration_hours,
         )
         results = evaluate_all(ctx, enabled_ids=alt_dep_ids, user_params=user_params, aggregation=aggregation)
 

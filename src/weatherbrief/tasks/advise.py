@@ -293,6 +293,7 @@ def run_advisories(
     cloud_method: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
+    cruise_speed_ias_kt: float | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
@@ -332,6 +333,8 @@ def run_advisories(
             locale=locale,
             route_fronts=route_fronts,
             sun=_compute_route_sun(rp_analyses, airport_conds),
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            flight_duration_hours=route.flight_duration_hours,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -377,6 +380,8 @@ def run_advisories_from_pack(
     cloud_method: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
+    cruise_speed_ias_kt: float | None = None,
+    flight_duration_hours: float = 0.0,
 ) -> AdvisoryResult:
     """Re-evaluate advisories from persisted pack_dir artifacts.
 
@@ -453,6 +458,8 @@ def run_advisories_from_pack(
             locale=locale,
             route_fronts=route_fronts,
             sun=route_sun,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            flight_duration_hours=flight_duration_hours,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -512,6 +519,8 @@ def run_altitude_table_from_pack(
     cloud_method: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
+    cruise_speed_ias_kt: float | None = None,
+    flight_duration_hours: float = 0.0,
 ) -> AltitudeTableResult:
     """Compute altitude advisory table from persisted pack artifacts.
 
@@ -557,6 +566,8 @@ def run_altitude_table_from_pack(
         user_params=user_params,
         aggregation=effective_aggregation,
         locale=locale,
+        cruise_speed_ias_kt=cruise_speed_ias_kt,
+        flight_duration_hours=flight_duration_hours,
     )
 
 
@@ -609,6 +620,7 @@ def run_alt_from_pack(
     cloud_method: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
+    cruise_speed_ias_kt: float | None = None,
 ) -> AdvisoryResult:
     """Re-run analysis + advisories at an alt departure time using existing pack data.
 
@@ -704,6 +716,8 @@ def run_alt_from_pack(
             airport_conditions=airport_conds,
             locale=locale,
             route_fronts=route_fronts,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            flight_duration_hours=route.flight_duration_hours,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)

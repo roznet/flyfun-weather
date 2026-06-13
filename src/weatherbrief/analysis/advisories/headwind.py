@@ -15,10 +15,14 @@ altitude (so the altitude slider and altitude table show how winds change
 with level — often the actual decision being made), falling back to the
 precomputed cruise wind components on packs without cross-section winds.
 
-The time estimate uses a per-profile TAS *parameter* rather than plumbing the
-aircraft through the pipeline: it keeps the advisory recalculable from a
-saved pack, and the headwind numbers themselves are model truth regardless of
-the TAS chosen.
+The trip-time estimate needs a cruise TAS, resolved per flight (no user knob):
+the aircraft cruise speed (IAS, aircraft→profile via
+``weatherbrief.atmo.resolve_cruise_speed_ias``) converted to TAS at the
+evaluated cruise altitude — so the minutes reflect the actual aeroplane and the
+altitude table shows TAS rising with height; failing that, the flight's own
+planned speed (distance ÷ duration); failing that, a generic fallback so the
+estimate can never divide by an absent speed. The headwind numbers themselves
+are model truth regardless of the TAS used.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import wind_at_altitude
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
+from weatherbrief.atmo import ias_to_tas_isa
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -38,13 +43,32 @@ from weatherbrief.models import (
 )
 
 # Floor on per-point groundspeed for the time integral — keeps the estimate
-# finite if a parameter combination puts headwind near TAS.
+# finite if winds put the headwind near TAS.
 _MIN_GS_KT = 30.0
+
+# Last-resort cruise TAS when a flight has neither an aircraft/profile speed nor
+# a usable planned duration (see _resolve_cruise_tas). A generic light-GA cruise.
+_DEFAULT_TAS_KT = 110.0
 
 
 def _headwind_component(speed_kt: float, direction_deg: float, track_deg: float) -> float:
     """Along-track wind component: positive = headwind, negative = tailwind."""
     return speed_kt * math.cos(math.radians(direction_deg - track_deg))
+
+
+def _resolve_cruise_tas(ctx: RouteContext) -> float:
+    """Cruise TAS (kt) for the trip-time estimate — always returns a value.
+
+    Precedence: the flight's aircraft/profile cruise speed (IAS → TAS at the
+    *evaluated* cruise altitude, so the altitude table reflects TAS rising with
+    height) → the flight's own planned speed (distance ÷ duration, already a
+    TAS) → a generic fallback.
+    """
+    if ctx.cruise_speed_ias_kt:
+        return ias_to_tas_isa(ctx.cruise_speed_ias_kt, ctx.cruise_altitude_ft)
+    if ctx.flight_duration_hours and ctx.flight_duration_hours > 0 and ctx.total_distance_nm > 0:
+        return ctx.total_distance_nm / ctx.flight_duration_hours
+    return _DEFAULT_TAS_KT
 
 
 @register
@@ -59,8 +83,8 @@ class HeadwindEvaluator:
             short_description="Headwind at cruise and trip-time impact",
             description=(
                 "Averages the cruise-level headwind component along the route "
-                "and estimates the trip-time impact versus still air using the "
-                "cruise TAS parameter (set it to your aircraft's). Mostly "
+                "and estimates the trip-time impact versus still air, using your "
+                "aircraft's cruise speed (or the flight's planned speed). Mostly "
                 "informational: amber when the average headwind exceeds the "
                 "threshold (fuel-planning attention), red only for extreme "
                 "days. Tailwinds report the time gained. Reads winds at the "
@@ -70,17 +94,6 @@ class HeadwindEvaluator:
             category="wind",
             altitude_dependent=True,
             parameters=[
-                AdvisoryParameterDef(
-                    key="cruise_tas_kt",
-                    label="Cruise TAS",
-                    description="True airspeed used for the trip-time estimate",
-                    type="speed",
-                    unit="kt",
-                    default=110,
-                    min=60,
-                    max=250,
-                    step=5,
-                ),
                 AdvisoryParameterDef(
                     key="mean_amber_kt",
                     label="Avg headwind (amber)",
@@ -108,7 +121,7 @@ class HeadwindEvaluator:
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        tas_kt = params.get("cruise_tas_kt", 110)
+        tas_kt = _resolve_cruise_tas(ctx)
         mean_amber_kt = params.get("mean_amber_kt", 20)
         mean_red_kt = params.get("mean_red_kt", 40)
 

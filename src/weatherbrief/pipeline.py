@@ -90,6 +90,7 @@ class BriefingOptions:
     advisory_aggregation: str | None = None  # "worst" or "majority"
     advisory_enabled: dict[str, bool] | None = None  # {advisory_id: enabled}
     advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
+    cruise_speed_ias_kt: float | None = None  # resolved aircraft/profile cruise IAS for headwind TAS
     auto_front_detection: bool = False  # experimental: write route_fronts.json (#195)
     compute_alternates: bool = False  # opt-in: weather-based divert candidates, D-2 inward (#210)
     historical_mode: bool = False  # Use archived NWP data for past departure times
@@ -376,6 +377,7 @@ def execute_briefing(
             aggregation=adv_aggregation,
             pack_dir=pack_dir,
             progress_callback=progress_callback,
+            cruise_speed_ias_kt=options.cruise_speed_ias_kt,
             icing_method=options.icing_method,
             cloud_method=options.cloud_method,
             convective_method=options.convective_method,
@@ -432,6 +434,7 @@ def execute_briefing(
                 cloud_method=options.cloud_method,
                 convective_method=options.convective_method,
                 locale=options.locale,
+                cruise_speed_ias_kt=options.cruise_speed_ias_kt,
             )
         except Exception:
             logger.warning("Alt advisory evaluation failed (non-fatal)", exc_info=True)

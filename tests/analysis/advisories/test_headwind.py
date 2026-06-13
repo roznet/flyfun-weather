@@ -41,7 +41,11 @@ def _make_rpa(i: int, headwind_kt: float | None) -> RoutePointAnalysis:
     )
 
 
-def _ctx(headwinds: list[float | None]) -> RouteContext:
+def _ctx(
+    headwinds: list[float | None],
+    cruise_speed_ias_kt: float | None = None,
+    flight_duration_hours: float = 0.0,
+) -> RouteContext:
     return RouteContext(
         analyses=[_make_rpa(i, hw) for i, hw in enumerate(headwinds)],
         cross_sections=[],
@@ -50,6 +54,8 @@ def _ctx(headwinds: list[float | None]) -> RouteContext:
         cruise_altitude_ft=8000,
         flight_ceiling_ft=18000,
         total_distance_nm=200,
+        cruise_speed_ias_kt=cruise_speed_ias_kt,
+        flight_duration_hours=flight_duration_hours,
     )
 
 
@@ -95,8 +101,42 @@ class TestHeadwindEvaluator:
         result = _evaluate(_ctx([25.0] * 10), params={"mean_amber_kt": 30})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
-    def test_tas_changes_time_estimate(self):
-        slow = _evaluate(_ctx([25.0] * 10), params={"cruise_tas_kt": 80})
-        fast = _evaluate(_ctx([25.0] * 10), params={"cruise_tas_kt": 160})
-        # Same wind, slower aircraft → larger time penalty in the detail.
+    def test_no_cruise_tas_parameter(self):
+        """The cruise speed is resolved per flight — there is no user knob."""
+        keys = {p.key for p in HeadwindEvaluator.catalog_entry().parameters}
+        assert "cruise_tas_kt" not in keys
+
+    def test_faster_aircraft_smaller_penalty(self):
+        """Same wind, faster aircraft cruise speed → smaller time penalty."""
+        slow = _evaluate(_ctx([25.0] * 10, cruise_speed_ias_kt=90))
+        fast = _evaluate(_ctx([25.0] * 10, cruise_speed_ias_kt=180))
         assert slow.per_model[0].detail != fast.per_model[0].detail
+
+    def test_aircraft_ias_converted_to_tas_at_altitude(self):
+        """The aircraft cruise IAS is converted to TAS at the cruise altitude."""
+        from weatherbrief.atmo import ias_to_tas_isa
+
+        derived = _evaluate(_ctx([25.0] * 10, cruise_speed_ias_kt=150))
+        # Equivalent to a flight whose planned speed is exactly that TAS.
+        expected_tas = ias_to_tas_isa(150, 8000)
+        dur = _evaluate(_ctx([25.0] * 10, flight_duration_hours=200 / expected_tas))
+        assert derived.per_model[0].detail == dur.per_model[0].detail
+
+    def test_duration_fallback_when_no_aircraft_speed(self):
+        """With no aircraft/profile speed, fall back to the flight's own planned
+        speed (distance ÷ duration)."""
+        # 200 nm in 2.0 h → 100 kt TAS; distinct from the 110kt last-resort.
+        dur = _evaluate(_ctx([25.0] * 10, flight_duration_hours=2.0))
+        last_resort = _evaluate(_ctx([25.0] * 10))
+        assert dur.per_model[0].detail != last_resort.per_model[0].detail
+
+    def test_last_resort_default_when_nothing_known(self):
+        """No aircraft speed and no usable duration → generic 110kt fallback."""
+        no_info = _evaluate(_ctx([25.0] * 10))
+        assert "+32 min" in no_info.per_model[0].detail  # the documented 110kt result
+
+    def test_aircraft_speed_beats_duration(self):
+        """Aircraft/profile speed takes precedence over the duration fallback."""
+        both = _evaluate(_ctx([25.0] * 10, cruise_speed_ias_kt=150, flight_duration_hours=2.0))
+        ac_only = _evaluate(_ctx([25.0] * 10, cruise_speed_ias_kt=150))
+        assert both.per_model[0].detail == ac_only.per_model[0].detail
