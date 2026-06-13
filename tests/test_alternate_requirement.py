@@ -23,8 +23,8 @@ from weatherbrief.analysis.alternate_requirement import (
     compute_easa_trigger,
     compute_faa_qual,
     compute_faa_trigger,
-    easa_ceiling_band,
-    easa_vis_band,
+    easa_alt_ceiling_band,
+    easa_alt_vis,
     no_forecast_window,
     nwp_window,
     proxy_for_approach,
@@ -84,23 +84,24 @@ class TestVerdictLogic:
 # --- EASA bands per approach class -------------------------------------------
 
 class TestEasaBands:
+    # NCO.OP.143 alternate minima: ILS (DH<250) → DH+200 / 1500 m;
+    # RNP & non-precision (DH>=250) → DH+400 / 3000 m.
     def test_precision_ceiling_band(self):
         # ILS DH 200–300 → ceiling 400–500
-        assert easa_ceiling_band(_PRECISION) == (400.0, 500.0)
+        assert easa_alt_ceiling_band(_PRECISION) == (400.0, 500.0)
 
     def test_gnss_ceiling_band(self):
-        # RNP/RNAV DH 250–600 → ceiling 450–800
-        assert easa_ceiling_band(_GNSS) == (450.0, 800.0)
+        # RNP/RNAV DH 250–600, +400 → ceiling 650–1000
+        assert easa_alt_ceiling_band(_GNSS) == (650.0, 1000.0)
 
     def test_nonprecision_ceiling_band(self):
-        # VOR/NDB DH 400–900 → ceiling 600–1100
-        assert easa_ceiling_band(_NONPRECISION) == (600.0, 1100.0)
+        # VOR/NDB DH 400–900, +400 → ceiling 800–1300
+        assert easa_alt_ceiling_band(_NONPRECISION) == (800.0, 1300.0)
 
-    def test_vis_band_with_floor(self):
-        # precision vis 550–1500 → +1500 = 2050–3000 (floor not binding here)
-        assert easa_vis_band(_PRECISION) == (2050.0, 3000.0)
-        # non-precision 1500–3000 → 3000–4500
-        assert easa_vis_band(_NONPRECISION) == (3000.0, 4500.0)
+    def test_vis_is_fixed_per_tier(self):
+        assert easa_alt_vis(_PRECISION) == 1500.0  # ILS / DH<250
+        assert easa_alt_vis(_GNSS) == 3000.0  # DH>=250
+        assert easa_alt_vis(_NONPRECISION) == 3000.0
 
 
 # --- Approach proxy selection / conservative rules ---------------------------
@@ -155,32 +156,43 @@ class TestFaaTrigger:
 # --- EASA trigger (destination, three-state) ---------------------------------
 
 class TestEasaTrigger:
-    # _NONPRECISION → ceiling band 600–1100 ft, vis band 3000–4500 m.
+    # NCO.OP.140: not required only if ceiling ≥ DH+1000 AND vis ≥ 5000 m.
+    # _NONPRECISION dh [400,900] → ceiling band [1400, 2400]; vis fixed 5000.
+    # _PRECISION (ILS) dh [200,300] → ceiling band [1200, 1300].
     def test_above_band_not_required(self):
-        trig = compute_easa_trigger(nwp_window(1500, 5000), _NONPRECISION)
+        trig = compute_easa_trigger(nwp_window(2500, 6000), _NONPRECISION)
         assert trig.status == TriggerVerdict.NOT_REQUIRED
 
     def test_inside_band_marginal(self):
-        # ceiling 800 in 600–1100 → marginal; vis 5000 ≥ 4500 → not-required
-        trig = compute_easa_trigger(nwp_window(800, 5000), _NONPRECISION)
+        # ceiling 1800 in 1400–2400 → marginal; vis 6000 ≥ 5000 → not-required
+        trig = compute_easa_trigger(nwp_window(1800, 6000), _NONPRECISION)
         assert trig.ceiling.verdict == TriggerVerdict.MARGINAL.value
         assert trig.status == TriggerVerdict.MARGINAL
 
     def test_below_band_required(self):
-        trig = compute_easa_trigger(nwp_window(500, 5000), _NONPRECISION)
+        trig = compute_easa_trigger(nwp_window(1300, 6000), _NONPRECISION)
         assert trig.status == TriggerVerdict.REQUIRED
 
-    def test_visibility_can_force_marginal(self):
-        # ceiling clears (1500 ≥ 1100); vis 3500 in 3000–4500 → marginal
-        trig = compute_easa_trigger(nwp_window(1500, 3500), _NONPRECISION)
-        assert trig.visibility.verdict == TriggerVerdict.MARGINAL.value
-        assert trig.status == TriggerVerdict.MARGINAL
+    def test_visibility_below_5km_required(self):
+        # ceiling clears (2500 ≥ 2400); vis 4000 < 5000 (fixed bar) → required
+        trig = compute_easa_trigger(nwp_window(2500, 4000), _NONPRECISION)
+        assert trig.visibility.verdict == TriggerVerdict.REQUIRED.value
+        assert trig.status == TriggerVerdict.REQUIRED
 
-    def test_no_iap_uses_vfr_proxy(self):
-        # proxy None (destination has no IAP) → VFR proxy 1000 ft / 5000 m
-        trig = compute_easa_trigger(nwp_window(1200, 6000), None)
+    def test_ifr_precision_field_requires_alternate(self):
+        # Regression (ESMQ): an ILS field, IFR ceiling 960 ft, good vis. DH+1000
+        # band is 1200–1300, so 960 < 1200 → REQUIRED (was wrongly NOT_REQUIRED
+        # when the trigger used the DH+200 selection minima).
+        trig = compute_easa_trigger(nwp_window(960, 26000), _PRECISION)
+        assert trig.status == TriggerVerdict.REQUIRED
+        assert trig.ceiling.required_min == 1200
+        assert trig.ceiling.required_max == 1300
+
+    def test_no_iap_requires_vmc(self):
+        # proxy None (no IAP) → must be VMC: ceiling ≥ 1500 ft / vis ≥ 5000 m.
+        trig = compute_easa_trigger(nwp_window(1600, 6000), None)
         assert trig.status == TriggerVerdict.NOT_REQUIRED
-        trig = compute_easa_trigger(nwp_window(800, 6000), None)
+        trig = compute_easa_trigger(nwp_window(1200, 6000), None)
         assert trig.status == TriggerVerdict.REQUIRED  # collapsed band, never marginal
 
     def test_no_forecast_required(self):
@@ -227,29 +239,40 @@ class TestFaaAlternateMinima:
 # --- EASA alternate minima (per candidate) -----------------------------------
 
 class TestEasaAlternateMinima:
+    # NCO.OP.143: VOR (DH>=250 tier) → ceiling DH+400 band [800, 1300], vis 3000 m.
+    # ILS (DH<250 tier) → ceiling [400, 500], vis 1500 m. No IAP → 2000 ft / 5 km.
     def test_marginal_in_band(self):
-        # non-precision ceiling band 600–1100; 700 ft is in-band → marginal
-        q = compute_easa_qual(700, 5000, "VOR", has_iap=True)
+        q = compute_easa_qual(1000, 5000, "VOR", has_iap=True)  # 1000 in 800–1300
         assert q.ceiling.verdict == BandVerdict.MARGINAL.value
 
     def test_likely_clears_worst_case(self):
-        q = compute_easa_qual(1200, 5000, "VOR", has_iap=True)
+        q = compute_easa_qual(1400, 5000, "VOR", has_iap=True)  # >=1300 and vis>=3000
         assert q.verdict == BandVerdict.LIKELY
 
     def test_unlikely_fails_best_case(self):
-        q = compute_easa_qual(500, 5000, "VOR", has_iap=True)
-        assert q.verdict == BandVerdict.UNLIKELY  # 500 < 600
+        q = compute_easa_qual(700, 5000, "VOR", has_iap=True)
+        assert q.verdict == BandVerdict.UNLIKELY  # 700 < 800
+
+    def test_ils_low_dh_tier_uses_1500m_vis(self):
+        # ILS: ceiling 600 clears [400,500] (Likely); vis 1500 is the bar.
+        q = compute_easa_qual(600, 1500, "ILS", has_iap=True)
+        assert q.verdict == BandVerdict.LIKELY
+        q2 = compute_easa_qual(600, 1400, "ILS", has_iap=True)  # vis 1400 < 1500
+        assert q2.visibility.verdict == BandVerdict.UNLIKELY.value
 
     def test_combine_worst_axis(self):
-        # ceiling likely, vis unlikely → unlikely overall
-        q = compute_easa_qual(1200, 1000, "VOR", has_iap=True)  # vis 1000 < 3000
+        # ceiling likely, vis unlikely → unlikely overall (VOR vis bar 3000 m)
+        q = compute_easa_qual(1400, 1000, "VOR", has_iap=True)  # vis 1000 < 3000
         assert q.visibility.verdict == BandVerdict.UNLIKELY.value
         assert q.verdict == BandVerdict.UNLIKELY
 
-    def test_no_iap_vfr_only(self):
-        q = compute_easa_qual(1200, 6000, None, has_iap=False)
+    def test_no_iap_requires_2000_5km(self):
+        # NCO.OP.143 no-IAP: ceiling 2000 ft / vis 5000 m.
+        q = compute_easa_qual(2200, 6000, None, has_iap=False)
         assert "VFR only" in q.reason
         assert q.verdict == BandVerdict.LIKELY
+        q2 = compute_easa_qual(1200, 6000, None, has_iap=False)  # 1200 < 2000
+        assert q2.verdict == BandVerdict.UNLIKELY
 
 
 # --- Conservative rules ------------------------------------------------------
@@ -266,9 +289,9 @@ class TestConservativeRules:
         assert q.verdict == BandVerdict.UNLIKELY
 
     def test_unknown_approach_uses_nonprecision_band(self):
-        # ILS band would clear 700 ft (band 400–500) Likely; non-precision (600–1100)
-        # makes it Marginal — confirm the unknown class is the demanding one.
-        q = compute_easa_qual(700, 5000, "WEIRD", has_iap=True)
+        # ILS band would clear 1000 ft (band 400–500) Likely; non-precision band
+        # (800–1300) makes it Marginal — confirm the unknown class is demanding.
+        q = compute_easa_qual(1000, 5000, "WEIRD", has_iap=True)
         assert q.ceiling.verdict == BandVerdict.MARGINAL.value
 
 
@@ -446,7 +469,7 @@ class TestWiringSmoke:
         )
         cand_marginal = AlternateAirport(
             icao="EGAC", lat=54.6, lon=-5.9, distance_from_dest_nm=10, position="after",
-            flight_category="MVFR", ceiling_ft=700, visibility_m=5000,
+            flight_category="MVFR", ceiling_ft=1000, visibility_m=5000,
             has_instrument_approach=True, best_approach_type="VOR",
         )
         alt = RouteAlternates(
@@ -466,8 +489,8 @@ class TestWiringSmoke:
         assert req.faa.source == "nwp"
         # 1500 ft / ~3.7 SM → FAA ceiling < 2000 → required
         assert req.faa.status == TriggerVerdict.REQUIRED
-        # EASA: no destination IAP (bogus DB) → VFR proxy 1000 ft / 5000 m;
-        # 1500 ft / 6000 m clears both → not required.
+        # EASA NCO.OP.140: no destination IAP (bogus DB) → VMC proxy 1500 ft /
+        # 5000 m; 1500 ft / 6000 m clears both → not required.
         assert req.easa.status == TriggerVerdict.NOT_REQUIRED
         # caveats present
         assert any("planning guidance" in c.lower() for c in req.caveats)
@@ -475,8 +498,46 @@ class TestWiringSmoke:
         # per-candidate quals populated
         assert cand_good.faa.verdict == BandVerdict.LIKELY  # ILS, 4000/9999
         assert cand_good.easa.verdict == BandVerdict.LIKELY
-        assert cand_marginal.easa.verdict == BandVerdict.MARGINAL  # 700 in 600–1100
+        assert cand_marginal.easa.verdict == BandVerdict.MARGINAL  # 1000 in 800–1300
 
     def test_no_alternates_is_noop(self):
         snap = SimpleNamespace(alternates=None)
         run_alternate_requirement(snap, "/nonexistent/nav.db")  # must not raise
+
+
+class TestConditionalExtraction:
+    """_extract_conditionals: descriptive TEMPO/PROB list with the counted flag."""
+
+    def _vt(self, day, hour):
+        return SimpleNamespace(day=day, hour=hour)
+
+    def test_classifies_and_counts(self):
+        from weatherbrief.tasks.alternate_requirement import _extract_conditionals
+        eta = datetime(2026, 6, 14, 12, tzinfo=timezone.utc)
+        taf = SimpleNamespace(trends=[
+            # FM is main body, not conditional → excluded
+            SimpleNamespace(trend_type="FM", probability=None, ceiling_ft=3000,
+                            visibility_meters=9999, cavok=False,
+                            validity_start=self._vt(14, 9), validity_end=None),
+            SimpleNamespace(trend_type="TEMPO", probability=None, ceiling_ft=400,
+                            visibility_meters=3000, cavok=False,
+                            validity_start=self._vt(14, 11), validity_end=self._vt(14, 13)),
+            SimpleNamespace(trend_type="TEMPO", probability=30, ceiling_ft=200,
+                            visibility_meters=800, cavok=False,
+                            validity_start=self._vt(14, 11), validity_end=self._vt(14, 13)),
+            SimpleNamespace(trend_type="TEMPO", probability=40, ceiling_ft=300,
+                            visibility_meters=1200, cavok=False,
+                            validity_start=self._vt(14, 11), validity_end=self._vt(14, 13)),
+            # outside the ETA window (next day) → excluded
+            SimpleNamespace(trend_type="TEMPO", probability=None, ceiling_ft=100,
+                            visibility_meters=500, cavok=False,
+                            validity_start=self._vt(15, 6), validity_end=self._vt(15, 9)),
+        ])
+        conds = _extract_conditionals(taf, eta)
+        kinds = {(c.kind, c.counted) for c in conds}
+        assert ("TEMPO", True) in kinds
+        assert ("PROB30 TEMPO", False) in kinds   # PROB30 noted, not counted
+        assert ("PROB40 TEMPO", True) in kinds
+        assert len(conds) == 3                      # FM + out-of-window excluded
+        tempo = next(c for c in conds if c.kind == "TEMPO")
+        assert tempo.validity == "1411/1413"

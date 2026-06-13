@@ -96,6 +96,23 @@ class AlternateQual(BaseModel):
     visibility: CriterionAssessment
 
 
+class ConditionalGroup(BaseModel):
+    """A TAF TEMPO/PROB change group overlapping the ETA window (descriptive).
+
+    Surfaced so the pilot can see *why* the window worst-case is what it is and
+    how each conditional was treated. ``counted`` reflects our (conservative)
+    policy — TEMPO and PROB40 count toward the verdict, PROB30 is noted only.
+    The verdict logic is unchanged by this; these are for display.
+    """
+
+    kind: str  # "TEMPO" | "PROB30" | "PROB40" | "PROB30 TEMPO" | "PROB40 TEMPO"
+    probability: int | None = None
+    ceiling_ft: float | None = None  # None = no ceiling layer in this group
+    visibility_m: float | None = None
+    validity: str | None = None  # e.g. "0406/0408"
+    counted: bool = True  # did it affect the (conservative) verdict?
+
+
 class AlternateRequirement(BaseModel):
     """Regulatory alternate-requirement assessment for a route's destination."""
 
@@ -104,4 +121,11 @@ class AlternateRequirement(BaseModel):
     faa: RegAlternateTrigger
     easa: RegAlternateTrigger
     caveats: list[str] = Field(default_factory=list)
+    # TAF-path transparency (None on the NWP fallback path): the steady-state
+    # (main body / FM / BECMG) worst over the window, plus the conditional
+    # TEMPO/PROB groups that overlap it. Lets the UI show steady-state vs the
+    # conditional-driven worst case.
+    main_body_ceiling_ft: float | None = None
+    main_body_visibility_m: float | None = None
+    conditionals: list[ConditionalGroup] = Field(default_factory=list)
     computed_at: datetime | None = None

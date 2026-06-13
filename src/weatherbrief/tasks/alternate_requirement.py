@@ -36,7 +36,10 @@ from weatherbrief.analysis.alternate_requirement import (
     nwp_window,
     proxy_for_approach,
 )
-from weatherbrief.models.alternate_requirement import AlternateRequirement
+from weatherbrief.models.alternate_requirement import (
+    AlternateRequirement,
+    ConditionalGroup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,13 +162,81 @@ def _taf_instant_trends(
     return instants
 
 
+def _fmt_validity(vs, ve) -> str | None:
+    """Format a trend's validity as the TAF token (e.g. "0406/0408", "FM0409")."""
+    def dh(x):
+        d = getattr(x, "day", None)
+        h = getattr(x, "hour", None)
+        if d is None or h is None:
+            return None
+        try:
+            return f"{int(d):02d}{int(h):02d}"
+        except (ValueError, TypeError):
+            return None
+    a = dh(vs) if vs is not None else None
+    b = dh(ve) if ve is not None else None
+    if a and b:
+        return f"{a}/{b}"
+    if a:
+        return f"FM{a}"
+    return None
+
+
+def _conditional_kind(trend_type: str, prob: int | None) -> str:
+    """Label a conditional group: TEMPO / PROB30 / PROB40 / PROB.. TEMPO."""
+    has_tempo = "TEMPO" in trend_type or "INTER" in trend_type
+    if prob is not None:
+        return f"PROB{prob} TEMPO" if has_tempo else f"PROB{prob}"
+    return "TEMPO" if has_tempo else "OTHER"
+
+
+def _extract_conditionals(taf, eta: datetime) -> list[ConditionalGroup]:
+    """Descriptive list of TEMPO/PROB groups overlapping the ETA window.
+
+    Does not change the verdict (that comes from ``build_window``); it lets the
+    UI show each conditional and how it was treated. ``counted`` mirrors the
+    conservative policy used by the window builder (TEMPO and PROB>30 count;
+    PROB30 is noted only).
+    """
+    trends = getattr(taf, "trends", None) or []
+    w_start = (eta - timedelta(hours=1)).replace(tzinfo=None)
+    w_end = (eta + timedelta(hours=1)).replace(tzinfo=None)
+    out: list[ConditionalGroup] = []
+    for tr in trends:
+        tt = (getattr(tr, "trend_type", None) or "").strip().upper()
+        prob = getattr(tr, "probability", None)
+        is_conditional = "TEMPO" in tt or tt.startswith("PROB") or "INTER" in tt or prob is not None
+        if not is_conditional:
+            continue
+        vs = getattr(tr, "validity_start", None)
+        ve = getattr(tr, "validity_end", None)
+        cs = _coerce_dt(vs, eta)
+        ce = _coerce_dt(ve, eta)
+        # Drop groups wholly outside the window; keep when validity is unknown.
+        if cs is not None and ce is not None and (ce < w_start or cs > w_end):
+            continue
+        out.append(ConditionalGroup(
+            kind=_conditional_kind(tt, prob),
+            probability=prob,
+            ceiling_ft=None if getattr(tr, "cavok", False) else getattr(tr, "ceiling_ft", None),
+            visibility_m=getattr(tr, "visibility_meters", None),
+            validity=_fmt_validity(vs, ve),
+            counted=prob is None or prob > 30,
+        ))
+    return out
+
+
 def _build_destination_window(
     taf_raw: str | None,
     eta: datetime,
     nwp_ceiling: float | None,
     nwp_vis: float | None,
-) -> CeilingVisWindow:
-    """Build the destination window: prefer a TAF that covers the ETA, else NWP."""
+) -> tuple[CeilingVisWindow, list[ConditionalGroup]]:
+    """Build the destination window (prefer a TAF covering the ETA, else NWP).
+
+    Returns the window plus the descriptive conditional groups (empty on the NWP
+    / no-forecast path).
+    """
     if taf_raw:
         try:
             from euro_aip.briefing.weather.models import WeatherReport
@@ -175,7 +246,7 @@ def _build_destination_window(
             instants = _taf_instant_trends(taf, sample_times, ref=eta)
             window = build_window(instants, source="taf")
             if window.has_forecast:
-                return window
+                return window, _extract_conditionals(taf, eta)
         except Exception:
             logger.warning(
                 "alternate_requirement: TAF parse/window failed; falling back to NWP",
@@ -183,8 +254,8 @@ def _build_destination_window(
             )
 
     if nwp_ceiling is not None or nwp_vis is not None:
-        return nwp_window(nwp_ceiling, nwp_vis)
-    return no_forecast_window()
+        return nwp_window(nwp_ceiling, nwp_vis), []
+    return no_forecast_window(), []
 
 
 def _destination_approach_class(airports_db_path: str, dest_icao: str) -> tuple[str | None, bool]:
@@ -237,7 +308,7 @@ def run_alternate_requirement(snapshot, airports_db_path: str, *, now: datetime 
                 break
 
     # 2. Destination window (TAF preferred, else NWP-consensus fallback).
-    window = _build_destination_window(
+    window, conditionals = _build_destination_window(
         taf_raw, eta,
         alternates.destination_ceiling_ft,
         alternates.destination_visibility_m,
@@ -260,6 +331,9 @@ def run_alternate_requirement(snapshot, airports_db_path: str, *, now: datetime 
         faa=compute_faa_trigger(window),
         easa=compute_easa_trigger(window, dest_proxy),
         caveats=caveats,
+        main_body_ceiling_ft=window.main_body_ceiling_ft,
+        main_body_visibility_m=window.main_body_visibility_m,
+        conditionals=conditionals,
         computed_at=now,
     )
 

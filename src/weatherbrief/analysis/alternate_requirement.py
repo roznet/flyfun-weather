@@ -80,10 +80,30 @@ APPROACH_CLASS_PROXY: dict[str, ApproachProxy] = {
 # Empty / NULL / TACAN / any unmapped string → most-demanding (non-precision).
 _DEFAULT_PROXY = _NONPRECISION
 
-# EASA Part-NCO planning margins.
-EASA_CEILING_MARGIN_FT = 200.0  # ceiling requirement = DH + 200 ft
-EASA_VIS_MARGIN_M = 1500.0  # visibility requirement = published vis + 1500 m
-EASA_VIS_FLOOR_M = 1500.0  # ... with a 1500 m hard floor
+# EASA NCO.OP.143 alternate-SELECTION planning minima (does candidate X qualify
+# as a destination alternate? — see compute_easa_qual). Tiered on the approach
+# DH; visibility is a FIXED value per tier (not the published-vis range):
+#   DH  < 250 ft (ILS):                 ceiling >= DH + 200 ft, vis >= 1500 m
+#   DH >= 250 ft (RNP / non-precision): ceiling >= DH + 400 ft, vis >= 3000 m
+#   no IAP:                             ceiling >= 2000 ft,      vis >= 5000 m
+# We tier by class (ILS is the only <250 ft class; everything else is treated as
+# the more-demanding >=250 ft tier, conservative given LPV/LNAV ambiguity).
+EASA_ALT_LOWDH_CEILING_MARGIN_FT = 200.0
+EASA_ALT_LOWDH_VIS_M = 1500.0
+EASA_ALT_HIGHDH_CEILING_MARGIN_FT = 400.0
+EASA_ALT_HIGHDH_VIS_M = 3000.0
+EASA_ALT_NOIAP_CEILING_FT = 2000.0  # or min safe IFR altitude (unavailable) if higher
+EASA_ALT_NOIAP_VIS_M = 5000.0
+
+# EASA NCO.OP.140 destination-alternate TRIGGER (is an alternate required at the
+# destination?). A DIFFERENT, higher bar than selection minima: no alternate is
+# required only if ceiling >= DH/MDH + 1000 ft AND visibility >= 5000 m over the
+# ETA window; with no IAP the field must be VMC. Do NOT confuse with the +200
+# selection margin above — using the selection minima here lets IFR destinations
+# wrongly pass (issue: EASA said "not required" for an IFR field).
+EASA_DEST_CEILING_MARGIN_FT = 1000.0  # ceiling >= DH/MDH + 1000 ft
+EASA_DEST_VIS_M = 5000.0  # visibility >= 5000 m (fixed)
+EASA_DEST_NOIAP_CEILING_FT = 1500.0  # no IAP -> require VMC (proxy ceiling)
 
 # FAA fixed thresholds (14 CFR 91.169). Statute miles for visibility.
 FAA_TRIGGER_CEILING_FT = 2000.0
@@ -93,10 +113,6 @@ FAA_ALT_NONPRECISION_CEILING_FT = 800.0
 FAA_ALT_VIS_SM = 2.0
 FAA_ALT_VFR_CEILING_FT = 1000.0  # no-IAP VFR proxy
 FAA_ALT_VFR_VIS_SM = 3.0
-
-# EASA VFR proxy (no instrument approach), metric.
-VFR_PROXY_CEILING_FT = 1000.0
-VFR_PROXY_VIS_M = 5000.0
 
 # A ceiling forecast of ``None`` means "no ceiling layer" (clear / good); map it
 # to +inf for the band comparison so it clears every requirement.
@@ -117,17 +133,19 @@ def proxy_for_approach(approach_type: str | None, has_iap: bool = True) -> Appro
     return APPROACH_CLASS_PROXY.get(approach_type.strip().upper(), _DEFAULT_PROXY)
 
 
-def easa_ceiling_band(proxy: ApproachProxy) -> tuple[float, float]:
-    """EASA ceiling requirement band ``[DH_lo + 200, DH_hi + 200]`` (ft)."""
-    return (proxy.dh_lo + EASA_CEILING_MARGIN_FT, proxy.dh_hi + EASA_CEILING_MARGIN_FT)
-
-
-def easa_vis_band(proxy: ApproachProxy) -> tuple[float, float]:
-    """EASA visibility requirement band ``[vis_lo + 1500, vis_hi + 1500]`` (m, 1500 floor)."""
-    return (
-        max(proxy.vis_lo + EASA_VIS_MARGIN_M, EASA_VIS_FLOOR_M),
-        max(proxy.vis_hi + EASA_VIS_MARGIN_M, EASA_VIS_FLOOR_M),
+def easa_alt_ceiling_band(proxy: ApproachProxy) -> tuple[float, float]:
+    """EASA NCO.OP.143 alternate ceiling band (ft): DH + 200 (ILS) or + 400."""
+    margin = (
+        EASA_ALT_LOWDH_CEILING_MARGIN_FT
+        if proxy.faa_precision
+        else EASA_ALT_HIGHDH_CEILING_MARGIN_FT
     )
+    return (proxy.dh_lo + margin, proxy.dh_hi + margin)
+
+
+def easa_alt_vis(proxy: ApproachProxy) -> float:
+    """EASA NCO.OP.143 alternate visibility (m): 1500 (ILS) or 3000 (otherwise)."""
+    return EASA_ALT_LOWDH_VIS_M if proxy.faa_precision else EASA_ALT_HIGHDH_VIS_M
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +247,11 @@ class CeilingVisWindow:
     source: str  # "taf" | "nwp" | "none"
     triggered_by_tempo: bool = False
     has_forecast: bool = True
+    # Steady-state (prevailing main body / FM / BECMG) worst over the window,
+    # before TEMPO/PROB are applied. Lets callers show "main body X, but a
+    # temporary group brings it to Y". None on the NWP / no-forecast path.
+    main_body_ceiling_ft: float | None = None
+    main_body_visibility_m: float | None = None
 
     @property
     def visibility_sm(self) -> float | None:
@@ -364,6 +387,8 @@ def build_window(
         source=source,
         triggered_by_tempo=triggered_by_tempo,
         has_forecast=True,
+        main_body_ceiling_ft=None if best_c_prev == _NO_CEILING else best_c_prev,
+        main_body_visibility_m=best_v_prev,
     )
 
 
@@ -530,16 +555,21 @@ def compute_faa_trigger(window: CeilingVisWindow) -> RegAlternateTrigger:
 def compute_easa_trigger(
     window: CeilingVisWindow, proxy: ApproachProxy | None
 ) -> RegAlternateTrigger:
-    """EASA Part-NCO destination trigger (DH+200 / vis+1500 bands).
+    """EASA NCO.OP.140 destination trigger (is an alternate required?).
 
-    ``proxy=None`` (destination has no IAP) → VFR proxy collapsed band.
+    No alternate is required only if, over the ETA window, the ceiling is at
+    least ``DH/MDH + 1000 ft`` AND visibility is at least 5000 m. With no IAP the
+    field must be VMC (proxy ceiling 1500 ft / 5000 m). This is the *need-an-
+    alternate* test and is deliberately a higher bar than the alternate-selection
+    minima in ``compute_easa_qual`` (DH+200) — an IFR destination requires an
+    alternate. The proxied DH range yields a small Marginal zone around the bar.
     """
     if proxy is None:
-        cl = ch = VFR_PROXY_CEILING_FT
-        vl = vh = VFR_PROXY_VIS_M
+        cl = ch = EASA_DEST_NOIAP_CEILING_FT
     else:
-        cl, ch = easa_ceiling_band(proxy)
-        vl, vh = easa_vis_band(proxy)
+        cl = proxy.dh_lo + EASA_DEST_CEILING_MARGIN_FT
+        ch = proxy.dh_hi + EASA_DEST_CEILING_MARGIN_FT
+    vl = vh = EASA_DEST_VIS_M
     return _build_trigger(
         "easa",
         window,
@@ -617,15 +647,20 @@ def compute_easa_qual(
     approach_type: str | None,
     has_iap: bool,
 ) -> AlternateQual:
-    """EASA per-candidate alternate minima (DH+200 / vis+1500 bands; no-IAP→VFR)."""
+    """EASA NCO.OP.143 alternate planning minima.
+
+    DH<250 ft (ILS) → ceiling DH+200 / vis 1500 m; DH>=250 ft (RNP / non-
+    precision) → ceiling DH+400 / vis 3000 m; no IAP → ceiling 2000 ft / vis
+    5000 m. The DH proxy range yields a ceiling band; visibility is a fixed bar.
+    """
     proxy = proxy_for_approach(approach_type, has_iap)
     if not has_iap or proxy is None:
-        cl = ch = VFR_PROXY_CEILING_FT
-        vl = vh = VFR_PROXY_VIS_M
+        cl = ch = EASA_ALT_NOIAP_CEILING_FT
+        vl = vh = EASA_ALT_NOIAP_VIS_M
         vfr_only = True
     else:
-        cl, ch = easa_ceiling_band(proxy)
-        vl, vh = easa_vis_band(proxy)
+        cl, ch = easa_alt_ceiling_band(proxy)
+        vl = vh = easa_alt_vis(proxy)
         vfr_only = False
 
     cverd = band_qualification(_ceiling_for_band(ceiling_ft), cl, ch)

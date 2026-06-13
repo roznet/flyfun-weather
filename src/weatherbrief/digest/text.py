@@ -444,7 +444,13 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
             faa_ok = "yes" if a.faa.verdict.value == "likely" else "no"
             bits.append(f"FAA alt {faa_ok}")
         if a.easa is not None:
-            bits.append(f"EASA {a.easa.verdict.value}")
+            # Mirror the web badge: a LIKELY result in VFR/MVFR conditions reads
+            # as "yes"; keep "likely" when it clears the (low) estimated minima
+            # in IFR/LIFR. Marginal/unlikely unchanged.
+            v = a.easa.verdict.value
+            if v == "likely" and (a.flight_category or "").upper() in ("VFR", "MVFR"):
+                v = "yes"
+            bits.append(f"EASA {v}")
         lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
     lines.append("")
