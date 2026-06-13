@@ -84,6 +84,8 @@
   "maps.shareLinkTitle": "Link zu dieser Ansicht kopieren",
   "maps.shareLinkCopied": "Link kopiert",
   "maps.shareLinkFallback": "Diesen Link zum Teilen kopieren:",
+  "maps.dayNotForecast": "Noch nicht vorhergesagt",
+  "maps.dayNotForecastDetail": "{date} ist noch nicht vorhergesagt — verfügbar nach dem nächsten Modelllauf (07Z/19Z).",
   "briefing.noFlightSpecified": "Kein Flug angegeben. Zurück zur Flugliste.",
   "briefing.noBriefings": "Noch keine Briefings vorhanden",
   "briefing.noAssessment": "Keine Bewertung verfügbar",

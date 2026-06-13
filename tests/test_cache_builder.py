@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -17,6 +18,7 @@ def db_engine():
 
 
 from weatherbrief.db.models import (
+    AirportForecastSnapshotRow,
     VerificationCacheRow,
     VerificationObservationRow,
     VerificationScoreRow,
@@ -116,6 +118,41 @@ class TestStalenessCheck:
         # SQLite drops tzinfo, so compare naive
         assert flight_max.replace(tzinfo=None) == NOW.replace(tzinfo=None)
         assert standalone_max.replace(tzinfo=None) == (NOW - timedelta(hours=1)).replace(tzinfo=None)
+
+
+class TestForecastMapRolloverStaleness:
+    """forecast_map cache keys are relative-day indexed but hold absolute
+    dates, so an entry built on an earlier UTC day is stale even when no new
+    snapshot has arrived (otherwise D-0 would show yesterday's data)."""
+
+    def _seed(self, db_session, computed_at: datetime):
+        # Snapshot whose fetched_at equals the cache's stored source_max, so
+        # the snapshot-freshness branch alone would report "not stale".
+        snap_time = datetime(2026, 4, 8, 7, 0, tzinfo=timezone.utc)
+        db_session.add(AirportForecastSnapshotRow(
+            icao="LFPG", model="gfs",
+            model_init_time=snap_time - timedelta(hours=1),
+            forecast_hour=datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc),
+            fetched_at=snap_time,
+        ))
+        db_session.add(VerificationCacheRow(
+            cache_key="forecast_map:0:12",
+            computed_at=computed_at,
+            source_max_time=snap_time,
+            data_json=json.dumps({"airports": []}),
+        ))
+        db_session.flush()
+
+    def test_stale_when_computed_yesterday(self, db_session):
+        # Built two days ago but snapshot unchanged → relative day now maps to
+        # a different calendar date → must be treated as stale.
+        self._seed(db_session, datetime.now(timezone.utc) - timedelta(days=2))
+        assert is_stale(db_session, "forecast_map:0:12", "snapshot") is True
+
+    def test_not_stale_when_computed_today(self, db_session):
+        # Same snapshot, built today → relative day still maps to today → fresh.
+        self._seed(db_session, datetime.now(timezone.utc))
+        assert is_stale(db_session, "forecast_map:0:12", "snapshot") is False
 
 
 class TestRebuildStatsCache:

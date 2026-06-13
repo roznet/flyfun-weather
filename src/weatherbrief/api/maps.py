@@ -32,6 +32,21 @@ from weatherbrief.tasks.standalone_verification import SAMPLE_HOURS_UTC as _SAMP
 from weatherbrief.api.deps import airports_db as _airports_db
 
 
+def _forecast_hour(day: int, hour: int) -> datetime:
+    """Absolute UTC datetime for a relative ``(day, hour)`` selection.
+
+    ``day`` is days from today (0 = today). This mirrors the client's date
+    labelling (``now + day``) so cache and live queries resolve to the same
+    calendar date the UI displays — the relative-day cache key alone is
+    ambiguous across a UTC-midnight rollover.
+    """
+    target_date = (datetime.now(timezone.utc) + timedelta(days=day)).date()
+    return datetime(
+        target_date.year, target_date.month, target_date.day,
+        hour, 0, 0, tzinfo=timezone.utc,
+    )
+
+
 @router.get("/forecast")
 def get_forecast_map(
     day: int = Query(default=0, ge=0, le=3),
@@ -61,13 +76,7 @@ def get_forecast_map(
         if cached is not None:
             return cached
 
-    now = datetime.now(timezone.utc)
-    target_date = (now + timedelta(days=day)).date()
-    forecast_hour = datetime(
-        target_date.year, target_date.month, target_date.day,
-        hour, 0, 0, tzinfo=timezone.utc,
-    )
-
+    forecast_hour = _forecast_hour(day, hour)
     return get_forecast_map_data(db, forecast_hour, airports_db)
 
 
@@ -104,6 +113,52 @@ def get_available_hours(
     available = sorted(int(h) for h in hour_rows if int(h) in _SAMPLE_HOURS)
 
     return {"day": day, "date": target_date.isoformat(), "hours": available}
+
+
+def compute_day_availability(db: Session) -> list[dict[str, Any]]:
+    """Per-relative-day (D-0..D-3) flag for whether any forecast data exists.
+
+    Pure logic (no ``Depends`` defaults) so it can be unit-tested directly and
+    reused. The far day (today+3) has no snapshots until the next twice-daily
+    model run extends the horizon.
+    """
+    from sqlalchemy import select
+
+    from weatherbrief.db.models import AirportForecastSnapshotRow
+
+    days = []
+    for day in (0, 1, 2, 3):
+        forecast_date = (datetime.now(timezone.utc) + timedelta(days=day)).date()
+        start = datetime(
+            forecast_date.year, forecast_date.month, forecast_date.day,
+            0, 0, 0, tzinfo=timezone.utc,
+        )
+        end = start + timedelta(days=1)
+        has_data = db.execute(
+            select(AirportForecastSnapshotRow.id)
+            .where(AirportForecastSnapshotRow.forecast_hour >= start)
+            .where(AirportForecastSnapshotRow.forecast_hour < end)
+            .limit(1)
+        ).scalar()
+        days.append({
+            "day": day,
+            "date": forecast_date.isoformat(),
+            "available": has_data is not None,
+        })
+    return days
+
+
+@router.get("/forecast/days")
+def get_available_days(
+    _user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Return which relative days (D-0..D-3) have any forecast data.
+
+    The frontend disables days beyond the current model horizon rather than
+    showing an empty or mislabelled map.
+    """
+    return {"days": compute_day_availability(db)}
 
 
 # ---------------------------------------------------------------------------
@@ -228,23 +283,38 @@ def get_airport_weather(
             "note": "No supported European airports found. Coverage: Western, Central, and Eastern Europe.",
         }
 
-    # Serve from pre-built cache only — the cache is rebuilt frequently
-    # by the background scheduler. Avoids expensive full-map queries
-    # when only a few airports are needed.
-    from weatherbrief.tasks.cache_builder import get_cached
+    # Prefer the pre-built cache (rebuilt frequently by the background
+    # scheduler) to avoid expensive full-map queries when only a few airports
+    # are needed. ``is_stale`` also rejects an entry whose relative-day index
+    # no longer maps to today's date (post-midnight, before the next model
+    # run); in that case compute live for the correct absolute date so the
+    # response date stays consistent with the requested day/hour.
+    from weatherbrief.tasks.cache_builder import get_cached, is_stale
+    from weatherbrief.tasks.map_queries import (
+        enrich_with_observations,
+        get_forecast_map_data,
+    )
 
     if hour not in _SAMPLE_HOURS:
         hour = min(_SAMPLE_HOURS, key=lambda h: abs(h - hour))
 
     cache_key = f"forecast_map:{day}:{hour}"
-    data = get_cached(db, cache_key)
+    data = None
+    if not is_stale(db, cache_key, "snapshot"):
+        data = get_cached(db, cache_key)
 
     if data is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Forecast data for day={day} hour={hour} is not yet available. "
-            "The cache is rebuilt every ~30 minutes — try again shortly.",
-        )
+        forecast_hour = _forecast_hour(day, hour)
+        data = get_forecast_map_data(db, forecast_hour, airports_db)
+        if day == 0:
+            data = enrich_with_observations(db, forecast_hour, data)
+        if not data.get("airports"):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Forecast data for day={day} hour={hour} is not yet "
+                "available — the day may be beyond the current model horizon. "
+                "The next model run extends it; try again shortly.",
+            )
 
     # Filter to requested airports
     resolution_map = {r["icao"]: r for r in resolved if "requested_icao" in r}

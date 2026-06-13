@@ -99,11 +99,25 @@ def is_stale(db: Session, cache_key: str, source: str) -> bool:
 
     For forecast map keys, compares against snapshot fetched_at instead of
     verification scores.
+
+    Forecast-map keys (``source == "snapshot"``) are *relative-day* indexed
+    (``forecast_map:{day}:{hour}``) but the cached payload holds an *absolute*
+    forecast date. Snapshots only refresh on the twice-daily fetch cycles, so
+    after a UTC-midnight rollover the snapshot max-time is unchanged yet the
+    relative day now maps to a new calendar date. Without a date check the
+    stale entry would be served — e.g. D-0 showing yesterday's data labelled
+    today. So an entry computed on an earlier UTC day is always stale, forcing
+    the live path (which re-derives the correct absolute hour). See
+    designs/forecast-page.md.
     """
-    _, cached_max = get_cache_meta(db, cache_key)
+    computed_at, cached_max = get_cache_meta(db, cache_key)
     if cached_max is None:
         return True
     if source == "snapshot":
+        if computed_at is not None:
+            ca = computed_at.astimezone(timezone.utc) if computed_at.tzinfo else computed_at
+            if ca.date() < datetime.now(timezone.utc).date():
+                return True
         live_max = get_snapshot_max_time(db)
     else:
         live_max = get_source_max_time(db, source)
