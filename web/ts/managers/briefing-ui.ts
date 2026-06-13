@@ -1499,6 +1499,11 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
   }
 
   upBtn.addEventListener('click', () => {
+    // Bare thumbs-up: no comment, no consent checkbox shown. contact_ok is
+    // deliberately false here (not the opt-out default) — the user was never
+    // told a reply might come, so an unprompted reply to a 👍 would be exactly
+    // the surprise the consent flag exists to avoid. The thumbs-down path
+    // shows the checkbox (default-on) for the case where a reply is expected.
     void post('up', '', false);
   });
 
