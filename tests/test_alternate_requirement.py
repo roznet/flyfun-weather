@@ -20,6 +20,7 @@ from weatherbrief.analysis.alternate_requirement import (
     combine_qual,
     combine_trigger,
     compute_easa_qual,
+    compute_easa_trigger,
     compute_faa_qual,
     compute_faa_trigger,
     easa_ceiling_band,
@@ -149,6 +150,43 @@ class TestFaaTrigger:
         assert trig.status == TriggerVerdict.REQUIRED
         assert trig.source == "none"
         assert trig.reason == "no forecast available"
+
+
+# --- EASA trigger (destination, three-state) ---------------------------------
+
+class TestEasaTrigger:
+    # _NONPRECISION → ceiling band 600–1100 ft, vis band 3000–4500 m.
+    def test_above_band_not_required(self):
+        trig = compute_easa_trigger(nwp_window(1500, 5000), _NONPRECISION)
+        assert trig.status == TriggerVerdict.NOT_REQUIRED
+
+    def test_inside_band_marginal(self):
+        # ceiling 800 in 600–1100 → marginal; vis 5000 ≥ 4500 → not-required
+        trig = compute_easa_trigger(nwp_window(800, 5000), _NONPRECISION)
+        assert trig.ceiling.verdict == TriggerVerdict.MARGINAL.value
+        assert trig.status == TriggerVerdict.MARGINAL
+
+    def test_below_band_required(self):
+        trig = compute_easa_trigger(nwp_window(500, 5000), _NONPRECISION)
+        assert trig.status == TriggerVerdict.REQUIRED
+
+    def test_visibility_can_force_marginal(self):
+        # ceiling clears (1500 ≥ 1100); vis 3500 in 3000–4500 → marginal
+        trig = compute_easa_trigger(nwp_window(1500, 3500), _NONPRECISION)
+        assert trig.visibility.verdict == TriggerVerdict.MARGINAL.value
+        assert trig.status == TriggerVerdict.MARGINAL
+
+    def test_no_iap_uses_vfr_proxy(self):
+        # proxy None (destination has no IAP) → VFR proxy 1000 ft / 5000 m
+        trig = compute_easa_trigger(nwp_window(1200, 6000), None)
+        assert trig.status == TriggerVerdict.NOT_REQUIRED
+        trig = compute_easa_trigger(nwp_window(800, 6000), None)
+        assert trig.status == TriggerVerdict.REQUIRED  # collapsed band, never marginal
+
+    def test_no_forecast_required(self):
+        trig = compute_easa_trigger(no_forecast_window(), _NONPRECISION)
+        assert trig.status == TriggerVerdict.REQUIRED
+        assert trig.source == "none"
 
 
 # --- FAA alternate minima (per candidate) ------------------------------------
@@ -367,6 +405,9 @@ class TestWiringSmoke:
         assert req.faa.source == "nwp"
         # 1500 ft / ~3.7 SM → FAA ceiling < 2000 → required
         assert req.faa.status == TriggerVerdict.REQUIRED
+        # EASA: no destination IAP (bogus DB) → VFR proxy 1000 ft / 5000 m;
+        # 1500 ft / 6000 m clears both → not required.
+        assert req.easa.status == TriggerVerdict.NOT_REQUIRED
         # caveats present
         assert any("planning guidance" in c.lower() for c in req.caveats)
 
