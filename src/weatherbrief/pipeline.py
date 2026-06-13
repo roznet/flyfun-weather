@@ -150,6 +150,9 @@ class BriefingResult:
     # AI off), so the UI shows "AI summary off" rather than a "generating"
     # spinner. Set from ``options.generate_llm_digest`` at run start.
     llm_digest_requested: bool = False
+    # LangSmith root run id for the digest LLM call (issue #244). Persisted with
+    # the pack so a later 👍/👎 can attach feedback to the run that produced it.
+    digest_trace_id: str | None = None
     text_digest: str | None = None
     grib_init_times: dict[str, int] = field(default_factory=dict)
     models_fetched: list[str] = field(default_factory=list)
@@ -723,6 +726,8 @@ def execute_briefing(
         )
         if digest_result.digest is not None:
             result.digest = digest_result.digest
+        if digest_result.digest_trace_id:
+            result.digest_trace_id = digest_result.digest_trace_id
         if digest_result.path:
             result.digest_path = digest_result.path
         if digest_result.text:

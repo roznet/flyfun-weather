@@ -137,6 +137,28 @@ def submit_feedback(
     db.flush()
     logger.info("Feedback #%d from user %s on flight %s", row.id, user_id, body.flight_id)
 
+    # Mirror digest thumb ratings to LangSmith as run feedback (issue #244).
+    # Fire-and-forget: look up the pack's digest_trace_id and attach the rating
+    # to that run so digest quality is reviewable in LangSmith. Never fails the
+    # POST — pack missing (legacy), no trace id, or a LangSmith hiccup all no-op.
+    if body.category == "digest_rating" and body.sentiment and body.flight_id and pack_ts:
+        try:
+            from weatherbrief.digest.langsmith_feedback import push_digest_thumb_feedback
+            from weatherbrief.storage.flights import load_pack_meta
+
+            meta = load_pack_meta(db, body.flight_id, pack_ts)
+            push_digest_thumb_feedback(
+                run_id=meta.digest_trace_id,
+                sentiment=body.sentiment,
+                comment=body.comment or None,
+            )
+        except KeyError:
+            # Pack not found (old/legacy pack, or mismatched ids) — nothing to
+            # attach feedback to in LangSmith. The DB row above still records it.
+            pass
+        except Exception:
+            logger.warning("Failed to mirror digest rating to LangSmith", exc_info=True)
+
     # Email admin (fire-and-forget)
     try:
         from weatherbrief.notify.admin_email import send_feedback_notification

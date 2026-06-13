@@ -51,6 +51,9 @@ class DigestResult:
     llm_model: str | None = None
     llm_input_tokens: int | None = None
     llm_output_tokens: int | None = None
+    # LangSmith root run id for the digest LLM call, persisted with the pack so
+    # later thumb ratings can attach feedback to the run (issue #244).
+    digest_trace_id: str | None = None
     diagnostic: Diagnostic | None = None
 
 
@@ -247,6 +250,7 @@ def run_llm_digest(
         llm_model = f"{config.llm.provider}:{config.llm.model}"
         llm_input_tokens = digest_result.get("llm_input_tokens")
         llm_output_tokens = digest_result.get("llm_output_tokens")
+        digest_trace_id = digest_result.get("digest_trace_id")
 
         # Save markdown + structured JSON digest
         digest_path: Path | None = None
@@ -269,6 +273,7 @@ def run_llm_digest(
                 llm_model=llm_model,
                 llm_input_tokens=llm_input_tokens,
                 llm_output_tokens=llm_output_tokens,
+                digest_trace_id=digest_trace_id,
             )
 
         md_path.write_text(digest_result["digest_text"])
@@ -297,6 +302,7 @@ def run_llm_digest(
             llm_model=llm_model,
             llm_input_tokens=llm_input_tokens,
             llm_output_tokens=llm_output_tokens,
+            digest_trace_id=digest_trace_id,
         )
 
     except Exception as exc:

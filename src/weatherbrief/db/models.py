@@ -224,6 +224,10 @@ class BriefingPackRow(Base):
     )
     assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # LangSmith root run id of the digest LLM call (issue #244). NULL for
+    # provisional rows (digest not yet run) and packs created before #244.
+    # The feedback endpoint reads this to attach thumb ratings to the run.
+    digest_trace_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     artifact_path: Mapped[str] = mapped_column(Text, default="")
     model_init_times_json: Mapped[str] = mapped_column(Text, default="{}")
     grib_init_times_json: Mapped[str] = mapped_column(Text, default="{}")

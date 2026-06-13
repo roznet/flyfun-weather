@@ -1174,6 +1174,9 @@ def _build_pack_meta(
         llm_digest_requested=result.llm_digest_requested,
         assessment=assessment,
         assessment_reason=assessment_reason,
+        # NULL on the provisional pass (digest hasn't run); set on finalize from
+        # the run_digest-controlled run_id so thumb feedback can reach LangSmith.
+        digest_trace_id=result.digest_trace_id,
         artifact_path=str(pack_path),
         model_init_times=init_times,
         grib_init_times=result.grib_init_times,

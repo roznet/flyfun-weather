@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from typing import Literal
+from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -214,13 +215,23 @@ def run_digest(
     )
 
     # --- LLM call via graph (traced — lightweight state) ---
+    # Pre-generate the root run id so we own it and can persist it with the
+    # pack. ``run_id`` in the RunnableConfig sets the id of the trace this
+    # invocation produces in LangSmith, which is what digest thumb feedback
+    # later attaches to (issue #244). Generated unconditionally — harmless
+    # when tracing is off locally (no trace is created), persisted regardless.
+    trace_id = str(uuid4())
     graph = build_digest_graph(config)
-    result = graph.invoke({
-        "context": context,
-        "config": config,
-        "locale": locale,
-        "guidance_key": guidance_key,
-    })
+    result = graph.invoke(
+        {
+            "context": context,
+            "config": config,
+            "locale": locale,
+            "guidance_key": guidance_key,
+        },
+        config={"run_id": trace_id},
+    )
+    result["digest_trace_id"] = trace_id
 
     # --- Post-graph formatting (not traced) ---
     if result.get("digest") is not None:

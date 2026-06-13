@@ -144,6 +144,14 @@ def test_run_digest_full_graph(mock_fetch_text, mock_create_llm, minimal_snapsho
     assert result.get("llm_input_tokens") == 1000
     assert result.get("llm_output_tokens") == 200
 
+    # A controlled root run_id is generated and returned for LangSmith feedback
+    # (issue #244). It must be a parseable UUID and be passed as the graph's
+    # root run_id so the trace can be located later.
+    from uuid import UUID
+    trace_id = result.get("digest_trace_id")
+    assert trace_id is not None
+    UUID(trace_id)  # raises if not a valid UUID
+
 
 @patch("weatherbrief.digest.llm_digest.create_llm")
 @patch("weatherbrief.digest.llm_digest.fetch_text_forecasts")
