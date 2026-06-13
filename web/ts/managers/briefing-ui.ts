@@ -1538,6 +1538,27 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
   });
 }
 
+/**
+ * Render the thumb feedback widget into the toolbar slot (top-right of the
+ * briefing toolbar) rather than at the foot of the synopsis section, so the
+ * rating prompt stays visible without scrolling. Called only when a digest is
+ * actually shown; the no-digest branches of renderSynopsis clear it.
+ */
+function renderDigestFeedbackToolbar(flightId: string, packTimestamp: string): void {
+  const slot = $('digest-feedback-slot');
+  if (!slot) return;
+  slot.innerHTML = digestFeedbackHtml(flightId, packTimestamp);
+  slot.style.display = '';
+  attachDigestFeedback(slot, flightId, packTimestamp);
+}
+
+function clearDigestFeedbackToolbar(): void {
+  const slot = $('digest-feedback-slot');
+  if (!slot) return;
+  slot.innerHTML = '';
+  slot.style.display = 'none';
+}
+
 function renderDigestHtml(digest: WeatherDigest, displayMode: DisplayMode): string {
   const sections = displayMode === 'compact'
     ? DIGEST_SECTIONS.filter(s => COMPACT_DIGEST_KEYS.has(s.key))
@@ -1566,19 +1587,21 @@ export function renderSynopsis(
 
   if (!flight || !pack) {
     el.innerHTML = `<p class="muted">${t('digest.noBriefing')}</p>`;
+    clearDigestFeedbackToolbar();
     return;
   }
 
   if (digest) {
     const warning = buildDigestProfileWarning(digest, flight.profile_id);
     const staleClass = warning ? ' digest-stale' : '';
-    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>${digestFeedbackHtml(flight.id, pack.fetch_timestamp)}`;
-    attachDigestFeedback(el, flight.id, pack.fetch_timestamp);
+    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
+    renderDigestFeedbackToolbar(flight.id, pack.fetch_timestamp);
     return;
   }
 
   if (pack.has_digest) {
     el.innerHTML = `<p class="muted">${t('digest.loading')}</p>`;
+    clearDigestFeedbackToolbar();
     fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode, flight.profile_id);
     return;
   }
@@ -1588,6 +1611,7 @@ export function renderSynopsis(
   // running. The visible briefing is up; the digest is being generated.
   if (digestPending) {
     el.innerHTML = `<p class="muted">${t('digest.generating')}</p>`;
+    clearDigestFeedbackToolbar();
     return;
   }
 
@@ -1596,10 +1620,12 @@ export function renderSynopsis(
   // banner at the top; here we just explain the empty section.
   if (pack.llm_digest_requested === false) {
     el.innerHTML = `<p class="muted">${t('digest.disabled')}</p>`;
+    clearDigestFeedbackToolbar();
     return;
   }
 
   el.innerHTML = `<p class="muted">${t('digest.notAvailable')}</p>`;
+  clearDigestFeedbackToolbar();
 }
 
 /** Build a warning banner if the digest was generated with a different profile. */
@@ -1627,10 +1653,11 @@ async function fetchAndRenderDigestJson(
     const digest: WeatherDigest = await resp.json();
     const warning = buildDigestProfileWarning(digest, currentProfileId ?? null);
     const staleClass = warning ? ' digest-stale' : '';
-    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>${digestFeedbackHtml(flightId, timestamp)}`;
-    attachDigestFeedback(el, flightId, timestamp);
+    el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
+    renderDigestFeedbackToolbar(flightId, timestamp);
   } catch {
     el.innerHTML = `<p class="muted">${t('digest.failed')}</p>`;
+    clearDigestFeedbackToolbar();
   }
 }
 

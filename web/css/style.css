@@ -1383,6 +1383,46 @@ label {
   color: var(--text-muted);
 }
 
+/* Toolbar variant: the thumb widget lives at the far right of the briefing
+   toolbar instead of under the synopsis. Lay the prompt + thumbs out inline,
+   strip the section divider, and float the thumbs-down comment box as a
+   right-anchored dropdown so it never reflows the toolbar row. */
+.digest-feedback-slot {
+  position: relative;
+  margin-left: auto;
+}
+.digest-feedback-slot .digest-feedback {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.digest-feedback-slot .digest-feedback-label {
+  margin-right: 0.25rem;
+  white-space: nowrap;
+}
+.digest-feedback-slot .digest-feedback-form {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 60;
+  width: 300px;
+  margin-top: 0;
+  padding: 0.75rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+}
+.digest-feedback-slot .digest-feedback-error {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  white-space: nowrap;
+}
+
 /* --- GRAMET --- */
 
 .gramet-img {
