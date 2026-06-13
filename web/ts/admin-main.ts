@@ -9,7 +9,7 @@ import {
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
   type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse, type ApiUsageResponse,
 } from './adapters/admin-adapter';
-import { redirectToLogin, renderUserInfo, escapeHtml, formatDate } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, flightTitle } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 import { initUsageAnalyticsTab } from './admin-usage-view';
@@ -52,6 +52,7 @@ function setupPeriodToggle(): void {
 
 let perfLoaded = false;
 let systemsLoaded = false;
+let ratingsLoaded = false;
 let messagesLoaded = false;
 let usageAnalyticsLoaded = false;
 let costLoaded = false;
@@ -80,6 +81,11 @@ function setupTabs(): void {
         systemsLoaded = true;
         setupSystemsPeriodToggle();
         loadSystems();
+      }
+      if (tabId === 'tab-ratings' && !ratingsLoaded) {
+        ratingsLoaded = true;
+        setupRatingsControls();
+        loadRatings();
       }
       if (tabId === 'tab-messages' && !messagesLoaded) {
         messagesLoaded = true;
@@ -123,7 +129,7 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
 async function loadFeedback(): Promise<void> {
   const container = document.getElementById('feedback-list')!;
   try {
-    const entries = await fetchAdminFeedback();
+    const entries = await fetchAdminFeedback(undefined, 'feedback');
     if (entries.length === 0) {
       container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">No feedback yet.</p>';
       return;
@@ -337,6 +343,186 @@ function attachFeedbackHandlers(container: HTMLElement): void {
       try {
         await reopenFeedback(id);
         loadFeedback();
+      } catch (err) {
+        if (statusEl) { statusEl.textContent = `Error: ${err}`; statusEl.style.color = '#dc3545'; }
+      }
+    });
+  });
+}
+
+// --- Ratings tab (digest thumb feedback) ---
+
+let ratingsPeriod: AdminPeriod = '30d';
+let ratingsFilter: 'all' | 'attention' = 'all';
+let ratingsData: FeedbackEntry[] = [];
+
+/** Relative time like "2h ago" / "3d ago" (admin is English-only). */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const mins = Math.round((Date.now() - then) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.round(days / 30)}mo ago`;
+}
+
+/** Briefing pack timestamp as "12 Jun 06:00Z" (UTC). */
+function formatBriefingDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const month = d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${d.getUTCDate()} ${month} ${hh}:${mm}Z`;
+}
+
+function setupRatingsControls(): void {
+  document.querySelectorAll('#ratings-period-toggle .toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const period = (btn as HTMLElement).dataset.period as AdminPeriod;
+      if (period === ratingsPeriod) return;
+      ratingsPeriod = period;
+      document.querySelectorAll('#ratings-period-toggle .toggle-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderRatings();
+    });
+  });
+  document.querySelectorAll('#ratings-filter .toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const filter = (btn as HTMLElement).dataset.filter as 'all' | 'attention';
+      if (filter === ratingsFilter) return;
+      ratingsFilter = filter;
+      document.querySelectorAll('#ratings-filter .toggle-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderRatings();
+    });
+  });
+}
+
+async function loadRatings(): Promise<void> {
+  const container = document.getElementById('ratings-list')!;
+  container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">Loading ratings...</p>';
+  try {
+    ratingsData = await fetchAdminFeedback(undefined, 'ratings');
+    renderRatings();
+  } catch (err) {
+    container.innerHTML = `<p style="color:#dc3545;text-align:center;padding:1rem;">Failed to load ratings: ${err}</p>`;
+  }
+}
+
+function renderRatings(): void {
+  const container = document.getElementById('ratings-list')!;
+  const summaryEl = document.getElementById('ratings-summary')!;
+  const pl = ratingsPeriod === '30d' ? '30d' : 'All';
+  const cutoff = ratingsPeriod === '30d' ? Date.now() - 30 * 86400000 : null;
+
+  const inPeriod = ratingsData.filter((r) => {
+    if (cutoff == null || !r.created_at) return true;
+    const t = new Date(r.created_at).getTime();
+    return Number.isNaN(t) || t >= cutoff;
+  });
+
+  // Summary bar
+  const up = inPeriod.filter((r) => r.sentiment === 'up').length;
+  const down = inPeriod.filter((r) => r.sentiment === 'down').length;
+  const total = up + down;
+  const pct = total > 0 ? Math.round((up / total) * 100) : 0;
+  summaryEl.textContent = total > 0
+    ? `👍 ${up} · 👎 ${down} · ${pct}% positive   (${pl})`
+    : `No ratings yet (${pl})`;
+
+  // Needs-attention filter: 👎 and/or has a comment worth a reply
+  let rows = inPeriod;
+  if (ratingsFilter === 'attention') {
+    rows = rows.filter((r) => r.sentiment === 'down' || !!r.comment);
+  }
+
+  if (rows.length === 0) {
+    container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">No ratings match this filter.</p>';
+    return;
+  }
+  // Backend already returns newest-first.
+  container.innerHTML = rows.map(renderRatingRow).join('');
+  attachRatingsHandlers(container);
+}
+
+function renderRatingRow(fb: FeedbackEntry): string {
+  const thumb = fb.sentiment === 'up' ? '👍' : fb.sentiment === 'down' ? '👎' : '–';
+  const briefingDate = fb.pack_timestamp ? formatBriefingDate(fb.pack_timestamp) : '–';
+  const briefingHref = fb.flight_id
+    ? `/briefing.html?flight=${encodeURIComponent(fb.flight_id)}${fb.pack_timestamp ? `&t=${encodeURIComponent(fb.pack_timestamp)}` : ''}`
+    : '';
+  const briefingCell = briefingHref
+    ? `<a href="${briefingHref}" target="_blank" onclick="event.stopPropagation()" style="color:#2563eb;">${escapeHtml(briefingDate)}</a>`
+    : escapeHtml(briefingDate);
+  const route = fb.waypoints.length ? flightTitle(fb.waypoints) : (fb.route_name || '–');
+  const user = fb.user_name || fb.user_email || '–';
+  const snippet = fb.comment
+    ? `&ldquo;${escapeHtml(fb.comment.length > 60 ? fb.comment.slice(0, 60) + '…' : fb.comment)}&rdquo;`
+    : '—';
+  const when = fb.created_at ? relativeTime(fb.created_at) : '';
+
+  const isArchived = fb.status === 'replied' || fb.status === 'ignored';
+  const canReply = fb.sentiment === 'down' && !!fb.comment && fb.contact_ok && !isArchived;
+
+  // Expanded detail
+  let detail = '';
+  if (fb.comment) {
+    detail += `<div style="background:var(--surface);border-radius:6px;padding:10px;white-space:pre-wrap;margin-bottom:8px;">${escapeHtml(fb.comment)}</div>`;
+  }
+  const consentNote = fb.contact_ok ? '' : ' · 🔕 opted out of replies';
+  detail += `<div style="color:var(--text-muted);font-size:12px;">${escapeHtml(fb.user_email)}${fb.flight_id ? ' · ' + escapeHtml(fb.flight_id) : ''}${fb.created_at ? ' · ' + formatDate(fb.created_at) : ''}${consentNote}</div>`;
+
+  if (canReply) {
+    detail += `
+      <div style="margin-top:10px;">
+        <textarea class="rating-reply" data-id="${fb.id}" rows="4" placeholder="Reply to this rating…" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px;resize:vertical;background:var(--surface);color:var(--text);"></textarea>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+          <button class="rating-send btn-sm" data-id="${fb.id}" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;font-weight:500;">Send Reply</button>
+          <span class="rating-status" data-id="${fb.id}" style="font-size:12px;"></span>
+        </div>
+      </div>`;
+  } else if (isArchived && fb.admin_reply) {
+    detail += `
+      <div style="margin-top:10px;">
+        <label style="font-size:12px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px;">Reply${fb.replied_at ? ` (sent ${formatDate(fb.replied_at)})` : ''}</label>
+        <div style="background:var(--surface);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;">${escapeHtml(fb.admin_reply)}</div>
+      </div>`;
+  }
+
+  return `
+    <details class="rating-row" style="border:1px solid var(--border);border-radius:6px;margin-bottom:6px;overflow:hidden;">
+      <summary style="display:flex;align-items:center;gap:12px;padding:8px 12px;cursor:pointer;font-size:13px;list-style:none;">
+        <span style="font-size:15px;width:20px;text-align:center;flex-shrink:0;">${thumb}</span>
+        <span style="width:120px;flex-shrink:0;">${briefingCell}</span>
+        <span style="width:120px;flex-shrink:0;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(route)}</span>
+        <span style="width:140px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(user)}</span>
+        <span style="flex:1;min-width:0;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${snippet}</span>
+        <span style="width:64px;flex-shrink:0;text-align:right;color:var(--text-muted);font-size:12px;">${when}</span>
+      </summary>
+      <div style="padding:0 12px 12px 44px;">${detail}</div>
+    </details>`;
+}
+
+function attachRatingsHandlers(container: HTMLElement): void {
+  container.querySelectorAll('.rating-send').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const id = Number((e.currentTarget as HTMLElement).dataset.id);
+      const replyEl = container.querySelector(`.rating-reply[data-id="${id}"]`) as HTMLTextAreaElement | null;
+      const statusEl = container.querySelector(`.rating-status[data-id="${id}"]`) as HTMLElement | null;
+      const reply = replyEl?.value?.trim();
+      if (!reply) {
+        if (statusEl) { statusEl.textContent = 'Please enter a reply first.'; statusEl.style.color = '#dc3545'; }
+        return;
+      }
+      try {
+        const result = await sendFeedbackReply(id, reply);
+        if (statusEl) { statusEl.textContent = `Sent to ${result.sent_to}`; statusEl.style.color = '#16a34a'; }
+        setTimeout(() => loadRatings(), 1500);
       } catch (err) {
         if (statusEl) { statusEl.textContent = `Error: ${err}`; statusEl.style.color = '#dc3545'; }
       }

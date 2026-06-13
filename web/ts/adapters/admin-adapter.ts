@@ -248,6 +248,8 @@ export interface FeedbackEntry {
   user_email: string;
   user_name: string;
   flight_id: string;
+  route_name: string;
+  waypoints: string[];
   pack_timestamp: string;
   category: string;
   comment: string;
@@ -265,9 +267,14 @@ export interface FeedbackEntry {
   processed_at: string | null;
 }
 
-export async function fetchAdminFeedback(status?: string): Promise<FeedbackEntry[]> {
-  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-  return apiFetch<FeedbackEntry[]>(`/feedback/admin${qs}`);
+export type FeedbackKind = 'feedback' | 'ratings';
+
+export async function fetchAdminFeedback(status?: string, kind?: FeedbackKind): Promise<FeedbackEntry[]> {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (kind) params.set('kind', kind);
+  const qs = params.toString();
+  return apiFetch<FeedbackEntry[]>(`/feedback/admin${qs ? `?${qs}` : ''}`);
 }
 
 export async function updateFeedbackStatus(id: number, status: FeedbackStatus): Promise<void> {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -15,7 +16,7 @@ from weatherbrief.api.throttle import feedback_burst_limiter, feedback_daily_lim
 from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
-from weatherbrief.db.models import FeedbackRow
+from weatherbrief.db.models import FeedbackRow, FlightRow
 from weatherbrief.triage.security import scan_for_exfil
 
 logger = logging.getLogger(__name__)
@@ -171,13 +172,32 @@ def _get_feedback_or_404(db: Session, feedback_id: int) -> FeedbackRow:
     return row
 
 
-def _serialize_feedback(fb: FeedbackRow, email: str, name: str) -> dict:
+def _parse_waypoints(waypoints_json: Optional[str]) -> list[str]:
+    """Parse a flight's waypoints_json column into a list of ICAO codes."""
+    if not waypoints_json:
+        return []
+    try:
+        value = json.loads(waypoints_json)
+    except (ValueError, TypeError):
+        return []
+    return [str(w) for w in value] if isinstance(value, list) else []
+
+
+def _serialize_feedback(
+    fb: FeedbackRow,
+    email: str,
+    name: str,
+    route_name: Optional[str] = None,
+    waypoints_json: Optional[str] = None,
+) -> dict:
     """Serialize a FeedbackRow + user info to a response dict."""
     return {
         "id": fb.id,
         "user_email": email,
         "user_name": name,
         "flight_id": fb.flight_id,
+        "route_name": route_name or "",
+        "waypoints": _parse_waypoints(waypoints_json),
         "pack_timestamp": fb.pack_timestamp.isoformat() if fb.pack_timestamp else "",
         "category": fb.category,
         "comment": fb.comment,
@@ -199,13 +219,24 @@ def _serialize_feedback(fb: FeedbackRow, email: str, name: str) -> dict:
 @router.get("/admin")
 def list_feedback(
     status: Optional[str] = Query(None, description="Comma-separated status filter"),
+    kind: Optional[str] = Query(
+        None,
+        description="'feedback' excludes digest_rating; 'ratings' returns only digest_rating",
+    ),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """List all feedback entries (admin only), optionally filtered by status."""
+    """List all feedback entries (admin only), optionally filtered by status/kind."""
     query = (
-        db.query(FeedbackRow, UserRow.email, UserRow.display_name)
+        db.query(
+            FeedbackRow,
+            UserRow.email,
+            UserRow.display_name,
+            FlightRow.route_name,
+            FlightRow.waypoints_json,
+        )
         .join(UserRow, FeedbackRow.user_id == UserRow.id)
+        .outerjoin(FlightRow, FeedbackRow.flight_id == FlightRow.id)
     )
 
     if status:
@@ -215,8 +246,18 @@ def list_feedback(
             raise HTTPException(400, f"Invalid status values: {', '.join(sorted(invalid))}")
         query = query.filter(FeedbackRow.status.in_(statuses))
 
+    if kind == "ratings":
+        query = query.filter(FeedbackRow.category == "digest_rating")
+    elif kind == "feedback":
+        query = query.filter(FeedbackRow.category != "digest_rating")
+    elif kind is not None:
+        raise HTTPException(400, "kind must be 'feedback' or 'ratings'")
+
     rows = query.order_by(FeedbackRow.created_at.desc()).all()
-    return [_serialize_feedback(fb, email, name) for fb, email, name in rows]
+    return [
+        _serialize_feedback(fb, email, name, route_name, waypoints_json)
+        for fb, email, name, route_name, waypoints_json in rows
+    ]
 
 
 @router.put("/admin/{feedback_id}/status")
