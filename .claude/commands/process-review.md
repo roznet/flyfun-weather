@@ -27,18 +27,23 @@ Never manually re-trigger the bot; pushing is what triggers it.
 
 ## Step 1 — Wait for the review (watch)
 
-> **Watch = polling.** There is no passive "subscribe" available to a local agent — GitHub offers no push/long-poll channel to `gh` for new comments (the only event-driven path is a GitHub Action on `issue_comment`/`pull_request_review`, which runs in CI, not here). So poll, but poll *efficiently*: sleep-and-recheck via the harness scheduler (ScheduleWakeup) or a background Bash loop, **not** a tight token-burning loop.
+"Ready" = a comment by `claude` starting with `## Code Review` that was created **after the latest commit on the PR branch**. This is a PR-branch-freshness check (so we don't act on a stale review from a previous round) — it is *not* about whether `main` has moved; that's handled separately in Step 2.
 
-The review is "ready" when a comment by `claude` starting with `## Code Review` exists that was created **after the latest commit on the PR branch**. This is a PR-branch-freshness check (so we don't act on a stale review from a previous round) — it is *not* about whether `main` has moved; that's handled separately in Step 2.
+First capture the reference time — the head commit date:
+`gh pr view <num> --json commits --jq '.commits[-1].committedDate'`
 
-1. Capture the head commit date:
-   `gh pr view <num> --json commits --jq '.commits[-1].committedDate'`
-2. Poll for the review comment, latest-wins. Note: `gh --jq` does **not** accept `--arg`, so pipe to standalone `jq`:
-   ```
-   gh pr view <num> --json comments | jq -r --arg t "<head-date>" \
-     '[.comments[] | select(.author.login=="claude" and .createdAt > $t and (.body|startswith("## Code Review")))] | last | (.body // "NO_REVIEW_YET")'
-   ```
-3. Poll about every 60s. **Do not block on a foreground `sleep`** (the harness blocks it) — run the poll as a background Bash loop that exits 0 once the comment is found, or use ScheduleWakeup to re-check. Give up after ~20 min and report that no review appeared (the bot may not have run — tell me so I can trigger it).
+Then wait for the review. **Prefer a GitHub MCP subscription if one is connected; otherwise fall back to `gh` polling.**
+
+**Path A — GitHub MCP subscribe (preferred, event-driven).** If a GitHub MCP server is connected to this session, check whether it exposes a PR-activity / comment subscription tool (look via ToolSearch for names like `subscribe`, `pr activity`, `watch`, `pull request comments`). If so, subscribe to this PR's comment/review activity and let the server's change-notifications wake you, instead of polling. When woken, apply the same freshness filter (author `claude`, body starts with `## Code Review`, created after the head commit date). Only use this if such a tool actually exists in the session — do not invent a server.
+
+**Path B — `gh` polling (fallback).** If no GitHub MCP server / subscribe tool is available, poll. There is no push/long-poll channel for `gh`, so poll *efficiently* — sleep-and-recheck via the harness scheduler (ScheduleWakeup) or a background Bash loop, **not** a tight token-burning loop. Latest-wins query (note: `gh --jq` does **not** accept `--arg`, so pipe to standalone `jq`):
+```
+gh pr view <num> --json comments | jq -r --arg t "<head-date>" \
+  '[.comments[] | select(.author.login=="claude" and .createdAt > $t and (.body|startswith("## Code Review")))] | last | (.body // "NO_REVIEW_YET")'
+```
+Poll about every 60s. **Do not block on a foreground `sleep`** (the harness blocks it) — run the poll as a background Bash loop that exits 0 once the comment is found, or use ScheduleWakeup to re-check.
+
+**Either path:** give up after ~20 min and report that no review appeared (the Action may not have run — tell me so I can look).
 
 ## Step 2 — Check for main divergence (before fixing)
 
