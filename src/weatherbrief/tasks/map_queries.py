@@ -119,14 +119,22 @@ def _alt_required(
     visibility_m: float | None,
     approach_type: str | None,
     has_iap: bool,
-) -> dict[str, bool]:
+) -> dict[str, bool] | None:
     """FAA/EASA "is a destination alternate required?" flags from NWP ceiling/vis.
 
     Reuses the briefing's destination-trigger logic on the NWP path. EASA
-    MARGINAL collapses to required (conservative, matching the briefing). The map
-    is model-estimate based (no TAF window), like the rest of the forecast map.
+    MARGINAL collapses to required (conservative). Returns ``None`` when the
+    model has neither a ceiling nor a visibility (no usable data → marker shows
+    "no data"). A *missing visibility alone* is NOT treated as poor visibility —
+    ECMWF visibility is GRIB-only and not republished here, so we judge on the
+    ceiling rather than let an absent value spuriously force "required"; a real
+    low visibility still triggers. (This differs from the briefing's destination
+    path, which has a real consensus visibility and keeps missing-vis → fail.)
     """
-    window = nwp_window(ceiling_ft, visibility_m)
+    if ceiling_ft is None and visibility_m is None:
+        return None
+    eff_vis = visibility_m if visibility_m is not None else 99999.0
+    window = nwp_window(ceiling_ft, eff_vis)
     proxy = proxy_for_approach(approach_type, has_iap)
     faa = compute_faa_trigger(window).status == TriggerVerdict.REQUIRED
     easa = compute_easa_trigger(window, proxy).status != TriggerVerdict.NOT_REQUIRED
@@ -264,10 +272,12 @@ def get_forecast_map_data(
         # Per-model FAA/EASA alternate-required flags (the airport colour is
         # aggregated worst-of-models client-side; the popup shows the spread).
         for model_dict in models_data.values():
-            model_dict["alt_required"] = _alt_required(
+            flag = _alt_required(
                 model_dict.get("ceiling_ft"), model_dict.get("visibility_m"),
                 atype, has_iap,
             )
+            if flag is not None:
+                model_dict["alt_required"] = flag
         airports.append({
             "icao": icao,
             "lat": lat,

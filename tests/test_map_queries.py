@@ -535,5 +535,10 @@ def test_alt_required_flags():
     assert _alt_required(3000, 26000, "ILS", True) == {"faa": False, "easa": False}
     # 1500 ft at an ILS: FAA (flat 2000) requires, EASA (DH+1000 ≈ 1200-1300) does not
     assert _alt_required(1500, 26000, "ILS", True) == {"faa": True, "easa": False}
-    # No forecast at all → conservative: both required
-    assert _alt_required(None, None, "ILS", True) == {"faa": True, "easa": True}
+    # Missing visibility alone (e.g. ECMWF, GRIB-only) → judged on ceiling, NOT
+    # forced "required" by the absent value
+    assert _alt_required(32880, None, "ILS", True) == {"faa": False, "easa": False}
+    # A genuinely low visibility still triggers
+    assert _alt_required(3000, 800, "ILS", True)["faa"] is True
+    # Neither ceiling nor visibility → no usable data → None ("no data" marker)
+    assert _alt_required(None, None, "ILS", True) is None
