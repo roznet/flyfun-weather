@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from weatherbrief.analysis.sun import compute_route_sun, normalize_180
+from weatherbrief.analysis.sun import _sun_sector, compute_route_sun, normalize_180
 from weatherbrief.models import RoutePointAnalysis
 from weatherbrief.models.airport_conditions import (
     AirportConditionsSummary,
@@ -90,7 +90,46 @@ class TestNightIntervals:
         assert rs.sun_side.dominant_side == "none"
 
 
+class TestSunSector:
+    def test_cone_boundaries(self):
+        # Nose cone: |rel| <= 30 -> ahead.
+        assert _sun_sector(0.0) == "ahead"
+        assert _sun_sector(30.0) == "ahead"
+        assert _sun_sector(-30.0) == "ahead"
+        # Just outside the nose cone -> flank by sign.
+        assert _sun_sector(31.0) == "right"
+        assert _sun_sector(-31.0) == "left"
+        assert _sun_sector(90.0) == "right"
+        assert _sun_sector(-90.0) == "left"
+        # Tail cone: |rel| >= 150 -> behind.
+        assert _sun_sector(149.0) == "right"
+        assert _sun_sector(150.0) == "behind"
+        assert _sun_sector(-150.0) == "behind"
+        assert _sun_sector(-180.0) == "behind"  # normalize_180(180)
+
+    def test_custom_cone_widens_ahead(self):
+        assert _sun_sector(40.0, ahead_cone_deg=45.0) == "ahead"
+        assert _sun_sector(40.0, ahead_cone_deg=30.0) == "right"
+
+
 class TestSunSide:
+    def test_eastbound_sunrise_is_into_the_sun(self):
+        # Just after sunrise the sun is near due east and low. Flying east
+        # (track 90) puts it roughly down the nose -> "ahead" (into the sun).
+        start = datetime(2024, 6, 21, 5, 0, tzinfo=timezone.utc)
+        analyses = _route(start=start, n=6, lat0=46.0, lon0=2.0,
+                          dlat=0.0, dlon=0.3, track_deg=90.0, minutes_step=10.0)
+        rs = compute_route_sun(analyses)
+        assert rs.sun_side.dominant_side == "ahead"
+
+    def test_westbound_sunrise_has_sun_behind(self):
+        # Same low eastern sun, flying west (track 270) -> sun at your back.
+        start = datetime(2024, 6, 21, 5, 0, tzinfo=timezone.utc)
+        analyses = _route(start=start, n=6, lat0=46.0, lon0=2.0,
+                          dlat=0.0, dlon=-0.3, track_deg=270.0, minutes_step=10.0)
+        rs = compute_route_sun(analyses)
+        assert rs.sun_side.dominant_side == "behind"
+
     def test_eastbound_morning_sun_on_right_then_left_by_direction(self):
         # Morning, sun in the east (~90deg true). Heading north (track 0):
         # rel = az - track ~ +90 -> right. Heading south (track 180): rel ~ -90 -> left.

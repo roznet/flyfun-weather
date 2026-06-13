@@ -848,17 +848,25 @@ class NightInterval(BaseModel):
 
 
 class SunSideSegment(BaseModel):
-    """A stretch of route where the sun sits on one side of the aircraft."""
+    """A stretch of route where the sun sits in one sector relative to the aircraft.
 
-    side: Literal["left", "right"]
+    ``left``/``right`` are the 120-deg flanks; ``ahead`` (flying into the sun) and
+    ``behind`` are the +/-30-deg cones off the nose and tail.
+    """
+
+    side: Literal["left", "right", "ahead", "behind"]
     start_distance_nm: float
     end_distance_nm: float
 
 
 class SunSideSummary(BaseModel):
-    """Which side of the aircraft the sun favours over the route (passenger seating note)."""
+    """Which sector the sun favours over the route (passenger-seating + glare note).
 
-    dominant_side: Literal["left", "right", "none"]
+    ``dominant_side`` is the longest-running sector: ``left``/``right`` for seating
+    and shade, ``ahead``/``behind`` for into-the-sun / sun-at-your-back.
+    """
+
+    dominant_side: Literal["left", "right", "ahead", "behind", "none"]
     dominant_side_pct: float  # the "X%" in the note
     segments: list[SunSideSegment] = Field(default_factory=list)
 

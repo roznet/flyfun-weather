@@ -39,6 +39,28 @@ def normalize_180(deg: float) -> float:
     return ((deg + 180.0) % 360.0) - 180.0
 
 
+# Half-angle of the nose/tail cones for the sun-side note. Within this many
+# degrees of the track the sun reads as "ahead" (into the sun); within the same
+# angle of the reciprocal it reads as "behind". Everything else is a left/right
+# flank. 30 deg matches the runway glare cone half-angle for consistency.
+AHEAD_CONE_DEG = 30.0
+
+
+def _sun_sector(rel: float, ahead_cone_deg: float = AHEAD_CONE_DEG) -> str:
+    """Bucket a signed sun-vs-track bearing into ahead/behind/left/right.
+
+    *rel* is ``normalize_180(sun_azimuth - track)`` in [-180, 180). The nose cone
+    (|rel| <= cone) is "ahead", the tail cone (|rel| >= 180 - cone) is "behind",
+    and the remaining flanks are "right" (rel > 0) or "left" (rel < 0).
+    """
+    a = abs(rel)
+    if a <= ahead_cone_deg:
+        return "ahead"
+    if a >= 180.0 - ahead_cone_deg:
+        return "behind"
+    return "right" if rel > 0 else "left"
+
+
 def _phase_for_elevation(elev_deg: float) -> str:
     """Classify a sun elevation: 'day' (>0), 'twilight' (0..-6), 'night' (<-6)."""
     if elev_deg > 0.0:
@@ -133,16 +155,16 @@ def _compute_night_intervals(
 
 def _compute_sun_side(
     analyses: list[RoutePointAnalysis],
+    ahead_cone_deg: float = AHEAD_CONE_DEG,
 ) -> SunSideSummary:
-    """Aggregate which side the sun favours, weighting each segment by its length.
+    """Aggregate which sector the sun favours, weighting each segment by its length.
 
-    Only daylit points (elevation > 0) contribute a side; night segments are
-    skipped (no sun → no side).
+    Each daylit segment (elevation > 0) is bucketed into ahead/behind/left/right
+    via :func:`_sun_sector`; night segments are skipped (no sun → no sector). The
+    dominant sector is the one with the most along-track distance.
     """
-    left_nm = 0.0
-    right_nm = 0.0
-    # Per forward-segment side: "left" / "right" / None (no sun).
-    seg_sides: list[tuple[float, float, str]] = []  # (start_nm, end_nm, side)
+    sector_nm: dict[str, float] = {"ahead": 0.0, "behind": 0.0, "left": 0.0, "right": 0.0}
+    seg_sides: list[tuple[float, float, str]] = []  # (start_nm, end_nm, sector)
 
     for i in range(len(analyses) - 1):
         p = analyses[i]
@@ -152,31 +174,24 @@ def _compute_sun_side(
             continue
         elev = solar_elevation(p.lat, p.lon, p.interpolated_time)
         if elev <= 0.0:
-            continue  # sun down → no side
+            continue  # sun down → no sector
         az = solar_azimuth(p.lat, p.lon, p.interpolated_time)
         rel = normalize_180(az - p.track_deg)
-        if rel > 0:
-            side = "right"
-            right_nm += seg_len
-        elif rel < 0:
-            side = "left"
-            left_nm += seg_len
-        else:
-            continue  # sun dead ahead/behind → no clear side
+        side = _sun_sector(rel, ahead_cone_deg)
+        sector_nm[side] += seg_len
         seg_sides.append((p.distance_from_origin_nm, nxt.distance_from_origin_nm, side))
 
-    sunlit_nm = left_nm + right_nm
+    sunlit_nm = sum(sector_nm.values())
     if sunlit_nm <= 0:
         return SunSideSummary(dominant_side="none", dominant_side_pct=0.0)
 
-    if right_nm >= left_nm:
-        dominant = "right"
-        dominant_pct = round(100.0 * right_nm / sunlit_nm, 1)
-    else:
-        dominant = "left"
-        dominant_pct = round(100.0 * left_nm / sunlit_nm, 1)
+    # Longest-running sector wins; ties resolve by a fixed priority that leads
+    # with the operationally relevant ones (into the sun, then sun behind).
+    priority = {"ahead": 0, "behind": 1, "right": 2, "left": 3}
+    dominant = min(sector_nm, key=lambda s: (-sector_nm[s], priority[s]))
+    dominant_pct = round(100.0 * sector_nm[dominant] / sunlit_nm, 1)
 
-    # Merge consecutive same-side segments into runs.
+    # Merge consecutive same-sector segments into runs.
     segments: list[SunSideSegment] = []
     for start_nm, end_nm, side in seg_sides:
         if segments and segments[-1].side == side and abs(
@@ -259,6 +274,7 @@ def compute_route_sun(
     *,
     glare_azimuth_deg: float = 30.0,
     glare_elev_max_deg: float = 15.0,
+    ahead_cone_deg: float = AHEAD_CONE_DEG,
 ) -> RouteSunAnalysis:
     """Compute night intervals, sun-side summary, and dep/arr glare for a route.
 
@@ -288,7 +304,7 @@ def compute_route_sun(
         for a, (elev, az) in zip(analyses, positions)
     ]
     night_intervals = _compute_night_intervals(samples)
-    sun_side = _compute_sun_side(analyses)
+    sun_side = _compute_sun_side(analyses, ahead_cone_deg)
 
     takeoff = _glare_for_airport(
         "takeoff", analyses[0], departure, glare_azimuth_deg, glare_elev_max_deg,

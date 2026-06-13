@@ -62,10 +62,11 @@ class SunEvaluator:
                 "Informational, never a go/no-go. GREEN by default. Goes AMBER when a "
                 "low sun would sit roughly down the wind-best runway on takeoff or "
                 "landing (glare on the roll/flare), and — for day-VFR profiles — when "
-                "the leg ends near or after sunset. It also always reports which side "
-                "the sun is on for most of the route — handy for deciding where to "
-                "seat a passenger (the shaded side) or which window gives the "
-                "better-lit shot for photos. Night-capable profiles can disable the "
+                "the leg ends near or after sunset. It also always reports where the "
+                "sun sits for most of the route — left or right (handy for deciding "
+                "where to seat a passenger on the shaded side, or which window gives "
+                "the better-lit shot for photos), or ahead/behind when you are flying "
+                "into the sun or have it at your back. Night-capable profiles can disable the "
                 "dusk AMBER via warn_near_sunset; glare AMBER always applies."
             ),
             category="sun",
@@ -193,22 +194,23 @@ class SunEvaluator:
 def _sun_side_note(sun_side: SunSideSummary | None, loc: str | None) -> str:
     """Build the informational sun-side note.
 
-    Just the directional fact ("Sun on your left for ~90% of the route"). The
-    practical use — which side to seat a passenger / better window for photos —
-    lives in the advisory's (i) description, not on the advisory line itself.
+    Just the directional fact: left/right gives the seating/shade side ("Sun on
+    your left for ~90% of the route"), while ahead/behind reports flying into the
+    sun or having it at your back. The practical use — which side to seat a
+    passenger / better window for photos — lives in the advisory's (i)
+    description, not on the advisory line itself.
     """
     if sun_side is None or sun_side.dominant_side == "none":
         return adv_t("sun.side_none", loc)
-    side_word = adv_t(f"sun.{sun_side.dominant_side}", loc)
-    note = adv_t(
-        "sun.side_note", loc,
-        side=side_word,
-        pct=round(sun_side.dominant_side_pct),
-    )
-    sides = {seg.side for seg in sun_side.segments}
-    if len(sides) > 1:
-        note += adv_t("sun.side_swings", loc)
-    return note
+    dom = sun_side.dominant_side
+    pct = round(sun_side.dominant_side_pct)
+    if dom == "ahead":
+        return adv_t("sun.ahead_note", loc, pct=pct)
+    if dom == "behind":
+        return adv_t("sun.behind_note", loc, pct=pct)
+    # The "~pct%" already implies the sun sits elsewhere on the rest of the
+    # route, so we don't append a separate "it shifts" clause.
+    return adv_t("sun.side_note", loc, side=adv_t(f"sun.{dom}", loc), pct=pct)
 
 
 def _near_dark(ctx: RouteContext, phase: str, margin_min: float) -> bool:

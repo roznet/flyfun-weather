@@ -60,6 +60,23 @@ class TestSunAdvisory:
         assert "left" not in result.aggregate_detail
         assert "78" in result.aggregate_detail
 
+    def test_green_into_the_sun_note(self):
+        sun = RouteSunAnalysis(night_intervals=[], sun_side=_side("ahead", 65.0))
+        result = SunEvaluator.evaluate(_ctx(sun), _defaults())
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        # "ahead" reads as flying into the sun, not "your ahead".
+        assert "into the sun" in result.aggregate_detail.lower()
+        assert "65" in result.aggregate_detail
+        assert "left" not in result.aggregate_detail
+        assert "right" not in result.aggregate_detail
+
+    def test_green_sun_behind_note(self):
+        sun = RouteSunAnalysis(night_intervals=[], sun_side=_side("behind", 70.0))
+        result = SunEvaluator.evaluate(_ctx(sun), _defaults())
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert "behind" in result.aggregate_detail.lower()
+        assert "70" in result.aggregate_detail
+
     def test_amber_on_glare_landing(self):
         landing = GlareAssessment(
             phase="landing", airport_icao="LFXX", runway_ident="27",
@@ -149,10 +166,16 @@ class TestSunAdvisory:
         result = SunEvaluator.evaluate(_ctx(sun, analyses=analyses), _defaults())
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
-    def test_side_swings_mentioned_when_segments_flip(self):
+    def test_no_swing_clause_when_segments_flip(self):
+        # A route whose sun sector flips still gets only the dominant-side note;
+        # the "~55%" already implies the rest of the route differs, so no extra
+        # "it shifts" clause is appended.
         sun = RouteSunAnalysis(sun_side=_side("right", 55.0, segments=[
             SunSideSegment(side="right", start_distance_nm=0, end_distance_nm=40),
             SunSideSegment(side="left", start_distance_nm=40, end_distance_nm=80),
         ]))
         result = SunEvaluator.evaluate(_ctx(sun), _defaults())
-        assert "turn" in result.aggregate_detail.lower()
+        detail = result.aggregate_detail.lower()
+        assert "right" in detail and "55" in detail
+        assert "turn" not in detail
+        assert "swing" not in detail
