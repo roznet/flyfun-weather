@@ -9,7 +9,11 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from weatherbrief.api.throttle import SlidingWindowRateLimiter, generation_slot
+from weatherbrief.api.throttle import (
+    SlidingWindowRateLimiter,
+    _format_window,
+    generation_slot,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +76,31 @@ class TestSlidingWindowRateLimiter:
         # 200 total attempts, limit is 100
         assert successes == 100
         assert errors == 100
+
+    def test_message_uses_human_window_not_zero_hours(self):
+        """A sub-hour window must not render as the misleading "0h"."""
+        limiter = SlidingWindowRateLimiter(max_requests=1, window_seconds=60)
+        limiter.check("user-1")
+        with pytest.raises(HTTPException) as exc_info:
+            limiter.check("user-1")
+        assert "minute" in exc_info.value.detail
+        assert "0h" not in exc_info.value.detail
+
+
+class TestFormatWindow:
+    @pytest.mark.parametrize(
+        "seconds,expected",
+        [
+            (1, "second"),
+            (45, "45 seconds"),
+            (60, "minute"),
+            (120, "2 minutes"),
+            (3600, "hour"),
+            (86400, "day"),
+        ],
+    )
+    def test_format_window(self, seconds, expected):
+        assert _format_window(seconds) == expected
 
 
 # ---------------------------------------------------------------------------

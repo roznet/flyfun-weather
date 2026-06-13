@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from weatherbrief.api.admin import require_admin
-from weatherbrief.api.throttle import feedback_burst_limiter, feedback_daily_limiter
+from weatherbrief.api.throttle import (
+    digest_rating_burst_limiter,
+    digest_rating_daily_limiter,
+    feedback_burst_limiter,
+    feedback_daily_limiter,
+)
 from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
@@ -108,8 +113,15 @@ def submit_feedback(
     db: Session = Depends(get_db),
 ):
     """Submit feedback for a specific briefing pack."""
-    feedback_burst_limiter.check(user_id)
-    feedback_daily_limiter.check(user_id)
+    # Lightweight digest thumb ratings get their own, looser limiters — a pilot
+    # may legitimately rate several briefings in a session, which the verbose
+    # form's 1/min burst would block. The form keeps the stricter limits.
+    if body.category == "digest_rating":
+        digest_rating_burst_limiter.check(user_id)
+        digest_rating_daily_limiter.check(user_id)
+    else:
+        feedback_burst_limiter.check(user_id)
+        feedback_daily_limiter.check(user_id)
 
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
 

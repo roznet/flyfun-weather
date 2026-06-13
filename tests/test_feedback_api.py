@@ -33,10 +33,14 @@ def app_db():
 @pytest.fixture(autouse=True)
 def _no_rate_limit(monkeypatch):
     """The burst limiter allows 1 req/min — neutralize it for tests."""
-    monkeypatch.setattr(throttle.feedback_burst_limiter, "max_requests", 1000)
-    monkeypatch.setattr(throttle.feedback_daily_limiter, "max_requests", 1000)
-    throttle.feedback_burst_limiter._hits.clear()
-    throttle.feedback_daily_limiter._hits.clear()
+    for limiter in (
+        throttle.feedback_burst_limiter,
+        throttle.feedback_daily_limiter,
+        throttle.digest_rating_burst_limiter,
+        throttle.digest_rating_daily_limiter,
+    ):
+        monkeypatch.setattr(limiter, "max_requests", 1000)
+        limiter._hits.clear()
 
 
 @pytest.fixture(autouse=True)

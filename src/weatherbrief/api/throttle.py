@@ -11,6 +11,19 @@ from typing import Iterator
 from fastapi import HTTPException
 
 
+def _format_window(seconds: int) -> str:
+    """Human-readable window for rate-limit messages (e.g. ``60`` -> "minute").
+
+    The old ``{seconds // 3600}h`` rendered sub-hour windows as a confusing
+    "0h" ("1 per 0h"), so format to the largest whole unit that divides evenly.
+    """
+    for unit_seconds, name in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if seconds >= unit_seconds and seconds % unit_seconds == 0:
+            n = seconds // unit_seconds
+            return name if n == 1 else f"{n} {name}s"
+    return "second" if seconds == 1 else f"{seconds} seconds"
+
+
 class SlidingWindowRateLimiter:
     """In-memory per-key sliding-window rate limiter.
 
@@ -40,7 +53,7 @@ class SlidingWindowRateLimiter:
                 raise HTTPException(
                     status_code=429,
                     detail=f"Rate limit exceeded ({self.max_requests} per "
-                    f"{self.window_seconds // 3600}h). Try again later.",
+                    f"{_format_window(self.window_seconds)}). Try again later.",
                 )
             timestamps.extend([now] * count)
 
@@ -92,6 +105,17 @@ feedback_daily_limiter = SlidingWindowRateLimiter(max_requests=20, window_second
 """Feedback submission — max 20 per 24 hours. Hard cap on admin mailbox
 amplification and on DB rows that the triage worker will later have to ignore
 (worker cap is 10 per 7 days — this is a pre-insert belt)."""
+
+digest_rating_burst_limiter = SlidingWindowRateLimiter(max_requests=10, window_seconds=60)
+"""Digest thumb 👍/👎 rating — max 10 per minute. Looser than the verbose
+feedback form's 1/min: the widget already blocks double-submit client-side
+(buttons disable + per-pack guard), so the only legitimate burst is a pilot
+rating several briefings in one session. This bounds mail/DB amplification
+without punishing that flow."""
+
+digest_rating_daily_limiter = SlidingWindowRateLimiter(max_requests=50, window_seconds=86400)
+"""Digest thumb rating — max 50 per 24 hours. Separate from the feedback-form
+daily cap so ratings and written feedback don't starve each other."""
 
 analytics_burst_limiter = SlidingWindowRateLimiter(max_requests=30, window_seconds=60)
 """Analytics ingest — max 30 batches per minute per IP. Real clients flush every
