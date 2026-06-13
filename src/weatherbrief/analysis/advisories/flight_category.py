@@ -33,6 +33,9 @@ _CONV_ORDER = [
     ConvectiveRisk.HIGH,
     ConvectiveRisk.EXTREME,
 ]
+# Severity rank for O(1) comparison — avoids repeated _CONV_ORDER.index()
+# scans across models × route points × two airports per call.
+_CONV_RANK: dict[ConvectiveRisk, int] = {r: i for i, r in enumerate(_CONV_ORDER)}
 
 
 def _terminal_convective_risk(
@@ -55,7 +58,7 @@ def _terminal_convective_risk(
         conv = sounding.convective if sounding is not None else None
         if conv is None:
             continue
-        if _CONV_ORDER.index(conv.risk_level) > _CONV_ORDER.index(worst):
+        if _CONV_RANK[conv.risk_level] > _CONV_RANK[worst]:
             worst = conv.risk_level
     return worst
 

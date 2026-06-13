@@ -42,9 +42,14 @@ from weatherbrief.models import (
 )
 
 # Stable-layer search band around ridge top: an inversion this far below to
-# this far above the local peak counts as the wave-supporting layer.
+# this far above the local peak counts as the wave-supporting layer. Classical
+# wave theory (Scorer parameter decreasing with height) places the critical
+# stable layer at or just above ridge level, so the upper bound is kept tight
+# (+2000 ft) to exclude elevated frontal inversions that carry no wave
+# mechanism — a wider band false-positives on any day with a mid-level stable
+# layer above a ridge. See designs/meteorology-decisions.md §11d.
 _INV_BELOW_FT = 1000.0
-_INV_ABOVE_FT = 4000.0
+_INV_ABOVE_FT = 2000.0
 
 
 def _wave_signatures(

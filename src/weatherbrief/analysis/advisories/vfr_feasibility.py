@@ -348,9 +348,17 @@ class VFRFeasibilityEvaluator:
 
             # 5. En-route precipitation (visibility proxy) — capped at AMBER
             # in the composite; the standalone advisory grades it fully.
+            # Deliberately called WITHOUT params: the composite always uses the
+            # fixed precip defaults, independent of any per-user tuning of the
+            # standalone EnroutePrecipEvaluator. The params dict here carries
+            # only VFR keys, so the two can grade differently if a user tunes
+            # the standalone — that divergence is intentional; the composite is
+            # a fixed-threshold sanity floor, not a mirror of the standalone.
             precip_status, precip_detail, _, _, precip_signal = (
                 classify_enroute_precip(ctx, model)
             )
+            # Old pack without precip data (no signal / UNAVAILABLE) → treat as
+            # GREEN in the composite rather than penalising a missing field.
             if not precip_signal or precip_status == AdvisoryStatus.UNAVAILABLE:
                 precip_status, precip_detail = AdvisoryStatus.GREEN, ""
             elif precip_status == AdvisoryStatus.RED:

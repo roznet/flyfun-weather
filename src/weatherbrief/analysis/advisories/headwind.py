@@ -153,6 +153,10 @@ class HeadwindEvaluator:
             max_hw = max(headwinds)
 
             # Trip time vs still air: equal-weight segments at per-point GS.
+            # Approximation — route points are not always evenly spaced (denser
+            # near waypoints), so using average spacing skews the time integral
+            # when point density correlates with wind speed. Acceptable for an
+            # informational advisory; a per-segment distance would be exact.
             seg_nm = ctx.total_distance_nm / total
             still_min = 60.0 * ctx.total_distance_nm / tas_kt
             wind_min = sum(

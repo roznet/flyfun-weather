@@ -1081,7 +1081,7 @@ trip-time delta vs still air. Two deliberate choices:
 Speed-only grading cannot separate "windy ridge" from "rotor day". The
 evaluator now corroborates strong-wind mountain points with two signatures
 already computed per sounding: an **inversion overlapping ridge top**
-(−1000/+4000 ft band — the stable layer of the classical wave criteria) or an
+(−1000/+2000 ft band — the stable layer of the classical wave criteria) or an
 **OSCILLATING vertical-motion classification** (model resolving the wave).
 With a signature present, the RED bar drops from `wind_red_kt` (40) to
 `corroborated_red_kt` (default 30). Cross-ridge wind *direction* was
@@ -1089,6 +1089,15 @@ considered and rejected: the elevation profile is 1-D along the route, ridge
 orientation is unknown, and inferring it from the along-track terrain
 gradient assumes perpendicular crossings — false precision. OSCILLATING
 finally feeds an advisory (was computed and unused).
+
+The upper band was tightened from +4000 ft to **+2000 ft** (post-merge review
+of #242): classical wave theory places the critical stable layer at or just
+above ridge level, and a +4000 ft window false-positively counts mid-level
+frontal inversions (e.g. a layer at terrain + 3500 ft) as wave-supporting,
+dropping the RED bar to 30 kt with no wave mechanism present. +2000 ft keeps
+true summit inversions while excluding elevated frontal features; the Alpine
+föhn validation in (d) below will confirm the tightened band still REDs real
+wave days at 30–39 kt.
 
 ### Real-world validation needed
 

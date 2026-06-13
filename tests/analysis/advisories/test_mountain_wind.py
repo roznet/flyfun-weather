@@ -159,6 +159,13 @@ class TestMountainWindWaveCorroboration:
         result = _evaluate(_ctx(45.0))
         assert result.aggregate_status == AdvisoryStatus.RED
 
+    def test_very_strong_wind_with_signature_appends_suffix(self):
+        # max_wind >= wind_red (40) AND a wave signature present: the severe
+        # branch wins (RED) and the signature suffix is appended to the detail.
+        result = _evaluate(_ctx(45.0, ridge_inversion=True))
+        assert result.aggregate_status == AdvisoryStatus.RED
+        assert "stable layer" in result.per_model[0].detail
+
     def test_no_mountains_green(self):
         ctx = _ctx(45.0)
         flat = ElevationProfile(
