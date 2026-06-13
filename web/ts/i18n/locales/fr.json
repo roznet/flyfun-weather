@@ -320,7 +320,7 @@
   "feedback.cat.tooOptimistic": "Briefing trop optimiste",
   "feedback.cat.incorrectInterpretation": "Interprétation incorrecte du briefing",
   "feedback.cat.other": "Autre bug/problème",
-  "feedback.contactOk": "J'accepte d'être contacté(e) à ce sujet",
+  "feedback.contactOk": "D'accord pour recevoir une réponse par e-mail",
   "feedback.thumbs.question": "Ce résumé était-il fidèle ?",
   "feedback.thumbs.up": "Oui, le résumé correspondait aux conditions",
   "feedback.thumbs.down": "Quelque chose ne collait pas",

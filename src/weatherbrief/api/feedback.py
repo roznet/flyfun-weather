@@ -35,7 +35,7 @@ class FeedbackRequest(BaseModel):
     comment: str = Field("", max_length=2000)
     sentiment: Optional[str] = Field(None, max_length=8)
     target: Optional[str] = Field(None, max_length=16)
-    contact_ok: bool = False
+    contact_ok: bool = True
 
     @field_validator("category")
     @classmethod

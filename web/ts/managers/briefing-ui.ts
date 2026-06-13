@@ -1454,9 +1454,10 @@ function digestFeedbackHtml(flightId: string, packTimestamp: string): string {
         <p class="digest-feedback-helper"><strong>${t('feedback.thumbs.helperTitle')}</strong><br>${t('feedback.thumbs.helperBody')}</p>
         <textarea id="digest-feedback-comment" rows="3" maxlength="2000" placeholder="${t('feedback.thumbs.placeholder')}"></textarea>
         <label class="digest-feedback-consent">
-          <input type="checkbox" id="digest-feedback-contact-ok"> ${t('feedback.contactOk')}
+          <input type="checkbox" id="digest-feedback-contact-ok" checked> ${t('feedback.contactOk')}
         </label>
         <div class="digest-feedback-actions">
+          <button type="button" class="btn" id="digest-feedback-cancel">${t('feedback.cancel')}</button>
           <button type="button" class="btn btn-primary" id="digest-feedback-send">${t('feedback.thumbs.send')}</button>
         </div>
       </div>
@@ -1506,6 +1507,12 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
     upBtn.classList.remove('active');
     form.style.display = '';
     widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')?.focus();
+  });
+
+  widget.querySelector<HTMLButtonElement>('#digest-feedback-cancel')!.addEventListener('click', () => {
+    form.style.display = 'none';
+    downBtn.classList.remove('active');
+    errorEl.textContent = '';
   });
 
   widget.querySelector<HTMLButtonElement>('#digest-feedback-send')!.addEventListener('click', () => {

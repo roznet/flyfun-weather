@@ -391,7 +391,7 @@
   "feedback.cat.tooOptimistic": "Briefing Too Optimistic",
   "feedback.cat.incorrectInterpretation": "Briefing Incorrect Interpretation",
   "feedback.cat.other": "Other Bug/Issue",
-  "feedback.contactOk": "I don't mind being contacted about this",
+  "feedback.contactOk": "OK to email me a reply about this",
   "feedback.thumbs.question": "Was this summary accurate?",
   "feedback.thumbs.up": "Yes, the summary matched conditions",
   "feedback.thumbs.down": "Something seemed off",
