@@ -523,3 +523,17 @@ class TestAvailableDaysEndpoint:
         assert days[3]["available"] is False
         # Date label tracks today + day so the UI label stays consistent.
         assert days[0]["date"] == datetime.now(timezone.utc).date().isoformat()
+
+
+def test_alt_required_flags():
+    """FAA/EASA destination-alternate flags used by the map 'Alternate required?' mode."""
+    from weatherbrief.tasks.map_queries import _alt_required
+
+    # IFR ILS field (ESMQ-like): both regimes require an alternate
+    assert _alt_required(960, 26000, "ILS", True) == {"faa": True, "easa": True}
+    # Comfortable VFR: neither
+    assert _alt_required(3000, 26000, "ILS", True) == {"faa": False, "easa": False}
+    # 1500 ft at an ILS: FAA (flat 2000) requires, EASA (DH+1000 ≈ 1200-1300) does not
+    assert _alt_required(1500, 26000, "ILS", True) == {"faa": True, "easa": False}
+    # No forecast at all → conservative: both required
+    assert _alt_required(None, None, "ILS", True) == {"faa": True, "easa": True}

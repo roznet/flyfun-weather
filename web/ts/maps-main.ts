@@ -107,7 +107,7 @@ const mapsUrlState = createUrlState({
   'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
   'fc.metric': {
     default: 'flight_category' as ForecastMetric,
-    values: ['flight_category', 'wind_speed_kt', 'crosswind_kt', 'headwind_kt', 'ceiling_ft', 'visibility_m', 'cape_jkg', 'convective_risk', 'cloud_cover_pct'] as readonly ForecastMetric[],
+    values: ['flight_category', 'alternate_needed', 'wind_speed_kt', 'crosswind_kt', 'headwind_kt', 'ceiling_ft', 'visibility_m', 'cape_jkg', 'convective_risk', 'cloud_cover_pct'] as readonly ForecastMetric[],
   },
   // Open airport-profile panel (ICAO) and the panel's selected model.
   // Empty ICAO = no panel open. Panel model defaults differ from the

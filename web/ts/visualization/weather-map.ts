@@ -2,7 +2,7 @@
 
 import * as L from 'leaflet';
 import type {
-  ForecastAirport, ForecastMapResponse, ModelForecast, ConsensusForecast,
+  ForecastAirport, ForecastMapResponse, ModelForecast, ConsensusForecast, AltRequired,
 } from '../adapters/maps-adapter';
 import { formatVisibility, getUnitsRegion } from '../units';
 
@@ -86,7 +86,47 @@ function cloudCoverColor(pct: number): string {
 
 // --- Forecast metric extraction ---
 
-export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'crosswind_kt' | 'headwind_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct' | 'visibility_m';
+export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'crosswind_kt' | 'headwind_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct' | 'visibility_m' | 'alternate_needed';
+
+// --- Alternate-required (FAA/EASA) helpers (#249) ---
+
+/** Per-model/aggregate label: None / EASA / FAA / FAA+EASA. */
+function altLabel(f: AltRequired | undefined): string {
+  if (!f) return '—';
+  if (f.faa && f.easa) return 'FAA+EASA';
+  if (f.easa) return 'EASA';
+  if (f.faa) return 'FAA';
+  return 'None';
+}
+
+/** Worst-of-models aggregate: a regime counts if any model triggers it. */
+function aggAltRequired(airport: ForecastAirport): AltRequired | undefined {
+  const flags = Object.values(airport.models)
+    .map((m) => m?.alt_required)
+    .filter((f): f is AltRequired => !!f);
+  if (!flags.length) return undefined;
+  return { faa: flags.some((f) => f.faa), easa: flags.some((f) => f.easa) };
+}
+
+function altNeededColor(airport: ForecastAirport, model: string): string {
+  const f = isConsensusMode(model) ? aggAltRequired(airport) : airport.models[model]?.alt_required;
+  if (!f) return '#888';
+  const n = (f.faa ? 1 : 0) + (f.easa ? 1 : 0);
+  return n === 0 ? '#22c55e' : n === 1 ? '#eab308' : '#ef4444'; // green / amber / red
+}
+
+function altNeededTooltip(airport: ForecastAirport, model: string): string {
+  const lines: string[] = [`<b>${airport.icao}</b>`];
+  if (isConsensusMode(model)) {
+    lines.push(`Alternate required: <b>${altLabel(aggAltRequired(airport))}</b>`);
+    for (const [m, d] of Object.entries(airport.models)) {
+      lines.push(`<span style="color:var(--text-muted)">${m.toUpperCase()}: ${altLabel(d?.alt_required)}</span>`);
+    }
+  } else {
+    lines.push(`Alternate required: <b>${altLabel(airport.models[model]?.alt_required)}</b>`);
+  }
+  return lines.join('<br>');
+}
 
 import { isConsensusMode, computeConsensus, type ConsensusMode } from './weather-map-consensus';
 
@@ -117,6 +157,8 @@ function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, mode
       return visibilityColor(data.visibility_m ?? 99999);
     case 'cloud_cover_pct':
       return cloudCoverColor(data.cloud_cover_pct ?? 0);
+    case 'alternate_needed':
+      return altNeededColor(airport, model);
     default:
       return '#888';
   }
@@ -169,6 +211,7 @@ const METRIC_LABEL: Record<ForecastMetric, string> = {
   convective_risk: 'Convective',
   visibility_m: 'Visibility',
   cloud_cover_pct: 'Cloud cover',
+  alternate_needed: 'Alternate required?',
 };
 
 /** Format the value of a metric (no label) for tooltip display. */
@@ -197,6 +240,8 @@ function formatMetricValue(data: { [key: string]: any }, metric: ForecastMetric)
       return data.convective_risk || 'none';
     case 'cloud_cover_pct':
       return data.cloud_cover_pct != null ? `${Math.round(data.cloud_cover_pct)}%` : '—';
+    case 'alternate_needed':
+      return altLabel(data.alt_required);
     default:
       return '—';
   }
@@ -224,6 +269,8 @@ function getAgreementForMetric(consensus: ConsensusForecast, metric: ForecastMet
 }
 
 function getForecastTooltip(airport: ForecastAirport, model: string, metric: ForecastMetric): string {
+  if (metric === 'alternate_needed') return altNeededTooltip(airport, model);
+
   const lines: string[] = [`<b>${airport.icao}</b>`];
   const label = METRIC_LABEL[metric];
 
@@ -332,6 +379,15 @@ const FORECAST_LEGENDS: Record<ForecastMetric, { title: string; items: Array<{ c
       { color: cloudCoverColor(50), label: '50%' },
       { color: cloudCoverColor(75), label: '75%' },
       { color: cloudCoverColor(100), label: 'Overcast' },
+    ],
+  },
+  alternate_needed: {
+    title: 'Alternate required? (model estimate)',
+    items: [
+      { color: '#22c55e', label: 'Neither (FAA & EASA ok)' },
+      { color: '#eab308', label: 'One regime (FAA or EASA)' },
+      { color: '#ef4444', label: 'Both (FAA & EASA)' },
+      { color: '#888', label: 'No data' },
     ],
   },
 };

@@ -21,12 +21,19 @@ from weatherbrief.analysis.airport_consensus import (
     flight_category as _shared_flight_category,
     snap_to_dict as _shared_snap_to_dict,
 )
+from weatherbrief.analysis.alternate_requirement import (
+    compute_easa_trigger,
+    compute_faa_trigger,
+    nwp_window,
+    proxy_for_approach,
+)
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
 from weatherbrief.models.airport_conditions import RunwayEnd
+from weatherbrief.models.alternate_requirement import TriggerVerdict
 from weatherbrief.tasks.airport_watchlist import (
     WatchlistAirport,
     get_configs_dir,
@@ -68,6 +75,62 @@ def _get_runways(airports_db_path: str) -> dict[str, list[RunwayEnd]]:
         coords = _get_coords(airports_db_path)
         _runway_cache = get_runway_ends(list(coords.keys()), airports_db_path)
     return _runway_cache
+
+
+_approach_cache: dict[str, tuple[str | None, bool]] | None = None
+
+
+def _get_approach_classes(airports_db_path: str) -> dict[str, tuple[str | None, bool]]:
+    """Return icao → (most-precise approach_type, has_iap), cached in-process.
+
+    Approach data is static (changes only with a nav.db rebuild + redeploy), so
+    it is computed once for the whole watchlist — mirrors the runway cache and
+    the per-destination lookup in ``tasks/alternate_requirement``.
+    """
+    global _approach_cache
+    if _approach_cache is None:
+        out: dict[str, tuple[str | None, bool]] = {}
+        try:
+            from weatherbrief.airports import _load_airport_model
+
+            coords = _get_coords(airports_db_path)
+            model = _load_airport_model(airports_db_path)
+            for icao in coords:
+                try:
+                    ap = model.airports.get(icao)
+                    approaches = ap.procedures_query.approaches() if ap is not None else None
+                    if approaches is None or not approaches.exists():
+                        out[icao] = (None, False)
+                        continue
+                    best = approaches.most_precise()
+                    out[icao] = (best.approach_type if best is not None else None, True)
+                except Exception:
+                    out[icao] = (None, False)
+        except Exception:
+            # No nav.db / model — degrade to "no approach data" (EASA uses its
+            # no-IAP VMC proxy, FAA is approach-independent). Map still renders.
+            logger.warning("map: approach-class load failed; alternate-needed degrades", exc_info=True)
+        _approach_cache = out
+    return _approach_cache
+
+
+def _alt_required(
+    ceiling_ft: float | None,
+    visibility_m: float | None,
+    approach_type: str | None,
+    has_iap: bool,
+) -> dict[str, bool]:
+    """FAA/EASA "is a destination alternate required?" flags from NWP ceiling/vis.
+
+    Reuses the briefing's destination-trigger logic on the NWP path. EASA
+    MARGINAL collapses to required (conservative, matching the briefing). The map
+    is model-estimate based (no TAF window), like the rest of the forecast map.
+    """
+    window = nwp_window(ceiling_ft, visibility_m)
+    proxy = proxy_for_approach(approach_type, has_iap)
+    faa = compute_faa_trigger(window).status == TriggerVerdict.REQUIRED
+    easa = compute_easa_trigger(window, proxy).status != TriggerVerdict.NOT_REQUIRED
+    return {"faa": faa, "easa": easa}
 
 
 # ---------------------------------------------------------------------------
@@ -190,16 +253,26 @@ def get_forecast_map_data(
         for model_dict in models_data.values():
             _enrich_wind(model_dict, rwy_ends)
 
-    # Build response with coords and consensus
+    # Build response with coords, consensus, and FAA/EASA alternate-required flags
+    approaches = _get_approach_classes(airports_db_path)
     airports = []
     for icao, models_data in sorted(by_airport.items()):
         if icao not in coords:
             continue
         lat, lon = coords[icao]
+        atype, has_iap = approaches.get(icao, (None, False))
+        # Per-model FAA/EASA alternate-required flags (the airport colour is
+        # aggregated worst-of-models client-side; the popup shows the spread).
+        for model_dict in models_data.values():
+            model_dict["alt_required"] = _alt_required(
+                model_dict.get("ceiling_ft"), model_dict.get("visibility_m"),
+                atype, has_iap,
+            )
         airports.append({
             "icao": icao,
             "lat": lat,
             "lon": lon,
+            "approach_type": atype,
             "models": models_data,
             "consensus": _consensus(models_data),
         })

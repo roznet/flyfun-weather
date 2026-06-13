@@ -6,10 +6,17 @@ const apiBase = API_BASE;
 
 // --- Forecast types ---
 
+/** FAA/EASA "is a destination alternate required?" flags (#249, NWP path). */
+export interface AltRequired {
+  faa: boolean;
+  easa: boolean;
+}
+
 export interface ForecastAirport {
   icao: string;
   lat: number;
   lon: number;
+  approach_type?: string | null;
   models: Record<string, ModelForecast>;
   consensus: ConsensusForecast;
 }
@@ -17,6 +24,7 @@ export interface ForecastAirport {
 export interface ModelForecast {
   ceiling_ft: number | null;
   visibility_m: number | null;
+  alt_required?: AltRequired;
   wind_speed_kt: number | null;
   wind_dir_deg: number | null;
   wind_gust_kt: number | null;
