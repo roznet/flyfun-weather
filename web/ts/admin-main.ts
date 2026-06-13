@@ -423,6 +423,7 @@ function renderRatings(): void {
   const inPeriod = ratingsData.filter((r) => {
     if (cutoff == null || !r.created_at) return true;
     const t = new Date(r.created_at).getTime();
+    // Include on parse failure so the admin can still see and action the entry.
     return Number.isNaN(t) || t >= cutoff;
   });
 
@@ -475,7 +476,7 @@ function renderRatingRow(fb: FeedbackEntry): string {
     detail += `<div style="background:var(--surface);border-radius:6px;padding:10px;white-space:pre-wrap;margin-bottom:8px;">${escapeHtml(fb.comment)}</div>`;
   }
   const consentNote = fb.contact_ok ? '' : ' · 🔕 opted out of replies';
-  detail += `<div style="color:var(--text-muted);font-size:12px;">${escapeHtml(fb.user_email)}${fb.flight_id ? ' · ' + escapeHtml(fb.flight_id) : ''}${fb.created_at ? ' · ' + formatDate(fb.created_at) : ''}${consentNote}</div>`;
+  detail += `<div style="color:var(--text-muted);font-size:12px;">${escapeHtml(fb.user_email)}${fb.flight_id ? ' · ' + escapeHtml(fb.flight_id) : ''}${fb.created_at ? ' · ' + escapeHtml(formatDate(fb.created_at)) : ''}${consentNote}</div>`;
 
   if (canReply) {
     detail += `
