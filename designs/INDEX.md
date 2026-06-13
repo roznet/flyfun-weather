@@ -73,6 +73,11 @@ Weather-based alternate airports (D-2 inward, gated by `compute_alternates` pref
 Key exports: `run_alternates`, `RouteAlternates`, `AlternateAirport`, `AlternateAxisPick`, `best_ceiling`, `flight_category`, `enrich_wind`, `consensus`, `compute_route_distances`
 → Full doc: alternates.md
 
+### alternate-requirement
+Regulatory "is a filed alternate required?" for the destination, computed two ways — FAA (14 CFR 91.169, binary) and EASA Part-NCO (Likely/Marginal/Unlikely band) — plus per-candidate alternate-minima qualification for each #210 divert candidate. Forecast ceiling/visibility are real (TAF at D-0, NWP consensus otherwise); the unknown plate minima are estimated as a per-approach-class range that sets the Marginal band width. Pure logic in `analysis/alternate_requirement.py`, wired as a pipeline post-step.
+Key exports: `run_alternate_requirement`, `compute_faa_trigger`, `compute_easa_trigger`, `compute_faa_qual`, `compute_easa_qual`, `build_window`, `APPROACH_CLASS_PROXY`, `AlternateRequirement`, `AlternateQual`, `BandVerdict`, `TriggerVerdict`
+→ Full doc: alternate-requirement.md
+
 ### time-alignment
 Time and spatial alignment in the data pipeline: aware-UTC datetime convention, per-hour GRIB enrichment across flight windows, spatial index consistency, hour-matching merge logic, old pack backward compatibility.
 Key exports: `compute_flight_window_hours`, `compute_icon_eu_flight_window_hours`, `_forecast_hour_to_utc`, `_merge_cloud_water_into_sections`

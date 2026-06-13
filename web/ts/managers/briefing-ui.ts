@@ -7,6 +7,8 @@
 import type {
   AirportObservation,
   AlternateAirport,
+  AlternateQual,
+  AlternateRequirement,
   AltitudeAdvisories,
   ConvectiveAssessment,
   DataStatus,
@@ -1141,6 +1143,58 @@ function deltaTags(apt: AlternateAirport): string {
   return tags.join(' ') || '—';
 }
 
+// --- Regulatory alternate-requirement badges (#249) ---
+
+/** FAA badge for a per-candidate qualification (binary: Yes/No). */
+function faaQualBadge(q: AlternateQual | null): string {
+  if (!q) return '—';
+  const ok = q.verdict === 'likely';
+  const cls = ok ? 'alt-reg-yes' : 'alt-reg-no';
+  const label = ok ? 'Yes' : 'No';
+  return `<span class="alt-reg ${cls}" title="${escapeHtml(q.reason)}">${label}</span>`;
+}
+
+/** EASA badge for a per-candidate qualification (Likely/Marginal/Unlikely). */
+function easaQualBadge(q: AlternateQual | null): string {
+  if (!q) return '—';
+  const cls = q.verdict === 'likely'
+    ? 'alt-reg-yes' : q.verdict === 'marginal' ? 'alt-reg-marginal' : 'alt-reg-no';
+  const label = q.verdict.charAt(0).toUpperCase() + q.verdict.slice(1);
+  return `<span class="alt-reg ${cls}" title="${escapeHtml(q.reason)}">${label}</span>`;
+}
+
+/** Destination "alternate required?" banner (FAA + EASA). */
+function altRequirementBanner(req: AlternateRequirement | null | undefined): string {
+  if (!req) return '';
+  const faaTxt = req.faa.status === 'required' ? 'Required' : 'Not required';
+  const easaMap: Record<string, string> = {
+    required: 'Required', marginal: 'Marginal', not_required: 'Not required',
+  };
+  const easaTxt = easaMap[req.easa.status] ?? req.easa.status;
+  const faaCls = req.faa.status === 'required' ? 'alt-reg-no' : 'alt-reg-yes';
+  const easaCls = req.easa.status === 'required'
+    ? 'alt-reg-no' : req.easa.status === 'marginal' ? 'alt-reg-marginal' : 'alt-reg-yes';
+  const srcLabel = req.faa.source === 'nwp'
+    ? 'model estimate' : req.faa.source === 'taf' ? 'forecast' : 'no forecast';
+  const tempo = (req.faa.triggered_by_tempo || req.easa.triggered_by_tempo)
+    ? ' <span class="alt-reg-tempo" title="The governing dip is from a TEMPO/PROB group">TEMPO</span>' : '';
+  const reason = escapeHtml(req.easa.reason || req.faa.reason || '');
+  return `
+    <p class="obs-summary alt-reg-banner">
+      Alternate required? —
+      FAA: <span class="alt-reg ${faaCls}">${faaTxt}</span> ·
+      EASA: <span class="alt-reg ${easaCls}">${easaTxt}</span>
+      <span class="muted">(${srcLabel})</span>${tempo}
+      <button class="alt-reg-info" title="${escapeHtml(ALT_REG_CAVEAT)}" aria-label="about alternate minima">i</button>
+      <br><span class="muted alt-reg-reason">${reason}</span>
+    </p>`;
+}
+
+const ALT_REG_CAVEAT =
+  "We don't have published approach minima; the EASA requirement is estimated "
+  + "from approach type as a range. 'Likely/Marginal/Unlikely' reflects that "
+  + 'uncertainty. Forecast ceiling/visibility inputs are real. Planning guidance only.';
+
 function renderAltPopup(apt: AlternateAirport): string {
   const rows = Object.entries(apt.per_model).map(([model, d]) => {
     const cat = (d['flight_category'] as string) ?? '—';
@@ -1152,12 +1206,15 @@ function renderAltPopup(apt: AlternateAirport): string {
     ? (apt.best_approach_type ? escapeHtml(apt.best_approach_type) : 'yes')
     : 'none';
   const rwy = apt.longest_runway_ft != null ? `${apt.longest_runway_ft}ft${apt.has_hard_runway ? ' hard' : ''}` : '—';
-  const meta = [
+  const metaRows = [
     `Distance from dest: ${Math.round(apt.distance_from_dest_nm)}nm (${escapeHtml(apt.position)})`,
     `Detour early/late: ${detourLabel(apt)}`,
     `Approach: ${approach}`,
     `Longest runway: ${rwy}`,
-  ].join('\n');
+  ];
+  if (apt.faa) metaRows.push(`FAA alternate: ${escapeHtml(apt.faa.reason)}`);
+  if (apt.easa) metaRows.push(`EASA alternate: ${escapeHtml(apt.easa.reason)}`);
+  const meta = metaRows.join('\n');
   return `
     <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' — ' + escapeHtml(apt.name) : ''}</h3></div>
     <pre class="obs-wind-summary">${meta}</pre>
@@ -1200,6 +1257,7 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
 
   const approachNote = alt.approach_filter_relaxed ? ', approach data unavailable' : '';
   const summaryHtml = `<p class="obs-summary">${header} <span class="obs-fetch-time">${alt.candidates_evaluated} candidates within ${Math.round(alt.radius_nm)}nm${approachNote}</span></p>`;
+  const reqBannerHtml = altRequirementBanner(alt.alternate_requirement);
   const relaxedHtml = alt.approach_filter_relaxed
     ? `<p class="muted alt-caption">⚠️ No published-approach data is available for the candidates, so non-VFR fields could not be filtered by approach — confirm an approach independently.</p>`
     : '';
@@ -1222,6 +1280,8 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
         <td>${windStr}</td>
         <td>${xwStr}</td>
         <td>${approach}</td>
+        <td>${faaQualBadge(apt.faa)}</td>
+        <td>${easaQualBadge(apt.easa)}</td>
         <td>${deltaTags(apt)}</td>
       </tr>
     `;
@@ -1229,6 +1289,7 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
 
   el.innerHTML = `
     ${summaryHtml}
+    ${reqBannerHtml}
     <p class="muted alt-caption">Planning-grade divert candidates that improve on the destination weather — not an operational alternate (no fuel, minima, NOTAM, customs or PPR check). Non-VFR fields are shown only with a published instrument approach.</p>
     ${relaxedHtml}
     ${picksHtml}
@@ -1243,6 +1304,8 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
             <th>Wind</th>
             <th>Xwind</th>
             <th>Approach</th>
+            <th title="FAA 14 CFR 91.169 alternate minima (binary)">FAA alt</th>
+            <th title="EASA Part-NCO alternate minima (Likely/Marginal/Unlikely)">EASA alt</th>
             <th>vs dest</th>
           </tr>
         </thead>

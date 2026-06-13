@@ -574,6 +574,25 @@ def execute_briefing(
         alternates=alternates,
     )
 
+    # === 4.1 Regulatory alternate requirement (FAA 91.169 + EASA Part-NCO) ===
+    # Post-step (after alternates + route weather): does the destination need a
+    # filed alternate, and does each computed divert candidate meet alternate
+    # minima? Uses the destination TAF when available (D-0), else the NWP
+    # consensus fallback. Mutates snapshot.alternates in place (#249).
+    if (
+        snapshot.alternates is not None
+        and options.airports_db_path
+        and not options.historical_mode
+    ):
+        _t0 = perf_counter()
+        try:
+            from weatherbrief.tasks.alternate_requirement import run_alternate_requirement
+
+            run_alternate_requirement(snapshot, options.airports_db_path)
+        except Exception:
+            logger.warning("Alternate-requirement stage failed", exc_info=True)
+        stage_timings["alternate_requirement"] = perf_counter() - _t0
+
     if pack_dir:
         from weatherbrief.tasks.artifacts import save_analysis_artifacts
 

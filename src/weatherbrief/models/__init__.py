@@ -105,6 +105,14 @@ from weatherbrief.models.airport_conditions import (  # noqa: F401
     RunwayEnd,
     RunwayWind,
 )
+from weatherbrief.models.alternate_requirement import (  # noqa: F401
+    AlternateQual,
+    AlternateRequirement,
+    BandVerdict,
+    CriterionAssessment,
+    RegAlternateTrigger,
+    TriggerVerdict,
+)
 from weatherbrief.models.alternates import (  # noqa: F401
     ALT_AXIS_LABELS,
     AlternateAirport,

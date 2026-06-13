@@ -407,6 +407,19 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         f"({alt.candidates_evaluated} candidates{approach_note})"
     )
 
+    req = alt.alternate_requirement
+    if req is not None:
+        faa = "Required" if req.faa.status.value == "required" else "Not required"
+        easa_map = {
+            "required": "Required", "marginal": "Marginal", "not_required": "Not required",
+        }
+        easa = easa_map.get(req.easa.status.value, req.easa.status.value)
+        src = "model estimate" if req.faa.source == "nwp" else (
+            "forecast" if req.faa.source == "taf" else "no forecast")
+        lines.append(
+            f"  Alternate required? FAA: {faa} | EASA: {easa} ({src})"
+        )
+
     for p in alt.nearest_improving:
         if not p.icao:
             continue
@@ -424,6 +437,11 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
             bits.append(a.best_approach_type)
         if a.dominates_destination:
             bits.append("dominates")
+        if a.faa is not None:
+            faa_ok = "yes" if a.faa.verdict.value == "likely" else "no"
+            bits.append(f"FAA alt {faa_ok}")
+        if a.easa is not None:
+            bits.append(f"EASA {a.easa.verdict.value}")
         lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
     lines.append("")

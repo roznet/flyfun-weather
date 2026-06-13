@@ -338,6 +338,10 @@ def run_alternates(
     dest_category = dest_cons["flight_category"]
     dest_wind = dest_cons.get("wind_speed_kt")
     dest_crosswind = dest_cons.get("crosswind_kt")
+    # Destination NWP-consensus ceiling/vis at ETA (worst across models) — the
+    # regulatory-trigger NWP fallback (#249) when no destination TAF is fetched.
+    dest_ceiling_ft = dest_cons.get("ceiling_ft")
+    dest_visibility_m = dest_cons.get("visibility_m")
     dest_idx = _cat_idx(dest_category)
     # Informational only: is the destination itself MVFR/IFR/LIFR (i.e. you'd
     # need an instrument approach to get into the *destination*). The candidate
@@ -499,6 +503,8 @@ def run_alternates(
         destination_icao=dest.icao,
         destination_category=dest_category,
         destination_crosswind_kt=dest_crosswind,
+        destination_ceiling_ft=dest_ceiling_ft,
+        destination_visibility_m=dest_visibility_m,
         eta=eta_dt,
         corridor_nm=corridor_nm,
         radius_nm=radius_nm,
