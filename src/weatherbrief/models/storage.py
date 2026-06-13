@@ -96,6 +96,11 @@ class BriefingPackMeta(BaseModel):
     llm_digest_requested: bool = True
     assessment: Optional[str] = None  # GREEN/AMBER/RED from digest
     assessment_reason: Optional[str] = None
+    # LangSmith root run id of the digest LLM call (issue #244). Set when the
+    # digest is generated with tracing-controlled run_id; NULL for provisional
+    # rows (digest not yet run) and legacy packs created before #244. Used by
+    # the feedback endpoint to attach thumb ratings to the LangSmith run.
+    digest_trace_id: Optional[str] = None
     artifact_path: str = ""  # path to pack directory
     model_init_times: dict[str, int] = Field(default_factory=dict)
     grib_init_times: dict[str, int] = Field(default_factory=dict)
