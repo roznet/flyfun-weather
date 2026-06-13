@@ -1472,6 +1472,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
 
   const upBtn = widget.querySelector<HTMLButtonElement>('#digest-thumb-up')!;
   const downBtn = widget.querySelector<HTMLButtonElement>('#digest-thumb-down')!;
+  const sendBtn = widget.querySelector<HTMLButtonElement>('#digest-feedback-send')!;
   const form = widget.querySelector<HTMLElement>('#digest-feedback-form')!;
   const errorEl = widget.querySelector<HTMLElement>('#digest-feedback-error')!;
 
@@ -1479,6 +1480,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
     errorEl.textContent = '';
     upBtn.disabled = true;
     downBtn.disabled = true;
+    sendBtn.disabled = true;
     try {
       await api.submitFeedback({
         flight_id: flightId,
@@ -1495,6 +1497,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
       errorEl.textContent = t('feedback.failedSubmit', { error: String(err) });
       upBtn.disabled = false;
       downBtn.disabled = false;
+      sendBtn.disabled = false;
     }
   }
 
@@ -1520,7 +1523,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
     errorEl.textContent = '';
   });
 
-  widget.querySelector<HTMLButtonElement>('#digest-feedback-send')!.addEventListener('click', () => {
+  sendBtn.addEventListener('click', () => {
     const comment = widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')!.value.trim();
     const contactOk = widget.querySelector<HTMLInputElement>('#digest-feedback-contact-ok')!.checked;
     void post('down', comment, contactOk);
