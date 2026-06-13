@@ -151,6 +151,7 @@ def submit_feedback(
             category=body.category,
             comment=body.comment,
             base_url=base_url,
+            sentiment=body.sentiment,
         )
     except Exception:
         logger.warning("Failed to send feedback notification email", exc_info=True)
