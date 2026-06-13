@@ -16,9 +16,9 @@ lack is the **published plate minima** (DA/MDA and RVR/visibility) — we only k
 the approach *type*.
 
 Rather than hide the missing minima behind one conservative number, we **compute
-the actual requirement** (e.g. EASA needs `ceiling ≥ DH + 200`), express the
-unknown plate value as a **plausible range** per approach class, and report a
-**confidence band**:
+the actual requirement** (e.g. an ILS alternate needs `ceiling ≥ DH + 200` under
+NCO.OP.143), express the unknown plate value as a **plausible range** per approach
+class, and report a **confidence band**:
 
 - **Likely** — the forecast clears even the worst-case plate minima.
 - **Unlikely** — it fails even the best-case.
@@ -37,7 +37,8 @@ trigger → required).
 analysis/alternate_requirement.py   ← PURE (no I/O, no euro_aip) — all the logic
   APPROACH_CLASS_PROXY              ← estimated plate-minima ranges (the only tuning surface)
   proxy_for_approach()              ← approach_type string → ApproachProxy | None (VFR)
-  easa_ceiling_band/easa_vis_band   ← DH+200 / vis+1500(floor 1500)
+  easa_alt_ceiling_band/easa_alt_vis ← NCO.OP.143 selection minima (DH+200/1500 | DH+400/3000)
+  compute_easa_trigger              ← NCO.OP.140 trigger (DH+1000 / 5000 m)
   band_qualification/band_trigger   ← verdict primitives (collapsed band ⇒ no Marginal)
   combine_qual/combine_trigger      ← worst-of-criteria
   TrendView / build_window          ← worst-case ceiling/vis over the ETA window
@@ -90,8 +91,38 @@ LPV-best to LNAV-worst and the Marginal band absorbs the ambiguity.
 | Unknown/other | empty/NULL/TACAN/unmapped | 400–900 | 1500–3000 | non-precision → 800-2 |
 | No IAP | `has_instrument_approach=False` | VFR proxy | VFR proxy | VFR proxy |
 
-EASA ceiling req = `[DH_lo+200, DH_hi+200]`; vis req = `[vis_lo+1500, vis_hi+1500]`
-with a 1500 m floor. **Only ILS** is the FAA precision branch (no confirmable LPV).
+**Only ILS** is the FAA precision branch (no confirmable LPV). The DH ranges feed
+the EASA bands (below); the vis ranges are now **descriptive only** — EASA uses
+the fixed NCO.OP.143 visibilities, not `published_vis + margin`.
+
+## EASA: two distinct tests (NCO.OP.140 vs NCO.OP.143)
+
+EASA splits into two separate regulatory tests. (The FAA side hides this because
+its trigger and alternate minima are unrelated fixed numbers.) Conflating them was
+a real bug — the trigger used the low *selection* minima, so IFR destinations
+wrongly read "no alternate required."
+
+### Destination trigger — NCO.OP.140 (is an alternate required?)
+An IFR flight needs a destination alternate **unless**, for ETA−1h..ETA+1h:
+- ceiling ≥ **DH/MDH + 1000 ft**, **and** visibility ≥ **5000 m**.
+
+No IAP at destination → must be VMC (proxy ceiling **1500 ft** / 5000 m). This is a
+far higher bar than selection minima, so an IFR destination requires an alternate.
+`EASA_DEST_CEILING_MARGIN_FT=1000`, `EASA_DEST_VIS_M=5000`.
+
+### Alternate selection — NCO.OP.143 (does candidate X qualify?)
+Tiered on the approach DH; **visibility is a fixed value per tier**:
+
+| Approach | Ceiling | Visibility |
+|---|---|---|
+| IAP, DH < 250 ft (ILS) | DH/MDH + 200 ft | 1500 m |
+| IAP, DH ≥ 250 ft (RNP / non-precision) | DH/MDH + 400 ft | 3000 m |
+| No IAP | 2000 ft (or min-safe IFR altitude) | 5000 m |
+
+We tier by class — ILS is the only confirmable DH<250 class; RNP/non-precision
+default to the demanding DH≥250 tier (conservative given the LPV/LNAV gap). The DH
+proxy range still yields a ceiling **band** (Likely/Marginal/Unlikely); the
+visibility bar is fixed.
 
 ## Verdict logic
 
@@ -122,6 +153,17 @@ latest applicable FM/BECMG (supersession by `validity_start`); TEMPO/PROB groups
 can only make it *worse*. PROB policy: TEMPO + PROB40 honoured; **PROB30
 disregarded** by default. `triggered_by_tempo` records whether a binding worst
 value came from a temporary group.
+
+### Conservative vs. the letter of the rule
+We deliberately treat **TEMPO and PROB40 as governing** the verdict (a dip below
+minima makes the field fail) and **PROB30 as advisory** (noted, not counted).
+Strictly, Part 91 / Part-NCO let a pilot legally disregard PROB lines and assess a
+TEMPO by expected duration and fuel — so our verdict is a notch more conservative
+than the legal minimum. The pilot sees the full picture: the destination popup
+lists the steady-state (main body) conditions and every TEMPO/PROB group in the
+window with how it was treated (`AlternateRequirement.main_body_ceiling_ft` /
+`_visibility_m` + `conditionals[]`, each tagged `counted`). Recorded in
+[meteorology-decisions.md](./meteorology-decisions.md).
 
 ## Surfacing
 
@@ -159,3 +201,16 @@ TAF; `source="nwp"` triggers are model estimates; planning guidance only.
   [metar-taf-route-weather.md](./metar-taf-route-weather.md)
 - euro_aip: `briefing/weather/models.py` (`WeatherReport.from_taf`),
   `briefing/weather/analysis.py` (`WeatherAnalyzer.applicable_trends`)
+
+### Regulations
+- **FAA 14 CFR 91.169** — IFR flight plan: alternate required (2000/3 trigger;
+  600-2 / 800-2 alternate minima).
+- **EASA NCO.OP.140** — destination alternate aerodromes (when an alternate is
+  required: ceiling ≥ DH/MDH + 1000 ft and vis ≥ 5000 m).
+  [CAA](https://regulatorylibrary.caa.co.uk/965-2012/Content/Document%20Structure/07%20NCO/2%20Regs/19210_NCOOP140_Destination_alternate_aerodromes_aeroplanes.htm) ·
+  [EASA](https://www.easa.europa.eu/en/easy-access-rules/4e4220/ERULES-1963177438-13656)
+- **EASA NCO.OP.143** — destination alternate planning minima (whether a field
+  qualifies: DH<250 → +200 ft / 1500 m; DH≥250 → +400 ft / 3000 m; no IAP →
+  2000 ft / 5000 m).
+  [CAA](https://regulatorylibrary.caa.co.uk/965-2012/Content/Document%20Structure/07%20NCO/2%20Regs/19245_NCOOP143_Destination%20alternate%20aerodromes%20planning%20minima%20-%20aeroplanes.htm) ·
+  [EASA](https://www.easa.europa.eu/en/easy-access-rules/4e4220/ERULES-1963177438-19090)

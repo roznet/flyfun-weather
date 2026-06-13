@@ -3963,7 +3963,20 @@ label {
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-secondary);
-  cursor: help;
+  cursor: pointer;
+}
+
+/* Clickable qualification badge (renders as a button, looks like the pill). */
+.alt-reg-btn {
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.alt-reg-btn:hover {
+  filter: brightness(0.95);
 }
 
 .obs-refresh-btn:hover {

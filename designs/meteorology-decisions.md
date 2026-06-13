@@ -1112,3 +1112,59 @@ wave days at 30–39 kt.
 - (d) A documented Alpine föhn/wave day (e.g. strong S flow over the main
   ridge) — confirm RED at 30-39 kt with the inversion signature, and that
   ordinary windy-but-neutral days stay AMBER.
+
+---
+
+## 12. Alternate-requirement TAF interpretation: conservative TEMPO/PROB handling
+
+**Date:** 2026-06-13
+**Status:** Implemented (deliberately stricter than the legal minimum)
+**Context:** The regulatory alternate-requirement feature (#249, see
+[alternate-requirement.md](./alternate-requirement.md)) reads the destination TAF
+over the ETA−1h..ETA+1h window. TAFs carry conditional groups (TEMPO, PROB30,
+PROB40, PROB.. TEMPO) and the rules for how a *private* pilot may treat them
+differ between FAA Part 91 and EASA Part-NCO.
+
+### The legal letter (per FAA Chief Counsel interpretations + EASA AMC)
+
+- **FAA Part 91:** a **TEMPO** deterioration in the arrival window is legally
+  binding (disqualifies the alternate); **PROB30/PROB40** lines do *not* legally
+  disqualify — legality is read off the main body (steady-state + FM/BECMG).
+- **EASA Part-NCO:** a **TEMPO** must be *considered* (assessed by expected
+  duration and holding fuel, not an automatic bar); **PROB** lines (probability
+  < 50%) can be disregarded as a hard legal barrier provided the main body is
+  above minima. No buffer margins beyond the published planning minima.
+
+### Our decision (conservative)
+
+We intentionally do **not** implement the permissive legal minimum. For the
+verdict we treat:
+
+- **TEMPO → governing** (a dip below minima makes the field fail) for **both**
+  regimes — we do not soften EASA TEMPO to "consider".
+- **PROB40 → governing** (counts) — stricter than both regulators, who let a
+  Part 91/NCO pilot legally disregard it.
+- **PROB30 → advisory only** (surfaced, not counted in the verdict).
+
+**Why.** The page is an attention-director, not a legal go/no-go machine. A
+PROB40 TEMPO 0400 FG below minima is a real 40% chance of an un-landable backup;
+flagging the field as failing is the safe default, and "legally valid" is not the
+same as "operationally wise". The pilot is **not** kept in the dark: the
+destination popup shows the steady-state (main body) conditions and lists every
+TEMPO/PROB group in the window with how each was treated (`counted` vs advisory),
+plus a note that the regulations may legally permit disregarding PROB lines and
+assessing a TEMPO by duration/fuel. So the tool is conservative *and* transparent.
+
+This deviation is the user's explicit choice (keep the conservative behaviour
+rather than match the legal minimum). PROB30 disregard is the one place we are not
+maximally conservative — it matches both the regulators and standard planning
+convention, and PROB30 is still surfaced as advisory.
+
+### Minima themselves (not a deviation — these follow the rules)
+
+The minima values *do* follow the regulations: EASA destination trigger is
+**NCO.OP.140** (ceiling ≥ DH/MDH + 1000 ft and vis ≥ 5000 m); EASA alternate
+selection is **NCO.OP.143** (tiered DH+200/1500 m, DH+400/3000 m, or no-IAP
+2000 ft/5000 m); FAA is 14 CFR 91.169 (2000/3 trigger, 600-2 / 800-2 alternate).
+The conservatism above is only in the *conditional-group* handling and in
+bracketing the unknown plate DH with a high-side proxy range.

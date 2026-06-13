@@ -11,6 +11,7 @@ import type {
   AlternateRequirement,
   AltitudeAdvisories,
   ConvectiveAssessment,
+  CriterionAssessment,
   DataStatus,
   FlightResponse,
   ForecastSnapshot,
@@ -1145,22 +1146,78 @@ function deltaTags(apt: AlternateAirport): string {
 
 // --- Regulatory alternate-requirement badges (#249) ---
 
-/** FAA badge for a per-candidate qualification (binary: Yes/No). */
-function faaQualBadge(q: AlternateQual | null): string {
-  if (!q) return '—';
-  const ok = q.verdict === 'likely';
-  const cls = ok ? 'alt-reg-yes' : 'alt-reg-no';
-  const label = ok ? 'Yes' : 'No';
-  return `<span class="alt-reg ${cls}" title="${escapeHtml(q.reason)}">${label}</span>`;
+/** Label for a per-candidate qualification badge.
+ *
+ * FAA is binary → Yes / No. EASA keeps the band wording (Likely / Marginal /
+ * Unlikely), with one upgrade: a LIKELY verdict in genuinely flyable conditions
+ * (the field is VFR or MVFR) reads as a plain "Yes" — "Likely" is odd there.
+ * In IFR/LIFR that still clears the (low) estimated minima, we keep "Likely". */
+function qualLabelFor(
+  q: AlternateQual,
+  regime: 'faa' | 'easa',
+  category: string | null | undefined,
+): string {
+  if (regime === 'faa') return q.verdict === 'likely' ? 'Yes' : 'No';
+  if (q.verdict === 'marginal') return 'Marginal';
+  if (q.verdict === 'unlikely') return 'Unlikely';
+  const cat = (category ?? '').toUpperCase();
+  return cat === 'VFR' || cat === 'MVFR' ? 'Yes' : 'Likely';
 }
 
-/** EASA badge for a per-candidate qualification (Likely/Marginal/Unlikely). */
-function easaQualBadge(q: AlternateQual | null): string {
+/** A clickable per-candidate qualification badge; click → ceiling/vis detail. */
+function qualBadge(
+  q: AlternateQual | null,
+  icao: string,
+  regime: 'faa' | 'easa',
+  category: string | null | undefined,
+): string {
   if (!q) return '—';
   const cls = q.verdict === 'likely'
     ? 'alt-reg-yes' : q.verdict === 'marginal' ? 'alt-reg-marginal' : 'alt-reg-no';
-  const label = q.verdict.charAt(0).toUpperCase() + q.verdict.slice(1);
-  return `<span class="alt-reg ${cls}" title="${escapeHtml(q.reason)}">${label}</span>`;
+  return `<button class="alt-reg alt-reg-btn ${cls}" data-qual-icao="${escapeHtml(icao)}"`
+    + ` data-qual-regime="${regime}" title="Click for ceiling/visibility detail">`
+    + `${qualLabelFor(q, regime, category)}</button>`;
+}
+
+function fmtQualForecast(c: CriterionAssessment): string {
+  if (c.forecast == null) return c.label === 'ceiling' ? 'no ceiling (clear)' : '—';
+  return `${Math.round(c.forecast)} ${c.unit}`;
+}
+
+function fmtQualBand(c: CriterionAssessment): string {
+  const lo = Math.round(c.required_min);
+  const hi = Math.round(c.required_max);
+  return lo === hi ? `≥ ${lo} ${c.unit}` : `≥ ~${lo}–${hi} ${c.unit} (est. range)`;
+}
+
+/** Click popup for a per-candidate qualification badge — shows ceiling and
+ * visibility forecast vs the (estimated) required band, plus an explanation. */
+function renderQualPopup(apt: AlternateAirport, regime: 'faa' | 'easa'): string {
+  const q = regime === 'faa' ? apt.faa : apt.easa;
+  if (!q) return '';
+  const title = regime === 'faa'
+    ? 'FAA alternate minima (14 CFR 91.169)'
+    : 'EASA alternate minima (Part-NCO)';
+  const row = (c: CriterionAssessment) =>
+    `<tr><td>${escapeHtml(c.label)}</td>`
+    + `<td>${escapeHtml(fmtQualForecast(c))}</td>`
+    + `<td>${escapeHtml(fmtQualBand(c))}</td></tr>`;
+  const note = regime === 'easa'
+    ? "Required values are estimated from the approach type as a range — we don't have "
+      + 'published plate minima, so the result is a confidence band. In VFR/MVFR conditions a '
+      + '"Likely" is shown as <strong>Yes</strong>; <strong>Marginal</strong> means inside the '
+      + 'estimated range (depends on the actual published minima); <strong>Unlikely</strong> is '
+      + 'below even the least demanding estimate.'
+    : 'FAA alternate minima are fixed regulatory values (ILS → 600 ft &amp; 2 SM, otherwise '
+      + '800 ft &amp; 2 SM; a VFR proxy applies with no instrument approach).';
+  return `
+    <div class="popup-header"><h3>${escapeHtml(apt.icao)} — ${escapeHtml(title)}</h3></div>
+    <p class="muted">Overall: <strong>${escapeHtml(qualLabelFor(q, regime, apt.flight_category))}</strong></p>
+    <table class="band-table">
+      <thead><tr><th>Criterion</th><th>Forecast</th><th>Required (estimated)</th></tr></thead>
+      <tbody>${row(q.ceiling)}${row(q.visibility)}</tbody>
+    </table>
+    <p class="muted alt-caption">${note}</p>`;
 }
 
 /** Destination "alternate required?" banner (FAA + EASA). */
@@ -1192,7 +1249,7 @@ function altRequirementBanner(req: AlternateRequirement | null | undefined): str
       FAA: <span class="alt-reg ${faaCls}">${faaTxt}</span> ·
       EASA: <span class="alt-reg ${easaCls}">${easaTxt}</span>
       <span class="muted">(${srcLabel})</span>${tempo}
-      <button class="alt-reg-info" title="${escapeHtml(ALT_REG_CAVEAT)}" aria-label="about alternate minima">i</button>
+      <button class="alt-reg-info" title="About alternate minima — click for details" aria-label="about alternate minima">i</button>
       <br><span class="muted alt-reg-reason">${reason}</span>
     </p>`;
 }
@@ -1201,6 +1258,70 @@ const ALT_REG_CAVEAT =
   "We don't have published approach minima; the EASA requirement is estimated "
   + "from approach type as a range. 'Likely/Marginal/Unlikely' reflects that "
   + 'uncertainty. Forecast ceiling/visibility inputs are real. Planning guidance only.';
+
+function fmtCeilingFt(v: number | null): string {
+  return v == null ? 'no ceiling' : `${Math.round(v)} ft`;
+}
+
+function fmtVisM(v: number | null): string {
+  return v == null ? '—' : `${Math.round(v)} m`;
+}
+
+/** Steady-state vs conditional (TEMPO/PROB) breakdown for the TAF path — shows
+ * the pilot which groups drove the worst case and how each was treated. */
+function renderForecastDetail(req: AlternateRequirement): string {
+  if (req.faa.source !== 'taf') return '';
+  const mb = `Steady-state (main body): ceiling ${fmtCeilingFt(req.main_body_ceiling_ft)}, `
+    + `vis ${fmtVisM(req.main_body_visibility_m)}`;
+  const conds = req.conditionals ?? [];
+  if (!conds.length) {
+    return `<h4>Forecast (ETA ±1h)</h4>`
+      + `<p class="muted">${escapeHtml(mb)}. No TEMPO/PROB groups in the window.</p>`;
+  }
+  const rows = conds.map((c) => {
+    const treat = c.counted
+      ? '<span class="alt-reg alt-reg-marginal">counted</span>'
+      : '<span class="muted">advisory only</span>';
+    return `<tr><td>${escapeHtml(c.kind)}</td><td>${escapeHtml(c.validity ?? '—')}</td>`
+      + `<td>${escapeHtml(fmtCeilingFt(c.ceiling_ft))}</td>`
+      + `<td>${escapeHtml(fmtVisM(c.visibility_m))}</td><td>${treat}</td></tr>`;
+  }).join('');
+  return `
+    <h4>Forecast (ETA ±1h)</h4>
+    <p class="muted">${escapeHtml(mb)}</p>
+    <table class="band-table">
+      <thead><tr><th>Group</th><th>Valid</th><th>Ceiling</th><th>Vis</th><th>Treatment</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="muted alt-caption">We conservatively count TEMPO and PROB40 as governing; PROB30 is
+    shown as advisory only. Under Part 91 / Part-NCO a PROB line may legally be disregarded (and a
+    TEMPO assessed by expected duration and fuel) — verify and use your own judgment.</p>`;
+}
+
+/** Click popup for the alternate-requirement caveat (i) button — same modal
+ * mechanism as every other info button on the page (the banner button used to
+ * be a hover-only title tooltip). Surfaces both regimes + the backend caveats. */
+function renderAltReqPopup(req: AlternateRequirement): string {
+  const faaTxt = req.faa.status === 'not_required' ? 'Not required' : 'Required';
+  const easaMap: Record<string, string> = {
+    required: 'Required', marginal: 'Marginal', not_required: 'Not required',
+  };
+  const easaTxt = easaMap[req.easa.status] ?? req.easa.status;
+  const src = req.faa.source === 'nwp'
+    ? 'model estimate' : req.faa.source === 'taf' ? 'forecast' : 'no forecast';
+  const caveatList = (req.caveats && req.caveats.length ? req.caveats : [ALT_REG_CAVEAT])
+    .map((c) => `<li>${escapeHtml(c)}</li>`).join('');
+  return `
+    <div class="popup-header"><h3>Alternate required? — ${escapeHtml(req.destination_icao)}</h3></div>
+    <pre class="obs-wind-summary">FAA (14 CFR 91.169): ${faaTxt}
+  ${escapeHtml(req.faa.reason)}
+EASA (Part-NCO): ${easaTxt}
+  ${escapeHtml(req.easa.reason)}
+Source: ${escapeHtml(src)}</pre>
+    ${renderForecastDetail(req)}
+    <h4>Notes</h4>
+    <ul class="alt-caveats">${caveatList}</ul>`;
+}
 
 function renderAltPopup(apt: AlternateAirport): string {
   const rows = Object.entries(apt.per_model).map(([model, d]) => {
@@ -1219,8 +1340,8 @@ function renderAltPopup(apt: AlternateAirport): string {
     `Approach: ${approach}`,
     `Longest runway: ${rwy}`,
   ];
-  if (apt.faa) metaRows.push(`FAA alternate: ${escapeHtml(apt.faa.reason)}`);
-  if (apt.easa) metaRows.push(`EASA alternate: ${escapeHtml(apt.easa.reason)}`);
+  // FAA/EASA alternate-minima detail lives in the dedicated badge popups
+  // (click the FAA/EASA badge in the row) so the wording stays consistent.
   const meta = metaRows.join('\n');
   return `
     <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' — ' + escapeHtml(apt.name) : ''}</h3></div>
@@ -1287,8 +1408,8 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
         <td>${windStr}</td>
         <td>${xwStr}</td>
         <td>${approach}</td>
-        <td>${faaQualBadge(apt.faa)}</td>
-        <td>${easaQualBadge(apt.easa)}</td>
+        <td>${qualBadge(apt.faa, apt.icao, 'faa', apt.flight_category)}</td>
+        <td>${qualBadge(apt.easa, apt.icao, 'easa', apt.flight_category)}</td>
         <td>${deltaTags(apt)}</td>
       </tr>
     `;
@@ -1325,6 +1446,20 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
   // subscription replace the handler rather than stacking duplicates.
   el.onclick = (e) => {
     const target = e.target as HTMLElement;
+    // Caveat (i) on the requirement banner → details popup (was hover-only).
+    if (target.closest('.alt-reg-info') && alt.alternate_requirement) {
+      showPopupContent(renderAltReqPopup(alt.alternate_requirement));
+      return;
+    }
+    // FAA/EASA qualification badge → ceiling/visibility detail popup.
+    const qualBtn = target.closest('.alt-reg-btn') as HTMLElement | null;
+    if (qualBtn) {
+      const icao = qualBtn.dataset.qualIcao;
+      const regime = qualBtn.dataset.qualRegime as 'faa' | 'easa' | undefined;
+      const apt = alt.alternates.find((a) => a.icao === icao);
+      if (apt && regime) showPopupContent(renderQualPopup(apt, regime));
+      return;
+    }
     const infoBtn = target.closest('.alt-info-btn') as HTMLElement | null;
     if (infoBtn) {
       const icao = infoBtn.dataset.icao;

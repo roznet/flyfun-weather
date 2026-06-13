@@ -603,6 +603,16 @@ export interface AlternateQual {
   visibility: CriterionAssessment;
 }
 
+/** A TAF TEMPO/PROB group overlapping the ETA window (descriptive, #249). */
+export interface ConditionalGroup {
+  kind: string;
+  probability: number | null;
+  ceiling_ft: number | null;
+  visibility_m: number | null;
+  validity: string | null;
+  counted: boolean;
+}
+
 /** Regulatory alternate-requirement assessment for the destination (#249). */
 export interface AlternateRequirement {
   destination_icao: string;
@@ -610,6 +620,9 @@ export interface AlternateRequirement {
   faa: RegAlternateTrigger;
   easa: RegAlternateTrigger;
   caveats: string[];
+  main_body_ceiling_ft: number | null;
+  main_body_visibility_m: number | null;
+  conditionals: ConditionalGroup[];
   computed_at: string | null;
 }
 
