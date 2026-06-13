@@ -1441,6 +1441,11 @@ const COMPACT_DIGEST_KEYS: Set<keyof WeatherDigest> = new Set(['synoptic', 'tren
 /** Packs already thumb-rated in this page view (no read-back of prior ratings). */
 const ratedDigests = new Set<string>();
 
+// NOTE: this widget uses fixed element IDs (#digest-feedback, #digest-thumb-up,
+// etc.). attachDigestFeedback scopes every selector to the widget root, so this
+// is safe for the current single-digest layout. If a future layout ever renders
+// two digests at once (e.g. a side-by-side historical comparison — see #245),
+// switch these to class/data-attribute selectors to keep IDs unique.
 function digestFeedbackHtml(flightId: string, packTimestamp: string): string {
   if (ratedDigests.has(`${flightId}|${packTimestamp}`)) {
     return `<div class="digest-feedback"><span class="digest-feedback-thanks">${t('feedback.thumbs.thanks')}</span></div>`;
@@ -1473,6 +1478,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
   const upBtn = widget.querySelector<HTMLButtonElement>('#digest-thumb-up')!;
   const downBtn = widget.querySelector<HTMLButtonElement>('#digest-thumb-down')!;
   const sendBtn = widget.querySelector<HTMLButtonElement>('#digest-feedback-send')!;
+  const cancelBtn = widget.querySelector<HTMLButtonElement>('#digest-feedback-cancel')!;
   const form = widget.querySelector<HTMLElement>('#digest-feedback-form')!;
   const errorEl = widget.querySelector<HTMLElement>('#digest-feedback-error')!;
 
@@ -1481,6 +1487,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
     upBtn.disabled = true;
     downBtn.disabled = true;
     sendBtn.disabled = true;
+    cancelBtn.disabled = true;
     try {
       await api.submitFeedback({
         flight_id: flightId,
@@ -1498,6 +1505,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
       upBtn.disabled = false;
       downBtn.disabled = false;
       sendBtn.disabled = false;
+      cancelBtn.disabled = false;
     }
   }
 
@@ -1517,7 +1525,7 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
     widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')?.focus();
   });
 
-  widget.querySelector<HTMLButtonElement>('#digest-feedback-cancel')!.addEventListener('click', () => {
+  cancelBtn.addEventListener('click', () => {
     form.style.display = 'none';
     downBtn.classList.remove('active');
     errorEl.textContent = '';
