@@ -99,17 +99,20 @@ function altLabel(f: AltRequired | undefined): string {
   return 'None';
 }
 
-/** Worst-of-models aggregate: a regime counts if any model triggers it. */
-function aggAltRequired(airport: ForecastAirport): AltRequired | undefined {
+/** Aggregate per-model flags using the active consensus mode (worst = any model;
+ * majority = modal with worst tiebreak), matching the flight-category toggle. */
+function aggAltRequired(airport: ForecastAirport, mode: ConsensusMode): AltRequired | undefined {
   const flags = Object.values(airport.models)
     .map((m) => m?.alt_required)
     .filter((f): f is AltRequired => !!f);
   if (!flags.length) return undefined;
-  return { faa: flags.some((f) => f.faa), easa: flags.some((f) => f.easa) };
+  const reg = (pick: (f: AltRequired) => boolean): boolean =>
+    ordinalConsensus(flags.map((f) => (pick(f) ? 'yes' : 'no')), ALT_ORDER, mode) === 'yes';
+  return { faa: reg((f) => f.faa), easa: reg((f) => f.easa) };
 }
 
 function altNeededColor(airport: ForecastAirport, model: string): string {
-  const f = isConsensusMode(model) ? aggAltRequired(airport) : airport.models[model]?.alt_required;
+  const f = isConsensusMode(model) ? aggAltRequired(airport, model) : airport.models[model]?.alt_required;
   if (!f) return '#888';
   const n = (f.faa ? 1 : 0) + (f.easa ? 1 : 0);
   return n === 0 ? '#22c55e' : n === 1 ? '#eab308' : '#ef4444'; // green / amber / red
@@ -118,7 +121,7 @@ function altNeededColor(airport: ForecastAirport, model: string): string {
 function altNeededTooltip(airport: ForecastAirport, model: string): string {
   const lines: string[] = [`<b>${airport.icao}</b>`];
   if (isConsensusMode(model)) {
-    lines.push(`Alternate required: <b>${altLabel(aggAltRequired(airport))}</b>`);
+    lines.push(`Alternate required: <b>${altLabel(aggAltRequired(airport, model))}</b>`);
     for (const [m, d] of Object.entries(airport.models)) {
       lines.push(`<span style="color:var(--text-muted)">${m.toUpperCase()}: ${altLabel(d?.alt_required)}</span>`);
     }
@@ -128,7 +131,11 @@ function altNeededTooltip(airport: ForecastAirport, model: string): string {
   return lines.join('<br>');
 }
 
-import { isConsensusMode, computeConsensus, type ConsensusMode } from './weather-map-consensus';
+import { isConsensusMode, computeConsensus, ordinalConsensus, type ConsensusMode } from './weather-map-consensus';
+
+// Alternate-required treated as an ordinal (no < yes=worse) so the Worst/Majority
+// toggle aggregates it the same way as flight category.
+const ALT_ORDER: Record<string, number> = { no: 0, yes: 1 };
 
 function getConsensus(airport: ForecastAirport, mode: ConsensusMode): ConsensusForecast {
   return computeConsensus(airport, mode);
