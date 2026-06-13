@@ -1,6 +1,6 @@
 # Briefing Sidebar Layout
 
-> Opt-in, fully reversible alternative layout for the briefing page: a fixed
+> Default, fully reversible layout for the briefing page: a fixed
 > left rail (route identity, derived glance summary, scroll-spy section nav,
 > freshness, controls) beside a scrollable main pane, with per-section focus mode.
 
@@ -9,8 +9,8 @@
 The classic briefing page is one long scroll. The sidebar layout gives a
 persistent at-a-glance rail so a pilot can see the overall assessment + the
 non-green advisories without scrolling, and jump directly to any section. It is
-**opt-in and reversible** — a power-user affordance, not a redesign. Nothing about
-the data path or the main-pane renderers changes.
+now the **default** layout, but stays **fully reversible** — classic is a one-click
+opt-out, and nothing about the data path or the main-pane renderers changes.
 
 **The defining design rule: the rail owns no data.** Every renderer
 (`briefing-ui.ts` etc.) renders into the main pane exactly as in classic layout.
@@ -25,9 +25,12 @@ Single module: `web/ts/managers/sidebar-layout.ts`. Entry point
 `initBriefingLayout()` is called once from `briefing-main.ts` after content
 renders.
 
-- **Activation**: `getBriefingLayout()` returns `'sidebar'` if `?layout=sidebar`
-  or `localStorage['wb_layout'] === 'sidebar'`, else `'classic'`. In classic mode
-  `initBriefingLayout` only injects an opt-in toggle button and returns.
+- **Activation**: sidebar is the **default**. `getBriefingLayout()` returns
+  `'classic'` only on an explicit opt-out (`?layout=classic` or
+  `localStorage['wb_layout'] === 'classic'`); otherwise `'sidebar'`. In classic
+  mode `initBriefingLayout` only injects a "Switch to sidebar layout" button (into
+  `.toolbar-end-group`) and returns. The sidebar's rail footer carries the reverse
+  "Switch to classic layout" button.
 - **DOM restructure** (sidebar mode): wrap `.container` content into a
   `.briefing-shell` with `.briefing-rail` (aside) + `.briefing-main` (main). All
   briefing content is moved into MAIN preserving order; the page-header, error

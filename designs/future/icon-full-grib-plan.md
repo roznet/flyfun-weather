@@ -1,14 +1,28 @@
 # Full GRIB Sounding Plan — ICON-EU
 
-**Status: Deferred** — ICON cloud fields (CLW, ice, CLC) are already enriched at
-full 40-level resolution, which was the high-value gap. The remaining gain (T, RH,
-wind on 40 native levels vs Open-Meteo's 19) is marginal for flight planning.
-ECMWF full sounding replacement is being handled separately (higher priority since
-its 25 native levels vs 19 Open-Meteo levels matter more). Revisit if
-source-consistency issues or icing analysis precision problems surface in practice.
+**Status: IMPLEMENTED (this plan is now historical).** Full sounding replacement
+shipped for BOTH ICON-EU (40 model levels) and ECMWF (25 pressure levels). The
+durable design now lives in [weather-engine-specs.md](../weather-engine-specs.md)
+(§B ECMWF + §C ICON-EU, both marked "IMPLEMENTED (full sounding)"). Read that doc,
+not this one, for current truth. This file is kept only as a record of the original
+plan and how the shipped code diverged from it — it should be archived.
 
-Replace Open-Meteo pressure-level data with complete ICON-EU GRIB soundings for
-higher vertical resolution (~500 ft vs ~3000 ft from Open-Meteo's 19 standard levels).
+**How the shipped code differs from the plan below:**
+- No `icon_eu_sounding.py` module and no `build_icon_sounding()`. The conversion
+  lives in `decode.py` as `build_pressure_levels_from_grib()` + `_convert_raw_sounding()`.
+- `_replace_pressure_levels_from_grib()` (in `fetch/grib/__init__.py`) was built
+  **model-agnostic** — it serves both ICON and ECMWF rather than ICON-specific.
+- Variable maps are `_ICON_FULL_VAR_MAP` / `_ECMWF_FULL_VAR_MAP` in `decode.py`
+  (using a `raw_` prefix convention), not the proposed `_SOUNDING_VAR_MAP`.
+- ICON model levels are log-pressure **interpolated to standard pressure levels**
+  (`EXTENDED_PRESSURE_LEVELS`, 28-level set), not kept on raw native levels — so the
+  "pressure_hpa stays int / round native levels" discussion below was sidestepped.
+- `w` (vertical velocity) was added beyond the plan's T/QV/U/V; geopotential is
+  derived via the hypsometric equation from T+P (the plan's optional item).
+
+Original goal: replace Open-Meteo pressure-level data with complete ICON-EU GRIB
+soundings for higher vertical resolution (~500 ft vs ~3000 ft from Open-Meteo's 19
+standard levels).
 
 ## Scope
 

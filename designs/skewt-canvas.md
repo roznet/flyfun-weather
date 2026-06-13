@@ -11,7 +11,6 @@ Replace the static MetPy-generated PNG Skew-T with an interactive canvas-based v
 ```
 web/ts/visualization/skewt/
 ├── types.ts              # SoundingProfileData, config types
-├── atmo-utils.ts         # Shared altitude↔pressure conversions
 ├── skewt-transform.ts    # (T,p) ↔ pixel mapping (log-P Y, skewed X)
 ├── thermodynamics.ts     # Background line generators (isotherms, adiabats, mixing ratios)
 ├── background-lines.ts   # Cached offscreen rendering of background grid
@@ -24,6 +23,8 @@ web/ts/visualization/skewt/
 ├── renderer.ts           # Main orchestrator — dual canvas, layout, render pipeline
 └── compare-renderer.ts   # Multi-model overlay: T/Td per model on one diagram
 ```
+
+Shared altitude↔pressure conversions (`altitudeToPressure`, `pressureToAltitudeFt`) live in `web/ts/utils/atmo.ts` and are imported by `overlay-bands.ts`, `axes.ts`, and `interaction.ts`.
 
 **Dual canvas pattern** (same as cross-section): main canvas for layers, overlay canvas for hover crosshair. The overlay redraws cheaply on mouse move without re-rendering the full diagram.
 

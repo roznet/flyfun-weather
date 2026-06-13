@@ -26,7 +26,7 @@ This makes the accuracy database a **growing, anonymized, community asset**.
 ```
 scheduler.py
 ├── run_verification_loop()             ← flight-based, 10-min poll
-│   └── _process_verifications()        ← collect_and_store + scoring
+│   └── _run_verification_once()        ← collect_and_store (+ scoring inside)
 ├── run_metar_ingest_loop()             ← standalone, every 30 min (:00/:30)
 │   └── run_metar_ingest_cycle()        ← fetch METAR/TAF for watchlist → obs
 ├── run_forecast_fetch_loop()           ← standalone, fires at FORECAST_FETCH_HOURS_UTC=[7,19]
@@ -117,7 +117,7 @@ db/models.py                            ← SQLAlchemy tables
 ├── VerificationMonthlyStatsRow         ← pre-aggregated monthly rollup
 ├── VerificationCacheRow                ← JSON cache for dashboard/map responses
 
-API: /api/verification/stats            ← admin dashboard data (cache-aware)
+API: GET /api/admin/verification        ← admin dashboard data (cache-aware; in api/admin.py)
 CLI: python -m weatherbrief.verify      ← backfill, manual runs, export
 ```
 
@@ -280,7 +280,7 @@ Mechanics worth knowing:
 
 ### Admin Dashboard
 
-`GET /api/verification/stats` serves JSON for the web dashboard (`web/verification.html`). Source-filtered: flight and standalone stats are queried independently, never mixed. Dashboard shows category accuracy by model/days_out, notable misses, MAE trends.
+`GET /api/admin/verification` (in `api/admin.py`) serves JSON for the web dashboard (`web/verification.html`). Source-filtered: flight and standalone stats are queried independently, never mixed. Dashboard shows category accuracy by model/days_out, notable misses, MAE trends.
 
 **Cache layer**: Unfiltered requests (no country/airport filter) use `verification_cache` for fast responses. If the cache is stale or missing, falls back to live query. Filtered requests always run live (small result sets). Cache is rebuilt after each standalone verification cycle via `rebuild_all()` in `cache_builder.py`.
 
@@ -338,11 +338,11 @@ Loop in `scheduler.py`, alongside other async loops:
 async def run_verification_loop(app_state) -> None:
     """Collect METAR/TAF observations for active flights."""
     logger.info("Verification loop started (poll every %ds)", _VERIF_POLL_SECONDS)
-    await asyncio.sleep(_VERIF_STARTUP_DELAY)
+    await asyncio.sleep(_VERIF_STARTUP_DELAY_SECONDS)
 
     while True:
         try:
-            await _process_verifications(app_state)
+            await asyncio.to_thread(_run_verification_once, app_state)  # → collect_and_store
         except Exception:
             logger.error("Verification cycle failed", exc_info=True)
         await asyncio.sleep(_VERIF_POLL_SECONDS)
@@ -353,7 +353,7 @@ async def run_verification_loop(app_state) -> None:
 ### Finding Active Flights
 
 ```python
-def _find_verifiable_flights(db: Session) -> list[FlightRow]:
+def find_verifiable_flights(db: Session) -> list[FlightRow]:  # tasks/verification.py
     """Flights in the observation window: departure-1h to departure+duration+1h."""
     now = datetime.now(timezone.utc)
     
@@ -451,12 +451,12 @@ Every derived value must use **the same function the advisory pipeline uses**. T
 
 | Scored field | Advisory function | Location | Inputs |
 |-------------|-------------------|----------|--------|
-| Model ceiling | `reconcile_ceiling(sounding, hourly)` | `analysis/airport_conditions.py:117` | `SoundingAnalysis` + `HourlyForecast` → min of sounding & NWP ceiling |
-| Model visibility | `hourly.visibility_m / 1609.34` (→ statute miles) | `analysis/airport_conditions.py:200` | Direct from model, converted to SM like advisories do |
-| Model flight category | `classify_flight_category(ceiling_ft, visibility_sm)` | `analysis/airport_conditions.py:48` | Standard VFR/MVFR/IFR/LIFR thresholds |
-| Model wind advisory | `compute_wind_advisory(dir, speed, gust, runway_ends)` | `tasks/route_weather.py:109` | Same thresholds: xw ≥15kt amber, ≥25kt red; gust ≥25/35kt |
-| Model precipitation | `hourly.precipitation_mm > 0 or hourly.snowfall_cm > 0` | `analysis/sounding/precipitation.py:44` | Same check as `assess_precipitation()` |
-| Model convection | `sounding.convective.risk_level` from `assess_convective_thermo()` | `analysis/sounding/convective.py:97` | CAPE thresholds: 50/300/1000/2000 J/kg, CIN suppression |
+| Model ceiling | `reconcile_ceiling(sounding, hourly)` | `analysis/airport_conditions.py` | `SoundingAnalysis` + `HourlyForecast` → min of sounding & NWP ceiling |
+| Model visibility | `hourly.visibility_m / 1609.34` (→ statute miles) | `analysis/airport_conditions.py` | Direct from model, converted to SM like advisories do |
+| Model flight category | `classify_flight_category(ceiling_ft, visibility_sm)` | `analysis/airport_conditions.py` | Standard VFR/MVFR/IFR/LIFR thresholds |
+| Model wind advisory | `compute_wind_advisory(dir, speed, gust, runway_ends)` | `tasks/route_weather.py` | Same thresholds: xw ≥15kt amber, ≥25kt red; gust ≥25/35kt |
+| Model precipitation | `hourly.precipitation_mm > 0 or hourly.snowfall_cm > 0` | `analysis/sounding/precipitation.py` (`assess_precipitation`) | Same check as `assess_precipitation()` |
+| Model convection | `sounding.convective.risk_level` from `assess_convective_thermo()` | `analysis/sounding/convective.py` | CAPE thresholds: 50/300/1000/2000 J/kg, CIN suppression |
 
 ```python
 def compute_verification_score(

@@ -392,7 +392,7 @@ div = compare_models("temperature_c", {"gfs": 5.0, "ecmwf": 6.0, "icon": 5.5})
 div.agreement  # → AgreementLevel.GOOD
 ```
 
-**Thresholds** `DIVERGENCE_THRESHOLDS` (good, poor) — 21 entries (some, e.g. `cape_jkg`/`ceiling_ft`/`visibility_m`, are defined for variables not currently collected by `_run_point_analysis`). `DEFAULT_THRESHOLD = (5.0, 15.0)` for anything unlisted:
+**Thresholds** `DIVERGENCE_THRESHOLDS` (good, poor) — 22 entries (some, e.g. `cape_jkg`/`ceiling_ft`/`visibility_m`, are defined for variables not currently collected by `_run_point_analysis`). `DEFAULT_THRESHOLD = (5.0, 15.0)` for anything unlisted:
 
 | Variable | Good ≤ | Poor > |
 |----------|--------|--------|
@@ -417,6 +417,7 @@ div.agreement  # → AgreementLevel.GOOD
 | max_omega_pa_s | 0.1 | 0.5 |
 | snowfall_cm | 0.5 | 2.0 |
 | rain_mm | 1.0 | 5.0 |
+| pressure_msl_hpa | 2.0 | 5.0 |
 
 **Circular statistics** for `wind_direction_deg` — uses sin/cos sum for mean, max angular difference for spread.
 

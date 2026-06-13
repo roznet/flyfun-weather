@@ -14,6 +14,8 @@ RouteContext (immutable)
   ├── cross_sections: list[RouteCrossSection]  (per-model forecast grids)
   ├── elevation: ElevationProfile | None
   ├── airport_conditions: AirportConditions | None  (dep + arr weather)
+  ├── sun: RouteSunAnalysis | None  ├── route_fronts: RouteFrontsManifest | None
+  ├── cruise_speed_ias_kt, flight_duration_hours  (headwind trip-time inputs)
   ├── models, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, locale
       ↓
 Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
@@ -73,6 +75,8 @@ Aggregation is controlled by `AdvisoryAggregation` enum (`WORST` or `MAJORITY`).
 
 Detail text comes from the worst-performing model. Shared classmethods on the models eliminated ~115 lines of boilerplate.
 
+**Localized detail text** (`strings.py`): evaluators build detail strings via `adv_t(key, locale, **params)` against the `_STRINGS` catalog (en/fr/de/es), keyed `<evaluator>.<msg>`. Aviation abbreviations (VFR, OVC, BKN, FL, kt, ICAO codes…) are never translated. `ctx.locale` flows in from the flight profile and is honored on recalc.
+
 ### Aggregation Modes
 
 - **WORST**: If ANY model shows RED, the aggregate is RED. Conservative — pilots see the worst-case scenario.
@@ -115,7 +119,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `ConvectiveEvaluator` | convective | Route points with convective risk ≥ threshold. Altitude-aware: ignores convection whose tops are below `cruise_ft - top_clearance_ft`. HIGH/EXTREME → instant RED. LOW risk capped at AMBER (prevents false alarms for marginal instability) | `min_risk`, `affected_pct_amber`, `affected_pct_red`, `top_clearance_ft` (2000) |
-| `HeadwindEvaluator` | wind | Route-average cruise-level headwind + trip-time delta vs still air (TAS is an advisory **parameter**, not plumbed from the aircraft — keeps recalc-from-pack working). Altitude-aware (cross-section winds at the evaluated altitude → the altitude table shows the wind trade per level; falls back to precomputed `wind_components`). Informational bias: AMBER on mean ≥ 20kt, RED only ≥ 40kt; tailwinds report minutes saved | `cruise_tas_kt` (110), `mean_amber_kt` (20), `mean_red_kt` (40) |
+| `HeadwindEvaluator` | wind | Route-average cruise-level headwind + trip-time delta vs still air. TAS is derived from `ctx.cruise_speed_ias_kt` (aircraft/profile cruise IAS via `atmo.resolve_cruise_speed_ias`, converted to TAS at cruise altitude), falling back to `total_distance_nm / flight_duration_hours` — both ride on `RouteContext` so recalc-from-pack still works. Altitude-aware (cross-section winds at the evaluated altitude → the altitude table shows the wind trade per level; falls back to precomputed `wind_components`). Informational bias: AMBER on mean ≥ 20kt, RED only ≥ 40kt; tailwinds report minutes saved | `mean_amber_kt` (20), `mean_red_kt` (40) |
 | `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). Evaluated once, not per-model. **Disabled by default** — user must enable via profile | `min_poor_vars` (3), `poor_pct_amber`, `poor_pct_red` |
 | `DDvsNWPAgreementEvaluator` | model | Within-model agreement: compares DD (thermodynamic) vs NWP tracks per model at each route point. Checks freezing-level delta, cloud layer Jaccard (only when NWP has real boundaries — `source="nwp_3d"` or `"grib"`, never `"synthesized"` which is circular), and convective risk category distance. Surfaces e.g. mid-level decks GFS sees that DD misses, or ECMWF cirrus ice-supersaturation that `cc` rejects. **Disabled by default** — dev/calibration signal, not pilot-facing | `freezing_delta_ft` (2000), `cloud_overlap_min` (30%), `amber_pct` (30), `red_pct` (60) |
 
@@ -152,7 +156,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 - **`pct_above_threshold(affected, total, amber_pct, red_pct)`** → common GREEN/AMBER/RED from percentage
 - **`terrain_at_distance(elevation, distance_nm)`** → binary search + linear interpolation for terrain altitude
 - **`max_terrain_near_point(elevation, distance_nm, radius_nm=5)`** → peak elevation within radius
-- **`wind_at_altitude(cross_sections, model, point_index, target_alt_ft)`** → extract wind at specific altitude from cross-section data
+- **`wind_at_altitude(cross_sections, model, point_index, target_alt_ft, target_time)`** → wind at the pressure level nearest a target altitude, for the hourly forecast nearest `target_time` (not the first hour — matters on multi-hour legs). Delegates the level pick to `analysis/wind.py:pick_wind_at_pressure`
 
 ## User Parameters
 
@@ -201,7 +205,10 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - Each card: aggregate status badge + name + info button + per-model badges + detail text
 - **Altitude slider**: re-evaluates advisories at different cruise altitudes without recalculating the full pipeline (altitude-dependent evaluators only)
 - **Altitude table button**: opens a popup rendering the `/advisories/altitude-table` sweep — per-altitude advisory grid with best-below/best-above-cruise picks
-- Recalculate button triggers POST endpoint and re-renders
+- **Profile selector** (`ProfileSelectorConfig`, owner-only): dropdown to switch the flight's advisory profile, re-running advisories with that profile's enabled/params/aggregation
+- **Alt-time toggle**: switches the displayed advisories between the planned departure and `alt_departure_time` (`routeAdvisories` vs `altAdvisories`)
+- **Advisory chips** (`handleAdvisoryChip`): clickable per-advisory chips that cross-link to the relevant map/cross-section context
+- Recalculate button triggers POST endpoint and re-renders. The top-level entry point is `renderAdvisories(...)` in `briefing-main.ts`, fed by `getEffectiveAdvisories(state)`
 
 **Info popup** (`components/info-popup.ts`):
 - Full description, category, parameter table with values used
@@ -226,7 +233,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - Evaluator exceptions are caught and logged — one failure doesn't break the whole advisory set
 - `ModelAgreementEvaluator` has `per_model=["all"]` (not actual model names) since it's cross-model
 - `format_extent` falls back to percentage-only if route has too few points for meaningful distance
-- `wind_at_altitude` does a linear scan of pressure levels (not binary search) — fine for ~15 levels
+- `wind_at_altitude` picks the level via `pick_wind_at_pressure` and the hour via `at_time` — don't reintroduce a "first hourly" shortcut, it lags the route point's valid time on long legs
 
 ## References
 

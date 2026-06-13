@@ -13,7 +13,7 @@ costs.py                  — Pure cost computation (no DB/IO): per-briefing + p
 api/credits.py            — Cost API: charge, query, admin config, program report, transparency
 api/packs.py              — Hook: _charge_briefing_cost() called after each refresh
 db/models.py              — CostConfigRow (weather-specific rate card)
-web/admin-cost-view.ts    — Admin "Cost" tab: program report + rate-card editor
+web/ts/admin-cost-view.ts — Admin "Cost" tab: program report + rate-card editor
 web/cost-summary.html     — Program cost + viewer's own usage (admin-gated; → Settings later)
 tests/test_costs.py       — Formula arithmetic tests (per-briefing + program)
 tests/test_cost_report_api.py — Report endpoint + config auto-sum integration tests

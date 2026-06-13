@@ -13,7 +13,7 @@ data/calibration/
   {init_time}/                         # e.g. 2026-04-16_12Z
     raw/
       ecmwf.json                       # cached Open-Meteo grid response (~10MB)
-      gfs.json                         # full 72h forecast, all 4947 grid points
+      gfs.json                         # full 72h forecast, all grid points
       icon.json                        # 4 variables: T850, Td850, ws850, wd850
     reference/
       17_04_00Z.png                    # Météo-France carte des fronts images
@@ -26,7 +26,7 @@ data/calibration/
 
 ### Raw Data
 
-The raw JSON files contain the full Open-Meteo response for each model — all hourly values for `temperature_850hPa`, `dewpoint_850hPa`, `wind_speed_850hPa`, `wind_direction_850hPa` across the 0.5° European grid (51 lat × 97 lon = 4947 points, domain 35-60°N, -20 to 28°E). This allows re-running detection with any algorithm or threshold change without re-fetching from Open-Meteo.
+The raw JSON files contain the full Open-Meteo response for each model — all hourly values for `temperature_850hPa`, `dewpoint_850hPa`, `wind_speed_850hPa`, `wind_direction_850hPa` across the 0.25° European grid (101 lat × 193 lon, domain 35-60°N, -20 to 28°E; the grid was bumped from 0.5° so Open-Meteo and ERA5 deliver at identical points — see `frontal/grid.py`). This allows re-running detection with any algorithm or threshold change without re-fetching from Open-Meteo.
 
 The CLI caches raw data automatically in `data/frontal_cache/`. To populate a calibration case, copy from the cache after running analysis:
 
@@ -194,7 +194,7 @@ For visual validation with the 4-column comparison (reference | expected | ECMWF
 | `smooth_sigma` | 0.5 grid pts | Gaussian smoothing before gradient computation |
 | `cross_front_threshold` | 2.0 km/h | Minimum cross-front wind for cold/warm classification |
 | `_MIN_FRONTAL_FRACTION` | 0.08 (8%) | Minimum fraction of zone that must be frontal |
-| `_MIN_FRONTAL_POINTS` | 8 | Absolute minimum frontal points in a zone |
+| `_MIN_FRONTAL_POINTS` | 32 | Absolute minimum frontal points in a zone (was 8 at 0.5°; bumped 4× with the 0.25° grid) |
 
 ## Current Baseline Scores
 

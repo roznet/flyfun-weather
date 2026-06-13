@@ -13,7 +13,7 @@ Key exports: `execute_briefing`, `create_app`, `run_fetch`, `run_analysis`, `run
 
 ### data-models
 Pydantic v2 models for routes, forecasts, analysis, snapshots, cross-sections, elevation, flights, and briefing packs. Snapshots stored as split files: `briefing.json` (analyses/observations/metadata) + `forecasts.json` (raw forecasts).
-Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection`, `WaypointForecast`, `SoundingAnalysis`, `VerticalMotionAssessment`, `RoutePointAnalysis`, `ElevationProfile`, `InversionLayer`, `Flight`, `FlightProfile`, `BriefingPackMeta`, `UserAircraftRow`
+Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection`, `WaypointForecast`, `SoundingAnalysis`, `VerticalMotionAssessment`, `RoutePointAnalysis`, `ElevationProfile`, `InversionLayer`, `Flight`, `FlightProfile`, `BriefingPackMeta`, `RouteAlternates`, `RouteSunAnalysis`
 → Full doc: data-models.md
 
 ### fetch
@@ -45,7 +45,7 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### visualization
-Four synchronized client visualizations: canvas cross-section (~25 weather layers), canvas route graph (11 scalar metrics), Leaflet route map (altitude slider, metric-colored segments), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable themes with theme-aware legends; four layout modes (cross-section, compare, split, map); shared color scales and hover sync. Compare mode renders one layer across all models with four band modes.
+Four synchronized client visualizations: canvas cross-section (~25 weather layers), canvas route graph (12 scalar metrics), Leaflet route map (altitude slider, metric-colored segments), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable themes with theme-aware legends; four layout modes (cross-section, compare, split, map); shared color scales and hover sync. Compare mode renders one layer across all models with four band modes.
 Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `SkewTRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 
@@ -140,7 +140,7 @@ Key exports: `get_forecast_map_data`, `WeatherMap`, `fetchForecastMap`
 → Full doc: forecast-page.md
 
 ### briefing-sidebar
-Opt-in, reversible alternative layout for the briefing page: fixed left rail (route identity, derived glance summary, scroll-spy nav, freshness, controls) + scrollable main pane, resizable, with per-section focus mode. The rail owns no data — it derives its summary from already-rendered DOM and builds nav from `data-section` tags, so it adds/removes without touching other managers.
+Default, reversible layout for the briefing page: fixed left rail (route identity, derived glance summary, scroll-spy nav, freshness, controls) + scrollable main pane, resizable, with per-section focus mode; classic is a one-click opt-out. The rail owns no data — it derives its summary from already-rendered DOM and builds nav from `data-section` tags, so it adds/removes without touching other managers.
 Key exports: `initBriefingLayout`, `getBriefingLayout`, `BriefingLayout`
 → Full doc: briefing-sidebar.md
 

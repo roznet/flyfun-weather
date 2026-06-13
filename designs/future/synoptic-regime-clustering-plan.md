@@ -17,6 +17,10 @@ Over time, accumulate model reconciliation data stratified by regime to determin
 
 Frontal detection and route corridor analysis are covered separately in `frontal-detection-plan.md`.
 
+### Status (2026-06-13)
+
+Unbuilt future plan. There is no `src/weatherbrief/regime/` module, no `weatherbrief.regime` CLI, and no regime columns on the reconciliation table — Parts 2–6 are entirely future work. Part 1 (ERA5 download) has a working but **untracked** prototype in `tmp/regime/` (`download_era5.py`, `download_era5_t850.py`, `smoke_test_era5.py`) matching the monthly-chunk approach below. The classifier's live-data dependency already exists: `fetch_multi_point()` in `src/weatherbrief/fetch/open_meteo.py` fetches `geopotential_height_500hPa` for GFS/ECMWF/ICON. Promote this to a real design doc (and INDEX entry) only once the `regime` module ships.
+
 ### Architecture summary
 
 The system has three distinct phases:

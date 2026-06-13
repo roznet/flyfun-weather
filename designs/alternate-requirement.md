@@ -167,7 +167,7 @@ window with how it was treated (`AlternateRequirement.main_body_ceiling_ft` /
 
 ## Surfacing
 
-- **Alternates UI** (`briefing-ui.ts:renderRouteAlternates`): a destination
+- **Alternates UI** (`web/ts/managers/briefing-ui.ts:renderRouteAlternates`): a destination
   banner (`Alternate required? — FAA: … · EASA: …`, with reason, `(forecast)` vs
   `(model estimate)`, a TEMPO tag, and an info button for the proxy caveat), plus
   two table columns — **FAA alt** (Yes/No) and **EASA alt** (Likely/Marginal/

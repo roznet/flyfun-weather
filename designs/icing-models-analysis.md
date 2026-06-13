@@ -2,7 +2,7 @@
 
 > Per-model input audit, source tracing, interpolation methods, and consistency analysis for all three icing estimation methods.
 
-_Code references verified against the repo on 2026-06-06._
+_Code references verified against the repo on 2026-06-13._
 
 > 📐 The Ogimet icing-zone-width / convective-contribution decision (why Ogimet bands look "wide" vs GRAMET) is documented in [meteorology-decisions.md](./meteorology-decisions.md) §2 — read before re-investigating zone width.
 
@@ -101,11 +101,24 @@ Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by
 
 ## Shared Utilities (`icing_common.py`)
 
-### `is_near_cloud(level, clouds, dd_threshold, skip_sct)`
+### `is_in_cloud_layer(level, cloud_layers, margin_ft)` — current gate
 
-Unified cloud-proximity check with configurable DD threshold:
-- **Ogimet** uses `DD_BKN_THRESHOLD` (2.0) + `skip_sct=True` — ignores SCT (avoidable in VMC)
-- **SFIP proxy** uses `DD_SCT_THRESHOLD` (3.0) + `skip_sct=False` — wider net (no pass-2 NWP fallback)
+The cloud-gating check used by **all four** zone builders today (Ogimet-DD,
+Ogimet-NWP, IENG, SFIP). Pure altitude-band test: true when the level's
+altitude falls within any supplied cloud layer ±`CLOUD_MARGIN_FT`. It does
+**no** per-level DD re-check — the cloud-layer list passed in already encodes
+the detection method's decisions (DD-detected+NWP-filtered layers for DD-gated
+methods; pure-model NWP layers for NWP-gated methods). The caller chooses which
+layer list to pass (`dd_clouds` vs `nwp_clouds`); see the `is_in_cloud_layer`
+call sites in `icing.py` and `sfip.py`.
+
+### `is_near_cloud(level, clouds, dd_threshold, skip_sct)` — deprecated/legacy
+
+The old proximity check that mixed a per-level DD re-check with layer proximity.
+**Deprecated** in favour of `is_in_cloud_layer`; now only referenced by the
+legacy `assess_icing_zones()` (no longer in the pipeline) and tests. The DD
+thresholds it consulted (`DD_BKN_THRESHOLD`=2.0, `DD_SCT_THRESHOLD`=3.0) are kept
+for that backward compatibility. Do not use for new gating.
 
 ### `nwp_cloud_cover_at_altitude(altitude_ft, ...)`
 
@@ -176,12 +189,14 @@ unified. (Earlier wording here claimed full unification — that was overstated.
 
 **Problem:** `_is_near_cloud`, `_classify_icing_type`, `_nwp_cloud_for_altitude`/`_cloud_cover_for_level`, and zone grouping logic were duplicated between `icing.py` and `sfip.py` with subtle differences.
 
-**Fix:** `_is_near_cloud`, the NWP cloud-altitude lookup, and zone grouping were
-extracted to `icing_common.py` and both modules use them (the `_is_near_cloud`
-wrappers have since been removed entirely). **Exception:** the icing-**type**
-classifier was *not* unified — `icing_common.classify_icing_type()` (wet-bulb) is
-used by the Ogimet-family methods only; SFIP retains its own dry-bulb
-`_classify_icing_type` by design (see Bug #2).
+**Fix:** the NWP cloud-altitude lookup and zone grouping were extracted to
+`icing_common.py` and both modules use them. Cloud gating was unified too, but
+has since moved past the original `_is_near_cloud` extraction: all four builders
+now gate on `is_in_cloud_layer` (clean altitude-band check), with the old
+`is_near_cloud` left deprecated/legacy (see Shared Utilities). **Exception:** the
+icing-**type** classifier was *not* unified — `icing_common.classify_icing_type()`
+(wet-bulb) is used by the Ogimet-family methods only; SFIP retains its own
+dry-bulb `_classify_icing_type` by design (see Bug #2).
 
 ### 7. Icing zones bridging cloud-band gaps (PR #106)
 

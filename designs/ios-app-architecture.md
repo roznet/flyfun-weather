@@ -131,7 +131,7 @@ SPM-linked: **RZFlight, RZSkewT, RZUtils, RZUtilsSwift, RZUtilsSwiftUI, RZUtilsU
 | Library | What's Reused |
 |---------|---------------|
 | **RZSkewT** | `SkewTView` in `SkewTDetailView` — see rzskewt entry in INDEX |
-| **RZFlight** | imported by `FlightTrackingService` (airport/aviation types); route projection geometry is done locally in `RouteGeometry`, not from the library |
+| **RZFlight** | imported by `FlightTrackingService` (airport/aviation types + `RouteGeometry`, a `public enum` in RZFlight's `Route+Geometry.swift` — `directDistanceNm`, `perpendicularDistanceAndRatio` for projecting live position onto the route) |
 
 The RZUtils* modules are linked (logging, storage, SwiftUI helpers) but not yet directly imported in these app files. (RZData is not a dependency.)
 

@@ -2,19 +2,19 @@
 
 > Per-model cloud data pipeline, source tracing, interpolation methods, and consistency analysis across all icing methods and visualization.
 
-_Code references verified against the repo on 2026-06-06._
+_Code references verified against the repo on 2026-06-13._
 
-> ⚠️ **Stale: synthesized NWP layers (pending doc rewrite).** A server-side
-> synthesized-layer fallback for Open-Meteo-only models was added then **reverted**
-> (df4474ff) so `nwp_cloud_layers` is now strictly model-native — Open-Meteo-only
-> models (GEM/UKMO/MétéoFr) return `None`, not synthesized bands. Several sections
-> below still describe `source="synthesized"` (per-model tables, pipeline summary)
-> and need a coherent rewrite.
+> **`nwp_cloud_layers` is strictly model-native.** A server-side synthesized-layer
+> fallback for Open-Meteo-only models was added then **reverted** (df4474ff), so
+> `build_nwp_cloud_layers` has only two tiers: 3D fraction (`nwp_3d`) and GRIB bulk
+> bands (`grib`). Open-Meteo-only models (GEM/UKMO/MétéoFr) return `None`, NOT
+> synthesized bands. The `EnhancedCloudLayer.source` enum no longer carries
+> `"synthesized"` at runtime.
 >
 > **Known minor item (code kept as-is, decision 2026-06-06):** `advise.py:109`
 > labels any non-`grib` NWP layer set `cloud_method_effective="nwp_synthesized"`,
-> which now mislabels genuine `nwp_3d` layers (ECMWF/ICON). Cosmetic — affects
-> only that metadata string; not corrected in code.
+> which mislabels genuine `nwp_3d` layers (ECMWF/ICON). Cosmetic — affects only
+> that metadata string; not corrected in code.
 
 ## Overview
 
@@ -70,9 +70,9 @@ These are **bulk band percentages** — a single value per ICAO band with no ver
 | **Best Match** | Full (via GFS) | GRIB bulk bands | Altitude-precise |
 | **ECMWF** | 3D `cc` + bulk bands + hcct + deg0l | **3D cloud fraction** | Altitude-precise (per-level) |
 | **ICON-EU** | 3D `clc` + bulk bands + ceiling + convective | **3D cloud fraction** | Altitude-precise (per-level) |
-| **MétéoFr** | None | Open-Meteo bulk %, synthesized | ICAO-band bulk |
-| **UKMO** | None | Open-Meteo bulk %, synthesized | ICAO-band bulk |
-| **GEM** | None | Open-Meteo bulk %, synthesized | ICAO-band bulk |
+| **MétéoFr** | None | Open-Meteo bulk % (icing only); `nwp_cloud_layers=None` | ICAO-band bulk |
+| **UKMO** | None | Open-Meteo bulk % (icing only); `nwp_cloud_layers=None` | ICAO-band bulk |
+| **GEM** | None | Open-Meteo bulk % (icing only); `nwp_cloud_layers=None` | ICAO-band bulk |
 
 ---
 
@@ -141,9 +141,9 @@ Reverted so `nwp_cloud_layers` is strictly model-native; the tier below now appl
 
 - **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 classifies each level individually then splits on category change; Tiers 1–2 use bulk band %)
 - **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
-- **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib"} (the "synthesized" source was removed when nwp_cloud_layers became strictly model-native)
-- **Method tracking:** `cloud_method_effective` records "dd", "nwp" (grib or nwp_3d), or "nwp_synthesized"
-- **Quantitative metadata:** `EnhancedCloudLayer.mean_cloud_cover_pct` carries the underlying numeric — mean `cloud_area_fraction_pct` across the (homogeneous) deck for `nwp_3d`, the band's `cover_pct` for `grib` (incl. convective). Surfaced in the cross-section tooltip as `(CC nn%)`. Null for `dd` and `synthesized` (those use `mean_dewpoint_depression_c` instead).
+- **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib"} at runtime (the "synthesized" source was removed when nwp_cloud_layers became strictly model-native; the model.py comment still lists it as a historical value).
+- **Method tracking:** `cloud_method_effective` records "dd" or "nwp". Note `advise.py:109` still emits "nwp_synthesized" for any non-`grib` source set — a stale metadata label that now also catches `nwp_3d` (cosmetic; see banner).
+- **Quantitative metadata:** `EnhancedCloudLayer.mean_cloud_cover_pct` carries the underlying numeric — mean `cloud_area_fraction_pct` across the (homogeneous) deck for `nwp_3d`, the band's `cover_pct` for `grib` (incl. convective). Surfaced in the cross-section tooltip as `(CC nn%)`. Null for `dd` (uses `mean_dewpoint_depression_c` instead).
 
 | Model | NWP Cloud Layers Result | Source Tag | Notes |
 |-------|------------------------|------------|-------|
@@ -151,7 +151,7 @@ Reverted so `nwp_cloud_layers` is strictly model-native; the tier below now appl
 | **Best Match** | Full layer list (via GFS) | `grib` | Same as GFS |
 | **ECMWF** | Per-deck layers from 3D `cc` | `nwp_3d` | Real model cloud scheme, not constrained to ICAO bands |
 | **ICON-EU** | Per-deck layers from 3D `clc` + convective from GRIB | `nwp_3d` | Same as ECMWF; convective layer added when present |
-| **MétéoFr / UKMO / GEM** | Synthesized bands | `synthesized` | Open-Meteo cloud %, narrowed by DD+inversions |
+| **MétéoFr / UKMO / GEM** | `None` (no native source) | — | `build_nwp_cloud_layers` returns None; Open-Meteo bulk % is NOT synthesized into layers |
 
 ### Stage 5: Cloud Top Uncertainty
 
@@ -391,11 +391,11 @@ Open-Meteo → cloud_cover_{low,mid,high}_pct (hourly)
              No GRIB enrichment
 Analysis:
   DD cloud layers     → always available
-  NWP cloud layers    → synthesized from Open-Meteo + DD envelope + inversions (source="synthesized")
-  nwp_cloud_at_alt    → ICAO-band bulk fallback
+  NWP cloud layers    → None (no native source; not synthesized from Open-Meteo)
+  nwp_cloud_at_alt    → ICAO-band bulk fallback (icing only)
 Visualization:
   DD cloud bands      → gray gradient (always)
-  NWP cloud bands     → server-computed synthesized layers (blue tint, all 3 bands)
+  NWP cloud bands     → none server-side (nwp_cloud_layers is None)
 ```
 
 ---

@@ -36,7 +36,7 @@ analyze_waypoint()  (per waypoint)
     ↓
 analyze_all_route_points()  → RouteAnalysesManifest (full route analysis)
     ↓
-evaluate_all(RouteContext)  → RouteAdvisoriesManifest (13 hazard evaluators)
+evaluate_all(RouteContext)  → RouteAdvisoriesManifest (20 hazard evaluators)
     ↓
 ForecastSnapshot  (root object, saved as briefing.json + forecasts.json)
     ↓
@@ -85,6 +85,9 @@ src/weatherbrief/
 │   ├── airport_summary.py / airport_watchlist.py / standalone_grib.py # Standalone pan-European monitoring cycle
 │   ├── map_queries.py / cache_builder.py / climatology_queries.py # Forecast-map + climatology query/cache builders
 │   ├── dwd_charts.py / metoffice_charts.py # Front-chart fetch/georeference tasks
+│   ├── alternates.py / alternate_requirement.py # EASA alternate requirement + selection (TAF/minima)
+│   ├── fronts.py # Hewson front-crossing computation for the route
+│   ├── edr_calibration.py # EDR turbulence calibration task (inert, see project_edr_calibration_inert)
 │   └── admin_digest_stats.py # Admin digest/usage stats
 ├── fetch/
 │   ├── variables.py   # Model endpoints, API parameters
@@ -115,22 +118,21 @@ src/weatherbrief/
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
 │   ├── comparison.py  # Multi-model divergence scoring (22 thresholds)
-│   ├── advisories/    # Route advisory evaluators (13 hazard types)
+│   ├── advisories/    # Route advisory evaluators (20 registered hazard types — see advisories.md)
 │   │   ├── __init__.py      # evaluate_all(), get_catalog()
 │   │   ├── registry.py      # @register decorator, auto-discovery
 │   │   ├── _helpers.py      # Shared: format_extent, pct_above_threshold, terrain lookup
 │   │   ├── cloud_top.py     # Cloud top vs ceiling
 │   │   ├── convective.py    # Convective risk along route
 │   │   ├── dd_nwp_agreement.py # DD-vs-NWP within-model cloud/icing agreement
-│   │   ├── fiki_icing.py    # FIKI icing layer thickness
+│   │   ├── fiki_icing.py / icing_escape.py / freezing_precip.py # FIKI icing, non-FIKI escape, freezing precip
 │   │   ├── flight_category.py # Airport ceiling/visibility (tunable MVFR/IFR thresholds)
-│   │   ├── airport_wind.py  # Airport crosswind + gust assessment
-│   │   ├── icing_escape.py  # Non-FIKI icing escape viability
-│   │   ├── ifr_feasibility.py # Composite IFR go/no-go (airport + icing + convective)
+│   │   ├── airport_wind.py / density_altitude.py / llws.py # Airport crosswind+gust, density altitude, low-level wind shear
+│   │   ├── enroute_precip.py / headwind.py # En-route precip/visibility, winds-aloft trip impact
+│   │   ├── ifr_feasibility.py / vfr_feasibility.py # Composite IFR/VFR go/no-go
 │   │   ├── model_agreement.py # Cross-model divergence
-│   │   ├── mountain_wind.py # Orographic/rotor risk
-│   │   ├── turbulence.py    # CAT + vertical motion
-│   │   ├── vfr_feasibility.py # Composite VFR go/no-go (airport + cloud + VMC)
+│   │   ├── mountain_wind.py / turbulence.py # Orographic/rotor risk, CAT + vertical motion
+│   │   ├── fronts.py / sun.py # Front crossings (Hewson), sun glare/position
 │   │   └── vmc_cruise.py    # Cloud coverage at cruise
 │   └── sounding/      # MetPy-based sounding analysis subpackage
 │       ├── __init__.py     # analyze_sounding() entry point
@@ -192,11 +194,22 @@ src/weatherbrief/
 │   ├── magic_link_email.py # Magic-link / passwordless sign-in email
 │   ├── verification_email.py # Daily verification digest email
 │   └── admin_digest_email.py # Admin digest stats email
-└── triage/
-    ├── __main__.py    # CLI entry point for feedback triage
-    ├── process.py     # AI triage via Claude CLI: classify, analyze, suggest reply
-    ├── prompt.py      # Triage prompt assembly
-    └── security.py    # Triage input sanitization
+├── triage/
+│   ├── __main__.py    # CLI entry point for feedback triage
+│   ├── process.py     # AI triage via Claude CLI: classify, analyze, suggest reply
+│   ├── prompt.py      # Triage prompt assembly
+│   └── security.py    # Triage input sanitization
+├── analytics/         # Client-event ingest + admin analytics (events, enrich, digest, API)
+├── mcp/               # fastmcp server + client (AI flight-planning tool surface, see project_mcp_server)
+├── hewson/            # Hewson frontal-detection precompute + CLI (ERA5 cases)
+├── frontal/           # Frontal-zone detection (contour fronts, TFP/θe) + CLI
+├── era5/              # ERA5 reanalysis loader (front-calibration reference data)
+├── release/           # Release-stream / What's New CLI + models
+├── verify/            # Standalone verification CLI entry
+├── debriefs/          # Post-flight debrief stats + taxonomy
+├── scenario/          # Scenario measurement helpers
+├── atmo.py / units.py # Atmospheric constants + region-aware unit conversion
+└── process_memory_sampler.py / process_rss.py # Memory instrumentation
 ```
 
 ## Web Frontend (`web/`)
@@ -434,7 +447,7 @@ Completed-phase development changelog moved to [archive/phase-roadmap.md](./arch
 
 The app is packaged as a Docker image (`python:3.13-slim`) with:
 - System deps for WeasyPrint (libpango, libcairo, etc.) + eccodes for GRIB2 decode
-- `euro-aip` installed from PyPI (`pip install -e .`), not a local path
+- `weatherbrief` installed editable (`pip install -e .`); `euro-aip` pulled from PyPI per the pyproject pin (`euro-aip>=0.12.0`), not a local path
 - Non-root user (UID 2000)
 - Exposed on port 8020
 

@@ -143,6 +143,6 @@ This decision should be reconsidered if:
 For pipeline improvements, the priority remains traditional NWP with full physics:
 
 1. **ICON-EU GRIB** — 40 native levels with QC/QI, already integrated
-2. **IFS HRES via commercial order** — 25 levels with clwc/ciwc, pending delivery setup
+2. **IFS HRES via commercial order** — 25 levels with clwc/ciwc; ECMWF direct-GRIB delivery now live and integrated (`fetch/grib/ecmwf_fetch.py`, scheduler watcher, alternates visibility source)
 3. **GFS GRIB** — 28 levels with CLWMR/ICMR, already integrated
 4. **Open-Meteo multi-model** — 6 models for consensus, already integrated

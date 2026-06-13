@@ -2,7 +2,7 @@
 
 > Per-model convective data pipeline, dual-method assessment, source inconsistencies, and recommendations.
 
-_Code references verified against the repo on 2026-06-06._
+_Code references verified against the repo on 2026-06-13._
 
 > 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [meteorology-decisions.md](./meteorology-decisions.md) §4–§5 — read before changing thresholds or the DD/NWP boundary.
 

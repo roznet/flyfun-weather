@@ -3,11 +3,13 @@
 > Pydantic v2 models for routes, forecasts, analysis results, and snapshots
 
 Models are organized in `src/weatherbrief/models/` package:
-- `analysis.py` — route, forecast, and weather analysis models
+- `analysis.py` — route, forecast, weather analysis, and route-solar (`RouteSunAnalysis` and friends) models
 - `storage.py` — `Flight`, `FlightProfile`, `BriefingPackMeta`, `FlightDebrief`
 - `advisories.py` — route advisory models (status, results, catalog, manifest, altitude table)
 - `observations.py` — METAR/TAF/SIGMET route models, `RefreshDelta`, `RealtimeRefreshResult`
 - `airport_conditions.py` — derived airport flight-category conditions (see advisories.md)
+- `alternates.py` / `alternate_requirement.py` — weather-based divert candidates + regulatory "alternate required?" assessment (see alternates.md, alternate-requirement.md)
+- `fronts.py` — per-briefing front-detection artifact (`route_fronts.json`; see frontal-detection.md)
 - `diagnostic.py` / `diagnostic_codes.py` — structured pipeline events + stable codes
 - `verification.py` — forecast-vs-observation verification records
 - `__init__.py` — re-exports everything for backward-compatible imports
@@ -74,10 +76,11 @@ Cross-section forecast data along the full route for one model: `(model, route_p
 
 ### ForecastSnapshot
 
-Root object for one fetch run: `(route, target_date, fetch_date, days_out, departure_time, forecasts, analyses, cross_sections, route_observations, route_sigmets, last_refresh_delta)`. Serialized to JSON for persistence.
+Root object for one fetch run: `(route, target_date, fetch_date, days_out, departure_time, forecasts, analyses, cross_sections, route_observations, route_sigmets, alternates, last_refresh_delta)`. Serialized to JSON for persistence.
 
 - `departure_time` is the aware-UTC departure (None for old packs)
 - `route_observations` / `route_sigmets` carry METAR/TAF/SIGMET (`models/observations.py`)
+- `alternates: RouteAlternates | None` — weather-based divert candidates, opt-in (D-2 inward); None outside that window (`models/alternates.py`, see alternates.md)
 - `last_refresh_delta` holds the worsening summary from the last cheap real-time refresh; None after a full pipeline run
 
 - `forecasts` contains only waypoint forecasts (used by analysis)
@@ -149,7 +152,15 @@ Fields: `point_index`, `lat`, `lon`, `distance_from_origin_nm`, `waypoint_icao`,
 
 Container for all route point analyses, saved as `route_analyses.json` in the pack directory.
 
-Fields: `route_name`, `target_date`, `departure_time`, `flight_duration_hours`, `total_distance_nm`, `cruise_altitude_ft`, `models`, `analyses: list[RoutePointAnalysis]`.
+Fields: `route_name`, `target_date`, `departure_time`, `flight_duration_hours`, `total_distance_nm`, `cruise_altitude_ft`, `models`, `analyses: list[RoutePointAnalysis]`, `sun: RouteSunAnalysis | None` (optional, old packs deserialize fine without it).
+
+### Route Solar Analysis
+
+`RouteSunAnalysis` (in `analysis.py`, issue #227) is precomputed solar readouts hung off `RouteAnalysesManifest.sun`. Fields:
+- `night_intervals: list[NightInterval]` — twilight (civil, 0..−6°) vs night (<−6°) runs for cross-section shading
+- `sun_side: SunSideSummary` — dominant sector (`left`/`right` for seating, `ahead`/`behind` for into-sun/sun-behind) + `dominant_side_pct` and per-stretch `segments` (`SunSideSegment`)
+- `points: list[SunPoint]` — per-route-point sun elevation/azimuth/relative-bearing for the cross-section hover readout
+- `takeoff` / `landing: GlareAssessment | None` — sun-vs-runway glare on the wind-best departure/arrival runway (`into_sun`, `is_dark`)
 
 ### RouteWindOverlay
 
@@ -248,7 +259,7 @@ BriefingPackMeta(
 
 Persisted as a `BriefingPackRow` in the DB (`_meta_to_row`/`_apply_meta_to_row` in `storage/flights.py`), not a `pack.json` file. `id` is the DB primary key. `fetch_timestamp` is a timezone-aware UTC datetime (stored as `DATETIME(6)` in MySQL, text in SQLite). `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)". `model_sources` maps each model to its freshness source key (e.g. `ecmwf:direct`).
 
-Other fields: `artifact_path` (pack directory), `models_skipped_region` (models out of coverage), `alt_assessment`/`alt_assessment_reason`/`has_alt_advisories` (optional same-day alternate departure), and DWD + Met Office surface-chart references (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). `is_historical` is a `@computed_field` (true when `days_out < 0`).
+Other fields: `artifact_path` (pack directory), `models_skipped_region` (models out of coverage), `llm_digest_requested` (whether the AI digest was requested for this pack; defaults True so legacy packs read as "still generating" not "off"), `digest_trace_id` (LangSmith root run id of the digest LLM call, #244; used by the feedback endpoint), `alt_assessment`/`alt_assessment_reason`/`has_alt_advisories` (optional same-day alternate departure), and DWD + Met Office surface-chart references (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). `is_historical` is a `@computed_field` (true when `days_out < 0`).
 
 `BriefingPackMeta.diagnostics: list[Diagnostic]` carries structured pipeline events from every stage (fetch, analyze, advisories, gramet, skewt, digest). See the **Diagnostic** section below.
 
@@ -363,3 +374,5 @@ See [advisories.md](./advisories.md) for the evaluator framework.
 - Snapshot persistence: `storage/snapshots.py` (`save_snapshot`/`save_cross_section`/`load_snapshot`); split-file loaders `load_briefing()`/`load_forecasts()`/`load_cross_sections()` live in `tasks/artifacts.py`
 - Flight/pack storage: `storage/flights.py`
 - API response models: `api/flights.py`, `api/packs.py`
+- Weather-based alternates (`alternates.py`) + regulatory trigger (`alternate_requirement.py`): [alternates.md](./alternates.md), [alternate-requirement.md](./alternate-requirement.md)
+- Front-detection artifact (`fronts.py` → `route_fronts.json`): [frontal-detection.md](./frontal-detection.md)

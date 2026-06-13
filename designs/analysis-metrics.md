@@ -8,7 +8,7 @@ This doc has two audiences: a **human/meteorologist** reviewing how we interpret
 
 Two kinds of content here are **code-derived and may drift** — treat them as a guide, not gospel, and confirm against code when it matters:
 - the **per-model availability matrix** (the yes/no columns) mirrors what the fetch layer requests per model — verify against the fetch/GRIB config (`fetch/`, [weather-engine-specs.md](./weather-engine-specs.md));
-- the **exact threshold numbers** (e.g. divergence cutoffs, classification bands) mirror constants in the analyzers / advisory catalog (`analysis/`, `advisories/catalog.py`).
+- the **exact threshold numbers** (e.g. divergence cutoffs, classification bands) mirror constants in the analyzers / advisory registry (`analysis/sounding/`, `analysis/advisories/registry.py`).
 
 ## Overview
 
@@ -204,7 +204,7 @@ Surface (a1) single-level scalar fields. Stored in `NWPCloudDiagnostics` model.
 
 ### 2.1 Per-Level Derivations
 
-These are computed in `thermodynamics.compute_derived_levels()` for each pressure level.
+These are computed in `analysis/sounding/thermodynamics.py` (`compute_derived_levels_core()` + `compute_derived_levels_extended()`) for each pressure level.
 
 | Metric | Formula / Method | Inputs | Physics | Aviation Use |
 |--------|-----------------|--------|---------|-------------|
@@ -221,12 +221,12 @@ These are computed in `thermodynamics.compute_derived_levels()` for each pressur
 | **Cloud liquid water** (g/m³) | `CLWMR × ρ_air` | CLWMR (GRIB2), P, T | Liquid water content in volume units. | Ogimet icing index input. GFS globally, ECMWF (EU+US ≤ 7 days), ICON-EU (Europe ≤ 5 days). |
 | **Cloud liquid water** (g/kg) | `CLWMR × 1000` | CLWMR (GRIB2) | Mixing ratio in g/kg. | SFIP icing index input. GFS globally, ECMWF (EU+US ≤ 7 days), ICON-EU (Europe ≤ 5 days). |
 | **Ice mixing ratio** (g/kg) | `ICMR × 1000` | ICMR (GRIB2) | Ice content mixing ratio. | Glaciation factor: CLW/(CLW+ICE). Reduces SFIP when cloud is glaciated. Available wherever CLW is. |
-| **SFIP per-level** | Fuzzy-logic membership + weights | T, RH, CLW, ω, CAPE | See §3.2b. 0–100 icing potential at each level. | Stored as `sfip_raw`, `sfip_100`, `sfip_severity`, `sfip_variant` on each DerivedLevel. Six variants: `"full"`, `"full_no_vv"`, `"interp"`, `"interp_no_vv"`, `"proxy"`, `"proxy_no_vv"` — `_no_vv` suffix when omega unavailable. `clw_interpolated` flag tracks spatially- or vertically-interpolated CLW. |
+| **SFIP per-level** | Fuzzy-logic membership + weights | T, RH, CLW, ω, CAPE | See §3.2e. 0–100 icing potential at each level. | Stored as `sfip_raw`, `sfip_100`, `sfip_severity`, `sfip_variant` on each DerivedLevel. Six variants: `"full"`, `"full_no_vv"`, `"interp"`, `"interp_no_vv"`, `"proxy"`, `"proxy_no_vv"` — `_no_vv` suffix when omega unavailable. `clw_interpolated` flag tracks spatially- or vertically-interpolated CLW. |
 | **Precipitation phase** | Wet-bulb T or GRIB2 ice fraction | Tw or CLWMR+ICMR | Phase of precipitation at altitude. | Stored as `precip_phase` on each DerivedLevel. See §3.6. |
 
 ### 2.2 Profile-Level Indices
 
-Computed in `thermodynamics.compute_indices()` — one value per sounding profile.
+Computed in `analysis/sounding/thermodynamics.py` (`compute_indices_core()` + `compute_indices_extended()`, wrapped by `compute_indices()`) — one value per sounding profile.
 
 | Index | Method | Physics | Aviation Interpretation |
 |-------|--------|---------|------------------------|
@@ -254,7 +254,7 @@ Computed in `thermodynamics.compute_indices()` — one value per sounding profil
 
 ### 3.1 Cloud Layers
 
-**Module:** `sounding/clouds.py`
+**Module:** `analysis/sounding/clouds.py`
 
 Two named methods — both always computed, user selects which drives advisories via `cloud_method` setting:
 
@@ -300,9 +300,9 @@ These can disagree. The NWP cloud cover includes sub-grid processes the sounding
 
 ### 3.2 Icing Assessment
 
-**Module:** `sounding/icing.py`
+**Module:** `analysis/sounding/icing.py` (Ogimet-DD, Ogimet-NWP, IENG) + `analysis/sounding/sfip.py` (SFIP)
 
-Three named methods — all computed per sounding, user selects which drives advisories:
+Four icing zone lists are computed per sounding (`icing_ogimet_dd_zones`, `icing_ogimet_nwp_zones`, `ieng_icing_zones`, `sfip_zones` on the result); the user's `icing_method` setting selects which drives advisories:
 
 #### 3.2a Ogimet-DD (default)
 
@@ -336,9 +336,13 @@ Same Ogimet index but uses NWP model cloud cover as cloud signal.
 
 Within cloud, severity is scaled by the NWP cloud fraction at altitude from `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`), which checks **all** diagnostic layers regardless of ICAO band and returns the highest cover for any layer whose base/top (± margin) contains the altitude; falls back to bulk ICAO band percentages when diagnostics unavailable. When CLW/ICMR microphysics are present, a temperature-floored glaciation factor further reduces the index in glaciated cloud. Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by Ogimet-DD) to prevent overwriting.
 
-#### 3.2c SFIP-NWP
+#### 3.2c IENG (alternative)
 
-See §3.2d below for full SFIP algorithm details.
+`assess_icing_zones_ieng` — the Ogimet **layered** temperature curve scaled directly by NWP cloud fraction (no DD attenuation, no glaciation). Like Ogimet-NWP it gates on `is_in_cloud_layer()` against the NWP cloud layers and returns `[]` when no model-native cloud envelope exists. A convective component is added when CAPE > 100. Stored as `ieng_icing_zones`. Uses the shared `_index_to_risk()` mapping below.
+
+#### 3.2d SFIP-NWP
+
+Fuzzy-logic SFIP index — see §3.2e below for full algorithm details.
 
 #### Shared: Index-to-Risk Mapping
 
@@ -368,9 +372,9 @@ Optional (`icing_severity_enhance=False` default):
 - Same + mean T ≤ −5°C → MODERATE → SEVERE
 - Precipitable water > 25mm → LIGHT → MODERATE
 
-### 3.2d SFIP Icing Index
+### 3.2e SFIP Icing Index
 
-**Module:** `sounding/sfip.py` — See [analysis.md](./analysis.md) for algorithm summary.
+**Module:** `analysis/sounding/sfip.py` — See [analysis.md](./analysis.md) for algorithm summary.
 
 A second icing index computed alongside Ogimet, based on fuzzy-logic membership functions (Belo-Pereira 2015, Morcrette et al. 2019). Same algorithm family used by Windy.com and European operational met services.
 
@@ -414,7 +418,7 @@ The `_no_vv` suffix indicates omega (vertical velocity) is unavailable for the m
 **CLW/ICMR interpolation** — two stages, both flagged `clw_interpolated=True` → SFIP reports variant containing `"interp"` → tooltip shows `(INTERP)`:
 
 1. **Spatial** (`analysis/spatial_interpolation.py`): Before sounding analysis, `interpolate_cloud_water_spatially()` fills gaps per-pressure-level by linear interpolation in distance-space between neighboring route points with data. Max gap: 100 nm (default).
-2. **Vertical** (`_interpolate_cloud_water()` in `sounding/__init__.py`): After direct-match enrichment of GRIB 50hPa levels, linear interpolation in pressure-space fills intermediate 25hPa levels that have no direct GRIB data.
+2. **Vertical** (`_interpolate_cloud_water()` in `analysis/sounding/__init__.py`): After direct-match enrichment of GRIB 50hPa levels, linear interpolation in pressure-space fills intermediate 25hPa levels that have no direct GRIB data.
 
 **Per-model behavior:**
 
@@ -433,7 +437,7 @@ The `_no_vv` suffix indicates omega (vertical velocity) is unavailable for the m
 
 ### 3.3 Convective Assessment
 
-**Module:** `sounding/convective.py`
+**Module:** `analysis/sounding/convective.py`
 
 Classifies convective risk from effective CAPE — max(SB-CAPE, MU-CAPE) — with CIN modulation and severe weather modifiers. MU-CAPE catches elevated convection common in European maritime environments where SB-CAPE is near zero while a warm layer aloft is unstable.
 
@@ -451,7 +455,7 @@ European-calibrated thresholds (lower than US values — European convection pro
 
 ### 3.4 Vertical Motion & Turbulence
 
-**Module:** `sounding/vertical_motion.py`
+**Module:** `analysis/sounding/vertical_motion.py`
 
 **Profile classification** from omega (ω) distribution:
 
@@ -474,7 +478,7 @@ European-calibrated thresholds (lower than US values — European convection pro
 
 ### 3.5 Altitude Advisories
 
-**Module:** `sounding/advisories.py`
+**Module:** `analysis/sounding/advisories.py`
 
 Aggregates cloud, icing, turbulence, and vertical motion data into vertical regimes (per model) and cross-model advisories.
 
@@ -491,7 +495,7 @@ Aggregates cloud, icing, turbulence, and vertical motion data into vertical regi
 
 ### 3.6 Precipitation Assessment
 
-**Module:** `sounding/precipitation.py`
+**Module:** `analysis/sounding/precipitation.py`
 
 Classifies precipitation phase at each pressure level and detects hazardous profiles (freezing rain, ice pellets).
 

@@ -1,5 +1,20 @@
 # Refresh pipeline performance investigation
 
+> **Outcome (verified 2026-06-13):** Phases A, B-1', B-2 and B-3 all
+> shipped to prod. B-3 evolved further into a priority-aware,
+> fault-tolerant decode dispatcher (GH #171 / PR #172, shipped
+> 2026-05-22) — see MEMORY note `project_decode_priority_dispatcher.md`
+> and `project_grib_process_pool.md`. Only **Phase C** (ICON memory
+> streaming) and the **parking-lot items (O-1, O-3 dup, O-4, O-5)**
+> remain unbuilt, all deliberately deferred (memory is not a
+> constraint post-upgrade). The active investigation is complete;
+> this doc is now mostly a historical record of the measurements and
+> reasoning. Candidate to fold the durable B-3 architecture into a
+> proper design doc and archive the rest. Two leftover Phase A nits
+> (`_stage_label` dead branch in `scripts/profile_refresh.py`,
+> WARNING-on-full-failure in `fetch_icon_eu_fields`) are still
+> unaddressed but low priority.
+
 ## Status (2026-05-02)
 
 - ✅ **Phase A** — instrumentation, ICON cycle/horizon fix, hardware
@@ -17,8 +32,10 @@
   commits a1eacab4 + 3afde9b9). First post-deploy refresh of the
   canonical test flight: `analyze` 51.81s → 35.37s (–31.7%) under
   concurrent-refresh contention. See [GIL evidence](#gil-bound-decode--prod-evidence-2026-05-02).
-- 🟢 **Phase B-3 — out-of-process GRIB decode pool** — PR #104, ready
-  to merge after rebase onto post-B-1' main. `ProcessPoolExecutor`
+- ✅ **Phase B-3 — out-of-process GRIB decode pool** — SHIPPED (PR
+  #104, `800bbeed`), then extended into a priority-aware,
+  fault-tolerant decode dispatcher (PR #172 / `14cf4d96`, shipped
+  2026-05-22). `ProcessPoolExecutor`
   (spawn, default workers=2, override via `GRIB_DECODE_WORKERS`,
   per-call timeout via `GRIB_DECODE_TIMEOUT_S` default 300 s) wraps the
   six decode entry points called from `enrich_forecasts`. Worker

@@ -186,7 +186,7 @@ Original concept: when pilot taps "Report" manually. All fields pre-populated fr
 - **Optional** — cloud tops (ft MSL) with a tops-**basis** picker (crossed/estimated_above/below_min), ceiling (ft MSL), wind dir (°) + speed (kt), temperature (°C). All free-entry.
 - **Remarks** — optional free-text field
 - (No flight-rules, visibility, or precip fields; no "All correct" shortcut)
-- **Submit** — state machine: idle → loading → loaded ("Saved offline — will sync" when no connectivity) with "Submit Another" (resets form) / "Done". Offline submissions set `queuedOffline` and enqueue to `PirepOfflineStore` to flush on reconnect.
+- **Submit** ("Submit Report" button) — state machine: idle/error → loading → loaded ("Saved offline — will sync when connected" when no connectivity) with "Submit Another" (resets form) / "Done". Offline submissions set `queuedOffline` and enqueue to `PirepOfflineStore` to flush on reconnect.
 
 Severity color mapping (`severityPicker`): none→green, trace/light→yellow, moderate→orange, severe→red. This is the real cockpit color coding referenced by the constraints above.
 

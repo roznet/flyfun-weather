@@ -84,7 +84,7 @@ Via `fetch/grib/` (gfs_idx.py, grib_fetch.py, decode.py):
 - Uses `.idx` companion files for HTTP Range byte-range downloads (only fetches needed messages)
 - Two separate fetch paths: `plan_byte_ranges()` for CLWMR/ICMR, `plan_cloud_diag_byte_ranges()` for cloud diagnostics
 - Bilinear spatial interpolation to route points via cfgrib + xarray
-- Disk cache with 48h TTL at `data/.cache/grib/gfs/{date}_{cycle}z/`
+- Disk cache with 24h TTL at `data/.cache/grib/gfs/{date}_{cycle}z/` (per-model TTL in `cache.py` → `MODEL_TTL_SECONDS`; ICON-EU gets 12h since it's precached each run)
 
 ### ECMWF IFS GRIB2 enrichment
 Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
@@ -103,7 +103,7 @@ Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py, decode.py):
 - Parallel download with ThreadPoolExecutor (8 workers)
 - Domain: 29.5–70.5°N, 23.5°W–62.5°E (Europe) — routes outside skip silently
 - Cycles: every 3h (00–21z), ~3h publication delay
-- Disk cache at `data/.cache/grib/icon-eu/{date}_{cycle}z/`
+- Disk cache (12h TTL) at `data/.cache/grib/icon-eu/{date}_{cycle}z/`
 
 See [fetch.md](./fetch.md) for implementation details.
 

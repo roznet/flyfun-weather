@@ -40,6 +40,16 @@ escape-logic issues — plus a small number of genuine bugs.
 
 ## 2. Likely bugs (high confidence)
 
+> **Status update (verified against code).** Most of the findings below have
+> since been fixed — see `meteorology-decisions.md` §8 (dated 2026-06-11,
+> "Review-driven fixes"). Per-finding RESOLVED markers added inline; the
+> original reasoning is kept verbatim as the record. The single
+> `_descend_below_icing` rewrite resolved §2.1 (min→max), §2.2 (terrain floor),
+> and §2.3 (warm-nose / freezing-rain guard) together. §2.4 (IENG vapor
+> density), §2.5 (E-Shear units), and §2.6 (negative-Ri storage) are also fixed.
+> Still open: §2.7's `analysis.md` Ogimet-table drift (the `≤0 NONE / 0–30
+> LIGHT` line — a different doc, not this review).
+
 ### 2.1 `_descend_below_icing`: code contradicts its own docstring, and the wrong way
 
 `sounding/advisories.py:524-576`. Docstring: *"escape altitude =
@@ -61,6 +71,9 @@ Note the route-level `IcingEscapeEvaluator` independently uses the freezing
 level vs terrain (correct logic); only this per-waypoint altitude advisory is
 affected.
 
+> **RESOLVED.** `advisories.py:599` now uses `max(candidates) − margin`; the
+> docstring matches. (meteorology-decisions §8a)
+
 ### 2.2 Escape altitudes have no terrain floor
 
 `_descend_below_icing` clamps at 0 ft MSL only (`advisories.py:576`); the
@@ -71,6 +84,10 @@ number a pilot sees on the altitude advisory / regimes panel is the unfloored
 one. Recommendation: floor at `max_terrain_along_segment + margin` and mark
 `feasible=False` when the floor wins — symmetric with how `climb_above_icing`
 handles the service ceiling.
+
+> **RESOLVED.** `advisories.py:628-632` now takes `terrain_elevation_ft`, keeps
+> the advisory but marks `feasible=False` when escape < terrain +
+> `_TERRAIN_CLEARANCE_FT`.
 
 ### 2.3 Descend-below-freezing-level escape is unsafe under a warm nose
 
@@ -83,6 +100,11 @@ detects warm noses and classifies FZRA/ice pellets
 Recommendation: when a warm nose / surface sub-zero profile is detected,
 suppress the descend advisory (or invert it to "climb into the warm layer /
 land short") — and see §5.1 for the missing freezing-precipitation advisory.
+
+> **RESOLVED (guard).** `advisories.py:566-571` now sets the per-model escape to
+> `None` when `precipitation.freezing_rain_risk` is set, and returns a "no
+> descent escape" advisory when every model is FZRA. The standalone
+> `FreezingPrecipEvaluator` proposed in §5.1 is still a separate open item.
 
 ### 2.4 IENG convective term: level vapor density hard-coded to 0
 
@@ -100,6 +122,10 @@ per-level `rho_v`). Impact is bounded — it is scaled by
 `convective_cover_pct`, which is often null — but it is an inconsistency
 between methods that are explicitly compared side-by-side
 (meteorology-decisions §2 method-comparison table).
+
+> **RESOLVED.** `icing.py:548` now passes `_vapor_density(lv.dewpoint_c)` (the
+> real per-level vapour density), matching the Ogimet-DD/NWP paths.
+> (meteorology-decisions §8d)
 
 ### 2.5 E-Shear units do not match the formula's calibration
 
@@ -124,6 +150,12 @@ and add a unit test pinning a known shear profile to a known E value.
 *(Correction over the first published version of this section, which had the
 VWS direction inverted. Fixed in code — see meteorology-decisions §8.)*
 
+> **RESOLVED.** `e_shear.py:35-37` now scales SI shear to the formula's
+> calibration units via `_VWS_SCALE` (m/s/m → kt/1000ft) and `_HWS_SCALE`
+> (m/s/m → kt/100nm); the old 1e3/1e5 factors are gone. (meteorology-decisions
+> §8b — note: a pinning unit test was recommended; confirm one exists before
+> relying on this staying fixed.)
+
 ### 2.6 Statically unstable layers are invisible to the Richardson CAT path
 
 `vertical_motion.py:121`: Ri is only stored when `n_sq >= 0`. A layer with
@@ -134,6 +166,11 @@ frontal surface) with strong shear is exactly the case that produces moderate+
 turbulence in cruise and is currently dropped by both paths (E-Shear may catch
 it only if raw shear is large). Recommendation: treat N² < 0 with valid shear
 as SEVERE CAT (or at least MODERATE), not as missing data.
+
+> **RESOLVED (storage).** `vertical_motion.py:121-123` now stores Ri whenever
+> shear is valid, regardless of N² sign, so a statically-unstable layer is no
+> longer dropped as missing. (meteorology-decisions §8c — verify how a *negative*
+> Ri then classifies downstream in `_classify_*`.)
 
 ### 2.7 Doc drift (minor, but in safety tables)
 

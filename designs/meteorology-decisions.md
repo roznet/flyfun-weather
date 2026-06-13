@@ -404,7 +404,8 @@ anchoring is the correct fix for averaged data.
 
 **Date:** 2026-05-20
 **Status:** Implemented (regime discrimination: PR #165, merged. Realizable-CAPE
-tier + elevated flag: this change. DD-vs-NWP advisory comment: planned.)
+tier + elevated flag: this change. DD-vs-NWP advisory comment: since shipped as
+the dedicated `analysis/advisories/dd_nwp_agreement.py` advisory.)
 **Context:** Investigation of `lsgs_odina_srn_adosa_chi_pul_ldlo-2026-05-25`
 (Po Valley, 25 May). At pt15 the surface-based CAPE was high (GFS SB/MU 1125,
 ECMWF 661 J/kg) and our convective rating read HIGH/MODERATE, yet **all three

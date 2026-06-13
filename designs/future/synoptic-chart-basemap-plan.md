@@ -48,10 +48,12 @@ when permitted. No new pref column.
 1. **Unified, source-parameterized endpoints** — one router, `{source}` path
    param, single place for the per-user gate.
 2. **Extract a shared chart base now** — factor the duplicated projection +
-   cache + selection logic into a `ChartSource` base both modules subclass.
+   cache + selection logic into a shared chart-cache type both modules reuse.
    Keep existing module-level function names as thin shims so callers
    (`packs.py`, `pipeline.py`, `scheduler.py`, `tasks/*`, `frontal/cli.py`,
-   `storage/*`) don't break.
+   `storage/*`) don't break. (As built: a single composable `ChartCache`
+   class each module *instantiates* with declarative config + a
+   `chart_type_for` callback — composition, not subclassing.)
 3. **Both DWD + Met Office together** — single 3-way picker; the projection
    generalization is the same work either way.
 
@@ -64,23 +66,28 @@ equivalence) land and get verified before the UI depends on them.
 
 **New**: `src/weatherbrief/fetch/chart_cache.py`
 
+As built (the base is a *composable* `ChartCache`, not an abstract subclassed
+`ChartSource`):
+
 - `ChartCalibration` dataclass: `proj: dict`, `homography: tuple[8] | None`,
   `native_size: (w, h)`.
-- `lonlat_to_pixel(lon, lat, cal) -> (int, int)` — the shared pyproj + homography
-  math (single copy).
-- `ChartSource` base:
-  - declarative attrs: `slug` (`"dwd"`/`"metoffice"`), `subdir`, `extension`
-    (`.png`/`.gif`), `chart_ids`, `forecast_offsets_h`, `calibrations:
-    dict[chart_type, ChartCalibration]`, `chart_type_for(chart_id)`,
-    `keep_cycles`.
-  - shared methods: `cache_root`, `cycle_dir`, `list_cycles`, `_read_meta`,
-    `_write_meta`, `_atomic_write_bytes`, `resolve_chart_path`, `chart_meta`,
-    `evict_old_cycles`, `select_default_chart_id`, `build_route_overlay`,
-    `lonlat_to_chart_pixel`.
-  - abstract: `discover_and_refresh(data_dir) -> RefreshReport` (DWD =
-    Last-Modified probe; Met Office = JSON index).
-- Refactor `dwd_charts.py` + `metoffice_charts.py` to subclass it; keep their
-  current module-level functions as thin delegating shims (back-compat).
+- `ChartCache.project(lon, lat, chart_type) -> (int, int)` — the shared pyproj +
+  homography math (single copy). (`is_calibrated(chart_type)` gates it.)
+- `ChartCache(...)` constructor takes declarative config: `slug`
+  (`"dwd"`/`"metoffice"`), `display_name`, `subdir`, `extension`
+  (`png`/`gif`), `chart_ids`, `forecast_offsets_h`, `calibrations:
+  Mapping[chart_type, ChartCalibration]`, `chart_type_for` (callback),
+  `keep_cycles`, `user_agent`, `timeout`.
+- shared methods on the class: `cache_root`, `cycle_dir`, `list_cycles`,
+  `read_meta`, `write_meta`, `atomic_write_bytes`, `resolve_chart_path`,
+  `chart_meta`, `evict_old_cycles`, `evict_cycles_older_than`,
+  `select_default_chart_id`, `build_route_overlay`, `project`, `fetch_one`,
+  `make_session`, `conditional_headers`, `apply_results_to_meta`.
+- Source-specific cycle discovery (DWD = Last-Modified probe; Met Office = JSON
+  index) lives in each module, not on `ChartCache`.
+- `dwd_charts.py` + `metoffice_charts.py` each build a module-level `_cache =
+  ChartCache(...)` and keep their current module-level functions as thin
+  delegating shims (back-compat).
 
 **Done when**: existing DWD + Met Office tests pass unchanged; both refresh
 tasks still produce identical cache layouts.
@@ -173,11 +180,19 @@ the Hewson valid time is outside its chart horizon.
 7. maps-main 3-way picker, time-match, info bar, URL state, attribution.
 8. Polish + edge cases.
 
-## Implementation status (2026-06-07)
+## Implementation status (verified 2026-06-13)
 
-Phases 0–5 implemented + committed on `feat/synoptic-chart-basemap`; all unit
-/ integration tests green (314 py chart/pipeline, 342 web incl. projection
-equivalence <1px). Phase 6 = in-browser visual verification (user-driven).
+Phases 0–5 implemented and **on `main`** (the `chart_cache.py`,
+`synoptic_charts.py`, `chart-projection.ts`, etc. files all exist on main; the
+`feat/synoptic-chart-basemap` branch itself is *not* an ancestor of main, so the
+work landed via separate commits — see `730770b2 refactor(charts): extract
+shared ChartCache base`). All unit / integration tests green at the time (314 py
+chart/pipeline, 342 web incl. projection equivalence <1px). Phase 6 =
+in-browser visual verification (user-driven).
+
+This is effectively built; the remaining content is the durable architecture
+note (composable `ChartCache`, two-source gating, projection equivalence
+contract) worth folding into a real design doc rather than leaving as a plan.
 
 Two items deferred from the plan, by choice:
 - **URL state `syn.base`** — skipped to stay consistent with the existing

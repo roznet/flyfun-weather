@@ -1,5 +1,16 @@
 # PIREP Collection & Model Validation — Implementation Plan
 
+## Build Status (as of 2026-06-13)
+
+This plan is **partly built**. Milestones 0 and 1 are implemented and shipped; Milestones 2 and 3 remain future work. Treat the sections below as: M0/M1 = "as-built reference" (verify against code, which is now the source of truth); M2/M3 = "design intent, not yet built".
+
+- **M0 Aircraft Registry — DONE.** `user_aircraft` table (`UserAircraftRow`) + ICAO type reference, migration `031_user_aircraft.py`, storage in `storage/aircraft.py` + `storage/aircraft_types.py`, CRUD/search API in `api/aircraft.py`.
+- **M1 PIREP Publish & View — DONE.** `pireps` + `device_tokens` tables (`PirepRow`, `DeviceTokenRow`), migration `032_pireps_and_device_tokens.py`, storage in `storage/pireps.py`, full API in `api/pireps.py` (submit, `/batch` with `client_uuid` 409 dedup, query by flight/pack/bounds/time). Rate limits live in `api/throttle.py` (`pirep_burst_limiter` 1/2min, `pirep_daily_limiter` 50/day). European-bounds rejection via `validate_european_bounds`. Permissions `pirep_can_view` / `pirep_can_publish` in `api/preferences.py` + admin toggle in `api/admin.py`. Retention exemption built in `tasks/retention.py` (skips packs whose id appears in `select(PirepRow.pack_id)`). iOS side covered by the `ios-app-*` design docs (PirepViewModel, PirepOfflineStore, single manual PirepReportingView).
+- **M2 Notifications — NOT built.** No `route_watches` / `airport_watches` / `notification_log` tables, no `pirep/matching.py` (Shapely), no `notify/apns.py`, no device-token upsert endpoint. Design below stands as-is.
+- **M3 Post-Flight & Validation — NOT built.** No cross-section-tap post-flight debrief, no validation reconstruction tooling.
+
+> Note: `device_tokens` table exists (created early in M1 per the plan) but is unused until M2 wires up the upsert endpoint + APNs. The detailed M0/M1 schema/endpoint sections below may drift from code over time — prefer the code. When M2/M3 land, fold their durable design into the iOS / API design docs and move this plan to `archive/`.
+
 ## Overview
 
 Add crowdsourced PIREP (pilot weather report) collection to flyfun-weather, with two goals:

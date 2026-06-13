@@ -1,6 +1,6 @@
 # Dynamic Canvas Skew-T View
 
-> **Status**: Phases 1–4 implemented. See [designs/skewt-canvas.md](../skewt-canvas.md) for the current implementation design doc. This file retains the original planning detail and documents what's still future (multi-model overlay, zoom/pan, theme integration).
+> **Status**: Phases 1–4 implemented, including the multi-model overlay (Compare mode — `compare-renderer.ts`) that was originally listed as future here. See [designs/skewt-canvas.md](../skewt-canvas.md) for the current implementation design doc — that doc is authoritative. This file retains the original planning detail only. The only items still genuinely future are **vertical zoom/pan**, **theme integration** (`CrossSectionTheme` → `VizTheme` rename), and **method sync** (icing/cloud preferred-method sync with the cross-section).
 
 > Interactive, client-rendered Skew-T log-P diagram for the web app, replacing the static MetPy PNG with a canvas-based view that supports layer overlays, side variable panels, multi-model comparison, and linked interaction with the cross-section.
 
@@ -299,10 +299,11 @@ For multi-model: fetch `sounding-profile` for each selected model via `Promise.a
 - Inline computation of DD, RH, lapse rate, θe, CLW, ICE, omega/w from raw data
 - **Not yet implemented**: Unified `VizTheme` rename + Skew-T theme property groups
 
-### Phase 4 — Interaction ✅ Implemented (partial)
+### Phase 4 — Interaction ✅ Implemented
 - Hover tooltip with all values at pressure level
 - Linked cursor: Skew-T ↔ cross-section (altitude-based)
-- **Not yet implemented**: Multi-model overlay, model divergence highlighting, vertical zoom/pan
+- Multi-model overlay (Compare mode) — `SkewTCompareRenderer` in `compare-renderer.ts`; overlays 2–3 models' T/Td on one diagram, per-model side-panel lines, optional CAPE/CIN + level markers (default off)
+- **Not yet implemented**: model divergence shading (gap >2°C), vertical zoom/pan
 
 ## Reuse from Cross-Section
 

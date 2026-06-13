@@ -91,11 +91,11 @@ for fhour in forecast_hours:
     _apply_cloud_diagnostics_to_sections(..., valid_utc=valid_utc)
 ```
 
-**ICON-EU QC/QI** (`_enrich_icon_eu`): Same loop, but processes one fhour at a time with `del decoded_points; gc.collect()` between iterations to limit memory (~800 MB per decoded ICON-EU hour).
+**ICON-EU QC/QI** (`_prefetch_icon_eu_data` in Phase 1, `_decode_and_merge_icon_eu` in Phase 2): split into a download-only prefetch and a decode+merge step. Unlike the GFS loops, the per-fhour decodes are fanned out in **parallel** via `_dispatch_decode_parallel` (issue #133 — sequential dispatch was using only one pool worker), then merged in `forecast_hours` order so the valid-time invariants hold. Memory is reclaimed by `del decoded_points` + nulling the per-fhour decode-result entry inside the merge loop, with a single `_grib_gc()` after the loop (not per-iteration).
 
 **ICON-EU Cloud Diagnostics** (`_enrich_icon_eu_cloud_diagnostics`): Same per-hour loop for single-level ceiling/convective fields.
 
-All four loops above (GFS cloud water, GFS cloud diag, ICON-EU QC/QI, ICON-EU cloud diag) follow the same `del decoded_points; gc.collect()` pattern at the end of each fhour iteration. Without it, decoded_points dicts accumulate across the loop on long-route briefings and contribute to OOM pressure. Diagnostics arrays (`diagnostics_per_point`) are deleted alongside in the diag loops.
+Three of these (GFS cloud water, GFS cloud diag, ICON-EU cloud diag) follow the same `del decoded_points; _grib_gc()` pattern at the end of each fhour iteration. The ICON-EU QC/QI path decodes in parallel and `_grib_gc()`s once after its merge loop. Without these collections, decoded_points dicts accumulate across the loop on long-route briefings and contribute to OOM pressure. Diagnostics arrays (`diagnostics_per_point`) are deleted alongside in the diag loops. `_grib_gc()` is the timing-instrumented `gc.collect()` wrapper used throughout GRIB enrichment.
 
 ### Hour Matching
 
@@ -215,4 +215,4 @@ GFS and ICON-EU share one set of cross-sections. GFS enriches first; ICON-EU che
 | `tasks/fetch.py` | Fetch orchestration, passes `flight_duration_hours` |
 | `tasks/analyze.py` | Route-point analysis, `compute_interpolated_time()` |
 | `models/analysis.py` | Data models, `at_time()` with naive/aware compat |
-| `api/packs.py` | Pack loading, `_parse_target_time()` |
+| `api/packs.py` | Pack loading; imports `parse_target_time()` from `tasks/artifacts.py` (aliased `_parse_target_time`) |

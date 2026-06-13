@@ -35,8 +35,8 @@ data-extract.ts  → extractVizData() → VizRouteData
 ┌───────────────────────┬──────────────────────┬──────────────────────┐
 │  CrossSectionRenderer │  RouteGraphRenderer  │  RouteMapRenderer    │
 │  ├── axes.ts          │  ├── axes.ts         │  ├── renderer.ts     │
-│  ├── layer-registry   │  ├── metrics.ts (11) │  ├── metrics.ts (13) │
-│  ├── layers/*.ts (18) │  ├── interaction.ts  │  ├── segment-style   │
+│  ├── layer-registry   │  ├── metrics.ts (12) │  ├── metrics.ts (13) │
+│  ├── layers/*.ts (19) │  ├── interaction.ts  │  ├── segment-style   │
 │  └── interaction.ts   │  └── constants.ts    │  ├── interaction.ts  │
 │                       │                      │  ├── altitude-slider │
 │                       │                      │  └── legend.ts       │
@@ -54,7 +54,7 @@ scales.ts          (shared color/opacity functions for all three renderers)
 
 Rendered back-to-front, per `ALL_LAYERS` order in `layer-registry.ts`:
 
-Rendering order: **night shading → obscuration → clouds → convection → icing → CAT/E-Shear/inversions → terrain (covers below-surface artifacts) → current conditions → lines → reference**.
+Rendering order: **night shading → obscuration → clouds → convection → icing → CAT/E-Shear/inversions → terrain (covers below-surface artifacts) → current conditions → front markers → lines → reference**.
 
 | Layer | Name | Group | File | Default | Description |
 |-------|------|-------|------|---------|-------------|
@@ -78,6 +78,7 @@ Rendering order: **night shading → obscuration → clouds → convection → i
 | Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | off† | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). †Default ON in airport-profile drawer, OFF on briefing — context-aware via `getDefaultEnabled('airport-profile')`. |
 | Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Current conditions | Current conditions | conditions | `current-conditions.ts` | off | D-0 overlay: METAR airport columns (flight-category color, ±2 nm, 5000 ft tall) + route SIGMET hatched zones; model-independent, projected from the snapshot |
+| Air-mass boundary | Air-mass boundary (experimental) | fronts | `fronts-markers.ts` | off | Vertical marker at each on-track Hewson front crossing (#196), colored by kind (cold=blue/warm=red/quasi=purple), weighted by intensity, solid/dashed by wet/dry, opacity by persistence, triangle for convective. Reads `VizRouteData.fronts`; skipped in single-airport time-axis view. Advisory-only free-atmosphere boundary. |
 | Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
 | −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |
 | −20°C level | −20°C | temperature | `temperature-lines.ts` | off | Navy dashed line |
@@ -109,11 +110,13 @@ The compact-mode invariant — *only* the preferred layer in each group is enabl
 
 ## Preset System
 
-Layer presets provide one-click configurations. Currently one preset:
+Layer presets provide one-click configurations. Three presets (`PRESETS` in `layer-registry.ts`):
 
-**GRAMET** — Autorouter-style: Natural NWP clouds + Ogimet-NWP icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise altitude. Also switches to the GRAMET theme. (SLD is excluded from GRAMET — experimental.)
+- **GRAMET** — Autorouter-style: Natural NWP clouds + Ogimet-NWP icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise altitude. Switches to the `gramet` theme.
+- **Windy** — light theme, Natural NWP clouds + SFIP-NWP icing + NWP Convective + CAT (Ri) + freezing level + terrain + cruise.
+- **ForeFlight** — high-contrast theme, Square DD clouds + Ogimet-DD icing + CAT (Ri) + NWP Convective + freezing level + terrain + cruise.
 
-Presets defined in `layer-registry.ts` as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides.
+(SLD is excluded from all presets — experimental.) Presets defined as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides.
 
 ## Data Flow
 
@@ -239,7 +242,7 @@ Per-layer tooltip content lives in a declarative registry consumed by `interacti
 - `formatLine` — produces one tooltip line per zone, including any per-layer extras (DD, CC, T, icing index, Ri, SLD tag, source tag, etc.).
 - `swatch(zone)` — optional fill colour for a small square key drawn next to the row, **keyed to the band's risk/coverage so it matches the on-chart fill** (returns null to omit). Each entry reuses the *same* color function as the renderer (`cloudFillFromDD`, `nwpCloudFill`, `icingRiskColor`, `sldRiskColor`, `catRiskColor`, `inversionSwatchColor`, theme `sfipIcing`/`convective.towerFill`/`obscuration`) so the tooltip key never drifts from the chart. The header row also carries a line-style key, and the point header is rendered single-line.
 
-The registry includes 13 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SFIP, IENG, SLD, CAT (Ri), E-Shear, Thermo Convective, NWP Convective, Inversions, Surface obscuration. Adding a new layer = one new entry; changing what a layer shows = edit one `formatLine`.
+The registry includes 14 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SFIP, IENG, SLD, CAT (Ri), E-Shear, Thermo Convective, NWP Convective, Inversions, Surface obscuration, Night shading. Adding a new layer = one new entry; changing what a layer shows = edit one `formatLine`.
 
 **Per-layer extras shown:**
 - Cloud DD: `(DD x.x°C, T n°C)`
@@ -310,7 +313,7 @@ Info popups include buttons for Claude, ChatGPT, and Gemini that copy a context-
 
 ### Layer Control Panel
 
-`controls/panel.ts` renders checkboxes grouped by category. `getLayerGroups()` returns them in the order `reference, temperature, clouds, obscuration, icing, stability, turbulence, convection, conditions` — the `terrain` group is intentionally omitted from the panel (terrain always renders, force-on at render time, so it has no UI toggle). Layers with a `metricId` get an info button that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods. A **theme selector dropdown** and **preview button** appear in the toolbar (both standard and compare mode) for switching cross-section themes.
+`controls/panel.ts` renders checkboxes grouped by category. `getLayerGroups()` returns them in the order `reference, temperature, clouds, obscuration, icing, stability, turbulence, convection, conditions, sun, fronts` — the `terrain` group is intentionally omitted from the panel (terrain always renders, force-on at render time, so it has no UI toggle). Layers with a `metricId` get an info button that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods. A **theme selector dropdown** and **preview button** appear in the toolbar (both standard and compare mode) for switching cross-section themes.
 
 ## Unified Atmospheric Profile Table
 
@@ -362,7 +365,7 @@ A separate canvas-based chart rendered below the cross-section for scalar weathe
 
 - **X-axis aligned** with cross-section (same `distanceToX` transform and margins)
 - **Dual Y-axes**: left and right metrics independently selectable
-- **9 metrics**: headwind, crosswind, temperature, precipitation, cloud cover, CAPE, freezing level, ceiling-DD (sounding AGL), ceiling-NWP (NWP AGL)
+- **12 metrics**: headwind, crosswind, temperature, ISA deviation, precipitation, cloud cover, CAPE, CIN, QNH (region-aware unit), freezing level, ceiling-DD (sounding AGL), ceiling-NWP (NWP AGL)
 - **Render types**: line (monotone cubic spline) and bar charts
 - **State**: `VizSettings` extended with `routeGraphVisible`, `routeGraphLeftMetric`, `routeGraphRightMetric`, persisted to localStorage
 - **Controls**: dropdown selectors below the graph, integrated into the controls panel
@@ -376,7 +379,7 @@ Leaflet-based geographic visualization showing weather metrics as colored route 
 | File | Purpose |
 |------|---------|
 | `renderer.ts` | Leaflet map lifecycle: lazy init, segment polylines, waypoint markers, highlight |
-| `metrics.ts` | 14-metric registry: `MapMetric` objects with `getValue`, `getColor`, `getWidth`, `formatValue` |
+| `metrics.ts` | 13-metric `MAP_METRICS` registry: `MapMetric` objects with `getValue`, `getColor`, `getWidth`, `formatValue` |
 | `segment-style.ts` | Pure function: `computeSegmentStyles()` → `{color, weight}[]` from metric + points |
 | `interaction.ts` | Hover (highlight + tooltip + sync), click (select point), event attach/detach |
 | `altitude-slider.ts` | Range input for level-dependent metrics (0 → ceiling, 500ft steps, FL labels) |

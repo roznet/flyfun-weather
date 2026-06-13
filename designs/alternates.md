@@ -145,6 +145,20 @@ Preference wiring copies the `auto_front_detection` pattern: `compute_alternates
 on the profile-settings model (`api/profiles.py`), read in `api/packs.py`
 (`profile_settings.get("compute_alternates", False)`), set on `BriefingOptions`.
 
+### Regulatory layer — separate co-located subsystem (#249)
+`run_alternates` does NOT compute regulatory minima. A **pipeline post-step**
+(`tasks/alternate_requirement.py:run_alternate_requirement`, called after
+alternates + route weather) mutates `snapshot.alternates` **in place**: it sets
+`RouteAlternates.alternate_requirement` (the destination "is a filed alternate
+required?" trigger, FAA + EASA) and fills each `AlternateAirport.faa/.easa`
+(per-candidate alternate-minima qualification). `run_alternates` only seeds the
+NWP fallback inputs (`destination_ceiling_ft/_visibility_m`) it will read when no
+destination TAF exists. That whole regime — FAA 14 CFR 91.169 binary + EASA
+Part-NCO band, plate-minima proxy, TAF TEMPO/PROB conditional handling — has its
+own design: **[alternate-requirement.md](./alternate-requirement.md)**. Keep the
+two docs in their lanes: weather-divert-candidate geometry/assessment here,
+regulatory minima there.
+
 ## Output data model (`models/alternates.py`)
 `AlternateAirport` (geometry: `distance_from_dest_nm`, `enroute_distance_nm`,
 `segment_distance_nm`, `position`, `detour_early_nm`, `detour_late_nm`;
@@ -152,14 +166,18 @@ assessment: `flight_category`, `wind_speed_kt`, `crosswind_kt`, `headwind_kt`,
 `best_runway_id`, `ceiling_ft`, `visibility_m`, `agreement`, `per_model`;
 suitability: `has_instrument_approach`, `best_approach_type`, `longest_runway_ft`,
 `has_hard_runway`, `point_of_entry`; vs-dest flags: `better_category`,
-`better_wind`, `better_crosswind`, `dominates_destination`).
+`better_wind`, `better_crosswind`, `dominates_destination`; regulatory:
+`faa`, `easa` — per-candidate alternate-minima qualification, filled by the
+**alternate-requirement post-step**, NOT by `run_alternates` — see below).
 
 `AlternateAxisPick` (`axis`, `icao`, `distance_from_dest_nm`, `position`).
 `ALT_AXIS_LABELS` maps axis keys to display labels (used by text digest + UI).
 
 `RouteAlternates` (`destination_icao/_category/_crosswind_kt`, `eta`,
 `corridor_nm`, `radius_nm`, `require_approach`, `approach_filter_relaxed`,
-`candidates_evaluated`, `alternates`, `nearest_improving`, `computed_at`).
+`candidates_evaluated`, `alternates`, `nearest_improving`, `computed_at`;
+plus `destination_ceiling_ft/_visibility_m` and `alternate_requirement` —
+all three populated by the post-step, see "Regulatory layer").
 
 ## Presentation
 - **Briefing web UI**: `briefing-ui.ts:renderRouteAlternates(snapshot)` mirrors
@@ -170,7 +188,9 @@ suitability: `has_instrument_approach`, `best_approach_type`, `longest_runway_ft
   Warns when `approach_filter_relaxed`.
 - **Plain-text digest**: `digest/text.py:_format_route_alternates` →
   `--- Weather Alternates ---` block with the nearest-improving picks (labelled
-  via `ALT_AXIS_LABELS`) + ranked table (top 8).
+  via `ALT_AXIS_LABELS`) + ranked table (top 8). When the post-step populated
+  `alternate_requirement`, it also prints the destination "Alternate required?
+  FAA/EASA" line and per-candidate FAA/EASA tags (owned by alternate-requirement.md).
 - **LLM digest**: intentionally **NOT** fed to the prompt yet — the block in
   `digest/prompt_builder.py` is commented out (`#210`). Deferred to avoid prompt
   bloat until the feature settles.
@@ -194,5 +214,8 @@ suitability: `has_instrument_approach`, `best_approach_type`, `longest_runway_ft
   `tasks/map_queries.py`
 - Pipeline / prefs: `pipeline.py`, `api/profiles.py`, `api/packs.py`
 - UI: `web/ts/managers/briefing-ui.ts:renderRouteAlternates`
+- Regulatory post-step: `tasks/alternate_requirement.py`,
+  `analysis/alternate_requirement.py` →
+  [alternate-requirement.md](./alternate-requirement.md)
 - Related: [standalone-verification-plan.md](./future/standalone-verification-plan.md),
   [advisories.md](./advisories.md)

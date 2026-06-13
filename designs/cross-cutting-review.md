@@ -2,7 +2,7 @@
 
 > Pipeline interdependencies, method coupling, inconsistencies, and simplification opportunities across the three subsystems.
 
-_Code references verified against the repo on 2026-06-06._
+_Code references verified against the repo on 2026-06-06; re-checked 2026-06-13: findings #1/#5/#6/A/B/C remain fixed in code; open findings #2/#3/#4 still open. Embedded line numbers are approximate — the sounding pipeline (`__init__.py`) was reorganized into lite/heavy passes since the original review._
 
 ## Pipeline Order & Data Flow
 
@@ -71,7 +71,7 @@ The icing formula underweights convective icing when SB-CAPE is low but elevated
 
 ### 2. Altitude advisories computed before method resolution ⚠️ Medium
 
-**Problem:** `compute_altitude_advisories()` is called in `analyze.py:149` during the analysis stage, **before** `_resolve_analyses()` runs in the advisory stage. The altitude advisories (vertical regimes, descend/climb advisories) always use:
+**Problem:** `compute_altitude_advisories()` is called in `analyze.py` (~line 161) during the analysis stage, **before** `_resolve_analyses()` runs in the advisory stage (`tasks/advise.py:64`). The altitude advisories (vertical regimes, descend/climb advisories) always use:
 - DD cloud layers (default `cloud_layers`)
 - Ogimet-DD icing zones (default `icing_zones`)
 
@@ -88,7 +88,7 @@ Option 3 is reasonable because altitude advisories are meant to be conservative 
 
 ### 3. Altitude advisories use raw `nwp_cloud_diagnostics` for convective transitions ⚠️ Low
 
-**Problem:** In `advisories.py:156-161`, convective cloud transitions are added to vertical regimes only when `diag.convective_cover_pct > 0`:
+**Problem:** In `advisories.py` (~lines 162-167), convective cloud transitions are added to vertical regimes only when `diag.convective_cover_pct > 0`:
 
 ```python
 if (diag.convective_base_ft is not None

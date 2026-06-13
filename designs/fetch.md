@@ -12,7 +12,7 @@ Multi-model NWP data from the free Open-Meteo API.
 
 ### Model Endpoints (`fetch/variables.py`)
 
-Each model has a `ModelEndpoint` dataclass (`name`, `base_url`, `max_days`, `unavailable_surface`, `unavailable_pressure`, `pressure_levels`, `default`, `region`, `required_icao_prefixes`) in `MODEL_ENDPOINTS`. There are **6** endpoints (no `best_match` — Open-Meteo's auto-blend was dropped):
+Each model has a `ModelEndpoint` dataclass (`name`, `base_url`, `max_days`, `model_param`, `unavailable_surface`, `unavailable_pressure`, `pressure_levels`, `default`, `region`, `required_icao_prefixes`) in `MODEL_ENDPOINTS`. There are **6** endpoints (no `best_match` — Open-Meteo's auto-blend was dropped):
 
 | Model | Endpoint | Max Days | Region / gate | Notes |
 |-------|----------|----------|---------------|-------|

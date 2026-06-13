@@ -34,7 +34,7 @@ Cached locally. Everything the app needs to display the full briefing and power 
 Heavier artifacts derived from full forecast data that don't need to live on device:
 - **Skew-T plots** — generated per-waypoint per-model (PNG, ~100KB each)
 - **Full sounding analysis** — detailed thermodynamic indices per waypoint
-- **Model comparison details** — full multi-metric divergence table (21 scored variables in `analysis/comparison.py::DIVERGENCE_THRESHOLDS`)
+- **Model comparison details** — full multi-metric divergence table (scored variables in `analysis/comparison.py::DIVERGENCE_THRESHOLDS`)
 - **LLM digest full text** — complete AI briefing narrative
 - **GRAMET cross-section** — Autorouter PDF/PNG
 

@@ -62,6 +62,7 @@ interface RouteGraphMetric {
 | `headwind` | Head/Tailwind | kt | line | `#2563eb` (blue) | `VizPoint.headwindKt` |
 | `crosswind` | Crosswind | kt | line | `#7c3aed` (purple) | `VizPoint.crosswindKt` |
 | `temperature` | Temperature (2m) | °C | line | `#dc2626` (red) | `model_divergence["temperature_c"]` |
+| `isa-dev` | ISA Deviation (cruise) | °C | line | `#ea580c` (orange) | `VizPoint.isaDevC` (cruise temp − ISA std) |
 | `precipitation` | Precipitation | mm | bar | `#0ea5e9` (sky) | `model_divergence["precipitation_mm"]` |
 | `cloud-cover` | Cloud Cover | % | bar | `#6b7280` (gray) | `VizPoint.cloudCoverTotalPct` |
 | `cape` | CAPE | J/kg | bar | `#f59e0b` (amber) | `VizPoint.capeSurfaceJkg` |
@@ -70,6 +71,8 @@ interface RouteGraphMetric {
 | `freezing-level` | Freezing Level | ft | line | `#06b6d4` (cyan) | `altitudeLines.freezingLevelFt` |
 | `ceiling-dd` | Ceiling DD | ft AGL | line | `#8b5cf6` (violet) | `soundingCeilingFt` − terrain elevation |
 | `ceiling-nwp` | Ceiling NWP | ft AGL | line | `#d946ef` (fuchsia) | `nwpCloudDiag.ceilingFt` − terrain elevation |
+
+**ISA deviation** plots cruise-level temperature minus the ISA standard at that level — the zero line is "on-ISA", above = warmer (degraded density altitude / climb / TAS). It is derived in `data-extract.ts` from a separate `VizPoint.temperatureCruiseC` (cruise-level temperature, kept distinct from the surface `temperatureC`), so the surface and cruise temperatures stay independent.
 
 **Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion and cap display at 5000ft AGL.
 
@@ -198,10 +201,12 @@ web/ts/visualization/
 │   ├── renderer.ts         # RouteGraphRenderer class (canvas, transform, render)
 │   ├── axes.ts             # Y-axis drawing (left + right), X grid lines
 │   └── interaction.ts      # Hover/click synced with cross-section (tooltip via getMetricLabel)
-├── types.ts                # Extended VizSettings, VizPoint (temperatureC, precipitationMm, qnhHpa)
-├── data-extract.ts         # Extract temperature/precipitation/pressure_msl from model_divergence
-├── units.ts                # Region-aware QNH conversion (qnhDisplayValue / qnhUnitLabel)
+├── types.ts                # Extended VizSettings, VizPoint (temperatureC, temperatureCruiseC, isaDevC, precipitationMm, qnhHpa)
+├── data-extract.ts         # Extract temperature/precipitation/pressure_msl from model_divergence; derive isaDevC from cruise temp
+├── route-graph/constants.ts # MARGIN (left 60 / right 50 / top 8 / bottom 24) shared by renderer + axes
 └── controls/panel.ts       # Extended with route graph toggle + dropdowns
+
+web/ts/units.ts             # Region-aware QNH conversion (qnhDisplayValue / qnhUnitLabel) — shared, not visualization-local
 ```
 
 Backend per-model surface plumbing: `tasks/analyze.py` collects the divergence variable, `analysis/comparison.py` holds its agreement threshold, and the comparison-table registration lives in `web/ts/data/metrics-{catalog,display}.json` + `helpers/metrics-helper.ts` (`VARIABLE_TO_METRIC`).

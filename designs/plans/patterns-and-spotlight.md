@@ -6,13 +6,40 @@
 > question from "how good are the models?" (boring — they're all 80–85%)
 > to "what is this airport actually like, and where do models trip?"
 
-## Status (2026-05-10)
+## Status (synced 2026-06-13)
 
-- ✅ **Phase 1** — METAR ingest decoupling + 30-min cadence. Shipped (PR #140) and deployed to weather.flyfun.aero.
-- 🟡 **Phase 2** — `airport_monthly_summary` rollup. In progress (this branch).
-- 🟡 **Phase 3** — `airport_daily_summary` rollup. In progress (this branch, alongside Phase 2).
-- ⏸ **Phase 4** — MySQL partitioning. **Deferred** — InnoDB rejects partitioning on tables with FKs (parent or child), and `verification_observations` has 3 inbound CASCADE FKs from score / map tables. Decided 2026-05-10 to use plain `DELETE` for retention (Option B): at current scale (~80–160k rows/month) indexed-range deletes complete in seconds; revisit only if perf becomes a real problem. ``ensure_future_partitions()`` left as a no-op stub for future pivot.
-- ⏸ Phases 5–6 not yet started.
+**Infra (Phases 1–4): SHIPPED. User-facing (Phases 5–6): reframed and
+partially shipped under a different design.** The two-tab "Patterns +
+Spotlight" plan below was superseded during implementation by a single
+**Climatology** tab (issue #155). Treat Phases 5–6 of this plan as
+historical intent, not a spec of the code. The durable parts of this
+plan now live in code; this doc should be folded into a Climatology
+design doc and archived.
+
+- ✅ **Phase 1** — METAR ingest decoupling + 30-min cadence. Shipped (PR #140), deployed.
+- ✅ **Phase 2** — `airport_monthly_summary` rollup. Shipped. `db/models.py:AirportMonthlySummaryRow`, `tasks/airport_summary.py`, migration `053_airport_summary_tables.py`, retention in `tasks/retention.py:prune_raw_observations`.
+- ✅ **Phase 3** — `airport_daily_summary` rollup. Shipped. `AirportDailySummaryRow`, daily rollup in `airport_summary.py`, migrations 053 + `057_airport_daily_n_category_changes.py`.
+- ✅ **Phase 4** — MySQL partitioning. **Now built**, reversing the earlier "deferred / no-op stub" decision: `tasks/retention.py:ensure_future_partitions()` is a real implementation (`REORGANIZE PARTITION p_future INTO …` via `TO_DAYS`, MySQL-guarded). Verify the FK-conflict concern (3 inbound CASCADE FKs) was resolved before relying on it.
+- 🟡 **Phases 5–6** — built as the **Climatology** tab, NOT as separate "Patterns" and "Spotlight" tabs. See "What actually shipped" below.
+
+### What actually shipped (Phases 5–6 reframe)
+
+- A single `data-tab="climatology"` tab in `web/maps.html` with **Map +
+  "Top airports"** (leaderboard) sub-tabs. The old "Accuracy Stats" tab
+  (`data-tab="stats"`, embedded `verification.html`) was **kept**, not
+  replaced by a "Spotlight" tab.
+- Backend: `api/climatology.py` (`/climatology/category|phenomena|wind|volatility|leaderboard`)
+  + `tasks/climatology_queries.py`. No `patterns.py` / `spotlight.py`.
+  Read-only over the summary tables, **no cache layer** (indexed reads
+  are cheap), and **auth-only** on every route (planned "Patterns =
+  public" was dropped; gating note in the module docstring).
+- Frontend: `web/ts/visualization/climatology-tab.ts`, `climatology-map.ts`,
+  `climatology-datasets.ts`, `adapters/climatology-adapter.ts`,
+  `data/metrics-catalog.json`.
+- **Not built**: the "Spotlight" per-airport drill-down — calendar
+  heatmap, diurnal strip, featured-airport bust card, TAF-vs-models
+  showdown, notable-bust → briefing-pack links. `calendar-heatmap.ts` /
+  `diurnal-strip.ts` do not exist.
 
 ## Why
 

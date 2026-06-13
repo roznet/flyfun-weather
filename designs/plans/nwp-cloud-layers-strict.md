@@ -1,5 +1,26 @@
 # Refactor: `nwp_cloud_layers` strictly native NWP
 
+> **STATUS (2026-06-13): SHIPPED & MERGED.** Branch/worktree gone. The
+> strict-native refactor is live: `build_nwp_cloud_layers` returns native
+> (`nwp_3d`/`grib`) layers or `None` (no synth fallback;
+> `clouds.py:507`); Ogimet-NWP/IENG icing short-circuit to `[]` on
+> `None`/empty clouds (`icing.py:441,517`); the model field is typed
+> `list[EnhancedCloudLayer] | None` (`models/analysis.py:682`) and `None`
+> is preserved end-to-end (`__init__.py:466`); the frontend gates
+> `nwp-cloud-bands` on `nwpCloudLayers !== null` and `nwp-convective-bg`
+> on `hasNwpConvective` (`data-extract.ts:452,474`). Tests:
+> `tests/test_nwp_cloud_layers_from_cc.py`, plus `test_icing.py`/`test_clouds.py`.
+>
+> **Deferred (item 4, by design, not abandoned):** `decode.py` does NOT
+> fake ECMWF single-level `top_ft`. ECMWF cloud decks come from per-level
+> `cc` (`nwp_3d` source) — wired (`decode.py:39`, `_ECMWF_FRAC_TO_PCT`).
+> The open follow-up is the separate ticket: confirm per-level `cc`
+> actually produces `nwp_3d` layers in prod (was empty on the test flight).
+>
+> The durable design knowledge (source taxonomy, no-synth rationale,
+> bulk-% as severity-modulator-not-gate) now lives in the docstrings of
+> `clouds.py` / `icing.py`. This plan can be archived.
+
 ## Why
 
 Today `nwp_cloud_layers` conflates three sources:

@@ -213,5 +213,5 @@ These informed our pivot away from zone-level detection toward per-leg Hewson ad
 
 - Full plan (with future phases): [frontal-detection-plan.md](./future/frontal-detection-plan.md)
 - Calibration workflow: [front-calibration.md](./future/front-calibration.md)
-- Tests: `tests/test_frontal_*.py` (7 files covering detect, grid, zones, tracking, cache, case, route_sampling)
+- Tests: `tests/test_frontal_*.py` (11 files: detect, grid, zones, tracking, cache, case, route_sampling, gates, decisions, contour_fronts, sources)
 - Key code: `src/weatherbrief/frontal/`

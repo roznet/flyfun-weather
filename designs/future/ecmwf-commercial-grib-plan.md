@@ -3,7 +3,16 @@
 > Integrate ECMWF IFS real-time GRIB data (commercial feed via ECPDS) to enrich
 > the ECMWF cross-section with cloud microphysics and eventually full sounding data.
 
-**Status:** Pre-agreement — test sample files received, validating we can decode them.
+**Status:** FULLY IMPLEMENTED & LIVE IN PRODUCTION (since 2026-04-20). This
+plan is now historical — all phases (0 sample validation → 1 fetch → 2 pipeline
+→ 3 full sounding) shipped. The durable design home is `designs/fetch.md`
+(see its "ECMWF IFS enrichment" section + gotchas); the IFS Cycle 50r1 follow-on
+is documented in `designs/future/ifs-cycle-50r1-migration.md`. The real
+subscription delivers **ifs-ens-cf** at 0.25° (a1 = 29 surface vars, a2 = 10
+vars × 25 pressure levels), not the speculative HRES/AIFS choices weighed below.
+Code lives in `ecmwf_fetch.py` + `ecmwf_watcher.py` + `_enrich_ecmwf()` in
+`fetch/grib/__init__.py`. Kept only as a record of the original validation plan;
+recommend archiving.
 
 ## Background
 

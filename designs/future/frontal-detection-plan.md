@@ -1,5 +1,22 @@
 # Frontal Detection — Implementation Plan for FlyFun Weather
 
+> **Status (2026-06-13): largely IMPLEMENTED and promoted.** Phase 1 detection core +
+> CLI is built and has been promoted to the live design doc
+> [`designs/frontal-detection.md`](../frontal-detection.md) (indexed in INDEX.md) — read
+> that for **current truth**. Several specifics in this plan are now stale: the gradient
+> threshold is **2.0 K/100km** (not 0.8 — at 0.8 >50% of the European domain triggered),
+> the grid is **0.25° / 35-60°N, -20-28°E** (not 0.5°), `_MIN_FRONTAL_POINTS = 32` (not 8),
+> and the module set grew well beyond the plan: a **Hewson TFP route locator**
+> (`detect.compute_hewson_diagnostics`, `sources.py`, `route_sampling.py`, `gates.py`'s
+> `FrontGateConfig` preset registry, `contour_fronts.py`, `case.py`) plus a `hewson/`
+> package, `api/hewson_map.py`, `models/fronts.py`, `tasks/fronts.py`, and DB storage. The
+> project **pivoted from zone-level detection toward per-leg Hewson advisories** — see
+> `designs/future/hewson-fields-aviation-advisories.md` and `designs/future/front-calibration.md`.
+>
+> This plan is retained for its **forward-looking phases** (Phase 2-4 integration sequence,
+> Future Enhancements) and its rejected-options reasoning. Treat Parts 1-3 as historical
+> design intent, not current code. Do NOT calibrate against the numbers below.
+
 ## Overview
 
 ### Goal
