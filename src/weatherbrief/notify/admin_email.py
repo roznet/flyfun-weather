@@ -198,6 +198,7 @@ CATEGORY_LABELS = {
     "too_optimistic": "Briefing Too Optimistic",
     "incorrect_interpretation": "Briefing Incorrect Interpretation",
     "other": "Other Bug/Issue",
+    "digest_rating": "Digest Rating",
 }
 
 
@@ -209,10 +210,14 @@ def send_feedback_notification(
     category: str,
     comment: str,
     base_url: str,
+    sentiment: str | None = None,
 ) -> None:
     """Notify admins when a user submits feedback.
 
-    In dev mode (no ADMIN_EMAILS set), logs instead.
+    ``sentiment`` ('up'/'down') marks a quick digest thumb rating; it gives
+    the email a distinct subject so thumb ratings are easy to recognise and
+    filter apart from detailed feedback. In dev mode (no ADMIN_EMAILS set),
+    logs instead.
     """
     from flyfun_common.auth import is_dev_mode
 
@@ -237,11 +242,17 @@ def send_feedback_notification(
     else:
         briefing_url = f"{base_url}/briefing.html?flight={flight_id}"
 
-    subject = f"[FlyFun Weather] Feedback: {category_label}"
+    if sentiment in ("up", "down"):
+        thumb = "👍" if sentiment == "up" else "👎"
+        subject = f"[FlyFun Weather] {thumb} Digest rating"
+        heading = f"{thumb} Digest Rating"
+    else:
+        subject = f"[FlyFun Weather] Feedback: {category_label}"
+        heading = "User Feedback"
     html_body = f"""\
 <html>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a2e;">
-  <h2 style="margin:0 0 12px;">User Feedback</h2>
+  <h2 style="margin:0 0 12px;">{heading}</h2>
   <table style="border-collapse:collapse;margin-bottom:16px;">
     <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">From</td><td>{html.escape(user_name)} ({html.escape(user_email)})</td></tr>
     <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">Category</td><td>{html.escape(category_label)}</td></tr>
@@ -259,7 +270,7 @@ def send_feedback_notification(
 </html>"""
 
     plain_body = (
-        f"User Feedback\n\n"
+        f"{heading}\n\n"
         f"From: {user_name} ({user_email})\n"
         f"Category: {category_label}\n"
         f"Flight: {flight_id}\n\n"
