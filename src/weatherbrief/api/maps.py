@@ -126,9 +126,12 @@ def compute_day_availability(db: Session) -> list[dict[str, Any]]:
 
     from weatherbrief.db.models import AirportForecastSnapshotRow
 
+    # Capture `now` once so all four days resolve against the same instant —
+    # otherwise a UTC-midnight tick mid-loop could map two days to one date.
+    now = datetime.now(timezone.utc)
     days = []
     for day in (0, 1, 2, 3):
-        forecast_date = (datetime.now(timezone.utc) + timedelta(days=day)).date()
+        forecast_date = (now + timedelta(days=day)).date()
         start = datetime(
             forecast_date.year, forecast_date.month, forecast_date.day,
             0, 0, 0, tzinfo=timezone.utc,

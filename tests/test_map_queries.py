@@ -516,6 +516,10 @@ class TestAvailableDaysEndpoint:
         days = {d["day"]: d for d in resp.json()["days"]}
         assert set(days) == {0, 1, 2, 3}
         assert days[0]["available"] is True
+        # D-1/D-2 also had nothing seeded — pin them so a regression that
+        # erroneously marks them available is caught.
+        assert days[1]["available"] is False
+        assert days[2]["available"] is False
         assert days[3]["available"] is False
         # Date label tracks today + day so the UI label stays consistent.
         assert days[0]["date"] == datetime.now(timezone.utc).date().isoformat()

@@ -181,6 +181,9 @@ function applyDayAvailability(): void {
     const avail = availableDays.has(d);
     btn.classList.toggle('day-unavailable', !avail);
     (btn as HTMLElement).title = avail ? '' : t('maps.dayNotForecast');
+    // Kept clickable (to show the explanation) so `disabled` isn't used —
+    // aria-disabled conveys the state to screen readers without that.
+    btn.setAttribute('aria-disabled', avail ? 'false' : 'true');
   }
 }
 
