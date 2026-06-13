@@ -61,27 +61,56 @@ _RELAXED_CAVEAT = (
 )
 
 
-def _coerce_dt(value) -> datetime | None:
+def _add_months(year: int, month: int, n: int) -> tuple[int, int]:
+    """Shift a (year, month) by ``n`` months."""
+    idx = (year * 12 + (month - 1)) + n
+    return idx // 12, idx % 12 + 1
+
+
+def _coerce_dt(value, ref: datetime | None):
     """Coerce a euro_aip validity marker (datetime or day/hour) to a datetime.
 
-    Only used to order prevailing groups within the small ETA window, so a
-    synthetic month/year is fine — we just need a consistent ordering key.
+    Only used to order prevailing groups within the ETA window (FM supersession),
+    so we need a consistent ordering key — but a TAF can straddle a month
+    boundary (a 29th-of-month TAF valid to 01/06Z), so a fixed Jan anchor would
+    sort an early-of-next-month FM *before* the late-of-this-month base and drop
+    the FM's (possibly worse) conditions. Resolve the day/hour to the calendar
+    month nearest ``ref`` (the ETA) so the ordering is rollover-safe. Returns a
+    naive datetime so the ordering key never mixes aware/naive with the
+    ``datetime.min`` sentinel used for groups without a validity_start.
     """
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        return value.replace(tzinfo=None)
     day = getattr(value, "day", None)
     hour = getattr(value, "hour", None)
     if day is None or hour is None:
         return None
     try:
-        return datetime(2000, 1, int(day), int(hour))
+        day = int(day)
+        hour = int(hour)
     except (ValueError, TypeError):
         return None
+    if ref is None:
+        try:
+            return datetime(2000, 1, day, hour)
+        except ValueError:
+            return None
+    ref_naive = ref.replace(tzinfo=None)
+    candidates: list[datetime] = []
+    for delta in (-1, 0, 1):
+        y, m = _add_months(ref_naive.year, ref_naive.month, delta)
+        try:
+            candidates.append(datetime(y, m, day, hour))
+        except ValueError:
+            continue  # day out of range for that month (e.g. 31 in a 30-day month)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda d: abs((d - ref_naive).total_seconds()))
 
 
-def _trend_to_view(obj, *, is_base: bool) -> TrendView:
+def _trend_to_view(obj, *, is_base: bool, ref: datetime | None = None) -> TrendView:
     """Map a euro_aip WeatherReport / trend to the pure ``TrendView``."""
     return TrendView(
         ceiling_ft=getattr(obj, "ceiling_ft", None),
@@ -92,30 +121,37 @@ def _trend_to_view(obj, *, is_base: bool) -> TrendView:
         # The base group never has a PROB; don't let a stray attribute on the
         # parent WeatherReport misclassify it as a temporary group (#250 review).
         probability=None if is_base else getattr(obj, "probability", None),
-        validity_start=_coerce_dt(getattr(obj, "validity_start", None)),
+        validity_start=_coerce_dt(getattr(obj, "validity_start", None), ref),
     )
 
 
-def _taf_instant_trends(taf, sample_times, applicable_trends_fn=None) -> list[list[TrendView]]:
+def _taf_instant_trends(
+    taf, sample_times, applicable_trends_fn=None, ref: datetime | None = None
+) -> list[list[TrendView]]:
     """Build the per-instant applicable-trend lists for the window builder.
 
     At each sample time the prevailing line is the base TAF group plus any
     applicable FM/BECMG groups; TEMPO/PROB groups come in as candidate-worse.
     ``applicable_trends_fn`` is injectable so the windowing can be tested without
-    euro_aip installed.
+    euro_aip installed. ``ref`` (the ETA) anchors validity-marker rollover so a
+    month-straddling TAF orders its FM groups correctly; it defaults to the first
+    sample time when not given.
     """
     if applicable_trends_fn is None:  # pragma: no cover - exercised in CI
         from euro_aip.briefing.weather.analysis import WeatherAnalyzer
 
         applicable_trends_fn = WeatherAnalyzer.applicable_trends
 
-    base_view = _trend_to_view(taf, is_base=True)
+    if ref is None and sample_times:
+        ref = sample_times[0]
+
+    base_view = _trend_to_view(taf, is_base=True, ref=ref)
     instants: list[list[TrendView]] = []
     for t in sample_times:
         views = [base_view]
         try:
             for change in applicable_trends_fn(taf, t) or []:
-                views.append(_trend_to_view(change, is_base=False))
+                views.append(_trend_to_view(change, is_base=False, ref=ref))
         except Exception:
             logger.debug("alternate_requirement: applicable_trends failed", exc_info=True)
         instants.append(views)
@@ -135,7 +171,7 @@ def _build_destination_window(
 
             taf = WeatherReport.from_taf(taf_raw)
             sample_times = [eta + timedelta(minutes=m) for m in _WINDOW_OFFSETS_MIN]
-            instants = _taf_instant_trends(taf, sample_times)
+            instants = _taf_instant_trends(taf, sample_times, ref=eta)
             window = build_window(instants, source="taf")
             if window.has_forecast:
                 return window

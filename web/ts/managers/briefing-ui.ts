@@ -1166,12 +1166,14 @@ function easaQualBadge(q: AlternateQual | null): string {
 /** Destination "alternate required?" banner (FAA + EASA). */
 function altRequirementBanner(req: AlternateRequirement | null | undefined): string {
   if (!req) return '';
-  const faaTxt = req.faa.status === 'required' ? 'Required' : 'Not required';
+  // FAA is binary, but keep the safe direction: only an explicit not_required
+  // reads as "Not required"; anything else (incl. a stray marginal) → Required.
+  const faaTxt = req.faa.status === 'not_required' ? 'Not required' : 'Required';
   const easaMap: Record<string, string> = {
     required: 'Required', marginal: 'Marginal', not_required: 'Not required',
   };
   const easaTxt = easaMap[req.easa.status] ?? req.easa.status;
-  const faaCls = req.faa.status === 'required' ? 'alt-reg-no' : 'alt-reg-yes';
+  const faaCls = req.faa.status === 'not_required' ? 'alt-reg-yes' : 'alt-reg-no';
   const easaCls = req.easa.status === 'required'
     ? 'alt-reg-no' : req.easa.status === 'marginal' ? 'alt-reg-marginal' : 'alt-reg-yes';
   const srcLabel = req.faa.source === 'nwp'

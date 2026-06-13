@@ -580,7 +580,7 @@ export interface CriterionAssessment {
   forecast: number | null;
   required_min: number;
   required_max: number;
-  verdict: string;
+  verdict: 'likely' | 'marginal' | 'unlikely' | 'not_required' | 'required';
 }
 
 /** Destination "alternate required?" for one regulatory regime (#249). */

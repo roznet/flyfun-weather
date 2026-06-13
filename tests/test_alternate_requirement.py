@@ -368,6 +368,42 @@ class TestTafExtraction:
         assert w.ceiling_ft == 600  # tempo worsens
         assert w.triggered_by_tempo
 
+    def test_base_group_with_stray_probability_not_temporary(self):
+        # #250 review: a parent WeatherReport with a stray `probability` must NOT
+        # cause the base view to be classed temporary (which would drop its
+        # ceiling to clear / its vis to fail and set a false TEMPO tag).
+        taf = SimpleNamespace(
+            ceiling_ft=500, visibility_meters=8000, cavok=False,
+            trend_type=None, probability=30, validity_start=None,
+        )
+        eta = datetime(2026, 6, 13, 12, tzinfo=timezone.utc)
+        instants = _taf_instant_trends(taf, [eta], applicable_trends_fn=lambda _t, _s: [])
+        w = build_window(instants, source="taf")
+        assert w.ceiling_ft == 500  # real ceiling kept (not optimistically clear)
+        assert w.visibility_m == 8000  # real vis kept (not pessimistically None)
+        assert not w.triggered_by_tempo
+
+    def test_month_straddling_taf_orders_fm_after_base(self):
+        # #250 review: base valid from day 29, FM from day 01 (next month). At an
+        # ETA on day 01, the FM must supersede the base (rollover-safe ordering),
+        # so its worse ceiling wins — not silently dropped by a fixed-Jan anchor.
+        base = SimpleNamespace(
+            ceiling_ft=3000, visibility_meters=9999, cavok=False,
+            trend_type=None, probability=None,
+            validity_start=SimpleNamespace(day=29, hour=6),
+        )
+        fm = SimpleNamespace(
+            ceiling_ft=800, visibility_meters=9999, cavok=False,
+            trend_type="FM", probability=None,
+            validity_start=SimpleNamespace(day=1, hour=0),
+        )
+        eta = datetime(2026, 7, 1, 6, tzinfo=timezone.utc)
+        instants = _taf_instant_trends(taf=base, sample_times=[eta], ref=eta,
+                                       applicable_trends_fn=lambda _t, _s: [fm])
+        w = build_window(instants, source="taf")
+        assert w.ceiling_ft == 800  # FM superseded the base, not the reverse
+        assert not w.triggered_by_tempo  # FM is prevailing, not a temporary group
+
 
 # --- Wiring smoke test (NWP path, no euro_aip) -------------------------------
 

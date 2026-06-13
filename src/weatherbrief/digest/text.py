@@ -409,7 +409,9 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
 
     req = alt.alternate_requirement
     if req is not None:
-        faa = "Required" if req.faa.status.value == "required" else "Not required"
+        # FAA is binary, but guard the safe direction: anything but an explicit
+        # not_required reads as Required (a stray marginal must not under-report).
+        faa = "Not required" if req.faa.status.value == "not_required" else "Required"
         easa_map = {
             "required": "Required", "marginal": "Marginal", "not_required": "Not required",
         }
