@@ -169,13 +169,13 @@ def test_digest_rating_pushes_langsmith_feedback(client, app_db, monkeypatch):
     assert pushed[0]["comment"] == "Spot on."
 
 
-def test_digest_rating_unknown_pack_does_not_fail(client, monkeypatch):
-    """Rating a pack with no stored trace id (legacy) still returns 200 (#244)."""
-    pushed = []
-    import weatherbrief.digest.langsmith_feedback as ls
-    monkeypatch.setattr(ls, "push_digest_thumb_feedback",
-                        lambda **kw: pushed.append(kw))
+def test_digest_rating_unknown_pack_does_not_fail(client):
+    """Rating with no matching pack (legacy/missing) still returns 200 (#244).
 
+    ``load_pack_meta`` raises ``KeyError``, which submit_feedback swallows —
+    the feedback row is recorded regardless. No push helper is patched: the
+    point is that the swallowed lookup doesn't surface to the user.
+    """
     resp = client.post("/api/feedback", json={
         "flight_id": "does-not-exist",
         "pack_timestamp": "2026-06-12T06:00:00+00:00",
@@ -185,8 +185,55 @@ def test_digest_rating_unknown_pack_does_not_fail(client, monkeypatch):
         "target": "digest",
     })
     assert resp.status_code == 200, resp.text
-    # No pack → no LangSmith push, but the feedback row is still recorded.
-    assert pushed == []
+
+
+def test_digest_rating_pack_without_trace_id_noops(client, app_db, monkeypatch):
+    """A pack with no digest_trace_id (digest never ran) passes run_id=None (#244).
+
+    The pack lookup succeeds, so the push helper IS invoked — but with
+    ``run_id=None``, which it treats as a no-op (no LangSmith call). Submission
+    still succeeds.
+    """
+    from datetime import datetime, timezone
+
+    from weatherbrief.models.storage import BriefingPackMeta
+    from weatherbrief.storage.flights import save_pack_meta
+    from weatherbrief.db.models import FlightRow
+
+    flight_id = "egtk_lfat-2026-06-12-notrace"
+    pack_ts = datetime(2026, 6, 12, 6, 0, 0, tzinfo=timezone.utc)
+
+    s = app_db()
+    try:
+        s.add(FlightRow(
+            id=flight_id, user_id=DEV_USER_ID, route_name="EGTK-LFAT",
+            waypoints_json="[]", departure_time=pack_ts, cruise_altitude_ft=8000,
+        ))
+        s.flush()
+        save_pack_meta(s, BriefingPackMeta(
+            flight_id=flight_id, fetch_timestamp=pack_ts, days_out=0,
+            digest_trace_id=None,
+        ))
+        s.commit()
+    finally:
+        s.close()
+
+    pushed = []
+    import weatherbrief.digest.langsmith_feedback as ls
+    monkeypatch.setattr(ls, "push_digest_thumb_feedback",
+                        lambda **kw: pushed.append(kw))
+
+    resp = client.post("/api/feedback", json={
+        "flight_id": flight_id,
+        "pack_timestamp": pack_ts.isoformat(),
+        "category": "digest_rating",
+        "comment": "",
+        "sentiment": "up",
+        "target": "digest",
+    })
+    assert resp.status_code == 200, resp.text
+    assert len(pushed) == 1
+    assert pushed[0]["run_id"] is None
 
 
 def test_thumb_down_bare_is_recorded(client, app_db):

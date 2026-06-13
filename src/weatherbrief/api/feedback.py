@@ -146,10 +146,12 @@ def submit_feedback(
             from weatherbrief.storage.flights import load_pack_meta
 
             meta = load_pack_meta(db, body.flight_id, pack_ts)
+            # push_digest_thumb_feedback normalizes "" → None at the LangSmith
+            # boundary, so pass the raw comment rather than duplicating it here.
             push_digest_thumb_feedback(
                 run_id=meta.digest_trace_id,
                 sentiment=body.sentiment,
-                comment=body.comment or None,
+                comment=body.comment,
             )
         except KeyError:
             # Pack not found (old/legacy pack, or mismatched ids) — nothing to
