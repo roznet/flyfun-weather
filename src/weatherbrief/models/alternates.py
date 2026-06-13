@@ -17,6 +17,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from weatherbrief.models.alternate_requirement import (
+    AlternateQual,
+    AlternateRequirement,
+)
+
 # Canonical per-axis labels for the nearest-improving picks, shared by the web
 # UI / text digest / LLM prompt so the wording can't drift between surfaces.
 ALT_AXIS_LABELS = {
@@ -66,6 +71,11 @@ class AlternateAirport(BaseModel):
     better_crosswind: bool = False
     dominates_destination: bool = False  # better-or-equal on all axes (Pareto)
 
+    # --- regulatory alternate-minima qualification (issue #249) ---
+    # Computed from the candidate's NWP-consensus ceiling/vis + best_approach_type.
+    faa: AlternateQual | None = None  # Yes/No (Likely/Unlikely)
+    easa: AlternateQual | None = None  # Likely/Marginal/Unlikely
+
 
 class AlternateAxisPick(BaseModel):
     """The nearest improving alternate for one deficient axis."""
@@ -82,6 +92,10 @@ class RouteAlternates(BaseModel):
     destination_icao: str
     destination_category: str
     destination_crosswind_kt: float | None = None
+    # Destination NWP-consensus ceiling/visibility at ETA (worst across models).
+    # The regulatory-trigger NWP fallback (#249) when no destination TAF exists.
+    destination_ceiling_ft: float | None = None
+    destination_visibility_m: float | None = None
     eta: datetime | None = None
     corridor_nm: float
     radius_nm: float
@@ -90,4 +104,7 @@ class RouteAlternates(BaseModel):
     candidates_evaluated: int = 0
     alternates: list[AlternateAirport] = Field(default_factory=list)  # ranked, closest-first
     nearest_improving: list[AlternateAxisPick] = Field(default_factory=list)
+    # Regulatory "is an alternate required?" for the destination (FAA + EASA),
+    # co-located with the candidates it qualifies (#249). None until wired.
+    alternate_requirement: AlternateRequirement | None = None
     computed_at: datetime | None = None

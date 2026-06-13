@@ -573,6 +573,46 @@ export interface RealtimeRefreshResult {
 }
 
 /** One weather-based divert candidate (issue #210). */
+/** One criterion (ceiling or visibility) vs its requirement band (#249). */
+export interface CriterionAssessment {
+  label: string;
+  unit: string;
+  forecast: number | null;
+  required_min: number;
+  required_max: number;
+  verdict: string;
+}
+
+/** Destination "alternate required?" for one regulatory regime (#249). */
+export interface RegAlternateTrigger {
+  regime: 'faa' | 'easa';
+  status: 'not_required' | 'marginal' | 'required';
+  reason: string;
+  source: 'taf' | 'nwp' | 'none';
+  triggered_by_tempo: boolean;
+  ceiling: CriterionAssessment;
+  visibility: CriterionAssessment;
+}
+
+/** Per-candidate alternate-minima qualification for one regime (#249). */
+export interface AlternateQual {
+  regime: 'faa' | 'easa';
+  verdict: 'likely' | 'marginal' | 'unlikely';
+  reason: string;
+  ceiling: CriterionAssessment;
+  visibility: CriterionAssessment;
+}
+
+/** Regulatory alternate-requirement assessment for the destination (#249). */
+export interface AlternateRequirement {
+  destination_icao: string;
+  eta: string | null;
+  faa: RegAlternateTrigger;
+  easa: RegAlternateTrigger;
+  caveats: string[];
+  computed_at: string | null;
+}
+
 export interface AlternateAirport {
   icao: string;
   name: string | null;
@@ -602,6 +642,8 @@ export interface AlternateAirport {
   better_wind: boolean;
   better_crosswind: boolean;
   dominates_destination: boolean;
+  faa: AlternateQual | null;
+  easa: AlternateQual | null;
 }
 
 /** The nearest improving alternate for one deficient axis. */
@@ -617,6 +659,8 @@ export interface RouteAlternates {
   destination_icao: string;
   destination_category: string;
   destination_crosswind_kt: number | null;
+  destination_ceiling_ft: number | null;
+  destination_visibility_m: number | null;
   eta: string | null;
   corridor_nm: number;
   radius_nm: number;
@@ -625,6 +669,7 @@ export interface RouteAlternates {
   candidates_evaluated: number;
   alternates: AlternateAirport[];
   nearest_improving: AlternateAxisPick[];
+  alternate_requirement: AlternateRequirement | null;
   computed_at: string | null;
 }
 
