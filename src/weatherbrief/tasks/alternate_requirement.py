@@ -25,6 +25,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from weatherbrief.analysis.alternate_requirement import (
+    CeilingVisWindow,
     TrendView,
     build_window,
     compute_easa_qual,
@@ -163,7 +164,7 @@ def _build_destination_window(
     eta: datetime,
     nwp_ceiling: float | None,
     nwp_vis: float | None,
-):
+) -> CeilingVisWindow:
     """Build the destination window: prefer a TAF that covers the ETA, else NWP."""
     if taf_raw:
         try:

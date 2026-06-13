@@ -415,7 +415,8 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         easa_map = {
             "required": "Required", "marginal": "Marginal", "not_required": "Not required",
         }
-        easa = easa_map.get(req.easa.status.value, req.easa.status.value)
+        # Direct lookup — raises loudly if TriggerVerdict ever gains a value.
+        easa = easa_map[req.easa.status.value]
         src = "model estimate" if req.faa.source == "nwp" else (
             "forecast" if req.faa.source == "taf" else "no forecast")
         lines.append(

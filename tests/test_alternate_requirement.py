@@ -295,6 +295,31 @@ class TestWindowBuilder:
         assert w.visibility_m == 3000
         assert w.triggered_by_tempo
 
+    def test_tempo_flag_cleared_by_later_equally_bad_prevailing(self):
+        # #250 round-3: a TEMPO drives the worst ceiling at one instant, then a
+        # later prevailing instant is equally bad. The window value is owed to
+        # the prevailing condition, so the TEMPO tag must NOT stale-persist.
+        inst_tempo = [
+            TrendView(ceiling_ft=3000, visibility_m=9999),
+            TrendView(ceiling_ft=300, visibility_m=5000, trend_type="TEMPO"),
+        ]
+        inst_prevailing = [TrendView(ceiling_ft=300, visibility_m=5000)]
+        w = build_window([inst_tempo, inst_prevailing])
+        assert w.ceiling_ft == 300
+        assert not w.triggered_by_tempo  # prevailing is equally bad → not temporary
+
+    def test_tempo_flag_set_when_tempo_is_strictly_worst(self):
+        # Counterpart: when the prevailing line never reaches the TEMPO low, the
+        # binding value is genuinely temporary and the tag stays.
+        inst_tempo = [
+            TrendView(ceiling_ft=3000, visibility_m=9999),
+            TrendView(ceiling_ft=300, visibility_m=5000, trend_type="TEMPO"),
+        ]
+        inst_prevailing = [TrendView(ceiling_ft=1500, visibility_m=9999)]
+        w = build_window([inst_tempo, inst_prevailing])
+        assert w.ceiling_ft == 300
+        assert w.triggered_by_tempo
+
     def test_fm_supersedes_base(self):
         # base is worse but an applicable FM improves it → prevailing = FM
         base = TrendView(ceiling_ft=500, visibility_m=9999)

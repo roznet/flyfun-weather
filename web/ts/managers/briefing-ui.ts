@@ -1180,7 +1180,12 @@ function altRequirementBanner(req: AlternateRequirement | null | undefined): str
     ? 'model estimate' : req.faa.source === 'taf' ? 'forecast' : 'no forecast';
   const tempo = (req.faa.triggered_by_tempo || req.easa.triggered_by_tempo)
     ? ' <span class="alt-reg-tempo" title="The governing dip is from a TEMPO/PROB group">TEMPO</span>' : '';
-  const reason = escapeHtml(req.easa.reason || req.faa.reason || '');
+  // Label the reason with its regime so it isn't read as explaining the FAA
+  // verdict (the detail almost always comes from the EASA band).
+  const rawReason = req.easa.reason
+    ? `EASA: ${req.easa.reason}`
+    : req.faa.reason ? `FAA: ${req.faa.reason}` : '';
+  const reason = escapeHtml(rawReason);
   return `
     <p class="obs-summary alt-reg-banner">
       Alternate required? —

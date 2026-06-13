@@ -275,11 +275,16 @@ def _eff_visibility(trend: TrendView) -> float | None:
 
 def _instant_worst(
     trends: list[TrendView], include_prob30: bool
-) -> tuple[float, float | None, bool, bool]:
-    """Worst-case (ceiling, vis, ceiling_from_tempo, vis_from_tempo) at one instant.
+) -> tuple[float, float | None, float, float | None]:
+    """Worst-case at one instant as ``(ceiling, vis, ceiling_prev, vis_prev)``.
 
-    The prevailing condition is the latest-by-validity FM/BECMG/base group;
-    TEMPO/PROB groups can only make it *worse* (never improve it).
+    ``ceiling``/``vis`` are the overall (TEMPO-inclusive) worst; ``ceiling_prev``/
+    ``vis_prev`` are the prevailing-only worst. The prevailing condition is the
+    latest-by-validity FM/BECMG/base group; TEMPO/PROB groups can only make it
+    *worse* (never improve it). Returning both lets the window builder decide
+    whether the binding value is owed to a temporary group — by comparing the
+    overall worst against the worst prevailing line, rather than latching a
+    per-instant flag that can go stale across instants (#250 round-3 review).
     """
     prevailing = [t for t in trends if not _is_temporary(t)]
     temporary = [
@@ -290,22 +295,20 @@ def _instant_worst(
     if prevailing:
         gov = max(prevailing, key=lambda t: t.validity_start or datetime.min)
 
-    ceiling = _eff_ceiling(gov) if gov is not None else _NO_CEILING
-    vis = _eff_visibility(gov) if gov is not None else None
-    c_tempo = False
-    v_tempo = False
+    c_prev = _eff_ceiling(gov) if gov is not None else _NO_CEILING
+    v_prev = _eff_visibility(gov) if gov is not None else None
+    ceiling = c_prev
+    vis = v_prev
 
     for t in temporary:
         ct = _eff_ceiling(t)
         if ct < ceiling:
             ceiling = ct
-            c_tempo = True
         vt = _eff_visibility(t)
         if vt is not None and (vis is None or vt < vis):
             vis = vt
-            v_tempo = True
 
-    return ceiling, vis, c_tempo, v_tempo
+    return ceiling, vis, c_prev, v_prev
 
 
 def build_window(
@@ -328,26 +331,33 @@ def build_window(
             triggered_by_tempo=False, has_forecast=False,
         )
 
-    best_c = _NO_CEILING
-    best_c_tempo = False
-    best_v: float | None = None
-    best_v_tempo = False
+    best_c = _NO_CEILING  # overall (TEMPO-inclusive) worst ceiling
+    best_c_prev = _NO_CEILING  # worst prevailing-only ceiling
+    best_v: float | None = None  # overall worst visibility
+    best_v_prev: float | None = None  # worst prevailing-only visibility
 
     for trends in instant_trends:
         if not trends:
             continue
-        c, v, ct, vt = _instant_worst(trends, include_prob30)
+        c, v, c_prev, v_prev = _instant_worst(trends, include_prob30)
         if c < best_c:
             best_c = c
-            best_c_tempo = ct
+        if c_prev < best_c_prev:
+            best_c_prev = c_prev
         if v is not None and (best_v is None or v < best_v):
             best_v = v
-            best_v_tempo = vt
+        if v_prev is not None and (best_v_prev is None or v_prev < best_v_prev):
+            best_v_prev = v_prev
 
     ceiling_out = None if best_c == _NO_CEILING else best_c
-    triggered_by_tempo = (ceiling_out is not None and best_c_tempo) or (
-        best_v is not None and best_v_tempo
-    )
+    # A criterion is "temporary" only when the window's worst value is strictly
+    # worse than the worst *prevailing* line — i.e. a TEMPO/PROB group drives it,
+    # not the prevailing condition. Deriving the flag from the two aggregates
+    # (instead of latching it per-instant) means a later equally-bad prevailing
+    # instant correctly clears a stale TEMPO tag (#250 round-3 review).
+    ceiling_tempo = ceiling_out is not None and best_c < best_c_prev
+    vis_tempo = best_v is not None and (best_v_prev is None or best_v < best_v_prev)
+    triggered_by_tempo = ceiling_tempo or vis_tempo
     return CeilingVisWindow(
         ceiling_ft=ceiling_out,
         visibility_m=best_v,
