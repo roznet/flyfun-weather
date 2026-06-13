@@ -244,7 +244,13 @@ def run_llm_digest(
         )
 
         if digest_result.get("diagnostic") is not None:
-            return DigestResult(diagnostic=digest_result["diagnostic"])
+            # run_digest() sets digest_trace_id even when briefer_node emits a
+            # diagnostic, so a real LangSmith trace exists for this run — keep
+            # the id so the pack stays correlatable (issue #244).
+            return DigestResult(
+                diagnostic=digest_result["diagnostic"],
+                digest_trace_id=digest_result.get("digest_trace_id"),
+            )
 
         digest_obj = digest_result.get("digest")
         llm_model = f"{config.llm.provider}:{config.llm.model}"
