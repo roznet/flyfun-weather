@@ -502,8 +502,18 @@ def _enrich_with_sounding(
             snap["sounding_convective_risk"] = sounding.convective.risk_level.value
 
         # EDR calibration: harvest the full per-level Richardson distribution
-        # (already computed, otherwise discarded) into the streaming
-        # accumulator. Standalone-only — None on the per-user briefing path.
+        # into the streaming accumulator. Standalone-only — None on the
+        # per-user briefing path.
+        #
+        # PARKED / INERT (issue #221, 2026-06-10): this collects ZERO data.
+        # `analyze_sounding_lite` (used here) does NOT call
+        # `compute_stability_indicators`, so `richardson_number` is never set
+        # and `observe_richardson_levels` drops every level. The original "free
+        # data" premise was wrong — Richardson is only computed in
+        # `_analyze_sounding_heavy`. Making it available here means recomputing
+        # stability on ~45k soundings/cycle, which the cycle's memory budget
+        # (peak_cgroup pinned at the limit) can't spare. Left in place pending a
+        # decision on a subsampled calibration; do not assume it works.
         if edr_acc is not None and sounding.derived_levels:
             edr_acc.observe_richardson_levels(model, sounding.derived_levels)
 
@@ -1213,10 +1223,11 @@ def run_standalone_cycle(
         _rss_log(f"start ({cycle_type})")
 
         if fetch_forecasts:
-            # EDR calibration accumulator (issue #221): harvests the per-level
-            # Richardson distribution already computed during sounding analysis
-            # into running ln-moments, flushed once after the fetch loop. Cheap
-            # (a few float ops per level) and fail-silent.
+            # EDR calibration accumulator (issue #221). PARKED / INERT as of
+            # 2026-06-10: accumulates nothing because the standalone path uses
+            # `analyze_sounding_lite`, which skips Richardson computation. See
+            # the note at `observe_richardson_levels` call site for details.
+            # Kept wired (fail-silent, ~zero cost) pending a subsampling design.
             edr_acc = EdrAccumulator()
 
             # Phase A+B: Fetch and store forecasts per model. One model at a
