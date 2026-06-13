@@ -176,9 +176,11 @@ function renderFeedbackCard(fb: FeedbackEntry): string {
   const sentimentBadge = fb.sentiment
     ? `<span title="${fb.sentiment === 'up' ? 'Thumbs up' : 'Thumbs down'}${fb.target ? ` on ${fb.target}` : ''}" style="font-size:14px;">${fb.sentiment === 'up' ? '👍' : '👎'}</span>`
     : '';
+  // Contactable is the default, so only flag the exception: a user who opted
+  // out of email replies. No badge for the (common) contactable case.
   const consentBadge = fb.contact_ok
-    ? '<span title="User consented to be contacted" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#dcfce7;color:#166534;">✉️ contactable</span>'
-    : '<span title="User did not consent to be contacted" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">🔕 no contact</span>';
+    ? ''
+    : '<span title="User opted out of email replies" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:var(--surface);color:var(--text-muted);border:1px solid var(--border);">🔕 no reply</span>';
   const confidenceText = fb.confidence != null
     ? `<span style="font-size:11px;color:var(--text-muted);margin-left:6px;">${Math.round(fb.confidence * 100)}% confidence</span>`
     : '';

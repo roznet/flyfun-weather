@@ -2,9 +2,12 @@
 
 ``sentiment`` ('up'/'down') and ``target`` ('digest') mark quick thumb
 ratings submitted from the digest footer; both stay NULL for the
-traditional feedback form. ``contact_ok`` records the user's explicit
-consent to be emailed about this feedback — server_default "0" so all
-pre-existing rows backfill to "no consent".
+traditional feedback form. ``contact_ok`` records whether the user is OK
+to receive an email reply about this feedback — server_default "1" so all
+pre-existing rows backfill to contactable (preserving the pre-consent
+behaviour where the admin could reply to any feedback). It is an opt-out:
+a reply answers feedback the user initiated, the checkbox just ensures a
+reply isn't a surprise.
 
 Revision ID: 065
 Revises: 064
@@ -32,7 +35,7 @@ def upgrade() -> None:
                 "contact_ok",
                 sa.Boolean(),
                 nullable=False,
-                server_default="0",
+                server_default="1",
             ),
         )
 

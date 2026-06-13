@@ -150,7 +150,9 @@ def test_traditional_form_defaults(client, app_db):
     row = _get_row(app_db, resp.json()["id"])
     assert row.sentiment is None
     assert row.target is None
-    assert row.contact_ok is False
+    # contact_ok defaults on: a reply answers user-initiated feedback; the
+    # checkbox is an opt-out, not an opt-in.
+    assert row.contact_ok is True
 
 
 def test_invalid_sentiment_rejected(client):
@@ -190,7 +192,7 @@ def test_admin_list_includes_new_fields(client):
     entry = next(e for e in entries if e["id"] == resp.json()["id"])
     assert entry["sentiment"] == "up"
     assert entry["target"] == "digest"
-    assert entry["contact_ok"] is False
+    assert entry["contact_ok"] is True
 
 
 def test_send_reply_blocked_without_consent(client, monkeypatch):

@@ -303,9 +303,12 @@ class FeedbackRow(Base):
     sentiment: Mapped[str | None] = mapped_column(String(8), nullable=True)
     # 'digest' for thumb ratings; NULL/'general' for the traditional form
     target: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    # User consented to be emailed about this feedback
+    # User is OK to receive an email reply about this feedback. Default-on:
+    # a reply answers feedback the user initiated, and the opt-out exists so
+    # a reply in their inbox isn't a surprise. Legacy rows backfill to
+    # contactable via server_default.
     contact_ok: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="0", default=False
+        Boolean, nullable=False, server_default="1", default=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
