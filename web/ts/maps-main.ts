@@ -2,7 +2,7 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
-  fetchForecastMap, fetchAvailableHours,
+  fetchForecastMap, fetchAvailableHours, fetchAvailableDays,
   type ForecastMapResponse,
 } from './adapters/maps-adapter';
 import {
@@ -147,19 +147,80 @@ function showInfo(text: string, targetId: string = 'map-info'): void {
 const _DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const _MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function updateForecastDatetime(): void {
-  const el = $('forecast-datetime');
-  if (!el) return;
+/** "Sat 13-Jun-26" for the calendar date `day` offsets from today (UTC).
+ *  Mirrors the server's `now + day` mapping so the displayed date stays
+ *  consistent with the forecast data resolved for that (day, hour). */
+function dayDateLabel(day: number): string {
   const now = new Date();
   const target = new Date(Date.UTC(
-    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + fcDay,
-    fcHour, 0, 0,
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, 0, 0, 0,
   ));
-  const day = _DAYS[target.getUTCDay()];
+  const dow = _DAYS[target.getUTCDay()];
   const dd = String(target.getUTCDate()).padStart(2, '0');
   const mon = _MONTHS[target.getUTCMonth()];
   const yr = String(target.getUTCFullYear()).slice(2);
-  el.textContent = `${day} ${dd}-${mon}-${yr} ${String(fcHour).padStart(2, '0')}Z`;
+  return `${dow} ${dd}-${mon}-${yr}`;
+}
+
+function updateForecastDatetime(): void {
+  const el = $('forecast-datetime');
+  if (!el) return;
+  el.textContent = `${dayDateLabel(fcDay)} ${String(fcHour).padStart(2, '0')}Z`;
+}
+
+// Which relative days (0..3) currently have forecast data. The far day
+// (today+3) is empty until the next twice-daily model run extends the
+// horizon; such days are disabled in the picker with an explanation.
+let availableDays = new Set<number>([0, 1, 2, 3]);
+
+function applyDayAvailability(): void {
+  const group = $('day-picker');
+  if (!group) return;
+  for (const btn of group.querySelectorAll('button')) {
+    const d = parseInt((btn as HTMLElement).dataset.day || '0');
+    const avail = availableDays.has(d);
+    btn.classList.toggle('day-unavailable', !avail);
+    (btn as HTMLElement).title = avail ? '' : t('maps.dayNotForecast');
+  }
+}
+
+/** Sync the hour picker's enabled buttons to the selected day. */
+async function syncHoursForDay(): Promise<void> {
+  try {
+    const { hours } = await fetchAvailableHours(fcDay);
+    const hourBtns = $('hour-picker')?.querySelectorAll('button');
+    if (!hourBtns) return;
+    for (const btn of hourBtns) {
+      const h = parseInt((btn as HTMLElement).dataset.hour || '0');
+      btn.classList.toggle('disabled', !hours.includes(h));
+      (btn as HTMLButtonElement).disabled = !hours.includes(h);
+    }
+    if (!hours.includes(fcHour) && hours.length > 0) {
+      fcHour = hours[0];
+      setActive('hour-picker', String(fcHour), 'hour');
+    }
+  } catch { /* ignore */ }
+}
+
+/** Refresh day availability and snap the selection back into range if the
+ *  selected day fell outside the horizon (e.g. after a UTC-midnight rollover
+ *  before the next model run). */
+async function refreshDayAvailability(): Promise<void> {
+  try {
+    const { days } = await fetchAvailableDays();
+    availableDays = new Set(days.filter((d) => d.available).map((d) => d.day));
+  } catch {
+    availableDays = new Set([0, 1, 2, 3]);
+  }
+  applyDayAvailability();
+  if (!availableDays.has(fcDay)) {
+    const fallback = [...availableDays].sort((a, b) => b - a)[0] ?? 0;
+    fcDay = fallback;
+    setActive('day-picker', String(fcDay), 'day');
+    await syncHoursForDay();
+    updateForecastDatetime();
+    syncUrl();
+  }
 }
 
 // --- Data loading ---
@@ -263,25 +324,23 @@ function wireButtonGroup(groupId: string, attr: string, onChange: (value: string
 }
 
 function wireForecastControls(): void {
-  wireButtonGroup('day-picker', 'day', async (v) => {
-    fcDay = parseInt(v);
-    // Update available hours
-    try {
-      const { hours } = await fetchAvailableHours(fcDay);
-      const hourBtns = $('hour-picker')?.querySelectorAll('button');
-      if (hourBtns) {
-        for (const btn of hourBtns) {
-          const h = parseInt(btn.dataset.hour || '0');
-          btn.classList.toggle('disabled', !hours.includes(h));
-          (btn as HTMLButtonElement).disabled = !hours.includes(h);
-        }
-        // If current hour is unavailable, switch to first available
-        if (!hours.includes(fcHour) && hours.length > 0) {
-          fcHour = hours[0];
-          setActive('hour-picker', String(fcHour), 'hour');
-        }
-      }
-    } catch { /* ignore */ }
+  // Custom day-picker handler (not the generic wireButtonGroup) so a click on
+  // a day beyond the model horizon explains itself instead of selecting an
+  // empty/mislabelled map.
+  const dayGroup = $('day-picker');
+  dayGroup?.addEventListener('click', async (e) => {
+    const btn = (e.target as HTMLElement).closest('button');
+    if (!btn || btn.dataset.day == null) return;
+    const d = parseInt(btn.dataset.day);
+    if (!availableDays.has(d)) {
+      showInfo(t('maps.dayNotForecastDetail', { date: dayDateLabel(d) }));
+      return;
+    }
+    if (d === fcDay) return;
+    for (const b of dayGroup.querySelectorAll('button')) b.classList.remove('active');
+    btn.classList.add('active');
+    fcDay = d;
+    await syncHoursForDay();
     syncUrl();
     loadForecast();
     refreshAirportPanelOnHourChange();
@@ -996,6 +1055,9 @@ async function main(): Promise<void> {
   // tab from the URL, switchTab() handles its lazy init; the forecast tab
   // is already the default-visible panel so we just kick off the fetch.
   updateForecastDatetime();
+  // Resolve day availability first so a hydrated/default day that's beyond
+  // the current horizon snaps into range before the initial fetch.
+  await refreshDayAvailability();
   if (currentTab === 'forecast') {
     loadForecast();
   } else {

@@ -65,3 +65,11 @@ export async function fetchAvailableHours(day: number): Promise<{ hours: number[
   if (!resp.ok) throw new Error(`Available hours: ${resp.status}`);
   return resp.json();
 }
+
+export interface DayAvailability { day: number; date: string; available: boolean; }
+
+export async function fetchAvailableDays(): Promise<{ days: DayAvailability[] }> {
+  const resp = await fetch(`${apiBase}/maps/forecast/days`, { credentials: 'include' });
+  if (!resp.ok) throw new Error(`Available days: ${resp.status}`);
+  return resp.json();
+}

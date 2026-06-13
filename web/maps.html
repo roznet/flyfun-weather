@@ -26,6 +26,10 @@
     .maps-controls .btn-group .btn-toggle.active { background: var(--primary); color: #fff; border-color: var(--primary); }
     .maps-controls .btn-group .btn-toggle:hover:not(.active) { background: var(--bg); }
     .maps-controls .btn-group .btn-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Day beyond model horizon: greyed but still clickable so a click can
+       explain why (see maps.dayNotForecastDetail). */
+    .maps-controls .btn-group .btn-toggle.day-unavailable { opacity: 0.4; cursor: not-allowed; }
+    .maps-controls .btn-group .btn-toggle.day-unavailable:hover:not(.active) { background: transparent; }
 
     .maps-controls select {
       padding: 0.3rem 0.5rem; border: 1px solid var(--border);

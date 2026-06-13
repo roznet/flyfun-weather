@@ -84,6 +84,8 @@
   "maps.shareLinkTitle": "Copier un lien vers cette vue",
   "maps.shareLinkCopied": "Lien copié",
   "maps.shareLinkFallback": "Copiez ce lien pour partager :",
+  "maps.dayNotForecast": "Pas encore prévu",
+  "maps.dayNotForecastDetail": "{date} n'est pas encore prévu — disponible après la prochaine sortie du modèle (07Z/19Z).",
   "briefing.noFlightSpecified": "Aucun vol spécifié. Retournez à la liste des vols.",
   "briefing.noBriefings": "Aucun briefing pour le moment",
   "briefing.noAssessment": "Aucune évaluation disponible",

@@ -493,3 +493,29 @@ class TestAvailableHoursEndpoint:
         resp = client.get("/api/maps/forecast/hours?day=3")
         assert resp.status_code == 200
         assert resp.json()["hours"] == []
+
+
+class TestAvailableDaysEndpoint:
+    """Tests for GET /api/maps/forecast/days — drives the day-picker
+    disable/“not forecast yet” behaviour."""
+
+    def test_reports_per_day_availability(self, app_db, tmp_path, monkeypatch):
+        client = _make_client(app_db, tmp_path, monkeypatch)
+
+        # Seed D-0 (today) only; D-3 stays unforecast, as it would be before
+        # the next twice-daily model run extends the horizon.
+        today_12z = datetime.now(timezone.utc).replace(
+            hour=12, minute=0, second=0, microsecond=0)
+        session = app_db()
+        _insert_snapshot(session, icao="LFPG", model="gfs", forecast_hour=today_12z)
+        session.commit()
+        session.close()
+
+        resp = client.get("/api/maps/forecast/days")
+        assert resp.status_code == 200
+        days = {d["day"]: d for d in resp.json()["days"]}
+        assert set(days) == {0, 1, 2, 3}
+        assert days[0]["available"] is True
+        assert days[3]["available"] is False
+        # Date label tracks today + day so the UI label stays consistent.
+        assert days[0]["date"] == datetime.now(timezone.utc).date().isoformat()
