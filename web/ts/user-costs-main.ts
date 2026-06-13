@@ -28,7 +28,7 @@ const COST_LABELS: Record<CostKey, string> = {
   infra_share_usd: 'Infrastructure',
   subscription_share_usd: 'Subscriptions',
   storage_cost_usd: 'Storage',
-  margin_usd: 'Margin',
+  margin_usd: 'Other costs',
 };
 
 async function init(): Promise<void> {
@@ -182,7 +182,7 @@ function renderTransactions(transactions: UserCostTransaction[]): void {
         ['Infra', bd.infra_share_usd],
         ['Subscriptions', bd.subscription_share_usd],
         ['Storage', bd.storage_cost_usd],
-        ['Margin', bd.margin_usd],
+        ['Other costs', bd.margin_usd],
         ['Total', bd.total_usd],
       ]
         .filter(([, v]) => v !== undefined)

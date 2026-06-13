@@ -84,7 +84,7 @@ function renderReport(r: CostReport | null): void {
   summary.innerHTML = `
     <div class="summary-card"><div class="value">${usd(r.fixed_prorated_usd)}</div><div class="label">Fixed</div></div>
     <div class="summary-card"><div class="value">${usd(r.variable_usd)}</div><div class="label">Variable</div></div>
-    <div class="summary-card"><div class="value">${usd(r.margin_usd)}</div><div class="label">Margin (${r.margin_percent}%)</div></div>
+    <div class="summary-card"><div class="value">${usd(r.margin_usd)}</div><div class="label">Other costs (${r.margin_percent}%)</div></div>
     <div class="summary-card"><div class="value">${usd(r.total_usd)}</div><div class="label">Total</div></div>
     <div class="summary-card"><div class="value">${r.num_briefings}</div><div class="label">Briefings</div></div>
     <div class="summary-card"><div class="value">${r.num_users}</div><div class="label">Active users</div></div>
@@ -168,7 +168,7 @@ function renderConfigForm(version: CostConfigVersion | null): void {
         ${numField('Token $/1k output', 'token_cost_per_1k_output', cfg.token_cost_per_1k_output, '0.0001')}
         ${numField('Disk $/GB-month', 'disk_cost_per_gb_monthly', cfg.disk_cost_per_gb_monthly, '0.01')}
         ${numField('Est. monthly briefings', 'estimated_monthly_briefings', cfg.estimated_monthly_briefings, '1')}
-        ${numField('Margin %', 'margin_percent', cfg.margin_percent, '1')}
+        ${numField('Other costs %', 'margin_percent', cfg.margin_percent, '1')}
       </fieldset>
     </div>
     <div style="margin-top:0.75rem;display:flex;gap:0.75rem;align-items:center;">
@@ -265,7 +265,7 @@ async function loadHistory(): Promise<void> {
     }
     el.innerHTML = `
       <table class="admin-table" style="margin-top:0.5rem;">
-        <thead><tr><th>Ver</th><th>Active from</th><th>Active until</th><th class="num">Droplet</th><th class="num">Subs</th><th class="num">Margin</th></tr></thead>
+        <thead><tr><th>Ver</th><th>Active from</th><th>Active until</th><th class="num">Droplet</th><th class="num">Subs</th><th class="num">Other costs</th></tr></thead>
         <tbody>${versions.map((v) => `
           <tr>
             <td>#${v.id}</td>

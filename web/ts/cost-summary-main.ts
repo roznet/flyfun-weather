@@ -17,7 +17,7 @@ const usd4 = (n: number) => `$${n.toFixed(4)}`;
 const COMPOSITION: Array<{ key: 'fixed_prorated_usd' | 'variable_usd' | 'margin_usd'; label: string; color: string }> = [
   { key: 'fixed_prorated_usd', label: 'Fixed', color: '#6366f1' },
   { key: 'variable_usd', label: 'Variable', color: '#2563eb' },
-  { key: 'margin_usd', label: 'Margin', color: '#d97706' },
+  { key: 'margin_usd', label: 'Other costs', color: '#d97706' },
 ];
 
 async function init(): Promise<void> {
@@ -67,7 +67,7 @@ function renderProgram(r: CostReport | null): void {
     return;
   }
 
-  note.textContent = `Based on the last ${r.window_days} days. Includes a ${r.margin_percent}% margin.`;
+  note.textContent = `Based on the last ${r.window_days} days. Includes a ${r.margin_percent}% allocation for other costs.`;
 
   summary.innerHTML = `
     <div class="summary-card"><div class="value">${usd(r.total_usd)}</div><div class="label">Total / month</div></div>
