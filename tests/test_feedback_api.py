@@ -195,6 +195,48 @@ def test_admin_list_includes_new_fields(client):
     assert entry["contact_ok"] is True
 
 
+def test_admin_list_route_defaults_when_no_flight(client):
+    """route_name/waypoints default to empty when the flight_id has no match."""
+    resp = client.post("/api/feedback", json={
+        "category": "digest_rating",
+        "comment": "",
+        "sentiment": "up",
+        "target": "digest",
+    })
+    fb_id = resp.json()["id"]
+    entries = client.get("/api/feedback/admin").json()
+    entry = next(e for e in entries if e["id"] == fb_id)
+    assert entry["route_name"] == ""
+    assert entry["waypoints"] == []
+
+
+def test_admin_list_kind_filter_splits_streams(client):
+    """kind=ratings returns only digest_rating; kind=feedback excludes it."""
+    rating = client.post("/api/feedback", json={
+        "category": "digest_rating", "comment": "", "sentiment": "up", "target": "digest",
+    }).json()["id"]
+    form = client.post("/api/feedback", json={
+        "category": "data_issue", "comment": "Wind looked wrong.",
+    }).json()["id"]
+
+    ratings = client.get("/api/feedback/admin?kind=ratings").json()
+    rating_ids = {e["id"] for e in ratings}
+    assert rating in rating_ids
+    assert form not in rating_ids
+    assert all(e["category"] == "digest_rating" for e in ratings)
+
+    feedback = client.get("/api/feedback/admin?kind=feedback").json()
+    feedback_ids = {e["id"] for e in feedback}
+    assert form in feedback_ids
+    assert rating not in feedback_ids
+    assert all(e["category"] != "digest_rating" for e in feedback)
+
+
+def test_admin_list_invalid_kind_rejected(client):
+    resp = client.get("/api/feedback/admin?kind=bogus")
+    assert resp.status_code == 400
+
+
 def test_send_reply_blocked_without_consent(client, monkeypatch):
     from weatherbrief.notify import admin_email
     sent = []

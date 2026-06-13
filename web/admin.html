@@ -313,6 +313,7 @@
     <!-- Tabs -->
     <div class="settings-tabs">
       <button class="tab-btn active" data-tab="tab-feedback">Feedback</button>
+      <button class="tab-btn" data-tab="tab-ratings">Ratings</button>
       <button class="tab-btn" data-tab="tab-messages">Messages</button>
       <button class="tab-btn" data-tab="tab-usage">Usage</button>
       <button class="tab-btn" data-tab="tab-usage-analytics">Usage Analytics</button>
@@ -325,6 +326,22 @@
     <div id="tab-feedback" class="tab-panel active">
       <div id="feedback-list">
         <p class="muted" style="text-align:center;padding:2rem;">Loading feedback...</p>
+      </div>
+    </div>
+
+    <!-- Ratings tab (digest thumb feedback) -->
+    <div id="tab-ratings" class="tab-panel">
+      <div id="ratings-period-toggle" class="period-toggle">
+        <button class="toggle-btn active" data-period="30d">Last 30 days</button>
+        <button class="toggle-btn" data-period="all">All Time</button>
+      </div>
+      <div id="ratings-summary" style="margin:0 0 12px;font-size:15px;font-weight:600;"></div>
+      <div id="ratings-filter" class="period-toggle" style="margin-bottom:12px;">
+        <button class="toggle-btn active" data-filter="all">All</button>
+        <button class="toggle-btn" data-filter="attention">Needs attention</button>
+      </div>
+      <div id="ratings-list">
+        <p class="muted" style="text-align:center;padding:2rem;">Click the Ratings tab to load...</p>
       </div>
     </div>
 
