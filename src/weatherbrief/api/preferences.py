@@ -65,6 +65,7 @@ class PreferencesResponse(BaseModel):
     convective_method: str
     locale: str
     units_region: str
+    display_currency: str  # ISO 4217 or "auto" (cost/donation display only)
     synoptic_forecast_map_enabled: bool
     defer_email_for_model_update: bool
     pirep_can_view: bool = False
@@ -87,6 +88,7 @@ class PreferencesUpdate(BaseModel):
     convective_method: str | None = None
     locale: str | None = None
     units_region: Literal["auto", "europe", "us"] | None = None
+    display_currency: str | None = None  # "auto" or an ISO 4217 code (e.g. "EUR")
     synoptic_forecast_map_enabled: bool | None = None
     defer_email_for_model_update: bool | None = None
 
@@ -132,6 +134,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "convective_method": data.get("convective_method", "nwp"),
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
+        "display_currency": data.get("display_currency", "auto"),
         "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
         "defer_email_for_model_update": data.get("defer_email_for_model_update", False),
     }
@@ -253,6 +256,8 @@ def update_preferences(
         data["locale"] = body.locale
     if body.units_region is not None:
         data["units_region"] = body.units_region
+    if body.display_currency is not None:
+        data["display_currency"] = _normalize_currency(body.display_currency)
     if body.synoptic_forecast_map_enabled is not None:
         data["synoptic_forecast_map_enabled"] = body.synoptic_forecast_map_enabled
     if body.defer_email_for_model_update is not None:
@@ -347,6 +352,63 @@ def load_units_region(db: Session, user_id: str) -> str:
         return "auto"
 
 
+# Display-currency derivation from the existing units_region preference.
+_REGION_CURRENCY = {"europe": "EUR", "us": "USD"}
+
+
+def _normalize_currency(value: str | None) -> str:
+    """Normalize a display-currency preference to "auto" or an ISO 4217 code.
+
+    Accepts "auto" (case-insensitive) or a 3-letter alphabetic code; anything
+    else falls back to "auto" so a bad value never breaks display.
+    """
+    if not value:
+        return "auto"
+    v = value.strip().upper()
+    if v == "AUTO":
+        return "auto"
+    return v if (len(v) == 3 and v.isalpha()) else "auto"
+
+
+def load_display_currency(db: Session, user_id: str) -> str:
+    """Resolve the viewer's display currency to a concrete ISO 4217 code.
+
+    A stored, explicit ``display_currency`` wins. "auto"/unset derives from the
+    existing ``units_region`` (europe→EUR, us→USD), defaulting to USD. The
+    browser-locale fallback is a frontend concern (the API can only see prefs).
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    data: dict = {}
+    if row and row.app_prefs_json:
+        try:
+            data = json.loads(row.app_prefs_json)
+        except json.JSONDecodeError:
+            data = {}
+    currency = _normalize_currency(data.get("display_currency"))
+    if currency != "auto":
+        return currency
+    return _REGION_CURRENCY.get(data.get("units_region", "auto"), "USD")
+
+
+def fx_block_for_user(db: Session, user_id: str) -> dict:
+    """Build the display ``fx`` block for a user's resolved currency.
+
+    API responses stay USD-canonical and carry this block so the frontend can
+    render the viewer's currency. Degrades gracefully to a USD (rate 1.0) block
+    if the rate source is unreachable — never fails the surrounding response.
+    """
+    from datetime import date
+
+    from flyfun_common import fx
+
+    currency = load_display_currency(db, user_id)
+    try:
+        return fx.fx_block(currency)
+    except Exception:
+        logger.warning("FX unavailable for %s; falling back to USD", currency)
+        return {"currency": "USD", "rate": 1.0, "as_of": date.today().isoformat()}
+
+
 def load_advisory_prefs(db: Session, user_id: str) -> AdvisoryPreferences:
     """Load advisory preferences for a user.
 
@@ -380,7 +442,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "square_nwp", "convective_method": "nwp", "units_region": "auto", "defer_email_for_model_update": False}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "square_nwp", "convective_method": "nwp", "units_region": "auto", "display_currency": "auto", "defer_email_for_model_update": False}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 

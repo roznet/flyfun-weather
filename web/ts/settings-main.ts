@@ -703,6 +703,14 @@ function populateAccountForm(prefs: PreferencesResponse): void {
     unitsRegionSelect.value = ur === 'us' || ur === 'europe' ? ur : 'auto';
   }
 
+  // Display-currency picker — "auto" or an ISO code (cost/donation display only)
+  const currencySelect = document.getElementById('input-display-currency') as HTMLSelectElement;
+  if (currencySelect) {
+    const dc = (prefs.display_currency || 'auto').toUpperCase();
+    const known = Array.from(currencySelect.options).some((o) => o.value === dc);
+    currencySelect.value = dc === 'AUTO' || !known ? 'auto' : dc;
+  }
+
   // Account-level optional services
   const synopticToggle = document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement;
   if (synopticToggle) {
@@ -963,6 +971,7 @@ async function handleSave(): Promise<void> {
   const selectedLocale = (document.getElementById('input-locale') as HTMLSelectElement)?.value || 'en';
   const unitsRegionVal = (document.getElementById('input-units-region') as HTMLSelectElement)?.value;
   const selectedUnitsRegion = unitsRegionVal === 'us' || unitsRegionVal === 'europe' ? unitsRegionVal : 'auto';
+  const selectedDisplayCurrency = (document.getElementById('input-display-currency') as HTMLSelectElement)?.value || 'auto';
 
   try {
     // Save profile settings
@@ -978,6 +987,7 @@ async function handleSave(): Promise<void> {
     const accountUpdate: import('./adapters/preferences-adapter').PreferencesUpdate = {
       locale: selectedLocale,
       units_region: selectedUnitsRegion,
+      display_currency: selectedDisplayCurrency,
       synoptic_forecast_map_enabled: synopticEnabled,
       defer_email_for_model_update: deferModelUpdate,
     };

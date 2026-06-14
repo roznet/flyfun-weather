@@ -159,10 +159,14 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 - **admin-cost-view.ts**: Admin "Cost" tab — program report (7d/30d toggle, summary cards, fixed-line table) + rate-card editor (itemized subscription rows with live subtotal, versioned save, config history)
 - **cost-summary.html / cost-summary-main.ts**: Program cost (what it costs to run the service, fixed breakdown + composition bar + per-briefing/per-user economics) plus the viewer's own usage. Admin-gated now via `is_admin`; designed to move into a Settings tab + add a donation link + a public program endpoint later.
 
-## Donations (Stripe) — planned
+## Donations (Stripe)
 
-> **Status: design only, not yet built.** Voluntary, unconditional donations to offset
-> running cost. No perks, no goods/services in return — see "VAT & legal" below.
+> **Status: built.** flyfun-common ships the shared Stripe/FX/ledger plumbing
+> (≥0.5.0); weatherbrief adds the impact math, endpoints, webhook, and web UI
+> (issue #186). The only remaining manual step is the Stripe account setup
+> (test/live keys, a recurring price, the registered webhook endpoint).
+> Voluntary, unconditional donations to offset running cost. No perks, no
+> goods/services in return — see "VAT & legal" below.
 
 ### Goals
 
@@ -206,13 +210,23 @@ flyfun_common/fx.py                       — daily ECB rates (Frankfurter), USD
 flyfun_common/db/models.py                — DonationRow (+ FxRateRow cache)
 ```
 
-Weather-specific pieces stay in weatherbrief:
+Weather-specific pieces stay in weatherbrief (built):
 
 ```
-weatherbrief/costs.py (or impact.py)      — donation impact math (depends on program cost)
-weatherbrief/api/donations.py             — donation endpoints + Stripe webhook route
-web/cost-summary.* / Settings tab         — donate button, currency display, impact + yearly total
+weatherbrief/impact.py                    — donation impact math (pure; margin-excluded run cost)
+weatherbrief/api/donations.py             — /checkout, /webhook, /me, /summary
+weatherbrief/api/credits.py               — build_program_report() (shared), fx block on /user/credits + /transparency
+weatherbrief/api/preferences.py           — display_currency pref + fx_block_for_user() resolver
+web/donate.html / ts/donate-main.ts       — donate page (amount/currency picker, impact, community total)
+web/donate-thanks.html / donate-cancel.html — Stripe redirect targets
+web/settings.html                         — display-currency picker + "Support" link (web-only)
+tests/test_impact.py, test_donations_api.py, test_credits_changes.py
 ```
+
+**Web-only:** the donate flow lives entirely in the web frontend (a standalone
+`/donate.html` page + a Settings link); the iOS app binary must not surface a
+donate button (App Store IAP rule). `/api/donations/me` is read-only and safe to
+surface in-app later.
 
 **Rollout order:** flyfun-common lands first (model + migration + Stripe/FX helpers),
 then weatherbrief bumps the flyfun-common pin and adds the impact framing, endpoints,

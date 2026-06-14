@@ -115,8 +115,27 @@
                 <option value="us">US — visibility in statute miles</option>
               </select>
             </div>
+            <div class="form-group">
+              <label for="input-display-currency">Currency</label>
+              <select id="input-display-currency" class="input-select">
+                <option value="auto">Automatic (by units region)</option>
+                <option value="EUR">EUR €</option>
+                <option value="USD">USD $</option>
+                <option value="GBP">GBP £</option>
+                <option value="CHF">CHF</option>
+              </select>
+            </div>
           </div>
-          <p class="muted section-hint">Automatic uses US units for US flights and metric for European flights. Altitude (ft), wind (kt) and distance (nm) are the same in both — only visibility differs today; QNH and temperature will follow this setting when added.</p>
+          <p class="muted section-hint">Automatic uses US units for US flights and metric for European flights. Altitude (ft), wind (kt) and distance (nm) are the same in both — only visibility differs today; QNH and temperature will follow this setting when added. Currency only affects how costs and donations are displayed.</p>
+        </div>
+
+        <div class="section">
+          <h3>Support Flyfun Weather</h3>
+          <p class="muted section-hint">
+            Flyfun Weather is free and sponsored by the operator. Voluntary donations
+            offset the running cost and keep it free for everyone — no perks, no premium tier.
+          </p>
+          <a href="/donate.html" class="btn btn-primary btn-sm">Support the service</a>
         </div>
 
         <div class="section">
