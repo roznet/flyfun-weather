@@ -36,6 +36,7 @@ export interface PreferencesResponse {
   convective_method: string;
   locale: string;
   units_region: string;
+  display_currency: string;
   synoptic_forecast_map_enabled: boolean;
   defer_email_for_model_update: boolean;
   pirep_can_view: boolean;
@@ -53,6 +54,7 @@ export interface PreferencesUpdate {
   icing_severity_enhance?: boolean;
   locale?: string;
   units_region?: string;
+  display_currency?: string;
   synoptic_forecast_map_enabled?: boolean;
   defer_email_for_model_update?: boolean;
 }

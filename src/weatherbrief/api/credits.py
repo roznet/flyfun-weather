@@ -23,13 +23,16 @@ from weatherbrief.costs import (
     program_report_to_dict,
 )
 from flyfun_common.costs import record_cost
-from flyfun_common.db import current_user_id, get_db
+from flyfun_common.db import current_user_id, get_db, optional_user_id
 from flyfun_common.db.models import CostLedgerRow, UserRow
+from weatherbrief.api.preferences import fx_block_for_user
 from weatherbrief.db.models import CostConfigRow
+
+# Default fx block when there's no logged-in viewer (public transparency).
+_USD_FX = {"currency": "USD", "rate": 1.0}
 
 logger = logging.getLogger(__name__)
 
-AUTO_RELOAD_AMOUNT = 5.0  # USD — auto-reload threshold for spending_limit
 SERVICE = "flyfun-weather"
 
 # ---------------------------------------------------------------------------
@@ -53,14 +56,13 @@ def charge_briefing(
     usage_row_id: int,
     breakdown: CostBreakdown,
 ) -> CostLedgerRow:
-    """Record briefing cost. Auto-reload spending_limit if it drops to 0."""
-    user = db.query(UserRow).filter(UserRow.id == user_id).with_for_update().first()
-    if not user:
-        raise ValueError(f"User {user_id} not found")
+    """Record a briefing's cost in the shared cost ledger.
 
-    user.spending_limit = user.spending_limit - breakdown.total_usd
-
-    entry = record_cost(
+    The service is free: there is no per-user spend balance to decrement. We
+    simply append the real USD cost (the old ``spending_limit`` decrement +
+    ``$5`` auto-reload churn was retired with issue #186).
+    """
+    return record_cost(
         db,
         user_id,
         service=SERVICE,
@@ -71,26 +73,6 @@ def charge_briefing(
         detail_json=json.dumps(breakdown_to_dict(breakdown)),
         reference_id=str(usage_row_id),
     )
-
-    if user.spending_limit <= 0:
-        _auto_reload(db, user)
-
-    return entry
-
-
-def _auto_reload(db: Session, user: UserRow) -> None:
-    """Reset user's spending_limit and log a topup entry."""
-    user.spending_limit = AUTO_RELOAD_AMOUNT
-    record_cost(
-        db,
-        user.id,
-        service=SERVICE,
-        action="topup",
-        cost=0.0,
-        category="topup",
-        description="Auto-reload (free tier)",
-    )
-    logger.info("Auto-reloaded spending limit to $%.2f for user %s", AUTO_RELOAD_AMOUNT, user.id)
 
 
 def get_recent_transactions(
@@ -129,6 +111,8 @@ class CostSummaryResponse(BaseModel):
     cost_this_week_usd: float
     total_briefings: int
     recent_transactions: list[TransactionResponse]
+    # USD stays canonical; the frontend renders the viewer's currency from this.
+    fx: dict
 
 
 class CostConfigResponse(BaseModel):
@@ -148,6 +132,8 @@ class TransparencyResponse(BaseModel):
     disk_cost_per_gb_monthly: float
     estimated_monthly_briefings: int
     margin_percent: float
+    # USD stays canonical; the frontend renders the viewer's currency from this.
+    fx: dict
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +233,7 @@ def get_costs(
         cost_this_week_usd=round(_cost_since(db, user_id, week_start), 4),
         total_briefings=total_briefings,
         recent_transactions=[_transaction_to_response(t) for t in transactions],
+        fx=fx_block_for_user(db, user_id),
     )
 
 
@@ -387,6 +374,31 @@ def _program_variable_and_counts(
     return token_usd, storage_usd, len(rows), len(users)
 
 
+def build_program_report(db: Session, window_days: int):
+    """Build a ProgramCostReport for a window, or None when no config exists.
+
+    Shared by the admin cost-report endpoint and the donation-impact endpoints
+    (which derive margin-excluded run-cost economics from it).
+    """
+    config_row = get_active_cost_config(db)
+    if not config_row:
+        return None
+
+    config, config_id = config_from_row(config_row)
+    since = datetime.now(timezone.utc) - timedelta(days=window_days)
+    token_usd, storage_usd, num_briefings, num_users = _program_variable_and_counts(db, since)
+
+    return compute_program_cost(
+        config=config,
+        config_id=config_id,
+        window_days=window_days,
+        variable_token_usd=token_usd,
+        variable_storage_usd=storage_usd,
+        num_briefings=num_briefings,
+        num_users=num_users,
+    )
+
+
 @report_router.get("")
 def get_cost_report(
     window: str = "30d",
@@ -401,23 +413,9 @@ def get_cost_report(
             detail=f"Invalid window '{window}'. Use one of: {', '.join(_ALLOWED_WINDOWS)}",
         )
 
-    config_row = get_active_cost_config(db)
-    if not config_row:
+    report = build_program_report(db, window_days)
+    if report is None:
         return None
-
-    config, config_id = config_from_row(config_row)
-    since = datetime.now(timezone.utc) - timedelta(days=window_days)
-    token_usd, storage_usd, num_briefings, num_users = _program_variable_and_counts(db, since)
-
-    report = compute_program_cost(
-        config=config,
-        config_id=config_id,
-        window_days=window_days,
-        variable_token_usd=token_usd,
-        variable_storage_usd=storage_usd,
-        num_briefings=num_briefings,
-        num_users=num_users,
-    )
     return program_report_to_dict(report)
 
 
@@ -429,12 +427,20 @@ transparency_router = APIRouter(prefix="/transparency", tags=["transparency"])
 
 
 @transparency_router.get("", response_model=TransparencyResponse | None)
-def get_transparency(db: Session = Depends(get_db)):
-    """Return the public-facing cost structure (no auth required)."""
+def get_transparency(
+    db: Session = Depends(get_db),
+    viewer_id: str | None = Depends(optional_user_id),
+):
+    """Return the public-facing cost structure (no auth required).
+
+    Carries an ``fx`` block so logged-in viewers see costs in their currency;
+    anonymous viewers get the USD-canonical block.
+    """
     row = get_active_cost_config(db)
     if not row:
         return None
     cfg = CostConfig.from_json(row.config_json)
+    fx = fx_block_for_user(db, viewer_id) if viewer_id else dict(_USD_FX)
     return TransparencyResponse(
         token_cost_per_1k_input=cfg.token_cost_per_1k_input,
         token_cost_per_1k_output=cfg.token_cost_per_1k_output,
@@ -444,4 +450,5 @@ def get_transparency(db: Session = Depends(get_db)):
         disk_cost_per_gb_monthly=cfg.disk_cost_per_gb_monthly,
         estimated_monthly_briefings=cfg.estimated_monthly_briefings,
         margin_percent=cfg.margin_percent,
+        fx=fx,
     )

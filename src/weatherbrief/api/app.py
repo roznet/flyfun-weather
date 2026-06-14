@@ -46,6 +46,7 @@ from weatherbrief.api.credits import (
     router as credits_router,
     transparency_router,
 )
+from weatherbrief.api.donations import router as donations_router
 from weatherbrief.api.feedback import router as feedback_router
 from weatherbrief.analytics.api import router as analytics_router
 from weatherbrief.analytics.admin_api import router as analytics_admin_router
@@ -514,6 +515,7 @@ def create_app() -> FastAPI:
     app.include_router(data_sources_router, prefix="/api")
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")
+    app.include_router(donations_router, prefix="/api")
 
     hub_router = create_hub_router(
         require_admin=require_admin,
