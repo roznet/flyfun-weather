@@ -26,7 +26,7 @@ from weatherbrief.costs import (
 from flyfun_common.costs import record_cost
 from flyfun_common.db import current_user_id, get_db, optional_user_id
 from flyfun_common.db.models import CostLedgerRow, UserRow
-from weatherbrief.api.preferences import fx_block_for_user, usd_fx_block
+from weatherbrief.api.preferences import FxBlock, fx_block_for_user, usd_fx_block
 from weatherbrief.db.models import CostConfigRow
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ class CostSummaryResponse(BaseModel):
     total_briefings: int
     recent_transactions: list[TransactionResponse]
     # USD stays canonical; the frontend renders the viewer's currency from this.
-    fx: dict
+    fx: FxBlock
 
 
 class CostConfigResponse(BaseModel):
@@ -131,7 +131,7 @@ class TransparencyResponse(BaseModel):
     estimated_monthly_briefings: int
     margin_percent: float
     # USD stays canonical; the frontend renders the viewer's currency from this.
-    fx: dict
+    fx: FxBlock
 
 
 # ---------------------------------------------------------------------------

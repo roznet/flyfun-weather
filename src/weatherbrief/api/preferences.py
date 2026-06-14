@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
+from flyfun_common import fx
 from flyfun_common.auth.config import is_dev_mode
 from flyfun_common.autorouter import get_autorouter_token
 from flyfun_common.credentials import (
@@ -25,6 +27,19 @@ from weatherbrief.api.user_migrations import run_pending_migrations
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user/preferences", tags=["preferences"])
+
+
+class FxBlock(BaseModel):
+    """Display-currency block carried on USD-canonical cost/donation responses.
+
+    ``rate`` is units of ``currency`` per 1 USD; the frontend formats from it.
+    Shared by the cost and donation response models so the shape stays in one
+    place and shows up in the OpenAPI schema.
+    """
+
+    currency: str
+    rate: float
+    as_of: str | None = None
 
 
 class AdvisoryPreferences(BaseModel):
@@ -91,6 +106,12 @@ class PreferencesUpdate(BaseModel):
     display_currency: str | None = None  # "auto" or an ISO 4217 code (e.g. "EUR")
     synoptic_forecast_map_enabled: bool | None = None
     defer_email_for_model_update: bool | None = None
+
+    @field_validator("display_currency")
+    @classmethod
+    def _normalize_display_currency(cls, v: str | None) -> str | None:
+        """Normalize to "auto" or a 3-letter code so the contract is explicit."""
+        return None if v is None else _normalize_currency(v)
 
 
 def _load_prefs(db: Session, user_id: str) -> UserPreferencesRow:
@@ -402,10 +423,6 @@ def fx_block_for_user(db: Session, user_id: str) -> dict:
     render the viewer's currency. Degrades gracefully to a USD (rate 1.0) block
     if the rate source is unreachable — never fails the surrounding response.
     """
-    from datetime import date
-
-    from flyfun_common import fx
-
     currency = load_display_currency(db, user_id)
     try:
         return fx.fx_block(currency)

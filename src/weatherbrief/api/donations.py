@@ -40,7 +40,7 @@ from flyfun_common.payments import (
 from flyfun_common.payments.stripe_client import SignatureVerificationError
 
 from weatherbrief.api.credits import build_program_report
-from weatherbrief.api.preferences import fx_block_for_user, usd_fx_block
+from weatherbrief.api.preferences import FxBlock, fx_block_for_user, usd_fx_block
 from weatherbrief.impact import (
     ProgramEconomics,
     donation_impact,
@@ -117,6 +117,13 @@ def create_checkout(
     Anonymous donations are allowed (``viewer_id`` may be ``None``). The webhook
     — not this redirect — is the source of truth for recording the donation.
     """
+    # Recurring is backend-capable, but renewal events (invoice.payment_succeeded)
+    # aren't handled yet, so a subscription would only ever record its first
+    # payment. Reject it at the API — not just the UI — until the lifecycle
+    # webhooks land, so a direct POST can't trigger the lossy path.
+    if body.recurring:
+        raise HTTPException(status_code=422, detail="Recurring donations are not yet supported")
+
     currency = body.currency.strip().upper()
     if len(currency) != 3 or not currency.isalpha():
         raise HTTPException(status_code=422, detail="currency must be a 3-letter ISO code")
@@ -189,7 +196,17 @@ def _handle_session_completed(db: Session, session: dict) -> dict:
     if not cd.provider_ref or cd.amount <= 0:
         return {"received": True, "ignored": "empty session"}
 
-    amount_usd, fx_rate, _as_of = fx.to_usd(cd.amount, cd.currency)
+    # Never let an FX hiccup lose a donation: an unhandled raise here → 500 →
+    # Stripe retries for ~3 days → if the outage outlives that, the donation is
+    # gone. fx.to_usd already degrades to the last cached rate; this guards the
+    # remaining cases (no cache yet, or an ECB-unlisted currency) with a 1:1 USD
+    # fallback (only off if currency != USD during a total outage — rare, and far
+    # better than silent loss). USD always converts exactly.
+    try:
+        amount_usd, fx_rate, _as_of = fx.to_usd(cd.amount, cd.currency)
+    except Exception:
+        logger.warning("FX unavailable for %s; recording 1:1 USD fallback", cd.currency)
+        amount_usd, fx_rate = cd.amount, 1.0
 
     net_usd = None
     if cd.payment_intent_id:
@@ -232,7 +249,7 @@ def _handle_charge_refunded(db: Session, charge: dict) -> dict:
 class DonationMeResponse(BaseModel):
     total_usd: float
     impact: dict
-    fx: dict
+    fx: FxBlock
 
 
 @router.get("/me", response_model=DonationMeResponse)
@@ -256,7 +273,7 @@ class DonationSummaryResponse(BaseModel):
     year: int
     total_year_usd: float
     impact: dict
-    fx: dict
+    fx: FxBlock
 
 
 @router.get("/summary", response_model=DonationSummaryResponse)
