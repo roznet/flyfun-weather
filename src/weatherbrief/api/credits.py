@@ -16,6 +16,7 @@ from weatherbrief.costs import (
     CostBreakdown,
     CostConfig,
     DEFAULT_CONFIG,
+    ProgramCostReport,
     breakdown_to_dict,
     compute_cost,
     compute_program_cost,
@@ -25,11 +26,8 @@ from weatherbrief.costs import (
 from flyfun_common.costs import record_cost
 from flyfun_common.db import current_user_id, get_db, optional_user_id
 from flyfun_common.db.models import CostLedgerRow, UserRow
-from weatherbrief.api.preferences import fx_block_for_user
+from weatherbrief.api.preferences import fx_block_for_user, usd_fx_block
 from weatherbrief.db.models import CostConfigRow
-
-# Default fx block when there's no logged-in viewer (public transparency).
-_USD_FX = {"currency": "USD", "rate": 1.0}
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +372,7 @@ def _program_variable_and_counts(
     return token_usd, storage_usd, len(rows), len(users)
 
 
-def build_program_report(db: Session, window_days: int):
+def build_program_report(db: Session, window_days: int) -> ProgramCostReport | None:
     """Build a ProgramCostReport for a window, or None when no config exists.
 
     Shared by the admin cost-report endpoint and the donation-impact endpoints
@@ -440,7 +438,7 @@ def get_transparency(
     if not row:
         return None
     cfg = CostConfig.from_json(row.config_json)
-    fx = fx_block_for_user(db, viewer_id) if viewer_id else dict(_USD_FX)
+    fx = fx_block_for_user(db, viewer_id) if viewer_id else usd_fx_block()
     return TransparencyResponse(
         token_cost_per_1k_input=cfg.token_cost_per_1k_input,
         token_cost_per_1k_output=cfg.token_cost_per_1k_output,

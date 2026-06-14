@@ -40,8 +40,9 @@ from flyfun_common.payments import (
 from flyfun_common.payments.stripe_client import SignatureVerificationError
 
 from weatherbrief.api.credits import build_program_report
-from weatherbrief.api.preferences import fx_block_for_user
+from weatherbrief.api.preferences import fx_block_for_user, usd_fx_block
 from weatherbrief.impact import (
+    ProgramEconomics,
     donation_impact,
     economics_from_report,
     impact_to_dict,
@@ -53,7 +54,6 @@ logger = logging.getLogger(__name__)
 
 SERVICE = "flyfun-weather"
 _ECONOMICS_WINDOW_DAYS = 30
-_USD_FX = {"currency": "USD", "rate": 1.0}
 
 # Sanity bounds on a single donation (major units, any currency).
 _MIN_AMOUNT = 1.0
@@ -67,10 +67,15 @@ router = APIRouter(prefix="/donations", tags=["donations"])
 # ---------------------------------------------------------------------------
 
 
-def _economics(db: Session):
+def _economics(db: Session) -> ProgramEconomics | None:
     """Derive margin-excluded run-cost economics, or None when no cost config."""
     report = build_program_report(db, _ECONOMICS_WINDOW_DAYS)
     return economics_from_report(report) if report is not None else None
+
+
+def _empty_economics() -> ProgramEconomics:
+    """Neutral economics → impact layer renders a neutral empty state."""
+    return ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0, cost_per_user_month_usd=0.0)
 
 
 def _redirect_urls(request: Request) -> tuple[str, str]:
@@ -237,12 +242,9 @@ def get_my_donations(
 ) -> DonationMeResponse:
     """The viewer's own donation total + impact framing (USD + ``fx`` block)."""
     total = get_user_total_usd(db, viewer_id, service=SERVICE)
-    econ = _economics(db)
+    econ = _economics(db) or _empty_economics()
     now = datetime.now(timezone.utc)
-    if econ is None:
-        impact = donation_impact(total, _empty_economics(), now=now)
-    else:
-        impact = donation_impact(total, econ, now=now)
+    impact = donation_impact(total, econ, now=now)
     return DonationMeResponse(
         total_usd=round(total, 2),
         impact=impact_to_dict(impact),
@@ -267,17 +269,10 @@ def get_summary(
     total = get_year_total_usd(db, now.year, service=SERVICE)
     econ = _economics(db) or _empty_economics()
     yi = yearly_impact(total, econ, now=now)
-    fx_block = fx_block_for_user(db, viewer_id) if viewer_id else dict(_USD_FX)
+    fx_block = fx_block_for_user(db, viewer_id) if viewer_id else usd_fx_block()
     return DonationSummaryResponse(
         year=now.year,
         total_year_usd=round(total, 2),
         impact=yearly_to_dict(yi),
         fx=fx_block,
     )
-
-
-def _empty_economics():
-    """Neutral economics → impact layer renders a neutral empty state."""
-    from weatherbrief.impact import ProgramEconomics
-
-    return ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0, cost_per_user_month_usd=0.0)

@@ -356,6 +356,11 @@ def load_units_region(db: Session, user_id: str) -> str:
 _REGION_CURRENCY = {"europe": "EUR", "us": "USD"}
 
 
+def usd_fx_block() -> dict:
+    """The USD-canonical display block (no conversion) for anonymous viewers."""
+    return {"currency": "USD", "rate": 1.0}
+
+
 def _normalize_currency(value: str | None) -> str:
     """Normalize a display-currency preference to "auto" or an ISO 4217 code.
 
