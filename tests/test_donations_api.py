@@ -162,6 +162,18 @@ class TestCheckout:
         r = client.post("/api/donations/checkout", json={"amount": 10, "currency": "EU"})
         assert r.status_code == 422
 
+    def test_rejects_recurring(self, make_client, monkeypatch):
+        # Recurring is gated at the API until subscription lifecycle is handled,
+        # so it must 422 before ever reaching Stripe.
+        def _should_not_be_called(**kw):
+            raise AssertionError("create_checkout_session must not run for recurring")
+
+        monkeypatch.setattr(donations, "create_checkout_session", _should_not_be_called)
+        r = make_client().post(
+            "/api/donations/checkout", json={"amount": 10, "recurring": True}
+        )
+        assert r.status_code == 422
+
     def test_not_configured_returns_503(self, make_client, monkeypatch):
         from flyfun_common.payments import StripeNotConfigured
 
@@ -212,6 +224,24 @@ class TestWebhook:
         s = session_factory()
         row = s.query(DonationRow).one()
         assert row.net_usd == pytest.approx(28.0 * 0.95)
+        s.close()
+
+    def test_fx_failure_falls_back_to_usd(self, make_client, session_factory, monkeypatch):
+        # An FX outage must never lose a donation: record it 1:1 rather than 500.
+        def _raise(amount, currency):
+            raise RuntimeError("ECB unreachable")
+
+        monkeypatch.setattr(donations, "verify_webhook_event",
+                            lambda p, s: _event("checkout.session.completed", _session_obj()))
+        monkeypatch.setattr(donations, "retrieve_net_ratio", lambda pi: None)
+        monkeypatch.setattr(donations.fx, "to_usd", _raise)
+        r = make_client().post("/api/donations/webhook", content=b"{}",
+                               headers={"stripe-signature": "x"})
+        assert r.json()["created"] is True
+        s = session_factory()
+        row = s.query(DonationRow).one()
+        assert row.amount_usd == pytest.approx(28.0)  # 1:1 fallback
+        assert row.fx_rate == pytest.approx(1.0)
         s.close()
 
     def test_bad_signature_is_400(self, make_client, monkeypatch):
