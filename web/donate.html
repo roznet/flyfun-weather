@@ -97,7 +97,10 @@
           </div>
         </div>
 
-        <label class="recurring-row">
+        <!-- Recurring is backend-capable but the subscription lifecycle webhooks
+             (renewal rows, cancel UI) aren't handled yet, so the toggle stays
+             hidden until then — one-time donations only for now. -->
+        <label class="recurring-row" id="recurring-row" style="display:none;">
           <input type="checkbox" id="input-recurring"> Make this a monthly donation
         </label>
 
