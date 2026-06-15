@@ -41,6 +41,7 @@ export interface PreferencesResponse {
   defer_email_for_model_update: boolean;
   pirep_can_view: boolean;
   pirep_can_publish: boolean;
+  donations_enabled: boolean; // global: Stripe configured (gates the donate link)
 }
 
 export interface PreferencesUpdate {

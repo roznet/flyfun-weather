@@ -711,6 +711,10 @@ function populateAccountForm(prefs: PreferencesResponse): void {
     currencySelect.value = dc === 'AUTO' || !known ? 'auto' : dc;
   }
 
+  // "Support the service" link is gated on Stripe being configured (global flag).
+  const supportSection = document.getElementById('support-section');
+  if (supportSection) supportSection.style.display = prefs.donations_enabled ? '' : 'none';
+
   // Account-level optional services
   const synopticToggle = document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement;
   if (synopticToggle) {

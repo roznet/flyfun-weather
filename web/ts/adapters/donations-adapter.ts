@@ -43,6 +43,7 @@ export interface DonationSummary {
   total_year_usd: number;
   impact: YearlyImpact;
   fx: FxBlock;
+  enabled: boolean; // false when Stripe isn't configured → hide the donate UI
 }
 
 export interface CheckoutRequest {

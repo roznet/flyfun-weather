@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date
 from typing import Any, Literal
 
@@ -85,6 +86,7 @@ class PreferencesResponse(BaseModel):
     defer_email_for_model_update: bool
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
+    donations_enabled: bool = False  # global: Stripe configured (gates the donate UI)
 
 
 class PreferencesUpdate(BaseModel):
@@ -210,6 +212,7 @@ def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> Prefe
         autorouter_mode="password" if is_dev_mode() else "oauth",
         pirep_can_view=prefs_data.get("pirep_can_view", False),
         pirep_can_publish=prefs_data.get("pirep_can_publish", False),
+        donations_enabled=stripe_configured(),
         **toggles,
     )
 
@@ -380,6 +383,17 @@ _REGION_CURRENCY = {"europe": "EUR", "us": "USD"}
 def usd_fx_block() -> dict:
     """The USD-canonical display block (no conversion) for anonymous viewers."""
     return {"currency": "USD", "rate": 1.0}
+
+
+def stripe_configured() -> bool:
+    """Donations are live only when Stripe is configured (key present in env).
+
+    The single on/off switch for the whole donation feature: with no
+    ``STRIPE_SECRET_KEY`` the donate page and the Settings link stay hidden, so
+    deploying the code before Stripe is set up surfaces nothing. Add the key
+    (+ restart) to turn it on — no redeploy.
+    """
+    return bool(os.environ.get("STRIPE_SECRET_KEY"))
 
 
 def _normalize_currency(value: str | None) -> str:
