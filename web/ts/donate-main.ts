@@ -15,44 +15,78 @@ import {
   formatMoney,
   type DonationMe,
   type DonationSummary,
-  type FxBlock,
 } from './adapters/donations-adapter';
+import { fetchPreferences, savePreferences } from './adapters/preferences-adapter';
+import {
+  SUPPORTED_CURRENCIES,
+  currencySymbol,
+  resolveInitialCurrency,
+  setStoredCurrency,
+} from './currency';
 import { renderUserInfo } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 
 const PRESETS = [10, 25, 50, 100];
-const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF'];
 
 let selectedCurrency = 'EUR';
+let isLoggedIn = false;
 
 async function init(): Promise<void> {
   await initI18n();
   initTheme();
 
   const user = await fetchCurrentUser(); // null when logged out — donations allow anon
+  isLoggedIn = !!user;
   if (user) renderUserInfo(user, 'donate');
 
   document.getElementById('loading')!.style.display = 'none';
   document.getElementById('page-content')!.style.display = '';
 
+  // Resolve the one currency that drives both display and the donate amount:
+  // an explicit saved preference wins, else the local choice, else browser
+  // detection, else EUR. Then persist it so display + pay stay in sync.
+  let savedPref: string | null = null;
+  if (user) {
+    try {
+      savedPref = (await fetchPreferences()).display_currency;
+    } catch {
+      /* fall back to local detection below */
+    }
+  }
+  selectedCurrency = resolveInitialCurrency(savedPref);
+  persistCurrency(selectedCurrency, savedPref);
+
   try {
-    const summary = await fetchDonationSummary();
+    const summary = await fetchDonationSummary(selectedCurrency);
     renderCommunity(summary);
-    initCurrency(summary.fx);
+    initCurrency();
   } catch (err) {
     showError(`Could not load donation summary: ${err}`);
   }
 
   if (user) {
     try {
-      renderPersonal(await fetchMyDonations());
+      renderPersonal(await fetchMyDonations(selectedCurrency));
     } catch {
       // Non-fatal: the donate form still works without the personal panel.
     }
   }
 
   initForm();
+}
+
+/** Persist the chosen currency so display + pay stay one synced setting:
+ * the display_currency preference for logged-in users (also read by Settings),
+ * and localStorage for everyone (anon fast path). Skips the server write when
+ * the preference already matches. */
+function persistCurrency(code: string, savedPref: string | null): void {
+  setStoredCurrency(code);
+  if (isLoggedIn && (savedPref || '').toUpperCase() !== code) {
+    savePreferences({ display_currency: code }).catch(() => {
+      /* non-fatal: localStorage still carries the choice this session */
+    });
+  }
 }
 
 function showError(msg: string): void {
@@ -87,27 +121,28 @@ function renderPersonal(me: DonationMe): void {
     : 'Thank you for your support.';
 }
 
-function initCurrency(fx: FxBlock): void {
+function initCurrency(): void {
   const select = document.getElementById('input-currency') as HTMLSelectElement;
-  // Default to the viewer's display currency when it's one we offer.
-  const preferred = (fx.currency || 'EUR').toUpperCase();
-  selectedCurrency = CURRENCIES.includes(preferred) ? preferred : 'EUR';
+  // Single source of truth for the offered set.
+  select.innerHTML = SUPPORTED_CURRENCIES.map(
+    (c) => `<option value="${c}">${c} ${currencySymbol(c)}</option>`,
+  ).join('');
   select.value = selectedCurrency;
-  select.addEventListener('change', () => {
+
+  // Changing the currency is the one setting: it re-displays every total in the
+  // new currency AND becomes the donate currency, and it persists.
+  select.addEventListener('change', async () => {
     selectedCurrency = select.value;
+    persistCurrency(selectedCurrency, null); // explicit change → always persist
     renderPresets();
+    try {
+      renderCommunity(await fetchDonationSummary(selectedCurrency));
+      if (isLoggedIn) renderPersonal(await fetchMyDonations(selectedCurrency));
+    } catch {
+      /* keep the previously rendered totals on a refetch hiccup */
+    }
   });
   renderPresets();
-}
-
-function currencySymbol(code: string): string {
-  try {
-    const parts = new Intl.NumberFormat(undefined, { style: 'currency', currency: code })
-      .formatToParts(0);
-    return parts.find((p) => p.type === 'currency')?.value || code;
-  } catch {
-    return code;
-  }
 }
 
 function renderPresets(): void {

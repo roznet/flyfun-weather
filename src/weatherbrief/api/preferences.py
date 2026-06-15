@@ -413,22 +413,35 @@ def load_display_currency(db: Session, user_id: str) -> str:
     currency = _normalize_currency(data.get("display_currency"))
     if currency != "auto":
         return currency
-    return _REGION_CURRENCY.get(data.get("units_region", "auto"), "USD")
+    # EU-first app: when nothing better is known, default to EUR. (units_region
+    # "us" still maps to USD; the frontend refines "auto" via browser locale and
+    # persists a concrete choice.)
+    return _REGION_CURRENCY.get(data.get("units_region", "auto"), "EUR")
+
+
+def fx_block_for_currency(currency: str) -> dict:
+    """Build a display ``fx`` block for an explicit currency code.
+
+    Degrades gracefully to a USD (rate 1.0) block if the code is bad or the rate
+    source is unreachable — never fails the surrounding response.
+    """
+    currency = _normalize_currency(currency)
+    if currency == "auto":
+        currency = "EUR"
+    try:
+        return fx.fx_block(currency)
+    except Exception:
+        logger.warning("FX unavailable for %s; falling back to USD", currency)
+        return {"currency": "USD", "rate": 1.0, "as_of": date.today().isoformat()}
 
 
 def fx_block_for_user(db: Session, user_id: str) -> dict:
     """Build the display ``fx`` block for a user's resolved currency.
 
     API responses stay USD-canonical and carry this block so the frontend can
-    render the viewer's currency. Degrades gracefully to a USD (rate 1.0) block
-    if the rate source is unreachable — never fails the surrounding response.
+    render the viewer's currency.
     """
-    currency = load_display_currency(db, user_id)
-    try:
-        return fx.fx_block(currency)
-    except Exception:
-        logger.warning("FX unavailable for %s; falling back to USD", currency)
-        return {"currency": "USD", "rate": 1.0, "as_of": date.today().isoformat()}
+    return fx_block_for_currency(load_display_currency(db, user_id))
 
 
 def load_advisory_prefs(db: Session, user_id: str) -> AdvisoryPreferences:

@@ -110,6 +110,24 @@ def _event(event_type, obj):
     return {"type": event_type, "data": {"object": obj}}
 
 
+@pytest.fixture(autouse=True)
+def _stub_fx(monkeypatch):
+    """Deterministic, offline FX so currency-dependent assertions never hit ECB.
+
+    The default display currency is EUR, so /me and /summary resolve a non-USD
+    rate — stub the fetch so tests don't depend on the network.
+    """
+    from flyfun_common import fx
+    fx.clear_cache()
+    monkeypatch.setattr(fx, "_fetch_rates", lambda: (
+        {"USD": 1.0, "EUR": 0.9, "GBP": 0.8, "CHF": 0.9, "NOK": 10.0,
+         "SEK": 10.5, "DKK": 6.7, "PLN": 4.0, "CZK": 23.0, "RON": 4.6},
+        "2026-06-15",
+    ))
+    yield
+    fx.clear_cache()
+
+
 # ---------------------------------------------------------------------------
 # Checkout
 # ---------------------------------------------------------------------------
@@ -343,7 +361,7 @@ class TestMe:
         assert body["impact"]["empty"] is False
         assert body["impact"]["user_months"] > 0
         assert body["impact"]["summary"]  # non-empty phrasing
-        assert body["fx"]["currency"] == "USD"
+        assert body["fx"]["currency"] == "EUR"  # EU-first default for an unset pref
 
     def test_neutral_when_no_economics(self, make_client, session_factory):
         # No cost config seeded → economics unavailable → neutral impact.
@@ -359,6 +377,13 @@ class TestMe:
         body = make_client().get("/api/donations/me").json()
         assert body["total_usd"] == pytest.approx(10.0)
 
+    def test_currency_override(self, make_client, session_factory):
+        _seed_economics(session_factory)
+        _record_donation(session_factory, 10.0)
+        body = make_client().get("/api/donations/me?currency=NOK").json()
+        assert body["fx"]["currency"] == "NOK"
+        assert body["fx"]["rate"] == pytest.approx(10.0)
+
 
 class TestSummary:
     def test_public_no_auth(self, make_client, session_factory):
@@ -370,7 +395,17 @@ class TestSummary:
         assert body["year"] == datetime.now(timezone.utc).year
         assert body["total_year_usd"] == pytest.approx(112.0)
         assert body["impact"]["months_covered"] > 0
-        assert body["fx"]["currency"] == "USD"
+        assert body["fx"]["currency"] == "USD"  # anon, no ?currency → USD-canonical
+
+    def test_anon_currency_override(self, make_client, session_factory):
+        _seed_economics(session_factory)
+        _record_donation(session_factory, 100.0)
+        # Anonymous viewers have no saved pref — ?currency= drives display.
+        body = make_client(viewer=None, optional=None).get(
+            "/api/donations/summary?currency=EUR"
+        ).json()
+        assert body["fx"]["currency"] == "EUR"
+        assert body["fx"]["rate"] == pytest.approx(0.9)
 
     def test_only_current_year(self, make_client, session_factory):
         _seed_economics(session_factory)

@@ -59,14 +59,18 @@ export async function createCheckout(req: CheckoutRequest): Promise<{ url: strin
   });
 }
 
-/** The viewer's own donation total + impact (requires auth). */
-export async function fetchMyDonations(): Promise<DonationMe> {
-  return apiFetch<DonationMe>('/donations/me');
+/** The viewer's own donation total + impact (requires auth).
+ * `currency` overrides the saved display currency for this response. */
+export async function fetchMyDonations(currency?: string): Promise<DonationMe> {
+  const q = currency ? `?currency=${encodeURIComponent(currency)}` : '';
+  return apiFetch<DonationMe>(`/donations/me${q}`);
 }
 
-/** Public this-year community total + coverage framing (no auth required). */
-export async function fetchDonationSummary(): Promise<DonationSummary> {
-  return apiFetch<DonationSummary>('/donations/summary');
+/** Public this-year community total + coverage framing (no auth required).
+ * `currency` selects the display currency (needed for anonymous viewers). */
+export async function fetchDonationSummary(currency?: string): Promise<DonationSummary> {
+  const q = currency ? `?currency=${encodeURIComponent(currency)}` : '';
+  return apiFetch<DonationSummary>(`/donations/summary${q}`);
 }
 
 /** Render a USD amount in the viewer's currency using an fx block. */
