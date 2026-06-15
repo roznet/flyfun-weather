@@ -145,6 +145,7 @@ def create_checkout(
             cancel_url=cancel_url,
             service=SERVICE,
             user_id=viewer_id,
+            product_name="Donation to FlyFun Weather",
         )
     except StripeNotConfigured:
         raise HTTPException(status_code=503, detail="Donations are not configured")
