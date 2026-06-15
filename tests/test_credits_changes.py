@@ -21,6 +21,18 @@ from weatherbrief.api import credits
 from weatherbrief.costs import DEFAULT_CONFIG, compute_cost, config_from_row
 from weatherbrief.db.models import CostConfigRow
 
+
+@pytest.fixture(autouse=True)
+def _stub_fx(monkeypatch):
+    """Offline, deterministic FX. The default display currency is now EUR, so
+    fx-carrying endpoints resolve a non-USD rate — stub the fetch to avoid the
+    network and pin a known rate."""
+    from flyfun_common import fx
+    fx.clear_cache()
+    monkeypatch.setattr(fx, "_fetch_rates", lambda: ({"USD": 1.0, "EUR": 0.9}, "2026-06-15"))
+    yield
+    fx.clear_cache()
+
 SERVICE = "flyfun-weather"
 
 
@@ -83,8 +95,9 @@ def test_credits_endpoint_carries_fx(client):
     r = client.get("/api/user/credits")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["fx"]["currency"] == "USD"
-    assert body["fx"]["rate"] == 1.0
+    # EU-first default for a user with no explicit currency preference.
+    assert body["fx"]["currency"] == "EUR"
+    assert body["fx"]["rate"] == pytest.approx(0.9)
 
 
 def test_transparency_carries_fx(client, session_factory):
@@ -95,4 +108,4 @@ def test_transparency_carries_fx(client, session_factory):
     s.close()
     r = client.get("/api/transparency")
     assert r.status_code == 200, r.text
-    assert r.json()["fx"]["currency"] == "USD"
+    assert r.json()["fx"]["currency"] == "EUR"

@@ -42,7 +42,12 @@ from flyfun_common.payments import (
 from flyfun_common.payments.stripe_client import SignatureVerificationError
 
 from weatherbrief.api.credits import build_program_report
-from weatherbrief.api.preferences import FxBlock, fx_block_for_user, usd_fx_block
+from weatherbrief.api.preferences import (
+    FxBlock,
+    fx_block_for_currency,
+    fx_block_for_user,
+    usd_fx_block,
+)
 from weatherbrief.impact import (
     ProgramEconomics,
     donation_impact,
@@ -289,16 +294,22 @@ class DonationMeResponse(BaseModel):
 def get_my_donations(
     viewer_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
+    currency: str | None = None,
 ) -> DonationMeResponse:
-    """The viewer's own donation total + impact framing (USD + ``fx`` block)."""
+    """The viewer's own donation total + impact framing (USD + ``fx`` block).
+
+    ``?currency=`` overrides the viewer's saved display currency for this
+    response (used for instant reformatting when the picker changes).
+    """
     total = get_user_total_usd(db, viewer_id, service=SERVICE)
     econ = _economics(db) or _empty_economics()
     now = datetime.now(timezone.utc)
     impact = donation_impact(total, econ, now=now)
+    fx_block = fx_block_for_currency(currency) if currency else fx_block_for_user(db, viewer_id)
     return DonationMeResponse(
         total_usd=round(total, 2),
         impact=impact_to_dict(impact),
-        fx=fx_block_for_user(db, viewer_id),
+        fx=fx_block,
     )
 
 
@@ -313,13 +324,23 @@ class DonationSummaryResponse(BaseModel):
 def get_summary(
     viewer_id: str | None = Depends(optional_user_id),
     db: Session = Depends(get_db),
+    currency: str | None = None,
 ) -> DonationSummaryResponse:
-    """Public this-year community total + coverage framing (no per-user data)."""
+    """Public this-year community total + coverage framing (no per-user data).
+
+    ``?currency=`` overrides the display currency for this response — needed for
+    anonymous viewers (who have no saved pref) and for instant reformatting.
+    """
     now = datetime.now(timezone.utc)
     total = get_year_total_usd(db, now.year, service=SERVICE)
     econ = _economics(db) or _empty_economics()
     yi = yearly_impact(total, econ, now=now)
-    fx_block = fx_block_for_user(db, viewer_id) if viewer_id else usd_fx_block()
+    if currency:
+        fx_block = fx_block_for_currency(currency)
+    elif viewer_id:
+        fx_block = fx_block_for_user(db, viewer_id)
+    else:
+        fx_block = usd_fx_block()
     return DonationSummaryResponse(
         year=now.year,
         total_year_usd=round(total, 2),
