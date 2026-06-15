@@ -2987,6 +2987,15 @@ label {
   white-space: nowrap;
 }
 
+/* Provenance of an estimated requirement band (approach class · est DH + margin),
+   shown as a quiet second line under the required value in the qual popup. */
+.popup-thr-basis {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 .threshold-row-active td {
   background: rgba(37, 99, 235, 0.06);
 }
@@ -3942,6 +3951,22 @@ label {
 
 .alt-reg-reason {
   font-size: 0.78rem;
+}
+
+/* Captions/footnotes in the alternates section and its popups. Without this the
+   class inherits the popup's larger base font and reads oversized next to the
+   0.8rem tables. */
+.alt-caption {
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+/* The candidate-funnel note: a quiet footnote under the table. */
+.alt-funnel-note {
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  opacity: 0.85;
 }
 
 .alt-reg-tempo {

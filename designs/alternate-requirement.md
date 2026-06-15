@@ -169,10 +169,51 @@ window with how it was treated (`AlternateRequirement.main_body_ceiling_ft` /
 
 - **Alternates UI** (`web/ts/managers/briefing-ui.ts:renderRouteAlternates`): a destination
   banner (`Alternate required? — FAA: … · EASA: …`, with reason, `(forecast)` vs
-  `(model estimate)`, a TEMPO tag, and an info button for the proxy caveat), plus
-  two table columns — **FAA alt** (Yes/No) and **EASA alt** (Likely/Marginal/
-  Unlikely, green/amber/grey). Tooltips + the candidate popup show the computed
-  requirement vs forecast.
+  `(model estimate)`, a TEMPO tag), plus two table columns — **FAA alt** (Yes/No)
+  and **EASA alt** (Likely/Marginal/Unlikely, green/amber/grey). Tooltips + the
+  candidate popup show the computed requirement vs forecast.
+  - **Clickable verdict pills.** Each banner verdict (FAA / EASA) is a button →
+    a focused per-regime popup (`renderAltReqRegimePopup`): the verdict, the worked
+    reason, a criteria table (forecast vs the threshold that makes an alternate
+    unnecessary, with the ceiling-band provenance), and the TAF TEMPO/PROB detail.
+    The small **(i)** is now an *about & caveats* overview only (how the two
+    regimes differ + backend caveats), not a per-verdict explanation — that lives
+    on the pills. Both pills and the per-candidate qual badges share `.alt-reg-btn`,
+    so the trigger handler (keyed on `data-altreq-regime`) must run first.
+  - **Trigger requirement provenance.** `RegAlternateTrigger.ceiling_basis`
+    mirrors the per-candidate `ceiling_basis` but with the *trigger* margin —
+    EASA `"{class}: est DH {lo}–{hi} ft + 1000 ft margin (NCO.OP.140)"`, FAA
+    `"fixed 2000 ft / 3 SM trigger (14 CFR 91.169)"`.
+  - **Per-candidate requirement provenance.** Each `AlternateQual` carries a
+    display-only `ceiling_basis` string explaining *why* the required ceiling band
+    is what it is, rendered as a muted second line under the required value in the
+    qual popup. EASA: `"{class}: est DH {lo}–{hi} ft + {200|400} ft alternate
+    margin (NCO.OP.143)"` (e.g. `"RNP: est DH 250–600 ft + 400 ft alternate margin"`);
+    FAA: the fixed regulatory value (`"ILS (precision): fixed 600-2"`). NB the
+    per-candidate **selection** margin (+200/+400) is *not* the destination
+    **trigger** margin (+1000); conflating them is the NCO.OP.140-vs-143 trap.
+  - **EASA trigger wording.** FAA stays binary (`Not required` / `Required`). The
+    EASA *trigger* reads as a likelihood band because the minima are estimated:
+    `not_required → "Unlikely required"`, `marginal → "Possibly required"`,
+    `required → "Required"`. The word **"required" is always attached** so it never
+    flips polarity against the per-candidate **EASA alt** column (there `Likely` =
+    *qualifies* = good; on the trigger an un-suffixed `Likely` would read as *bad*).
+  - **Worked EASA reason** (`_easa_trigger_reason`, surfaced verbatim in banner +
+    digest). Instead of the opaque "comfortably above minima", it inverts the
+    NCO.OP.140 bar: the "no alternate" rule is `ceiling ≥ DH + 1000 ft`, so the
+    forecast ceiling implies the highest DH for which no alternate is needed
+    (**break-even DH = ceiling − 1000**). It states that against the approach
+    class's typical minima range. E.g. EGTE: *"ILS: no alternate if ceiling ≥
+    DH+1000 ft — forecast ceiling 1597 ft permits DH up to ~597 ft, above typical
+    ILS minima (~200–300 ft); vis 22840 m ≥ 5000 m*⏎*alternate unlikely required,
+    check the relevant plate minimum ≤ 597 ft"*. The conclusion sits on its own
+    line and ends with the **actionable break-even** (the pilot verifies the
+    published plate minimum against it) — the source (TAF vs model estimate) is
+    shown separately by the UI/digest, not repeated in the string. The
+    `above/within/below` word is exactly the band edge, so the prose and the
+    verdict can never disagree. The label ("ILS") is passed via
+    `compute_easa_trigger(window, proxy, approach_label=...)` and does not affect
+    the verdict.
 - **Plain-text digest** (`digest/text.py:_format_route_alternates`): a trigger
   line + per-candidate `FAA alt yes/no` and `EASA <verdict>` on each row.
 - **LLM digest / PDF report:** out of scope (matches the alternates decision).

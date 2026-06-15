@@ -200,6 +200,55 @@ class TestEasaTrigger:
         assert trig.status == TriggerVerdict.REQUIRED
         assert trig.source == "none"
 
+    def test_worked_reason_shows_breakeven_dh(self):
+        # EGTE-style: ILS, ceiling 1597 → break-even DH = 1597 − 1000 = 597 ft,
+        # above the typical ILS minima range (200–300) → "alternate unlikely
+        # required". The prose must surface the inverted bar, not "comfortably
+        # above minima".
+        trig = compute_easa_trigger(nwp_window(1597, 22840), _PRECISION, approach_label="ILS")
+        assert trig.status == TriggerVerdict.NOT_REQUIRED
+        r = trig.reason
+        assert "ILS" in r
+        assert "597" in r  # break-even DH = ceiling − 1000
+        assert "above" in r
+        assert "alternate unlikely required" in r
+        assert "comfortably above minima" not in r
+        # Actionable plate-minimum check replaces the (model estimate) suffix; the
+        # conclusion sits on its own line.
+        assert "check the relevant plate minimum ≤ 597 ft" in r
+        assert "(model estimate)" not in r
+        assert "\nalternate unlikely required" in r
+
+    def test_worked_reason_below_band_names_required(self):
+        # ILS ceiling 960 → break-even DH = −40 (clamped to 0), below the ILS
+        # minima range → "alternate required".
+        trig = compute_easa_trigger(nwp_window(960, 26000), _PRECISION, approach_label="ILS")
+        assert trig.status == TriggerVerdict.REQUIRED
+        assert "below" in trig.reason
+        assert "alternate required" in trig.reason
+
+    def test_worked_reason_no_iap_mentions_vmc(self):
+        trig = compute_easa_trigger(nwp_window(1600, 6000), None)
+        assert "no instrument approach" in trig.reason
+        assert "VMC" in trig.reason
+
+    def test_no_forecast_reason_unchanged(self):
+        # The worked reason override must not touch the no-forecast branch.
+        trig = compute_easa_trigger(no_forecast_window(), _PRECISION, approach_label="ILS")
+        assert trig.reason == "no forecast available"
+
+    def test_trigger_ceiling_basis_uses_1000_margin(self):
+        # The trigger basis must use the +1000 ft NCO.OP.140 margin, NOT the
+        # +200/+400 selection margin (the regime trap). Present even no-forecast.
+        easa = compute_easa_trigger(nwp_window(1597, 22840), _PRECISION, approach_label="ILS")
+        assert easa.ceiling_basis == "ILS: est DH 200–300 ft + 1000 ft margin (NCO.OP.140)"
+        noiap = compute_easa_trigger(nwp_window(1600, 6000), None)
+        assert "VMC proxy" in noiap.ceiling_basis
+        nofc = compute_easa_trigger(no_forecast_window(), _PRECISION, approach_label="ILS")
+        assert "1000 ft margin" in nofc.ceiling_basis
+        faa = compute_faa_trigger(nwp_window(1597, 22840))
+        assert faa.ceiling_basis == "fixed 2000 ft / 3 SM trigger (14 CFR 91.169)"
+
 
 # --- FAA alternate minima (per candidate) ------------------------------------
 
@@ -273,6 +322,20 @@ class TestEasaAlternateMinima:
         assert q.verdict == BandVerdict.LIKELY
         q2 = compute_easa_qual(1200, 6000, None, has_iap=False)  # 1200 < 2000
         assert q2.verdict == BandVerdict.UNLIKELY
+
+    def test_ceiling_basis_surfaces_est_dh_and_margin(self):
+        # The provenance string explains the band: approach class · est DH +
+        # alternate margin (RNP → +400 ft; ILS → +200 ft).
+        q = compute_easa_qual(4675, 23660, "RNP", has_iap=True)
+        assert q.ceiling_basis == "RNP: est DH 250–600 ft + 400 ft alternate margin (NCO.OP.143)"
+        ils = compute_easa_qual(1200, 2000, "ILS", has_iap=True)
+        assert "ILS: est DH 200–300 ft + 200 ft alternate margin" in ils.ceiling_basis
+        noiap = compute_easa_qual(2200, 6000, None, has_iap=False)
+        assert "VFR proxy" in noiap.ceiling_basis
+
+    def test_faa_ceiling_basis_is_fixed_regulatory(self):
+        assert "fixed 600-2" in compute_faa_qual(650, 2.5 * M_PER_SM, "ILS", has_iap=True).ceiling_basis
+        assert "fixed 800-2" in compute_faa_qual(850, 2.5 * M_PER_SM, "RNP", has_iap=True).ceiling_basis
 
 
 # --- Conservative rules ------------------------------------------------------

@@ -118,6 +118,35 @@ Candidate selection: (1) geometry union of near-route corridor ∪ dest-radius;
 length ≥ min); (4) cap to nearest `max_candidates` by dest distance; (5) fresh
 fetch + shared assembly at ETA; (6) **per-candidate** approach gate (below).
 
+### The candidate funnel: "evaluated" vs "shown"
+The summary count and the table row count are **two different stages**, and the
+gap between them surprised a reader (e.g. *"25 candidates within 50 nm" but only
+7 rows*). The full funnel:
+
+| Stage | What it does | Reported as |
+|-------|--------------|-------------|
+| 1. Geometry | corridor (≤`corridor_nm`) ∪ dest-radius (≤`radius_nm`) | — |
+| 2. Drop self | remove departure + destination | — |
+| 3. GA-suitability | drop `large_airport`, scheduled service, no hard runway, runway `< min_runway_ft`, missing coords | — |
+| 4. Cap | nearest `max_candidates` (30) by dest distance | **`candidates_evaluated`** (the "N candidates" headline) |
+| 5. Weather fetch | drop any candidate with **no model snapshot** at the ETA hour (`_assess` → None) | — |
+| 6. Approach gate | drop a field that is **itself** MVFR/IFR/LIFR *and* has **no published IAP** (unreachable in those conditions); VFR always kept, any field with an IAP always kept | — |
+| → | survivors, ranked closest-first | **`len(alternates)`** (the table rows) |
+
+So **`candidates_evaluated` is the post-cap count (stage 4)**, *not* the number
+shown. The shown list is what survives stages 5–6. For a typical IFR destination
+the gate (stage 6) is the dominant reducer — most nearby fields are sub-VFR with
+no published approach. Worked example (EGTE, IFR ceiling 1597 ft): 25 evaluated →
+7 shown = 3 MVFR-with-approach + 4 VFR; the ~18 dropped are sub-VFR fields with no
+published instrument approach.
+
+The shown list is **not** filtered to "beats the destination" — it shows every
+survivor with a per-row `dominates_destination` flag and `vs dest` Δ tags; the
+"which is the nearest *improvement*" question is answered separately by
+`nearest_improving`. The UI surfaces the evaluated→shown gap with a caption
+(`renderRouteAlternates`); `approach_filter_relaxed` (stage 6 graceful
+degradation) suppresses the gate entirely.
+
 ### Per-candidate instrument-approach gate
 Applied **after** each candidate's own weather is assessed (not at
 destination-level as the original design sketched). For each candidate, if its

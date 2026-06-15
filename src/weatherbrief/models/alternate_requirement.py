@@ -84,6 +84,9 @@ class RegAlternateTrigger(BaseModel):
     triggered_by_tempo: bool = False
     ceiling: CriterionAssessment
     visibility: CriterionAssessment
+    # Provenance of the ceiling requirement (approach class · est DH + the
+    # destination-trigger margin for EASA; fixed value for FAA). Display-only.
+    ceiling_basis: str | None = None
 
 
 class AlternateQual(BaseModel):
@@ -94,6 +97,10 @@ class AlternateQual(BaseModel):
     reason: str
     ceiling: CriterionAssessment
     visibility: CriterionAssessment
+    # Human-readable provenance of the ceiling requirement — explains *why* the
+    # required band is what it is (approach class · estimated DH + alternate
+    # margin for EASA; fixed regulatory value for FAA). Display-only.
+    ceiling_basis: str | None = None
 
 
 class ConditionalGroup(BaseModel):

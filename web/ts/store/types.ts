@@ -592,6 +592,8 @@ export interface RegAlternateTrigger {
   triggered_by_tempo: boolean;
   ceiling: CriterionAssessment;
   visibility: CriterionAssessment;
+  /** Provenance of the ceiling requirement (approach class · est DH + margin). */
+  ceiling_basis?: string | null;
 }
 
 /** Per-candidate alternate-minima qualification for one regime (#249). */
@@ -601,6 +603,8 @@ export interface AlternateQual {
   reason: string;
   ceiling: CriterionAssessment;
   visibility: CriterionAssessment;
+  /** Provenance of the ceiling requirement (approach class · est DH + margin). */
+  ceiling_basis?: string | null;
 }
 
 /** A TAF TEMPO/PROB group overlapping the ETA window (descriptive, #249). */

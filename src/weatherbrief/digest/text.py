@@ -412,8 +412,13 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         # FAA is binary, but guard the safe direction: anything but an explicit
         # not_required reads as Required (a stray marginal must not under-report).
         faa = "Not required" if req.faa.status.value == "not_required" else "Required"
+        # EASA minima are estimated → the trigger reads as a likelihood band;
+        # "required" stays attached so it never flips polarity vs the per-
+        # candidate EASA column (mirrors the web banner).
         easa_map = {
-            "required": "Required", "marginal": "Marginal", "not_required": "Not required",
+            "required": "Required",
+            "marginal": "Possibly required",
+            "not_required": "Unlikely required",
         }
         # Direct lookup — raises loudly if TriggerVerdict ever gains a value.
         easa = easa_map[req.easa.status.value]

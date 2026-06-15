@@ -329,7 +329,7 @@ def run_alternate_requirement(snapshot, airports_db_path: str, *, now: datetime 
         destination_icao=dest_icao,
         eta=eta,
         faa=compute_faa_trigger(window),
-        easa=compute_easa_trigger(window, dest_proxy),
+        easa=compute_easa_trigger(window, dest_proxy, approach_label=dest_approach_type),
         caveats=caveats,
         main_body_ceiling_ft=window.main_body_ceiling_ft,
         main_body_visibility_m=window.main_body_visibility_m,

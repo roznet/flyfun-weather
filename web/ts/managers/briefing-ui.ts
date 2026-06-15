@@ -1190,6 +1190,18 @@ function fmtQualBand(c: CriterionAssessment): string {
   return lo === hi ? `≥ ${lo} ${c.unit}` : `≥ ~${lo}–${hi} ${c.unit} (est. range)`;
 }
 
+/** A criterion row (forecast vs required band) for the qual + trigger popups.
+ * The ceiling's required band is the estimated one; its provenance (approach
+ * class · est DH + margin) is shown as a muted second line so the band isn't an
+ * unexplained range. Other criteria (visibility) carry no basis. */
+function renderCriterionRow(c: CriterionAssessment, basis?: string | null): string {
+  const basisHtml = basis && c.label === 'ceiling'
+    ? `<div class="popup-thr-basis">${escapeHtml(basis)}</div>` : '';
+  return `<tr><td>${escapeHtml(c.label)}</td>`
+    + `<td>${escapeHtml(fmtQualForecast(c))}</td>`
+    + `<td>${escapeHtml(fmtQualBand(c))}${basisHtml}</td></tr>`;
+}
+
 /** Click popup for a per-candidate qualification badge — shows ceiling and
  * visibility forecast vs the (estimated) required band, plus an explanation. */
 function renderQualPopup(apt: AlternateAirport, regime: 'faa' | 'easa'): string {
@@ -1198,10 +1210,6 @@ function renderQualPopup(apt: AlternateAirport, regime: 'faa' | 'easa'): string 
   const title = regime === 'faa'
     ? 'FAA alternate minima (14 CFR 91.169)'
     : 'EASA alternate minima (Part-NCO)';
-  const row = (c: CriterionAssessment) =>
-    `<tr><td>${escapeHtml(c.label)}</td>`
-    + `<td>${escapeHtml(fmtQualForecast(c))}</td>`
-    + `<td>${escapeHtml(fmtQualBand(c))}</td></tr>`;
   const note = regime === 'easa'
     ? "Required values are estimated from the approach type as a range — we don't have "
       + 'published plate minima, so the result is a confidence band. In VFR/MVFR conditions a '
@@ -1215,24 +1223,83 @@ function renderQualPopup(apt: AlternateAirport, regime: 'faa' | 'easa'): string 
     <p class="muted">Overall: <strong>${escapeHtml(qualLabelFor(q, regime, apt.flight_category))}</strong></p>
     <table class="band-table">
       <thead><tr><th>Criterion</th><th>Forecast</th><th>Required (estimated)</th></tr></thead>
-      <tbody>${row(q.ceiling)}${row(q.visibility)}</tbody>
+      <tbody>${renderCriterionRow(q.ceiling, q.ceiling_basis)}${renderCriterionRow(q.visibility)}</tbody>
     </table>
     <p class="muted alt-caption">${note}</p>`;
+}
+
+/** Display label for a destination-trigger verdict. FAA is binary (Not
+ * required / Required); EASA reads as a likelihood band with "required" kept
+ * attached (so it never flips polarity vs the per-candidate "EASA alt" column). */
+function altTriggerLabel(req: AlternateRequirement, regime: 'faa' | 'easa'): string {
+  if (regime === 'faa') return req.faa.status === 'not_required' ? 'Not required' : 'Required';
+  const easaMap: Record<string, string> = {
+    required: 'Required', marginal: 'Possibly required', not_required: 'Unlikely required',
+  };
+  return easaMap[req.easa.status] ?? req.easa.status;
+}
+
+/** Verdict pill colour class: green = no alternate needed, amber = marginal,
+ * red = required. */
+function altTriggerCls(req: AlternateRequirement, regime: 'faa' | 'easa'): string {
+  const t = regime === 'faa' ? req.faa : req.easa;
+  if (regime === 'faa') return t.status === 'not_required' ? 'alt-reg-yes' : 'alt-reg-no';
+  return t.status === 'required'
+    ? 'alt-reg-no' : t.status === 'marginal' ? 'alt-reg-marginal' : 'alt-reg-yes';
+}
+
+/** Focused popup for one regime's destination trigger — opened by clicking the
+ * verdict pill in the banner. Mirrors the per-candidate qual popup: verdict +
+ * worked reason + a criteria table (forecast vs the threshold that would make an
+ * alternate unnecessary, with the ceiling-band provenance) + the TAF detail. */
+function renderAltReqRegimePopup(req: AlternateRequirement, regime: 'faa' | 'easa'): string {
+  const t = regime === 'faa' ? req.faa : req.easa;
+  const title = regime === 'faa'
+    ? 'FAA alternate requirement (14 CFR 91.169)'
+    : 'EASA alternate requirement (Part-NCO)';
+  const verdict = altTriggerLabel(req, regime);
+  const cls = altTriggerCls(req, regime);
+  const src = t.source === 'nwp'
+    ? 'model estimate' : t.source === 'taf' ? 'forecast' : 'no forecast';
+  const note = regime === 'easa'
+    ? "An alternate is <em>not</em> required only if both ceiling and visibility clear these thresholds over the "
+      + 'ETA window (NCO.OP.140: ceiling ≥ DH + 1000 ft, vis ≥ 5000 m; no approach → VMC). The required ceiling is '
+      + 'estimated from the approach type as a range, so the verdict is a likelihood band — '
+      + '<strong>Unlikely required</strong> clears even the worst-case estimate, <strong>Possibly required</strong> '
+      + 'is inside the estimated range, <strong>Required</strong> fails even the best case.'
+    : 'FAA requires a filed alternate unless the ceiling is at least 2000 ft <em>and</em> visibility at least 3 SM '
+      + 'from 1 hour before to 1 hour after ETA — fixed regulatory values (14 CFR 91.169), so the verdict is a plain '
+      + 'Yes / No.';
+  const forecastDetail = renderForecastDetail(req);
+  return `
+    <div class="popup-header">
+      <h3>${escapeHtml(req.destination_icao)} — ${escapeHtml(title)}</h3>
+      <p class="popup-vibe">Is a filed alternate required at the destination? (${escapeHtml(src)})</p>
+    </div>
+    <div class="popup-body">
+      <div class="popup-section">
+        <p>Verdict: <span class="alt-reg ${cls}">${escapeHtml(verdict)}</span></p>
+        <p>${escapeHtml(t.reason).replace(/\n/g, '<br>')}</p>
+      </div>
+      <div class="popup-section">
+        <h4>Criteria — thresholds to <em>not</em> need an alternate</h4>
+        <table class="band-table">
+          <thead><tr><th>Criterion</th><th>Forecast</th><th>Required</th></tr></thead>
+          <tbody>${renderCriterionRow(t.ceiling, t.ceiling_basis)}${renderCriterionRow(t.visibility)}</tbody>
+        </table>
+      </div>
+      ${forecastDetail ? `<div class="popup-section">${forecastDetail}</div>` : ''}
+      <div class="popup-section"><h4>How this is decided</h4><p class="alt-caption">${note}</p></div>
+    </div>`;
 }
 
 /** Destination "alternate required?" banner (FAA + EASA). */
 function altRequirementBanner(req: AlternateRequirement | null | undefined): string {
   if (!req) return '';
-  // FAA is binary, but keep the safe direction: only an explicit not_required
-  // reads as "Not required"; anything else (incl. a stray marginal) → Required.
-  const faaTxt = req.faa.status === 'not_required' ? 'Not required' : 'Required';
-  const easaMap: Record<string, string> = {
-    required: 'Required', marginal: 'Marginal', not_required: 'Not required',
-  };
-  const easaTxt = easaMap[req.easa.status] ?? req.easa.status;
-  const faaCls = req.faa.status === 'not_required' ? 'alt-reg-yes' : 'alt-reg-no';
-  const easaCls = req.easa.status === 'required'
-    ? 'alt-reg-no' : req.easa.status === 'marginal' ? 'alt-reg-marginal' : 'alt-reg-yes';
+  const faaTxt = altTriggerLabel(req, 'faa');
+  const easaTxt = altTriggerLabel(req, 'easa');
+  const faaCls = altTriggerCls(req, 'faa');
+  const easaCls = altTriggerCls(req, 'easa');
   const srcLabel = req.faa.source === 'nwp'
     ? 'model estimate' : req.faa.source === 'taf' ? 'forecast' : 'no forecast';
   const tempo = (req.faa.triggered_by_tempo || req.easa.triggered_by_tempo)
@@ -1242,14 +1309,17 @@ function altRequirementBanner(req: AlternateRequirement | null | undefined): str
   const rawReason = req.easa.reason
     ? `EASA: ${req.easa.reason}`
     : req.faa.reason ? `FAA: ${req.faa.reason}` : '';
-  const reason = escapeHtml(rawReason);
+  const reason = escapeHtml(rawReason).replace(/\n/g, '<br>');
+  // The verdict pills are clickable → focused per-regime popup explaining why.
+  const pill = (regime: 'faa' | 'easa', cls: string, txt: string) =>
+    `<button class="alt-reg alt-reg-btn ${cls}" data-altreq-regime="${regime}" title="Why? — click for the criteria">${txt}</button>`;
   return `
     <p class="obs-summary alt-reg-banner">
       Alternate required? —
-      FAA: <span class="alt-reg ${faaCls}">${faaTxt}</span> ·
-      EASA: <span class="alt-reg ${easaCls}">${easaTxt}</span>
+      FAA: ${pill('faa', faaCls, faaTxt)} ·
+      EASA: ${pill('easa', easaCls, easaTxt)}
       <span class="muted">(${srcLabel})</span>${tempo}
-      <button class="alt-reg-info" title="About alternate minima — click for details" aria-label="about alternate minima">i</button>
+      <button class="alt-reg-info" title="About alternate minima — caveats" aria-label="about alternate minima">i</button>
       <br><span class="muted alt-reg-reason">${reason}</span>
     </p>`;
 }
@@ -1298,29 +1368,40 @@ function renderForecastDetail(req: AlternateRequirement): string {
     TEMPO assessed by expected duration and fuel) — verify and use your own judgment.</p>`;
 }
 
-/** Click popup for the alternate-requirement caveat (i) button — same modal
- * mechanism as every other info button on the page (the banner button used to
- * be a hover-only title tooltip). Surfaces both regimes + the backend caveats. */
+/** Click popup for the alternate-requirement (i) button — the "about & caveats"
+ * overview. The per-regime *why* (criteria + worked reason) now lives in the
+ * verdict-pill popups (renderAltReqRegimePopup), so this stays high-level: how
+ * the two regimes differ + the backend caveats, with a pointer to the pills. */
 function renderAltReqPopup(req: AlternateRequirement): string {
-  const faaTxt = req.faa.status === 'not_required' ? 'Not required' : 'Required';
-  const easaMap: Record<string, string> = {
-    required: 'Required', marginal: 'Marginal', not_required: 'Not required',
-  };
-  const easaTxt = easaMap[req.easa.status] ?? req.easa.status;
   const src = req.faa.source === 'nwp'
     ? 'model estimate' : req.faa.source === 'taf' ? 'forecast' : 'no forecast';
   const caveatList = (req.caveats && req.caveats.length ? req.caveats : [ALT_REG_CAVEAT])
     .map((c) => `<li>${escapeHtml(c)}</li>`).join('');
   return `
-    <div class="popup-header"><h3>Alternate required? — ${escapeHtml(req.destination_icao)}</h3></div>
-    <pre class="obs-wind-summary">FAA (14 CFR 91.169): ${faaTxt}
-  ${escapeHtml(req.faa.reason)}
-EASA (Part-NCO): ${easaTxt}
-  ${escapeHtml(req.easa.reason)}
-Source: ${escapeHtml(src)}</pre>
-    ${renderForecastDetail(req)}
-    <h4>Notes</h4>
-    <ul class="alt-caveats">${caveatList}</ul>`;
+    <div class="popup-header">
+      <h3>Alternate required? <span class="popup-unit">${escapeHtml(req.destination_icao)}</span></h3>
+      <p class="popup-vibe">Is a filed destination alternate required? Computed two ways from the ${escapeHtml(src)}.</p>
+    </div>
+    <div class="popup-body">
+      <div class="popup-section">
+        <p>Click the <strong>FAA</strong> or <strong>EASA</strong> verdict pill for that regime's
+        criteria and the worked reasoning.</p>
+      </div>
+      <div class="popup-section">
+        <h4>The two regimes</h4>
+        <ul>
+          <li><strong>FAA (14 CFR 91.169)</strong> — fixed regulatory trigger: an alternate is
+          required unless ceiling ≥ 2000 ft and visibility ≥ 3 SM. Plain Yes / No.</li>
+          <li><strong>EASA (Part-NCO)</strong> — NCO.OP.140: no alternate only if ceiling ≥ DH + 1000 ft
+          and visibility ≥ 5000 m. The DH is estimated from the approach type as a range, so the
+          verdict is a likelihood band (Unlikely / Possibly / Required).</li>
+        </ul>
+      </div>
+      <div class="popup-section">
+        <h4>Notes</h4>
+        <ul>${caveatList}</ul>
+      </div>
+    </div>`;
 }
 
 function renderAltPopup(apt: AlternateAirport): string {
@@ -1384,7 +1465,15 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
     : `<p class="muted">No weather alternate improves on the destination across the evaluated candidates.</p>`;
 
   const approachNote = alt.approach_filter_relaxed ? ', approach data unavailable' : '';
-  const summaryHtml = `<p class="obs-summary">${header} <span class="obs-fetch-time">${alt.candidates_evaluated} candidates within ${Math.round(alt.radius_nm)}nm${approachNote}</span></p>`;
+  const shownCount = alt.alternates.length;
+  const summaryHtml = `<p class="obs-summary">${header} <span class="obs-fetch-time">${alt.candidates_evaluated} evaluated → ${shownCount} shown within ${Math.round(alt.radius_nm)}nm${approachNote}</span></p>`;
+  // Explain the evaluated→shown gap. The drop is the per-candidate
+  // instrument-approach gate (a field that is itself sub-VFR with no published
+  // approach is unreachable in those conditions) plus any with no ETA forecast.
+  const droppedCount = Math.max(0, alt.candidates_evaluated - shownCount);
+  const funnelHtml = droppedCount > 0
+    ? `<p class="muted alt-funnel-note">From ${alt.candidates_evaluated} GA-suitable fields within ${Math.round(alt.radius_nm)}nm (hard runway, no scheduled service), ${droppedCount} were filtered out — sub-VFR fields with no published instrument approach (unreachable in those conditions), or no forecast at ETA.</p>`
+    : '';
   const reqBannerHtml = altRequirementBanner(alt.alternate_requirement);
   const relaxedHtml = alt.approach_filter_relaxed
     ? `<p class="muted alt-caption">⚠️ No published-approach data is available for the candidates, so non-VFR fields could not be filtered by approach — confirm an approach independently.</p>`
@@ -1440,15 +1529,24 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    ${funnelHtml}
   `;
 
   // Assign (not addEventListener) so repeated renders from the store
   // subscription replace the handler rather than stacking duplicates.
   el.onclick = (e) => {
     const target = e.target as HTMLElement;
-    // Caveat (i) on the requirement banner → details popup (was hover-only).
+    // Caveat (i) on the requirement banner → overview + caveats popup.
     if (target.closest('.alt-reg-info') && alt.alternate_requirement) {
       showPopupContent(renderAltReqPopup(alt.alternate_requirement));
+      return;
+    }
+    // Destination-trigger verdict pill → focused per-regime "why?" popup. Must
+    // run before the qual-badge check below: both share `.alt-reg-btn`.
+    const trigBtn = target.closest('[data-altreq-regime]') as HTMLElement | null;
+    if (trigBtn && alt.alternate_requirement) {
+      const regime = trigBtn.dataset.altreqRegime as 'faa' | 'easa' | undefined;
+      if (regime) showPopupContent(renderAltReqRegimePopup(alt.alternate_requirement, regime));
       return;
     }
     // FAA/EASA qualification badge → ceiling/visibility detail popup.

@@ -539,9 +539,100 @@ def _trigger_reason(
     return f"{'; '.join(bits)}{tempo} ({src})"
 
 
+# EASA trigger conclusion phrasing. The band is intrinsically a likelihood (the
+# plate minima are estimated), so we say "unlikely/possibly/required" rather than
+# a flat yes/no — and always attach "required" so the word never reads with the
+# opposite polarity of the per-candidate qualification ("Likely" = qualifies).
+_EASA_TRIGGER_CONCLUSION = {
+    TriggerVerdict.NOT_REQUIRED: "alternate unlikely required",
+    TriggerVerdict.MARGINAL: "alternate possibly required",
+    TriggerVerdict.REQUIRED: "alternate required",
+}
+
+
+def _easa_trigger_reason(
+    window: CeilingVisWindow,
+    proxy: ApproachProxy | None,
+    approach_label: str | None,
+    status: TriggerVerdict,
+) -> str:
+    """Worked NCO.OP.140 reasoning: break-even DH vs typical approach minima.
+
+    The "no alternate" bar is ceiling ≥ DH/MDH + 1000 ft. Inverting it, the
+    forecast ceiling implies the highest DH for which no alternate is required
+    (``break-even DH = ceiling − 1000``); comparing that to the approach class's
+    typical minima range is exactly what sets the band — so we surface it instead
+    of the opaque "comfortably above minima". The source (TAF vs model estimate)
+    is shown separately by the UI/digest, so it is not repeated here; instead the
+    conclusion ends with the actionable break-even ("check the relevant plate
+    minimum ≤ X ft") that the pilot can verify against the published plate.
+    """
+    margin = EASA_DEST_CEILING_MARGIN_FT
+
+    vis_m = window.visibility_m
+    vis_ok = vis_m is not None and vis_m >= EASA_DEST_VIS_M
+    vis_clause = (
+        f"vis {_fmt_forecast(vis_m, 'm', is_ceiling=False)} "
+        f"{'≥' if vis_ok else '<'} {EASA_DEST_VIS_M:.0f} m"
+    )
+
+    if proxy is None:
+        ceiling_clause = (
+            f"no instrument approach → needs VMC "
+            f"(ceiling ≥ {EASA_DEST_NOIAP_CEILING_FT:.0f} ft); "
+            f"forecast ceiling {_fmt_forecast(window.ceiling_ft, 'ft', is_ceiling=True)}"
+        )
+    else:
+        label = (approach_label or "instrument").strip().upper()
+        typ = _fmt_req(proxy.dh_lo, proxy.dh_hi, "ft")
+        if window.ceiling_ft is None:
+            ceiling_clause = (
+                f"{label}: no ceiling layer (clear) — well above the DH+{margin:.0f} ft bar"
+            )
+        else:
+            slack = window.ceiling_ft - margin
+            rel = "above" if slack >= proxy.dh_hi else "below" if slack < proxy.dh_lo else "within"
+            ceiling_clause = (
+                f"{label}: no alternate if ceiling ≥ DH+{margin:.0f} ft — forecast ceiling "
+                f"{window.ceiling_ft:.0f} ft permits DH up to ~{max(0.0, slack):.0f} ft, "
+                f"{rel} typical {label} minima ({typ})"
+            )
+
+    # Conclusion on its own line, ending with the actionable plate-minimum check
+    # (the break-even DH): if the published plate minimum is at/below this, no
+    # alternate is required. Only meaningful with an IAP and a finite ceiling.
+    conclusion = _EASA_TRIGGER_CONCLUSION[status]
+    if proxy is not None and window.ceiling_ft is not None:
+        breakeven = window.ceiling_ft - margin
+        if breakeven > 0:
+            conclusion = (
+                f"{conclusion}, check the relevant plate minimum ≤ {breakeven:.0f} ft"
+            )
+    return f"{ceiling_clause}; {vis_clause}\n{conclusion}"
+
+
+def _easa_trigger_basis(proxy: ApproachProxy | None, approach_label: str | None) -> str:
+    """Provenance of the EASA trigger's required ceiling (NCO.OP.140 margin).
+
+    Mirrors the per-candidate ``ceiling_basis`` but with the *trigger* margin
+    (+1000 ft), not the selection margin (+200/+400) — keeping the two distinct
+    is the NCO.OP.140-vs-143 trap.
+    """
+    if proxy is None:
+        return (
+            f"no instrument approach → VMC proxy "
+            f"({EASA_DEST_NOIAP_CEILING_FT:.0f} ft / {EASA_DEST_VIS_M:.0f} m, NCO.OP.140)"
+        )
+    label = (approach_label or "instrument").strip().upper()
+    return (
+        f"{label}: est DH {proxy.dh_lo:.0f}–{proxy.dh_hi:.0f} ft "
+        f"+ {EASA_DEST_CEILING_MARGIN_FT:.0f} ft margin (NCO.OP.140)"
+    )
+
+
 def compute_faa_trigger(window: CeilingVisWindow) -> RegAlternateTrigger:
     """FAA 14 CFR 91.169 destination trigger (2000 ft / 3 SM, binary)."""
-    return _build_trigger(
+    trigger = _build_trigger(
         "faa",
         window,
         ceiling_lo=FAA_TRIGGER_CEILING_FT,
@@ -550,10 +641,15 @@ def compute_faa_trigger(window: CeilingVisWindow) -> RegAlternateTrigger:
         vis_hi=FAA_TRIGGER_VIS_SM,
         vis_unit="SM",
     )
+    return trigger.model_copy(
+        update={"ceiling_basis": "fixed 2000 ft / 3 SM trigger (14 CFR 91.169)"}
+    )
 
 
 def compute_easa_trigger(
-    window: CeilingVisWindow, proxy: ApproachProxy | None
+    window: CeilingVisWindow,
+    proxy: ApproachProxy | None,
+    approach_label: str | None = None,
 ) -> RegAlternateTrigger:
     """EASA NCO.OP.140 destination trigger (is an alternate required?).
 
@@ -563,6 +659,9 @@ def compute_easa_trigger(
     alternate* test and is deliberately a higher bar than the alternate-selection
     minima in ``compute_easa_qual`` (DH+200) — an IFR destination requires an
     alternate. The proxied DH range yields a small Marginal zone around the bar.
+
+    ``approach_label`` (e.g. "ILS") is used only to phrase the worked reason
+    (break-even DH vs typical minima); it does not change the verdict.
     """
     if proxy is None:
         cl = ch = EASA_DEST_NOIAP_CEILING_FT
@@ -570,7 +669,7 @@ def compute_easa_trigger(
         cl = proxy.dh_lo + EASA_DEST_CEILING_MARGIN_FT
         ch = proxy.dh_hi + EASA_DEST_CEILING_MARGIN_FT
     vl = vh = EASA_DEST_VIS_M
-    return _build_trigger(
+    trigger = _build_trigger(
         "easa",
         window,
         ceiling_lo=cl,
@@ -579,6 +678,14 @@ def compute_easa_trigger(
         vis_hi=vh,
         vis_unit="m",
     )
+    # Replace the generic "comfortably above minima" reason with the worked
+    # break-even reasoning (forecast-present path only; the no-forecast branch
+    # keeps "no forecast available"). The ceiling basis is independent of the
+    # forecast, so it is always attached.
+    update: dict = {"ceiling_basis": _easa_trigger_basis(proxy, approach_label)}
+    if window.has_forecast:
+        update["reason"] = _easa_trigger_reason(window, proxy, approach_label, trigger.status)
+    return trigger.model_copy(update=update)
 
 
 # ---------------------------------------------------------------------------
@@ -616,14 +723,18 @@ def compute_faa_qual(
         cl = ch = FAA_ALT_VFR_CEILING_FT
         vl = vh = FAA_ALT_VFR_VIS_SM
         vfr_only = True
+        basis = "no instrument approach → VFR proxy (1000 ft / 3 SM)"
     elif proxy.faa_precision:
         cl = ch = FAA_ALT_PRECISION_CEILING_FT
         vl = vh = FAA_ALT_VIS_SM
         vfr_only = False
+        basis = "ILS (precision): fixed 600-2 (regulatory, 14 CFR 91.169)"
     else:
         cl = ch = FAA_ALT_NONPRECISION_CEILING_FT
         vl = vh = FAA_ALT_VIS_SM
         vfr_only = False
+        label = (approach_type or "non-precision").strip().upper()
+        basis = f"{label} (non-precision): fixed 800-2 (regulatory, 14 CFR 91.169)"
 
     vis_sm = None if visibility_m is None else visibility_m / M_PER_SM
     cverd = band_qualification(_ceiling_for_band(ceiling_ft), cl, ch)
@@ -638,6 +749,7 @@ def compute_faa_qual(
         reason=_qual_reason(verdict, ceiling_c, vis_c, "SM", vfr_only=vfr_only),
         ceiling=ceiling_c,
         visibility=vis_c,
+        ceiling_basis=basis,
     )
 
 
@@ -658,10 +770,21 @@ def compute_easa_qual(
         cl = ch = EASA_ALT_NOIAP_CEILING_FT
         vl = vh = EASA_ALT_NOIAP_VIS_M
         vfr_only = True
+        basis = "no instrument approach → VFR proxy (2000 ft / 5000 m)"
     else:
         cl, ch = easa_alt_ceiling_band(proxy)
         vl = vh = easa_alt_vis(proxy)
         vfr_only = False
+        margin = (
+            EASA_ALT_LOWDH_CEILING_MARGIN_FT
+            if proxy.faa_precision
+            else EASA_ALT_HIGHDH_CEILING_MARGIN_FT
+        )
+        label = (approach_type or "instrument").strip().upper()
+        basis = (
+            f"{label}: est DH {proxy.dh_lo:.0f}–{proxy.dh_hi:.0f} ft "
+            f"+ {margin:.0f} ft alternate margin (NCO.OP.143)"
+        )
 
     cverd = band_qualification(_ceiling_for_band(ceiling_ft), cl, ch)
     vverd = band_qualification(visibility_m, vl, vh)
@@ -675,4 +798,5 @@ def compute_easa_qual(
         reason=_qual_reason(verdict, ceiling_c, vis_c, "m", vfr_only=vfr_only),
         ceiling=ceiling_c,
         visibility=vis_c,
+        ceiling_basis=basis,
     )
