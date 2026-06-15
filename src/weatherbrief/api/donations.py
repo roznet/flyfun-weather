@@ -30,11 +30,13 @@ from flyfun_common.payments import (
     StripeNotConfigured,
     create_checkout_session,
     extract_donation_from_session,
+    get_donation,
     get_user_total_usd,
     get_year_total_usd,
     mark_refunded,
     record_donation,
     retrieve_net_ratio,
+    set_net_usd,
     verify_webhook_event,
 )
 from flyfun_common.payments.stripe_client import SignatureVerificationError
@@ -184,6 +186,8 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
 
     if event_type == "checkout.session.completed":
         return _handle_session_completed(db, data_object)
+    if event_type == "charge.updated":
+        return _handle_charge_updated(db, data_object)
     if event_type == "charge.refunded":
         return _handle_charge_refunded(db, data_object)
 
@@ -230,6 +234,34 @@ def _handle_session_completed(db: Session, session: dict) -> dict:
         recurring=cd.recurring,
     )
     return {"received": True, "created": created}
+
+
+def _handle_charge_updated(db: Session, charge: dict) -> dict:
+    """Backfill ``net_usd`` once the Stripe fee is known.
+
+    The balance transaction carrying the fee is created slightly after the
+    charge, so ``net_usd`` is usually still NULL after
+    ``checkout.session.completed``. ``charge.updated`` fires when the charge
+    changes (including when the balance transaction attaches), so we use it to
+    fill the fee in. Cheap-guard first: skip the Stripe API call entirely unless
+    we have a matching donation that still needs the fee. Idempotent — repeated
+    deliveries no-op once ``net_usd`` is set.
+    """
+    provider_ref = charge.get("payment_intent")
+    if not provider_ref:
+        return {"received": True, "ignored": "no payment_intent"}
+    row = get_donation(db, provider_ref)
+    if row is None or row.net_usd is not None:
+        return {"received": True, "ignored": "unknown charge or net already set"}
+    try:
+        ratio = retrieve_net_ratio(provider_ref)
+    except Exception:
+        logger.warning("Could not retrieve Stripe fee for %s", provider_ref)
+        return {"received": True, "net_pending": True}
+    if ratio is None:
+        return {"received": True, "net_pending": True}
+    set_net_usd(db, provider_ref, round(row.amount_usd * ratio, 6))
+    return {"received": True, "net_updated": True}
 
 
 def _handle_charge_refunded(db: Session, charge: dict) -> dict:
