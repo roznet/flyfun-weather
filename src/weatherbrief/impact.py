@@ -183,8 +183,10 @@ def format_yearly_coverage(yi: YearlyImpact) -> str:
     mc = yi.months_covered
     if mc >= 12:
         return f"this year's donations cover ~{mc / 12:.1f} years of running costs"
-    if mc >= 0.95:
+    if mc >= 1.5:
         return f"this year's donations cover ~{mc:.1f} months of running costs"
+    if mc >= 0.95:  # avoids the grammatically odd "~1.0 months"
+        return "this year's donations cover ~1 month of running costs"
     return "this year's donations help cover the running costs"
 
 

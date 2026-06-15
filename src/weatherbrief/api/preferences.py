@@ -281,7 +281,8 @@ def update_preferences(
     if body.units_region is not None:
         data["units_region"] = body.units_region
     if body.display_currency is not None:
-        data["display_currency"] = _normalize_currency(body.display_currency)
+        # Already normalized by the PreferencesUpdate field validator.
+        data["display_currency"] = body.display_currency
     if body.synoptic_forecast_map_enabled is not None:
         data["synoptic_forecast_map_enabled"] = body.synoptic_forecast_map_enabled
     if body.defer_email_for_model_update is not None:
@@ -380,9 +381,9 @@ def load_units_region(db: Session, user_id: str) -> str:
 _REGION_CURRENCY = {"europe": "EUR", "us": "USD"}
 
 
-def usd_fx_block() -> dict:
+def usd_fx_block() -> FxBlock:
     """The USD-canonical display block (no conversion) for anonymous viewers."""
-    return {"currency": "USD", "rate": 1.0}
+    return FxBlock(currency="USD", rate=1.0)
 
 
 def stripe_configured() -> bool:
@@ -433,7 +434,7 @@ def load_display_currency(db: Session, user_id: str) -> str:
     return _REGION_CURRENCY.get(data.get("units_region", "auto"), "EUR")
 
 
-def fx_block_for_currency(currency: str) -> dict:
+def fx_block_for_currency(currency: str) -> FxBlock:
     """Build a display ``fx`` block for an explicit currency code.
 
     Degrades gracefully to a USD (rate 1.0) block if the code is bad or the rate
@@ -443,13 +444,13 @@ def fx_block_for_currency(currency: str) -> dict:
     if currency == "auto":
         currency = "EUR"
     try:
-        return fx.fx_block(currency)
+        return FxBlock(**fx.fx_block(currency))
     except Exception:
         logger.warning("FX unavailable for %s; falling back to USD", currency)
-        return {"currency": "USD", "rate": 1.0, "as_of": date.today().isoformat()}
+        return FxBlock(currency="USD", rate=1.0, as_of=date.today().isoformat())
 
 
-def fx_block_for_user(db: Session, user_id: str) -> dict:
+def fx_block_for_user(db: Session, user_id: str) -> FxBlock:
     """Build the display ``fx`` block for a user's resolved currency.
 
     API responses stay USD-canonical and carry this block so the frontend can

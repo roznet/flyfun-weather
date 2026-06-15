@@ -60,8 +60,8 @@ async function init(): Promise<void> {
   let summary: DonationSummary;
   try {
     summary = await fetchDonationSummary(selectedCurrency);
-  } catch (err) {
-    showError(`Could not load donation summary: ${err}`);
+  } catch {
+    showError('Could not load donations right now. Please try again later.');
     return;
   }
 
@@ -198,9 +198,17 @@ function initForm(): void {
         currency: selectedCurrency,
         recurring: recurring.checked,
       });
+      // Defense-in-depth: only ever navigate to a Stripe Checkout URL, never an
+      // arbitrary (e.g. javascript:) scheme if the response were ever tampered with.
+      if (!url.startsWith('https://checkout.stripe.com/')) {
+        showError('Unexpected checkout URL — please try again.');
+        btn.disabled = false;
+        btn.textContent = 'Donate';
+        return;
+      }
       window.location.href = url; // hand off to Stripe Checkout
-    } catch (err) {
-      showError(`Could not start checkout: ${err}`);
+    } catch {
+      showError('Could not start checkout. Please try again.');
       btn.disabled = false;
       btn.textContent = 'Donate';
     }

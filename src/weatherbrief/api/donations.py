@@ -272,10 +272,21 @@ def _handle_charge_updated(db: Session, charge: dict) -> dict:
 
 
 def _handle_charge_refunded(db: Session, charge: dict) -> dict:
-    """Flip a refunded donation out of aggregation, keyed by PaymentIntent."""
-    provider_ref = charge.get("payment_intent") or charge.get("id")
+    """Flip a refunded donation out of aggregation, keyed by PaymentIntent.
+
+    Donations are stored with ``provider_ref`` = the PaymentIntent id, so we match
+    on that. We deliberately do NOT fall back to ``charge.id``: that would never
+    match a ledger row and would silently mark nothing while returning 200 (so
+    Stripe stops retrying) — a silent miss. Checkout always creates a
+    PaymentIntent, so a charge without one isn't ours; log and ignore.
+    """
+    provider_ref = charge.get("payment_intent")
     if not provider_ref:
-        return {"received": True, "ignored": "no provider_ref"}
+        logger.warning(
+            "charge.refunded with no payment_intent (charge id: %s) — no ledger match",
+            charge.get("id"),
+        )
+        return {"received": True, "ignored": "no payment_intent"}
     row = mark_refunded(db, provider_ref)
     return {"received": True, "refunded": row is not None}
 
@@ -285,9 +296,32 @@ def _handle_charge_refunded(db: Session, charge: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+class DonationImpactResponse(BaseModel):
+    """Per-viewer impact framing (mirror of impact_to_dict)."""
+
+    amount_usd: float
+    user_months: float
+    users_until_eoy: float
+    months_until_eoy: float
+    empty: bool
+    summary: str
+
+
+class YearlyImpactResponse(BaseModel):
+    """Community yearly coverage framing (mirror of yearly_to_dict)."""
+
+    total_year_usd: float
+    months_covered: float
+    users_full_year: float
+    coverage_ratio: float
+    months_elapsed: float
+    empty: bool
+    summary: str
+
+
 class DonationMeResponse(BaseModel):
     total_usd: float
-    impact: dict
+    impact: DonationImpactResponse
     fx: FxBlock
 
 
@@ -317,7 +351,7 @@ def get_my_donations(
 class DonationSummaryResponse(BaseModel):
     year: int
     total_year_usd: float
-    impact: dict
+    impact: YearlyImpactResponse
     fx: FxBlock
     enabled: bool
 
