@@ -271,6 +271,40 @@ class TestWebhook:
         assert s.query(DonationRow).one().status == "refunded"
         s.close()
 
+    def test_charge_updated_backfills_net_usd(self, make_client, session_factory, monkeypatch):
+        # Record a donation whose fee wasn't ready yet (net_usd stays None).
+        monkeypatch.setattr(donations, "verify_webhook_event",
+                            lambda p, s: _event("checkout.session.completed", _session_obj()))
+        monkeypatch.setattr(donations, "retrieve_net_ratio", lambda pi: None)
+        make_client().post("/api/donations/webhook", content=b"{}",
+                           headers={"stripe-signature": "x"})
+        s = session_factory()
+        assert s.query(DonationRow).one().net_usd is None
+        s.close()
+
+        # charge.updated arrives once the balance transaction (fee) is ready.
+        monkeypatch.setattr(donations, "verify_webhook_event",
+                            lambda p, s: _event("charge.updated", {"payment_intent": "pi_123"}))
+        monkeypatch.setattr(donations, "retrieve_net_ratio", lambda pi: 0.95)
+        r = make_client().post("/api/donations/webhook", content=b"{}",
+                               headers={"stripe-signature": "x"})
+        assert r.json()["net_updated"] is True
+        s = session_factory()
+        # amount_total 2800 → 28.00 USD; net = 28.00 * 0.95
+        assert s.query(DonationRow).one().net_usd == pytest.approx(28.0 * 0.95)
+        s.close()
+
+    def test_charge_updated_idempotent_and_skips_unknown(self, make_client, session_factory, monkeypatch):
+        # No matching donation → ignored, and (guard) the fee API is never called.
+        def _boom(pi):
+            raise AssertionError("retrieve_net_ratio must not be called without a row")
+        monkeypatch.setattr(donations, "retrieve_net_ratio", _boom)
+        monkeypatch.setattr(donations, "verify_webhook_event",
+                            lambda p, s: _event("charge.updated", {"payment_intent": "pi_absent"}))
+        r = make_client().post("/api/donations/webhook", content=b"{}",
+                               headers={"stripe-signature": "x"})
+        assert r.status_code == 200 and "ignored" in r.json()
+
     def test_unknown_event_ignored(self, make_client, monkeypatch):
         monkeypatch.setattr(donations, "verify_webhook_event",
                             lambda p, s: _event("payment_intent.created", {}))
