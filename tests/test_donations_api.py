@@ -397,6 +397,13 @@ class TestSummary:
         assert body["impact"]["months_covered"] > 0
         assert body["fx"]["currency"] == "USD"  # anon, no ?currency → USD-canonical
 
+    def test_enabled_reflects_stripe_config(self, make_client, session_factory, monkeypatch):
+        _seed_economics(session_factory)
+        monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+        assert make_client().get("/api/donations/summary").json()["enabled"] is False
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
+        assert make_client().get("/api/donations/summary").json()["enabled"] is True
+
     def test_anon_currency_override(self, make_client, session_factory):
         _seed_economics(session_factory)
         _record_donation(session_factory, 100.0)

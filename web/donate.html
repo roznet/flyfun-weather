@@ -50,6 +50,11 @@
     <div id="loading"><p class="muted">Loading…</p></div>
 
     <div id="page-content" style="display:none;">
+      <!-- Shown when Stripe isn't configured (donations not live yet). -->
+      <div id="donations-disabled" class="section" style="display:none;">
+        <h3>Donations aren't available yet</h3>
+        <p class="muted">Thanks for your interest — the donation option isn't live just yet. Please check back soon.</p>
+      </div>
       <p class="intro">
         Flyfun Weather is free and sponsored by the operator. Donations are voluntary —
         no perks, no premium tier — they simply offset the real cost of running the
@@ -75,7 +80,7 @@
       </div>
 
       <!-- Donate form -->
-      <div class="section">
+      <div class="section" id="donate-form-section">
         <h3>Make a donation</h3>
         <p class="sub">Pick an amount and currency — you'll be taken to Stripe's secure checkout.</p>
 

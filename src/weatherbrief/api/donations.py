@@ -46,6 +46,7 @@ from weatherbrief.api.preferences import (
     FxBlock,
     fx_block_for_currency,
     fx_block_for_user,
+    stripe_configured,
     usd_fx_block,
 )
 from weatherbrief.impact import (
@@ -318,6 +319,7 @@ class DonationSummaryResponse(BaseModel):
     total_year_usd: float
     impact: dict
     fx: FxBlock
+    enabled: bool
 
 
 @router.get("/summary", response_model=DonationSummaryResponse)
@@ -346,4 +348,5 @@ def get_summary(
         total_year_usd=round(total, 2),
         impact=yearly_to_dict(yi),
         fx=fx_block,
+        enabled=stripe_configured(),
     )

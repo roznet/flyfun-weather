@@ -57,13 +57,24 @@ async function init(): Promise<void> {
   selectedCurrency = resolveInitialCurrency(savedPref);
   persistCurrency(selectedCurrency, savedPref);
 
+  let summary: DonationSummary;
   try {
-    const summary = await fetchDonationSummary(selectedCurrency);
-    renderCommunity(summary);
-    initCurrency();
+    summary = await fetchDonationSummary(selectedCurrency);
   } catch (err) {
     showError(`Could not load donation summary: ${err}`);
+    return;
   }
+
+  // Single on/off switch: Stripe not configured → donations aren't live, so
+  // show the "not available" notice and render nothing else. (The Settings link
+  // is hidden too; this guards direct navigation.)
+  if (!summary.enabled) {
+    showDonationsDisabled();
+    return;
+  }
+
+  renderCommunity(summary);
+  initCurrency();
 
   if (user) {
     try {
@@ -74,6 +85,13 @@ async function init(): Promise<void> {
   }
 
   initForm();
+}
+
+function showDonationsDisabled(): void {
+  document.querySelector<HTMLElement>('.intro')?.style.setProperty('display', 'none');
+  document.querySelectorAll<HTMLElement>('#page-content > .section').forEach((el) => {
+    el.style.display = el.id === 'donations-disabled' ? '' : 'none';
+  });
 }
 
 /** Persist the chosen currency so display + pay stay one synced setting:
