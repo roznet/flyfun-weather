@@ -78,6 +78,18 @@ describe('formatAltitudeDeltaNote', () => {
     expect(note).toContain('improves Icing Escape (AMBER→GREEN)');
     expect(note).toContain('worsens Headwind (GREEN→AMBER)');
   });
+
+  it('reports "same advisory picture" when altitudes differ but statuses do not', () => {
+    const sameTable: AltitudeTableResult = {
+      ...table,
+      rows: [
+        row(8000, { icing_escape: 'amber', headwind: 'green' }),
+        row(6000, { icing_escape: 'amber', headwind: 'green' }),
+      ],
+    };
+    const note = formatAltitudeDeltaNote(sameTable, 6000, 8000);
+    expect(note).toBe('At 6000ft vs planned 8000ft: same advisory picture.');
+  });
 });
 
 describe('overlayAltitudeStatuses', () => {

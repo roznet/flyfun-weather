@@ -128,7 +128,9 @@ export function formatAltitudeDeltaNote(
 /** Overlay a probed altitude's per-advisory statuses onto a manifest's cards.
  *  Only altitude-dependent advisories present in the table row are touched;
  *  everything else (airport, model quality, …) keeps its baseline status. The
- *  detail text is left as-is (the debounced server recalc reconciles it). */
+ *  detail text is intentionally left at the pack's planned altitude — the lever
+ *  conveys the per-altitude picture through the overlaid badges + delta note,
+ *  and the base manifest is never mutated, so resetting is instant. */
 export function overlayAltitudeStatuses<
   T extends { advisories: { advisory_id: string; aggregate_status: AdvisoryStatus }[] },
 >(

@@ -79,3 +79,24 @@ def test_altitude_options_block_none_without_planned_row():
     # cruise altitude absent from rows → no usable planned row → omit the block.
     t = _table().model_copy(update={"cruise_altitude_ft": 9999})
     assert _format_altitude_options_context(t) is None
+
+
+def test_altitude_options_block_same_picture_when_statuses_match():
+    # A lower option with identical statuses → "same advisory picture as planned".
+    t = AltitudeTableResult(
+        rows=[
+            _row(8000, icing_escape=AdvisoryStatus.AMBER, headwind=AdvisoryStatus.GREEN),
+            _row(4000, icing_escape=AdvisoryStatus.AMBER, headwind=AdvisoryStatus.GREEN),
+        ],
+        advisory_ids=["icing_escape", "headwind"],
+        advisory_names=_NAMES,
+        cruise_altitude_ft=8000,
+        flight_ceiling_ft=10000,
+        step_ft=2000,
+        best_below_cruise=4000,
+        best_above_cruise=None,
+    )
+    block = _format_altitude_options_context(t)
+    assert block is not None
+    assert "Lower option 4,000 ft: same advisory picture as planned." in block
+    assert "Higher option: planned altitude is already best at/above cruise." in block

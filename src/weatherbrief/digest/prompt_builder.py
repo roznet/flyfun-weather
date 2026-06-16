@@ -743,12 +743,13 @@ def _format_altitude_options_context(table: AltitudeTableResult) -> str | None:
         f"  Planned {table.cruise_altitude_ft:,} ft: {_status_summary(planned)}.",
         _option_line("Lower option", table.best_below_cruise),
     ]
-    # best_above_cruise is the best at/above cruise; only mention it when it is a
-    # genuinely higher altitude than planned (the picker can return cruise itself).
-    if table.best_above_cruise is not None and table.best_above_cruise > table.cruise_altitude_ft:
-        lines.append(_option_line("Higher option", table.best_above_cruise))
+    # best_above_cruise is the best at/above cruise; the picker can return cruise
+    # itself (predicate is altitude_ft >= cruise), so distinguish "no higher row"
+    # / "cruise is already best" from a genuinely higher, better option.
+    if table.best_above_cruise is None or table.best_above_cruise == table.cruise_altitude_ft:
+        lines.append("  Higher option: planned altitude is already best at/above cruise.")
     else:
-        lines.append("  Higher option: none below ceiling improves on planned.")
+        lines.append(_option_line("Higher option", table.best_above_cruise))
     return "\n".join(lines)
 
 

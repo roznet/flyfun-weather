@@ -622,6 +622,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // getEffectiveAdvisories — instant, no race). Only the route-graph wind
     // overlay needs the server (it reparses cross_section.json), so debounce it
     // and tag each request so a slow earlier response can't clobber a newer one.
+    // We deliberately apply ONLY windOverlay — routeAdvisories stays the pack
+    // baseline so resetting the lever to anchor restores the planned statuses
+    // instantly (no stale-probe flash during the debounce window).
     if (_windOverlayTimer !== null) clearTimeout(_windOverlayTimer);
     const seq = ++_windOverlaySeq;
     _windOverlayTimer = window.setTimeout(() => {
@@ -631,7 +634,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           // AND the lever hasn't moved away from the altitude we requested.
           if (seq !== _windOverlaySeq) return;
           if ((get().advisoryAltitudeOverride ?? anchor) !== alt) return;
-          set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
+          set({ windOverlay: result.wind_overlay });
         })
         .catch(() => { /* overlay-only failure — cards already updated from table */ });
     }, 300);
@@ -644,9 +647,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // flight's saved cruise_altitude_ft is never written from here.
     const { flight, currentPack } = get();
     if (!flight || !currentPack) return;
+    const packTimestamp = currentPack.fetch_timestamp;
     set({ advisoryAltitudeOverride: alt });
     try {
-      const result = await api.recalculateAdvisories(flight.id, currentPack.fetch_timestamp, alt);
+      const result = await api.recalculateAdvisories(flight.id, packTimestamp, alt);
+      // Drop the response if the user switched packs while it was in flight,
+      // otherwise we'd write a stale manifest into the new pack's state.
+      if (get().currentPack?.fetch_timestamp !== packTimestamp) return;
       set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
