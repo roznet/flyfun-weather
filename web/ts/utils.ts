@@ -194,12 +194,30 @@ export function isFlightPast(targetDate: string, targetTimeUtc: number, duration
 
 // --- Model catalog (populated from /api/models at startup) ---
 
-export interface ModelCatalogEntry { key: string; name: string; default: boolean; }
+export interface ModelCatalogEntry { key: string; name: string; default: boolean; max_days?: number; }
 
 let _catalog: ModelCatalogEntry[] = [];
 
 export function initModelCatalog(catalog: ModelCatalogEntry[]): void {
   _catalog = catalog;
+}
+
+/** The full model catalog as last loaded (empty until initModelCatalog runs). */
+export function getModelCatalog(): ModelCatalogEntry[] {
+  return _catalog;
+}
+
+/** Largest lead time (days from today) at which BOTH ECMWF and GFS are still
+ *  available — the bookable forecast horizon that bounds the flight date picker.
+ *  Derived from the model catalog so it tracks the backend's
+ *  `dual_model_horizon_days()`; falls back to `fallback` if the catalog (or the
+ *  `max_days` field from an older backend) isn't available. */
+export function dualModelHorizonDays(fallback = 9): number {
+  const maxDays = (k: string) => _catalog.find(m => m.key === k)?.max_days;
+  const ecmwf = maxDays('ecmwf');
+  const gfs = maxDays('gfs');
+  if (ecmwf == null || gfs == null) return fallback;
+  return Math.min(ecmwf, gfs) - 1;
 }
 
 export function allModelKeys(): string[] {

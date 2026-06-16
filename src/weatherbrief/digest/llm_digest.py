@@ -22,6 +22,7 @@ from typing_extensions import TypedDict
 
 from weatherbrief.digest.exceptions import classify_llm_exception
 from weatherbrief.digest.llm_config import DigestConfig, create_llm
+from weatherbrief.digest.outlook import OUTLOOK_ICONS, OUTLOOK_LABELS
 from weatherbrief.digest.prompt_builder import build_digest_context
 from weatherbrief.fetch.freshness.registry import first_full_coverage, max_horizon
 from weatherbrief.fetch.text_forecasts import fetch_text_forecasts
@@ -383,13 +384,6 @@ def format_digest_markdown(
     return "\n".join(lines)
 
 
-_OUTLOOK_LABELS = {
-    "TRENDING_SETTLED": "\U0001f7e2 Trending settled",
-    "MIXED_SIGNALS": "\U0001f7e1 Mixed signals",
-    "TRENDING_UNSETTLED": "\U0001f7e0 Trending unsettled",
-}
-
-
 def format_longrange_markdown(
     digest: LongRangeDigest,
     snapshot: ForecastSnapshot,
@@ -397,7 +391,8 @@ def format_longrange_markdown(
 ) -> str:
     """Format a LongRangeDigest into the same fixed-width layout as the digest."""
     waypoints = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
-    label = _OUTLOOK_LABELS.get(digest.outlook, digest.outlook)
+    icon = OUTLOOK_ICONS.get(digest.outlook, "")
+    label = f"{icon} {OUTLOOK_LABELS.get(digest.outlook, digest.outlook)}".strip()
 
     lines = [
         _SEPARATOR,

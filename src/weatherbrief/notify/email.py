@@ -15,6 +15,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel
 
+from weatherbrief.digest.outlook import OUTLOOK_LABELS
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.models.airport_conditions import FLIGHT_CATEGORY_COLORS
 
@@ -27,12 +28,8 @@ _ASSESSMENT_COLORS = {
 }
 
 # Long-range outlook — muted palette (paired with a dashed border) so it reads
-# as a soft preview, distinct from the solid assessment traffic light.
-_OUTLOOK_LABELS = {
-    "TRENDING_SETTLED": "Trending settled",
-    "MIXED_SIGNALS": "Mixed signals",
-    "TRENDING_UNSETTLED": "Trending unsettled",
-}
+# as a soft preview, distinct from the solid assessment traffic light. Labels are
+# the shared canonical strings (see weatherbrief.digest.outlook).
 _OUTLOOK_COLORS = {
     "TRENDING_SETTLED": ("#f8f9fa", "#0f5132"),
     "MIXED_SIGNALS": ("#f8f9fa", "#555555"),
@@ -324,7 +321,7 @@ def _build_html_body(
     if outlook:
         o = outlook.upper()
         bg, fg = _OUTLOOK_COLORS.get(o, ("#f0f0f0", "#333"))
-        label = _OUTLOOK_LABELS.get(o, outlook)
+        label = OUTLOOK_LABELS.get(o, outlook)
         o_reason = getattr(pack, "outlook_reason", None) or (
             digest.get("outlook_reason") if digest else None
         )
@@ -425,7 +422,7 @@ def _build_plain_body(
 
     outlook = getattr(pack, "outlook", None) or (digest.get("outlook") if digest else None)
     if outlook:
-        label = _OUTLOOK_LABELS.get(outlook.upper(), outlook)
+        label = OUTLOOK_LABELS.get(outlook.upper(), outlook)
         o_reason = getattr(pack, "outlook_reason", None) or (
             digest.get("outlook_reason") if digest else None
         )
