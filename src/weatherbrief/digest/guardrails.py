@@ -89,7 +89,9 @@ _NUMBER_RE = re.compile(r"\d[\d,]*")
 # model dumping 2x the longest real output). Conciseness/style is the LLM
 # judge's job (#255), not this deterministic layer. Observed maxima (non-
 # longrange): assessment_reason 525ch/2s, synoptic 1485ch/7s, specific_concerns
-# 2563ch/24s, trend 1368ch/10s, watch_items 1496ch/19s.
+# 2563ch/24s, trend 1368ch/10s, watch_items 1496ch/19s. Caps sit ~1.5x above
+# those, except assessment_reason (700/525 ≈ 1.33x) where the round number is a
+# touch tighter but still a generous backstop for a one-sentence field.
 @dataclass(frozen=True)
 class _FieldBound:
     min_chars: int

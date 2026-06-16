@@ -317,7 +317,9 @@ def run_llm_digest(
         digest_context = digest_result.get("digest_context")
         if digest_context and pack_dir:
             try:
-                (pack_dir / "digest_context.txt").write_text(digest_context)
+                (pack_dir / "digest_context.txt").write_text(
+                    digest_context, encoding="utf-8"
+                )
             except Exception:
                 logger.warning("Failed to save digest context", exc_info=True)
 
