@@ -343,6 +343,12 @@ def run_digest(
     # LangSmith trace payloads small), so we attach it post-graph instead.
     result["dwd_translated"] = dwd_translated
 
+    # Carry the exact context string (the user message sent to the LLM) out for
+    # persistence. Saving it in the pack lets the digest eval (#254) build
+    # byte-faithful fixtures — the reconstructed-from-snapshot context omits the
+    # text-forecast / previous-digest sections the LLM actually saw.
+    result["digest_context"] = context
+
     return result
 
 

@@ -80,15 +80,16 @@ _NUMBER_RE = re.compile(r"\d[\d,]*")
 # different model or prompt variant that still respects the contract passes —
 # they exist to catch egregious violations, not to police style.
 #
-# Calibrated against the real distribution of shipped prod digests (~35 packs):
-# observed maxima were assessment_reason 484ch/1s, synoptic 883ch/4s,
-# specific_concerns 1529ch/21s, trend 1022ch/8s, watch_items 1177ch/16s. The
-# only fields the prompt explicitly limits are assessment_reason ("one
-# sentence") and synoptic ("2-3 sentences") — those keep tight, contract-backed
-# bounds. The free-form fields (specific_concerns/trend/watch_items) carry no
-# prompt length contract, so their caps sit ~1.4x above observed max purely as a
-# runaway backstop, not a style cop. (See #253: earlier bounds were tuned to the
-# 3 committed fixtures and false-positived on the broader real distribution.)
+# These are RUNAWAY BACKSTOPS, not style policing. Length/sentence bounds are
+# inherently fragile — every prompt or model change shifts the output length
+# distribution, and a too-tight cap then false-positives on legitimate output
+# (we hit this twice: first tuned to 3 fixtures, then to a Feb/Mar sample that
+# the more verbose June packs exceeded). So caps sit ~1.5x above the observed
+# max across the real prod distribution and only catch egregious blow-ups (a
+# model dumping 2x the longest real output). Conciseness/style is the LLM
+# judge's job (#255), not this deterministic layer. Observed maxima (non-
+# longrange): assessment_reason 525ch/2s, synoptic 1485ch/7s, specific_concerns
+# 2563ch/24s, trend 1368ch/10s, watch_items 1496ch/19s.
 @dataclass(frozen=True)
 class _FieldBound:
     min_chars: int
@@ -97,14 +98,11 @@ class _FieldBound:
 
 
 _FIELD_BOUNDS: dict[str, _FieldBound] = {
-    # Prompt: "One sentence." Allow 2 to tolerate model phrasing.
-    "assessment_reason": _FieldBound(min_chars=10, max_chars=600, max_sentences=2),
-    # Prompt: "2-3 sentences." Allow generous headroom over observed 883ch/4s.
-    "synoptic": _FieldBound(min_chars=10, max_chars=1300, max_sentences=7),
-    # Free-form, no prompt length contract — runaway backstop only.
-    "specific_concerns": _FieldBound(min_chars=1, max_chars=2200, max_sentences=30),
-    "trend": _FieldBound(min_chars=1, max_chars=1600, max_sentences=14),
-    "watch_items": _FieldBound(min_chars=1, max_chars=1800, max_sentences=24),
+    "assessment_reason": _FieldBound(min_chars=10, max_chars=700, max_sentences=3),
+    "synoptic": _FieldBound(min_chars=10, max_chars=2200, max_sentences=11),
+    "specific_concerns": _FieldBound(min_chars=1, max_chars=3800, max_sentences=38),
+    "trend": _FieldBound(min_chars=1, max_chars=2000, max_sentences=16),
+    "watch_items": _FieldBound(min_chars=1, max_chars=2200, max_sentences=30),
 }
 
 # Fuzzy traceability tolerance: an output figure is "traceable" if some context
