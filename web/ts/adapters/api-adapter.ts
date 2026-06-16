@@ -588,6 +588,19 @@ export async function fetchAltitudeTable(
   );
 }
 
+/** Fetch the altitude table precomputed at refresh (#259) — cheap, no sweep.
+ *  404s for packs that predate the precompute; callers fall back to the POST
+ *  sweep endpoint (`fetchAltitudeTable`) in that case. */
+export async function fetchAltitudeTableCached(
+  flightId: string,
+  timestamp: string,
+): Promise<AltitudeTableResult> {
+  return apiFetch<AltitudeTableResult>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/altitude-table`,
+    { method: 'GET' },
+  );
+}
+
 // --- On-demand AI summary (digest-only, no full refresh) ---
 
 /** Generate the AI summary for an existing pack whose profile had AI off.

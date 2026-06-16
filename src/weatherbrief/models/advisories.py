@@ -202,3 +202,29 @@ class AltitudeTableResult(BaseModel):
     step_ft: int
     best_below_cruise: int | None = None  # altitude_ft with best score below cruise
     best_above_cruise: int | None = None  # altitude_ft with best score at/above cruise
+
+
+class AltitudeAdvisoryChange(BaseModel):
+    """One advisory's status change between two altitudes."""
+
+    advisory_id: str
+    name: str
+    from_status: AdvisoryStatus
+    to_status: AdvisoryStatus
+
+
+class AltitudeAdvisoryDelta(BaseModel):
+    """Per-advisory diff between a baseline altitude row and a candidate row.
+
+    ``improved`` = severity decreased (e.g. RED→AMBER); ``worsened`` =
+    severity increased. UNAVAILABLE statuses are ignored on either side.
+    """
+
+    improved: list[AltitudeAdvisoryChange] = Field(default_factory=list)
+    worsened: list[AltitudeAdvisoryChange] = Field(default_factory=list)
+    unchanged: list[str] = Field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        """True when nothing improved or worsened (note may be omitted)."""
+        return not self.improved and not self.worsened

@@ -524,7 +524,9 @@
   "stalePack.altChanged": "Pack altitude {packAlt} differs from flight {flightAlt}.",
   "stalePack.timeChanged": "Pack departure {packTime} differs from flight {flightTime}.",
   "stalePack.refreshPrompt": "Refresh to regenerate the briefing.",
+  "stalePack.altOnlyPrompt": "Update the advisories to the new altitude (no full refresh needed).",
   "stalePack.refreshBtn": "Refresh",
+  "stalePack.updateBtn": "Update advisories",
 
   "popup.close": "Close",
   "popup.discussAi": "Tell me more about {metric} in the context of aviation weather. How should a VFR or IFR pilot interpret it, what are the key thresholds, and how does it interact with other weather parameters for flight safety?",

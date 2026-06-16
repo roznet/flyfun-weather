@@ -2741,6 +2741,26 @@ def generate_digest(
     return _meta_to_response(meta)
 
 
+@router.get("/{timestamp}/advisories/altitude-table")
+def get_altitude_table(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Return the precomputed altitude table persisted at refresh (#259).
+
+    404 for packs predating the precompute (the client falls back to the POST
+    sweep endpoint). No recompute — this is the cheap, cached path the lever
+    indexes into.
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    path = pack_dir / "altitude_table.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Altitude table not available")
+    return FileResponse(path, media_type="application/json")
+
+
 @router.post("/{timestamp}/advisories/altitude-table")
 def altitude_table(
     flight_id: str,
@@ -2829,6 +2849,7 @@ def get_bundle(
         "route-analyses": ["route_analyses.json"],
         "elevation": ["elevation_profile.json"],
         "digest": ["digest.json"],
+        "altitude-table": ["altitude_table.json"],
     }
     for endpoint, filenames in file_map.items():
         for filename in filenames:

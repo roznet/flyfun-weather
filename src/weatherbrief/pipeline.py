@@ -371,6 +371,7 @@ def execute_briefing(
     adv_enabled_ids = resolve_enabled_ids(options.advisory_enabled)
 
     route_advisories_manifest = None
+    altitude_table_manifest = None
     if analysis_result.route_analyses_manifest and analysis_result.route_analyses:
         total_distance = fetch_result.route_points[-1].distance_from_origin_nm
 
@@ -395,8 +396,13 @@ def execute_briefing(
             cloud_method=options.cloud_method,
             convective_method=options.convective_method,
             locale=options.locale,
+            # Precompute the altitude table now, while cross-sections are still
+            # in memory (cleared just below). Feeds the digest's ALTITUDE OPTIONS
+            # block and the client-side lever; default 2000ft step (#259).
+            altitude_table_step_ft=2000,
         )
         route_advisories_manifest = advisory_result.manifest
+        altitude_table_manifest = advisory_result.altitude_table
         stage_timings["advisories"] = perf_counter() - _t0
 
     rss = _current_rss_mb()
@@ -751,6 +757,7 @@ def execute_briefing(
             pack_dir=pack_dir,
             data_dir=data_dir,
             route_advisories=route_advisories_manifest,
+            altitude_table=altitude_table_manifest,
             flight_rules=options.flight_rules,
             previous_digest=previous_digest,
             locale=options.locale,

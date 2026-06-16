@@ -217,6 +217,7 @@ def run_llm_digest(
     pack_dir: Path | None = None,
     data_dir: Path | None = None,
     route_advisories=None,  # RouteAdvisoriesManifest | None
+    altitude_table=None,  # AltitudeTableResult | None
     flight_rules: str | None = None,
     previous_digest=None,  # WeatherDigest | None
     locale: str | None = None,
@@ -233,10 +234,19 @@ def run_llm_digest(
         config = load_digest_config(digest_config_name)
         logger.info("LLM digest: %s/%s", config.llm.provider, config.llm.model)
 
+        # The pipeline passes the freshly computed table in-memory; on-demand
+        # digest callers (e.g. the "generate summary" endpoint) don't, so fall
+        # back to the persisted artifact. Old packs lack it → block omitted.
+        if altitude_table is None and pack_dir is not None:
+            from weatherbrief.tasks.artifacts import load_altitude_table
+
+            altitude_table = load_altitude_table(pack_dir)
+
         digest_result = run_digest(
             snapshot, target_time, config,
             previous_digest=previous_digest,
             route_advisories=route_advisories,
+            altitude_table=altitude_table,
             flight_rules=flight_rules,
             locale=locale,
             units_region=units_region,

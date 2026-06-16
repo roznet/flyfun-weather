@@ -47,9 +47,16 @@ export function computeStalePackBanner(
     }));
   }
 
+  // Altitude-only changes route to the cheap recalc path (#259): re-evaluating
+  // advisories at the new altitude is ~free and never needs new model data, so
+  // the full-pipeline "Refresh" (which no-ops when no newer GRIB exists) would
+  // be misleading. A time/route change genuinely needs a re-fetch.
+  const altOnly = altChanged && !timeChanged;
+  const prompt = altOnly ? t('stalePack.altOnlyPrompt') : t('stalePack.refreshPrompt');
+
   return {
     altChanged,
     timeChanged,
-    message: `${parts.join(' ')} ${t('stalePack.refreshPrompt')}`,
+    message: `${parts.join(' ')} ${prompt}`,
   };
 }

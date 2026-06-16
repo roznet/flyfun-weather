@@ -127,6 +127,7 @@ export function renderStalePackBanner(
   manifest: RouteAnalysesManifest | null,
   isOwner: boolean,
   onRefresh: () => void,
+  onReanchorAltitude?: (alt: number) => void,
 ): void {
   const el = $('stale-pack-banner');
   if (!el) return;
@@ -142,12 +143,24 @@ export function renderStalePackBanner(
   const messageSpan = document.createElement('span');
   messageSpan.textContent = state.message;
   el.appendChild(messageSpan);
+
   const btn = document.createElement('button');
   btn.className = 'btn btn-sm btn-primary';
-  btn.id = 'stale-pack-refresh-btn';
   btn.style.marginLeft = '0.75rem';
-  btn.textContent = t('stalePack.refreshBtn');
-  btn.addEventListener('click', () => onRefresh());
+
+  // Altitude-only change → cheap re-anchor (no full refresh, never auto-saves
+  // the altitude). Anything touching time/route → the real pipeline refresh.
+  const altOnly = state.altChanged && !state.timeChanged;
+  if (altOnly && onReanchorAltitude && flight) {
+    btn.id = 'stale-pack-reanchor-btn';
+    btn.textContent = t('stalePack.updateBtn');
+    const targetAlt = flight.cruise_altitude_ft;
+    btn.addEventListener('click', () => onReanchorAltitude(targetAlt));
+  } else {
+    btn.id = 'stale-pack-refresh-btn';
+    btn.textContent = t('stalePack.refreshBtn');
+    btn.addEventListener('click', () => onRefresh());
+  }
   el.appendChild(btn);
 }
 

@@ -7,6 +7,7 @@ import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
 import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
+import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -308,7 +309,15 @@ async function init(): Promise<void> {
       currentAlt: state.advisoryAltitudeOverride ?? defaultAlt,
       defaultAlt,
       ceilingFt,
+      // Drag (continuous): cheap local override → cross-section line follows.
       onChange: (alt) => store.getState().setAdvisoryAltitudeOverride(alt === defaultAlt ? null : alt),
+      // Release: index the cached table for instant statuses + debounced,
+      // stale-guarded wind overlay (#259) — no per-release full reload.
+      onProbe: (alt) => store.getState().probeAltitude(alt),
+      // The digest's analysis is anchored to the pack's planned altitude; the
+      // delta note compares the probed altitude against it.
+      plannedAlt: state.routeAnalyses?.cruise_altitude_ft ?? defaultAlt,
+      table: state.altitudeTable,
     };
   }
 
@@ -378,7 +387,14 @@ async function init(): Promise<void> {
 
   /** Get the effective advisory manifest based on primary/alt toggle state. */
   function getEffectiveAdvisories(state: BriefingState): import('./types/advisories').RouteAdvisoriesManifest | null {
-    return state.showingAlt && state.altAdvisories ? state.altAdvisories : state.routeAdvisories;
+    const base = state.showingAlt && state.altAdvisories ? state.altAdvisories : state.routeAdvisories;
+    // Lever moved (#259): overlay the probed altitude's advisory statuses from
+    // the cached table so the cards update instantly, before the debounced
+    // server recalc lands. Alt-time view keeps its own altitude — don't overlay.
+    if (base && !state.showingAlt && state.advisoryAltitudeOverride != null && state.altitudeTable) {
+      return overlayAltitudeStatuses(base, state.altitudeTable, state.advisoryAltitudeOverride);
+    }
+    return base;
   }
 
   // Apply initial display mode
@@ -1097,6 +1113,13 @@ async function init(): Promise<void> {
     }
   };
 
+  // Altitude-only stale-pack action (#259): re-evaluate advisories at the new
+  // planned altitude via the cheap recalc path — no full pipeline refresh, and
+  // the flight's saved cruise altitude is never written from here.
+  const stalePackOnReanchor = (alt: number) => {
+    void store.getState().reanchorAdvisories(alt);
+  };
+
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
     // Resolve 'auto' units against this flight's region (US flights → US units)
@@ -1109,7 +1132,7 @@ async function init(): Promise<void> {
     }
     if (state.flight !== prev.flight || state.routeAnalyses !== prev.routeAnalyses) {
       const isOwner = !!user && state.flight?.user_id === user.id;
-      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh);
+      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor);
     }
     if (state.flight !== prev.flight) {
       ui.renderBriefingSharing(state.flight, sharingHandlers);
@@ -1566,7 +1589,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     {
       const isOwner = !!user && s.flight?.user_id === user.id;
-      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, stalePackOnRefresh);
+      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor);
     }
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).
