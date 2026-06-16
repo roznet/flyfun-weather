@@ -83,7 +83,10 @@ Structure your response as JSON with these exact fields:
   it improves and any it worsens (e.g. "descending to 6,000 ft would clear the
   icing-escape concern but add a headwind penalty"). **Never invent the
   trade-off** — use only what the ALTITUDE OPTIONS section states. If no option
-  improves on planned, do not suggest changing altitude.
+  improves on planned, do not suggest changing altitude. Write about altitudes
+  in natural prose — do NOT name internal data sections (never write phrases
+  like "the ALTITUDE OPTIONS section shows"); just state the altitude and its
+  effect (e.g. "climbing to 8,000 ft would restore VMC at cruise").
 - Airport wind advisories already select the best runway (lowest crosswind
   component). Do NOT re-analyze wind for other runways or worry about tailwind
   on the reported runway — it is always the into-wind direction. Only discuss

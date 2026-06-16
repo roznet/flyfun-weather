@@ -1920,10 +1920,32 @@ function renderDigestHtml(digest: WeatherDigest, displayMode: DisplayMode): stri
     return `
       <div class="digest-section">
         <h4>${icon} ${t(labelKey)}</h4>
-        <p>${escapeHtml(text as string)}</p>
+        ${formatDigestBody(text as string)}
       </div>
     `;
   }).join('');
+}
+
+/** Render a digest section value with light, XSS-safe markdown:
+ *  - `**bold**` → <strong> (the LLM emits these inline)
+ *  - a run of `1. … 2. …` items → a proper <ol> so numbers align on their own
+ *    lines instead of running together in one paragraph.
+ *  Escaping happens first; only our own tags are injected afterwards. */
+function formatDigestBody(raw: string): string {
+  const bold = (s: string): string =>
+    escapeHtml(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  // Split on whitespace that precedes a list marker ("N. "). Decimals like
+  // "1.6mm" or values like "8,000 ft" lack the dot+space, so they don't split.
+  const parts = raw.split(/\s+(?=\d+\.\s)/).map(s => s.trim()).filter(Boolean);
+  const allNumbered = parts.length >= 2 && parts.every(p => /^\d+\.\s/.test(p));
+  if (allNumbered) {
+    const items = parts
+      .map(p => `<li>${bold(p.replace(/^\d+\.\s+/, ''))}</li>`)
+      .join('');
+    return `<ol class="digest-list">${items}</ol>`;
+  }
+  return `<p>${bold(raw)}</p>`;
 }
 
 export function renderSynopsis(

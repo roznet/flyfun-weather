@@ -1318,6 +1318,23 @@ label {
   line-height: 1.6;
 }
 
+/* Numbered digest sections (e.g. watch items): each item on its own line with
+   the marker hanging in the gutter, instead of a run-on paragraph. */
+.digest-section ol.digest-list {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.digest-section ol.digest-list li {
+  margin-bottom: 0.4rem;
+}
+
+.digest-section ol.digest-list li:last-child {
+  margin-bottom: 0;
+}
+
 /* --- Digest thumb feedback --- */
 
 .digest-feedback {
