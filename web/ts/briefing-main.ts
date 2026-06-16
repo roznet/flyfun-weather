@@ -391,7 +391,14 @@ async function init(): Promise<void> {
     // Lever moved (#259): overlay the probed altitude's advisory statuses from
     // the cached table so the cards update instantly, before the debounced
     // server recalc lands. Alt-time view keeps its own altitude — don't overlay.
-    if (base && !state.showingAlt && state.advisoryAltitudeOverride != null && state.altitudeTable) {
+    // Skip the overlay once the base manifest already reflects the override
+    // altitude (the reanchor path recomputes routeAdvisories at `alt`):
+    // re-overlaying a snapped table row there would clobber the exact live
+    // statuses with the nearest 2000ft row's.
+    if (
+      base && !state.showingAlt && state.advisoryAltitudeOverride != null && state.altitudeTable
+      && base.cruise_altitude_ft !== state.advisoryAltitudeOverride
+    ) {
       return overlayAltitudeStatuses(base, state.altitudeTable, state.advisoryAltitudeOverride);
     }
     return base;
@@ -1130,9 +1137,13 @@ async function init(): Promise<void> {
     if (state.flight !== prev.flight || state.snapshot !== prev.snapshot) {
       ui.renderHeader(state.flight, state.snapshot);
     }
-    if (state.flight !== prev.flight || state.routeAnalyses !== prev.routeAnalyses) {
+    if (
+      state.flight !== prev.flight
+      || state.routeAnalyses !== prev.routeAnalyses
+      || state.routeAdvisories !== prev.routeAdvisories
+    ) {
       const isOwner = !!user && state.flight?.user_id === user.id;
-      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor);
+      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor, state.routeAdvisories?.cruise_altitude_ft ?? null);
     }
     if (state.flight !== prev.flight) {
       ui.renderBriefingSharing(state.flight, sharingHandlers);
@@ -1589,7 +1600,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     {
       const isOwner = !!user && s.flight?.user_id === user.id;
-      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor);
+      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor, s.routeAdvisories?.cruise_altitude_ft ?? null);
     }
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).

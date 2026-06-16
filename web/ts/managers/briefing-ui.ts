@@ -128,11 +128,12 @@ export function renderStalePackBanner(
   isOwner: boolean,
   onRefresh: () => void,
   onReanchorAltitude?: (alt: number) => void,
+  advisoriesCruiseAltFt?: number | null,
 ): void {
   const el = $('stale-pack-banner');
   if (!el) return;
 
-  const state = computeStalePackBanner(flight, manifest, isOwner);
+  const state = computeStalePackBanner(flight, manifest, isOwner, advisoriesCruiseAltFt);
   if (state === null) {
     el.style.display = 'none';
     return;

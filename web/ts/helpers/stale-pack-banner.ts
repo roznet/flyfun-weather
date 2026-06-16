@@ -25,10 +25,19 @@ export function computeStalePackBanner(
   flight: FlightResponse | null,
   manifest: RouteAnalysesManifest | null,
   isOwner: boolean,
+  advisoriesCruiseAltFt?: number | null,
 ): StalePackBannerState | null {
   if (!flight || !manifest || !isOwner) return null;
 
-  const altChanged = manifest.cruise_altitude_ft !== flight.cruise_altitude_ft;
+  // The advisory manifest's baked altitude (route_analyses) is what drives the
+  // staleness. But once the cheap reanchor path has recomputed the advisories at
+  // the flight's new altitude, the altitude staleness is resolved even though
+  // route_analyses still carries the old altitude — suppress the banner then so
+  // the "Update advisories" button doesn't linger and invite redundant recalcs.
+  const altResolvedByReanchor =
+    advisoriesCruiseAltFt != null && advisoriesCruiseAltFt === flight.cruise_altitude_ft;
+  const altChanged =
+    manifest.cruise_altitude_ft !== flight.cruise_altitude_ft && !altResolvedByReanchor;
   const flightDepIso = new Date(flight.departure_time).toISOString();
   const manifestDepIso = new Date(manifest.departure_time).toISOString();
   const timeChanged = flightDepIso !== manifestDepIso;
