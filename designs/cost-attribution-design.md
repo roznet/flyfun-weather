@@ -274,35 +274,94 @@ registered webhook endpoint) is a manual prerequisite for the weatherbrief side.
 
 ### Impact framing (pure, testable — like `costs.py`)
 
-Donors see coverage, never "you gave $X". Inputs come from the program cost report:
+Donors see coverage, never "you gave $X". The framing is **retrospective**: a
+donation *offsets cost already incurred*, it is not a forward prepayment (the
+droplet/ECMWF/model bills are largely sunk + fixed, so a gift doesn't draw down
+anyone's marginal bill). Verb policy, enforced in the phrasing layer:
+**offset / contribute / cover / help cover** — never "pay for" or "fund your next
+N months". Inputs come from the program cost report (`impact.py`,
+`economics_from_report`):
 
 ```python
 # Operator's real monthly run cost — margin EXCLUDED (donations cover real cost, not the buffer)
-monthly_run_cost_usd = fixed_monthly_usd + variable_usd * (30 / window_days)
+scale                = 30 / window_days
+monthly_run_cost_usd = fixed_monthly_usd + variable_usd * scale
 active_users         = num_users                         # distinct briefing users, 30d window
-cost_per_user_month  = monthly_run_cost_usd / active_users   # guard active_users == 0
-
-# Per-donation (amount already in USD)
-user_months     = amount_usd / cost_per_user_month
-users_until_eoy = amount_usd / (cost_per_user_month * months_until_dec31)
-
-# Yearly aggregate (sum of donation_ledger.amount_usd, this calendar year, status="succeeded")
-months_covered  = total_year_usd / monthly_run_cost_usd
-users_full_year = total_year_usd / (cost_per_user_month * 12)
-coverage_ratio  = total_year_usd / (monthly_run_cost_usd * months_elapsed_this_year)
+cost_per_user_month  = monthly_run_cost_usd / active_users           # guard active_users == 0
+cost_per_briefing    = monthly_run_cost_usd / (num_briefings * scale) # margin-excluded, for "X briefings funded"
 ```
 
-Phrasing rules (pick the most natural unit, never show "0"):
+**Denominators (decided):**
 
-- `user_months ≥ 18` → "covers one user for ~{user_months/12:.1f} years"; else
-  "covers one user for ~{user_months:.0f} months" (or, when the amount covers ≥~2 users,
-  "covers ~{N} users for a month").
-- `months_covered ≥ 12` → "this year's donations cover ~{months_covered/12:.1f} years of
-  running costs"; else "~{months_covered:.1f} months".
+- **Community = this calendar year.** `coverage_ratio = total_year_usd /
+  (monthly_run_cost_usd * months_elapsed_this_year)` — donations-this-year ÷
+  cost-incurred-this-year-so-far. Resets annually.
+- **Personal = lifetime.** The user's whole relationship with the app: lifetime
+  cost from `cost_ledger` (`credits.user_cost_stats`, which also yields the
+  realized **monthly burn rate** = lifetime cost ÷ months active) vs lifetime
+  donations (`get_user_total_usd`).
 
-A frozen `DonationImpact` dataclass holds the raw numbers; phrasing lives in a thin
-formatter (i18n-friendly). Returns a neutral empty state when there are no donations or
-`active_users == 0`.
+#### Personal panel — retrospective with forward overflow
+
+`impact.personal_impact()` returns a `PersonalImpact` with a `band`:
+
+1. **`retrospective`** (`coverage_ratio < 1.0`, the normal case): "covers ~N
+   months of your own usage so far" (donation ÷ burn rate) or, when the burn
+   rate is too thin to round to a whole month, "covers ~Y% of what your usage
+   has cost."
+2. **`covers_others`** (own usage covered, but the whole site is *not*):
+   "fully covers your own usage — plus ~N other pilots", where N = surplus ÷
+   `cost_per_user_month`, **rounded to a whole number, minimum 1** (0.x rounds up
+   to "another pilot"; never a fraction). This intermediate band stops us
+   jumping to a future promise the moment a small footprint over-covers.
+3. **`future`** (only once community `coverage_ratio ≥ 1.0` — `site_covered`):
+   forward framing unlocks — "fully covers your own usage and helped others —
+   and contributes ~N months toward the service ahead" (N = surplus ÷ monthly
+   run cost).
+
+#### Community panel
+
+`impact.yearly_impact()` → `YearlyImpact`; phrasing flips at full coverage:
+
+- below 1.0 → "this year's donations have offset ~{coverage_ratio*100:.0f}% of
+  the running costs so far."
+- `coverage_ratio ≥ 1.0` → "this year's costs are fully covered" (+ "plus ~N
+  months ahead" when `surplus_months = months_covered − months_elapsed ≥ 1`).
+
+#### Adaptive translation ladder (prospective "donate €X" preview)
+
+`impact.choose_translation()` adapts the *translation type* (not just the unit)
+so the chosen number lands ~2–24 and never reads "0"/"0.3". `GET
+/api/donations/preview?amount=&currency=` serializes it; logged-in pilots with
+history get the personal path (small amounts vs their own burn rate), everyone
+else the program average.
+
+| Amount (USD, rough) | Preferred translation (`kind`) | Source |
+|---|---|---|
+| small (≤25) | "covers ~N months of **your own** usage" (`personal_months`, logged-in w/ history); else "covers one pilot for ~N months" (`user_months`); else "funds ~N briefings" (`briefings`) | burn rate / `cost_per_user_month` / `cost_per_briefing` |
+| medium (≤150) | "covers ~N pilots for a month" (`users_for_month`) or "funds ~N briefings" (`briefings`) | `cost_per_user_month` / `cost_per_briefing` |
+| large (>150) | "covers ~N months of running the whole service" (`service_months`) | `monthly_run_cost_usd` |
+
+#### Stats trio (transparency header on the donate page)
+
+`GET /api/donations/summary` carries a `stats` block + a `run_cost` block:
+
+- **active_pilots_30d** — `num_users` from the 30d cost report.
+- **briefings_all_time** — `COUNT(*)` over `briefing_packs`.
+- **analysis_words_all_time** — `SUM(briefing_usage.llm_output_tokens) × 0.75`.
+  **Output tokens only** (what the AI *wrote*, not input/total). `words_to_books`
+  (~90,000 words/novel) is an optional, clearly-approximate flourish; words is
+  the headline.
+- **run_cost** — `monthly_run_cost_usd` + `cost_per_user_month_usd`, rendered in
+  the viewer's currency. Publishing active pilots + run cost lets a reader back
+  out per-pilot cost — **intended** (transparency), not a leak. (A standalone
+  public cost-breakdown page/link is deferred; the donate page itself is the
+  public transparency surface for now.)
+
+Frozen dataclasses (`ProgramEconomics`, `DonationImpact`, `YearlyImpact`,
+`PersonalImpact`, `TranslationChoice`) hold the raw numbers; phrasing lives in a
+thin formatter (i18n-friendly). Every path returns a neutral empty state when
+there are no donations or `active_users == 0`.
 
 ### API endpoints (proposed)
 
@@ -310,8 +369,9 @@ formatter (i18n-friendly). Returns a neutral empty state when there are no donat
 |----------|--------|------|---------|
 | `/api/donations/checkout` | POST | User or anon | Create a Stripe Checkout Session (`{amount, currency, recurring}`) → returns redirect URL |
 | `/api/donations/webhook` | POST | Stripe sig | **Source of truth**: record/refund on `checkout.session.completed`, `charge.refunded`; verifies `STRIPE_WEBHOOK_SECRET`; idempotent on `provider_ref` |
-| `/api/donations/me` | GET | User | The viewer's own donation total + impact (USD + `fx` block) |
-| `/api/donations/summary` | GET | None | Public: this-year community total + coverage framing (no per-user data) |
+| `/api/donations/me` | GET | User | Viewer's donation total + program-average `impact` + retrospective `personal` panel (lifetime cost, "+N pilots"/forward overflow) (USD + `fx`) |
+| `/api/donations/summary` | GET | None | Public: this-year community coverage + `stats` trio (active pilots 30d, briefings all-time, AI words) + `run_cost` block |
+| `/api/donations/preview` | GET | User or anon | Adaptive-ladder translation of a prospective `?amount=&currency=` (personal path when logged-in w/ history, else program average) |
 
 ### Stripe flow
 

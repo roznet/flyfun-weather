@@ -11,11 +11,23 @@ from weatherbrief.impact import (
     DonationImpact,
     ProgramEconomics,
     YearlyImpact,
+    TRANSLATION_BRIEFINGS,
+    TRANSLATION_PERSONAL_MONTHS,
+    TRANSLATION_SERVICE_MONTHS,
+    TRANSLATION_USER_MONTHS,
+    TRANSLATION_USERS_FOR_MONTH,
+    choose_translation,
     donation_impact,
     economics_from_report,
+    format_personal_coverage,
     format_user_coverage,
+    format_words_written,
     format_yearly_coverage,
     impact_to_dict,
+    personal_impact,
+    personal_to_dict,
+    tokens_to_words,
+    words_to_books,
     yearly_impact,
     yearly_to_dict,
 )
@@ -128,15 +140,26 @@ class TestPhrasing:
                                 months_until_eoy=6, empty=False)
         assert format_user_coverage(impact) == "covers part of a user's monthly cost"
 
-    def test_yearly_years(self):
-        yi = YearlyImpact(total_year_usd=900, months_covered=18, users_full_year=3,
-                          coverage_ratio=3, months_elapsed=6, empty=False)
-        assert format_yearly_coverage(yi) == "this year's donations cover ~1.5 years of running costs"
-
-    def test_yearly_months(self):
+    def test_yearly_retrospective_percent(self):
+        # Below full coverage → retrospective "offset ~N%".
         yi = YearlyImpact(total_year_usd=112, months_covered=2.0, users_full_year=1,
-                          coverage_ratio=0.3, months_elapsed=6, empty=False)
-        assert format_yearly_coverage(yi) == "this year's donations cover ~2.0 months of running costs"
+                          coverage_ratio=0.62, months_elapsed=6, surplus_months=0.0, empty=False)
+        assert format_yearly_coverage(yi) == (
+            "this year's donations have offset ~62% of the running costs so far"
+        )
+
+    def test_yearly_fully_covered_with_overflow(self):
+        # coverage_ratio >= 1.0 unlocks forward framing.
+        yi = YearlyImpact(total_year_usd=900, months_covered=9, users_full_year=3,
+                          coverage_ratio=1.5, months_elapsed=6, surplus_months=3.0, empty=False)
+        assert format_yearly_coverage(yi) == (
+            "this year's costs are fully covered, plus ~3 months ahead"
+        )
+
+    def test_yearly_fully_covered_no_overflow(self):
+        yi = YearlyImpact(total_year_usd=340, months_covered=6.2, users_full_year=1,
+                          coverage_ratio=1.03, months_elapsed=6, surplus_months=0.2, empty=False)
+        assert format_yearly_coverage(yi) == "this year's costs are fully covered"
 
 
 class TestSerialization:
@@ -150,4 +173,168 @@ class TestSerialization:
         econ = economics_from_report(_report(num_users=10))
         d = yearly_to_dict(yearly_impact(112.0, econ, now=NOW))
         assert d["months_covered"] == pytest.approx(2.0)
+        assert "summary" in d and "surplus_months" in d
+
+
+# Default config: droplet 24 + misc 2 + subscriptions 30 = $56/month fixed.
+# With num_users=10 → cpum = $5.60; num_briefings = 30 → cost/briefing ≈ $1.867.
+
+
+class TestTokensToWords:
+    def test_output_tokens_only_075_per_token(self):
+        assert tokens_to_words(1000) == 750
+        assert tokens_to_words(0) == 0
+        assert tokens_to_words(-5) == 0  # never negative
+
+    def test_books_equivalence(self):
+        # 1.8M words ≈ 20 novels at ~90k words each.
+        assert words_to_books(1_800_000) == pytest.approx(20.0)
+        assert words_to_books(0) == 0.0
+
+    def test_words_summary_phrasing(self):
+        assert "million words" in format_words_written(3_000_000)  # 2.25M words
+        assert format_words_written(0) == ""
+        # Mid-range rounds to thousands.
+        s = format_words_written(20_000)  # 15,000 words
+        assert "words of AI weather analysis" in s
+
+
+class TestEconomicsCostPerBriefing:
+    def test_margin_excluded_per_briefing(self):
+        # $56/month over 30 briefings/30d window → ~$1.867 per briefing.
+        econ = economics_from_report(_report(num_users=10))  # num_briefings = 30
+        assert econ.cost_per_briefing_usd == pytest.approx(56.0 / 30.0, abs=1e-3)
+
+    def test_zero_when_no_briefings(self):
+        econ = economics_from_report(_report(num_users=0))
+        assert econ.cost_per_briefing_usd == 0.0
+
+
+class TestPersonalImpact:
+    def _econ(self):
+        return economics_from_report(_report(num_users=10))  # cpum 5.6, monthly 56
+
+    def test_retrospective_below_full_coverage(self):
+        # Lifetime cost $10, donated $5 → 50% covered, retrospective band.
+        pi = personal_impact(5.0, 10.0, 2.0, self._econ(), site_covered=False)
+        assert pi.band == "retrospective"
+        assert pi.extra_pilots == 0
+        assert pi.coverage_ratio == pytest.approx(0.5)
+        # $5 / $2/mo burn = 2.5 months → "~2 months of your own usage so far"
+        assert "your own usage so far" in format_personal_coverage(pi)
+
+    def test_retrospective_percent_fallback_when_burn_thin(self):
+        # Burn rate too small to round to a whole month → percent phrasing.
+        pi = personal_impact(3.0, 10.0, 0.0, self._econ(), site_covered=False)
+        assert pi.band == "retrospective"
+        assert "% of what your usage has cost" in format_personal_coverage(pi)
+
+    def test_covers_others_band_rounds_min_one(self):
+        # Donated $20, lifetime cost $2 → surplus $18; cpum 5.6 → ~3 pilots.
+        pi = personal_impact(20.0, 2.0, 1.0, self._econ(), site_covered=False)
+        assert pi.band == "covers_others"
+        assert pi.extra_pilots == round(18.0 / 5.6)
+        assert pi.future_months == 0.0
+        assert "other pilots" in format_personal_coverage(pi)
+
+    def test_covers_others_min_one_when_surplus_tiny(self):
+        # Surplus rounds to 0 → bumped to "another pilot" (min 1, never a fraction).
+        pi = personal_impact(2.5, 2.0, 1.0, self._econ(), site_covered=False)
+        assert pi.band == "covers_others"
+        assert pi.extra_pilots == 1
+        assert "1 other pilot" in format_personal_coverage(pi)
+
+    def test_future_band_only_when_site_covered(self):
+        # Same over-coverage, but the whole site is covered → forward framing.
+        pi = personal_impact(120.0, 2.0, 1.0, self._econ(), site_covered=True)
+        assert pi.band == "future"
+        assert pi.future_months > 0
+        assert "toward the service ahead" in format_personal_coverage(pi)
+
+    def test_no_history_treated_as_fully_covered(self):
+        # Brand-new donor: lifetime cost 0 → surplus = full donation, covers_others.
+        pi = personal_impact(20.0, 0.0, 0.0, self._econ(), site_covered=False)
+        assert pi.band == "covers_others"
+        assert pi.extra_pilots >= 1
+
+    def test_empty_when_no_economics(self):
+        econ = ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0,
+                                cost_per_user_month_usd=0.0)
+        pi = personal_impact(20.0, 5.0, 2.0, econ, site_covered=False)
+        assert pi.empty
+        assert format_personal_coverage(pi) == ""
+
+    def test_empty_when_zero_donation(self):
+        pi = personal_impact(0.0, 5.0, 2.0, self._econ(), site_covered=False)
+        assert pi.empty
+
+    def test_serialization_has_summary(self):
+        d = personal_to_dict(personal_impact(5.0, 10.0, 2.0, self._econ(), site_covered=False))
+        assert d["band"] == "retrospective"
         assert "summary" in d
+
+
+class TestAdaptiveLadder:
+    def _econ(self):
+        return economics_from_report(_report(num_users=10))  # cpum 5.6, cpb ~1.867
+
+    def test_small_uses_personal_when_history(self):
+        # $20 at $5/mo personal burn → 4 months of your own usage.
+        tc = choose_translation(20.0, self._econ(), burn_rate_monthly_usd=5.0)
+        assert tc.kind == TRANSLATION_PERSONAL_MONTHS
+        assert "your own usage" in tc.summary
+        assert round(tc.value) == 4
+
+    def test_small_falls_back_to_program_average(self):
+        # No burn rate → one-pilot-for-N-months. $20 / 5.6 ≈ 3.6 months.
+        tc = choose_translation(20.0, self._econ())
+        assert tc.kind == TRANSLATION_USER_MONTHS
+        assert "one pilot for" in tc.summary
+
+    def test_medium_uses_pilots_for_a_month(self):
+        # $100 / 5.6 ≈ 18 pilots for a month.
+        tc = choose_translation(100.0, self._econ())
+        assert tc.kind == TRANSLATION_USERS_FOR_MONTH
+        assert "pilots for a month" in tc.summary
+        assert round(tc.value) == round(100.0 / 5.6)
+
+    def test_large_uses_service_months(self):
+        # $200 / $56/mo ≈ 3.6 months of the whole service.
+        tc = choose_translation(200.0, self._econ())
+        assert tc.kind == TRANSLATION_SERVICE_MONTHS
+        assert "running the whole service" in tc.summary
+
+    def test_never_shows_zero(self):
+        # Every band's chosen value rounds to a non-zero, readable number.
+        econ = self._econ()
+        for amount in (5, 10, 25, 50, 100, 150, 250, 1000):
+            tc = choose_translation(float(amount), econ)
+            assert not tc.empty
+            assert tc.summary and "~0 " not in tc.summary
+
+    def test_empty_when_no_economics(self):
+        econ = ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0,
+                                cost_per_user_month_usd=0.0)
+        tc = choose_translation(20.0, econ)
+        assert tc.empty and tc.summary == ""
+
+    def test_briefings_kind_for_tiny_amount(self):
+        # Below a user-month but ≥2 briefings → "funds ~N briefings".
+        tc = choose_translation(5.0, self._econ())  # 5/5.6 < 1.5 months; 5/1.867 ≈ 2.7 briefings
+        assert tc.kind == TRANSLATION_BRIEFINGS
+        assert "briefings" in tc.summary
+
+
+class TestYearlyOverflow:
+    def test_surplus_months_zero_below_coverage(self):
+        econ = economics_from_report(_report(num_users=10))  # monthly 56
+        yi = yearly_impact(112.0, econ, now=NOW)  # 2 months covered, ~6 elapsed
+        assert yi.coverage_ratio < 1.0
+        assert yi.surplus_months == 0.0
+
+    def test_surplus_months_positive_when_over_covered(self):
+        econ = economics_from_report(_report(num_users=10))  # monthly 56
+        # 12 months covered vs ~6 elapsed → ~6 months ahead.
+        yi = yearly_impact(56.0 * 12, econ, now=NOW)
+        assert yi.coverage_ratio >= 1.0
+        assert yi.surplus_months == pytest.approx(12 - yi.months_elapsed, abs=1e-3)
