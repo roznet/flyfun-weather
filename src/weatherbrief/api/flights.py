@@ -115,6 +115,11 @@ class BriefingStatusInfo(BaseModel):
 
     assessment: str | None = None
     assessment_reason: str | None = None
+    # Long-range early outlook (beyond the GRIB horizon). Mutually exclusive
+    # with ``assessment`` — the flights-list card shows a soft outlook badge
+    # instead of the GREEN/AMBER/RED traffic light when this is set.
+    outlook: str | None = None
+    outlook_reason: str | None = None
     has_digest: bool = False
     days_out: int | None = None
     fetch_timestamp: str | None = None
@@ -501,6 +506,8 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
         row.flight_id: BriefingStatusInfo(
             assessment=row.assessment,
             assessment_reason=row.assessment_reason,
+            outlook=row.outlook,
+            outlook_reason=row.outlook_reason,
             has_digest=row.has_digest,
             days_out=row.days_out,
             fetch_timestamp=row.fetch_timestamp.isoformat(),

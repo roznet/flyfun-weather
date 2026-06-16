@@ -1,6 +1,6 @@
 /** DOM management for the Flights list page. */
 
-import type { DebriefStats, FlightResponse } from '../store/types';
+import type { BriefingStatusInfo, DebriefStats, FlightResponse } from '../store/types';
 import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
@@ -19,6 +19,26 @@ function assessmentClass(assessment: string | null): string {
     case 'RED': return 'badge-red';
     default: return 'badge-none';
   }
+}
+
+// Long-range early outlook → soft badge class. Distinct from the GREEN/AMBER/RED
+// traffic light: an outlook is a tendency ("what to expect"), not a verdict.
+const OUTLOOK_BADGE_CLASS: Record<string, string> = {
+  TRENDING_SETTLED: 'badge-outlook-settled',
+  MIXED_SIGNALS: 'badge-outlook-mixed',
+  TRENDING_UNSETTLED: 'badge-outlook-unsettled',
+};
+
+/** Status badge for a flight's latest briefing: long-range outlook badge when
+ *  present, otherwise the GREEN/AMBER/RED assessment chip. */
+function statusBadge(lb: BriefingStatusInfo): string {
+  if (lb.outlook) {
+    const key = lb.outlook.toUpperCase();
+    const cls = OUTLOOK_BADGE_CLASS[key] ?? 'badge-outlook-mixed';
+    const label = t(`outlook.${lb.outlook.toLowerCase()}`);
+    return `<span class="badge badge-outlook ${cls}" title="${escapeHtml(t('outlook.early'))}">${escapeHtml(label)}</span>`;
+  }
+  return `<span class="badge ${assessmentClass(lb.assessment)}">${escapeHtml(lb.assessment || '—')}</span>`;
 }
 
 /** Track whether the past-flights section is expanded. */
@@ -67,7 +87,7 @@ function renderFlightCard(
   const lb = f.latest_briefing;
   const packInfo = lb && lb.fetch_timestamp
     ? `<span class="pack-info">D-${lb.days_out} (${new Date(lb.fetch_timestamp).toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
-       <span class="badge ${assessmentClass(lb.assessment)}">${escapeHtml(lb.assessment || '\u2014')}</span>`
+       ${statusBadge(lb)}`
     : `<span class="pack-info">${t('flights.noBriefings')}</span>`;
 
   const routeLine = compactRoute

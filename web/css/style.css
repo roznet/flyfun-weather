@@ -496,6 +496,12 @@ label {
 .badge-amber { background: var(--amber-bg); color: var(--amber); }
 .badge-red { background: var(--red-bg); color: var(--red); }
 .badge-none { background: var(--bg); color: var(--text-muted); }
+/* Long-range early outlook — soft, dashed badge (a tendency, not a verdict),
+   matching the briefing-banner outlook palette. */
+.badge-outlook { font-weight: 600; }
+.badge-outlook-settled { background: var(--bg); color: var(--green); border: 1px dashed var(--green); }
+.badge-outlook-mixed { background: var(--bg); color: var(--text-muted); border: 1px dashed var(--border); }
+.badge-outlook-unsettled { background: var(--bg); color: var(--amber); border: 1px dashed var(--amber); }
 .badge-past { background: var(--bg); color: var(--text-muted); font-weight: normal; }
 .badge-shared {
   background: #ede9fe;

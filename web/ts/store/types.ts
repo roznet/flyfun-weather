@@ -14,6 +14,11 @@ export interface AircraftInfo {
 export interface BriefingStatusInfo {
   assessment: string | null;
   assessment_reason: string | null;
+  // Long-range early outlook (beyond the GRIB horizon): TRENDING_SETTLED /
+  // MIXED_SIGNALS / TRENDING_UNSETTLED. Mutually exclusive with assessment —
+  // the card shows a soft outlook badge instead of the traffic light.
+  outlook?: string | null;
+  outlook_reason?: string | null;
   has_digest: boolean;
   days_out: number | null;
   fetch_timestamp: string | null;
