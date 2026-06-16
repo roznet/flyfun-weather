@@ -131,7 +131,10 @@ def _as_dict(digest: Mapping[str, object] | object) -> dict[str, object]:
 
 
 def _count_sentences(text: str) -> int:
-    parts = [p for p in re.split(r"[.!?]+", text) if p.strip()]
+    # Split only on sentence-ending punctuation followed by whitespace (or
+    # end-of-string), so a decimal mid-sentence ("QNH 1013.5hPa") is not
+    # mistaken for a sentence boundary.
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p.strip()]
     return len(parts)
 
 
@@ -167,9 +170,9 @@ def _output_figures(text: str) -> list[int]:
             v = _to_int(token)
             if v is not None:
                 figures.append(v)
-    # Single figures — skip any already consumed as part of a range to avoid
-    # double counting is unnecessary (membership is set-based downstream), but
-    # we keep both ends explicit for clear error messages.
+    # Single figures. _FIGURE_SINGLE_RE also re-matches the unit-bearing end of
+    # a range ("9000ft" in "1500-9000ft"), so dedupe at the end to avoid
+    # emitting two identical violations for the same value.
     for m in _FIGURE_SINGLE_RE.finditer(text):
         v = _to_int(m.group(1))
         if v is not None:
@@ -180,7 +183,7 @@ def _output_figures(text: str) -> list[int]:
             # FL080 == 8000ft; accept either the flight level or its altitude.
             figures.append(v)
             figures.append(v * 100)
-    return figures
+    return list(dict.fromkeys(figures))
 
 
 # --- Individual checks -------------------------------------------------------
