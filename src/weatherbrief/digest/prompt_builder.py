@@ -287,8 +287,13 @@ def _format_previous_digest_context(
     long-range ``LongRangeDigest`` (outlook/…) so trend survives a flight
     crossing the long→short-range boundary.
     """
+    # Local import keeps the type out of module scope (llm_digest imports this
+    # module — a top-level import would cycle), while still letting us use a
+    # precise isinstance check instead of duck-typing on the attribute.
+    from weatherbrief.digest.llm_digest import LongRangeDigest
+
     lines = ["=== PREVIOUS DIGEST (for trend comparison) ==="]
-    if hasattr(previous_digest, "outlook"):
+    if isinstance(previous_digest, LongRangeDigest):
         lines.append(f"Previous outlook: {previous_digest.outlook}")
         lines.append(f"Previous reason: {previous_digest.outlook_reason}")
         lines.append(f"Previous synoptic: {previous_digest.synoptic}")
@@ -302,15 +307,23 @@ def _format_previous_digest_context(
     return "\n".join(lines)
 
 
+_COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+
+def _compass(deg: float) -> str:
+    return _COMPASS[int((deg % 360) / 45 + 0.5) % 8]
+
+
 def _build_coarse_quant(snapshot: ForecastSnapshot, target_time: datetime) -> str:
     """Coarse per-waypoint model data for the long-range outlook.
 
-    Trims the full quantitative block to broad signals — surface wind, broad
-    cloud, precipitation presence, freezing level, a convective (CAPE) flag —
-    and shows ALL model divergence (agreement is the headline at this range).
-    The precise sounding indices (CAPE/CIN/K-index/shear/icing geometry) are
-    deliberately omitted: they are computed from low-skill long-range models and
-    invite false precision.
+    Emits only QUALITATIVE bands (light/moderate/strong wind, clear/broken/
+    overcast, dry/precip, some/notable instability) — never raw values. At this
+    range the underlying numbers (10m wind, CAPE, cloud %) have low skill, and
+    the long-range prompt forbids quoting figures; feeding bands instead of
+    numbers keeps the context and the prompt consistent and removes the
+    anchoring/leak risk. Precise sounding indices are omitted entirely; model
+    agreement (shown via :func:`_format_divergence_all`) is the headline signal.
     """
     lines: list[str] = [
         "=== MODEL OUTLOOK DATA (coarse — long range, two/three global models) ==="
@@ -324,23 +337,27 @@ def _build_coarse_quant(snapshot: ForecastSnapshot, target_time: datetime) -> st
             if not hourly:
                 continue
             parts: list[str] = []
-            if hourly.wind_speed_10m_kt is not None:
-                gust = (
-                    f" g{hourly.wind_gusts_10m_kt:.0f}"
-                    if hourly.wind_gusts_10m_kt is not None else ""
+            ws = hourly.wind_speed_10m_kt
+            if ws is not None:
+                band = "light" if ws < 10 else ("moderate" if ws <= 20 else "strong")
+                dirn = (
+                    f" {_compass(hourly.wind_direction_10m_deg)}"
+                    if hourly.wind_direction_10m_deg is not None else ""
                 )
-                parts.append(
-                    f"wind {hourly.wind_direction_10m_deg:.0f}/"
-                    f"{hourly.wind_speed_10m_kt:.0f}kt{gust}"
+                gusty = (
+                    hourly.wind_gusts_10m_kt is not None
+                    and hourly.wind_gusts_10m_kt >= max(25.0, ws + 10)
                 )
-            if hourly.cloud_cover_pct is not None:
-                parts.append(f"cloud {hourly.cloud_cover_pct:.0f}%")
+                parts.append(f"{band}{dirn} wind" + (", gusty" if gusty else ""))
+            cc = hourly.cloud_cover_pct
+            if cc is not None:
+                parts.append("clear" if cc < 25 else ("broken cloud" if cc <= 75 else "overcast"))
             if hourly.precipitation_mm is not None:
                 parts.append("precip" if hourly.precipitation_mm > 0.1 else "dry")
-            if hourly.freezing_level_m is not None:
-                parts.append(f"FzLvl ~{hourly.freezing_level_m * 3.28084:.0f}ft")
             if hourly.cape_jkg is not None and hourly.cape_jkg >= 100:
-                parts.append(f"CAPE present (~{hourly.cape_jkg:.0f}J/kg)")
+                parts.append(
+                    "notable instability" if hourly.cape_jkg >= 500 else "some instability"
+                )
             if parts:
                 lines.append(f"[{wf.model.value}]: {', '.join(parts)}")
 
@@ -375,8 +392,11 @@ def _format_divergence_all(divergences: list[ModelDivergence]) -> list[str]:
     models agree" is itself the key long-range signal. Restricted to
     :data:`_LONGRANGE_DIVERGENCE_VARS` to keep the focus broad.
     """
+    # Agreement LEVEL only (good/moderate/poor) — the numeric spread is dropped
+    # to keep the long-range context free of raw figures, consistent with the
+    # prompt's no-numbers rule.
     parts = [
-        f"{d.variable} {d.agreement.value}(spread={d.spread:.1f})"
+        f"{d.variable} {d.agreement.value}"
         for d in divergences
         if d.variable in _LONGRANGE_DIVERGENCE_VARS
     ]

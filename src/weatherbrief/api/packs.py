@@ -45,7 +45,7 @@ def _validate_model(model: str) -> str:
     return model
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
-from weatherbrief.digest.llm_digest import LongRangeDigest
+from weatherbrief.digest.llm_digest import LongRangeDigest, ecmwf_grib_horizon_days
 from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
 from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
@@ -1211,9 +1211,13 @@ def _build_pack_meta(
         else:
             assessment = result.digest.assessment
             assessment_reason = result.digest.assessment_reason
-    # Fall back to the advisory-derived assessment only in the short-range regime
-    # — a long-range pack intentionally shows its soft outlook, not a verdict.
-    if assessment is None and outlook is None:
+    # Fall back to the advisory-derived assessment only in the short-range regime.
+    # A long-range pack must never show a GREEN/AMBER/RED verdict — not even a
+    # *provisional* one (before its digest runs, both assessment and outlook are
+    # None, which would otherwise trip this fallback and flash a traffic light on
+    # a D-8+ flight). Gate on the regime via days_out, not on digest presence.
+    is_long_range = days_out > ecmwf_grib_horizon_days()
+    if assessment is None and outlook is None and not is_long_range:
         assessment, assessment_reason = _assessment_from_advisories(
             result.route_advisories_manifest, pack_path,
         )
