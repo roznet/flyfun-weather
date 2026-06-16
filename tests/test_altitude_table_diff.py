@@ -77,6 +77,5 @@ def test_altitude_options_block_names_tradeoff():
 
 def test_altitude_options_block_none_without_planned_row():
     # cruise altitude absent from rows → no usable planned row → omit the block.
-    t = _table()
-    t.cruise_altitude_ft = 9999
+    t = _table().model_copy(update={"cruise_altitude_ft": 9999})
     assert _format_altitude_options_context(t) is None

@@ -49,6 +49,9 @@ def diff_altitude_rows(
     worsened: list[AltitudeAdvisoryChange] = []
     unchanged: list[str] = []
 
+    # Iterate the baseline's advisories: a candidate-only advisory has no
+    # baseline status to diff against, so it can't be classified either way.
+    # The same evaluator set produces both rows today, so the keys match.
     for advisory_id, base_status in baseline.statuses.items():
         cand_status = candidate.statuses.get(advisory_id)
         if cand_status is None:

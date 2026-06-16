@@ -11,6 +11,7 @@ from weatherbrief.units import format_visibility
 from weatherbrief.models import (
     ALT_AXIS_LABELS,
     AgreementLevel,
+    AltitudeAdvisoryChange,
     AltitudeAdvisoryRow,
     AltitudeTableResult,
     ConvectiveRisk,
@@ -716,18 +717,20 @@ def _format_altitude_options_context(table: AltitudeTableResult) -> str | None:
         ]
         return ", ".join(parts) if parts else "no altitude-dependent advisories"
 
-    def _change_phrase(changes) -> str:
+    def _change_phrase(changes: list[AltitudeAdvisoryChange]) -> str:
         return "; ".join(
             f"{c.name} ({c.from_status.value.upper()}→{c.to_status.value.upper()})"
             for c in changes
         )
 
     def _option_line(label: str, alt_ft: int | None) -> str:
-        if alt_ft is None or alt_ft == table.cruise_altitude_ft:
-            return f"  {label}: none differs from planned."
+        if alt_ft is None:
+            return f"  {label}: none available."
+        if alt_ft == table.cruise_altitude_ft:
+            return f"  {label}: the planned altitude is already best."
         cand = row_for_altitude(table, alt_ft)
         if cand is None:
-            return f"  {label}: none differs from planned."
+            return f"  {label}: none available."
         delta = diff_altitude_rows(planned, cand, table.advisory_names)
         if delta.is_empty:
             return f"  {label} {alt_ft:,} ft: same advisory picture as planned."
