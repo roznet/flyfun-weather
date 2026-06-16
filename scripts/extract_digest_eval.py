@@ -136,7 +136,7 @@ def _load_dwd_translated(pack_dir: Path) -> list | None:
     try:
         from weatherbrief.fetch.dwd_text import DWDDayBlock
 
-        overview = json.loads(overview_path.read_text())
+        overview = json.loads(overview_path.read_text(encoding="utf-8"))
         out = []
         for entry in overview.get("entries", []):
             iso = entry.get("date_iso")
@@ -185,7 +185,7 @@ def _classify_situations(
         tags.add("d0")
     if "=== METAR/TAF OBSERVATIONS" in context:
         tags.add("metar")
-    if "=== SIGMETs ALONG ROUTE" in context or "=== SIGMET" in context:
+    if "=== SIGMETs ALONG ROUTE" in context:
         tags.add("sigmet")
     if "=== PREVIOUS DIGEST" in context:
         tags.add("previous_digest")
@@ -304,7 +304,7 @@ def _read_synthetic_fixtures(output_dir: Path) -> list[dict]:
         if not child.is_dir() or not meta_path.exists():
             continue
         try:
-            meta = json.loads(meta_path.read_text())
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             continue
         if not meta.get("synthetic"):
