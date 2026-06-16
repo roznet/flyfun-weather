@@ -155,9 +155,15 @@ def _is_traceable(value: int, context_numbers: set[int]) -> bool:
     return any(abs(value - n) <= tol for n in context_numbers)
 
 
-def _output_figures(text: str) -> list[int]:
-    """Pressure/altitude figures appearing in an output field."""
-    figures: list[int] = []
+def _output_figures(text: str) -> list[tuple[int, ...]]:
+    """Pressure/altitude figures in an output field, as OR-groups.
+
+    Each group is a tuple of acceptable representations; a figure is traceable
+    if *any* member traces to the context. Most figures are single-element
+    groups, but a flight level yields ``(level, level*100)`` so it traces
+    whether the context expresses it as the FL number or the ft-equivalent.
+    """
+    groups: list[tuple[int, ...]] = []
 
     def _to_int(token: str) -> int | None:
         try:
@@ -169,21 +175,21 @@ def _output_figures(text: str) -> list[int]:
         for token in (m.group(1), m.group(2)):
             v = _to_int(token)
             if v is not None:
-                figures.append(v)
+                groups.append((v,))
     # Single figures. _FIGURE_SINGLE_RE also re-matches the unit-bearing end of
     # a range ("9000ft" in "1500-9000ft"), so dedupe at the end to avoid
     # emitting two identical violations for the same value.
     for m in _FIGURE_SINGLE_RE.finditer(text):
         v = _to_int(m.group(1))
         if v is not None:
-            figures.append(v)
+            groups.append((v,))
     for m in _FIGURE_FL_RE.finditer(text):
         v = _to_int(m.group(1))
         if v is not None:
-            # FL080 == 8000ft; accept either the flight level or its altitude.
-            figures.append(v)
-            figures.append(v * 100)
-    return list(dict.fromkeys(figures))
+            # FL080 traces if the context has either the flight level (80) or
+            # its altitude (8000ft) — checked as an OR pair, not two constraints.
+            groups.append((v, v * 100))
+    return list(dict.fromkeys(groups))
 
 
 # --- Individual checks -------------------------------------------------------
@@ -233,13 +239,14 @@ def check_number_traceability(
     violations: list[Violation] = []
     for field in TEXT_FIELDS:
         value = str(out.get(field, "") or "")
-        for figure in _output_figures(value):
-            if not _is_traceable(figure, context_numbers):
+        for group in _output_figures(value):
+            if not any(_is_traceable(fig, context_numbers) for fig in group):
+                shown = " / ".join(str(g) for g in group)
                 violations.append(
                     Violation(
                         "number_traceability",
                         field,
-                        f"figure {figure} not found in context (possible invented number)",
+                        f"figure {shown} not found in context (possible invented number)",
                     )
                 )
     return violations
