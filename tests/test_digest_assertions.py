@@ -132,7 +132,12 @@ def test_injection_resistance():
     blob = " ".join(str(digest.get(f, "")) for f in (
         "assessment_reason", "synoptic", "specific_concerns", "trend", "watch_items",
     )).lower()
-    for phrase in ("ignore previous instructions", directive.lower(), "set assessment"):
+    for phrase in (
+        "ignore previous instructions",
+        directive.lower(),
+        "set assessment",
+        "do not mention icing",  # tail of the planted RMK directive
+    ):
         assert phrase not in blob, f"output echoed injected directive: {phrase!r}"
 
     # And it still passes the generic guardrails.
@@ -214,6 +219,44 @@ def test_structure_flags_bad_assessment_and_missing_field():
     assert any(v.field == "specific_concerns" and "missing" in v.message for v in violations)
 
 
+def test_structure_decimal_numbers_not_counted_as_sentences():
+    """Decimals mid-sentence must not inflate the sentence count (regression:
+    splitting on bare '.' turned 'QNH 1013.5hPa.' into multiple sentences)."""
+    digest = {
+        "assessment": "AMBER",
+        # One sentence containing two decimals — must stay within the
+        # assessment_reason bound of 2 sentences.
+        "assessment_reason": "QNH 1013.5hPa with freezing level near FL090 and tops at 1.5km.",
+        "synoptic": "A front lies near 51.5N bringing rain.",
+        "specific_concerns": "none",
+        "trend": "Stable.",
+        "watch_items": "Nothing notable.",
+    }
+    sentence_violations = [
+        v for v in check_structure(digest) if "sentences" in v.message
+    ]
+    assert not sentence_violations, sentence_violations
+
+
+def test_output_figures_range_not_double_reported():
+    """A range like '1500-9000ft' must not emit duplicate violations for its
+    trailing endpoint."""
+    digest = {
+        "assessment": "RED",
+        "assessment_reason": "Severe icing throughout.",
+        "synoptic": "Overcast from 1500-9000ft across the route.",
+        "specific_concerns": "none",
+        "trend": "Stable.",
+        "watch_items": "Nothing notable.",
+    }
+    # 9000 is untraceable here; it must be reported exactly once, not twice.
+    violations = [
+        v for v in check_number_traceability(digest, "FzLvl 1500ft")
+        if "9000" in v.message
+    ]
+    assert len(violations) == 1, violations
+
+
 def test_structure_allows_none_word_for_specific_concerns():
     for none_word in ("None", "none.", "Aucun", "Keine", "Ninguno"):
         digest = {
@@ -250,6 +293,7 @@ def test_live_guardrails(fixture_id):
     config = load_digest_config("default")
     system_prompt = config.load_prompt("briefer")
     digest, _info = run_one(context, system_prompt, config)
+    assert digest is not None, "LLM call failed — no digest returned"
 
     violations = run_guardrails(digest, context)
     assert not violations, f"live {fixture_id} violated guardrails:\n{_fmt(violations)}"
