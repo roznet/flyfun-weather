@@ -31,6 +31,10 @@
     .assessment-green { background: #d1e7dd; color: #0f5132; border: 1px solid #198754; }
     .assessment-amber { background: #fff3cd; color: #664d03; border: 1px solid #cc8800; }
     .assessment-red   { background: #f8d7da; color: #842029; border: 1px solid #dc3545; }
+    /* Long-range outlook — muted fill + dashed border, distinct from the verdict. */
+    .outlook-trending_settled   { background: #f8f9fa; color: #0f5132; border: 1px dashed #198754; }
+    .outlook-mixed_signals      { background: #f8f9fa; color: #555555; border: 1px dashed #aaaaaa; }
+    .outlook-trending_unsettled { background: #f8f9fa; color: #664d03; border: 1px dashed #cc8800; }
 
     /* Digest sections */
     .digest-section { margin-bottom: 0.6em; }
@@ -98,8 +102,16 @@
     </div>
   </div>
 
-  <!-- Assessment -->
-  {% if digest and digest.assessment %}
+  <!-- Assessment / long-range outlook -->
+  {% if digest and digest.outlook %}
+  <div class="assessment outlook-{{ digest.outlook|lower }}">
+    EARLY OUTLOOK &mdash; {{ digest.outlook|replace('_', ' ')|title }}{% if digest.outlook_reason %} &mdash; {{ digest.outlook_reason }}{% endif %}
+  </div>
+  {% elif pack.outlook %}
+  <div class="assessment outlook-{{ pack.outlook|lower }}">
+    EARLY OUTLOOK &mdash; {{ pack.outlook|replace('_', ' ')|title }}{% if pack.outlook_reason %} &mdash; {{ pack.outlook_reason }}{% endif %}
+  </div>
+  {% elif digest and digest.assessment %}
   <div class="assessment assessment-{{ digest.assessment|lower }}">
     {{ digest.assessment }} &mdash; {{ digest.assessment_reason }}
   </div>

@@ -45,6 +45,7 @@ def _validate_model(model: str) -> str:
     return model
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
+from weatherbrief.digest.llm_digest import LongRangeDigest
 from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
 from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
@@ -1204,7 +1205,7 @@ def _build_pack_meta(
     if not provisional and result.digest:
         # A long-range digest carries an ``outlook`` instead of a GREEN/AMBER/RED
         # assessment; keep them mutually exclusive so the UI shows one or the other.
-        if hasattr(result.digest, "outlook"):
+        if isinstance(result.digest, LongRangeDigest):
             outlook = result.digest.outlook
             outlook_reason = result.digest.outlook_reason
         else:
@@ -2706,10 +2707,17 @@ def generate_digest(
         raise HTTPException(status_code=500, detail="Summary generation failed")
 
     # Promote the pack to "has digest" and prefer the digest's assessment.
+    # A long-range digest carries an outlook instead of a GREEN/AMBER/RED
+    # assessment — mirror the _build_pack_meta branch so the on-demand
+    # "Generate" path doesn't AttributeError on LongRangeDigest.
     meta.has_digest = True
     if digest_result.digest is not None:
-        meta.assessment = digest_result.digest.assessment
-        meta.assessment_reason = digest_result.digest.assessment_reason
+        if isinstance(digest_result.digest, LongRangeDigest):
+            meta.outlook = digest_result.digest.outlook
+            meta.outlook_reason = digest_result.digest.outlook_reason
+        else:
+            meta.assessment = digest_result.digest.assessment
+            meta.assessment_reason = digest_result.digest.assessment_reason
     update_pack_meta(db, meta)
 
     # Log + charge the LLM call (same accounting as the refresh path). get_db

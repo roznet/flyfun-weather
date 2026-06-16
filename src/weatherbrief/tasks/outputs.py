@@ -47,7 +47,7 @@ class SkewtResult:
 class DigestResult:
     path: Path | None = None
     text: str | None = None
-    digest: object | None = None  # WeatherDigest
+    digest: object | None = None  # WeatherDigest | LongRangeDigest
     llm_model: str | None = None
     llm_input_tokens: int | None = None
     llm_output_tokens: int | None = None
