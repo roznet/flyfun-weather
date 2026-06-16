@@ -43,6 +43,8 @@ export function diffAltitudeRows(
   const worsened: AltitudeStatusChange[] = [];
   const unchanged: string[] = [];
 
+  // Iterate the baseline's advisories: a candidate-only advisory has no
+  // baseline status to diff against (mirrors the Python twin).
   for (const [advisoryId, baseStatus] of Object.entries(baseline.statuses)) {
     const candStatus = candidate.statuses[advisoryId];
     if (candStatus === undefined) continue;

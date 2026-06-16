@@ -309,6 +309,15 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   selectPack: async (timestamp: string) => {
     const flight = get().flight;
     if (!flight) return;
+    // Cancel any in-flight altitude-probe wind-overlay request and bump the
+    // sequence so a slow response from the previous pack can't apply to this
+    // one (the per-probe guard alone misses the release-at-default case where
+    // override is null on both packs). #259 review follow-up.
+    _windOverlaySeq++;
+    if (_windOverlayTimer !== null) {
+      clearTimeout(_windOverlayTimer);
+      _windOverlayTimer = null;
+    }
     set({ loading: true, error: null });
     try {
       const pack = await api.fetchPack(flight.id, timestamp);
