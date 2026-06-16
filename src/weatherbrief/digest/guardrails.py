@@ -44,7 +44,9 @@ VALID_ASSESSMENTS = frozenset({"GREEN", "AMBER", "RED"})
 # Allowed "nothing to add" words for specific_concerns, across the four
 # supported locales (en/fr/de/es ``none_word`` frontmatter). Compared
 # case-insensitively, trailing punctuation stripped.
-NONE_WORDS: frozenset[str] = frozenset({"none", "aucun", "keine", "ninguno"})
+NONE_WORDS: frozenset[str] = frozenset(
+    {"none", "aucun", "aucune", "keine", "kein", "ninguno", "ninguna"}
+)
 
 # Sources the prompt forbids citing unless a text-forecast section is present.
 _SOURCE_RE = re.compile(r"\b(DWD|NWS|AFD)\b")
@@ -77,6 +79,16 @@ _NUMBER_RE = re.compile(r"\d[\d,]*")
 # ``min_chars`` catches empty/stub fields. Bounds are generous on purpose so a
 # different model or prompt variant that still respects the contract passes —
 # they exist to catch egregious violations, not to police style.
+#
+# Calibrated against the real distribution of shipped prod digests (~35 packs):
+# observed maxima were assessment_reason 484ch/1s, synoptic 883ch/4s,
+# specific_concerns 1529ch/21s, trend 1022ch/8s, watch_items 1177ch/16s. The
+# only fields the prompt explicitly limits are assessment_reason ("one
+# sentence") and synoptic ("2-3 sentences") — those keep tight, contract-backed
+# bounds. The free-form fields (specific_concerns/trend/watch_items) carry no
+# prompt length contract, so their caps sit ~1.4x above observed max purely as a
+# runaway backstop, not a style cop. (See #253: earlier bounds were tuned to the
+# 3 committed fixtures and false-positived on the broader real distribution.)
 @dataclass(frozen=True)
 class _FieldBound:
     min_chars: int
@@ -86,12 +98,13 @@ class _FieldBound:
 
 _FIELD_BOUNDS: dict[str, _FieldBound] = {
     # Prompt: "One sentence." Allow 2 to tolerate model phrasing.
-    "assessment_reason": _FieldBound(min_chars=10, max_chars=500, max_sentences=2),
-    # Prompt: "2-3 sentences." Allow up to 5.
-    "synoptic": _FieldBound(min_chars=10, max_chars=900, max_sentences=5),
-    "specific_concerns": _FieldBound(min_chars=1, max_chars=900, max_sentences=6),
-    "trend": _FieldBound(min_chars=1, max_chars=600, max_sentences=4),
-    "watch_items": _FieldBound(min_chars=1, max_chars=700, max_sentences=5),
+    "assessment_reason": _FieldBound(min_chars=10, max_chars=600, max_sentences=2),
+    # Prompt: "2-3 sentences." Allow generous headroom over observed 883ch/4s.
+    "synoptic": _FieldBound(min_chars=10, max_chars=1300, max_sentences=7),
+    # Free-form, no prompt length contract — runaway backstop only.
+    "specific_concerns": _FieldBound(min_chars=1, max_chars=2200, max_sentences=30),
+    "trend": _FieldBound(min_chars=1, max_chars=1600, max_sentences=14),
+    "watch_items": _FieldBound(min_chars=1, max_chars=1800, max_sentences=24),
 }
 
 # Fuzzy traceability tolerance: an output figure is "traceable" if some context
@@ -189,7 +202,13 @@ def _output_figures(text: str) -> list[tuple[int, ...]]:
             # FL080 traces if the context has either the flight level (80) or
             # its altitude (8000ft) — checked as an OR pair, not two constraints.
             groups.append((v, v * 100))
-    return list(dict.fromkeys(groups))
+    # Dedup. ``dict.fromkeys`` collapses identical tuples; additionally drop any
+    # single-element group whose value already appears in a multi-element (FL)
+    # group, so "FL090" + "9000ft" in one field reports one figure, not two.
+    covered = {m for g in groups if len(g) > 1 for m in g}
+    return [
+        g for g in dict.fromkeys(groups) if len(g) > 1 or g[0] not in covered
+    ]
 
 
 # --- Individual checks -------------------------------------------------------

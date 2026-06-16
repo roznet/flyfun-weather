@@ -245,7 +245,9 @@ def test_structure_decimal_numbers_not_counted_as_sentences():
         # One sentence containing two decimals — must stay within the
         # assessment_reason bound of 2 sentences.
         "assessment_reason": "QNH 1013.5hPa with freezing level near FL090 and tops at 1.5km.",
-        "synoptic": "A front lies near 51.5N bringing rain.",
+        # Decimal that is NOT a coordinate, so this stays focused on sentence
+        # counting and would not trip the coordinate check under run_guardrails.
+        "synoptic": "A front approaches with gusts to 25.5 kt bringing rain.",
         "specific_concerns": "none",
         "trend": "Stable.",
         "watch_items": "Nothing notable.",
@@ -293,6 +295,26 @@ def test_output_figures_range_not_double_reported():
     assert len(violations) == 1, violations
 
 
+def test_output_figures_fl_and_ft_same_altitude_reported_once():
+    """The same altitude written as both FL and feet in one field must report a
+    single violation, not one for the FL pair and one for the bare ft value."""
+    digest = {
+        "assessment": "AMBER",
+        "assessment_reason": "Icing near cruise.",
+        # FL090 -> (90, 9000) and 9000ft -> (9000,); the bare-ft group is
+        # already covered by the FL group and must be deduped away.
+        "synoptic": "Tops near FL090 (9000ft) along the route.",
+        "specific_concerns": "none",
+        "trend": "Stable.",
+        "watch_items": "Nothing notable.",
+    }
+    flagged = [
+        v for v in check_number_traceability(digest, "FzLvl 1500ft")
+        if "9000" in v.message
+    ]
+    assert len(flagged) == 1, flagged
+
+
 def test_structure_allows_none_word_for_specific_concerns():
     for none_word in ("None", "none.", "Aucun", "Keine", "Ninguno"):
         digest = {
@@ -323,6 +345,9 @@ def test_live_guardrails(fixture_id):
     """Tiny live subset: run the fixture through the real LLM and assert the
     fresh output still passes every guardrail (and resists injection)."""
     from weatherbrief.digest.llm_config import load_digest_config
+
+    if not (EVAL_DIR / fixture_id / "digest.json").exists():
+        pytest.skip(f"{fixture_id} not committed locally")
 
     run_one = _load_run_one()
 
