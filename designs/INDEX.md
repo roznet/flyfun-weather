@@ -59,8 +59,8 @@ Key exports: `SkewTRenderer`, `SkewTTransform`, `attachSkewTInteraction`, `SkewT
 → Full doc: route-graph.md
 
 ### digest
-Output generation: plain-text digest, enhanced Skew-T plots (CAPE/CIN shading, hodograph, indices panel), LLM-powered weather briefing via LangGraph.
-Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDigest`
+Output generation: plain-text digest, enhanced Skew-T plots (CAPE/CIN shading, hodograph, indices panel), LLM-powered weather briefing via LangGraph (short-range traffic-light + long-range outlook regimes), deterministic guardrails.
+Key exports: `format_digest`, `generate_all_skewts`, `run_digest`, `WeatherDigest`, `LongRangeDigest`, `run_guardrails`
 → Full doc: digest.md
 
 ### metar-taf-route-weather

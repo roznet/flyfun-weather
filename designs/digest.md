@@ -73,21 +73,26 @@ context = build_digest_context(
     text_forecasts=text_fcsts,      # optional TextForecasts (NWS or DWD)
     previous_digest=prev_digest,    # optional, for trend
     route_advisories=manifest,      # optional RouteAdvisoriesManifest
+    altitude_table=table,           # optional AltitudeTableResult → ALTITUDE OPTIONS block
+    confidence_note=note,           # optional long-range FORECAST CONFIDENCE note
     flight_rules="vfr_only",        # → pilot-capability line
     units_region="europe",          # visibility unit formatting
     dwd_translated=blocks,          # optional list[(DWDDayBlock, english)]
     dwd_is_synoptic_extract=False,  # framing for non-German routes
+    longrange=False,                # True → coarse quant + drop raw text forecasts
 )
 ```
 
 Builds structured text. Sections are appended only when their data is present:
 1. Header: `ROUTE / DATE (with day-of-week) / BRIEFING ISSUED / ALTITUDE / PILOT CAPABILITY`
-2. `=== QUANTITATIVE DATA ===` — per-waypoint surface, weather, cruise-level, wind components, then the per-waypoint sounding analysis (`_format_sounding_context`: thermo indices, icing zones type/SLD/risk, cloud layers, convective risk) and model divergence (`_format_divergence_context`: only moderate/poor agreement, "variable level(spread=...)") inline. There is no separate model-comparison or altitude-band-comparison section.
-3. `=== ROUTE ADVISORIES ===` — deterministic hazard assessments (`_format_route_advisories_context`)
-4. `=== METAR/TAF OBSERVATIONS ===` — D-0 only: corridor airports, flight categories, raw METARs, TAF trends
-5. `=== SIGMETs ALONG ROUTE ===` — D-0 only, when `route_sigmets.count` > 0
-6. `=== TEXT FORECASTS (...) ===` — translated DWD blocks (`_format_dwd_translated_context`, full or synoptic-extract framing) if available, else NWS AFD / raw DWD entries
-7. `=== PREVIOUS DIGEST (for trend comparison) ===` — prior assessment/reason/synoptic/trend (if available)
+2. `=== FORECAST CONFIDENCE ===` — long-range only: the code-computed `confidence_note` (when the high-res GRIB first covers this flight). See *Long-Range Outlook* below.
+3. `=== ALTITUDE OPTIONS (altitude-dependent advisories only) ===` — deterministic block from the precomputed `AltitudeTableResult` (`_format_altitude_options_context`). States the planned-altitude advisory picture and what the best-below / best-above-cruise alternatives improve/worsen, computed via the shared `diff_altitude_rows` primitive — the LLM only *phrases* the trade-off, it never invents the numbers. This makes "would a different altitude help?" an instant, deterministic lever. See [advisories.md](./advisories.md) for the table itself.
+4. `=== QUANTITATIVE DATA ===` — per-waypoint surface, weather, cruise-level, wind components, then the per-waypoint sounding analysis (`_format_sounding_context`: thermo indices, icing zones type/SLD/risk, cloud layers, convective risk) and model divergence (`_format_divergence_context`: only moderate/poor agreement, "variable level(spread=...)") inline. There is no separate model-comparison or altitude-band-comparison section. **Long-range** replaces this with a coarser `_build_coarse_quant` block and drops the raw text-forecast section (NWS AFD / non-covering DWD describe a different day at that range).
+5. `=== ROUTE ADVISORIES ===` — deterministic hazard assessments (`_format_route_advisories_context`)
+6. `=== METAR/TAF OBSERVATIONS ===` — D-0 only: corridor airports, flight categories, raw METARs, TAF trends
+7. `=== SIGMETs ALONG ROUTE ===` — D-0 only, when `route_sigmets.count` > 0
+8. `=== TEXT FORECASTS (...) ===` — translated DWD blocks (`_format_dwd_translated_context`, full or synoptic-extract framing) if available, else NWS AFD / raw DWD entries
+9. `=== PREVIOUS DIGEST (for trend comparison) ===` — prior assessment/reason/synoptic/trend (if available)
 
 ### LangGraph Pipeline (`digest/llm_digest.py`)
 
@@ -101,7 +106,7 @@ START → briefer → END
 
 `run_digest()` orchestrates three stages:
 - **pre-graph (not traced)**: `_fetch_and_translate_text()` calls `fetch_text_forecasts(route)` (dispatches NWS vs DWD by route, None on failure) and, for European routes, translates DWD day-blocks via `translate_dwd_blocks()` (synoptic-extract mode when the route doesn't cross Germany). Then `build_digest_context()` assembles the context string.
-- **graph (traced — lightweight state)**: `briefer_node` calls the LLM with `with_structured_output(WeatherDigest, include_raw=True)`, loading the system prompt via `config.load_prompt("briefer", locale=, guidance_key=)`, and captures token usage from the raw `AIMessage`. The invocation runs with a **pre-generated `run_id`** (`config={"run_id": uuid4()}`) so we own the LangSmith trace id rather than letting LangChain auto-generate-and-discard it. The id is returned as `result["digest_trace_id"]` and persisted on the pack (see below).
+- **graph (traced — lightweight state)**: `briefer_node` calls the LLM with `with_structured_output(schema, include_raw=True)` — `schema`/prompt/model switch by regime (`WeatherDigest` + `briefer` vs `LongRangeDigest` + `briefer_longrange`; see *Long-Range Outlook*) — loading the system prompt via `config.load_prompt(prompt_key, locale=, guidance_key=)`, and captures token usage from the raw `AIMessage`. The invocation runs with a **pre-generated `run_id`** (`config={"run_id": uuid4()}`) so we own the LangSmith trace id rather than letting LangChain auto-generate-and-discard it. The id is returned as `result["digest_trace_id"]` and persisted on the pack (see below).
 - **post-graph (not traced)**: formats markdown; re-attaches `dwd_translated` to the result.
 
 ```python
@@ -156,6 +161,26 @@ Structured output with 6 fields (the per-hazard fields were consolidated into
 | `trend` | str | How outlook compares to yesterday |
 | `watch_items` | str | What to monitor next 24h |
 
+### Long-Range Outlook (dual horizons)
+
+Beyond the **ECMWF GRIB horizon** (`ecmwf_grib_horizon_days()` — 168h → 7 days, read live from `fetch/freshness/registry.py:max_horizon`, *not* hard-coded) the high-resolution GRIB and ICON soundings no longer reach the flight date; only global models (ECMWF/GFS via Open-Meteo, GEM) remain. `is_long_range(snapshot)` (`snapshot.days_out > horizon`) flips the digest into a **trimmed, cheaper long-range regime**:
+
+- A distinct structured model, `LongRangeDigest`, replaces the GREEN/AMBER/RED verdict with a **soft tendency** — never a go/no-go. Fields: `outlook` (`TRENDING_SETTLED` / `MIXED_SIGNALS` / `TRENDING_UNSETTLED`), `outlook_reason`, `synoptic`, `model_agreement`, `trend`, `watch_items`. At this range confidence is driven by how well the remaining global models *agree*, not any single value — hence the explicit `model_agreement` field instead of an assessment.
+- A cheaper model + a different prompt: `briefer_node` picks `create_llm(config, longrange=…)` and the `briefer_longrange` prompt (`configs/weather_digest/prompts/briefer_longrange_v1.md`).
+- `build_confidence_note()` is **code-computed, not asked of the LLM** (which is unreliable at date arithmetic): it derives from the registry the date the first full-horizon ECMWF GRIB run will cover the flight and phrases the `=== FORECAST CONFIDENCE ===` block ("high-resolution guidance first covers this flight from <date>").
+- `run_digest(..., longrange=None)` auto-detects via `is_long_range`; pass an explicit bool to force a regime (used by `scripts/run_longrange_eval.py`).
+- Output: `format_longrange_markdown()` renders the outlook icon/label (see below) instead of the traffic-light icon.
+
+**Canonical outlook labels live in `digest/outlook.py`** (a deliberately import-light module: `OUTLOOK_LABELS` plain-text + `OUTLOOK_ICONS` emoji) so `notify/email.py` can render the same strings without importing the LangGraph-laden `llm_digest`. The web UI keeps its own localised labels in the i18n catalogs.
+
+**Pack persistence:** migration `068` adds nullable `outlook` / `outlook_reason` columns to `briefing_packs`, **mutually exclusive with `assessment`** — NULL for short-range packs (which use the traffic light) and legacy packs. The flight list and briefing page show the outlook tendency in place of a verdict.
+
+> The GRIB-horizon outlook boundary is one of two long-range horizons — keep it distinct from the separate booking-gate horizon. See the project memory note "Long-range outlook + dual horizons".
+
+### Deterministic Guardrails (`digest/guardrails.py`)
+
+A **prompt/approach-independent safety layer** (`run_guardrails(context, output) → list[Violation]`, pure, no LLM) that verifies promises the briefer prompt already makes, by checking the structured output against the raw context string it was generated from. Checks: **coordinate leak** (raw `58°N`/`8°W` that should have been converted to plain geography), **fabricated sources** (citing DWD/NWS/AFD when no `=== TEXT FORECASTS` section was provided), **number traceability** (every hPa/ft/FL figure in the output must fuzzily trace to a number in the context), and **structure** (enum assessment, all fields present, per-field sentence/length bounds). Currently used to **gate CI on recorded eval output** (`tests/test_digest_assertions.py`); designed to also run against a live subset or in front of user-facing output. Bounds were recalibrated to real output in #253.
+
 ### Markdown Output
 
 `format_digest_markdown(digest, snapshot)` produces output with assessment icon, labeled sections (SYNOPTIC / SPECIFIC CONCERNS / TREND / WATCH), and separator lines. Saved as `digest.md` inside the pack dir (`tasks/outputs.py`).
@@ -170,7 +195,7 @@ For Europe routes, the digest pipeline also fetches DWD German weather text, tra
 
 ### System Prompt
 
-`configs/weather_digest/prompts/briefer_v1.md`: aviation weather briefer persona, instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty.
+`configs/weather_digest/prompts/briefer_v1.md`: aviation weather briefer persona, instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty. Avoids exposing internal section names (e.g. "ALTITUDE OPTIONS") in prose and renders numbered `watch_items` as a list. `briefer_longrange_v1.md` is the trimmed long-range counterpart (outlook tendency + model-agreement framing; see *Long-Range Outlook*).
 
 The prompt contains a `{guidance}` placeholder that is replaced at runtime with a guidance preset. This controls how the LLM interprets advisory severity when producing the GREEN/AMBER/RED assessment.
 
