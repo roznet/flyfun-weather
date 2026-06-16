@@ -23,7 +23,7 @@ from weatherbrief.models import (
 )
 
 if TYPE_CHECKING:
-    from weatherbrief.digest.llm_digest import WeatherDigest
+    from weatherbrief.digest.llm_digest import LongRangeDigest, WeatherDigest
     from weatherbrief.fetch.dwd_text import DWDDayBlock
     from weatherbrief.fetch.text_forecasts import TextForecasts
 
@@ -42,7 +42,7 @@ def build_digest_context(
     snapshot: ForecastSnapshot,
     target_time: datetime,
     text_forecasts: TextForecasts | None = None,
-    previous_digest: WeatherDigest | None = None,
+    previous_digest: WeatherDigest | LongRangeDigest | None = None,
     route_advisories: RouteAdvisoriesManifest | None = None,
     flight_rules: str | None = None,
     units_region: str | None = None,
@@ -230,7 +230,7 @@ def _append_shared_sections(
     snapshot: ForecastSnapshot,
     route_advisories: RouteAdvisoriesManifest | None,
     text_forecasts: TextForecasts | None,
-    previous_digest,  # WeatherDigest | LongRangeDigest | None
+    previous_digest: WeatherDigest | LongRangeDigest | None,
     dwd_translated: list[tuple[DWDDayBlock, str]] | None,
     dwd_is_synoptic_extract: bool,
 ) -> str:
@@ -278,7 +278,9 @@ def _append_shared_sections(
     return "\n\n".join(sections)
 
 
-def _format_previous_digest_context(previous_digest) -> str:
+def _format_previous_digest_context(
+    previous_digest: WeatherDigest | LongRangeDigest,
+) -> str:
     """Render the previous digest for trend comparison.
 
     Works for both the short-range ``WeatherDigest`` (assessment/…) and the

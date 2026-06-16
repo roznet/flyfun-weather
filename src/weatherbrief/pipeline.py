@@ -144,7 +144,7 @@ class BriefingResult:
     skewt_paths: list[Path] = field(default_factory=list)
     digest_path: Path | None = None
     digest_text: str | None = None
-    digest: object | None = None  # WeatherDigest (lazy import avoids hard dep)
+    digest: object | None = None  # WeatherDigest | LongRangeDigest (lazy import avoids hard dep)
     # Whether the LLM digest was *requested* for this run (profile toggle).
     # Distinct from ``digest_path is not None`` (= it succeeded): a pack with
     # ``llm_digest_requested=False`` skipped the digest on purpose (profile has
@@ -198,15 +198,20 @@ def _load_previous_digest(pack_dir: Path | None, days_out: int = -1):
     except OSError:
         return None
 
+    from pydantic import ValidationError
+
     from weatherbrief.digest.llm_digest import LongRangeDigest, WeatherDigest
 
     def _parse_digest(data: dict):
         """Parse either a short-range WeatherDigest or a long-range
-        LongRangeDigest (distinguished by the ``outlook`` field), so trend
-        continuity survives across the long↔short-range boundary."""
-        if "outlook" in data:
+        LongRangeDigest, so trend continuity survives across the long↔short-range
+        boundary. Tries the short-range schema first (its required ``assessment``
+        fields fail on a long-range dict) and falls back to the long-range one —
+        robust to either schema gaining new optional fields."""
+        try:
+            return WeatherDigest.model_validate(data)
+        except ValidationError:
             return LongRangeDigest.model_validate(data)
-        return WeatherDigest.model_validate(data)
 
     for sibling in siblings:
         digest_path = sibling / "digest.json"
