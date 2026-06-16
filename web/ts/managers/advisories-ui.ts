@@ -503,10 +503,6 @@ export function renderAdvisories(
     ? `<div class="advisory-summary">${summaryParts.join(' ')}</div>`
     : '';
 
-  const recalcBtn = onRecalculate
-    ? `<button class="btn btn-secondary btn-sm" id="recalc-advisories-btn">${t('advisories.recalculate')}</button>`
-    : '';
-
   const altTableBtn = onAltitudeTable
     ? `<button class="btn btn-secondary btn-sm" id="alt-table-btn">${t('advisories.altitudeTable')}</button>`
     : '';
@@ -525,8 +521,11 @@ export function renderAdvisories(
       </div>`;
   }
 
-  // Altitude slider
+  // Altitude slider + its delta note. The note renders as a sibling BELOW the
+  // whole toolbar row (not inside the slider cell) so it never disturbs the
+  // row's vertical alignment (#259).
   let sliderHtml = '';
+  let deltaNoteHtml = '';
   if (altitudeOverride) {
     const { currentAlt, defaultAlt, ceilingFt } = altitudeOverride;
     const isOverridden = currentAlt !== defaultAlt;
@@ -544,8 +543,8 @@ export function renderAdvisories(
         <label class="alt-slider-label ${labelClass}" id="advisory-alt-label">${formatAlt(currentAlt)}</label>
         <input type="range" id="advisory-alt-slider" min="2000" max="${ceilingFt}" step="1000" value="${currentAlt}">
         ${resetBtn}
-        <span class="alt-delta-note" id="advisory-alt-delta">${escapeHtml(deltaNote)}</span>
       </div>`;
+    deltaNoteHtml = `<div class="alt-delta-note" id="advisory-alt-delta">${escapeHtml(deltaNote)}</div>`;
   }
 
   // Airport conditions cards (above advisory grid)
@@ -588,9 +587,9 @@ export function renderAdvisories(
       ${summary}
       ${profileHtml}
       ${sliderHtml}
-      ${recalcBtn}
       ${altTableBtn}
     </div>
+    ${deltaNoteHtml}
     ${airportHtml}
     <div class="advisory-grid">${cards}</div>
     ${compact}
@@ -606,18 +605,6 @@ export function renderAdvisories(
           selectEl.setAttribute('disabled', 'true');
           profileSelector.onChange(newId);
         }
-      });
-    }
-  }
-
-  // Wire recalculate button
-  if (onRecalculate) {
-    const btn = $('recalc-advisories-btn');
-    if (btn) {
-      btn.addEventListener('click', () => {
-        btn.setAttribute('disabled', 'true');
-        btn.textContent = t('advisories.recalculating');
-        onRecalculate();
       });
     }
   }

@@ -3402,10 +3402,12 @@ label {
   gap: 0.4rem;
 }
 
-/* Deterministic delta note vs the planned altitude (#259). Wraps to its own
-   line below the slider; hidden when empty so it doesn't reserve space. */
+/* Deterministic delta note vs the planned altitude (#259). Renders on its own
+   line below the whole advisory toolbar (a block sibling, not a slider cell) so
+   it never disturbs the toolbar row's vertical alignment. Hidden when empty so
+   it doesn't reserve space. */
 .alt-delta-note {
-  flex-basis: 100%;
+  margin: -0.35rem 0 0.75rem;
   font-size: 0.78rem;
   color: var(--text-muted, var(--muted, #888));
   line-height: 1.3;
