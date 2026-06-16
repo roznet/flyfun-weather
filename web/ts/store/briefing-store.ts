@@ -611,12 +611,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   probeAltitude: (alt: number) => {
     const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
     // Anchor = the lever's home (the flight's cruise altitude); matches
     // getAltitudeOverrideConfig.defaultAlt so the null/non-null override
     // decision is consistent across drag and release.
-    const anchor = flight?.cruise_altitude_ft ?? null;
+    const anchor = flight.cruise_altitude_ft;
     set({ advisoryAltitudeOverride: alt === anchor ? null : alt });
-    if (!flight || !currentPack) return;
 
     // The advisory statuses come from the cached table (overlaid client-side in
     // getEffectiveAdvisories — instant, no race). Only the route-graph wind

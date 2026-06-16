@@ -5,6 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from weatherbrief.analysis.advisories.altitude_table import (
+    diff_altitude_rows,
+    row_for_altitude,
+)
 from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.units import format_visibility
@@ -700,11 +704,6 @@ def _format_altitude_options_context(table: AltitudeTableResult) -> str | None:
     — it never invents which advisory improves or worsens. Returns ``None`` when
     the table has no usable planned row (e.g. degenerate single-altitude sweep).
     """
-    from weatherbrief.analysis.advisories.altitude_table import (
-        diff_altitude_rows,
-        row_for_altitude,
-    )
-
     planned = row_for_altitude(table, table.cruise_altitude_ft)
     if planned is None or not planned.statuses:
         return None

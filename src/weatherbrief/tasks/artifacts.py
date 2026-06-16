@@ -182,8 +182,10 @@ def save_altitude_table_artifacts(
     Written at refresh from the in-memory advisory inputs (see
     ``run_advisories``) so the lever + digest can index into it without a
     re-fetch. Old packs simply lack the file — loaders return ``None``.
+
+    ``save_advisory_artifacts`` always runs first in ``run_advisories`` and
+    creates *pack_dir*, so no ``mkdir`` is needed here.
     """
-    pack_dir.mkdir(parents=True, exist_ok=True)
     (pack_dir / "altitude_table.json").write_text(table.model_dump_json(indent=2))
 
 
