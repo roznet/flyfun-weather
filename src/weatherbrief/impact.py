@@ -303,7 +303,10 @@ class PersonalImpact:
     donation_total_usd: float
     lifetime_cost_usd: float
     own_months_covered: float
-    coverage_ratio: float
+    # None when the pilot has no realized cost yet (brand-new donor): the ratio
+    # is undefined (donation ÷ 0), so we expose null rather than a sentinel that
+    # a consumer would render as a nonsensical percentage.
+    coverage_ratio: float | None
     extra_pilots: int
     future_months: float
     band: str
@@ -361,7 +364,7 @@ def personal_impact(
         donation_total_usd=round(donation_total_usd, 2),
         lifetime_cost_usd=round(lifetime_cost_usd, 4),
         own_months_covered=round(own_months, 4),
-        coverage_ratio=round(coverage_ratio, 4) if coverage_ratio != float("inf") else -1.0,
+        coverage_ratio=round(coverage_ratio, 4) if coverage_ratio != float("inf") else None,
         extra_pilots=int(extra_pilots),
         future_months=round(future_months, 4),
         band=band,
@@ -385,7 +388,7 @@ def format_personal_coverage(pi: PersonalImpact) -> str:
         # Coverage ratio is the honest fallback when burn rate is too thin to
         # round to a whole month.
         ratio = pi.coverage_ratio
-        if ratio < 0:  # sentinel for "no realized cost" — shouldn't reach here
+        if ratio is None:  # no realized cost — never reaches the retrospective band
             return "covers your usage so far"
         pct = max(1, round(ratio * 100))
         return f"covers ~{pct}% of what your usage has cost"
@@ -536,9 +539,11 @@ def choose_translation(
         )
     # Very large per-pilot economics make even a big amount sub-month — fall back
     # to pilots-for-a-month so the number stays meaningful.
+    n = max(1, round(user_months))
+    pilot_word = "pilot" if n == 1 else "pilots"
     return _choice(
         amount_usd, TRANSLATION_USERS_FOR_MONTH, max(user_months, 0.0),
-        f"covers ~{max(1, round(user_months))} pilots for a month",
+        f"covers ~{n} {pilot_word} for a month",
     )
 
 

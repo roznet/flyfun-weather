@@ -352,7 +352,8 @@ class PersonalImpactResponse(BaseModel):
     donation_total_usd: float
     lifetime_cost_usd: float
     own_months_covered: float
-    coverage_ratio: float
+    # null when the pilot has no realized cost yet (ratio is donation ÷ 0).
+    coverage_ratio: float | None = None
     extra_pilots: int
     future_months: float
     band: str
@@ -512,7 +513,7 @@ def preview_donation(
         fx_block_for_user(db, viewer_id) if viewer_id else usd_fx_block()
     )
     rate = fx_block.rate or 1.0
-    amount_usd = amount / rate if rate else amount
+    amount_usd = amount / rate
 
     econ = _economics(db) or _empty_economics()
     burn_rate = 0.0

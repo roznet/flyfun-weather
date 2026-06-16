@@ -257,6 +257,12 @@ class TestPersonalImpact:
         assert pi.band == "covers_others"
         assert pi.extra_pilots >= 1
 
+    def test_no_history_coverage_ratio_is_none(self):
+        # Ratio is donation ÷ 0 → exposed as None, not a sentinel/percentage.
+        pi = personal_impact(20.0, 0.0, 0.0, self._econ(), site_covered=False)
+        assert pi.coverage_ratio is None
+        assert personal_to_dict(pi)["coverage_ratio"] is None
+
     def test_empty_when_no_economics(self):
         econ = ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0,
                                 cost_per_user_month_usd=0.0)
@@ -317,6 +323,15 @@ class TestAdaptiveLadder:
                                 cost_per_user_month_usd=0.0)
         tc = choose_translation(20.0, econ)
         assert tc.empty and tc.summary == ""
+
+    def test_large_band_fallback_singular_pilot(self):
+        # Very high per-pilot economics: a big amount is sub-month for the whole
+        # service AND ~1 pilot-month → must read "1 pilot", never "1 pilots".
+        econ = ProgramEconomics(monthly_run_cost_usd=100_000.0, active_users=1,
+                                cost_per_user_month_usd=200.0, cost_per_briefing_usd=50.0)
+        tc = choose_translation(200.0, econ)  # service_months tiny; user_months = 1
+        assert tc.kind == TRANSLATION_USERS_FOR_MONTH
+        assert "~1 pilot for a month" in tc.summary
 
     def test_briefings_kind_for_tiny_amount(self):
         # Below a user-month but ≥2 briefings → "funds ~N briefings".
