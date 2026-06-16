@@ -152,18 +152,13 @@ function renderStats(s: DonationSummary): void {
   document.getElementById('stat-words-label')!.textContent =
     `words of AI weather analysis${booksNote}`;
 
-  // Run cost: transparent, in the viewer's currency. Lets a reader back out the
-  // per-pilot cost — that's intended.
+  // Cost note: qualitative for now — we intentionally don't surface the dollar
+  // figure here. A link to a cost-detail breakdown may follow later.
   const note = document.getElementById('run-cost-note')!;
-  if (s.run_cost && s.run_cost.monthly_run_cost_usd > 0) {
-    const monthly = formatMoney(s.run_cost.monthly_run_cost_usd, s.fx);
-    const perPilot = formatMoney(s.run_cost.cost_per_user_month_usd, s.fx);
-    note.textContent =
-      `Running the service costs about ${monthly}/month — roughly ${perPilot} per active pilot. ` +
-      `Donations offset that real cost; the operator keeps no margin on them.`;
-  } else {
-    note.textContent = '';
-  }
+  note.textContent =
+    'Running the site means real costs — cloud hardware, weather-data ' +
+    'subscriptions and AI models — and they grow with every pilot and ' +
+    'briefing. Your donations help offset them.';
 }
 
 /** Compact word count: 2.3M / 45k / 900. */

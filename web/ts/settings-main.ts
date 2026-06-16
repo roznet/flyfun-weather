@@ -1,6 +1,7 @@
 /** Settings page entry point — tabbed preferences with profile-based advisory configuration. */
 
 import { fetchCurrentUser, deleteAccount } from './adapters/auth-adapter';
+import { fetchMyDonations } from './adapters/donations-adapter';
 import { resetMyOnboarding } from './adapters/admin-adapter';
 import { redirectToLogin, renderUserInfo, escapeHtml, STATUS_DISMISS_MS, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from './utils';
 import {
@@ -713,7 +714,22 @@ function populateAccountForm(prefs: PreferencesResponse): void {
 
   // "Support the service" link is gated on Stripe being configured (global flag).
   const supportSection = document.getElementById('support-section');
-  if (supportSection) supportSection.style.display = prefs.donations_enabled ? '' : 'none';
+  if (supportSection) {
+    supportSection.style.display = prefs.donations_enabled ? '' : 'none';
+    // Thank existing donors (fire-and-forget; total comes from /donations/me).
+    if (prefs.donations_enabled) {
+      void fetchMyDonations()
+        .then((me) => {
+          if (me.total_usd > 0) {
+            const thanks = document.getElementById('support-thanks');
+            if (thanks) thanks.style.display = '';
+          }
+        })
+        .catch(() => {
+          /* non-fatal — just skip the thank-you message */
+        });
+    }
+  }
 
   // Account-level optional services
   const synopticToggle = document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement;
