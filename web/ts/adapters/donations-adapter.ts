@@ -38,7 +38,7 @@ export interface PersonalImpact {
   donation_total_usd: number;
   lifetime_cost_usd: number;
   own_months_covered: number;
-  coverage_ratio: number;
+  coverage_ratio: number | null; // null when no realized cost yet (donation ÷ 0)
   extra_pilots: number;
   future_months: number;
   band: 'retrospective' | 'covers_others' | 'future';
@@ -78,7 +78,13 @@ export interface DonationSummary {
   enabled: boolean; // false when Stripe isn't configured → hide the donate UI
 }
 
-/** One chosen prospective-donation translation (the adaptive ladder result). */
+/** One chosen prospective-donation translation (the adaptive ladder result).
+ *
+ * `value` is the raw dimensionless quantity, whose meaning depends on `kind`
+ * (pilot-months for `user_months`/`personal_months`, a pilot count for
+ * `users_for_month`, a briefing count for `briefings`, months of service for
+ * `service_months`). Prefer `summary` — it is the canonical human-readable form;
+ * only read `value` if you intend to re-render it yourself per `kind`. */
 export interface TranslationChoice {
   amount_usd: number;
   kind: string;
