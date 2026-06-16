@@ -6,7 +6,17 @@ reconstruct the LLM context string, this script saves a compact fixture
 containing:
   - context.txt  — the exact string sent to the LLM as the user message
   - digest.json  — the LLM's structured output (for comparison)
-  - meta.json    — route, date, days_out, advisory summary, model counts
+  - meta.json    — route, date, days_out, advisory summary, situations,
+                   and fidelity (faithful vs reconstructed)
+
+Context fidelity (#254): the LLM is sent more than the snapshot can rebuild —
+text forecasts (NWS AFD / DWD), DWD translations, and the previous digest. So
+we prefer the *persisted* ``digest_context.txt`` written into the pack at digest
+generation time (byte-faithful). When that's absent (older back-catalog packs),
+we reconstruct best-effort: rebuild the context from the snapshot and splice in
+the DWD overview if the pack saved one. Reconstructed fixtures are tagged
+``faithful=False`` because the text-forecast/previous-digest sections the LLM
+actually saw cannot be fully recovered — the eval treats them more leniently.
 
 Usage:
     python scripts/extract_digest_eval.py [--output-dir tests/eval_data/digests]
@@ -19,8 +29,8 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-from collections import defaultdict
-from datetime import datetime
+from collections import Counter, defaultdict
+from datetime import date, datetime
 from pathlib import Path
 
 from weatherbrief.digest.prompt_builder import build_digest_context
@@ -82,6 +92,113 @@ def find_packs() -> list[Path]:
     )
 
 
+# Map an advisory_id to the situation tag it contributes when its aggregate is
+# not green. Several ids fold into one tag (icing_escape + fiki_icing + freezing
+# _level → "icing"). Unmapped ids are ignored for tagging.
+_ADVISORY_SITUATION: dict[str, str] = {
+    "icing_escape": "icing",
+    "fiki_icing": "icing",
+    "freezing_level": "icing",
+    "convective": "convective",
+    "turbulence": "turbulence",
+    "mountain_wind": "turbulence",
+    "cloud_top": "cloud",
+    "vmc_cruise": "cloud",
+    "airport_wind": "wind",
+    "flight_category": "low_category",
+    "vfr_feasibility": "vfr_marginal",
+    "ifr_feasibility": "ifr_marginal",
+}
+
+# The coverage matrix we want the curated set to fill (parent #252 / #254).
+# A fixture may carry several tags; these are the cells we report on.
+SITUATION_VOCAB: tuple[str, ...] = (
+    "all_green", "single_red", "multi_red",
+    "icing", "convective", "icing_plus_convective", "cloud", "turbulence",
+    "wind", "low_category", "vfr_marginal", "ifr_marginal",
+    "d0", "metar", "sigmet", "previous_digest",
+    "us_route", "alpine", "channel_crossing",
+)
+
+
+def _load_dwd_translated(pack_dir: Path) -> list | None:
+    """Reconstruct the ``dwd_translated`` list from a saved ``dwd_overview.json``.
+
+    Returns ``[(DWDDayBlock, english), ...]`` so a reconstructed context can
+    splice the DWD section back in, or ``None`` if the pack has no overview.
+    """
+    overview_path = pack_dir / "dwd_overview.json"
+    if not overview_path.exists():
+        return None
+    try:
+        from weatherbrief.fetch.dwd_text import DWDDayBlock
+
+        overview = json.loads(overview_path.read_text())
+        out = []
+        for entry in overview.get("entries", []):
+            iso = entry.get("date_iso")
+            block = DWDDayBlock(
+                day_name_de=entry.get("day_name_de", ""),
+                date_iso=date.fromisoformat(iso) if iso else None,
+                text=entry.get("text_de", "") or "",
+                source=entry.get("source", "") or "",
+            )
+            out.append((block, entry.get("text_en", "") or ""))
+        return out or None
+    except Exception:
+        return None
+
+
+def _classify_situations(
+    snapshot: ForecastSnapshot, adv_summary: dict, context: str, days_out: int
+) -> list[str]:
+    """Tag a fixture with the meteorological/structural situations it covers."""
+    tags: set[str] = set()
+
+    counts = adv_summary.get("counts", {})
+    reds = counts.get("red", 0)
+    non_green = [
+        a for a in adv_summary.get("advisories", []) if a["aggregate"] != "green"
+    ]
+    if adv_summary.get("has_advisories") and not non_green:
+        tags.add("all_green")
+    if reds == 1:
+        tags.add("single_red")
+    elif reds >= 2:
+        tags.add("multi_red")
+
+    for adv in non_green:
+        tag = _ADVISORY_SITUATION.get(adv["id"])
+        if tag:
+            tags.add(tag)
+    if "icing" in tags and "convective" in tags:
+        tags.add("icing_plus_convective")
+
+    # Structural / context-derived tags.
+    if days_out == 0:
+        tags.add("d0")
+    if "=== METAR/TAF OBSERVATIONS" in context:
+        tags.add("metar")
+    if "=== SIGMETs ALONG ROUTE" in context or "=== SIGMET" in context:
+        tags.add("sigmet")
+    if "=== PREVIOUS DIGEST" in context:
+        tags.add("previous_digest")
+
+    # Route/region tags from waypoint ICAOs.
+    icaos = [wp.icao.upper() for wp in snapshot.route.waypoints]
+    if any(c.startswith(("K", "PA", "PH")) for c in icaos):
+        tags.add("us_route")
+    # Switzerland (LS) / Austria (LO) prefixes are a coarse Alpine proxy.
+    if any(c.startswith(("LS", "LO")) for c in icaos):
+        tags.add("alpine")
+    if any(c.startswith("EG") for c in icaos) and any(
+        c.startswith("LF") for c in icaos
+    ):
+        tags.add("channel_crossing")
+
+    return sorted(tags)
+
+
 def extract_one(pack_dir: Path) -> dict | None:
     """Extract eval data from a single pack. Returns meta dict or None."""
     snapshot = load_snapshot_from_pack(pack_dir)
@@ -101,19 +218,42 @@ def extract_one(pack_dir: Path) -> dict | None:
     else:
         target_time = datetime.fromisoformat(f"{snapshot.target_date}T09:00:00")
 
-    # Build context string (the exact LLM input)
-    context = build_digest_context(
-        snapshot, target_time,
-        route_advisories=advisories,
-        flight_rules="vfr_ifr",
-    )
+    # Prefer the persisted context (byte-faithful to what the LLM saw). Fall
+    # back to best-effort reconstruction for older packs that predate
+    # digest_context.txt — splicing the DWD overview back in when available.
+    persisted = pack_dir / "digest_context.txt"
+    if persisted.exists():
+        context = persisted.read_text()
+        faithful = True
+        context_source = "persisted"
+    else:
+        context = build_digest_context(
+            snapshot, target_time,
+            route_advisories=advisories,
+            dwd_translated=_load_dwd_translated(pack_dir),
+            flight_rules="vfr_ifr",
+        )
+        faithful = False
+        context_source = "reconstructed"
 
     # Load existing digest output
     digest = json.loads((pack_dir / "digest.json").read_text())
 
+    # Skip long-range outlooks — they are a different output type
+    # (LongRangeDigest: outlook/outlook_reason, no GREEN/AMBER/RED assessment)
+    # with its own contract, so the WeatherDigest eval/guardrails don't apply.
+    # Long-range gets its own eval track later (see project_longrange_outlook).
+    if "outlook" in digest or digest.get("assessment") not in (
+        "GREEN", "AMBER", "RED"
+    ):
+        return None
+
     # Build metadata
     route = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
     adv_summary = extract_advisory_summary(adv_path)
+    situations = _classify_situations(
+        snapshot, adv_summary, context, snapshot.days_out
+    )
 
     meta = {
         "pack_path": str(pack_dir),
@@ -124,6 +264,9 @@ def extract_one(pack_dir: Path) -> dict | None:
         "assessment": digest.get("assessment"),
         "assessment_reason": digest.get("assessment_reason"),
         "advisory_summary": adv_summary,
+        "situations": situations,
+        "faithful": faithful,
+        "context_source": context_source,
         "context_chars": len(context),
     }
 
@@ -137,6 +280,51 @@ def make_fixture_id(meta: dict) -> str:
     days = f"d{meta['days_out']}"
     fetch = meta["fetch_date"]
     return f"{route}_{date}_{days}_{fetch}"
+
+
+def _read_synthetic_fixtures(output_dir: Path) -> list[dict]:
+    """Read hand-authored fixtures (``meta.json`` with ``synthetic: true``).
+
+    Returns ``[{"id": dir_name, "files": {filename: text}}, ...]`` so they can
+    be re-written verbatim after the pack-derived set is regenerated. These are
+    not in ``data/packs`` and would otherwise be lost on rmtree.
+    """
+    preserved: list[dict] = []
+    if not output_dir.exists():
+        return preserved
+    for child in sorted(output_dir.iterdir()):
+        meta_path = child / "meta.json"
+        if not child.is_dir() or not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            continue
+        if not meta.get("synthetic"):
+            continue
+        files = {f.name: f.read_text() for f in child.iterdir() if f.is_file()}
+        preserved.append({"id": child.name, "files": files})
+    return preserved
+
+
+def preserved_index(preserved: list[dict]):
+    """Yield index entries for preserved synthetic fixtures."""
+    for p in preserved:
+        meta = json.loads(p["files"]["meta.json"])
+        yield {
+            "id": p["id"],
+            "assessment": meta.get("assessment"),
+            "route": meta.get("route"),
+            "days_out": meta.get("days_out"),
+            "has_advisories": meta.get("advisory_summary", {}).get(
+                "has_advisories", False
+            ),
+            "advisory_counts": meta.get("advisory_summary", {}).get("counts", {}),
+            "situations": meta.get("situations", []),
+            "faithful": meta.get("faithful", True),
+            "synthetic": True,
+            "context_chars": meta.get("context_chars", len(p["files"].get("context.txt", ""))),
+        }
 
 
 def main():
@@ -251,13 +439,24 @@ def main():
         results = pruned
         print(f"After prune: {len(results)} fixtures (from {before})")
 
-    # Write output
+    # Write output. Preserve hand-authored synthetic fixtures (meta.json with
+    # "synthetic": true) across a regenerate — they are not derived from packs,
+    # so rmtree would silently destroy them (e.g. the injection fixture).
+    preserved = _read_synthetic_fixtures(args.output_dir)
+    if preserved:
+        print(f"Preserving {len(preserved)} synthetic fixture(s): "
+              f"{', '.join(p['id'] for p in preserved)}")
     if args.output_dir.exists():
         shutil.rmtree(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    for p in preserved:
+        dst = args.output_dir / p["id"]
+        dst.mkdir(parents=True, exist_ok=True)
+        for name, content in p["files"].items():
+            (dst / name).write_text(content)
 
     # Write index
-    index = []
+    index = list(preserved_index(preserved))
     for r in sorted(results, key=lambda x: (x["meta"]["route"], x["meta"]["target_date"])):
         fid = make_fixture_id(r["meta"])
         fixture_dir = args.output_dir / fid
@@ -278,21 +477,36 @@ def main():
             "days_out": r["meta"]["days_out"],
             "has_advisories": r["meta"]["advisory_summary"].get("has_advisories", False),
             "advisory_counts": r["meta"]["advisory_summary"].get("counts", {}),
+            "situations": r["meta"].get("situations", []),
+            "faithful": r["meta"].get("faithful", False),
             "context_chars": r["meta"]["context_chars"],
         }
         index.append(idx_entry)
 
     (args.output_dir / "index.json").write_text(
-        json.dumps(index, indent=2, ensure_ascii=False)
+        json.dumps(index, indent=2, ensure_ascii=False) + "\n"
     )
 
     # Print summary
-    from collections import Counter
     assess_counts = Counter(r["meta"]["assessment"] for r in results)
     total_kb = sum(r["meta"]["context_chars"] for r in results) / 1024
+    faithful_n = sum(1 for r in results if r["meta"].get("faithful"))
     print(f"\nDataset written to {args.output_dir}/")
     print(f"  {len(results)} fixtures, {total_kb:.0f}KB total context")
     print(f"  Assessment distribution: {dict(assess_counts)}")
+    print(f"  Fidelity: {faithful_n} faithful (persisted) / "
+          f"{len(results) - faithful_n} reconstructed")
+
+    # Coverage matrix — how many fixtures cover each situation cell, so we can
+    # see which cells are thin and need targeted sourcing (parent #252 / #254).
+    sit_counts: Counter[str] = Counter()
+    for r in results:
+        sit_counts.update(r["meta"].get("situations", []))
+    print("  Situation coverage:")
+    for cell in SITUATION_VOCAB:
+        n = sit_counts.get(cell, 0)
+        flag = "  <-- empty" if n == 0 else ("  <-- thin" if n < 2 else "")
+        print(f"    {cell:24} {n:>3}{flag}")
 
 
 if __name__ == "__main__":

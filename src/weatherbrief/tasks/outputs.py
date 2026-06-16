@@ -311,6 +311,16 @@ def run_llm_digest(
         if dwd_translated and pack_dir:
             _save_dwd_overview(pack_dir, dwd_translated)
 
+        # Persist the exact context string sent to the LLM so the digest eval
+        # (#254) can build byte-faithful fixtures. Cheap (~2-6 KB text) and
+        # best-effort: a failure here must never break digest generation.
+        digest_context = digest_result.get("digest_context")
+        if digest_context and pack_dir:
+            try:
+                (pack_dir / "digest_context.txt").write_text(digest_context)
+            except Exception:
+                logger.warning("Failed to save digest context", exc_info=True)
+
         return DigestResult(
             path=digest_path,
             text=digest_result["digest_text"],

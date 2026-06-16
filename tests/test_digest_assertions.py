@@ -87,15 +87,31 @@ def test_fixtures_present():
     assert FIXTURE_IDS, f"no committed digest fixtures found under {EVAL_DIR}"
 
 
+# Two guardrails compare the output against the context: fabricated-source and
+# number-traceability. They are only meaningful when the fixture's context is
+# byte-faithful to what the LLM actually saw. Reconstructed back-catalog
+# fixtures (meta ``faithful: false``) omit the text-forecast / previous-digest
+# sections, so a legitimate DWD citation or a figure drawn from a text forecast
+# would false-positive. We skip those two checks for non-faithful fixtures; the
+# fidelity-independent checks (structure, coordinate leak) always run. See #254.
+def _is_faithful(meta: dict) -> bool:
+    # Default True so legacy fixtures without the flag are still fully checked.
+    return meta.get("faithful", True)
+
+
 @pytest.mark.parametrize("fixture_id", FIXTURE_IDS)
 def test_baseline_passes_all_guardrails(fixture_id):
     """Every recorded baseline output must satisfy all guardrails.
 
     This is the acceptance gate: it must pass on the current briefer_v1.md
-    baseline outputs.
+    baseline outputs. Context-dependent checks are skipped for reconstructed
+    (non-faithful) fixtures — see the module note above.
     """
-    digest, context, _ = _load(fixture_id)
-    violations = run_guardrails(digest, context)
+    digest, context, meta = _load(fixture_id)
+    if _is_faithful(meta):
+        violations = run_guardrails(digest, context)
+    else:
+        violations = check_structure(digest) + check_coordinate_leak(digest)
     assert not violations, f"{fixture_id} violated guardrails:\n{_fmt(violations)}"
 
 
@@ -108,14 +124,18 @@ def test_no_coordinate_leak(fixture_id):
 
 @pytest.mark.parametrize("fixture_id", FIXTURE_IDS)
 def test_no_fabricated_sources(fixture_id):
-    digest, context, _ = _load(fixture_id)
+    digest, context, meta = _load(fixture_id)
+    if not _is_faithful(meta):
+        pytest.skip(f"{fixture_id} context is reconstructed (not byte-faithful)")
     violations = check_fabricated_sources(digest, context)
     assert not violations, f"{fixture_id} cited an absent source:\n{_fmt(violations)}"
 
 
 @pytest.mark.parametrize("fixture_id", FIXTURE_IDS)
 def test_number_traceability(fixture_id):
-    digest, context, _ = _load(fixture_id)
+    digest, context, meta = _load(fixture_id)
+    if not _is_faithful(meta):
+        pytest.skip(f"{fixture_id} context is reconstructed (not byte-faithful)")
     violations = check_number_traceability(digest, context)
     assert not violations, f"{fixture_id} has untraceable numbers:\n{_fmt(violations)}"
 
