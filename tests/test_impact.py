@@ -235,7 +235,26 @@ class TestPersonalImpact:
         assert pi.band == "covers_others"
         assert pi.extra_pilots == round(18.0 / 5.6)
         assert pi.future_months == 0.0
+        assert not pi.overflow_capped
         assert "other pilots" in format_personal_coverage(pi)
+
+    def test_covers_others_caps_to_service_months_past_active_base(self):
+        # Surplus would name ≥ active_users (10) pilots → cap to whole-service
+        # months so we never claim more pilots than exist. $60 - $2 = $58 surplus,
+        # cpum 5.6 → ~10 pilots ≥ 10 active; $58 / $56 ≈ 1 month of the service.
+        pi = personal_impact(60.0, 2.0, 1.0, self._econ(), site_covered=False)
+        assert pi.band == "covers_others"
+        assert pi.overflow_capped
+        s = format_personal_coverage(pi)
+        assert "running the whole service" in s
+        assert "pilot" not in s
+        assert "~1 month " in s  # singular, never "~1 months"
+
+    def test_retrospective_rolls_up_to_years(self):
+        # cr < 1 but a big own-months count reads as years, not "~25 months".
+        pi = personal_impact(50.0, 100.0, 2.0, self._econ(), site_covered=False)
+        assert pi.band == "retrospective"
+        assert "years of your own usage so far" in format_personal_coverage(pi)
 
     def test_covers_others_min_one_when_surplus_tiny(self):
         # Surplus rounds to 0 → bumped to "another pilot" (min 1, never a fraction).
@@ -298,11 +317,25 @@ class TestAdaptiveLadder:
         assert "one pilot for" in tc.summary
 
     def test_medium_uses_pilots_for_a_month(self):
-        # $100 / 5.6 ≈ 18 pilots for a month.
-        tc = choose_translation(100.0, self._econ())
+        # $50 / 5.6 ≈ 9 pilots for a month (stays under the 10-pilot active base).
+        tc = choose_translation(50.0, self._econ())
         assert tc.kind == TRANSLATION_USERS_FOR_MONTH
         assert "pilots for a month" in tc.summary
-        assert round(tc.value) == round(100.0 / 5.6)
+        assert round(tc.value) == round(50.0 / 5.6)
+
+    def test_medium_caps_pilots_to_service_when_over_active_base(self):
+        # $100 / 5.6 ≈ 18 pilots > 10 active → switch to whole-service months
+        # rather than claim more pilots than exist.
+        tc = choose_translation(100.0, self._econ())
+        assert tc.kind == TRANSLATION_SERVICE_MONTHS
+        assert "running the whole service" in tc.summary
+        assert "pilots for a month" not in tc.summary
+
+    def test_small_personal_months_roll_up_to_years(self):
+        # Tiny personal burn ($0.25/mo) → $20 covers many months → read as years.
+        tc = choose_translation(20.0, self._econ(), burn_rate_monthly_usd=0.25)
+        assert tc.kind == TRANSLATION_PERSONAL_MONTHS
+        assert "years of your own usage" in tc.summary
 
     def test_large_uses_service_months(self):
         # $200 / $56/mo ≈ 3.6 months of the whole service.

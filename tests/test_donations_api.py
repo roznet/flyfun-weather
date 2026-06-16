@@ -478,14 +478,18 @@ class TestMePersonal:
         assert p["summary"]
 
     def test_personal_covers_others(self, make_client, session_factory):
-        # Donation far exceeds DEV's tiny lifetime cost → surplus to other pilots.
+        # $56 dwarfs DEV's tiny lifetime cost AND the 2-pilot active base, so the
+        # surplus caps to whole-service months rather than claiming more pilots
+        # than exist. (The uncapped "+N pilots" phrasing is unit-tested in
+        # test_impact.py.)
         _seed_economics(session_factory)
         _record_donation(session_factory, 56.0)
         body = make_client().get("/api/donations/me").json()
         p = body["personal"]
         assert p["band"] == "covers_others"
-        assert p["extra_pilots"] >= 1
-        assert "other pilot" in p["summary"]
+        assert p["overflow_capped"] is True
+        assert "running the whole service" in p["summary"]
+        assert "pilot" not in p["summary"]
 
     def test_personal_empty_without_economics(self, make_client, session_factory):
         _record_donation(session_factory, 56.0)

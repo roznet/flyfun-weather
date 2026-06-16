@@ -309,6 +309,13 @@ class PersonalImpact:
     coverage_ratio: float | None
     extra_pilots: int
     future_months: float
+    # Surplus expressed as whole-platform run-months, plus whether the overflow
+    # is big enough that we phrase it as service-months instead of "+N pilots".
+    # The cap fires when the surplus would cover more pilots than actually exist
+    # (so we never claim more pilots than the active base) or ≥2 months of the
+    # platform — both read live from the report, so they self-adjust over time.
+    service_months: float
+    overflow_capped: bool
     band: str
     empty: bool
 
@@ -335,6 +342,8 @@ def personal_impact(
             coverage_ratio=0.0,
             extra_pilots=0,
             future_months=0.0,
+            service_months=0.0,
+            overflow_capped=False,
             band=_BAND_RETROSPECTIVE,
             empty=True,
         )
@@ -347,18 +356,23 @@ def personal_impact(
     )
     surplus = max(donation_total_usd - max(lifetime_cost_usd, 0.0), 0.0)
     avg_user_cost = economics.cost_per_user_month_usd  # representative per-pilot unit
+    monthly = economics.monthly_run_cost_usd
+    service_months = surplus / monthly if monthly > 0 else 0.0
+    extra_pilots = max(1, round(surplus / avg_user_cost)) if avg_user_cost > 0 else 1
+    # Cap the "+N pilots" framing: once it would name more pilots than exist
+    # (equivalently ≥1 month of the whole platform) or ≥2 months, switch to
+    # whole-service months so we never claim more pilots than the active base.
+    overflow_capped = extra_pilots >= economics.active_users or service_months >= 2.0
 
     if coverage_ratio < 1.0:
         band, extra_pilots, future_months = _BAND_RETROSPECTIVE, 0, 0.0
+        service_months, overflow_capped = 0.0, False
     elif not site_covered:
         # Round 0.x up to "plus another pilot" — never a fraction, never zero.
-        extra_pilots = max(1, round(surplus / avg_user_cost)) if avg_user_cost > 0 else 1
         band, future_months = _BAND_COVERS_OTHERS, 0.0
     else:
-        extra_pilots = max(1, round(surplus / avg_user_cost)) if avg_user_cost > 0 else 1
-        monthly = economics.monthly_run_cost_usd
-        future_months = surplus / monthly if monthly > 0 else 0.0
-        band = _BAND_FUTURE
+        future_months = service_months
+        band, overflow_capped = _BAND_FUTURE, False
 
     return PersonalImpact(
         donation_total_usd=round(donation_total_usd, 2),
@@ -367,9 +381,17 @@ def personal_impact(
         coverage_ratio=round(coverage_ratio, 4) if coverage_ratio != float("inf") else None,
         extra_pilots=int(extra_pilots),
         future_months=round(future_months, 4),
+        service_months=round(service_months, 4),
+        overflow_capped=overflow_capped,
         band=band,
         empty=False,
     )
+
+
+def _count(n: int, word: str) -> str:
+    """``'1 month'`` / ``'3 months'`` — singularizes so we never render
+    a grammatically-wrong ``'~1 months'`` / ``'~1 pilots'``."""
+    return f"{n} {word}" + ("" if n == 1 else "s")
 
 
 def format_personal_coverage(pi: PersonalImpact) -> str:
@@ -377,30 +399,35 @@ def format_personal_coverage(pi: PersonalImpact) -> str:
 
     Verbs stay in the offset/contribute/cover family — never "pay for" or "fund
     your next N months". All counts are whole numbers so the phrasing never shows
-    a fraction.
+    a fraction, and big month counts roll up to years.
     """
     if pi.empty:
         return ""
     if pi.band == _BAND_RETROSPECTIVE:
-        months = round(pi.own_months_covered)
+        m = pi.own_months_covered
+        if m >= _YEARS_THRESHOLD_MONTHS:
+            return f"covers ~{m / 12:.1f} years of your own usage so far"
+        months = round(m)
         if months >= 1:
-            return f"covers ~{months} months of your own usage so far"
+            return f"covers ~{_count(months, 'month')} of your own usage so far"
         # Coverage ratio is the honest fallback when burn rate is too thin to
         # round to a whole month. It is always a real number in this band
         # (inf-coverage donors skip retrospective); coalesce defensively for typing.
         pct = max(1, round((pi.coverage_ratio or 0.0) * 100))
         return f"covers ~{pct}% of what your usage has cost"
-    pilots = pi.extra_pilots
-    pilot_word = "pilot" if pilots == 1 else "pilots"
     if pi.band == _BAND_COVERS_OTHERS:
-        return f"fully covers your own usage — plus ~{pilots} other {pilot_word}"
+        # Large overflow → whole-service months (never claims more pilots than exist).
+        if pi.overflow_capped:
+            n = max(1, round(pi.service_months))
+            return f"fully covers your own usage — and ~{_count(n, 'month')} of running the whole service"
+        return f"fully covers your own usage — plus ~{_count(pi.extra_pilots, 'other pilot')}"
     months_ahead = round(pi.future_months)
     if months_ahead >= 1:
         return (
             "fully covers your own usage and helped others — and contributes "
-            f"~{months_ahead} months toward the service ahead"
+            f"~{_count(months_ahead, 'month')} toward the service ahead"
         )
-    return f"fully covers your own usage — plus ~{pilots} other {pilot_word}"
+    return f"fully covers your own usage — plus ~{_count(pi.extra_pilots, 'other pilot')}"
 
 
 def personal_to_dict(pi: PersonalImpact) -> dict:
@@ -412,6 +439,8 @@ def personal_to_dict(pi: PersonalImpact) -> dict:
         "coverage_ratio": pi.coverage_ratio,
         "extra_pilots": pi.extra_pilots,
         "future_months": pi.future_months,
+        "service_months": pi.service_months,
+        "overflow_capped": pi.overflow_capped,
         "band": pi.band,
         "empty": pi.empty,
         "summary": format_personal_coverage(pi),
@@ -486,14 +515,19 @@ def choose_translation(
     # Small: relate to the donor's own usage when we can, else one pilot's.
     if amount_usd <= _SMALL_MAX:
         if personal_months >= 1.5:
+            if personal_months >= _YEARS_THRESHOLD_MONTHS:
+                return _choice(
+                    amount_usd, TRANSLATION_PERSONAL_MONTHS, personal_months,
+                    f"covers ~{personal_months / 12:.1f} years of your own usage",
+                )
             return _choice(
                 amount_usd, TRANSLATION_PERSONAL_MONTHS, personal_months,
-                f"covers ~{round(personal_months)} months of your own usage",
+                f"covers ~{_count(round(personal_months), 'month')} of your own usage",
             )
         if user_months >= 1.5:
             return _choice(
                 amount_usd, TRANSLATION_USER_MONTHS, user_months,
-                f"covers one pilot for ~{round(user_months)} months",
+                f"covers one pilot for ~{_count(round(user_months), 'month')}",
             )
         # Tiny relative to cost — briefings keep the number off "0".
         if briefings >= 2:
@@ -507,12 +541,18 @@ def choose_translation(
         )
 
     # Medium: "N pilots for a month" reads better than "one pilot for N months"
-    # once N ≥ 2; otherwise the concrete "briefings funded".
+    # once N ≥ 2 — but only while N stays below the real active base (else we'd
+    # claim more pilots than exist; fall to whole-service months there).
     if amount_usd <= _MEDIUM_MAX:
-        if user_months >= 2:
+        if 2 <= user_months < economics.active_users:
             return _choice(
                 amount_usd, TRANSLATION_USERS_FOR_MONTH, user_months,
-                f"covers ~{round(user_months)} pilots for a month",
+                f"covers ~{_count(round(user_months), 'pilot')} for a month",
+            )
+        if service_months >= 0.95:
+            return _choice(
+                amount_usd, TRANSLATION_SERVICE_MONTHS, service_months,
+                f"covers ~{_count(round(service_months), 'month')} of running the whole service",
             )
         if briefings >= 2:
             return _choice(
@@ -528,7 +568,7 @@ def choose_translation(
     if service_months >= 1.5:
         return _choice(
             amount_usd, TRANSLATION_SERVICE_MONTHS, service_months,
-            f"covers ~{round(service_months)} months of running the whole service",
+            f"covers ~{_count(round(service_months), 'month')} of running the whole service",
         )
     if service_months >= 0.95:
         return _choice(

@@ -356,6 +356,8 @@ class PersonalImpactResponse(BaseModel):
     coverage_ratio: float | None = None
     extra_pilots: int
     future_months: float
+    service_months: float
+    overflow_capped: bool
     band: str
     empty: bool
     summary: str

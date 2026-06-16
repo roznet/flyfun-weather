@@ -308,16 +308,28 @@ cost_per_briefing    = monthly_run_cost_usd / (num_briefings * scale) # margin-e
 1. **`retrospective`** (`coverage_ratio < 1.0`, the normal case): "covers ~N
    months of your own usage so far" (donation ÷ burn rate) or, when the burn
    rate is too thin to round to a whole month, "covers ~Y% of what your usage
-   has cost."
+   has cost." Big month counts (≥ 18) roll up to years ("~3.3 years of your own
+   usage so far") rather than reading as "~40 months".
 2. **`covers_others`** (own usage covered, but the whole site is *not*):
    "fully covers your own usage — plus ~N other pilots", where N = surplus ÷
    `cost_per_user_month`, **rounded to a whole number, minimum 1** (0.x rounds up
    to "another pilot"; never a fraction). This intermediate band stops us
    jumping to a future promise the moment a small footprint over-covers.
+   **Overflow cap (`overflow_capped`):** once N would reach the *actual* active
+   pilot count (equivalently the surplus ≥ 1 month of the whole platform) or the
+   surplus ≥ 2 months, we never claim more pilots than exist — the phrasing
+   switches to "…— and ~N months of running the whole service" (N = surplus ÷
+   monthly run cost). Both thresholds read live from the report, so they
+   self-adjust as the platform grows. `service_months` carries the value.
 3. **`future`** (only once community `coverage_ratio ≥ 1.0` — `site_covered`):
    forward framing unlocks — "fully covers your own usage and helped others —
    and contributes ~N months toward the service ahead" (N = surplus ÷ monthly
    run cost).
+
+All counts singularize ("~1 month", "~1 other pilot") so the page never renders
+"~1 months". The prospective preview ladder (`choose_translation`) applies the
+same pilot cap — the "N pilots for a month" framing only shows while N stays
+below the active base — and the same year roll-up for personal-usage months.
 
 #### Community panel
 

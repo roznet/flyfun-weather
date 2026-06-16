@@ -41,6 +41,8 @@ export interface PersonalImpact {
   coverage_ratio: number | null; // null when no realized cost yet (donation ÷ 0)
   extra_pilots: number;
   future_months: number;
+  service_months: number; // surplus as whole-platform run-months
+  overflow_capped: boolean; // large overflow → service-months phrasing, not "+N pilots"
   band: 'retrospective' | 'covers_others' | 'future';
   empty: boolean;
   summary: string;
