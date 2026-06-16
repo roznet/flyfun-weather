@@ -308,8 +308,8 @@ cost_per_briefing    = monthly_run_cost_usd / (num_briefings * scale) # margin-e
 1. **`retrospective`** (`coverage_ratio < 1.0`, the normal case): "covers ~N
    months of your own usage so far" (donation ÷ burn rate) or, when the burn
    rate is too thin to round to a whole month, "covers ~Y% of what your usage
-   has cost." Big month counts (≥ 18) roll up to years ("~3.3 years of your own
-   usage so far") rather than reading as "~40 months".
+   has cost." "Your own usage" duration caps at a year — beyond 12 months it
+   reads "covers over a year of your own usage so far" rather than "~3.3 years".
 2. **`covers_others`** (own usage covered, but the whole site is *not*):
    "fully covers your own usage — plus ~N other pilots", where N = surplus ÷
    `cost_per_user_month`, **rounded to a whole number, minimum 1** (0.x rounds up
@@ -329,7 +329,9 @@ cost_per_briefing    = monthly_run_cost_usd / (num_briefings * scale) # margin-e
 All counts singularize ("~1 month", "~1 other pilot") so the page never renders
 "~1 months". The prospective preview ladder (`choose_translation`) applies the
 same pilot cap — the "N pilots for a month" framing only shows while N stays
-below the active base — and the same year roll-up for personal-usage months.
+below the active base — and caps "your own usage" at a year, spilling the
+overflow into pilots: "covers ~1 year of your own usage + ~N other pilots"
+(`_OWN_USAGE_CAP_MONTHS`).
 
 #### Community panel
 

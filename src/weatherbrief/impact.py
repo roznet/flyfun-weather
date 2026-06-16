@@ -20,6 +20,9 @@ from weatherbrief.costs import ProgramCostReport
 _DAYS_PER_MONTH = 30.0
 # Below this, "covers one user for ~N years" reads more naturally than months.
 _YEARS_THRESHOLD_MONTHS = 18.0
+# "Your own usage" duration caps at a year — beyond that we'd say "~3.3 years of
+# your own usage", which reads oddly; the overflow becomes pilots helped instead.
+_OWN_USAGE_CAP_MONTHS = 12.0
 
 # Tokens → words: an output token is ~0.75 English words. Output tokens only —
 # that is what the AI *wrote* (input/total tokens are data fed in, not prose).
@@ -405,8 +408,10 @@ def format_personal_coverage(pi: PersonalImpact) -> str:
         return ""
     if pi.band == _BAND_RETROSPECTIVE:
         m = pi.own_months_covered
-        if m >= _YEARS_THRESHOLD_MONTHS:
-            return f"covers ~{m / 12:.1f} years of your own usage so far"
+        # Capped at a year — retrospective has no surplus to spill into pilots
+        # (donation < lifetime cost), so we just say "over a year".
+        if m > _OWN_USAGE_CAP_MONTHS:
+            return "covers over a year of your own usage so far"
         months = round(m)
         if months >= 1:
             return f"covers ~{_count(months, 'month')} of your own usage so far"
@@ -515,11 +520,16 @@ def choose_translation(
     # Small: relate to the donor's own usage when we can, else one pilot's.
     if amount_usd <= _SMALL_MAX:
         if personal_months >= 1.5:
-            if personal_months >= _YEARS_THRESHOLD_MONTHS:
-                return _choice(
-                    amount_usd, TRANSLATION_PERSONAL_MONTHS, personal_months,
-                    f"covers ~{personal_months / 12:.1f} years of your own usage",
+            if personal_months > _OWN_USAGE_CAP_MONTHS:
+                # Cap own usage at a year; spill the rest into pilots helped.
+                overflow_usd = amount_usd - _OWN_USAGE_CAP_MONTHS * burn_rate_monthly_usd
+                pilots = round(overflow_usd / cpum) if cpum > 0 else 0
+                summary = (
+                    f"covers ~1 year of your own usage + ~{_count(pilots, 'other pilot')}"
+                    if pilots >= 1
+                    else "covers ~1 year of your own usage"
                 )
+                return _choice(amount_usd, TRANSLATION_PERSONAL_MONTHS, personal_months, summary)
             return _choice(
                 amount_usd, TRANSLATION_PERSONAL_MONTHS, personal_months,
                 f"covers ~{_count(round(personal_months), 'month')} of your own usage",

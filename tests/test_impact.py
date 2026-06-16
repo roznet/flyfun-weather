@@ -250,11 +250,11 @@ class TestPersonalImpact:
         assert "pilot" not in s
         assert "~1 month " in s  # singular, never "~1 months"
 
-    def test_retrospective_rolls_up_to_years(self):
-        # cr < 1 but a big own-months count reads as years, not "~25 months".
+    def test_retrospective_caps_at_a_year(self):
+        # cr < 1 but >12 months of own usage → "over a year", not "~25 months".
         pi = personal_impact(50.0, 100.0, 2.0, self._econ(), site_covered=False)
         assert pi.band == "retrospective"
-        assert "years of your own usage so far" in format_personal_coverage(pi)
+        assert format_personal_coverage(pi) == "covers over a year of your own usage so far"
 
     def test_covers_others_min_one_when_surplus_tiny(self):
         # Surplus rounds to 0 → bumped to "another pilot" (min 1, never a fraction).
@@ -331,11 +331,13 @@ class TestAdaptiveLadder:
         assert "running the whole service" in tc.summary
         assert "pilots for a month" not in tc.summary
 
-    def test_small_personal_months_roll_up_to_years(self):
-        # Tiny personal burn ($0.25/mo) → $20 covers many months → read as years.
+    def test_small_personal_months_cap_at_year_plus_pilots(self):
+        # Tiny personal burn ($0.25/mo) → $20 covers >1yr of own usage → cap at
+        # "1 year of your own usage" and spill the rest into pilots helped.
         tc = choose_translation(20.0, self._econ(), burn_rate_monthly_usd=0.25)
         assert tc.kind == TRANSLATION_PERSONAL_MONTHS
-        assert "years of your own usage" in tc.summary
+        assert tc.summary.startswith("covers ~1 year of your own usage + ~")
+        assert "other pilot" in tc.summary
 
     def test_large_uses_service_months(self):
         # $200 / $56/mo ≈ 3.6 months of the whole service.
