@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from flyfun_common import fx
@@ -41,7 +42,7 @@ from flyfun_common.payments import (
 )
 from flyfun_common.payments.stripe_client import SignatureVerificationError
 
-from weatherbrief.api.credits import build_program_report
+from weatherbrief.api.credits import build_program_report, user_cost_stats
 from weatherbrief.api.preferences import (
     FxBlock,
     fx_block_for_currency,
@@ -49,11 +50,19 @@ from weatherbrief.api.preferences import (
     stripe_configured,
     usd_fx_block,
 )
+from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow
 from weatherbrief.impact import (
     ProgramEconomics,
+    choose_translation,
     donation_impact,
     economics_from_report,
+    format_words_written,
     impact_to_dict,
+    personal_impact,
+    personal_to_dict,
+    tokens_to_words,
+    translation_to_dict,
+    words_to_books,
     yearly_impact,
     yearly_to_dict,
 )
@@ -84,6 +93,24 @@ def _economics(db: Session) -> ProgramEconomics | None:
 def _empty_economics() -> ProgramEconomics:
     """Neutral economics → impact layer renders a neutral empty state."""
     return ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0, cost_per_user_month_usd=0.0)
+
+
+def _program_stats(db: Session) -> tuple[int, int]:
+    """All-time ``(briefings_generated, ai_output_tokens)`` for the stats header.
+
+    Briefings = every ``briefing_packs`` row; AI words derive from the sum of
+    ``briefing_usage.llm_output_tokens`` (output only — what the AI *wrote*).
+    """
+    briefings = db.query(func.count()).select_from(BriefingPackRow).scalar() or 0
+    out_tokens = (
+        db.query(func.coalesce(func.sum(BriefingUsageRow.llm_output_tokens), 0)).scalar() or 0
+    )
+    return int(briefings), int(out_tokens)
+
+
+def _site_covered(total_year_usd: float, econ: ProgramEconomics, *, now: datetime) -> bool:
+    """Whether the whole site's cost is covered this year (forward-framing gate)."""
+    return yearly_impact(total_year_usd, econ, now=now).coverage_ratio >= 1.0
 
 
 def _redirect_urls(request: Request) -> tuple[str, str]:
@@ -319,9 +346,24 @@ class YearlyImpactResponse(BaseModel):
     summary: str
 
 
+class PersonalImpactResponse(BaseModel):
+    """Per-viewer lifetime coverage (mirror of personal_to_dict)."""
+
+    donation_total_usd: float
+    lifetime_cost_usd: float
+    own_months_covered: float
+    coverage_ratio: float
+    extra_pilots: int
+    future_months: float
+    band: str
+    empty: bool
+    summary: str
+
+
 class DonationMeResponse(BaseModel):
     total_usd: float
     impact: DonationImpactResponse
+    personal: PersonalImpactResponse
     fx: FxBlock
 
 
@@ -333,25 +375,53 @@ def get_my_donations(
 ) -> DonationMeResponse:
     """The viewer's own donation total + impact framing (USD + ``fx`` block).
 
-    ``?currency=`` overrides the viewer's saved display currency for this
-    response (used for instant reformatting when the picker changes).
+    Carries both the program-average ``impact`` (legacy) and the retrospective
+    ``personal`` panel (donation total vs the viewer's *lifetime* cost, with the
+    "+N other pilots" / forward overflow). ``?currency=`` overrides the viewer's
+    saved display currency for this response.
     """
     total = get_user_total_usd(db, viewer_id, service=SERVICE)
     econ = _economics(db) or _empty_economics()
     now = datetime.now(timezone.utc)
     impact = donation_impact(total, econ, now=now)
+
+    _lifetime, _months, burn_rate = user_cost_stats(db, viewer_id)
+    year_total = get_year_total_usd(db, now.year, service=SERVICE)
+    site_covered = _site_covered(year_total, econ, now=now)
+    personal = personal_impact(total, _lifetime, burn_rate, econ, site_covered=site_covered)
+
     fx_block = fx_block_for_currency(currency) if currency else fx_block_for_user(db, viewer_id)
     return DonationMeResponse(
         total_usd=round(total, 2),
         impact=impact_to_dict(impact),
+        personal=personal_to_dict(personal),
         fx=fx_block,
     )
+
+
+class StatsResponse(BaseModel):
+    """Transparency stats trio for the donate-page header (all human-facing)."""
+
+    active_pilots_30d: int
+    briefings_all_time: int
+    analysis_words_all_time: int
+    analysis_books_equiv: float
+    words_summary: str
+
+
+class RunCostResponse(BaseModel):
+    """Margin-excluded run cost, in USD (frontend renders via the ``fx`` block)."""
+
+    monthly_run_cost_usd: float
+    cost_per_user_month_usd: float
 
 
 class DonationSummaryResponse(BaseModel):
     year: int
     total_year_usd: float
     impact: YearlyImpactResponse
+    stats: StatsResponse
+    run_cost: RunCostResponse
     fx: FxBlock
     enabled: bool
 
@@ -362,15 +432,28 @@ def get_summary(
     db: Session = Depends(get_db),
     currency: str | None = None,
 ) -> DonationSummaryResponse:
-    """Public this-year community total + coverage framing (no per-user data).
+    """Public this-year community total + coverage framing + stats header.
 
-    ``?currency=`` overrides the display currency for this response — needed for
-    anonymous viewers (who have no saved pref) and for instant reformatting.
+    Adds the transparency stats trio (active pilots 30d, all-time briefings,
+    all-time AI words) and the margin-excluded run cost — publishing these lets a
+    reader back out per-pilot cost, which is intended. ``?currency=`` overrides
+    the display currency (needed for anonymous viewers and instant reformatting).
     """
     now = datetime.now(timezone.utc)
     total = get_year_total_usd(db, now.year, service=SERVICE)
     econ = _economics(db) or _empty_economics()
     yi = yearly_impact(total, econ, now=now)
+
+    briefings, out_tokens = _program_stats(db)
+    words = tokens_to_words(out_tokens)
+    stats = StatsResponse(
+        active_pilots_30d=econ.active_users,
+        briefings_all_time=briefings,
+        analysis_words_all_time=words,
+        analysis_books_equiv=words_to_books(words),
+        words_summary=format_words_written(out_tokens),
+    )
+
     if currency:
         fx_block = fx_block_for_currency(currency)
     elif viewer_id:
@@ -381,6 +464,63 @@ def get_summary(
         year=now.year,
         total_year_usd=round(total, 2),
         impact=yearly_to_dict(yi),
+        stats=stats,
+        run_cost=RunCostResponse(
+            monthly_run_cost_usd=econ.monthly_run_cost_usd,
+            cost_per_user_month_usd=econ.cost_per_user_month_usd,
+        ),
         fx=fx_block,
         enabled=stripe_configured(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prospective donation preview (the "donate €X" button → translation)
+# ---------------------------------------------------------------------------
+
+
+class TranslationChoiceResponse(BaseModel):
+    """One chosen prospective-donation translation (mirror of translation_to_dict)."""
+
+    amount_usd: float
+    kind: str
+    value: float
+    summary: str
+    empty: bool
+
+
+class DonationPreviewResponse(BaseModel):
+    amount_usd: float
+    translation: TranslationChoiceResponse
+    fx: FxBlock
+
+
+@router.get("/preview", response_model=DonationPreviewResponse)
+def preview_donation(
+    amount: float,
+    currency: str | None = None,
+    viewer_id: str | None = Depends(optional_user_id),
+    db: Session = Depends(get_db),
+) -> DonationPreviewResponse:
+    """Translate a prospective amount via the adaptive ladder.
+
+    For a logged-in pilot with usage history, small amounts translate against
+    *their own* burn rate; otherwise the program average. ``amount`` is in the
+    display currency — convert to USD-canonical before running the math.
+    """
+    fx_block = fx_block_for_currency(currency) if currency else (
+        fx_block_for_user(db, viewer_id) if viewer_id else usd_fx_block()
+    )
+    rate = fx_block.rate or 1.0
+    amount_usd = amount / rate if rate else amount
+
+    econ = _economics(db) or _empty_economics()
+    burn_rate = 0.0
+    if viewer_id:
+        _lifetime, _months, burn_rate = user_cost_stats(db, viewer_id)
+    tc = choose_translation(amount_usd, econ, burn_rate_monthly_usd=burn_rate)
+    return DonationPreviewResponse(
+        amount_usd=round(amount_usd, 2),
+        translation=translation_to_dict(tc),
+        fx=fx_block,
     )

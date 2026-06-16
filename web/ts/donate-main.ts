@@ -10,6 +10,7 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   createCheckout,
+  fetchDonationPreview,
   fetchDonationSummary,
   fetchMyDonations,
   formatMoney,
@@ -73,6 +74,7 @@ async function init(): Promise<void> {
     return;
   }
 
+  renderStats(summary);
   renderCommunity(summary);
   initCurrency();
 
@@ -128,15 +130,60 @@ function renderCommunity(s: DonationSummary): void {
   sub.textContent = `${total} donated in ${s.year}.`;
 }
 
+/** Transparency stats trio + the run-cost note. Hidden until data is present. */
+function renderStats(s: DonationSummary): void {
+  const stats = s.stats;
+  const section = document.getElementById('stats-section')!;
+  // Nothing meaningful yet → leave the header hidden.
+  if (!stats || (stats.briefings_all_time <= 0 && stats.active_pilots_30d <= 0)) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  document.getElementById('stat-pilots')!.textContent = stats.active_pilots_30d.toLocaleString();
+  document.getElementById('stat-briefings')!.textContent =
+    stats.briefings_all_time.toLocaleString();
+
+  // Words is the headline; the ~N books equivalence is an optional flourish.
+  const words = stats.analysis_words_all_time;
+  document.getElementById('stat-words')!.textContent = formatWords(words);
+  const booksNote =
+    stats.analysis_books_equiv >= 1
+      ? ` (~${Math.round(stats.analysis_books_equiv)} novels)`
+      : '';
+  document.getElementById('stat-words-label')!.textContent =
+    `words of AI weather analysis${booksNote}`;
+
+  // Run cost: transparent, in the viewer's currency. Lets a reader back out the
+  // per-pilot cost — that's intended.
+  const note = document.getElementById('run-cost-note')!;
+  if (s.run_cost && s.run_cost.monthly_run_cost_usd > 0) {
+    const monthly = formatMoney(s.run_cost.monthly_run_cost_usd, s.fx);
+    const perPilot = formatMoney(s.run_cost.cost_per_user_month_usd, s.fx);
+    note.textContent =
+      `Running the service costs about ${monthly}/month — roughly ${perPilot} per active pilot. ` +
+      `Donations offset that real cost; the operator keeps no margin on them.`;
+  } else {
+    note.textContent = '';
+  }
+}
+
+/** Compact word count: 2.3M / 45k / 900. */
+function formatWords(words: number): string {
+  if (words >= 1_000_000) return `${(words / 1_000_000).toFixed(1)}M`;
+  if (words >= 1_000) return `${Math.round(words / 1_000)}k`;
+  return words.toLocaleString();
+}
+
 function renderPersonal(me: DonationMe): void {
   if (me.total_usd <= 0) return; // nothing donated yet — keep the panel hidden
   document.getElementById('personal-section')!.style.display = '';
   const headline = document.getElementById('personal-headline')!;
   const sub = document.getElementById('personal-sub')!;
   headline.textContent = formatMoney(me.total_usd, me.fx);
-  sub.textContent = me.impact.summary
-    ? `Your support ${me.impact.summary}.`
-    : 'Thank you for your support.';
+  // Prefer the retrospective personal panel; fall back to program-average impact.
+  const phrase = me.personal && !me.personal.empty ? me.personal.summary : me.impact.summary;
+  sub.textContent = phrase ? `Your support ${phrase}.` : 'Thank you for your support.';
 }
 
 function initCurrency(): void {
@@ -154,11 +201,14 @@ function initCurrency(): void {
     persistCurrency(selectedCurrency, null); // explicit change → always persist
     renderPresets();
     try {
-      renderCommunity(await fetchDonationSummary(selectedCurrency));
+      const s = await fetchDonationSummary(selectedCurrency);
+      renderStats(s);
+      renderCommunity(s);
       if (isLoggedIn) renderPersonal(await fetchMyDonations(selectedCurrency));
     } catch {
       /* keep the previously rendered totals on a refetch hiccup */
     }
+    previewAmount(); // re-translate the entered amount in the new currency
   });
   renderPresets();
 }
@@ -175,14 +225,51 @@ function renderPresets(): void {
       amountInput.value = btn.dataset.amount || '';
       grid.querySelectorAll('.amount-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
+      previewAmount();
     });
   });
+}
+
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
+let previewSeq = 0; // guards against out-of-order responses
+
+/** Translate the entered amount via the backend ladder and show the phrasing.
+ * Debounced so typing doesn't spam the endpoint. */
+function previewAmount(): void {
+  const note = document.getElementById('amount-preview');
+  const amountInput = document.getElementById('input-amount') as HTMLInputElement | null;
+  if (!note || !amountInput) return;
+  const amount = parseFloat(amountInput.value);
+  if (!Number.isFinite(amount) || amount < 1) {
+    note.textContent = '';
+    return;
+  }
+  clearTimeout(previewTimer);
+  const seq = ++previewSeq;
+  previewTimer = setTimeout(async () => {
+    try {
+      const { translation } = await fetchDonationPreview(amount, selectedCurrency);
+      if (seq !== previewSeq) return; // a newer request superseded this one
+      note.textContent = translation.empty ? '' : translation.summary;
+    } catch {
+      if (seq === previewSeq) note.textContent = '';
+    }
+  }, 250);
 }
 
 function initForm(): void {
   const btn = document.getElementById('btn-donate') as HTMLButtonElement;
   const amountInput = document.getElementById('input-amount') as HTMLInputElement;
   const recurring = document.getElementById('input-recurring') as HTMLInputElement;
+
+  // Typing a custom amount clears any active preset highlight + re-translates.
+  amountInput.addEventListener('input', () => {
+    document
+      .getElementById('amount-grid')
+      ?.querySelectorAll('.amount-btn')
+      .forEach((b) => b.classList.remove('active'));
+    previewAmount();
+  });
 
   btn.addEventListener('click', async () => {
     const amount = parseFloat(amountInput.value);

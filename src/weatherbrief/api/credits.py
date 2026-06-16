@@ -165,19 +165,48 @@ def _transaction_to_response(row: CostLedgerRow) -> TransactionResponse:
     )
 
 
-def _cost_since(db: Session, user_id: str, since: datetime) -> float:
-    """Sum of USD costs since a given time."""
-    result = (
-        db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
+def _cost_since(db: Session, user_id: str, since: datetime | None = None) -> float:
+    """Sum of a user's briefing USD costs.
+
+    With ``since`` it is windowed (this-week/this-month); with ``since=None`` it
+    is the user's **lifetime** briefing cost — the denominator the donation
+    personal panel needs.
+    """
+    q = db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0)).filter(
+        CostLedgerRow.user_id == user_id,
+        CostLedgerRow.service == SERVICE,
+        CostLedgerRow.category == "briefing",
+    )
+    if since is not None:
+        q = q.filter(CostLedgerRow.created_at >= since)
+    return float(q.scalar())
+
+
+def user_cost_stats(db: Session, user_id: str) -> tuple[float, float, float]:
+    """Return ``(lifetime_cost_usd, months_active, burn_rate_monthly_usd)``.
+
+    ``burn_rate`` is the user's realized lifetime cost ÷ months active (months
+    since their first briefing, floored at half a month so a brand-new user's
+    rate isn't divide-by-tiny). All zero when the user has no briefing history —
+    the donation layer then falls back to the program average.
+    """
+    lifetime = _cost_since(db, user_id)
+    first = (
+        db.query(func.min(CostLedgerRow.created_at))
         .filter(
             CostLedgerRow.user_id == user_id,
             CostLedgerRow.service == SERVICE,
             CostLedgerRow.category == "briefing",
-            CostLedgerRow.created_at >= since,
         )
         .scalar()
     )
-    return float(result)
+    if first is None or lifetime <= 0:
+        return 0.0, 0.0, 0.0
+    if first.tzinfo is None:
+        first = first.replace(tzinfo=timezone.utc)
+    days = (datetime.now(timezone.utc) - first).total_seconds() / 86400.0
+    months_active = max(days / 30.0, 0.5)
+    return lifetime, months_active, lifetime / months_active
 
 
 # ---------------------------------------------------------------------------

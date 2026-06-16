@@ -420,3 +420,101 @@ class TestSummary:
         _record_donation(session_factory, 500.0, provider_ref="pi_old", year=2023)
         body = make_client(viewer=None, optional=None).get("/api/donations/summary").json()
         assert body["total_year_usd"] == pytest.approx(50.0)
+
+
+def _seed_stats(session_factory, *, packs=3, output_tokens=10_000):
+    """A flight + briefing packs + a usage row carrying output tokens."""
+    from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow
+
+    s = session_factory()
+    s.add(FlightRow(id="flt-1", user_id=DEV_USER_ID,
+                    departure_time=datetime(2026, 6, 1, tzinfo=timezone.utc)))
+    s.flush()
+    for i in range(packs):
+        s.add(BriefingPackRow(
+            flight_id="flt-1",
+            fetch_timestamp=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            days_out=i,
+        ))
+    s.add(BriefingUsageRow(user_id=DEV_USER_ID, flight_id="flt-1",
+                           llm_output_tokens=output_tokens, llm_input_tokens=999_999))
+    s.commit()
+    s.close()
+
+
+class TestSummaryStats:
+    def test_stats_trio(self, make_client, session_factory):
+        _seed_economics(session_factory)  # 2 distinct briefing users (30d)
+        _seed_stats(session_factory, packs=4, output_tokens=10_000)
+        body = make_client(viewer=None, optional=None).get("/api/donations/summary").json()
+        stats = body["stats"]
+        assert stats["active_pilots_30d"] == 2
+        assert stats["briefings_all_time"] == 4
+        # Output tokens only, ~0.75 words/token: 10_000 → 7_500 words.
+        assert stats["analysis_words_all_time"] == 7_500
+        assert stats["words_summary"]  # non-empty phrasing
+        # run-cost block exposed for transparency.
+        assert body["run_cost"]["monthly_run_cost_usd"] > 0
+        assert body["run_cost"]["cost_per_user_month_usd"] > 0
+
+    def test_stats_zero_when_empty(self, make_client, session_factory):
+        # No economics, no packs/usage → neutral zeros, no crash.
+        body = make_client(viewer=None, optional=None).get("/api/donations/summary").json()
+        assert body["stats"]["briefings_all_time"] == 0
+        assert body["stats"]["analysis_words_all_time"] == 0
+        assert body["stats"]["words_summary"] == ""
+
+
+class TestMePersonal:
+    def test_personal_retrospective(self, make_client, session_factory):
+        # DEV has one $0.1 briefing row (from _seed_economics) → lifetime $0.1; a
+        # donation below that covers only a fraction → retrospective band.
+        _seed_economics(session_factory)
+        _record_donation(session_factory, 0.05)
+        body = make_client().get("/api/donations/me").json()
+        p = body["personal"]
+        assert p["empty"] is False
+        assert p["band"] == "retrospective"
+        assert p["summary"]
+
+    def test_personal_covers_others(self, make_client, session_factory):
+        # Donation far exceeds DEV's tiny lifetime cost → surplus to other pilots.
+        _seed_economics(session_factory)
+        _record_donation(session_factory, 56.0)
+        body = make_client().get("/api/donations/me").json()
+        p = body["personal"]
+        assert p["band"] == "covers_others"
+        assert p["extra_pilots"] >= 1
+        assert "other pilot" in p["summary"]
+
+    def test_personal_empty_without_economics(self, make_client, session_factory):
+        _record_donation(session_factory, 56.0)
+        body = make_client().get("/api/donations/me").json()
+        assert body["personal"]["empty"] is True
+        assert body["personal"]["summary"] == ""
+
+
+class TestPreview:
+    def test_program_average_for_anon(self, make_client, session_factory):
+        _seed_economics(session_factory)  # cpum from default config / 2 users
+        body = make_client(viewer=None, optional=None).get(
+            "/api/donations/preview?amount=20&currency=USD"
+        ).json()
+        assert body["amount_usd"] == pytest.approx(20.0)
+        assert body["translation"]["empty"] is False
+        assert body["translation"]["summary"]
+
+    def test_currency_converted_to_usd(self, make_client, session_factory):
+        _seed_economics(session_factory)
+        # EUR 18 at rate 0.9 → $20 USD-canonical.
+        body = make_client(viewer=None, optional=None).get(
+            "/api/donations/preview?amount=18&currency=EUR"
+        ).json()
+        assert body["amount_usd"] == pytest.approx(20.0)
+        assert body["fx"]["currency"] == "EUR"
+
+    def test_empty_when_no_economics(self, make_client, session_factory):
+        body = make_client(viewer=None, optional=None).get(
+            "/api/donations/preview?amount=20&currency=USD"
+        ).json()
+        assert body["translation"]["empty"] is True

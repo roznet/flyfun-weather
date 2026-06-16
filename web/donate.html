@@ -35,6 +35,22 @@
 
     #loading { text-align: center; padding: 3rem; color: var(--text-muted); }
     #error-message { color: var(--danger); text-align: center; padding: 1rem; display: none; }
+
+    .stats-grid {
+      display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      flex: 1 1 8rem; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.85rem 1rem; text-align: center;
+    }
+    .stat-card .value { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .stat-card .label { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.2rem; }
+    .run-cost-note { color: var(--text-muted); font-size: 0.8rem; margin: -0.5rem 0 1.25rem; }
+
+    .preview-note {
+      min-height: 1.2rem; color: var(--accent, #2563eb); font-size: 0.85rem;
+      font-weight: 600; margin-bottom: 0.75rem;
+    }
   </style>
 </head>
 <body>
@@ -60,6 +76,25 @@
         no perks, no premium tier — they simply offset the real cost of running the
         service. You're not buying anything; you're keeping it free for everyone.
       </p>
+
+      <!-- Transparency stats header -->
+      <div class="section" id="stats-section" style="display:none;">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="value" id="stat-pilots">—</div>
+            <div class="label">active pilots (30 days)</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-briefings">—</div>
+            <div class="label">briefings generated</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="stat-words">—</div>
+            <div class="label" id="stat-words-label">of AI weather analysis</div>
+          </div>
+        </div>
+        <p class="run-cost-note" id="run-cost-note"></p>
+      </div>
 
       <!-- Community impact -->
       <div class="section">
@@ -97,6 +132,9 @@
             <select id="input-currency" class="input-select input-narrow"></select>
           </div>
         </div>
+
+        <!-- Live translation of the entered amount (adaptive ladder). -->
+        <p class="preview-note" id="amount-preview"></p>
 
         <!-- Recurring is backend-capable but the subscription lifecycle webhooks
              (renewal rows, cancel UI) aren't handled yet, so the toggle stays
