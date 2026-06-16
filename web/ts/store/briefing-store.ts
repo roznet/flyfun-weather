@@ -144,6 +144,13 @@ export interface BriefingState {
   setCloudStyle: (style: 'natural' | 'soft' | 'square') => void;
   setAdvisoryAltitudeOverride: (alt: number | null) => void;
   recalculateAdvisories: () => Promise<void>;
+  /** Lever move (#259): set the override and index the cached altitude table
+   *  for instant advisory statuses; the route-graph wind overlay still needs
+   *  the server, so it's fetched debounced + stale-guarded (no out-of-order). */
+  probeAltitude: (alt: number) => void;
+  /** Re-anchor advisories to a new planned altitude via the cheap recalc path
+   *  (used by the altitude-only stale-pack banner). Never saves the altitude. */
+  reanchorAdvisories: (alt: number) => Promise<void>;
   changeFlightProfile: (profileId: number) => Promise<void>;
   fetchAltitudeTable: () => Promise<void>;
   refreshObservations: () => Promise<void>;
@@ -235,6 +242,11 @@ function isStreamDrop(err: unknown): boolean {
   return err instanceof Error && err.message === 'Refresh stream ended without completion';
 }
 
+// Altitude-lever wind-overlay debounce + stale-response guard (#259). Module
+// scope (not store state) — purely transient request bookkeeping.
+let _windOverlayTimer: number | null = null;
+let _windOverlaySeq = 0;
+
 export const briefingStore = createStore<BriefingState>((set, get) => ({
   flight: null,
   packs: [],
@@ -323,16 +335,21 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       // non-blocking and treat any rejection as "no fronts".
       let routeAdvisories: RouteAdvisoriesManifest | null = null;
       let routeFronts: RouteFrontsManifest | null = null;
-      const [raResult, epResult, advResult, frResult] = await Promise.allSettled([
+      // Precomputed altitude table (#259) — cheap, best-effort. Absent on old
+      // packs; the lever then falls back to the on-demand sweep endpoint.
+      let altitudeTable: AltitudeTableResult | null = null;
+      const [raResult, epResult, advResult, frResult, atResult] = await Promise.allSettled([
         api.fetchRouteAnalyses(flight.id, timestamp),
         api.fetchElevationProfile(flight.id, timestamp),
         pack.has_advisories ? api.fetchRouteAdvisories(flight.id, timestamp) : Promise.reject('no advisories'),
         api.fetchRouteFronts(flight.id, timestamp),
+        pack.has_advisories ? api.fetchAltitudeTableCached(flight.id, timestamp) : Promise.reject('no advisories'),
       ]);
       if (raResult.status === 'fulfilled') routeAnalyses = raResult.value;
       if (epResult.status === 'fulfilled') elevationProfile = epResult.value;
       if (advResult.status === 'fulfilled') routeAdvisories = advResult.value;
       if (frResult.status === 'fulfilled') routeFronts = frResult.value;
+      if (atResult.status === 'fulfilled') altitudeTable = atResult.value;
 
       // Reconcile selectedModel against this pack's available models.
       // Why: packs fetched with a non-default model set (e.g. ECMWF only) would
@@ -345,7 +362,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, selectedModel, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
@@ -577,6 +594,50 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         currentPack.fetch_timestamp,
         advisoryAltitudeOverride ?? undefined,
       );
+      set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
+    } catch (err) {
+      set({ error: `Advisory recalculation failed: ${err}` });
+    }
+  },
+
+  probeAltitude: (alt: number) => {
+    const { flight, currentPack } = get();
+    // Anchor = the lever's home (the flight's cruise altitude); matches
+    // getAltitudeOverrideConfig.defaultAlt so the null/non-null override
+    // decision is consistent across drag and release.
+    const anchor = flight?.cruise_altitude_ft ?? null;
+    set({ advisoryAltitudeOverride: alt === anchor ? null : alt });
+    if (!flight || !currentPack) return;
+
+    // The advisory statuses come from the cached table (overlaid client-side in
+    // getEffectiveAdvisories — instant, no race). Only the route-graph wind
+    // overlay needs the server (it reparses cross_section.json), so debounce it
+    // and tag each request so a slow earlier response can't clobber a newer one.
+    if (_windOverlayTimer !== null) clearTimeout(_windOverlayTimer);
+    const seq = ++_windOverlaySeq;
+    _windOverlayTimer = window.setTimeout(() => {
+      void api.recalculateAdvisories(flight.id, currentPack.fetch_timestamp, alt)
+        .then(result => {
+          // Drop stale responses: only apply if this is still the latest probe
+          // AND the lever hasn't moved away from the altitude we requested.
+          if (seq !== _windOverlaySeq) return;
+          if ((get().advisoryAltitudeOverride ?? anchor) !== alt) return;
+          set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
+        })
+        .catch(() => { /* overlay-only failure — cards already updated from table */ });
+    }, 300);
+  },
+
+  reanchorAdvisories: async (alt: number) => {
+    // Altitude-only stale-pack path: re-evaluate at the new planned altitude via
+    // the cheap recalc endpoint (no full pipeline re-fetch). The override is set
+    // so the displayed cards + cross-section line follow the new altitude; the
+    // flight's saved cruise_altitude_ft is never written from here.
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    set({ advisoryAltitudeOverride: alt });
+    try {
+      const result = await api.recalculateAdvisories(flight.id, currentPack.fetch_timestamp, alt);
       set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });

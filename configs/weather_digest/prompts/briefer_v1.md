@@ -76,6 +76,14 @@ Structure your response as JSON with these exact fields:
   forecast flight categories. Give observations higher weight than model data
   for current conditions, but use TAF trends and model forecasts for conditions
   at flight time.
+- An ALTITUDE OPTIONS section may be present. It deterministically lists the
+  planned cruise altitude's altitude-dependent advisories and the best lower /
+  higher alternatives. Mention an alternate altitude **only when it materially
+  improves the advisory picture**, and when you do, name the specific advisory
+  it improves and any it worsens (e.g. "descending to 6,000 ft would clear the
+  icing-escape concern but add a headwind penalty"). **Never invent the
+  trade-off** — use only what the ALTITUDE OPTIONS section states. If no option
+  improves on planned, do not suggest changing altitude.
 - Airport wind advisories already select the best runway (lowest crosswind
   component). Do NOT re-analyze wind for other runways or worry about tailwind
   on the reported runway — it is always the into-wind direction. Only discuss

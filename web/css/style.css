@@ -3398,7 +3398,21 @@ label {
 .advisory-altitude-slider {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+/* Deterministic delta note vs the planned altitude (#259). Wraps to its own
+   line below the slider; hidden when empty so it doesn't reserve space. */
+.alt-delta-note {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  color: var(--text-muted, var(--muted, #888));
+  line-height: 1.3;
+}
+
+.alt-delta-note:empty {
+  display: none;
 }
 
 .advisory-altitude-slider input[type="range"] {

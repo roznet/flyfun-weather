@@ -12,6 +12,8 @@ from weatherbrief.models import (
     AdvisoryAggregation,
     AdvisoryStatus,
     AirportConditions,
+    AltitudeAdvisoryChange,
+    AltitudeAdvisoryDelta,
     AltitudeAdvisoryRow,
     AltitudeTableResult,
     ElevationProfile,
@@ -20,6 +22,68 @@ from weatherbrief.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Severity rank for status comparison; UNAVAILABLE is excluded (not comparable).
+_SEVERITY: dict[AdvisoryStatus, int] = {
+    AdvisoryStatus.GREEN: 0,
+    AdvisoryStatus.AMBER: 1,
+    AdvisoryStatus.RED: 2,
+}
+
+
+def diff_altitude_rows(
+    baseline: AltitudeAdvisoryRow,
+    candidate: AltitudeAdvisoryRow,
+    advisory_names: dict[str, str] | None = None,
+) -> AltitudeAdvisoryDelta:
+    """Compare two altitude rows, returning which advisories improve / worsen.
+
+    "Improved" = the candidate's status is *less* severe than the baseline's
+    (e.g. RED→AMBER, AMBER→GREEN); "worsened" = more severe. Advisories whose
+    status is UNAVAILABLE on either side are skipped entirely (not comparable).
+    Pure function — the canonical altitude-diff primitive shared by the digest
+    prompt builder; the client carries a TypeScript twin (``altitude-diff.ts``).
+    """
+    names = advisory_names or {}
+    improved: list[AltitudeAdvisoryChange] = []
+    worsened: list[AltitudeAdvisoryChange] = []
+    unchanged: list[str] = []
+
+    for advisory_id, base_status in baseline.statuses.items():
+        cand_status = candidate.statuses.get(advisory_id)
+        if cand_status is None:
+            continue
+        if base_status not in _SEVERITY or cand_status not in _SEVERITY:
+            continue
+        base_rank = _SEVERITY[base_status]
+        cand_rank = _SEVERITY[cand_status]
+        if cand_rank == base_rank:
+            unchanged.append(advisory_id)
+            continue
+        change = AltitudeAdvisoryChange(
+            advisory_id=advisory_id,
+            name=names.get(advisory_id, advisory_id),
+            from_status=base_status,
+            to_status=cand_status,
+        )
+        if cand_rank < base_rank:
+            improved.append(change)
+        else:
+            worsened.append(change)
+
+    return AltitudeAdvisoryDelta(improved=improved, worsened=worsened, unchanged=unchanged)
+
+
+def row_for_altitude(
+    table: AltitudeTableResult, altitude_ft: int | None,
+) -> AltitudeAdvisoryRow | None:
+    """Return the table row whose altitude exactly matches ``altitude_ft``."""
+    if altitude_ft is None:
+        return None
+    for row in table.rows:
+        if row.altitude_ft == altitude_ft:
+            return row
+    return None
 
 
 def compute_altitude_table(

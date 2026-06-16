@@ -262,6 +262,7 @@ def run_digest(
     config: DigestConfig,
     previous_digest: WeatherDigest | None = None,
     route_advisories=None,  # RouteAdvisoriesManifest | None
+    altitude_table=None,  # AltitudeTableResult | None
     flight_rules: str | None = None,
     locale: str | None = None,
     units_region: str | None = None,
@@ -295,6 +296,7 @@ def run_digest(
         text_forecasts=text_forecasts,
         previous_digest=previous_digest,
         route_advisories=route_advisories,
+        altitude_table=altitude_table,
         flight_rules=flight_rules,
         units_region=units_region,
         dwd_translated=dwd_translated,

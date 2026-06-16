@@ -173,6 +173,34 @@ def save_advisory_artifacts(
     adv_path.write_text(manifest.model_dump_json(indent=2))
 
 
+def save_altitude_table_artifacts(
+    pack_dir: Path,
+    table: "AltitudeTableResult",
+) -> None:
+    """Persist the precomputed altitude advisory table to *pack_dir*.
+
+    Written at refresh from the in-memory advisory inputs (see
+    ``run_advisories``) so the lever + digest can index into it without a
+    re-fetch. Old packs simply lack the file — loaders return ``None``.
+    """
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "altitude_table.json").write_text(table.model_dump_json(indent=2))
+
+
+def load_altitude_table(pack_dir: Path) -> "AltitudeTableResult | None":
+    """Load the precomputed altitude table, returning *None* if missing."""
+    from weatherbrief.models import AltitudeTableResult
+
+    at_path = pack_dir / "altitude_table.json"
+    if not at_path.exists():
+        return None
+    try:
+        return AltitudeTableResult.model_validate_json(at_path.read_text())
+    except Exception:
+        logger.warning("Failed to load altitude_table.json from %s", pack_dir, exc_info=True)
+        return None
+
+
 def save_front_artifacts(
     pack_dir: Path,
     manifest: "RouteFrontsManifest",

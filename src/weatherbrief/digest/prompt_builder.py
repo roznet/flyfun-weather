@@ -11,6 +11,8 @@ from weatherbrief.units import format_visibility
 from weatherbrief.models import (
     ALT_AXIS_LABELS,
     AgreementLevel,
+    AltitudeAdvisoryRow,
+    AltitudeTableResult,
     ConvectiveRisk,
     ForecastSnapshot,
     ModelDivergence,
@@ -44,6 +46,7 @@ def build_digest_context(
     text_forecasts: TextForecasts | None = None,
     previous_digest: WeatherDigest | LongRangeDigest | None = None,
     route_advisories: RouteAdvisoriesManifest | None = None,
+    altitude_table: AltitudeTableResult | None = None,
     flight_rules: str | None = None,
     units_region: str | None = None,
     dwd_translated: list[tuple[DWDDayBlock, str]] | None = None,
@@ -95,6 +98,12 @@ def build_digest_context(
     # --- Forecast confidence note (long-range only, code-computed) ---
     if confidence_note:
         sections.append(f"=== FORECAST CONFIDENCE ===\n{confidence_note}")
+
+    # --- Altitude options (deterministic; from the precomputed table) ---
+    if altitude_table is not None:
+        alt_block = _format_altitude_options_context(altitude_table)
+        if alt_block:
+            sections.append(alt_block)
 
     # --- Quantitative data per waypoint ---
     if longrange:
@@ -679,6 +688,64 @@ def _format_alternates_context(alt: RouteAlternates) -> str:
             bits.append("dominates dest")
         lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
+    return "\n".join(lines)
+
+
+def _format_altitude_options_context(table: AltitudeTableResult) -> str | None:
+    """Build the deterministic ALTITUDE OPTIONS block from the precomputed table.
+
+    Compares the planned-cruise row against the best lower/higher options using
+    the shared altitude-diff primitive, so the LLM only *phrases* the trade-off
+    — it never invents which advisory improves or worsens. Returns ``None`` when
+    the table has no usable planned row (e.g. degenerate single-altitude sweep).
+    """
+    from weatherbrief.analysis.advisories.altitude_table import (
+        diff_altitude_rows,
+        row_for_altitude,
+    )
+
+    planned = row_for_altitude(table, table.cruise_altitude_ft)
+    if planned is None or not planned.statuses:
+        return None
+
+    def _status_summary(row: AltitudeAdvisoryRow) -> str:
+        parts = [
+            f"{table.advisory_names.get(aid, aid)}={status.value.upper()}"
+            for aid, status in sorted(row.statuses.items())
+            if status.value != "unavailable"
+        ]
+        return ", ".join(parts) if parts else "no altitude-dependent advisories"
+
+    def _change_phrase(changes) -> str:
+        return "; ".join(
+            f"{c.name} ({c.from_status.value.upper()}→{c.to_status.value.upper()})"
+            for c in changes
+        )
+
+    def _option_line(label: str, alt_ft: int | None) -> str:
+        if alt_ft is None or alt_ft == table.cruise_altitude_ft:
+            return f"  {label}: none differs from planned."
+        cand = row_for_altitude(table, alt_ft)
+        if cand is None:
+            return f"  {label}: none differs from planned."
+        delta = diff_altitude_rows(planned, cand, table.advisory_names)
+        if delta.is_empty:
+            return f"  {label} {alt_ft:,} ft: same advisory picture as planned."
+        improves = _change_phrase(delta.improved) if delta.improved else "nothing"
+        worsens = _change_phrase(delta.worsened) if delta.worsened else "nothing"
+        return f"  {label} {alt_ft:,} ft: improves {improves}; worsens {worsens}."
+
+    lines = [
+        "=== ALTITUDE OPTIONS (altitude-dependent advisories only) ===",
+        f"  Planned {table.cruise_altitude_ft:,} ft: {_status_summary(planned)}.",
+        _option_line("Lower option", table.best_below_cruise),
+    ]
+    # best_above_cruise is the best at/above cruise; only mention it when it is a
+    # genuinely higher altitude than planned (the picker can return cruise itself).
+    if table.best_above_cruise is not None and table.best_above_cruise > table.cruise_altitude_ft:
+        lines.append(_option_line("Higher option", table.best_above_cruise))
+    else:
+        lines.append("  Higher option: none below ceiling improves on planned.")
     return "\n".join(lines)
 
 

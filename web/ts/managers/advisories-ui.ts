@@ -6,6 +6,7 @@ import { showPopupContent } from '../components/info-popup';
 import { renderAdvisoryPopup } from '../helpers/advisory-popup';
 import { renderFrontsInfo } from '../helpers/fronts-info';
 import { advisoryBand, isCompactBand, compareAdvisories } from '../helpers/advisory-order';
+import { formatAltitudeDeltaNote } from '../helpers/altitude-diff';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
 import { formatVisibility } from '../units';
@@ -409,7 +410,10 @@ export interface AltitudeOverrideConfig {
   currentAlt: number;    // current slider value or flight default
   defaultAlt: number;    // flight's cruise_altitude_ft
   ceilingFt: number;     // flight_ceiling_ft for slider max
-  onChange: (alt: number) => void;
+  onChange: (alt: number) => void;       // continuous (drag): cheap local update
+  onProbe?: (alt: number) => void;       // release: table-indexed statuses + guarded wind overlay (#259)
+  plannedAlt?: number;                   // digest's planned altitude, for the delta note
+  table?: AltitudeTableResult | null;    // cached altitude table for instant indexing + delta note
 }
 
 export interface AltTimeToggleConfig {
@@ -530,11 +534,17 @@ export function renderAdvisories(
     const resetBtn = isOverridden
       ? `<button class="btn btn-sm alt-reset-btn" id="advisory-alt-reset" title="${t('advisories.resetTitle')}">${t('advisories.reset')}</button>`
       : '';
+    // Deterministic delta note vs the digest's planned altitude (#259).
+    const plannedAlt = altitudeOverride.plannedAlt ?? defaultAlt;
+    const deltaNote = (altitudeOverride.table && isOverridden)
+      ? (formatAltitudeDeltaNote(altitudeOverride.table, currentAlt, plannedAlt) ?? '')
+      : '';
     sliderHtml = `
       <div class="advisory-altitude-slider">
         <label class="alt-slider-label ${labelClass}" id="advisory-alt-label">${formatAlt(currentAlt)}</label>
         <input type="range" id="advisory-alt-slider" min="2000" max="${ceilingFt}" step="1000" value="${currentAlt}">
         ${resetBtn}
+        <span class="alt-delta-note" id="advisory-alt-delta">${escapeHtml(deltaNote)}</span>
       </div>`;
   }
 
@@ -633,7 +643,19 @@ export function renderAdvisories(
   if (altitudeOverride) {
     const slider = document.getElementById('advisory-alt-slider') as HTMLInputElement | null;
     const label = document.getElementById('advisory-alt-label');
+    const deltaEl = document.getElementById('advisory-alt-delta');
     const resetBtn = document.getElementById('advisory-alt-reset');
+    const plannedAlt = altitudeOverride.plannedAlt ?? altitudeOverride.defaultAlt;
+    // Live, deterministic delta note from the cached table — instant, no server.
+    const updateDelta = (val: number): void => {
+      if (!deltaEl) return;
+      deltaEl.textContent = (altitudeOverride.table && val !== altitudeOverride.defaultAlt)
+        ? (formatAltitudeDeltaNote(altitudeOverride.table, val, plannedAlt) ?? '')
+        : '';
+    };
+    // The lever indexes the cached table client-side (#259); fall back to the
+    // legacy full recalc only when no table is available (old packs).
+    const onRelease = altitudeOverride.onProbe ?? (onRecalculate ? () => onRecalculate() : undefined);
     if (slider) {
       // `input` fires continuously during drag — keep this cheap (local state
       // + cross-section repaint). Cross-section cruise line follows live.
@@ -643,21 +665,20 @@ export function renderAdvisories(
           label.textContent = formatAlt(val);
           label.classList.toggle('alt-label-overridden', val !== altitudeOverride.defaultAlt);
         }
+        updateDelta(val);
         altitudeOverride.onChange(val);
       });
-      // `change` fires once on release — trigger the server recalc so the
-      // wind overlay (route-graph head/crosswind) follows the new altitude.
-      // Without this, the cross-section cruise line moves but headwind values
-      // stay anchored to the pack's baked altitude until the user manually
-      // clicks Recalculate.
-      if (onRecalculate) {
-        slider.addEventListener('change', () => onRecalculate());
+      // `change` fires once on release — index the table for instant statuses
+      // and kick the debounced, stale-guarded wind-overlay update.
+      if (onRelease) {
+        slider.addEventListener('change', () => onRelease(parseInt(slider.value, 10)));
       }
     }
     if (resetBtn) {
       resetBtn.addEventListener('click', () => {
         altitudeOverride.onChange(altitudeOverride.defaultAlt);
-        if (onRecalculate) onRecalculate();
+        updateDelta(altitudeOverride.defaultAlt);
+        if (onRelease) onRelease(altitudeOverride.defaultAlt);
       });
     }
   }

@@ -38,6 +38,7 @@ class AdvisoryResult:
     manifest: RouteAdvisoriesManifest | None
     airport_conditions: AirportConditions | None = None
     wind_overlay: RouteWindOverlay | None = None
+    altitude_table: AltitudeTableResult | None = None
     error: str | None = None
 
 
@@ -294,10 +295,17 @@ def run_advisories(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    altitude_table_step_ft: int | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
     If *pack_dir* is set, persists the advisory manifest to disk.
+
+    If *altitude_table_step_ft* is set, also sweeps the altitude-dependent
+    advisories across the flight's altitude range (reusing the already-resolved
+    analyses, cross-sections, and airport conditions — essentially free) and
+    persists ``altitude_table.json``. This must happen here, while the
+    cross-sections are still in memory (the pipeline clears them right after).
     """
     def _notify(stage: str, detail: str | None = None) -> None:
         if progress_callback is not None:
@@ -357,7 +365,47 @@ def run_advisories(
 
             save_advisory_artifacts(pack_dir, manifest)
 
-        return AdvisoryResult(manifest=manifest, airport_conditions=airport_conds)
+        # Precompute the altitude table while the cross-sections are still in
+        # memory (the pipeline clears them right after advisories). Reuses the
+        # resolved analyses + airport conditions — ~1ms/altitude. Failures here
+        # never fail advisories: the lever falls back to the live endpoint.
+        altitude_table = None
+        if altitude_table_step_ft is not None:
+            try:
+                from weatherbrief.analysis.advisories.altitude_table import (
+                    compute_altitude_table,
+                )
+
+                altitude_table = compute_altitude_table(
+                    analyses=rp_analyses,
+                    cross_sections=cross_sections,
+                    elevation=elevation_profile,
+                    models=advisory_model_names,
+                    cruise_altitude_ft=route.cruise_altitude_ft,
+                    flight_ceiling_ft=route.flight_ceiling_ft,
+                    total_distance_nm=total_distance_nm,
+                    airport_conditions=airport_conds,
+                    step_ft=altitude_table_step_ft,
+                    enabled_ids=enabled_ids,
+                    user_params=user_params,
+                    aggregation=effective_aggregation,
+                    locale=locale,
+                    cruise_speed_ias_kt=cruise_speed_ias_kt,
+                    flight_duration_hours=route.flight_duration_hours,
+                )
+                if pack_dir and altitude_table is not None:
+                    from weatherbrief.tasks.artifacts import save_altitude_table_artifacts
+
+                    save_altitude_table_artifacts(pack_dir, altitude_table)
+            except Exception:
+                logger.warning("Altitude table precompute failed (non-fatal)", exc_info=True)
+                altitude_table = None
+
+        return AdvisoryResult(
+            manifest=manifest,
+            airport_conditions=airport_conds,
+            altitude_table=altitude_table,
+        )
     except Exception as exc:
         logger.warning("Route advisory evaluation failed", exc_info=True)
         return AdvisoryResult(manifest=None, error=str(exc))
