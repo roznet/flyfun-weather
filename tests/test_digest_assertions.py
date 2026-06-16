@@ -19,6 +19,7 @@ hit the network.
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 from pathlib import Path
 
@@ -33,7 +34,24 @@ from weatherbrief.digest.guardrails import (
     run_guardrails,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 EVAL_DIR = Path(__file__).resolve().parent / "eval_data" / "digests"
+
+
+def _load_run_one():
+    """Load ``run_one`` from ``scripts/run_digest_eval.py`` by file path.
+
+    ``scripts/`` is not a package and not on ``sys.path`` under the default
+    pytest config, so a plain ``from scripts.run_digest_eval import run_one``
+    would ``ModuleNotFoundError`` when someone first enables the live subset.
+    Loading by path sidesteps that regardless of how pytest was invoked.
+    """
+    script = _REPO_ROOT / "scripts" / "run_digest_eval.py"
+    spec = importlib.util.spec_from_file_location("run_digest_eval", script)
+    assert spec and spec.loader, f"cannot load {script}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.run_one
 
 
 def _committed_fixture_ids() -> list[str]:
@@ -238,6 +256,24 @@ def test_structure_decimal_numbers_not_counted_as_sentences():
     assert not sentence_violations, sentence_violations
 
 
+def test_fl_figure_traces_via_altitude_equivalent():
+    """A flight level in the output must trace when the context expresses the
+    same height in feet (FL090 <-> 9000ft), not flag the bare FL number."""
+    digest = {
+        "assessment": "AMBER",
+        "assessment_reason": "Icing in cloud near cruise.",
+        "synoptic": "Cloud tops near FL090 along the route.",
+        "specific_concerns": "none",
+        "trend": "Stable.",
+        "watch_items": "Nothing notable.",
+    }
+    # Context has only the ft-equivalent, not the bare "90".
+    assert not check_number_traceability(digest, "cloud tops 9000ft")
+    # If neither the FL number nor its ft-equivalent is present, it flags once.
+    flagged = check_number_traceability(digest, "cloud tops 6500ft")
+    assert len(flagged) == 1 and "9000" in flagged[0].message
+
+
 def test_output_figures_range_not_double_reported():
     """A range like '1500-9000ft' must not emit duplicate violations for its
     trailing endpoint."""
@@ -287,7 +323,8 @@ def test_live_guardrails(fixture_id):
     """Tiny live subset: run the fixture through the real LLM and assert the
     fresh output still passes every guardrail (and resists injection)."""
     from weatherbrief.digest.llm_config import load_digest_config
-    from scripts.run_digest_eval import run_one  # type: ignore
+
+    run_one = _load_run_one()
 
     _, context, meta = _load(fixture_id)
     config = load_digest_config("default")
