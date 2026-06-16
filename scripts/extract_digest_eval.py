@@ -190,8 +190,15 @@ def _classify_situations(
     if "=== PREVIOUS DIGEST" in context:
         tags.add("previous_digest")
 
-    # Route/region tags from waypoint ICAOs.
-    icaos = [wp.icao.upper() for wp in snapshot.route.waypoints]
+    # Route/region tags from *airport* ICAOs only. Route waypoints also include
+    # navaids/fixes (3-letter "DVR", 5-letter "KONAN") that would false-match
+    # region prefixes (e.g. "KONAN" -> us_route). Real ICAO airport codes are
+    # exactly 4 letters, so filter to those.
+    icaos = [
+        (wp.icao or "").upper()
+        for wp in snapshot.route.waypoints
+        if len(wp.icao or "") == 4
+    ]
     if any(c.startswith(("K", "PA", "PH")) for c in icaos):
         tags.add("us_route")
     # Switzerland (LS) / Austria (LO) prefixes are a coarse Alpine proxy.
@@ -289,12 +296,17 @@ def make_fixture_id(meta: dict) -> str:
     return f"{route}_{date}_{days}_{fetch}"
 
 
-def _read_synthetic_fixtures(output_dir: Path) -> list[dict]:
-    """Read hand-authored fixtures (``meta.json`` with ``synthetic: true``).
+def _read_preserved_fixtures(output_dir: Path) -> list[dict]:
+    """Read fixtures that must survive a regenerate verbatim.
 
-    Returns ``[{"id": dir_name, "files": {filename: text}}, ...]`` so they can
-    be re-written verbatim after the pack-derived set is regenerated. These are
-    not in ``data/packs`` and would otherwise be lost on rmtree.
+    Two kinds qualify (by ``meta.json`` flag):
+    * ``synthetic: true`` — hand-authored, not derived from a pack.
+    * ``curated: true`` — a pack-derived fixture a human has golden-labelled
+      (see ``scripts/label_digest_eval.py``). We freeze it so re-extraction
+      doesn't drop the human label, and so the committed golden context stays
+      exactly what was labelled.
+
+    Returns ``[{"id": dir_name, "files": {filename: text}}, ...]``.
     """
     preserved: list[dict] = []
     if not output_dir.exists():
@@ -307,7 +319,7 @@ def _read_synthetic_fixtures(output_dir: Path) -> list[dict]:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if not meta.get("synthetic"):
+        if not (meta.get("synthetic") or meta.get("curated")):
             continue
         files = {
             f.name: f.read_text(encoding="utf-8")
@@ -318,9 +330,9 @@ def _read_synthetic_fixtures(output_dir: Path) -> list[dict]:
 
 
 def preserved_index(preserved: list[dict]):
-    """Yield index entries for preserved synthetic fixtures."""
+    """Yield index entries for preserved (synthetic/curated) fixtures."""
     for p in preserved:
-        # meta.json is guaranteed present by _read_synthetic_fixtures (it only
+        # meta.json is guaranteed present by _read_preserved_fixtures (it only
         # includes dirs where meta_path.exists()); the default is just defensive.
         meta = json.loads(p["files"].get("meta.json", "{}"))
         yield {
@@ -334,7 +346,9 @@ def preserved_index(preserved: list[dict]):
             "advisory_counts": meta.get("advisory_summary", {}).get("counts", {}),
             "situations": meta.get("situations", []),
             "faithful": meta.get("faithful", True),
-            "synthetic": True,
+            "synthetic": bool(meta.get("synthetic")),
+            "curated": bool(meta.get("curated")),
+            "golden": meta.get("golden"),
             "context_chars": meta.get("context_chars", len(p["files"].get("context.txt", ""))),
         }
 
@@ -451,12 +465,12 @@ def main():
         results = pruned
         print(f"After prune: {len(results)} fixtures (from {before})")
 
-    # Write output. Preserve hand-authored synthetic fixtures (meta.json with
-    # "synthetic": true) across a regenerate — they are not derived from packs,
-    # so rmtree would silently destroy them (e.g. the injection fixture).
-    preserved = _read_synthetic_fixtures(args.output_dir)
+    # Write output. Preserve fixtures flagged synthetic (hand-authored) or
+    # curated (human-golden-labelled) across a regenerate — rmtree would
+    # otherwise destroy the injection fixture and any golden labels we've added.
+    preserved = _read_preserved_fixtures(args.output_dir)
     if preserved:
-        print(f"Preserving {len(preserved)} synthetic fixture(s): "
+        print(f"Preserving {len(preserved)} synthetic/curated fixture(s): "
               f"{', '.join(p['id'] for p in preserved)}")
     if args.output_dir.exists():
         shutil.rmtree(args.output_dir)
@@ -467,10 +481,15 @@ def main():
         for name, content in p["files"].items():
             (dst / name).write_text(content, encoding="utf-8")
 
-    # Write index
+    # Write index — preserved (frozen) fixtures first. A curated fixture is also
+    # pack-derived, so skip its id in the results loop below: the frozen copy
+    # (with its golden label) must win over a fresh re-extraction.
     index = list(preserved_index(preserved))
+    preserved_ids = {p["id"] for p in preserved}
     for r in sorted(results, key=lambda x: (x["meta"]["route"], x["meta"]["target_date"])):
         fid = make_fixture_id(r["meta"])
+        if fid in preserved_ids:
+            continue
         fixture_dir = args.output_dir / fid
         fixture_dir.mkdir(parents=True, exist_ok=True)
 
@@ -505,7 +524,7 @@ def main():
     total_kb = sum(e.get("context_chars", 0) for e in index) / 1024
     faithful_n = sum(1 for e in index if e.get("faithful"))
     print(f"\nDataset written to {args.output_dir}/")
-    print(f"  {len(index)} fixtures ({len(preserved)} synthetic), "
+    print(f"  {len(index)} fixtures ({len(preserved)} synthetic/curated), "
           f"{total_kb:.0f}KB total context")
     print(f"  Assessment distribution: {dict(assess_counts)}")
     print(f"  Fidelity: {faithful_n} faithful / "
