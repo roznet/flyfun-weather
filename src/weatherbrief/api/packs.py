@@ -331,6 +331,10 @@ class PackMetaResponse(BaseModel):
     has_alt_advisories: bool = False
     assessment: str | None
     assessment_reason: str | None
+    # Long-range outlook (beyond the GRIB horizon), shown instead of the
+    # traffic-light assessment: TRENDING_SETTLED / MIXED_SIGNALS / TRENDING_UNSETTLED.
+    outlook: str | None = None
+    outlook_reason: str | None = None
     alt_assessment: str | None = None
     alt_assessment_reason: str | None = None
     model_init_times: dict[str, int] = Field(default_factory=dict)
@@ -378,6 +382,8 @@ def _meta_to_response(
         has_alt_advisories=meta.has_alt_advisories,
         assessment=meta.assessment,
         assessment_reason=meta.assessment_reason,
+        outlook=meta.outlook,
+        outlook_reason=meta.outlook_reason,
         alt_assessment=meta.alt_assessment,
         alt_assessment_reason=meta.alt_assessment_reason,
         model_init_times=meta.model_init_times,
@@ -1193,10 +1199,20 @@ def _build_pack_meta(
     # provide a result that doesn't carry the manifest.
     assessment: str | None = None
     assessment_reason: str | None = None
+    outlook: str | None = None
+    outlook_reason: str | None = None
     if not provisional and result.digest:
-        assessment = result.digest.assessment
-        assessment_reason = result.digest.assessment_reason
-    if assessment is None:
+        # A long-range digest carries an ``outlook`` instead of a GREEN/AMBER/RED
+        # assessment; keep them mutually exclusive so the UI shows one or the other.
+        if hasattr(result.digest, "outlook"):
+            outlook = result.digest.outlook
+            outlook_reason = result.digest.outlook_reason
+        else:
+            assessment = result.digest.assessment
+            assessment_reason = result.digest.assessment_reason
+    # Fall back to the advisory-derived assessment only in the short-range regime
+    # — a long-range pack intentionally shows its soft outlook, not a verdict.
+    if assessment is None and outlook is None:
         assessment, assessment_reason = _assessment_from_advisories(
             result.route_advisories_manifest, pack_path,
         )
@@ -1213,6 +1229,8 @@ def _build_pack_meta(
         llm_digest_requested=result.llm_digest_requested,
         assessment=assessment,
         assessment_reason=assessment_reason,
+        outlook=outlook,
+        outlook_reason=outlook_reason,
         # NULL on the provisional pass (digest hasn't run); set on finalize from
         # the run_digest-controlled run_id so thumb feedback can reach LangSmith.
         digest_trace_id=result.digest_trace_id,

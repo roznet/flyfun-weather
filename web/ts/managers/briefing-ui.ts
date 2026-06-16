@@ -250,6 +250,15 @@ function renderAdvisoryChips(manifest: RouteAdvisoriesManifest): string {
   }).join(' ');
 }
 
+// Long-range outlook → CSS class for the banner. Distinct from the
+// assessment-green/amber/red traffic light: a long-range outlook is a soft
+// "what to expect" tendency, not a go/no-go verdict.
+const OUTLOOK_CLASS: Record<string, string> = {
+  TRENDING_SETTLED: 'outlook-settled',
+  MIXED_SIGNALS: 'outlook-mixed',
+  TRENDING_UNSETTLED: 'outlook-unsettled',
+};
+
 export function renderAssessment(
   pack: PackMeta | null,
   flight?: FlightResponse | null,
@@ -260,7 +269,21 @@ export function renderAssessment(
 ): void {
   const el = $('assessment-banner');
   if (el) {
-    if (!pack || !pack.assessment) {
+    if (pack && pack.outlook) {
+      // Long-range early outlook — distinct badge, never the traffic light.
+      const key = pack.outlook.toUpperCase();
+      el.className = `assessment-banner ${OUTLOOK_CLASS[key] ?? 'outlook-mixed'}`;
+      const label = t(`outlook.${pack.outlook.toLowerCase()}`);
+      let suffixHtml = '';
+      if (pack.has_digest) {
+        suffixHtml = pack.outlook_reason ? ` — ${escapeHtml(pack.outlook_reason)}` : '';
+      } else if (digestPending) {
+        suffixHtml = ` <span class="assessment-pending">${escapeHtml(t('digest.generating'))}</span>`;
+      }
+      el.innerHTML =
+        `<span class="outlook-tag">${escapeHtml(t('outlook.early'))}</span> ` +
+        `<strong>${escapeHtml(label)}</strong>${suffixHtml}`;
+    } else if (!pack || !pack.assessment) {
       el.className = 'assessment-banner assessment-none';
       el.textContent = t('briefing.noAssessment');
     } else {
@@ -1738,6 +1761,15 @@ const DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; labelKey: string; icon:
   { key: 'watch_items', labelKey: 'digest.watchItems', icon: '\uD83D\uDC41\uFE0F' },
 ];
 
+// Long-range digest sections — model agreement replaces specific concerns, and
+// there is no GREEN/AMBER/RED (the outlook lives in the banner instead).
+const LONGRANGE_DIGEST_SECTIONS: Array<{ key: keyof WeatherDigest; labelKey: string; icon: string }> = [
+  { key: 'synoptic', labelKey: 'digest.synoptic', icon: '🌍' },
+  { key: 'model_agreement', labelKey: 'digest.modelAgreement', icon: '🤝' },
+  { key: 'trend', labelKey: 'digest.trend', icon: '📈' },
+  { key: 'watch_items', labelKey: 'digest.watchItems', icon: '👁️' },
+];
+
 /** Digest section keys shown in compact mode (synoptic overview + trend only). */
 const COMPACT_DIGEST_KEYS: Set<keyof WeatherDigest> = new Set(['synoptic', 'trend']);
 
@@ -1863,9 +1895,12 @@ function clearDigestFeedbackToolbar(): void {
 }
 
 function renderDigestHtml(digest: WeatherDigest, displayMode: DisplayMode): string {
+  // A long-range digest (distinguished by `outlook`) uses a different section
+  // set — model agreement in place of specific concerns.
+  const baseSections = digest.outlook ? LONGRANGE_DIGEST_SECTIONS : DIGEST_SECTIONS;
   const sections = displayMode === 'compact'
-    ? DIGEST_SECTIONS.filter(s => COMPACT_DIGEST_KEYS.has(s.key))
-    : DIGEST_SECTIONS;
+    ? baseSections.filter(s => COMPACT_DIGEST_KEYS.has(s.key))
+    : baseSections;
   return sections.map(({ key, labelKey, icon }) => {
     const text = digest[key];
     if (!text) return '';

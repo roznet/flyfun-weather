@@ -198,7 +198,15 @@ def _load_previous_digest(pack_dir: Path | None, days_out: int = -1):
     except OSError:
         return None
 
-    from weatherbrief.digest.llm_digest import WeatherDigest
+    from weatherbrief.digest.llm_digest import LongRangeDigest, WeatherDigest
+
+    def _parse_digest(data: dict):
+        """Parse either a short-range WeatherDigest or a long-range
+        LongRangeDigest (distinguished by the ``outlook`` field), so trend
+        continuity survives across the long↔short-range boundary."""
+        if "outlook" in data:
+            return LongRangeDigest.model_validate(data)
+        return WeatherDigest.model_validate(data)
 
     for sibling in siblings:
         digest_path = sibling / "digest.json"
@@ -216,7 +224,7 @@ def _load_previous_digest(pack_dir: Path | None, days_out: int = -1):
                 pass  # can't read metadata — still try the digest
         try:
             data = json.loads(digest_path.read_text())
-            prev = WeatherDigest.model_validate(data)
+            prev = _parse_digest(data)
             logger.info("Loaded previous digest from %s", digest_path)
             return prev
         except Exception:

@@ -213,6 +213,8 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.llm_digest_requested = meta.llm_digest_requested
     row.assessment = meta.assessment
     row.assessment_reason = meta.assessment_reason
+    row.outlook = meta.outlook
+    row.outlook_reason = meta.outlook_reason
     row.digest_trace_id = meta.digest_trace_id
     row.artifact_path = meta.artifact_path
     row.model_init_times_json = json.dumps(meta.model_init_times)
@@ -333,6 +335,8 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         llm_digest_requested=row.llm_digest_requested,
         assessment=row.assessment,
         assessment_reason=row.assessment_reason,
+        outlook=row.outlook,
+        outlook_reason=row.outlook_reason,
         digest_trace_id=row.digest_trace_id,
         artifact_path=_resolve_artifact_path(row.artifact_path),
         model_init_times=json.loads(row.model_init_times_json) if row.model_init_times_json else {},

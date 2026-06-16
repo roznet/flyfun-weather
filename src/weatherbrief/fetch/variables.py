@@ -189,6 +189,24 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
 }
 
 
+# Global models that must BOTH be present for a flight to be bookable. The
+# booking horizon is the last lead day on which both still deliver: Open-Meteo
+# drops a model once ``days_out >= max_days``, so the last available lead day is
+# ``max_days - 1``.
+DUAL_MODEL_KEYS = ("ecmwf", "gfs")
+
+
+def dual_model_horizon_days() -> int:
+    """Max ``days_out`` at which both ECMWF and GFS (Open-Meteo) are available.
+
+    Beyond this only a single global model remains, so a flight that far out
+    cannot get a meaningful two-model outlook and is not bookable. Derived from
+    ``MODEL_ENDPOINTS`` so it tracks any future horizon change (currently 9:
+    ECMWF ``max_days=10`` → available for ``days_out`` 0..9).
+    """
+    return min(MODEL_ENDPOINTS[k].max_days for k in DUAL_MODEL_KEYS) - 1
+
+
 def build_hourly_params(endpoint: ModelEndpoint) -> str:
     """Build the comma-separated hourly parameter string for a model endpoint."""
     # Surface variables (excluding unavailable)

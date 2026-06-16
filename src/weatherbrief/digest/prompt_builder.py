@@ -48,6 +48,8 @@ def build_digest_context(
     units_region: str | None = None,
     dwd_translated: list[tuple[DWDDayBlock, str]] | None = None,
     dwd_is_synoptic_extract: bool = False,
+    longrange: bool = False,
+    confidence_note: str | None = None,
 ) -> str:
     """Build the full context string for the LLM briefer.
 
@@ -57,6 +59,15 @@ def build_digest_context(
     3. Route advisories (deterministic hazard assessments)
     4. Text forecasts (NWS AFD or translated DWD, region-dependent)
     5. Trend from previous digest
+
+    ``longrange=True`` produces the trimmed context for the early long-range
+    outlook (beyond the ECMWF GRIB horizon): the per-waypoint quantitative
+    block is reduced to coarse signals, all model divergence is shown (not just
+    moderate/poor) since agreement is the headline, and the precise sounding
+    indices are dropped because they are not skilful at that range. The
+    advisories, text forecasts and trend sections are unchanged. ``confidence_note``
+    is a code-computed line (e.g. "more detail from <date>") prepended so the
+    LLM can phrase it without doing its own date arithmetic.
     """
     sections: list[str] = []
 
@@ -81,7 +92,27 @@ def build_digest_context(
         f"PILOT CAPABILITY: {capability}"
     )
 
+    # --- Forecast confidence note (long-range only, code-computed) ---
+    if confidence_note:
+        sections.append(f"=== FORECAST CONFIDENCE ===\n{confidence_note}")
+
     # --- Quantitative data per waypoint ---
+    if longrange:
+        sections.append(_build_coarse_quant(snapshot, target_time))
+        # Long range: include DWD only via the strictly-covering blocks the
+        # caller already filtered (``dwd_translated``); drop the raw text block
+        # entirely, since NWS AFD (~24-48h) and any non-covering text would
+        # describe a day other than the flight and confuse the outlook.
+        return _append_shared_sections(
+            sections,
+            snapshot=snapshot,
+            route_advisories=route_advisories,
+            text_forecasts=None,
+            previous_digest=previous_digest,
+            dwd_translated=dwd_translated,
+            dwd_is_synoptic_extract=dwd_is_synoptic_extract,
+        )
+
     quant_lines: list[str] = ["=== QUANTITATIVE DATA ==="]
     for wp in snapshot.route.waypoints:
         coord_str = f" [{_fmt_coords(wp.lat, wp.lon)}]" if wp.lat is not None else ""
@@ -182,7 +213,33 @@ def build_digest_context(
             )
 
     sections.append("\n".join(quant_lines))
+    return _append_shared_sections(
+        sections,
+        snapshot=snapshot,
+        route_advisories=route_advisories,
+        text_forecasts=text_forecasts,
+        previous_digest=previous_digest,
+        dwd_translated=dwd_translated,
+        dwd_is_synoptic_extract=dwd_is_synoptic_extract,
+    )
 
+
+def _append_shared_sections(
+    sections: list[str],
+    *,
+    snapshot: ForecastSnapshot,
+    route_advisories: RouteAdvisoriesManifest | None,
+    text_forecasts: TextForecasts | None,
+    previous_digest,  # WeatherDigest | LongRangeDigest | None
+    dwd_translated: list[tuple[DWDDayBlock, str]] | None,
+    dwd_is_synoptic_extract: bool,
+) -> str:
+    """Append the sections common to short- and long-range context and join.
+
+    Advisories, METAR/TAF, SIGMETs, text forecasts and trend are identical for
+    both regimes (METAR/TAF and SIGMETs are D-0 only, so they are simply absent
+    at long range).
+    """
     # --- Route advisories ---
     if route_advisories:
         sections.append(_format_route_advisories_context(route_advisories))
@@ -216,14 +273,114 @@ def build_digest_context(
 
     # --- Trend ---
     if previous_digest:
-        trend_lines: list[str] = ["=== PREVIOUS DIGEST (for trend comparison) ==="]
-        trend_lines.append(f"Previous assessment: {previous_digest.assessment}")
-        trend_lines.append(f"Previous reason: {previous_digest.assessment_reason}")
-        trend_lines.append(f"Previous synoptic: {previous_digest.synoptic}")
-        trend_lines.append(f"Previous trend: {previous_digest.trend}")
-        sections.append("\n".join(trend_lines))
+        sections.append(_format_previous_digest_context(previous_digest))
 
     return "\n\n".join(sections)
+
+
+def _format_previous_digest_context(previous_digest) -> str:
+    """Render the previous digest for trend comparison.
+
+    Works for both the short-range ``WeatherDigest`` (assessment/…) and the
+    long-range ``LongRangeDigest`` (outlook/…) so trend survives a flight
+    crossing the long→short-range boundary.
+    """
+    lines = ["=== PREVIOUS DIGEST (for trend comparison) ==="]
+    if hasattr(previous_digest, "outlook"):
+        lines.append(f"Previous outlook: {previous_digest.outlook}")
+        lines.append(f"Previous reason: {previous_digest.outlook_reason}")
+        lines.append(f"Previous synoptic: {previous_digest.synoptic}")
+        lines.append(f"Previous model agreement: {previous_digest.model_agreement}")
+        lines.append(f"Previous trend: {previous_digest.trend}")
+    else:
+        lines.append(f"Previous assessment: {previous_digest.assessment}")
+        lines.append(f"Previous reason: {previous_digest.assessment_reason}")
+        lines.append(f"Previous synoptic: {previous_digest.synoptic}")
+        lines.append(f"Previous trend: {previous_digest.trend}")
+    return "\n".join(lines)
+
+
+def _build_coarse_quant(snapshot: ForecastSnapshot, target_time: datetime) -> str:
+    """Coarse per-waypoint model data for the long-range outlook.
+
+    Trims the full quantitative block to broad signals — surface wind, broad
+    cloud, precipitation presence, freezing level, a convective (CAPE) flag —
+    and shows ALL model divergence (agreement is the headline at this range).
+    The precise sounding indices (CAPE/CIN/K-index/shear/icing geometry) are
+    deliberately omitted: they are computed from low-skill long-range models and
+    invite false precision.
+    """
+    lines: list[str] = [
+        "=== MODEL OUTLOOK DATA (coarse — long range, two/three global models) ==="
+    ]
+    for wp in snapshot.route.waypoints:
+        coord_str = f" [{_fmt_coords(wp.lat, wp.lon)}]" if wp.lat is not None else ""
+        lines.append(f"\n--- {wp.icao} ({wp.name}){coord_str} ---")
+
+        for wf in [f for f in snapshot.forecasts if f.waypoint.icao == wp.icao]:
+            hourly = wf.at_time(target_time)
+            if not hourly:
+                continue
+            parts: list[str] = []
+            if hourly.wind_speed_10m_kt is not None:
+                gust = (
+                    f" g{hourly.wind_gusts_10m_kt:.0f}"
+                    if hourly.wind_gusts_10m_kt is not None else ""
+                )
+                parts.append(
+                    f"wind {hourly.wind_direction_10m_deg:.0f}/"
+                    f"{hourly.wind_speed_10m_kt:.0f}kt{gust}"
+                )
+            if hourly.cloud_cover_pct is not None:
+                parts.append(f"cloud {hourly.cloud_cover_pct:.0f}%")
+            if hourly.precipitation_mm is not None:
+                parts.append("precip" if hourly.precipitation_mm > 0.1 else "dry")
+            if hourly.freezing_level_m is not None:
+                parts.append(f"FzLvl ~{hourly.freezing_level_m * 3.28084:.0f}ft")
+            if hourly.cape_jkg is not None and hourly.cape_jkg >= 100:
+                parts.append(f"CAPE present (~{hourly.cape_jkg:.0f}J/kg)")
+            if parts:
+                lines.append(f"[{wf.model.value}]: {', '.join(parts)}")
+
+        wp_analysis = next(
+            (a for a in snapshot.analyses if a.waypoint.icao == wp.icao), None
+        )
+        if wp_analysis and wp_analysis.model_divergence:
+            lines.extend(_format_divergence_all(wp_analysis.model_divergence))
+
+    return "\n".join(lines)
+
+
+# Coarse variables surfaced in the long-range agreement line. The precise
+# sounding indices (k_index, total_totals, bulk_shear, lcl, omega, …) are
+# excluded — they are not skilful this far out and reintroduce false precision.
+_LONGRANGE_DIVERGENCE_VARS = (
+    "temperature_c",
+    "wind_speed_kt",
+    "wind_direction_deg",
+    "cloud_cover_pct",
+    "precipitation_mm",
+    "freezing_level_ft",
+    "cape_surface_jkg",
+)
+
+
+def _format_divergence_all(divergences: list[ModelDivergence]) -> list[str]:
+    """Format model divergence for long range — agreement shown explicitly.
+
+    Unlike :func:`_format_divergence_context` (which hides GOOD agreement as
+    implicit), this surfaces agreement on the coarse variables because "the
+    models agree" is itself the key long-range signal. Restricted to
+    :data:`_LONGRANGE_DIVERGENCE_VARS` to keep the focus broad.
+    """
+    parts = [
+        f"{d.variable} {d.agreement.value}(spread={d.spread:.1f})"
+        for d in divergences
+        if d.variable in _LONGRANGE_DIVERGENCE_VARS
+    ]
+    if not parts:
+        return []
+    return [f"  Model agreement: {'; '.join(parts)}"]
 
 
 def _format_dwd_translated_context(

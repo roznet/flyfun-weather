@@ -94,8 +94,14 @@ class BriefingPackMeta(BaseModel):
     # built with the profile's AI toggle off carries False, which the UI uses
     # to show "AI summary off for this profile" + a Generate button instead.
     llm_digest_requested: bool = True
-    assessment: Optional[str] = None  # GREEN/AMBER/RED from digest
+    assessment: Optional[str] = None  # GREEN/AMBER/RED from digest (short range)
     assessment_reason: Optional[str] = None
+    # Long-range (beyond the GRIB horizon) outlook, in place of the traffic-light
+    # assessment: TRENDING_SETTLED / MIXED_SIGNALS / TRENDING_UNSETTLED. Mutually
+    # exclusive with ``assessment`` — a long-range pack shows a soft outlook, not
+    # a go/no-go verdict.
+    outlook: Optional[str] = None
+    outlook_reason: Optional[str] = None
     # LangSmith root run id of the digest LLM call (issue #244). Set when the
     # digest is generated with tracing-controlled run_id; NULL for provisional
     # rows (digest not yet run) and legacy packs created before #244. Used by

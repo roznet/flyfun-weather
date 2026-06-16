@@ -26,6 +26,19 @@ _ASSESSMENT_COLORS = {
     "RED": ("#f8d7da", "#842029"),
 }
 
+# Long-range outlook — muted palette (paired with a dashed border) so it reads
+# as a soft preview, distinct from the solid assessment traffic light.
+_OUTLOOK_LABELS = {
+    "TRENDING_SETTLED": "Trending settled",
+    "MIXED_SIGNALS": "Mixed signals",
+    "TRENDING_UNSETTLED": "Trending unsettled",
+}
+_OUTLOOK_COLORS = {
+    "TRENDING_SETTLED": ("#f8f9fa", "#0f5132"),
+    "MIXED_SIGNALS": ("#f8f9fa", "#555555"),
+    "TRENDING_UNSETTLED": ("#f8f9fa", "#664d03"),
+}
+
 _ADVISORY_STATUS_COLORS = {
     "green": "#0f5132",
     "amber": "#b45309",
@@ -304,18 +317,35 @@ def _build_html_body(
         f'</div>'
     )
 
-    # Assessment banner
+    # Assessment / outlook banner. A long-range pack shows a soft "early outlook"
+    # (dashed, muted) instead of the GREEN/AMBER/RED traffic light.
     assessment_html = ""
-    assessment = pack.assessment or (digest.get("assessment") if digest else None)
-    reason = pack.assessment_reason or (digest.get("assessment_reason") if digest else None)
-    if assessment:
-        bg, fg = _ASSESSMENT_COLORS.get(assessment.upper(), ("#f0f0f0", "#333"))
-        esc_reason = html.escape(reason) if reason else ""
+    outlook = getattr(pack, "outlook", None) or (digest.get("outlook") if digest else None)
+    if outlook:
+        o = outlook.upper()
+        bg, fg = _OUTLOOK_COLORS.get(o, ("#f0f0f0", "#333"))
+        label = _OUTLOOK_LABELS.get(o, outlook)
+        o_reason = getattr(pack, "outlook_reason", None) or (
+            digest.get("outlook_reason") if digest else None
+        )
+        esc_reason = html.escape(o_reason) if o_reason else ""
         assessment_html = (
             f'<div style="background:{bg};color:{fg};padding:8px 12px;'
-            f'border-radius:4px;font-weight:600;margin-bottom:12px;">'
-            f'{html.escape(assessment)}{f" &mdash; {esc_reason}" if reason else ""}</div>'
+            f'border:1px dashed {fg};border-radius:4px;font-weight:600;margin-bottom:12px;">'
+            f'EARLY OUTLOOK &mdash; {html.escape(label)}'
+            f'{f" &mdash; {esc_reason}" if o_reason else ""}</div>'
         )
+    else:
+        assessment = pack.assessment or (digest.get("assessment") if digest else None)
+        reason = pack.assessment_reason or (digest.get("assessment_reason") if digest else None)
+        if assessment:
+            bg, fg = _ASSESSMENT_COLORS.get(assessment.upper(), ("#f0f0f0", "#333"))
+            esc_reason = html.escape(reason) if reason else ""
+            assessment_html = (
+                f'<div style="background:{bg};color:{fg};padding:8px 12px;'
+                f'border-radius:4px;font-weight:600;margin-bottom:12px;">'
+                f'{html.escape(assessment)}{f" &mdash; {esc_reason}" if reason else ""}</div>'
+            )
 
     # Airport conditions
     airport_html = ""
@@ -332,14 +362,22 @@ def _build_html_body(
             + '</div>'
         )
 
-    # Digest sections
+    # Digest sections — long-range swaps specific concerns for model agreement.
     digest_html = ""
     if digest:
-        sections = [
-            ("synoptic", "Synoptic"),
-            ("specific_concerns", "Specific Concerns"),
-            ("watch_items", "Watch Items"),
-        ]
+        if digest.get("outlook"):
+            sections = [
+                ("synoptic", "Synoptic"),
+                ("model_agreement", "Model Agreement"),
+                ("trend", "Trend"),
+                ("watch_items", "Watch Items"),
+            ]
+        else:
+            sections = [
+                ("synoptic", "Synoptic"),
+                ("specific_concerns", "Specific Concerns"),
+                ("watch_items", "Watch Items"),
+            ]
         digest_parts = [_digest_section(digest, key, label) for key, label in sections]
         digest_html = "".join(digest_parts)
 
@@ -385,11 +423,20 @@ def _build_plain_body(
         "",
     ]
 
-    assessment = pack.assessment or (digest.get("assessment") if digest else None)
-    reason = pack.assessment_reason or (digest.get("assessment_reason") if digest else None)
-    if assessment:
-        lines.append(f"{assessment}{f' — {reason}' if reason else ''}")
+    outlook = getattr(pack, "outlook", None) or (digest.get("outlook") if digest else None)
+    if outlook:
+        label = _OUTLOOK_LABELS.get(outlook.upper(), outlook)
+        o_reason = getattr(pack, "outlook_reason", None) or (
+            digest.get("outlook_reason") if digest else None
+        )
+        lines.append(f"EARLY OUTLOOK — {label}{f' — {o_reason}' if o_reason else ''}")
         lines.append("")
+    else:
+        assessment = pack.assessment or (digest.get("assessment") if digest else None)
+        reason = pack.assessment_reason or (digest.get("assessment_reason") if digest else None)
+        if assessment:
+            lines.append(f"{assessment}{f' — {reason}' if reason else ''}")
+            lines.append("")
 
     # Advisories summary
     if advisories_data:
@@ -406,13 +453,22 @@ def _build_plain_body(
             lines.extend(["All advisories GREEN", ""])
 
     if digest:
-        for key, label in [
-            ("synoptic", "Synoptic"),
-            ("winds", "Winds"),
-            ("icing", "Icing"),
-            ("specific_concerns", "Specific Concerns"),
-            ("watch_items", "Watch Items"),
-        ]:
+        if digest.get("outlook"):
+            section_keys = [
+                ("synoptic", "Synoptic"),
+                ("model_agreement", "Model Agreement"),
+                ("trend", "Trend"),
+                ("watch_items", "Watch Items"),
+            ]
+        else:
+            section_keys = [
+                ("synoptic", "Synoptic"),
+                ("winds", "Winds"),
+                ("icing", "Icing"),
+                ("specific_concerns", "Specific Concerns"),
+                ("watch_items", "Watch Items"),
+            ]
+        for key, label in section_keys:
             text = digest.get(key, "")
             if text:
                 lines.extend([f"{label}: {text}", ""])

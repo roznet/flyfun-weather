@@ -29,6 +29,8 @@ class PromptsConfig(BaseModel):
     """Paths to prompt templates (relative to configs/weather_digest/)."""
 
     briefer: str = "prompts/briefer_v1.md"
+    # Long-range (>7 day) outlook prompt — softer, model-agreement driven.
+    briefer_longrange: str = "prompts/briefer_longrange_v1.md"
 
 
 class DigestConfig(BaseModel):
@@ -37,6 +39,14 @@ class DigestConfig(BaseModel):
     version: str = "1.0"
     name: str = "default"
     llm: LLMConfig = LLMConfig()
+    # Beyond the ECMWF GRIB horizon (~7 days) only two global models remain and
+    # confidence is low, so the long-range outlook runs a cheaper model on a
+    # trimmed prompt.  Haiku by default; overridable per config like ``llm``.
+    longrange: LLMConfig = LLMConfig(
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        temperature=0.0,
+    )
     translator: LLMConfig = LLMConfig(
         provider="anthropic",
         model="claude-haiku-4-5-20251001",
@@ -194,10 +204,19 @@ def load_guidance_index(locale: str | None = None) -> list[dict]:
     return result
 
 
-def create_llm(config: DigestConfig) -> BaseChatModel:
-    """Create a LangChain chat model from digest config."""
+def create_chat_model(llm_config: LLMConfig) -> BaseChatModel:
+    """Create a LangChain chat model from a single LLMConfig block."""
     return init_chat_model(
-        model=config.llm.model,
-        model_provider=config.llm.provider,
-        temperature=config.llm.temperature,
+        model=llm_config.model,
+        model_provider=llm_config.provider,
+        temperature=llm_config.temperature,
     )
+
+
+def create_llm(config: DigestConfig, *, longrange: bool = False) -> BaseChatModel:
+    """Create the briefer chat model from digest config.
+
+    ``longrange=True`` selects the cheaper long-range model (``config.longrange``)
+    used beyond the ECMWF GRIB horizon; otherwise the default ``config.llm``.
+    """
+    return create_chat_model(config.longrange if longrange else config.llm)

@@ -467,6 +467,39 @@ def next_full_horizon_run(source: str, after: datetime) -> tuple[datetime, datet
     return best
 
 
+def first_full_coverage(source: str, target: datetime) -> tuple[datetime, datetime]:
+    """Return ``(init, expected_delivery)`` of the earliest *full-horizon* run
+    of ``source`` whose forecast reaches ``target``.
+
+    This answers "when does high-resolution guidance first cover a far-out
+    flight?".  For a flight 10 days out, ECMWF direct GRIB (168h = 7 days on
+    its 00/12Z full-horizon cycles) cannot see it yet; this returns the first
+    00/12Z run — and the wallclock it is expected to be delivered — whose
+    ``init + 168h`` first includes ``target``.  The caller turns that delivery
+    time into a "more detail expected from <date>" message for the long-range
+    digest.
+
+    Only full-horizon cycles qualify (see :func:`next_full_horizon_run`): a
+    medium-only cycle would reach a shorter horizon and so cover ``target``
+    later, not sooner.
+    """
+    cfg = SOURCE_REGISTRY[source]
+    full_h = max_horizon(source)
+    full_cycles = sorted(h for h in cfg.cycles if cfg.horizon_for(h) == full_h)
+    # The earliest run reaching ``target`` is the first full-horizon cycle init
+    # at-or-after ``target - full_horizon``.
+    earliest_init = target - full_h
+    base = earliest_init.replace(hour=0, minute=0, second=0, microsecond=0)
+    for day in (0, 1):
+        for hour in full_cycles:
+            init = base + timedelta(days=day, hours=hour)
+            if init >= earliest_init:
+                return init, init + cfg.offset_for(init.hour)
+    raise ValueError(  # pragma: no cover - full_cycles is always non-empty
+        f"no full-horizon cycle configured for {source!r}"
+    )
+
+
 def cycle_init_for(source: str, dt: datetime) -> datetime:
     """Return the latest cycle init at-or-before ``dt`` for ``source``."""
     cfg = SOURCE_REGISTRY[source]

@@ -224,6 +224,10 @@ class BriefingPackRow(Base):
     )
     assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Long-range outlook (beyond the GRIB horizon), shown instead of the
+    # traffic-light assessment. Mutually exclusive with ``assessment``.
+    outlook: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    outlook_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     # LangSmith root run id of the digest LLM call (issue #244). NULL for
     # provisional rows (digest not yet run) and packs created before #244.
     # The feedback endpoint reads this to attach thumb ratings to the run.
