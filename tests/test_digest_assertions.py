@@ -71,10 +71,13 @@ FIXTURE_IDS = _committed_fixture_ids()
 
 def _load(fixture_id: str) -> tuple[dict, str, dict]:
     d = EVAL_DIR / fixture_id
-    digest = json.loads((d / "digest.json").read_text())
-    context = (d / "context.txt").read_text()
+    digest = json.loads((d / "digest.json").read_text(encoding="utf-8"))
+    context = (d / "context.txt").read_text(encoding="utf-8")
     meta_path = d / "meta.json"
-    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    meta = (
+        json.loads(meta_path.read_text(encoding="utf-8"))
+        if meta_path.exists() else {}
+    )
     return digest, context, meta
 
 

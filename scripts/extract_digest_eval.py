@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import shutil
 from collections import Counter, defaultdict
 from datetime import date, datetime
@@ -36,6 +37,8 @@ from pathlib import Path
 from weatherbrief.digest.prompt_builder import build_digest_context
 from weatherbrief.models import ForecastSnapshot, RouteAdvisoriesManifest
 
+
+logger = logging.getLogger(__name__)
 
 PACKS_DIR = Path("data/packs")
 DEFAULT_OUTPUT = Path("tests/eval_data/digests")
@@ -146,6 +149,9 @@ def _load_dwd_translated(pack_dir: Path) -> list | None:
             out.append((block, entry.get("text_en", "") or ""))
         return out or None
     except Exception:
+        # e.g. a DWDDayBlock schema change — fall back to a context without the
+        # DWD section, but leave a breadcrumb so it's diagnosable.
+        logger.debug("_load_dwd_translated failed for %s", pack_dir, exc_info=True)
         return None
 
 
@@ -218,12 +224,25 @@ def extract_one(pack_dir: Path) -> dict | None:
     else:
         target_time = datetime.fromisoformat(f"{snapshot.target_date}T09:00:00")
 
+    # Load the digest and skip long-range outlooks *before* touching the
+    # context — they are a different output type (LongRangeDigest:
+    # outlook/outlook_reason, no GREEN/AMBER/RED assessment) with its own
+    # contract, so the WeatherDigest eval/guardrails don't apply. Doing the
+    # skip first avoids reading/rebuilding a context we're about to discard
+    # (outputs.py persists digest_context.txt for longrange packs too).
+    # Long-range gets its own eval track later (see project_longrange_outlook).
+    digest = json.loads((pack_dir / "digest.json").read_text())
+    if "outlook" in digest or digest.get("assessment") not in (
+        "GREEN", "AMBER", "RED"
+    ):
+        return None
+
     # Prefer the persisted context (byte-faithful to what the LLM saw). Fall
     # back to best-effort reconstruction for older packs that predate
     # digest_context.txt — splicing the DWD overview back in when available.
     persisted = pack_dir / "digest_context.txt"
     if persisted.exists():
-        context = persisted.read_text()
+        context = persisted.read_text(encoding="utf-8")
         faithful = True
         context_source = "persisted"
     else:
@@ -235,18 +254,6 @@ def extract_one(pack_dir: Path) -> dict | None:
         )
         faithful = False
         context_source = "reconstructed"
-
-    # Load existing digest output
-    digest = json.loads((pack_dir / "digest.json").read_text())
-
-    # Skip long-range outlooks — they are a different output type
-    # (LongRangeDigest: outlook/outlook_reason, no GREEN/AMBER/RED assessment)
-    # with its own contract, so the WeatherDigest eval/guardrails don't apply.
-    # Long-range gets its own eval track later (see project_longrange_outlook).
-    if "outlook" in digest or digest.get("assessment") not in (
-        "GREEN", "AMBER", "RED"
-    ):
-        return None
 
     # Build metadata
     route = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
@@ -302,7 +309,10 @@ def _read_synthetic_fixtures(output_dir: Path) -> list[dict]:
             continue
         if not meta.get("synthetic"):
             continue
-        files = {f.name: f.read_text() for f in child.iterdir() if f.is_file()}
+        files = {
+            f.name: f.read_text(encoding="utf-8")
+            for f in child.iterdir() if f.is_file()
+        }
         preserved.append({"id": child.name, "files": files})
     return preserved
 
@@ -310,7 +320,9 @@ def _read_synthetic_fixtures(output_dir: Path) -> list[dict]:
 def preserved_index(preserved: list[dict]):
     """Yield index entries for preserved synthetic fixtures."""
     for p in preserved:
-        meta = json.loads(p["files"]["meta.json"])
+        # meta.json is guaranteed present by _read_synthetic_fixtures (it only
+        # includes dirs where meta_path.exists()); the default is just defensive.
+        meta = json.loads(p["files"].get("meta.json", "{}"))
         yield {
             "id": p["id"],
             "assessment": meta.get("assessment"),
@@ -453,7 +465,7 @@ def main():
         dst = args.output_dir / p["id"]
         dst.mkdir(parents=True, exist_ok=True)
         for name, content in p["files"].items():
-            (dst / name).write_text(content)
+            (dst / name).write_text(content, encoding="utf-8")
 
     # Write index
     index = list(preserved_index(preserved))
@@ -462,12 +474,12 @@ def main():
         fixture_dir = args.output_dir / fid
         fixture_dir.mkdir(parents=True, exist_ok=True)
 
-        (fixture_dir / "context.txt").write_text(r["context"])
+        (fixture_dir / "context.txt").write_text(r["context"], encoding="utf-8")
         (fixture_dir / "digest.json").write_text(
-            json.dumps(r["digest"], indent=2, ensure_ascii=False)
+            json.dumps(r["digest"], indent=2, ensure_ascii=False), encoding="utf-8"
         )
         (fixture_dir / "meta.json").write_text(
-            json.dumps(r["meta"], indent=2, ensure_ascii=False)
+            json.dumps(r["meta"], indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
         idx_entry = {
@@ -484,24 +496,28 @@ def main():
         index.append(idx_entry)
 
     (args.output_dir / "index.json").write_text(
-        json.dumps(index, indent=2, ensure_ascii=False) + "\n"
+        json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    # Print summary
-    assess_counts = Counter(r["meta"]["assessment"] for r in results)
-    total_kb = sum(r["meta"]["context_chars"] for r in results) / 1024
-    faithful_n = sum(1 for r in results if r["meta"].get("faithful"))
+    # Print summary over the combined index (pack-derived + preserved synthetic)
+    # so counts match what was actually written.
+    assess_counts = Counter(e.get("assessment") for e in index)
+    total_kb = sum(e.get("context_chars", 0) for e in index) / 1024
+    faithful_n = sum(1 for e in index if e.get("faithful"))
     print(f"\nDataset written to {args.output_dir}/")
-    print(f"  {len(results)} fixtures, {total_kb:.0f}KB total context")
+    print(f"  {len(index)} fixtures ({len(preserved)} synthetic), "
+          f"{total_kb:.0f}KB total context")
     print(f"  Assessment distribution: {dict(assess_counts)}")
-    print(f"  Fidelity: {faithful_n} faithful (persisted) / "
-          f"{len(results) - faithful_n} reconstructed")
+    print(f"  Fidelity: {faithful_n} faithful / "
+          f"{len(index) - faithful_n} reconstructed")
 
     # Coverage matrix — how many fixtures cover each situation cell, so we can
     # see which cells are thin and need targeted sourcing (parent #252 / #254).
+    # Accumulate from the combined index so preserved synthetic fixtures count
+    # too — otherwise a cell only covered by a synthetic fixture reads "empty".
     sit_counts: Counter[str] = Counter()
-    for r in results:
-        sit_counts.update(r["meta"].get("situations", []))
+    for entry in index:
+        sit_counts.update(entry.get("situations", []))
     print("  Situation coverage:")
     for cell in SITUATION_VOCAB:
         n = sit_counts.get(cell, 0)
