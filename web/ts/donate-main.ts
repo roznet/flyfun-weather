@@ -147,10 +147,8 @@ function renderStats(s: DonationSummary): void {
   // Words is the headline; the ~N books equivalence is an optional flourish.
   const words = stats.analysis_words_all_time;
   document.getElementById('stat-words')!.textContent = formatWords(words);
-  const booksNote =
-    stats.analysis_books_equiv >= 1
-      ? ` (~${Math.round(stats.analysis_books_equiv)} novels)`
-      : '';
+  const books = Math.round(stats.analysis_books_equiv);
+  const booksNote = books >= 1 ? ` (~${books} ${books === 1 ? 'novel' : 'novels'})` : '';
   document.getElementById('stat-words-label')!.textContent =
     `words of AI weather analysis${booksNote}`;
 

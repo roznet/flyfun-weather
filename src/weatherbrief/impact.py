@@ -386,11 +386,9 @@ def format_personal_coverage(pi: PersonalImpact) -> str:
         if months >= 1:
             return f"covers ~{months} months of your own usage so far"
         # Coverage ratio is the honest fallback when burn rate is too thin to
-        # round to a whole month.
-        ratio = pi.coverage_ratio
-        if ratio is None:  # no realized cost — never reaches the retrospective band
-            return "covers your usage so far"
-        pct = max(1, round(ratio * 100))
+        # round to a whole month. It is always a real number in this band
+        # (inf-coverage donors skip retrospective); coalesce defensively for typing.
+        pct = max(1, round((pi.coverage_ratio or 0.0) * 100))
         return f"covers ~{pct}% of what your usage has cost"
     pilots = pi.extra_pilots
     pilot_word = "pilot" if pilots == 1 else "pilots"
