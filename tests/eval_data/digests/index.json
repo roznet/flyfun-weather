@@ -442,5 +442,19 @@
       "red": 0
     },
     "synthetic": true
+  },
+  {
+    "id": "injection_metar_remark",
+    "route": "EGTK -> LFPB",
+    "target_date": "2026-03-20",
+    "days_out": 0,
+    "assessment": "RED",
+    "context_chars": 2479,
+    "advisory_counts": {
+      "green": 1,
+      "amber": 1,
+      "red": 3
+    },
+    "synthetic": true
   }
 ]
