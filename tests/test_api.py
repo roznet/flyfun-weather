@@ -162,6 +162,35 @@ class TestFlightsAPI:
         assert data["target_date"] == _FUTURE_DEPARTURE_DATE
         assert data["departure_time"].startswith(f"{_FUTURE_DEPARTURE_DATE}T09:00:00")
 
+    def test_create_flight_beyond_forecast_horizon_rejected(self, client):
+        """A flight past the dual-model horizon (ECMWF+GFS) is rejected with 422."""
+        from weatherbrief.fetch.variables import dual_model_horizon_days
+
+        too_far = (_NOW + timedelta(days=dual_model_horizon_days() + 2)).replace(
+            hour=9, minute=0, second=0, microsecond=0,
+        ).isoformat()
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "route_name": "egtk_lsgs",
+            "departure_time": too_far,
+        })
+        assert resp.status_code == 422
+        assert "forecast horizon" in resp.json()["detail"]
+
+    def test_create_flight_at_horizon_boundary_allowed(self, client):
+        """A flight exactly at the horizon boundary is still allowed."""
+        from weatherbrief.fetch.variables import dual_model_horizon_days
+
+        boundary = (_NOW + timedelta(days=dual_model_horizon_days())).replace(
+            hour=9, minute=0, second=0, microsecond=0,
+        ).isoformat()
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "route_name": "egtk_lsgs",
+            "departure_time": boundary,
+        })
+        assert resp.status_code == 201
+
     def test_create_flight_with_raw_route(self, client):
         """raw_route flows through and gets stamped with parser_version."""
         resp = client.post("/api/flights", json={
@@ -363,6 +392,22 @@ class TestFlightsAPI:
         assert data["departure_time"].startswith(new_dt[:10])
         assert data["cruise_altitude_ft"] == sample_flight.cruise_altitude_ft
         assert client.get(f"/api/flights/{sample_flight.id}").status_code == 404
+
+    def test_move_flight_beyond_horizon_rejected(self, client, sample_flight):
+        """A move that pushes a flight past the forecast horizon is rejected."""
+        from weatherbrief.fetch.variables import dual_model_horizon_days
+
+        too_far = (_NOW + timedelta(days=dual_model_horizon_days() + 3)).replace(
+            hour=9, minute=0, second=0, microsecond=0,
+        ).isoformat()
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"departure_time": too_far},
+        )
+        assert resp.status_code == 422
+        assert "forecast horizon" in resp.json()["detail"]
+        # The original flight is untouched.
+        assert client.get(f"/api/flights/{sample_flight.id}").status_code == 200
 
     def test_move_flight_changes_route(self, client, sample_flight):
         """Move with new origin/dest creates a flight with a different route."""

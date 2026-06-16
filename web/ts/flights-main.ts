@@ -31,6 +31,13 @@ import { track, EVENTS } from './analytics/track';
 let loadedProfiles: ProfileResponse[] = [];
 let loadedAircraft: AircraftResponse[] = [];
 
+/** Max bookable lead time (days from today). Beyond this both ECMWF and GFS
+ *  drop out, so no forecast exists and the backend rejects the flight. This is
+ *  the client-side hint that bounds the date picker; the server
+ *  (flights.py create_flight) is authoritative. Keep in sync with
+ *  variables.dual_model_horizon_days(). */
+const MAX_FORECAST_LEAD_DAYS = 9;
+
 /** Whether the user has linked Autorouter — drives the import-button tooltip
  *  and which dialog handleImportFromAutorouter shows. Optimistic snapshot from
  *  /user/preferences; the picker still calls the API and reacts to a 409. */
@@ -784,6 +791,12 @@ async function init(): Promise<void> {
 
   // --- Re-compute TZ offset labels when date changes (DST may differ) ---
   const dateInput = document.getElementById('input-date') as HTMLInputElement;
+  if (dateInput) {
+    // Bound the picker to the forecast horizon (today + MAX_FORECAST_LEAD_DAYS).
+    const maxDate = new Date();
+    maxDate.setUTCDate(maxDate.getUTCDate() + MAX_FORECAST_LEAD_DAYS);
+    dateInput.max = maxDate.toISOString().slice(0, 10);
+  }
   dateInput?.addEventListener('change', () => {
     if (lastWaypoints.length > 0) {
       populateTimezones(lastWaypoints);

@@ -19,6 +19,7 @@ from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
 from weatherbrief.db.models import BriefingPackRow
+from weatherbrief.fetch.variables import dual_model_horizon_days
 from weatherbrief.models import Flight, FlightDebrief
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
@@ -220,6 +221,27 @@ def _is_admin_or_dev(request: Request, db: Session) -> bool:
         return True
     except HTTPException:
         return False
+
+
+def _reject_if_beyond_horizon(departure_time: datetime) -> None:
+    """Reject a flight whose date is past the forecast horizon.
+
+    Beyond the dual-model horizon (the last lead day both ECMWF and GFS still
+    deliver) no weather model reaches the date, so there is nothing to brief.
+    Shared by create and move so the gate and its message stay identical.
+    """
+    max_lead_days = dual_model_horizon_days()
+    now_utc = datetime.now(timezone.utc)
+    if (departure_time.date() - now_utc.date()).days > max_lead_days:
+        latest = (now_utc + timedelta(days=max_lead_days)).strftime("%Y-%m-%d")
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"That date is beyond the {max_lead_days}-day forecast horizon — "
+                f"no weather model reaches that far yet, so a briefing isn't "
+                f"available. Please choose a departure date on or before {latest}."
+            ),
+        )
 
 
 def _resolve_aircraft_info(
@@ -613,6 +635,9 @@ def create_flight(
                 status_code=403,
                 detail="Only admins can create flights with past departure times",
             )
+
+    # Reject flights beyond the forecast horizon (no model reaches that far).
+    _reject_if_beyond_horizon(departure_time)
 
     # Derive date string and hour for flight ID and hash (backward compat)
     target_date_str = departure_time.strftime("%Y-%m-%d")
@@ -1333,6 +1358,9 @@ def move_flight(
                 status_code=403,
                 detail="Only admins can move a flight into the past",
             )
+
+    # And, like create, a move cannot push a flight past the forecast horizon.
+    _reject_if_beyond_horizon(new_departure_time)
 
     # Re-derive route_name only when waypoints actually changed; otherwise keep
     # the source's stored name (which may be non-derived, e.g. set explicitly

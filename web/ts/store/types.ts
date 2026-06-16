@@ -196,6 +196,11 @@ export interface PackMeta {
   has_alt_advisories?: boolean;
   assessment: string | null;
   assessment_reason: string | null;
+  // Long-range outlook (beyond the GRIB horizon), shown instead of the
+  // traffic-light assessment: TRENDING_SETTLED / MIXED_SIGNALS / TRENDING_UNSETTLED.
+  // Mutually exclusive with assessment.
+  outlook?: string | null;
+  outlook_reason?: string | null;
   alt_assessment?: string | null;
   alt_assessment_reason?: string | null;
   model_init_times?: Record<string, number>;
@@ -436,12 +441,20 @@ export interface WaypointAnalysis {
 }
 
 export interface WeatherDigest {
-  assessment: 'GREEN' | 'AMBER' | 'RED';
-  assessment_reason: string;
+  // Short-range (within GRIB horizon) fields. Optional because a long-range
+  // digest carries `outlook`/`outlook_reason` instead (the two shapes are
+  // distinguished by the presence of `outlook`).
+  assessment?: 'GREEN' | 'AMBER' | 'RED';
+  assessment_reason?: string;
+  specific_concerns?: string;
+  // Long-range (beyond GRIB horizon) outlook fields.
+  outlook?: 'TRENDING_SETTLED' | 'TRENDING_UNSETTLED' | 'MIXED_SIGNALS';
+  outlook_reason?: string;
+  // Shared fields (present in both regimes).
   synoptic: string;
-  specific_concerns: string;
   trend: string;
   watch_items: string;
+  model_agreement?: string;
   // Profile tracking: which profile was active when digest was generated
   profile_id?: number | null;
   profile_name?: string | null;
@@ -450,7 +463,6 @@ export interface WeatherDigest {
   cloud_visibility?: string;
   precipitation_convection?: string;
   icing?: string;
-  model_agreement?: string;
 }
 
 export interface AirportObservation {

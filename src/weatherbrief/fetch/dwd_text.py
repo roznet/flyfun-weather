@@ -257,11 +257,16 @@ def extract_day_blocks(text: str, source: str) -> list[DWDDayBlock]:
 def filter_blocks_for_flight(
     blocks: list[DWDDayBlock],
     target_date: date,
+    strict: bool = False,
 ) -> list[DWDDayBlock]:
     """Filter DWD day blocks to those relevant for a flight date.
 
     Returns blocks for the flight day and the day before (for synoptic setup).
-    Falls back to the nearest block if no exact match.
+    Falls back to the nearest block if no exact match — UNLESS ``strict`` is set,
+    in which case an empty list is returned when no block actually covers the
+    flight. The long-range digest uses ``strict=True`` so a flight beyond the
+    Mittelfrist window (D+7) is not fed a stale, non-covering block that would
+    mislead the LLM into thinking it has synoptic guidance for the flight day.
     """
     day_before = target_date - timedelta(days=1)
     relevant_dates = {target_date, day_before}
@@ -269,6 +274,9 @@ def filter_blocks_for_flight(
     matched = [b for b in blocks if b.date_iso in relevant_dates]
     if matched:
         return sorted(matched, key=lambda b: b.date_iso or date.min)
+
+    if strict:
+        return []
 
     # Fallback: if no exact date match (e.g. target_date is beyond the
     # forecast range), return the last available block
@@ -283,10 +291,14 @@ def filter_blocks_for_flight(
 def get_dwd_day_blocks(
     dwd_text: DWDTextForecasts,
     target_date: date,
+    strict: bool = False,
 ) -> list[DWDDayBlock]:
     """Extract and filter day blocks from both Kurzfrist and Mittelfrist.
 
-    Selects blocks relevant to the target flight date.
+    Selects blocks relevant to the target flight date. With ``strict=True``,
+    returns nothing unless a block actually covers the flight (no nearest-block
+    fallback) — used by the long-range digest to avoid feeding the LLM a stale
+    block for a flight beyond DWD's ~7-day horizon.
     """
     all_blocks: list[DWDDayBlock] = []
 
@@ -295,4 +307,4 @@ def get_dwd_day_blocks(
     if dwd_text.medium_range:
         all_blocks.extend(extract_day_blocks(dwd_text.medium_range, "mittelfrist"))
 
-    return filter_blocks_for_flight(all_blocks, target_date)
+    return filter_blocks_for_flight(all_blocks, target_date, strict=strict)

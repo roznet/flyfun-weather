@@ -822,6 +822,27 @@ label {
 .assessment-red { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
 .assessment-none { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
 
+/* Long-range outlook banner — deliberately distinct from the solid GREEN/AMBER/RED
+   traffic light: a muted fill + dashed border + an "early outlook" tag so it reads
+   as a soft preview of what to expect, not a go/no-go verdict. */
+.outlook-settled { background: var(--bg); color: var(--green); border: 1px dashed var(--green); }
+.outlook-mixed { background: var(--bg); color: var(--text-muted); border: 1px dashed var(--border); }
+.outlook-unsettled { background: var(--bg); color: var(--amber); border: 1px dashed var(--amber); }
+
+.outlook-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--border);
+  color: var(--text-muted);
+  margin-right: 0.3rem;
+  vertical-align: middle;
+}
+
 .assessment-dual {
   display: flex;
   align-items: center;

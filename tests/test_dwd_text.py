@@ -279,6 +279,21 @@ class TestFilterBlocksForFlight:
         filtered = filter_blocks_for_flight(self._all_blocks(), date(2026, 3, 25))
         assert len(filtered) >= 1
 
+    def test_beyond_range_strict_returns_empty(self):
+        """Strict mode (long-range digest) drops the stale fallback block so the
+        LLM is not handed synoptic text that doesn't cover the flight day."""
+        filtered = filter_blocks_for_flight(
+            self._all_blocks(), date(2026, 3, 25), strict=True,
+        )
+        assert filtered == []
+
+    def test_in_range_strict_still_matches(self):
+        """Strict mode still returns blocks that genuinely cover the flight."""
+        filtered = filter_blocks_for_flight(
+            self._all_blocks(), date(2026, 3, 15), strict=True,
+        )
+        assert len(filtered) >= 1
+
     def test_sorted_by_date(self):
         filtered = filter_blocks_for_flight(self._all_blocks(), date(2026, 3, 15))
         dates = [b.date_iso for b in filtered]
