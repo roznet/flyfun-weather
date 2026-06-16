@@ -648,12 +648,24 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const { flight, currentPack } = get();
     if (!flight || !currentPack) return;
     const packTimestamp = currentPack.fetch_timestamp;
+    // Cancel any in-flight probe wind-overlay request + bump the sequence so a
+    // slow probe response at a different altitude can't land on top of the
+    // reanchored wind overlay (mirrors selectPack).
+    if (_windOverlayTimer !== null) {
+      clearTimeout(_windOverlayTimer);
+      _windOverlayTimer = null;
+    }
+    _windOverlaySeq++;
     set({ advisoryAltitudeOverride: alt });
     try {
       const result = await api.recalculateAdvisories(flight.id, packTimestamp, alt);
       // Drop the response if the user switched packs while it was in flight,
       // otherwise we'd write a stale manifest into the new pack's state.
       if (get().currentPack?.fetch_timestamp !== packTimestamp) return;
+      // routeAdvisories now reflects `alt`; the override stays set so the
+      // cross-section cruise line follows, and getEffectiveAdvisories skips the
+      // table overlay once base.cruise_altitude_ft === the override (no double
+      // overlay — see briefing-main).
       set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });

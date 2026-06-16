@@ -60,6 +60,32 @@ describe('computeStalePackBanner', () => {
     expect(state).not.toBeNull();
     expect(state!.altChanged).toBe(true);
     expect(state!.timeChanged).toBe(false);
+    expect(state!.altOnly).toBe(true);
+  });
+
+  it('altOnly is false when both altitude and time changed', () => {
+    const flight = makeFlight({
+      cruise_altitude_ft: 6000,
+      departure_time: '2026-02-25T15:00:00+00:00',
+    });
+    const state = computeStalePackBanner(flight, makeManifest(), true);
+    expect(state!.altOnly).toBe(false);
+  });
+
+  it('suppresses the alt-only banner once advisories are reanchored', () => {
+    // Flight altitude edited to 12000; route_analyses still at 8000 (stale),
+    // but the advisories have already been recomputed at 12000 → no banner.
+    const flight = makeFlight({ cruise_altitude_ft: 12000 });
+    const state = computeStalePackBanner(flight, makeManifest(), true, 12000);
+    expect(state).toBeNull();
+  });
+
+  it('still flags when advisories altitude does not match the new flight altitude', () => {
+    const flight = makeFlight({ cruise_altitude_ft: 12000 });
+    // advisories still at the stale 8000 → banner persists.
+    const state = computeStalePackBanner(flight, makeManifest(), true, 8000);
+    expect(state).not.toBeNull();
+    expect(state!.altOnly).toBe(true);
   });
 
   it('flags time change', () => {
