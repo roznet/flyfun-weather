@@ -16,6 +16,8 @@ import { t } from '../i18n/i18n';
 export interface StalePackBannerState {
   altChanged: boolean;
   timeChanged: boolean;
+  /** Altitude changed but time/route didn't → cheap recalc path, not a full refresh. */
+  altOnly: boolean;
   message: string;
 }
 
@@ -57,6 +59,7 @@ export function computeStalePackBanner(
   return {
     altChanged,
     timeChanged,
+    altOnly,
     message: `${parts.join(' ')} ${prompt}`,
   };
 }

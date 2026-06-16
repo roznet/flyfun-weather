@@ -150,8 +150,7 @@ export function renderStalePackBanner(
 
   // Altitude-only change → cheap re-anchor (no full refresh, never auto-saves
   // the altitude). Anything touching time/route → the real pipeline refresh.
-  const altOnly = state.altChanged && !state.timeChanged;
-  if (altOnly && onReanchorAltitude && flight) {
+  if (state.altOnly && onReanchorAltitude && flight) {
     btn.id = 'stale-pack-reanchor-btn';
     btn.textContent = t('stalePack.updateBtn');
     const targetAlt = flight.cruise_altitude_ft;
