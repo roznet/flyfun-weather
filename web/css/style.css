@@ -2539,22 +2539,47 @@ label {
   color: var(--text);
 }
 
-/* Advisory method selectors — compact 3-column grid */
-.advisory-method-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
+/* Advisory method selectors — stacked rows: label + control on one line, hint
+   below. Replaces the old 3-column grid, whose uneven hint lengths looked
+   ragged. */
+.advisory-method-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
   margin-bottom: 0.75rem;
-  align-items: start;
 }
-.advisory-method-grid .input-select {
-  width: 100%;
+.advisory-field-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
 }
-@media (max-width: 700px) {
-  .advisory-method-grid {
-    grid-template-columns: 1fr;
-  }
+.advisory-field-line label {
+  min-width: 150px;   /* aligns the dropdowns down the column */
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);  /* black title — distinct from the muted hint below */
 }
+.advisory-field-line .input-select {
+  flex: 1 1 220px;
+  max-width: 340px;
+}
+
+/* Shared muted helper text under a field/toggle — single source of truth so the
+   smaller font matches everywhere (advisory methods, checkboxes, account
+   services). */
+.field-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.85em;
+  line-height: 1.4;
+  color: var(--text-muted);
+  font-style: italic;
+}
+/* When the hint lives inside a checkbox label, drop it onto its own full-width
+   line below the label instead of trailing off to the side. */
+.checkbox-label { flex-wrap: wrap; }
+.checkbox-label .field-hint { flex-basis: 100%; }
 
 #profile-select {
   padding: 0.35rem 0.5rem;
