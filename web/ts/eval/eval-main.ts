@@ -70,7 +70,12 @@ function renderPacks(packs: CorpusPackSummary[]): string {
     .map((p) => {
       const g = p.label?.assessments || {};
       const recon = p.faithful ? '' : ' <span class="recon">reconstructed</span>';
-      const open = `/flight.html?id=${encodeURIComponent(p.flight_id)}`;
+      // Open the full briefing view (where the SME actually judges the weather),
+      // not the flight summary page. The pack timestamp pins the briefing to this
+      // corpus pack; the virtual-flight resolver serves it from disk.
+      const open =
+        `/briefing.html?flight=${encodeURIComponent(p.flight_id)}` +
+        `&pack=${encodeURIComponent(p.fetch_timestamp)}`;
       return `<tr>
         <td><a href="${open}">${esc(p.route)}</a> <span class="sit">d${p.days_out}</span>${recon}</td>
         <td>${badge(p.assessment)}</td>

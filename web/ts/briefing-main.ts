@@ -231,6 +231,14 @@ async function init(): Promise<void> {
     return;
   }
 
+  // Dev-only eval labelling workbench (#254): when viewing a corpus pack
+  // (flight id in the ``eval-`` namespace), dock the golden-label panel onto
+  // the standard briefing view. Lazy-imported so it's tree-shaken out of the
+  // normal briefing bundle path until an eval flight is opened.
+  if (flightId.startsWith('eval-')) {
+    import('./eval/label-panel').then((m) => m.initLabelPanel(flightId)).catch(() => {});
+  }
+
   // --- Apply display mode CSS class ---
   function applyDisplayModeClass(mode: string): void {
     const container = document.querySelector('.container');
