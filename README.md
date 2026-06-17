@@ -1,21 +1,27 @@
-# WeatherBrief
+# Flyfun Weather
 
 **Medium-range aviation weather assessment for cross-country GA flights in Europe**
 
-WeatherBrief fetches forecast data from multiple numerical weather prediction (NWP) models, performs aviation-specific analysis (icing, turbulence, convection, clouds), and presents everything side-by-side so pilots can compare models and start forming an early view of what conditions will look like from D-7 through D-0.
+> The Python package and module are named `weatherbrief`; the product is **Flyfun Weather**.
 
-> **Disclaimer** — This is an early-stage exploratory tool, not built by a meteorologist. It is meant to help pilots explore the wealth of NWP data available and see how models converge (or diverge) on metrics that matter for flying. It is **not** a substitute for official weather briefings, MET reports, or professional meteorological advice. Always consult official sources before flying.
+Flyfun Weather fetches forecast data from multiple numerical weather prediction (NWP) models, performs aviation-specific analysis (icing, turbulence, convection, clouds), and presents everything side-by-side so pilots can compare models and start forming an early view of what conditions will look like from D-7 through D-0.
+
+> **Disclaimer** — Flyfun Weather is built to help and support flight planning and decision-making, giving pilots an early, multi-model picture of the weather and surfacing the factors that matter for a route. It relies on automated analysis and AI, which can make mistakes or miss things, and it has not been reviewed by a professional meteorologist. It is **not** a substitute for official weather briefings, MET reports, or professional meteorological advice. Always consult official sources before flying — the pilot in command remains the sole decision-maker.
 
 ## What it does
 
-- **Multi-model forecasting** — Fetches from 6 NWP models via Open-Meteo (GFS, ECMWF IFS, DWD ICON, UKMO, Meteo-France, Best Match) at 8 pressure levels along your route
-- **~40 derived metrics** — From raw NWP data, derives thermodynamic indices (CAPE, CIN, Lifted Index, K-Index, etc.), cloud layers, icing zones, CAT turbulence risk, convective potential, wind shear, and more using MetPy
-- **13 route advisories** — Deterministic hazard evaluators (icing escape, FIKI icing, freezing level, cloud top, VMC cruise, VFR/IFR feasibility, flight category, turbulence, mountain wind, airport wind, convective, model agreement) with per-model GREEN/AMBER/RED severity grading
-- **Model comparison** — Side-by-side divergence scoring across 15 metrics so you can see where models agree and where they don't
-- **Interactive cross-section** — Canvas-rendered visualization with 17 toggleable layers (terrain, clouds, icing, SFIP, CAT, inversions, convective, temperature lines, stability levels, NWP cloud bands) and hover/click interaction
-- **Skew-T soundings** — Per-waypoint, per-model diagrams with CAPE/CIN shading, hodograph, and indices panel
+- **Multi-model forecasting** — Fetches 6 NWP models via Open-Meteo (GFS, ECMWF IFS, DWD ICON, UKMO, Meteo-France, Best Match) at 8 pressure levels along your route, with high-resolution **GRIB2 enrichment** (upper-air soundings, cloud microphysics) direct from ECMWF IFS, DWD ICON-EU, and NOAA GFS where coverage allows
+- **~85 derived metrics** — From raw NWP data, derives thermodynamic indices (CAPE, CIN, Lifted Index, K-Index, etc.), cloud layers, icing zones (multiple methods), CAT turbulence risk, convective potential, wind shear, and more using MetPy
+- **20+ route advisories across 11 categories** — Deterministic hazard evaluators (icing incl. freezing precipitation, cloud, en-route visibility/precipitation, turbulence incl. wave-corroborated mountain wind, convective incl. terminal convective & LLWS, winds-aloft trip impact, airport conditions incl. density altitude, feasibility, model quality, fronts, sun/daylight) with per-model GREEN/AMBER/RED severity grading and worst/majority aggregation
+- **D-0 observations** — METAR/TAF for departure/arrival airports plus route **SIGMETs** (area hazards), with a deterministic banner flagging conditions that have worsened since the last refresh
+- **Weather-based alternates** — When a destination is marginal (D-2 inward), surfaces nearby divert candidates that fix the deficient axis (category/wind/crosswind), classified before/after along the route, plus a regulatory **"is an alternate required?"** estimate (FAA 14 CFR 91.169 + EASA Part-NCO)
+- **Model comparison** — Side-by-side divergence scoring so you can see where models agree and where they don't
+- **Interactive cross-section** — Canvas-rendered visualization with ~25 toggleable layers (terrain, clouds, icing, SFIP, CAT, inversions, convective, temperature lines, stability levels, NWP cloud bands), switchable themes, a compare-across-models mode, and hover/click interaction
+- **Route map & route graph** — Leaflet route map with an altitude slider and metric-colored segments (incl. an "alternate required?" mode), plus a scalar route graph sharing the cross-section's x-axis
+- **Skew-T soundings** — Per-waypoint, per-model diagrams: a dynamic canvas Skew-T with a multi-variable side panel and overlay bands, a multi-model compare mode, and the classic MetPy PNG (CAPE/CIN shading, hodograph, indices panel)
 - **GRAMET cross-section** — From the Autorouter API (requires credentials)
-- **LLM-powered synopsis** — Optional AI-generated weather narrative via Claude or ChatGPT, combining DWD synoptic text with quantitative analysis
+- **LLM-powered synopsis** — Optional AI-generated weather narrative via Claude or ChatGPT, combining DWD synoptic text with quantitative analysis; beyond the high-resolution horizon it switches to a cheaper, confidence-led **long-range early outlook**
+- **Navigation database** — Resolves non-airport waypoints (5-letter fixes, navaids, free-route points) from ~95,900 deduplicated points built from four free public sources, refreshed on the 28-day AIRAC/NASR cycle
 - **PDF/HTML reports & email** — Self-contained briefing reports you can download or email to yourself
 - **Terrain-aware** — SRTM 90m elevation profiles for mountain crossing risk assessment
 
@@ -34,22 +40,27 @@ Not all variables are available from all models (e.g., omega/vertical velocity i
 
 ## Route Advisories
 
-Each advisory evaluates a specific weather hazard along your route, per model:
+Each advisory evaluates a specific weather hazard along your route, per model. The set has grown to 20+ evaluators across 11 categories; a representative selection:
 
 | Advisory | What it checks |
 |----------|---------------|
 | Icing Escape | Can you descend below freezing to escape icing? (terrain clearance) |
 | FIKI Icing | Icing layer thickness and severity for FIKI-equipped aircraft |
 | Freezing Level | Freezing level vs terrain (mountain icing risk) |
+| Freezing Precipitation | Freezing rain / ice pellets in the column |
 | Cloud Top | Can you fly above the clouds? (cloud top vs flight ceiling) |
 | VMC Cruise | Cloud coverage at cruise altitude (VFR viability) |
-| VFR Feasibility | Overall VFR viability considering ceiling, visibility, and cloud layers |
-| IFR Feasibility | IFR flight viability considering ceiling and visibility minimums |
+| En-route Visibility | Visibility and precipitation along the route |
+| VFR / IFR Feasibility | Overall VFR/IFR viability vs ceiling, visibility, and cloud layers |
 | Flight Category | VFR/MVFR/IFR/LIFR classification at departure, en-route, and arrival |
 | Turbulence | Clear Air Turbulence + strong vertical motion at cruise |
-| Mountain Wind | Orographic/rotor wind risk near significant terrain |
-| Airport Wind | Surface wind and crosswind at departure and arrival airports |
+| Mountain Wind | Orographic/rotor wind risk near significant terrain (wave-corroborated) |
+| Winds Aloft | Headwind/tailwind trip impact along the route |
+| Airport Conditions | Surface wind, gusts, crosswind, and density altitude at departure/arrival |
+| Terminal Convective / LLWS | Low-level wind shear and convective risk near the airports |
 | Convective | Thunderstorm development risk from CAPE and instability indices |
+| Fronts | Frontal passages crossing the route |
+| Sun | Daylight / sun position relative to the flight window |
 | Model Agreement | How much do the models agree with each other? |
 
 Advisory parameters are user-tunable (terrain margins, percentage thresholds, etc.) and can be recalculated without re-fetching weather data.
@@ -72,7 +83,7 @@ src/weatherbrief/
 ├── analysis/
 │   ├── wind.py       # Headwind/crosswind decomposition
 │   ├── comparison.py # Multi-model divergence scoring
-│   ├── advisories/   # 13 route hazard evaluators (registry pattern)
+│   ├── advisories/   # 20+ route hazard evaluators (registry pattern)
 │   └── sounding/     # MetPy thermodynamic analysis (clouds, icing, CAT, convective)
 ├── digest/           # Text digest, Skew-T plots, LLM briefing (LangGraph)
 ├── api/              # FastAPI app (auth, flights, packs, preferences, admin)
@@ -83,23 +94,26 @@ src/weatherbrief/
 
 web/
 ├── ts/
-│   ├── visualization/  # Canvas cross-section renderer (17 layers)
+│   ├── visualization/  # Canvas cross-section renderer (~25 layers)
 │   ├── store/          # Zustand state management
 │   ├── managers/       # DOM rendering (briefing, advisories, flights)
 │   ├── adapters/       # API communication
 │   └── data/           # Metrics catalog, display config
 ├── css/style.css
 ├── index.html          # Flights list
-├── briefing.html       # Briefing report (10 collapsible sections)
+├── briefing.html       # Briefing report (collapsible sections)
 ├── flight.html         # Single flight detail / edit
+├── maps.html           # Pan-European forecast map
 ├── settings.html       # User preferences + advisory tuning
 ├── admin.html          # User approval + usage tracking
 ├── login.html          # Authentication page
-├── help.html           # User help / FAQ
+├── help.html           # User help / FAQ + What's New
+├── donate.html         # Optional support / donations (Stripe)
+├── cost-summary.html   # Service cost transparency (admin)
 └── user-costs.html     # Personal usage & cost tracking
 
 configs/              # LLM digest configuration and prompts
-designs/              # Design documentation (21 docs)
+designs/              # Design documentation (40+ docs)
 tests/                # pytest test suite
 ```
 
@@ -188,11 +202,13 @@ The Docker image runs as a non-root user (UID 2000). Data is persisted via volum
 
 ## Data Sources
 
-- **NWP forecasts** — [Open-Meteo](https://open-meteo.com/) (free, open-source weather API)
+- **NWP forecasts** — [Open-Meteo](https://open-meteo.com/) (free, open-source weather API), plus high-resolution GRIB2 enrichment direct from ECMWF IFS, DWD ICON-EU, and NOAA GFS where available
+- **METAR / TAF & SIGMETs** — [NOAA Aviation Weather Center](https://aviationweather.gov/data/api/) for day-of observations, terminal forecasts, and route SIGMETs
 - **Terrain elevation** — [SRTM](https://www.usgs.gov/centers/eros/science/usgs-eros-archive-digital-elevation-shuttle-radar-topography-mission-srtm-1) 90m resolution via srtm.py
 - **Airport database** — [euro-aip](https://github.com/roznet/rzflight) (European AIP data)
+- **Navigation waypoints** — Eurocontrol FRA, OpenNav, OurAirports NAVAIDs, and FAA NASR (free public sources; ~95,900 deduplicated points on the 28-day AIRAC/NASR cycle)
 - **GRAMET cross-sections** — [Autorouter](https://www.autorouter.aero/) (requires free account)
-- **Synoptic text forecasts** — DWD (German Weather Service) open data
+- **Synoptic text forecasts** — DWD (German Weather Service) open data; NWS Area Forecast Discussions for US routes
 
 ## How the Analysis Works
 
@@ -205,7 +221,7 @@ The pipeline fetches NWP data for ~20 interpolated points along your route (ever
 - **Convective risk** — from CAPE thresholds with CIN modulation and severe weather modifiers (shear, hail indicators)
 - **Vertical motion** — omega profiles classified as quiescent, synoptic ascent/subsidence, oscillating, or convective
 
-These per-point results feed into the 13 route-level advisory evaluators that produce the GREEN/AMBER/RED hazard assessment.
+These per-point results feed into the 20+ route-level advisory evaluators that produce the GREEN/AMBER/RED hazard assessment.
 
 ## Known Limitations
 
@@ -217,7 +233,7 @@ These per-point results feed into the 13 route-level advisory evaluators that pr
 
 ## Design Documentation
 
-The `designs/` directory contains 21 detailed design documents covering architecture, data models, analysis methods, metrics catalog, and implementation plans. Start with `designs/architecture.md` for the system overview.
+The `designs/` directory contains 40+ detailed design documents covering architecture, data models, analysis methods, metrics catalog, and implementation plans. Start with `designs/architecture.md` for the system overview, or `designs/INDEX.md` for the module map.
 
 ## AI Acknowledgment
 
