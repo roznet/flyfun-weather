@@ -36,5 +36,11 @@ DerivedData/
 eval_data
 test-results/
 
+# Eval labelling workbench (#254): the pulled corpus lives under eval_data/
+# (already ignored). Pack payloads are reproducible from prod; only each pack's
+# corpus_meta.json + label.json are committed, via `git add -f` (see
+# scripts/pull_eval_corpus.py output). The candidate manifest is a scratch file.
+eval_candidates.json
+
 # ECMWF sample GRIB files (large binary, not for git)
 tests/data/ecmwf_samples/

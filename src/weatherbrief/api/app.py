@@ -527,6 +527,16 @@ def create_app() -> FastAPI:
     )
     app.include_router(hub_router, prefix="/api/admin")
 
+    # Dev-only golden-labeling workbench (#254). Mounted ONLY when
+    # WEATHERBRIEF_EVAL_WORKBENCH is set — never in production. The router is
+    # lazily imported so its module isn't even loaded when the flag is off.
+    from weatherbrief.eval_workbench.config import eval_workbench_enabled
+
+    if eval_workbench_enabled():
+        from weatherbrief.api.eval_workbench import router as eval_workbench_router
+
+        app.include_router(eval_workbench_router, prefix="/api")
+
     @app.get("/health")
     def health():
         return {"status": "ok"}

@@ -31,59 +31,22 @@ import json
 import logging
 import shutil
 from collections import Counter, defaultdict
-from datetime import date, datetime
 from pathlib import Path
 
-from weatherbrief.digest.prompt_builder import build_digest_context
-from weatherbrief.models import ForecastSnapshot, RouteAdvisoriesManifest
+from weatherbrief.eval_workbench.ingest import load_pack_context
+from weatherbrief.eval_workbench.situations import (
+    SITUATION_VOCAB,
+    classify_situations,
+    extract_advisory_summary,
+    load_snapshot_from_pack,
+)
+from weatherbrief.models import RouteAdvisoriesManifest
 
 
 logger = logging.getLogger(__name__)
 
 PACKS_DIR = Path("data/packs")
 DEFAULT_OUTPUT = Path("tests/eval_data/digests")
-
-
-def load_snapshot_from_pack(pack_dir: Path) -> ForecastSnapshot | None:
-    """Load a ForecastSnapshot from a pack directory."""
-    briefing_path = pack_dir / "briefing.json"
-    forecasts_path = pack_dir / "forecasts.json"
-    if not briefing_path.exists() or not forecasts_path.exists():
-        return None
-
-    briefing = json.loads(briefing_path.read_text())
-    forecasts = json.loads(forecasts_path.read_text())
-    briefing["forecasts"] = forecasts.get("forecasts", [])
-    return ForecastSnapshot.model_validate(briefing)
-
-
-def extract_advisory_summary(adv_path: Path) -> dict:
-    """Extract a compact advisory summary for meta.json."""
-    if not adv_path.exists():
-        return {"has_advisories": False}
-
-    advs = json.loads(adv_path.read_text())
-    summary = {"has_advisories": True, "advisories": []}
-
-    for adv in advs.get("advisories", []):
-        aid = adv.get("advisory_id", "")
-        if aid == "model_agreement":
-            continue
-        model_statuses = defaultdict(int)
-        for m in adv.get("per_model", []):
-            model_statuses[m.get("status", "unknown")] += 1
-        summary["advisories"].append({
-            "id": aid,
-            "aggregate": adv.get("aggregate_status", "unknown"),
-            "models": dict(model_statuses),
-        })
-
-    green = sum(1 for a in summary["advisories"] if a["aggregate"] == "green")
-    amber = sum(1 for a in summary["advisories"] if a["aggregate"] == "amber")
-    red = sum(1 for a in summary["advisories"] if a["aggregate"] == "red")
-    summary["counts"] = {"green": green, "amber": amber, "red": red}
-
-    return summary
 
 
 def find_packs() -> list[Path]:
@@ -93,123 +56,6 @@ def find_packs() -> list[Path]:
         if (p.parent / "briefing.json").exists()
         and (p.parent / "forecasts.json").exists()
     )
-
-
-# Map an advisory_id to the situation tag it contributes when its aggregate is
-# not green. Several ids fold into one tag (icing_escape + fiki_icing + freezing
-# _level → "icing"). Unmapped ids are ignored for tagging.
-_ADVISORY_SITUATION: dict[str, str] = {
-    "icing_escape": "icing",
-    "fiki_icing": "icing",
-    "freezing_level": "icing",
-    "convective": "convective",
-    "turbulence": "turbulence",
-    "mountain_wind": "turbulence",
-    "cloud_top": "cloud",
-    "vmc_cruise": "cloud",
-    "airport_wind": "wind",
-    "flight_category": "low_category",
-    "vfr_feasibility": "vfr_marginal",
-    "ifr_feasibility": "ifr_marginal",
-}
-
-# The coverage matrix we want the curated set to fill (parent #252 / #254).
-# A fixture may carry several tags; these are the cells we report on.
-SITUATION_VOCAB: tuple[str, ...] = (
-    "all_green", "single_red", "multi_red",
-    "icing", "convective", "icing_plus_convective", "cloud", "turbulence",
-    "wind", "low_category", "vfr_marginal", "ifr_marginal",
-    "d0", "metar", "sigmet", "previous_digest",
-    "us_route", "alpine", "channel_crossing",
-)
-
-
-def _load_dwd_translated(pack_dir: Path) -> list | None:
-    """Reconstruct the ``dwd_translated`` list from a saved ``dwd_overview.json``.
-
-    Returns ``[(DWDDayBlock, english), ...]`` so a reconstructed context can
-    splice the DWD section back in, or ``None`` if the pack has no overview.
-    """
-    overview_path = pack_dir / "dwd_overview.json"
-    if not overview_path.exists():
-        return None
-    try:
-        from weatherbrief.fetch.dwd_text import DWDDayBlock
-
-        overview = json.loads(overview_path.read_text(encoding="utf-8"))
-        out = []
-        for entry in overview.get("entries", []):
-            iso = entry.get("date_iso")
-            block = DWDDayBlock(
-                day_name_de=entry.get("day_name_de", ""),
-                date_iso=date.fromisoformat(iso) if iso else None,
-                text=entry.get("text_de", "") or "",
-                source=entry.get("source", "") or "",
-            )
-            out.append((block, entry.get("text_en", "") or ""))
-        return out or None
-    except Exception:
-        # e.g. a DWDDayBlock schema change — fall back to a context without the
-        # DWD section, but leave a breadcrumb so it's diagnosable.
-        logger.debug("_load_dwd_translated failed for %s", pack_dir, exc_info=True)
-        return None
-
-
-def _classify_situations(
-    snapshot: ForecastSnapshot, adv_summary: dict, context: str, days_out: int
-) -> list[str]:
-    """Tag a fixture with the meteorological/structural situations it covers."""
-    tags: set[str] = set()
-
-    counts = adv_summary.get("counts", {})
-    reds = counts.get("red", 0)
-    non_green = [
-        a for a in adv_summary.get("advisories", []) if a["aggregate"] != "green"
-    ]
-    if adv_summary.get("has_advisories") and not non_green:
-        tags.add("all_green")
-    if reds == 1:
-        tags.add("single_red")
-    elif reds >= 2:
-        tags.add("multi_red")
-
-    for adv in non_green:
-        tag = _ADVISORY_SITUATION.get(adv["id"])
-        if tag:
-            tags.add(tag)
-    if "icing" in tags and "convective" in tags:
-        tags.add("icing_plus_convective")
-
-    # Structural / context-derived tags.
-    if days_out == 0:
-        tags.add("d0")
-    if "=== METAR/TAF OBSERVATIONS" in context:
-        tags.add("metar")
-    if "=== SIGMETs ALONG ROUTE" in context:
-        tags.add("sigmet")
-    if "=== PREVIOUS DIGEST" in context:
-        tags.add("previous_digest")
-
-    # Route/region tags from *airport* ICAOs only. Route waypoints also include
-    # navaids/fixes (3-letter "DVR", 5-letter "KONAN") that would false-match
-    # region prefixes (e.g. "KONAN" -> us_route). Real ICAO airport codes are
-    # exactly 4 letters, so filter to those.
-    icaos = [
-        (wp.icao or "").upper()
-        for wp in snapshot.route.waypoints
-        if len(wp.icao or "") == 4
-    ]
-    if any(c.startswith(("K", "PA", "PH")) for c in icaos):
-        tags.add("us_route")
-    # Switzerland (LS) / Austria (LO) prefixes are a coarse Alpine proxy.
-    if any(c.startswith(("LS", "LO")) for c in icaos):
-        tags.add("alpine")
-    if any(c.startswith("EG") for c in icaos) and any(
-        c.startswith("LF") for c in icaos
-    ):
-        tags.add("channel_crossing")
-
-    return sorted(tags)
 
 
 def extract_one(pack_dir: Path) -> dict | None:
@@ -225,47 +71,25 @@ def extract_one(pack_dir: Path) -> dict | None:
             json.loads(adv_path.read_text())
         )
 
-    # Determine target time
-    if snapshot.departure_time and isinstance(snapshot.departure_time, datetime):
-        target_time = snapshot.departure_time
-    else:
-        target_time = datetime.fromisoformat(f"{snapshot.target_date}T09:00:00")
-
-    # Load the digest and skip long-range outlooks *before* touching the
-    # context — they are a different output type (LongRangeDigest:
-    # outlook/outlook_reason, no GREEN/AMBER/RED assessment) with its own
-    # contract, so the WeatherDigest eval/guardrails don't apply. Doing the
-    # skip first avoids reading/rebuilding a context we're about to discard
-    # (outputs.py persists digest_context.txt for longrange packs too).
-    # Long-range gets its own eval track later (see project_longrange_outlook).
+    # Skip long-range outlooks *before* touching the context — they are a
+    # different output type (LongRangeDigest: outlook/outlook_reason, no
+    # GREEN/AMBER/RED assessment) with its own contract, so the WeatherDigest
+    # eval/guardrails don't apply. Long-range gets its own eval track later.
     digest = json.loads((pack_dir / "digest.json").read_text())
     if "outlook" in digest or digest.get("assessment") not in (
         "GREEN", "AMBER", "RED"
     ):
         return None
 
-    # Prefer the persisted context (byte-faithful to what the LLM saw). Fall
-    # back to best-effort reconstruction for older packs that predate
-    # digest_context.txt — splicing the DWD overview back in when available.
-    persisted = pack_dir / "digest_context.txt"
-    if persisted.exists():
-        context = persisted.read_text(encoding="utf-8")
-        faithful = True
-        context_source = "persisted"
-    else:
-        context = build_digest_context(
-            snapshot, target_time,
-            route_advisories=advisories,
-            dwd_translated=_load_dwd_translated(pack_dir),
-            flight_rules="vfr_ifr",
-        )
-        faithful = False
-        context_source = "reconstructed"
+    # Prefer the persisted (byte-faithful) context; reconstruct for older packs.
+    context, faithful, context_source = load_pack_context(
+        pack_dir, snapshot, advisories
+    )
 
     # Build metadata
     route = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
     adv_summary = extract_advisory_summary(adv_path)
-    situations = _classify_situations(
+    situations = classify_situations(
         snapshot, adv_summary, context, snapshot.days_out
     )
 

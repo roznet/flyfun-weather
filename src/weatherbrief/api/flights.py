@@ -1843,6 +1843,17 @@ def remove_flight(
 
 def _load_flight_or_404(db: Session, flight_id: str, *, viewer_id: str | None = None) -> Flight:
     """Load a flight by ID. Returns 404 if not found or private and not owned by viewer."""
+    # Dev-only golden-labeling workbench (#254): resolve ``eval-<id>`` flights
+    # from the file corpus instead of the DB. Dead code in production (flag off).
+    from weatherbrief.eval_workbench.config import eval_workbench_enabled, is_eval_flight_id
+
+    if eval_workbench_enabled() and is_eval_flight_id(flight_id):
+        from weatherbrief.eval_workbench.resolver import resolve_eval_flight
+
+        try:
+            return resolve_eval_flight(flight_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Flight '{flight_id}' not found")
     try:
         flight = load_flight(db, flight_id)
     except KeyError:
