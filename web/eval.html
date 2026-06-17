@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Eval Labelling Workbench</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .eval-wrap { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+    .eval-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 1.5rem; }
+    .eval-cell {
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.35rem 0.6rem; font-size: 0.8rem; min-width: 9rem;
+    }
+    .eval-cell.gap { border-color: #c0392b; }
+    .eval-cell .c-count { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .eval-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .eval-table th, .eval-table td {
+      padding: 0.45rem 0.6rem; text-align: left; border-bottom: 1px solid var(--border);
+    }
+    .eval-table th { font-size: 0.72rem; text-transform: uppercase; color: var(--text-muted); }
+    .badge { display: inline-block; padding: 0.05rem 0.4rem; border-radius: 4px; font-size: 0.72rem; }
+    .badge.G { background: #1e824c; color: #fff; }
+    .badge.A { background: #c9851a; color: #fff; }
+    .badge.R { background: #b03030; color: #fff; }
+    .badge.unl { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+    .sit { color: var(--text-muted); font-size: 0.75rem; }
+    .recon { color: #c9851a; font-size: 0.72rem; }
+  </style>
+</head>
+<body>
+  <div class="eval-wrap">
+    <h1>Eval Labelling Workbench</h1>
+    <p class="sit">Dev-only golden-labelling for the LLM digest eval (#254).
+       Open a pack to render the standard briefing view with the labelling panel.</p>
+    <h2>Coverage</h2>
+    <div id="coverage" class="eval-grid">Loading…</div>
+    <h2>Corpus packs</h2>
+    <div id="packs">Loading…</div>
+  </div>
+  <script src="/dist/eval.js"></script>
+</body>
+</html>

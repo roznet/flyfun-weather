@@ -72,6 +72,24 @@ After a run, load the results JSON and compare old vs new assessments. Key metri
 | `src/weatherbrief/digest/prompt_builder.py` | Context string assembly |
 | `src/weatherbrief/digest/llm_digest.py` | WeatherDigest model + LangGraph pipeline |
 
+## Golden labels + the labelling workbench (#254)
+
+The eval scores against **golden** labels (the SME's correct assessment), not
+the model's own output. Two ways to label:
+
+- **Interactive CLI** — `python scripts/label_digest_eval.py --situation icing
+  --unlabeled`. Writes `meta["golden"]["assessments"]` into a fixture.
+- **Visual workbench** (preferred) — render the real briefing view for a corpus
+  of pulled prod packs and label in-view, blind-first. See
+  `designs/digest-eval-workbench.md`. Flow: `scripts/export_eval_candidates.py`
+  → copy to dev → `scripts/pull_eval_corpus.py` → `WEATHERBRIEF_EVAL_WORKBENCH=1`
+  + `/devserver` → open `/eval.html`. Golden lives in each corpus pack's
+  `label.json`.
+
+`run_digest_eval.py --guidance <preset>` scores the model against the golden
+label for that guidance (`resolve_expected` prefers the golden over the model's
+original assessment).
+
 ## AMBER bias investigation
 
 Known issue: ~70% of digests are AMBER. Suspects to check:

@@ -158,6 +158,11 @@ Key exports: `compute_frontal_zones_dual`, `classify_front_type`, `build_zone_ti
 Swift package for Skew-T log-P diagrams. Extracted to own repo: `github.com/roznet/rztskew`. Full atmospheric thermodynamics, Canvas rendering, 47 unit tests. Design docs live in that repo's `designs/` directory.
 Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
 
+### digest-eval-workbench [project]
+Dev-only golden-labelling workbench for the LLM digest eval (#254): renders the standard briefing view for a curated corpus of pulled prod packs, with an in-view panel to record golden GREEN/AMBER/RED labels per guidance. File-based corpus served through existing endpoints via a "virtual-flight" resolver (`eval-<corpus_id>` ids), runtime-gated by `WEATHERBRIEF_EVAL_WORKBENCH` + admin (never in prod). Labels committed (`label.json`), pack payloads gitignored/re-pullable. Backend+scripts+tests done; frontend written, runtime verification pending.
+Key exports: `eval_workbench_enabled`, `resolve_eval_flight`, `CorpusMeta`, `CorpusLabel`, `coverage_report`, `select_candidates`, `ingest_pack`
+→ Full doc: digest-eval-workbench.md
+
 ### debrief
 Pilot post-flight judgement (cancelled/flown) on past flights — Phase 1 of #92. Sidecar `flight_debriefs` table with shared 8-tag taxonomy, hybrid chips+text entry, per-user summary stats, three-section flight list (future/recent/past). Debriefed flights' packs are exempt from T2 retention so calibration can re-analyse against ERA5 later.
 Key exports: `FlightDebrief`, `Decision`, `ConditionTag`, `OutcomeValue`, `compute_stats`, `upsert_debrief`, `list_debriefed_flight_ids`

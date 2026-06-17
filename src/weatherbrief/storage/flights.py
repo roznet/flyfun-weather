@@ -640,6 +640,16 @@ def load_pack_meta(
 
     ``fetch_timestamp`` can be a datetime or an ISO string (parsed automatically).
     """
+    from weatherbrief.eval_workbench.config import eval_workbench_enabled, is_eval_flight_id
+
+    if eval_workbench_enabled() and is_eval_flight_id(flight_id):
+        from weatherbrief.eval_workbench.resolver import resolve_eval_pack_meta
+
+        try:
+            return resolve_eval_pack_meta(flight_id, fetch_timestamp)
+        except FileNotFoundError as exc:
+            raise KeyError(str(exc)) from exc
+
     from datetime import timezone as _tz
 
     if isinstance(fetch_timestamp, str):
@@ -667,6 +677,13 @@ def load_pack_meta(
 
 def list_packs(session: Session, flight_id: str) -> list[BriefingPackMeta]:
     """List all packs for a flight, newest first."""
+    from weatherbrief.eval_workbench.config import eval_workbench_enabled, is_eval_flight_id
+
+    if eval_workbench_enabled() and is_eval_flight_id(flight_id):
+        from weatherbrief.eval_workbench.resolver import resolve_eval_pack_list
+
+        return resolve_eval_pack_list(flight_id)
+
     stmt = (
         select(BriefingPackRow)
         .where(BriefingPackRow.flight_id == flight_id)
