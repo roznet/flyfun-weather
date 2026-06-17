@@ -89,12 +89,12 @@ export async function initLabelPanel(flightId: string): Promise<void> {
     `${pack.faithful ? '' : ' · reconstructed context'}`;
   panel.appendChild(modelLine);
 
-  // Per-guidance G/A/R selectors.
-  const rows: Record<string, HTMLElement[]> = {};
+  // Per-guidance G/A/R selectors. Each button has a paint() closure; clicking
+  // any button repaints the whole row so only the chosen one is highlighted.
   for (const g of GUIDANCES) {
     const row = el('div', {}, `<span style="display:inline-block;width:6rem">${g}</span>`);
     row.style.margin = '0.35rem 0';
-    const btns: HTMLElement[] = [];
+    const paintFns: Array<() => void> = [];
     for (const L of ['G', 'A', 'R']) {
       const b = el('button', { textContent: L }) as HTMLButtonElement;
       b.type = 'button';
@@ -107,14 +107,12 @@ export async function initLabelPanel(flightId: string): Promise<void> {
       };
       b.addEventListener('click', () => {
         chosen[g] = LETTERS[L];
-        btns.forEach((x) => (x as any)._paint && (x as any)._paint());
+        paintFns.forEach((f) => f());
       });
-      (b as any)._paint = paint;
       paint();
-      btns.push(b);
+      paintFns.push(paint);
       row.appendChild(b);
     }
-    rows[g] = btns;
     panel.appendChild(row);
   }
 

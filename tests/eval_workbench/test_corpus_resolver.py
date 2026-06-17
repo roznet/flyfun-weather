@@ -97,6 +97,17 @@ def test_save_label_requires_existing_pack(corpus_env):
         corpus.save_label("does-not-exist", corpus.CorpusLabel())
 
 
+def test_corpus_label_normalizes_and_validates_assessments():
+    # Lower-case is upper-cased; empty values are dropped.
+    lab = corpus.CorpusLabel(assessments={"balanced": "amber", "tolerant": ""})
+    assert lab.assessments == {"balanced": "AMBER"}
+    assert lab.is_complete is False
+
+    # A typo'd assessment is rejected (would silently never match in scoring).
+    with pytest.raises(ValueError):
+        corpus.CorpusLabel(assessments={"balanced": "AMBR"})
+
+
 def test_list_and_coverage(corpus_env):
     corpus.save_corpus_meta(_make_meta("a"))
     corpus.save_corpus_meta(

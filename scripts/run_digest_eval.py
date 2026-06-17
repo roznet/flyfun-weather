@@ -259,7 +259,17 @@ def main():
             )
             if cmp != "=":
                 reason_label = "expected" if has_expected else "old"
-                print(f"         {reason_label}: {fixture['digest']['assessment_reason'][:90]}")
+                if has_expected:
+                    # Show the SME's golden rationale (why it was labelled), not
+                    # the model's original reasoning; fall back if unlabelled.
+                    golden = meta.get("golden") or {}
+                    reason_text = (
+                        golden.get("rationale")
+                        or fixture["digest"]["assessment_reason"]
+                    )
+                else:
+                    reason_text = fixture["digest"]["assessment_reason"]
+                print(f"         {reason_label}: {reason_text[:90]}")
                 print(f"         new:      {digest.assessment_reason[:90]}")
 
             results.append({

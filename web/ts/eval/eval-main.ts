@@ -40,6 +40,16 @@ function badge(letter: string | null | undefined): string {
   return `<span class="badge ${c}">${c}</span>`;
 }
 
+/** HTML-escape a dynamic value before interpolating into an innerHTML string.
+ *  Corpus values are developer-committed (ICAO routes, vocab tags) so the risk
+ *  is negligible, but we keep the same no-raw-interpolation discipline as
+ *  label-panel.ts even on this dev-only page. */
+function esc(s: string): string {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 function renderCoverage(rows: CoverageRow[]): string {
   return rows
     .map((r) => {
@@ -62,10 +72,10 @@ function renderPacks(packs: CorpusPackSummary[]): string {
       const recon = p.faithful ? '' : ' <span class="recon">reconstructed</span>';
       const open = `/flight.html?id=${encodeURIComponent(p.flight_id)}`;
       return `<tr>
-        <td><a href="${open}">${p.route}</a> <span class="sit">d${p.days_out}</span>${recon}</td>
+        <td><a href="${open}">${esc(p.route)}</a> <span class="sit">d${p.days_out}</span>${recon}</td>
         <td>${badge(p.assessment)}</td>
         <td>${badge(g.conservative)} ${badge(g.balanced)} ${badge(g.tolerant)}</td>
-        <td class="sit">${p.situations.join(', ')}</td>
+        <td class="sit">${esc(p.situations.join(', '))}</td>
       </tr>`;
     })
     .join('');
