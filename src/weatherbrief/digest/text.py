@@ -394,6 +394,10 @@ def _format_route_sigmets(sig: RouteSigmets) -> list[str]:
     return lines
 
 
+# Digest mirrors the web default view: near-destination candidates only.
+_ALT_DIGEST_MAX_DIST_NM = 100.0
+
+
 def _format_route_alternates(alt: RouteAlternates) -> list[str]:
     """Format weather alternates for plain-text digest."""
     lines: list[str] = ["--- Weather Alternates ---"]
@@ -437,7 +441,15 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         lines.append(f"  Nearest weather alternate ({label}): {p.icao}{dist}{pos}")
 
     lines.append("")
-    for a in alt.alternates[:8]:
+    # Mirror the web default view: hide major (large) airports and limit to the
+    # near-destination candidates (≤100 nm). The full set incl. major airports
+    # and far en-route fields is available on the web via the list controls.
+    visible = [
+        a for a in alt.alternates
+        if not a.is_major and a.distance_from_dest_nm <= _ALT_DIGEST_MAX_DIST_NM
+    ]
+    hidden = len(alt.alternates) - len(visible)
+    for a in visible[:8]:
         bits = [f"{a.distance_from_dest_nm:.0f}nm", a.position, a.flight_category]
         if a.crosswind_kt is not None:
             bits.append(f"xwind {a.crosswind_kt:.0f}kt")
@@ -463,6 +475,9 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         elif qual_src == "nwp":
             bits.append("via model")
         lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
+
+    if hidden > 0:
+        lines.append(f"  (+{hidden} more incl. major airports / >{_ALT_DIGEST_MAX_DIST_NM:.0f}nm — see web)")
 
     lines.append("")
     return lines

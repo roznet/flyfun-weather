@@ -1164,6 +1164,12 @@ export function renderRouteObservations(
 
 // --- Weather-based alternates (D-2 inward) ---
 
+// List-view controls (session state — persists across store re-renders, resets
+// on reload). Default to a concise near-destination view: hide major (large)
+// airports, limit to within 100 nm of the destination. `null` distance = "All".
+let altHideMajor = true;
+let altMaxDistNm: number | null = 100;
+
 function detourLabel(apt: AlternateAirport): string {
   if (apt.detour_early_nm == null && apt.detour_late_nm == null) return '—';
   const early = apt.detour_early_nm != null ? `${apt.detour_early_nm >= 0 ? '+' : ''}${Math.round(apt.detour_early_nm)}` : '?';
@@ -1506,21 +1512,30 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
     : `<p class="muted">No weather alternate improves on the destination across the evaluated candidates.</p>`;
 
   const approachNote = alt.approach_filter_relaxed ? ', approach data unavailable' : '';
-  const shownCount = alt.alternates.length;
-  const summaryHtml = `<p class="obs-summary">${header} <span class="obs-fetch-time">${alt.candidates_evaluated} evaluated → ${shownCount} shown within ${Math.round(alt.radius_nm)}nm${approachNote}</span></p>`;
-  // Explain the evaluated→shown gap. The drop is the per-candidate
-  // instrument-approach gate (a field that is itself sub-VFR with no published
-  // approach is unreachable in those conditions) plus any with no ETA forecast.
-  const droppedCount = Math.max(0, alt.candidates_evaluated - shownCount);
-  const funnelHtml = droppedCount > 0
-    ? `<p class="muted alt-funnel-note">From ${alt.candidates_evaluated} GA-suitable fields within ${Math.round(alt.radius_nm)}nm (hard runway, no scheduled service), ${droppedCount} were filtered out — sub-VFR fields with no published instrument approach (unreachable in those conditions), or no forecast at ETA.</p>`
-    : '';
   const reqBannerHtml = altRequirementBanner(alt.alternate_requirement);
   const relaxedHtml = alt.approach_filter_relaxed
     ? `<p class="muted alt-caption">⚠️ No published-approach data is available for the candidates, so non-VFR fields could not be filtered by approach — confirm an approach independently.</p>`
     : '';
 
-  const rows = alt.alternates.map((apt) => {
+  // The backend returns ALL reachable candidates (incl. major airports and far
+  // en-route fields). The hide-major + max-distance controls below filter the
+  // *view* only — defaults give a concise near-destination list, the pilot can
+  // relax them to review everything.
+  const distSel = (v: number | null): string =>
+    altMaxDistNm === v ? ' selected' : '';
+  const controlsHtml = `
+    <div class="alt-controls">
+      <label class="alt-control"><input type="checkbox" id="alt-hide-major"${altHideMajor ? ' checked' : ''}> Hide major airports</label>
+      <label class="alt-control">Within
+        <select id="alt-max-dist">
+          <option value="50"${distSel(50)}>50 nm</option>
+          <option value="100"${distSel(100)}>100 nm</option>
+          <option value="all"${distSel(null)}>All</option>
+        </select>
+      </label>
+    </div>`;
+
+  const buildRow = (apt: AlternateAirport): string => {
     const tip = windTooltip(apt.best_runway_id, apt.crosswind_kt);
     const windStr = apt.wind_speed_kt != null ? `${Math.round(apt.wind_speed_kt)}kt` : '—';
     const xwStr = apt.crosswind_kt != null
@@ -1529,9 +1544,11 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
       ? (apt.best_approach_type ? escapeHtml(apt.best_approach_type) : '✓') : '—';
     const agreeCat = apt.agreement?.['flight_category'];
     const agreeBadge = agreeCat ? ` <span class="alt-agree alt-agree-${agreeCat}">${escapeHtml(agreeCat)}</span>` : '';
+    const majorChip = apt.is_major
+      ? ` <span class="alt-tag alt-tag-major" title="Major airport (airline hub) — hidden by default">MAJOR</span>` : '';
     return `
       <tr>
-        <td class="obs-icao">${escapeHtml(apt.icao)} <button class="alt-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Details" aria-label="info">i</button></td>
+        <td class="obs-icao">${escapeHtml(apt.icao)}${majorChip} <button class="alt-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Details" aria-label="info">i</button></td>
         <td>${Math.round(apt.distance_from_dest_nm)}nm</td>
         <td>${escapeHtml(apt.position)} <span class="muted">(${detourLabel(apt)})</span></td>
         <td>${flightCatBadge(apt.flight_category)}${agreeBadge}</td>
@@ -1543,13 +1560,14 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
         <td>${deltaTags(apt)}</td>
       </tr>
     `;
-  }).join('');
+  };
 
   el.innerHTML = `
-    ${summaryHtml}
+    <p class="obs-summary">${header} <span class="obs-fetch-time" id="alt-summary-counts"></span></p>
     ${reqBannerHtml}
     <p class="muted alt-caption">Planning-grade divert candidates that improve on the destination weather — not an operational alternate (no fuel, minima, NOTAM, customs or PPR check). Non-VFR fields are shown only with a published instrument approach.</p>
     ${relaxedHtml}
+    ${controlsHtml}
     ${picksHtml}
     <div class="table-scroll">
       <table class="band-table obs-table">
@@ -1567,11 +1585,64 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
             <th>vs dest</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody id="alt-tbody"></tbody>
       </table>
     </div>
-    ${funnelHtml}
+    <p class="muted alt-funnel-note" id="alt-funnel"></p>
   `;
+
+  // Filter the *view* from module state and (re)paint the rows + counts. Wired
+  // to the controls below; also called once now for the initial paint.
+  const applyAltFilter = (): void => {
+    const withinDist = (a: AlternateAirport): boolean =>
+      altMaxDistNm == null || a.distance_from_dest_nm <= altMaxDistNm;
+    const visible = alt.alternates.filter((a) => (!altHideMajor || !a.is_major) && withinDist(a));
+    const hiddenMajor = alt.alternates.filter((a) => altHideMajor && a.is_major).length;
+    const hiddenDist = alt.alternates.filter((a) => (!altHideMajor || !a.is_major) && !withinDist(a)).length;
+
+    const tbody = $('alt-tbody');
+    if (tbody) {
+      tbody.innerHTML = visible.length
+        ? visible.map(buildRow).join('')
+        : `<tr><td colspan="10" class="muted">No candidates match the current filters — try “Hide major airports” off or a larger distance.</td></tr>`;
+    }
+
+    const distLabel = altMaxDistNm == null ? '' : ` within ${altMaxDistNm}nm`;
+    const hiddenBits: string[] = [];
+    if (hiddenMajor > 0) hiddenBits.push(`${hiddenMajor} major hidden`);
+    if (hiddenDist > 0) hiddenBits.push(`${hiddenDist} beyond ${altMaxDistNm}nm`);
+    const hiddenStr = hiddenBits.length ? ` · ${hiddenBits.join(' · ')}` : '';
+    const counts = $('alt-summary-counts');
+    if (counts) {
+      counts.textContent = `${alt.candidates_evaluated} evaluated · ${visible.length} shown${distLabel}${hiddenStr}${approachNote}`;
+    }
+
+    // Backend evaluated→returned gap (the reachability gate + missing ETA
+    // forecast). Distinct from the view filters above, which hide nothing
+    // permanently.
+    const droppedByBackend = Math.max(0, alt.candidates_evaluated - alt.alternates.length);
+    const funnel = $('alt-funnel');
+    if (funnel) {
+      funnel.textContent = droppedByBackend > 0
+        ? `${droppedByBackend} of ${alt.candidates_evaluated} GA-suitable fields (hard runway, within range) were dropped server-side — sub-VFR fields with no published instrument approach (unreachable in those conditions), or no forecast at ETA.`
+        : '';
+    }
+  };
+  applyAltFilter();
+
+  // Re-filter on control change. Controls are recreated each render, so fresh
+  // listeners each time — no stacking.
+  const hideMajorEl = $('alt-hide-major') as HTMLInputElement | null;
+  if (hideMajorEl) {
+    hideMajorEl.onchange = () => { altHideMajor = hideMajorEl.checked; applyAltFilter(); };
+  }
+  const maxDistEl = $('alt-max-dist') as HTMLSelectElement | null;
+  if (maxDistEl) {
+    maxDistEl.onchange = () => {
+      altMaxDistNm = maxDistEl.value === 'all' ? null : Number(maxDistEl.value);
+      applyAltFilter();
+    };
+  }
 
   // Assign (not addEventListener) so repeated renders from the store
   // subscription replace the handler rather than stacking duplicates.

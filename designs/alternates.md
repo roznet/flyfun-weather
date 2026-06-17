@@ -113,10 +113,18 @@ run_alternates(
 `ALT_POSITION_MARGIN_NM = 10.0`.
 
 Candidate selection: (1) geometry union of near-route corridor ∪ dest-radius;
-(2) drop departure + destination; (3) GA-appropriateness (exclude
-`large_airport`, `scheduled_service == "yes"`) + runway suitability (hard runway,
-length ≥ min); (4) cap to nearest `max_candidates` by dest distance; (5) fresh
-fetch + shared assembly at ETA; (6) **per-candidate** approach gate (below).
+(2) drop departure + destination; (3) runway suitability (hard runway, length ≥
+min); (4) cap to nearest `max_candidates` by dest distance; (5) fresh fetch +
+shared assembly at ETA; (6) **per-candidate** approach gate (below).
+
+> **No backend preference filtering (changed).** `large_airport` and
+> `scheduled_service` are **no longer dropped** server-side — that silently
+> excluded good IFR diversions (e.g. EGTE/Exeter: airline service, but a 6811 ft
+> ILS runway 3 nm off the corridor). The backend now **returns every reachable
+> candidate** and only flags `is_major = (type == "large_airport")`. Hiding
+> majors and limiting distance are **view** choices, applied client-side (see
+> "List-view controls"). Only genuine reachability/safety gates stay
+> server-side: hard runway, `min_runway_ft`, and the sub-VFR-no-approach gate.
 
 ### The candidate funnel: "evaluated" vs "shown"
 The summary count and the table row count are **two different stages**, and the
@@ -127,25 +135,51 @@ gap between them surprised a reader (e.g. *"25 candidates within 50 nm" but only
 |-------|--------------|-------------|
 | 1. Geometry | corridor (≤`corridor_nm`) ∪ dest-radius (≤`radius_nm`) | — |
 | 2. Drop self | remove departure + destination | — |
-| 3. GA-suitability | drop `large_airport`, scheduled service, no hard runway, runway `< min_runway_ft`, missing coords | — |
+| 3. Runway suitability | drop no hard runway, runway `< min_runway_ft`, missing coords (`large_airport` / scheduled service are **kept**, just flagged `is_major`) | — |
 | 4. Cap | nearest `max_candidates` (30) by dest distance | **`candidates_evaluated`** (the "N candidates" headline) |
 | 5. Weather fetch | drop any candidate with **no model snapshot** at the ETA hour (`_assess` → None) | — |
 | 6. Approach gate | drop a field that is **itself** MVFR/IFR/LIFR *and* has **no published IAP** (unreachable in those conditions); VFR always kept, any field with an IAP always kept | — |
-| → | survivors, ranked closest-first | **`len(alternates)`** (the table rows) |
+| → | survivors, ranked closest-first | **`len(alternates)`** (returned to the client) |
+| 7. View filters (client) | hide `is_major` (default on) + max-distance-from-dest (default 100 nm) | the **rows the pilot sees** |
 
 So **`candidates_evaluated` is the post-cap count (stage 4)**, *not* the number
-shown. The shown list is what survives stages 5–6. For a typical IFR destination
-the gate (stage 6) is the dominant reducer — most nearby fields are sub-VFR with
-no published approach. Worked example (EGTE, IFR ceiling 1597 ft): 25 evaluated →
-7 shown = 3 MVFR-with-approach + 4 VFR; the ~18 dropped are sub-VFR fields with no
-published instrument approach.
+returned. The returned list is what survives stages 5–6; the **shown** list is
+that minus the client-side view filters (stage 7). For a typical IFR destination
+the gate (stage 6) is the dominant server-side reducer — most nearby fields are
+sub-VFR with no published approach.
 
-The shown list is **not** filtered to "beats the destination" — it shows every
+**Cap × majors interaction:** because majors now reach stage 4, they compete for
+the 30 nearest-to-dest slots. The effect is minor (large_airports are rare within
+the corridor/radius) and the default-visible set — non-major fields closest to the
+destination — is exactly what the nearest-to-dest cap favours, so it survives.
+The distance selector's **"All"** means *all returned* candidates, still bounded
+by the stage-4 cap (it does not re-query the backend for a wider net).
+
+The returned list is **not** filtered to "beats the destination" — it shows every
 survivor with a per-row `dominates_destination` flag and `vs dest` Δ tags; the
 "which is the nearest *improvement*" question is answered separately by
-`nearest_improving`. The UI surfaces the evaluated→shown gap with a caption
-(`renderRouteAlternates`); `approach_filter_relaxed` (stage 6 graceful
-degradation) suppresses the gate entirely.
+`nearest_improving` (computed over the full returned set, **not** re-filtered by
+the view controls). `approach_filter_relaxed` (stage 6 graceful degradation)
+suppresses the gate entirely.
+
+### List-view controls
+`renderRouteAlternates` (web) renders two controls above the table, defaulting to
+a concise near-destination view; both are **session state** (persist across store
+re-renders, reset on reload), not user prefs:
+
+- **Hide major airports** (default **on**) — hides `is_major` rows
+  (`large_airport`: Heathrow/Gatwick/Manchester). Regional fields with airline
+  service (Exeter, Newquay, Bournemouth) are *not* major and stay visible. When
+  off, major rows carry a `MAJOR` chip.
+- **Within 50 / 100 / All nm** (default **100 nm**) — filters by
+  `distance_from_dest_nm`. 100 nm shows near-destination diversions (incl. Exeter
+  ≈ 63 nm) while hiding the far en-route/early-divert corridor candidates; "All"
+  shows everything returned.
+
+The summary line reports the breakdown (`N evaluated · M shown within Dnm · K
+major hidden · …`). The **text digest mirrors this default view** (hide major,
+≤ 100 nm; `_format_route_alternates` in `digest/text.py`), appending a
+`(+N more … — see web)` line when items are hidden.
 
 ### Per-candidate instrument-approach gate
 Applied **after** each candidate's own weather is assessed (not at
@@ -194,7 +228,8 @@ regulatory minima there.
 assessment: `flight_category`, `wind_speed_kt`, `crosswind_kt`, `headwind_kt`,
 `best_runway_id`, `ceiling_ft`, `visibility_m`, `agreement`, `per_model`;
 suitability: `has_instrument_approach`, `best_approach_type`, `longest_runway_ft`,
-`has_hard_runway`, `point_of_entry`; vs-dest flags: `better_category`,
+`has_hard_runway`, `point_of_entry`, `is_major` (== `large_airport`; hidden by
+default in the UI list controls); vs-dest flags: `better_category`,
 `better_wind`, `better_crosswind`, `dominates_destination`; regulatory:
 `faa`, `easa` — per-candidate alternate-minima qualification, filled by the
 **alternate-requirement post-step**, NOT by `run_alternates` — see below).
