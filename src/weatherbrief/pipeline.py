@@ -92,7 +92,7 @@ class BriefingOptions:
     advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
     cruise_speed_ias_kt: float | None = None  # resolved aircraft/profile cruise IAS for headwind TAS
     auto_front_detection: bool = False  # experimental: write route_fronts.json (#195)
-    compute_alternates: bool = False  # opt-in: weather-based divert candidates, D-2 inward (#210)
+    compute_alternates: bool = True  # default-on: weather-based divert candidates, D-2 inward (#210, graduated)
     historical_mode: bool = False  # Use archived NWP data for past departure times
     as_of_time: datetime | None = None  # For historical: the date "as of" which to fetch data
     alt_departure_time: datetime | None = None  # optional same-day alt departure for lite advisory re-run

@@ -218,7 +218,7 @@ function populateProfileForm(profile: ProfileResponse): void {
   const autoFrontToggle = document.getElementById('toggle-auto-front-detection') as HTMLInputElement;
   if (autoFrontToggle) autoFrontToggle.checked = s.auto_front_detection ?? false;
   const computeAlternatesToggle = document.getElementById('toggle-compute-alternates') as HTMLInputElement;
-  if (computeAlternatesToggle) computeAlternatesToggle.checked = s.compute_alternates ?? false;
+  if (computeAlternatesToggle) computeAlternatesToggle.checked = s.compute_alternates ?? true;  // default-on (graduated)
 
   // Icing method selector
   const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;

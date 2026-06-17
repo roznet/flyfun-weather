@@ -5,8 +5,18 @@
 > category, wind, crosswind), classified as reachable **before** or **after** the
 > destination along the route.
 
-**Status: Shipped (#210).** Gated behind the `compute_alternates` user preference
-(default off) and `days_out <= 2`.
+**Status: Shipped (#210), graduated to default-on.** Gated by the
+`compute_alternates` user preference — now **default on** (was experimental /
+opt-out) — and `days_out <= 2`. Pilots can opt out in Settings.
+
+> **Graduating a feature (experimental → default-on).** The recipe used here is
+> the template for promoting any opt-in feature: (1) flip the resolution default
+> in `api/packs.py` (`get(key, True)`) + the `PipelineOptions` default; (2) ship a
+> one-off backfill data-migration that flips existing profiles' `settings_json`
+> (see `alembic/versions/069_alternates_default_on.py`, modelled on 028 — pure
+> Python, dialect-agnostic); (3) drop the "⚠️ Experimental" wording and move the
+> toggle out of the Settings **Experimental / Beta** section. New profiles need no
+> template change — they omit the key and resolve to the new default.
 
 ## Intent
 
