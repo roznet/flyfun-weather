@@ -1496,20 +1496,12 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
     ? `, ${Math.round(alt.destination_crosswind_kt)}kt xwind` : '';
   const header = `Destination ${escapeHtml(alt.destination_icao)}: ${flightCatBadge(alt.destination_category)}${destXw}`;
 
-  // Nearest-improving picks ("nearest VFR: EGyy 22nm before")
+  // Nearest-improving picks ("nearest VFR: EGyy 22nm before"). Rendered inside
+  // applyAltFilter (below) because a pick can reference an airport the current
+  // view filters hide — we annotate those so the pointer is never silent.
   const axisLabel: Record<string, string> = {
     category: 'better category', wind: 'lower wind', crosswind: 'lower crosswind',
   };
-  const picks = alt.nearest_improving
-    .filter((p) => p.icao)
-    .map((p) => {
-      const pos = p.position ? ` ${escapeHtml(p.position)}` : '';
-      return `<li>Nearest ${axisLabel[p.axis] ?? escapeHtml(p.axis)}: <strong>${escapeHtml(p.icao as string)}</strong> ${Math.round(p.distance_from_dest_nm as number)}nm${pos}</li>`;
-    })
-    .join('');
-  const picksHtml = picks
-    ? `<ul class="alt-picks">${picks}</ul>`
-    : `<p class="muted">No weather alternate improves on the destination across the evaluated candidates.</p>`;
 
   const approachNote = alt.approach_filter_relaxed ? ', approach data unavailable' : '';
   const reqBannerHtml = altRequirementBanner(alt.alternate_requirement);
@@ -1568,7 +1560,7 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
     <p class="muted alt-caption">Planning-grade divert candidates that improve on the destination weather — not an operational alternate (no fuel, minima, NOTAM, customs or PPR check). Non-VFR fields are shown only with a published instrument approach.</p>
     ${relaxedHtml}
     ${controlsHtml}
-    ${picksHtml}
+    <div id="alt-picks-wrap"></div>
     <div class="table-scroll">
       <table class="band-table obs-table">
         <thead>
@@ -1605,6 +1597,28 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
       tbody.innerHTML = visible.length
         ? visible.map(buildRow).join('')
         : `<tr><td colspan="10" class="muted">No candidates match the current filters — try “Hide major airports” off or a larger distance.</td></tr>`;
+    }
+
+    // Nearest-improving picks. A pick may reference an airport hidden by the
+    // current filters (e.g. a major hub, or one beyond the distance limit) — it
+    // is the genuine nearest improver but absent from the table above, so flag
+    // it as hidden rather than pointing at an invisible row.
+    const visibleIcaos = new Set(visible.map((a) => a.icao));
+    const picks = alt.nearest_improving
+      .filter((p) => p.icao)
+      .map((p) => {
+        const pos = p.position ? ` ${escapeHtml(p.position)}` : '';
+        const hiddenNote = visibleIcaos.has(p.icao as string)
+          ? ''
+          : ' <span class="muted alt-pick-hidden">(hidden — adjust filters)</span>';
+        return `<li>Nearest ${axisLabel[p.axis] ?? escapeHtml(p.axis)}: <strong>${escapeHtml(p.icao as string)}</strong> ${Math.round(p.distance_from_dest_nm as number)}nm${pos}${hiddenNote}</li>`;
+      })
+      .join('');
+    const picksWrap = $('alt-picks-wrap');
+    if (picksWrap) {
+      picksWrap.innerHTML = picks
+        ? `<ul class="alt-picks">${picks}</ul>`
+        : `<p class="muted">No weather alternate improves on the destination across the evaluated candidates.</p>`;
     }
 
     const distLabel = altMaxDistNm == null ? '' : ` within ${altMaxDistNm}nm`;

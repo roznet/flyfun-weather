@@ -449,6 +449,7 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         if not a.is_major and a.distance_from_dest_nm <= _ALT_DIGEST_MAX_DIST_NM
     ]
     hidden = len(alt.alternates) - len(visible)
+    truncated = max(0, len(visible) - 8)  # within-filter rows beyond the digest cap
     for a in visible[:8]:
         bits = [f"{a.distance_from_dest_nm:.0f}nm", a.position, a.flight_category]
         if a.crosswind_kt is not None:
@@ -476,8 +477,9 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
             bits.append("via model")
         lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
-    if hidden > 0:
-        lines.append(f"  (+{hidden} more incl. major airports / >{_ALT_DIGEST_MAX_DIST_NM:.0f}nm — see web)")
+    overflow = hidden + truncated
+    if overflow > 0:
+        lines.append(f"  (+{overflow} more — see web)")
 
     lines.append("")
     return lines
