@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from weatherbrief.analysis.alternate_requirement import (
     CeilingVisWindow,
@@ -40,6 +41,9 @@ from weatherbrief.models.alternate_requirement import (
     AlternateRequirement,
     ConditionalGroup,
 )
+
+if TYPE_CHECKING:
+    from weatherbrief.models.analysis import RouteObservations
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +308,7 @@ def _fetch_candidate_tafs(icaos: list[str], airports_db_path: str) -> dict[str, 
         model = _load_airport_model(airports_db_path)
         service = RouteWeatherService()
         result = service.fetch_route_weather(
-            route_icaos=list(icaos),
+            route_icaos=icaos,
             corridor_nm=1,  # minimal — just resolve the named airports themselves
             model=model,
         )
@@ -322,7 +326,9 @@ def _fetch_candidate_tafs(icaos: list[str], airports_db_path: str) -> dict[str, 
         return {}
 
 
-def _collect_candidate_tafs(obs, candidate_icaos: set[str], airports_db_path: str) -> dict[str, str]:
+def _collect_candidate_tafs(
+    obs: "RouteObservations | None", candidate_icaos: set[str], airports_db_path: str
+) -> dict[str, str]:
     """Assemble ``icao -> taf_raw`` for the candidates: reuse first, fetch the gaps.
 
     TAFs are only meaningful at D-0; ``obs`` (``route_observations``) is present

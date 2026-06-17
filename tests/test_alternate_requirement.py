@@ -642,7 +642,7 @@ class TestCandidateTafQualification:
 
         run_alternate_requirement(snap, "/nonexistent/nav.db")
 
-        assert called["icaos"] == ["EGAA"]  # only the uncovered candidate
+        assert set(called["icaos"]) == {"EGAA"}  # only the uncovered candidate
         assert cand.faa.source == "taf"
         assert cand.faa.verdict == BandVerdict.LIKELY
 

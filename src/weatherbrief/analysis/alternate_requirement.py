@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from weatherbrief.models.alternate_requirement import (
     AlternateQual,
@@ -717,7 +718,7 @@ def compute_faa_qual(
     approach_type: str | None,
     has_iap: bool,
     *,
-    source: str = "nwp",
+    source: Literal["taf", "nwp"] = "nwp",
 ) -> AlternateQual:
     """FAA per-candidate alternate minima (ILS→600-2, else→800-2, no-IAP→VFR).
 
@@ -767,7 +768,7 @@ def compute_easa_qual(
     approach_type: str | None,
     has_iap: bool,
     *,
-    source: str = "nwp",
+    source: Literal["taf", "nwp"] = "nwp",
 ) -> AlternateQual:
     """EASA NCO.OP.143 alternate planning minima.
 
