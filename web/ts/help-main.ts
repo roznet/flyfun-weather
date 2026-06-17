@@ -36,6 +36,11 @@ async function init(): Promise<void> {
 
     // Load unseen count for the tab badge
     loadTabBadge();
+
+    // Reveal the "Supporting the service" section only when donations are
+    // enabled (Stripe configured). Gated to signed-in users since the flag
+    // requires auth to read. Mirrors the gating on the Settings page.
+    maybeShowSupportSection();
   } else {
     const info = document.getElementById('user-info');
     if (info) {
@@ -47,10 +52,6 @@ async function init(): Promise<void> {
       `;
     }
   }
-
-  // Reveal the "Supporting the service" section only when donations are
-  // enabled (Stripe configured). Mirrors the gating on the Settings page.
-  maybeShowSupportSection();
 
   // Render the data-driven Data Sources & Models table in summary mode for
   // the guide tab. The full-detail table mounts lazily on tab switch.
