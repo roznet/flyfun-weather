@@ -64,6 +64,7 @@ class AlternateAirport(BaseModel):
     longest_runway_ft: int | None = None
     has_hard_runway: bool = False
     point_of_entry: bool = False  # customs/border crossing
+    is_major: bool = False  # type == large_airport — hidden by default in the UI
 
     # --- vs-destination flags ---
     better_category: bool = False

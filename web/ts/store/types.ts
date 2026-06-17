@@ -675,6 +675,7 @@ export interface AlternateAirport {
   longest_runway_ft: number | null;
   has_hard_runway: boolean;
   point_of_entry: boolean;
+  is_major: boolean;
   better_category: boolean;
   better_wind: boolean;
   better_crosswind: boolean;

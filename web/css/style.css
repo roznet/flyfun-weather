@@ -3970,6 +3970,36 @@ label {
   font-weight: 600;
 }
 
+/* Major (airline-hub) marker — neutral grey, distinct from the improvement
+   tints; only visible once the pilot unchecks "Hide major airports". */
+.alt-tag-major {
+  background: rgba(120, 120, 120, 0.22);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* List-view controls: hide-major + max-distance, above the candidate table. */
+.alt-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+  margin: 0.5rem 0 0.6rem;
+  font-size: 0.8rem;
+}
+
+.alt-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+}
+
+.alt-control select {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.3rem;
+}
+
 .alt-agree {
   font-size: 0.7rem;
   color: var(--text-tertiary, #888);

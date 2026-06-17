@@ -2,7 +2,8 @@
 
 Covers:
 - geometry: before/after classification + the detour pair
-- candidate filters: instrument-approach gate, large_airport / scheduled exclusion
+- candidate filters: instrument-approach gate, runway suitability; major/scheduled
+  fields are returned and flagged (is_major), not excluded
 - consistency: the shared assembly yields the same category/crosswind as the
   forecast map's ``map_queries`` wrappers for a fixed snapshot ("Seam 2").
 """
@@ -266,7 +267,11 @@ def test_approach_gate_relaxed_when_no_procedure_data():
 # ---------------------------------------------------------------------------
 
 
-def test_large_airport_and_scheduled_service_excluded():
+def test_major_and_scheduled_returned_and_flagged():
+    """large_airport / scheduled_service are no longer dropped — they are
+    returned and flagged so the UI can hide them by default. Only is_major
+    (== large_airport) marks a candidate; scheduled-service regional fields
+    (e.g. EGTE Exeter) stay non-major and visible (the #-regression)."""
     route = _route()
     ok = _FakeAirport("EGPN", 55.50, -3.40)
     large = _FakeAirport("EGPK", 55.51, -4.59, type="large_airport")
@@ -284,7 +289,14 @@ def test_large_airport_and_scheduled_service_excluded():
     }
     result = _run(route, near, snaps)
     assert result is not None
-    assert {a.icao for a in result.alternates} == {"EGPN"}
+    # All three now survive (each has a hard runway, length and an approach).
+    by_icao = {a.icao: a for a in result.alternates}
+    assert set(by_icao) == {"EGPN", "EGPK", "EGPH"}
+    # Only the large_airport is flagged major.
+    assert by_icao["EGPK"].is_major is True
+    # A scheduled-service regional field is NOT major and stays visible.
+    assert by_icao["EGPH"].is_major is False
+    assert by_icao["EGPN"].is_major is False
 
 
 def test_short_runway_excluded():

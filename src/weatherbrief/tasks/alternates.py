@@ -65,11 +65,6 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return dist_nm
 
 
-def _is_scheduled_service(value: object) -> bool:
-    """True when an airport advertises scheduled commercial service."""
-    return str(value).strip().lower() == "yes"
-
-
 def _eta_hour(target_time: datetime, duration_hours: float) -> datetime:
     """Destination ETA rounded to the nearest whole UTC hour (the fetch sample hour)."""
     eta = target_time
@@ -278,14 +273,15 @@ def run_alternates(
     candidates.pop(dest.icao, None)
     candidates.pop(origin.icao, None)
 
-    # --- 3. GA-appropriateness + runway suitability ---
+    # --- 3. Runway suitability ---
+    # NB: large_airport / scheduled_service are NOT dropped here — they are
+    # returned and flagged (is_major, below) so the UI can hide them by default
+    # while letting the pilot reveal them. Only genuine reachability/safety
+    # filters (hard runway, min length, the sub-VFR-no-approach gate) stay
+    # server-side.
     filtered: list[dict] = []
     for c in candidates.values():
         ap = c["airport"]
-        if ap.type == "large_airport":
-            continue
-        if _is_scheduled_service(ap.scheduled_service):
-            continue
         if require_hard_runway and not ap.has_hard_runway:
             continue
         if (
@@ -442,6 +438,7 @@ def run_alternates(
             longest_runway_ft=ap.longest_runway_length_ft,
             has_hard_runway=bool(ap.has_hard_runway),
             point_of_entry=bool(ap.point_of_entry),
+            is_major=ap.type == "large_airport",
             better_category=better_category,
             better_wind=better_wind,
             better_crosswind=better_crosswind,
