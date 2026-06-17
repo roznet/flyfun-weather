@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from weatherbrief.eval_workbench.config import eval_corpus_dir, eval_flight_id
 from weatherbrief.eval_workbench.situations import SITUATION_VOCAB
@@ -28,6 +28,11 @@ LABEL_FILE = "label.json"
 
 # The guidance presets a golden label carries an assessment for.
 GUIDANCES: tuple[str, ...] = ("conservative", "balanced", "tolerant")
+
+# The only valid golden assessment values. A typo'd value (e.g. "AMBR") would
+# never match LLM output in run_digest_eval, silently looking like a regression
+# — so reject it at write time rather than store it.
+ASSESSMENT_VALUES: frozenset[str] = frozenset({"GREEN", "AMBER", "RED"})
 
 
 class CorpusMeta(BaseModel):
@@ -65,6 +70,23 @@ class CorpusLabel(BaseModel):
     notes: str = ""
     labeled_by: str = ""
     labeled_at: str = ""
+
+    @field_validator("assessments")
+    @classmethod
+    def _normalize_assessments(cls, value: dict[str, str]) -> dict[str, str]:
+        """Upper-case, drop empties, and reject non-GREEN/AMBER/RED values."""
+        out: dict[str, str] = {}
+        for guidance, assessment in value.items():
+            if not assessment:
+                continue
+            normalized = assessment.upper()
+            if normalized not in ASSESSMENT_VALUES:
+                raise ValueError(
+                    f"invalid assessment {assessment!r} for {guidance!r}; "
+                    "must be GREEN/AMBER/RED"
+                )
+            out[guidance] = normalized
+        return out
 
     @property
     def is_complete(self) -> bool:

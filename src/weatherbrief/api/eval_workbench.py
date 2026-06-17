@@ -129,12 +129,19 @@ def save_corpus_label(
 
     from datetime import datetime, timezone
 
-    label = corpus.CorpusLabel(
-        assessments={k: v.upper() for k, v in body.assessments.items() if v},
-        rationale=body.rationale.strip(),
-        notes=body.notes.strip(),
-        labeled_by=body.labeled_by.strip() or admin_id,
-        labeled_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    )
+    from pydantic import ValidationError
+
+    # CorpusLabel normalizes + validates assessment values (GREEN/AMBER/RED);
+    # surface a bad value as 422 rather than a 500.
+    try:
+        label = corpus.CorpusLabel(
+            assessments=body.assessments,
+            rationale=body.rationale.strip(),
+            notes=body.notes.strip(),
+            labeled_by=body.labeled_by.strip() or admin_id,
+            labeled_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid label: {exc}")
     corpus.save_label(corpus_id, label)
     return LabelModel(**label.model_dump())
