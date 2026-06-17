@@ -716,8 +716,15 @@ def compute_faa_qual(
     visibility_m: float | None,
     approach_type: str | None,
     has_iap: bool,
+    *,
+    source: str = "nwp",
 ) -> AlternateQual:
-    """FAA per-candidate alternate minima (ILS→600-2, else→800-2, no-IAP→VFR)."""
+    """FAA per-candidate alternate minima (ILS→600-2, else→800-2, no-IAP→VFR).
+
+    ``source`` records where the forecast ceiling/visibility came from ("taf"
+    when a TAF covered the ETA window, else "nwp"); it is provenance only and
+    never changes the verdict.
+    """
     proxy = proxy_for_approach(approach_type, has_iap)
     if not has_iap or proxy is None:
         cl = ch = FAA_ALT_VFR_CEILING_FT
@@ -749,6 +756,7 @@ def compute_faa_qual(
         reason=_qual_reason(verdict, ceiling_c, vis_c, "SM", vfr_only=vfr_only),
         ceiling=ceiling_c,
         visibility=vis_c,
+        source=source,
         ceiling_basis=basis,
     )
 
@@ -758,12 +766,18 @@ def compute_easa_qual(
     visibility_m: float | None,
     approach_type: str | None,
     has_iap: bool,
+    *,
+    source: str = "nwp",
 ) -> AlternateQual:
     """EASA NCO.OP.143 alternate planning minima.
 
     DH<250 ft (ILS) → ceiling DH+200 / vis 1500 m; DH>=250 ft (RNP / non-
     precision) → ceiling DH+400 / vis 3000 m; no IAP → ceiling 2000 ft / vis
     5000 m. The DH proxy range yields a ceiling band; visibility is a fixed bar.
+
+    ``source`` records where the forecast ceiling/visibility came from ("taf"
+    when a TAF covered the ETA window, else "nwp"); provenance only, never
+    affects the verdict.
     """
     proxy = proxy_for_approach(approach_type, has_iap)
     if not has_iap or proxy is None:
@@ -798,5 +812,6 @@ def compute_easa_qual(
         reason=_qual_reason(verdict, ceiling_c, vis_c, "m", vfr_only=vfr_only),
         ceiling=ceiling_c,
         visibility=vis_c,
+        source=source,
         ceiling_basis=basis,
     )

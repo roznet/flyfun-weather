@@ -456,6 +456,12 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
             if v == "likely" and (a.flight_category or "").upper() in ("VFR", "MVFR"):
                 v = "yes"
             bits.append(f"EASA {v}")
+        # Provenance of the qualifying forecast (FAA/EASA share the same source).
+        qual_src = (a.faa or a.easa).source if (a.faa or a.easa) is not None else None
+        if qual_src == "taf":
+            bits.append("via TAF")
+        elif qual_src == "nwp":
+            bits.append("via model")
         lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
     lines.append("")

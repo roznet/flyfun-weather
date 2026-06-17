@@ -1254,9 +1254,14 @@ function renderQualPopup(apt: AlternateAirport, regime: 'faa' | 'easa'): string 
       + 'below even the least demanding estimate.'
     : 'FAA alternate minima are fixed regulatory values (ILS → 600 ft &amp; 2 SM, otherwise '
       + '800 ft &amp; 2 SM; a VFR proxy applies with no instrument approach).';
+  const srcLabel = q.source === 'taf'
+    ? 'TAF (forecast)' : q.source === 'nwp' ? 'NWP consensus (model estimate)' : '';
+  const srcHtml = srcLabel
+    ? `<p class="muted">Based on: <strong>${escapeHtml(srcLabel)}</strong></p>` : '';
   return `
     <div class="popup-header"><h3>${escapeHtml(apt.icao)} — ${escapeHtml(title)}</h3></div>
     <p class="muted">Overall: <strong>${escapeHtml(qualLabelFor(q, regime, apt.flight_category))}</strong></p>
+    ${srcHtml}
     <table class="band-table">
       <thead><tr><th>Criterion</th><th>Forecast</th><th>Required (estimated)</th></tr></thead>
       <tbody>${renderCriterionRow(q.ceiling, q.ceiling_basis)}${renderCriterionRow(q.visibility)}</tbody>

@@ -51,7 +51,8 @@ _CAVEATS = [
     "EASA requirements are computed from estimated plate minima expressed as a "
     "range; the Likely/Marginal/Unlikely band reflects that uncertainty. "
     "Forecast ceiling/visibility inputs are real.",
-    "Per-candidate qualification uses NWP consensus, not a TAF.",
+    "Per-candidate qualification uses a TAF when one covers the candidate's ETA "
+    "window (D-0), and NWP consensus otherwise.",
     "Planning guidance only — not an operational minima computation or a "
     "go/no-go decision.",
 ]
@@ -258,6 +259,90 @@ def _build_destination_window(
     return no_forecast_window(), []
 
 
+def _candidate_taf_window(taf_raw: str | None, eta: datetime) -> CeilingVisWindow | None:
+    """Build a TAF-only window for a divert candidate at the divert ETA.
+
+    Reuses the destination window builder (same TEMPO/PROB worst-case policy) but
+    ignores the NWP fallback: returns the window only when a TAF actually covered
+    the ETA (``source == "taf"``), else ``None`` so the caller keeps the
+    NWP-consensus ceiling/vis. A parse failure or an empty TAF also yields
+    ``None``.
+    """
+    if not taf_raw:
+        return None
+    window, _ = _build_destination_window(taf_raw, eta, None, None)
+    # Require the TAF window to carry at least one usable value. A string that
+    # parses but yields neither ceiling nor visibility (e.g. an unparseable TAF
+    # body) must not flip a candidate to a failing verdict — keep the valid NWP
+    # consensus in that case. Real TAFs covering the ETA always carry a base
+    # visibility (or CAVOK, which sets a high visibility).
+    if (
+        window.source == "taf"
+        and window.has_forecast
+        and (window.ceiling_ft is not None or window.visibility_m is not None)
+    ):
+        return window
+    return None
+
+
+def _fetch_candidate_tafs(icaos: list[str], airports_db_path: str) -> dict[str, str]:
+    """Fetch raw TAFs for candidate ICAOs not already covered by the route corridor.
+
+    Uses the same euro_aip ``RouteWeatherService`` path as ``run_route_weather``
+    with a minimal corridor (just enough to resolve the named airports — the
+    pattern ``tasks/verification.py`` uses for arbitrary ICAO lists). Returns an
+    ``icao -> taf_raw`` map. Never raises: a network/source failure degrades the
+    affected candidates to the NWP-consensus path.
+    """
+    if not icaos:
+        return {}
+    try:
+        from euro_aip.briefing.weather.route_weather import RouteWeatherService
+
+        from weatherbrief.airports import _load_airport_model
+
+        model = _load_airport_model(airports_db_path)
+        service = RouteWeatherService()
+        result = service.fetch_route_weather(
+            route_icaos=list(icaos),
+            corridor_nm=1,  # minimal — just resolve the named airports themselves
+            model=model,
+        )
+        out: dict[str, str] = {}
+        for raw in result.airports:
+            taf = raw.latest_taf
+            if taf is not None and taf.raw_text:
+                out[raw.icao] = taf.raw_text
+        return out
+    except Exception:
+        logger.warning(
+            "alternate_requirement: candidate TAF fetch failed; candidates fall "
+            "back to NWP consensus", exc_info=True,
+        )
+        return {}
+
+
+def _collect_candidate_tafs(obs, candidate_icaos: set[str], airports_db_path: str) -> dict[str, str]:
+    """Assemble ``icao -> taf_raw`` for the candidates: reuse first, fetch the gaps.
+
+    TAFs are only meaningful at D-0; ``obs`` (``route_observations``) is present
+    only then, so its absence gates the whole TAF path off for D-1/D-2 (where a
+    current TAF would not cover the ETA window anyway).
+    """
+    if obs is None or not candidate_icaos:
+        return {}
+    taf_by_icao: dict[str, str] = {}
+    # Reuse TAFs already fetched along the route corridor (zero extra network).
+    for a in obs.airports:
+        if a.icao in candidate_icaos and a.taf_raw:
+            taf_by_icao[a.icao] = a.taf_raw
+    # Explicitly fetch the candidates the corridor didn't cover.
+    gap = [icao for icao in candidate_icaos if icao not in taf_by_icao]
+    if gap:
+        taf_by_icao.update(_fetch_candidate_tafs(gap, airports_db_path))
+    return taf_by_icao
+
+
 def _destination_approach_class(airports_db_path: str, dest_icao: str) -> tuple[str | None, bool]:
     """Look up the destination's most-precise approach type + IAP presence.
 
@@ -337,13 +422,25 @@ def run_alternate_requirement(snapshot, airports_db_path: str, *, now: datetime 
         computed_at=now,
     )
 
-    # 5. Per-candidate qualification from each candidate's consensus ceiling/vis.
+    # 5. Per-candidate qualification. Prefer a TAF covering the candidate's ETA
+    #    (D-0 only; reuse the route-corridor TAFs, fetch the gaps), exactly as the
+    #    destination trigger above does — falling back to the NWP-consensus
+    #    ceiling/vis that run_alternates assembled. `source` records which path
+    #    fed the verdict so the UI/digest can badge "(forecast)" vs "(model)".
+    taf_by_icao = _collect_candidate_tafs(
+        obs, {c.icao for c in alternates.alternates}, airports_db_path,
+    )
     for cand in alternates.alternates:
+        taf_window = _candidate_taf_window(taf_by_icao.get(cand.icao), eta)
+        if taf_window is not None:
+            ceiling_ft, vis_m, source = taf_window.ceiling_ft, taf_window.visibility_m, "taf"
+        else:
+            ceiling_ft, vis_m, source = cand.ceiling_ft, cand.visibility_m, "nwp"
         cand.faa = compute_faa_qual(
-            cand.ceiling_ft, cand.visibility_m, cand.best_approach_type,
-            cand.has_instrument_approach,
+            ceiling_ft, vis_m, cand.best_approach_type,
+            cand.has_instrument_approach, source=source,
         )
         cand.easa = compute_easa_qual(
-            cand.ceiling_ft, cand.visibility_m, cand.best_approach_type,
-            cand.has_instrument_approach,
+            ceiling_ft, vis_m, cand.best_approach_type,
+            cand.has_instrument_approach, source=source,
         )

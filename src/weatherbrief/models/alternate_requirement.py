@@ -97,6 +97,12 @@ class AlternateQual(BaseModel):
     reason: str
     ceiling: CriterionAssessment
     visibility: CriterionAssessment
+    # Provenance of the forecast ceiling/visibility the verdict was computed
+    # from: ``"taf"`` when an aviation TAF covered the candidate's ETA window
+    # (D-0), else ``"nwp"`` for the NWP-consensus model estimate. Mirrors the
+    # destination trigger's ``source`` so the UI/digest can badge "(forecast)"
+    # vs "(model estimate)" per candidate.
+    source: Literal["taf", "nwp"] = "nwp"
     # Human-readable provenance of the ceiling requirement — explains *why* the
     # required band is what it is (approach class · estimated DH + alternate
     # margin for EASA; fixed regulatory value for FAA). Display-only.
