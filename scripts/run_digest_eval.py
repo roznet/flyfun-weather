@@ -70,6 +70,20 @@ def load_fixture(fixture_id: str) -> dict:
     }
 
 
+def resolve_expected(meta: dict) -> dict:
+    """Golden expected assessments per guidance, tolerant of both schemas.
+
+    The interactive labeller (``label_digest_eval.py``) writes the SME's
+    ground truth to ``meta["golden"]["assessments"]``; older synthetic
+    fixtures carry a top-level ``meta["expected_assessments"]``. Prefer the
+    golden label when present so CLI-produced labels are actually scored.
+    """
+    golden = meta.get("golden")
+    if isinstance(golden, dict) and isinstance(golden.get("assessments"), dict):
+        return golden["assessments"]
+    return meta.get("expected_assessments", {})
+
+
 def run_one(
     context: str,
     system_prompt: str,
@@ -163,7 +177,7 @@ def main():
             expected_col = ""
             if guidance_key:
                 fixture = load_fixture(e["id"])
-                ea = fixture["meta"].get("expected_assessments", {})
+                ea = resolve_expected(fixture["meta"])
                 if guidance_key in ea:
                     expected_col = f" exp={ea[guidance_key]:5}"
                     has_expected_count += 1
@@ -205,8 +219,9 @@ def main():
         fixture = load_fixture(entry["id"])
         meta = fixture["meta"]
 
-        # Use expected_assessments[guidance] when available, else fall back to digest
-        expected_assessments = meta.get("expected_assessments", {})
+        # Use golden/expected assessment for the guidance when available,
+        # else fall back to what the model originally produced.
+        expected_assessments = resolve_expected(meta)
         if guidance_key and guidance_key in expected_assessments:
             expected = expected_assessments[guidance_key]
             has_expected = True
