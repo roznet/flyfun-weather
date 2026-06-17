@@ -33,16 +33,34 @@ function patchFlightDates(obj: Record<string, any>): Record<string, any> {
 // Full flight lifecycle test
 // ---------------------------------------------------------------------------
 
-test('flight lifecycle: create → view → change setting → recalculate → delete', async ({ page }) => {
+test('flight lifecycle: create → view → save settings → altitude overlay → delete', async ({ page }) => {
   const enc = encodeURIComponent;
   const flightData = patchFlightDates({ ...fixture('flight.json'), id: FLIGHT_ID });
   const packMetaData = { ...fixture('pack_meta.json'), flight_id: FLIGHT_ID };
   const advisoriesData = fixture('advisories.json');
-  const advisoriesWorstData = fixture('advisories_worst.json');
+
+  // Precomputed altitude table (#259). The lever no longer triggers a full
+  // recalc — it indexes this cached table client-side via overlayAltitudeStatuses
+  // for instant per-altitude statuses (the old #recalc-advisories-btn is gone).
+  // At the 2000ft cruise everything is green; at 8000ft turbulence goes RED and
+  // cloud_top AMBER, so dragging the lever there must repaint those cards.
+  const altitudeTableData = {
+    rows: [
+      { altitude_ft: 2000, statuses: { turbulence: 'green', cloud_top: 'green' }, red_count: 0, amber_count: 0, green_count: 13 },
+      { altitude_ft: 4000, statuses: { turbulence: 'amber', cloud_top: 'green' }, red_count: 0, amber_count: 1, green_count: 12 },
+      { altitude_ft: 8000, statuses: { turbulence: 'red', cloud_top: 'amber' }, red_count: 1, amber_count: 1, green_count: 11 },
+    ],
+    advisory_ids: ['turbulence', 'cloud_top'],
+    advisory_names: { turbulence: 'Turbulence', cloud_top: 'Cloud Tops' },
+    cruise_altitude_ft: 2000,
+    flight_ceiling_ft: 18000,
+    step_ft: 2000,
+    best_below_cruise: 2000,
+    best_above_cruise: null,
+  };
 
   // --- Mutable state flags ---
   let flightsCreated = false;
-  let useWorstAdvisories = false;
 
   // --- Mock user auth ---
   await page.route('**/auth/me', route =>
@@ -248,18 +266,30 @@ test('flight lifecycle: create → view → change setting → recalculate → d
     route.fulfill({ json: fixture('route_analyses.json') }),
   );
 
-  // --- Mock advisories (dynamic) ---
+  // --- Mock advisories (baked pack manifest) ---
+  // The GET serves the frozen route_advisories.json; it does NOT re-apply the
+  // current profile aggregation, so a settings change won't retroactively worsen
+  // a baked pack (only a refresh would). Let the sub-paths fall through to their
+  // own routes.
   await page.route(`**/packs/${enc(TIMESTAMP)}/advisories`, route => {
     const url = route.request().url();
-    if (url.includes('/recalculate')) return route.fallthrough();
-    return route.fulfill({ json: useWorstAdvisories ? advisoriesWorstData : advisoriesData });
+    if (url.includes('/recalculate') || url.includes('/altitude-table') || url.includes('/alt'))
+      return route.fallthrough();
+    return route.fulfill({ json: advisoriesData });
   });
 
-  // --- Mock advisories recalculate ---
-  await page.route(`**/packs/${enc(TIMESTAMP)}/advisories/recalculate`, route => {
-    useWorstAdvisories = true;
-    return route.fulfill({ json: { manifest: advisoriesWorstData, wind_overlay: null } });
-  });
+  // --- Mock advisories recalculate (wind-overlay path) ---
+  // The lever's debounced release fires this only to refresh the route-graph
+  // wind overlay; advisory card statuses come from the cached altitude table, so
+  // keep this inert (baseline manifest, no overlay) to stay hermetic.
+  await page.route(`**/packs/${enc(TIMESTAMP)}/advisories/recalculate`, route =>
+    route.fulfill({ json: { manifest: advisoriesData, wind_overlay: null } }),
+  );
+
+  // --- Mock precomputed altitude table (cached GET + on-demand POST sweep) ---
+  await page.route(`**/packs/${enc(TIMESTAMP)}/advisories/altitude-table**`, route =>
+    route.fulfill({ json: altitudeTableData }),
+  );
 
   // --- Mock elevation ---
   await page.route(`**/packs/${enc(TIMESTAMP)}/elevation`, route =>
@@ -353,7 +383,9 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   await expect(page.locator('.advisory-summary .badge-amber')).not.toBeVisible();
 
   // =========================================================================
-  // Phase 3: Navigate to settings and change aggregation to "worst"
+  // Phase 3: Settings round-trip — change aggregation to "worst" and save.
+  // (Standalone coverage: a baked pack is NOT re-evaluated from this; only a
+  // refresh would. Phase 4 asserts the pack stays green.)
   // =========================================================================
 
   await page.click('a[href="/settings.html"]');
@@ -369,7 +401,8 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   await expect(page.locator('#status-message')).toContainText('Settings saved');
 
   // =========================================================================
-  // Phase 4: Return to briefing, recalculate, and verify red/amber appear
+  // Phase 4: Return to briefing and drive the altitude lever — the precomputed
+  // table overlays worse statuses client-side (no recalc button anymore, #259).
   // =========================================================================
 
   // Navigate back to flights list
@@ -389,19 +422,35 @@ test('flight lifecycle: create → view → change setting → recalculate → d
   await page.click('.flight-card button:has-text("Briefing")');
   await page.waitForURL(/briefing\.html/);
 
-  // Wait for advisories to load
+  // Wait for advisories to load. The baked pack is unaffected by the saved
+  // aggregation change (no refresh ran), so it's still all-green at 2000ft cruise.
   await expect(page.locator('#advisories-wrapper')).toBeVisible();
+  await expect(page.locator('.advisory-summary .badge-green')).toBeVisible();
+  await expect(page.locator('.advisory-summary .badge-red')).not.toBeVisible();
 
-  // Click recalculate
-  await page.click('#recalc-advisories-btn');
+  // Drag the altitude lever from 2000ft cruise to 8000ft. `input` fires during
+  // drag (sets the override → re-render with the table overlay); `change` fires
+  // on release (debounced wind overlay). Dispatch both to mimic a real drag+drop.
+  const slider = page.locator('#advisory-alt-slider');
+  await expect(slider).toBeVisible();
+  await slider.evaluate((el, val) => {
+    const input = el as HTMLInputElement;
+    input.value = String(val);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, 8000);
 
-  // After recalculation with worst mode, turbulence is RED and cloud_top is AMBER
+  // At 8000ft the cached table marks turbulence RED and cloud_top AMBER — the
+  // overlay must repaint those cards and the summary counts without a refetch.
+  await expect(page.locator('.advisory-card[data-advisory="turbulence"].advisory-red')).toBeVisible();
+  await expect(page.locator('.advisory-card[data-advisory="cloud_top"].advisory-amber')).toBeVisible();
   await expect(page.locator('.advisory-summary .badge-red')).toBeVisible();
   await expect(page.locator('.advisory-summary .badge-amber')).toBeVisible();
 
-  // Verify specific advisory cards
-  await expect(page.locator('.advisory-card[data-advisory="turbulence"].advisory-red')).toBeVisible();
-  await expect(page.locator('.advisory-card[data-advisory="cloud_top"].advisory-amber')).toBeVisible();
+  // The delta note (sibling below the toolbar) reports the altitude-vs-planned
+  // change live from the same table.
+  await expect(page.locator('#advisory-alt-delta')).toContainText('8000ft');
+  await expect(page.locator('#advisory-alt-delta')).toContainText('worsens');
 
   // =========================================================================
   // Phase 5: Delete the flight
