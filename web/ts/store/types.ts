@@ -620,6 +620,9 @@ export interface AlternateQual {
   reason: string;
   ceiling: CriterionAssessment;
   visibility: CriterionAssessment;
+  /** Forecast provenance: 'taf' when a TAF covered the candidate's ETA window
+   * (D-0), else 'nwp' for the NWP-consensus model estimate. */
+  source: 'taf' | 'nwp';
   /** Provenance of the ceiling requirement (approach class · est DH + margin). */
   ceiling_basis?: string | null;
 }

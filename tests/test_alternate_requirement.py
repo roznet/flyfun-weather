@@ -562,10 +562,120 @@ class TestWiringSmoke:
         assert cand_good.faa.verdict == BandVerdict.LIKELY  # ILS, 4000/9999
         assert cand_good.easa.verdict == BandVerdict.LIKELY
         assert cand_marginal.easa.verdict == BandVerdict.MARGINAL  # 1000 in 800–1300
+        # No route_observations (D-2/D-1) → candidates qualify on NWP consensus.
+        assert cand_good.faa.source == "nwp"
+        assert cand_good.easa.source == "nwp"
 
     def test_no_alternates_is_noop(self):
         snap = SimpleNamespace(alternates=None)
         run_alternate_requirement(snap, "/nonexistent/nav.db")  # must not raise
+
+
+# --- Candidate TAF path (D-0): reuse route-corridor TAFs, fetch the gaps ------
+
+def _obs(airports):
+    """Minimal route_observations stand-in: only .airports is read."""
+    return SimpleNamespace(airports=airports)
+
+
+class TestCandidateTafQualification:
+    """A TAF covering a candidate's ETA overrides its NWP-consensus qualification."""
+
+    def _alt_with_candidate(self, cand):
+        return RouteAlternates(
+            destination_icao="EIDW", destination_category="VFR",
+            destination_ceiling_ft=4000, destination_visibility_m=9999,
+            corridor_nm=40, radius_nm=50,
+            eta=datetime(2026, 6, 13, 12, tzinfo=timezone.utc),
+            alternates=[cand],
+        )
+
+    def test_reused_taf_overrides_nwp_consensus(self):
+        # NWP consensus says LIFR (would be UNLIKELY even for ILS minima), but a
+        # TAF covering the ETA reports CAVOK → the candidate qualifies on the TAF.
+        cand = AlternateAirport(
+            icao="EGAC", lat=54.6, lon=-5.9, distance_from_dest_nm=10, position="after",
+            flight_category="LIFR", ceiling_ft=100, visibility_m=400,
+            has_instrument_approach=True, best_approach_type="ILS",
+        )
+        alt = self._alt_with_candidate(cand)
+        obs = _obs([SimpleNamespace(
+            icao="EGAC", taf_raw="TAF EGAC 130600Z 1306/1406 28010KT CAVOK",
+        )])
+        snap = SimpleNamespace(
+            route=SimpleNamespace(destination=SimpleNamespace(icao="EIDW")),
+            alternates=alt, route_observations=obs,
+        )
+
+        run_alternate_requirement(snap, "/nonexistent/nav.db")
+
+        assert cand.faa.source == "taf"
+        assert cand.easa.source == "taf"
+        # CAVOK clears the fixed/estimated minima → LIKELY, not the NWP UNLIKELY.
+        assert cand.faa.verdict == BandVerdict.LIKELY
+        assert cand.easa.verdict == BandVerdict.LIKELY
+
+    def test_gap_candidate_taf_is_fetched(self, monkeypatch):
+        # Candidate is NOT in route_observations → the gap-fetch path supplies
+        # its TAF. We stub the network fetch to keep the test offline.
+        cand = AlternateAirport(
+            icao="EGAA", lat=54.0, lon=-6.0, distance_from_dest_nm=30, position="after",
+            flight_category="LIFR", ceiling_ft=100, visibility_m=400,
+            has_instrument_approach=True, best_approach_type="ILS",
+        )
+        alt = self._alt_with_candidate(cand)
+        # route_observations present (D-0) but without this candidate.
+        obs = _obs([SimpleNamespace(icao="EISOMEWHERE", taf_raw="TAF ...")])
+        snap = SimpleNamespace(
+            route=SimpleNamespace(destination=SimpleNamespace(icao="EIDW")),
+            alternates=alt, route_observations=obs,
+        )
+
+        import weatherbrief.tasks.alternate_requirement as mod
+        called = {}
+
+        def fake_fetch(icaos, db_path):
+            called["icaos"] = list(icaos)
+            return {"EGAA": "TAF EGAA 130600Z 1306/1406 28010KT CAVOK"}
+
+        monkeypatch.setattr(mod, "_fetch_candidate_tafs", fake_fetch)
+
+        run_alternate_requirement(snap, "/nonexistent/nav.db")
+
+        assert called["icaos"] == ["EGAA"]  # only the uncovered candidate
+        assert cand.faa.source == "taf"
+        assert cand.faa.verdict == BandVerdict.LIKELY
+
+    def test_no_taf_for_candidate_keeps_nwp(self, monkeypatch):
+        # route_observations present but no TAF for the candidate and gap-fetch
+        # finds none → NWP consensus is kept (source stays "nwp").
+        cand = AlternateAirport(
+            icao="EGAC", lat=54.6, lon=-5.9, distance_from_dest_nm=10, position="after",
+            flight_category="VFR", ceiling_ft=4000, visibility_m=9999,
+            has_instrument_approach=True, best_approach_type="ILS",
+        )
+        alt = self._alt_with_candidate(cand)
+        obs = _obs([SimpleNamespace(icao="EGAC", taf_raw=None)])
+        snap = SimpleNamespace(
+            route=SimpleNamespace(destination=SimpleNamespace(icao="EIDW")),
+            alternates=alt, route_observations=obs,
+        )
+
+        import weatherbrief.tasks.alternate_requirement as mod
+        monkeypatch.setattr(mod, "_fetch_candidate_tafs", lambda icaos, db: {})
+
+        run_alternate_requirement(snap, "/nonexistent/nav.db")
+
+        assert cand.faa.source == "nwp"
+        assert cand.faa.verdict == BandVerdict.LIKELY  # VFR clears on NWP too
+
+    def test_candidate_taf_window_rejects_empty_parse(self):
+        from weatherbrief.tasks.alternate_requirement import _candidate_taf_window
+        eta = datetime(2026, 6, 13, 12, tzinfo=timezone.utc)
+        # An unparseable body yields neither ceiling nor visibility → no override.
+        assert _candidate_taf_window("not a taf", eta) is None
+        assert _candidate_taf_window("", eta) is None
+        assert _candidate_taf_window(None, eta) is None
 
 
 class TestConditionalExtraction:

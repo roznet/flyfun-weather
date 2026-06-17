@@ -50,8 +50,12 @@ tasks/alternate_requirement.py      ← WIRING (the only euro_aip / airports-DB 
   run_alternate_requirement(snapshot, airports_db_path)
     _build_destination_window()     ← destination TAF (WeatherReport.from_taf +
                                        WeatherAnalyzer.applicable_trends) else NWP
+    _collect_candidate_tafs()       ← reuse route_observations TAFs + fetch the gaps
+    _fetch_candidate_tafs()         ← RouteWeatherService (corridor=1) for gap ICAOs
+    _candidate_taf_window()         ← per-candidate TAF window (reuses _build_destination_window)
     _destination_approach_class()   ← airport.procedures_query.approaches().most_precise()
     → writes snapshot.alternates.alternate_requirement + per-candidate .faa/.easa
+      (per-candidate qual from a TAF covering the ETA when available, else NWP)
 
 models/alternate_requirement.py     ← BandVerdict, TriggerVerdict, CriterionAssessment,
                                        RegAlternateTrigger, AlternateQual, AlternateRequirement
@@ -68,7 +72,7 @@ without euro_aip installed.
 | Destination raw TAF (D-0 only) | `snapshot.route_observations.airports[*].taf_raw` (matched on `obs.icao == destination`) |
 | Destination NWP fallback (D-2/D-1) | `RouteAlternates.destination_ceiling_ft` / `destination_visibility_m` — the destination's NWP-consensus assessment at ETA, stored by `run_alternates` (worst across models) |
 | Destination ETA | `RouteAlternates.eta` (rounded ETA hour) |
-| Candidate ceiling/vis | `AlternateAirport.ceiling_ft` / `.visibility_m` (NWP-consensus, `mode="worst"`) |
+| Candidate ceiling/vis | A candidate TAF covering its ETA when available (D-0; reused from `route_observations` or gap-fetched), else `AlternateAirport.ceiling_ft` / `.visibility_m` (NWP-consensus, `mode="worst"`). `AlternateQual.source` records which. |
 | Candidate / destination approach class | `best_approach_type` (candidates) / `procedures_query.approaches().most_precise()` (destination) |
 
 The NWP fallback deliberately reuses the alternates stage's own destination
@@ -109,6 +113,21 @@ An IFR flight needs a destination alternate **unless**, for ETA−1h..ETA+1h:
 No IAP at destination → must be VMC (proxy ceiling **1500 ft** / 5000 m). This is a
 far higher bar than selection minima, so an IFR destination requires an alternate.
 `EASA_DEST_CEILING_MARGIN_FT=1000`, `EASA_DEST_VIS_M=5000`.
+
+**Candidate forecast source (D-0 TAF, mirroring the destination trigger).** The
+per-candidate qualification prefers a **TAF covering the candidate's ETA** over the
+NWP consensus — the same TAF-else-NWP precedence the destination trigger uses, via
+the same `_build_destination_window` / `build_window` machinery (TEMPO/PROB
+worst-case policy, CAVOK handling, all identical). Candidate TAFs are sourced
+**reuse-first, fetch-the-gaps**: `_collect_candidate_tafs` reuses any TAF already in
+`snapshot.route_observations` (the 30 nm METAR/TAF corridor) and explicitly fetches
+the rest via `RouteWeatherService` with a minimal corridor (`tasks/verification.py`'s
+arbitrary-ICAO pattern). The whole TAF path is gated on `route_observations` being
+present (D-0 only) — at D-1/D-2 a current TAF would not cover the ETA, so candidates
+stay on NWP. `AlternateQual.source` (`"taf"` | `"nwp"`) records which fed each
+verdict; the network fetch is wrapped so a failure degrades silently to NWP. A TAF
+that parses but yields neither ceiling nor visibility does **not** override a valid
+NWP consensus (guards against a degenerate parse flipping a candidate to a fail).
 
 ### Alternate selection — NCO.OP.143 (does candidate X qualify?)
 Tiered on the approach DH; **visibility is a fixed value per tier**:
@@ -184,6 +203,11 @@ window with how it was treated (`AlternateRequirement.main_body_ceiling_ft` /
     mirrors the per-candidate `ceiling_basis` but with the *trigger* margin —
     EASA `"{class}: est DH {lo}–{hi} ft + 1000 ft margin (NCO.OP.140)"`, FAA
     `"fixed 2000 ft / 3 SM trigger (14 CFR 91.169)"`.
+  - **Per-candidate forecast source.** Each `AlternateQual` carries `source`
+    (`"taf"` | `"nwp"`); the qual popup shows a "Based on: TAF (forecast)" /
+    "NWP consensus (model estimate)" line, and the text-digest candidate row gets a
+    `via TAF` / `via model` tag — mirroring the destination banner's
+    `(forecast)`/`(model estimate)` badge.
   - **Per-candidate requirement provenance.** Each `AlternateQual` carries a
     display-only `ceiling_basis` string explaining *why* the required ceiling band
     is what it is, rendered as a muted second line under the required value in the
@@ -222,13 +246,14 @@ window with how it was treated (`AlternateRequirement.main_body_ceiling_ft` /
 
 Surfaced via `AlternateRequirement.caveats`: EASA requirements are computed from
 estimated plate minima expressed as a range (band reflects that uncertainty;
-forecast inputs are real); per-candidate qualification uses NWP consensus not a
-TAF; `source="nwp"` triggers are model estimates; planning guidance only.
+forecast inputs are real); per-candidate qualification uses a TAF when one covers
+the candidate's ETA window (D-0) and NWP consensus otherwise (per-candidate
+`AlternateQual.source` records which); `source="nwp"` triggers are model
+estimates; planning guidance only.
 
 ## Out of scope / follow-ups
 
 - User-entered Field-16 alternate list.
-- Fetching TAFs for the divert candidates themselves.
 - Real plate minima from a procedures DB (would replace the proxy ranges and
   shrink Marginal toward exact Yes/No).
 - Route advisory evaluator (GREEN/AMBER/RED), isolated-aerodrome fuel rules.
