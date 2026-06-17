@@ -156,13 +156,13 @@
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">
               <input type="checkbox" id="toggle-synoptic-forecast-map"> Synoptic Forecast Map
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Adds a "Synoptic Forecast" tab to the Forecast page with gridded θe / TFP / advection fields (Hewson frontal-detection method). Experimental — fields are still being calibrated.</span>
+              <span class="field-hint">Adds a "Synoptic Forecast" tab to the Forecast page with gridded θe / TFP / advection fields (Hewson frontal-detection method). Experimental — fields are still being calibrated.</span>
             </label>
           </div>
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">
               <input type="checkbox" id="toggle-defer-model-update"> Wait for an imminent model update before sending (custom refresh times)
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">When a scheduled auto-refresh email would go out shortly before a fresh ECMWF run lands (~06:40 / 18:40 UTC), hold it a little (up to ~2.5 h) so the briefing rides the newer forecast. Flights on the default refresh time always do this automatically — enable this to also apply it to flights where you've set a custom refresh hour. Only applies 2+ days before the flight, never on the day of.</span>
+              <span class="field-hint">When a scheduled auto-refresh email would go out shortly before a fresh ECMWF run lands (~06:40 / 18:40 UTC), hold it a little (up to ~2.5 h) so the briefing rides the newer forecast. Flights on the default refresh time always do this automatically — enable this to also apply it to flights where you've set a custom refresh hour. Only applies 2+ days before the flight, never on the day of.</span>
             </label>
           </div>
         </div>
@@ -351,7 +351,7 @@
                   <option value="balanced">Balanced</option>
                   <option value="tolerant">Tolerant</option>
                 </select>
-                <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">How the AI interprets advisory severity when producing the go/no-go assessment.</span>
+                <span class="field-hint">How the AI interprets advisory severity when producing the go/no-go assessment.</span>
               </div>
             </div>
           </div>
@@ -360,59 +360,70 @@
         <div class="section">
           <h3>Advisories</h3>
           <p class="muted section-hint">Enable or disable advisories and configure their parameters. Changes apply on next recalculation.</p>
-          <div class="advisory-method-grid">
-            <div class="form-group">
-              <label for="advisory-aggregation">Summary Rating</label>
-              <select id="advisory-aggregation" class="input-select">
-                <option value="worst">Worst model (conservative)</option>
-                <option value="majority">Majority of models</option>
-              </select>
+          <div class="advisory-method-list">
+            <div class="advisory-field">
+              <div class="advisory-field-line">
+                <label for="advisory-aggregation">Summary Rating</label>
+                <select id="advisory-aggregation" class="input-select">
+                  <option value="worst">Worst model (conservative)</option>
+                  <option value="majority">Majority of models</option>
+                </select>
+              </div>
+              <span class="field-hint">How the per-model ratings combine into the destination summary.</span>
             </div>
-            <div class="form-group">
-              <label for="input-icing-method">Icing Method</label>
-              <select id="input-icing-method" class="input-select">
-                <option value="ogimet_dd">Ogimet-DD (dewpoint depression)</option>
-                <option value="ogimet_nwp">Ogimet-NWP (NWP cloud cover)</option>
-                <option value="sfip_nwp">SFIP-NWP (fuzzy-logic)</option>
-              </select>
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which icing method feeds the advisory evaluators. All three are always visible on the cross-section.</span>
+            <div class="advisory-field">
+              <div class="advisory-field-line">
+                <label for="input-icing-method">Icing Method</label>
+                <select id="input-icing-method" class="input-select">
+                  <option value="ogimet_dd">Ogimet-DD (dewpoint depression)</option>
+                  <option value="ogimet_nwp">Ogimet-NWP (NWP cloud cover)</option>
+                  <option value="sfip_nwp">SFIP-NWP (fuzzy-logic)</option>
+                </select>
+              </div>
+              <span class="field-hint">Which icing method feeds the advisory evaluators. All three are always visible on the cross-section.</span>
             </div>
-            <div class="form-group">
-              <label for="input-cloud-source">Cloud Source</label>
-              <select id="input-cloud-source" class="input-select">
-                <option value="nwp">NWP (model cloud cover)</option>
-                <option value="dd">DD (dewpoint depression)</option>
-              </select>
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Default cloud source for this profile. NWP uses the model's cloud cover; DD derives zones from sounding moisture. Both sources can be enabled simultaneously from the cross-section panel — this setting just picks the default. Advisory cloud detection is independent of this setting.</span>
+            <div class="advisory-field">
+              <div class="advisory-field-line">
+                <label for="input-cloud-source">Cloud Source</label>
+                <select id="input-cloud-source" class="input-select">
+                  <option value="nwp">NWP (model cloud cover)</option>
+                  <option value="dd">DD (dewpoint depression)</option>
+                </select>
+              </div>
+              <span class="field-hint">Default cloud source for this profile. NWP uses the model's cloud cover; DD derives zones from sounding moisture. Both sources can be enabled simultaneously from the cross-section panel — this setting just picks the default. Advisory cloud detection is independent of this setting.</span>
             </div>
-            <div class="form-group">
-              <label for="input-cloud-style">Cloud Style</label>
-              <select id="input-cloud-style" class="input-select">
-                <option value="square">Square (cells)</option>
-                <option value="natural">Natural (puffy clouds)</option>
-                <option value="soft">Soft (gradient fill)</option>
-              </select>
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">How clouds are rendered. Soft is GRAMET-like; Natural paints a continuous puffy band with colour varying by coverage; Square fills each zone as a cell with opacity from the value.</span>
+            <div class="advisory-field">
+              <div class="advisory-field-line">
+                <label for="input-cloud-style">Cloud Style</label>
+                <select id="input-cloud-style" class="input-select">
+                  <option value="square">Square (cells)</option>
+                  <option value="natural">Natural (puffy clouds)</option>
+                  <option value="soft">Soft (gradient fill)</option>
+                </select>
+              </div>
+              <span class="field-hint">How clouds are rendered. Soft is GRAMET-like; Natural paints a continuous puffy band with colour varying by coverage; Square fills each zone as a cell with opacity from the value.</span>
             </div>
-            <div class="form-group">
-              <label for="input-convective-method">Convective Method</label>
-              <select id="input-convective-method" class="input-select">
-                <option value="thermo">Thermo (thermodynamic indices)</option>
-                <option value="nwp">NWP (model convective cloud)</option>
-              </select>
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Which convective risk assessment feeds advisories. Thermo uses CAPE/CIN; NWP uses the model's convective cloud cover parameterisation (matches GRAMET).</span>
+            <div class="advisory-field">
+              <div class="advisory-field-line">
+                <label for="input-convective-method">Convective Method</label>
+                <select id="input-convective-method" class="input-select">
+                  <option value="thermo">Thermo (thermodynamic indices)</option>
+                  <option value="nwp">NWP (model convective cloud)</option>
+                </select>
+              </div>
+              <span class="field-hint">Which convective risk assessment feeds advisories. Thermo uses CAPE/CIN; NWP uses the model's convective cloud cover parameterisation (matches GRAMET).</span>
             </div>
           </div>
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">
               <input type="checkbox" id="toggle-icing-enhance" checked> Icing severity enhancement
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">Upgrade icing severity when RH &gt; 95% or precipitable water &gt; 25 mm.</span>
+              <span class="field-hint">Upgrade icing severity when RH &gt; 95% or precipitable water &gt; 25 mm.</span>
             </label>
           </div>
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">
               <input type="checkbox" id="toggle-compute-alternates" checked> Weather alternates (D-2 inward)
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">On day-of and the two days before, finds the closest airports that improve on the destination's weather (flight category, wind, crosswind) and shows them on the briefing. <em>Planning-grade weather candidates only</em> — not operational alternates (no fuel, minima, NOTAM, customs or PPR check).</span>
+              <span class="field-hint">On day-of and the two days before, finds the closest airports that improve on the destination's weather (flight category, wind, crosswind) and shows them on the briefing. <em>Planning-grade weather candidates only</em> — not operational alternates (no fuel, minima, NOTAM, customs or PPR check).</span>
             </label>
           </div>
           <div class="subsection">
@@ -431,7 +442,7 @@
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">
               <input type="checkbox" id="toggle-auto-front-detection"> Auto Front Detection
-              <span class="muted" style="font-size:0.85em; display:block; margin-top:2px;">⚠️ Experimental. Adds a front advisory plus map &amp; cross-section overlays from Hewson θe diagnostics (ECMWF / GFS / ICON only). These are <em>free-atmosphere air-mass boundaries</em> — advisory-only, not official SIGWX, and blind to low IMC / fog. Adds some compute and rendering per briefing.</span>
+              <span class="field-hint">⚠️ Experimental. Adds a front advisory plus map &amp; cross-section overlays from Hewson θe diagnostics (ECMWF / GFS / ICON only). These are <em>free-atmosphere air-mass boundaries</em> — advisory-only, not official SIGWX, and blind to low IMC / fog. Adds some compute and rendering per briefing.</span>
             </label>
           </div>
         </div>
