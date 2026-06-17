@@ -49,7 +49,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Best-effort reverse: drop the key so the (old) opt-out default applies.
+    # Best-effort reverse: drop the key. This only restores the old opt-out
+    # (off) default when the code is *also* rolled back — with the current code
+    # a missing key resolves to True (the new default-on). Pair this downgrade
+    # with reverting packs.py / pipeline.py if you truly want alternates off.
     conn = op.get_bind()
     rows = conn.execute(
         sa.text("SELECT id, settings_json FROM flight_profiles")

@@ -22,8 +22,12 @@ def test_pipeline_options_compute_alternates_defaults_on():
 
 
 def test_missing_profile_key_resolves_to_on():
-    # Mirrors api/packs.py: a profile that never stored the key gets the new
-    # default-on. (A stored False still wins — explicit opt-out is honoured.)
+    # NOTE: intent/documentation test only, NOT a regression guard. The real
+    # resolution `profile_settings.get("compute_alternates", True)` is inline in
+    # api/packs.py with no extractable wrapper, so this only documents the
+    # expected dict.get semantics: absent key → on (new default), explicit False
+    # → off (opt-out honoured). A revert of the packs.py default would NOT fail
+    # here — the BriefingOptions guard above is the real default regression test.
     settings: dict = {}
     assert settings.get("compute_alternates", True) is True
     assert {"compute_alternates": False}.get("compute_alternates", True) is False
