@@ -48,6 +48,10 @@ async function init(): Promise<void> {
     }
   }
 
+  // Reveal the "Supporting the service" section only when donations are
+  // enabled (Stripe configured). Mirrors the gating on the Settings page.
+  maybeShowSupportSection();
+
   // Render the data-driven Data Sources & Models table in summary mode for
   // the guide tab. The full-detail table mounts lazily on tab switch.
   const dataSourcesHost = document.getElementById('data-sources-table-host');
@@ -70,6 +74,22 @@ async function init(): Promise<void> {
   const initialTab = params.get('tab');
   if (initialTab === 'whats-new' || initialTab === 'data-sources') {
     switchTab(initialTab, 'deeplink');
+  }
+}
+
+/** Show the "Supporting the service" help section only when the global
+ *  donations flag is set (Stripe configured). Non-critical: any failure
+ *  (e.g. signed-out 401) leaves the section hidden. */
+async function maybeShowSupportSection(): Promise<void> {
+  try {
+    const { fetchPreferences } = await import('./adapters/preferences-adapter');
+    const prefs = await fetchPreferences();
+    if (prefs.donations_enabled) {
+      const el = document.getElementById('help-support-section');
+      if (el) el.style.display = '';
+    }
+  } catch {
+    // non-critical — leave the section hidden
   }
 }
 

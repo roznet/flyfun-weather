@@ -62,8 +62,13 @@
     <div class="help-section">
       <h3>Getting Started</h3>
       <div id="help-tour-cta-host"></div>
+      <p>
+        Flyfun Weather is updated frequently with new features and refinements. Check the
+        <a href="?tab=whats-new" data-tab-link="whats-new"><strong>What's New</strong></a>
+        tab to see the latest changes.
+      </p>
       <ol>
-        <li><strong>Create a flight</strong> on the Flights page by entering your waypoints (airports, navaids, or fixes), date, time, altitude, and ceiling.</li>
+        <li><strong>Create a flight</strong> on the Flights page by entering your waypoints (airports, navaids, or fixes), date, time, altitude, and ceiling. Flights can be planned up to about <strong>9 days ahead</strong> &mdash; the limit of the global model horizon.</li>
         <li><strong>Open the briefing</strong> by clicking the flight card. Flyfun Weather will fetch forecast data from each enabled model, run thermodynamic analysis, compute advisories, and generate a synopsis.</li>
         <li><strong>Refresh</strong> the briefing at any time to pull the latest available forecasts. Each refresh creates a new snapshot you can compare via the history dropdown.</li>
       </ol>
@@ -101,6 +106,14 @@
         derived from the worst-rated advisories. It's the headline read on your flight
         before you dig into the detail below.
       </p>
+      <p>
+        For flights more than about a week out &mdash; beyond the high-resolution model
+        horizon &mdash; the banner instead shows a dashed <strong>Early outlook</strong>
+        badge (<em>Trending Settled</em>, <em>Mixed Signals</em>, or
+        <em>Trending Unsettled</em>) rather than a green/amber/red verdict. This far ahead
+        the models only agree on the broad pattern, so the briefing gives a confidence-led
+        trend and tells you when more detailed analysis will become available.
+      </p>
 
       <h4>Route Advisories</h4>
       <p>
@@ -124,7 +137,7 @@
         <li><strong>Cloud &amp; Visibility</strong> &mdash; cloud base height relative to your ceiling, coverage, and visibility conditions at departure and arrival.</li>
         <li><strong>Turbulence &amp; Wind</strong> &mdash; vertical wind shear, crosswind components at departure and arrival airports, headwind/tailwind along the route.</li>
         <li><strong>Airport Conditions</strong> &mdash; surface wind, gusts, and crosswind at departure and arrival relative to available runways.</li>
-        <li><strong>Altitude Advisory</strong> &mdash; analyses conditions at multiple flight levels and suggests the best altitude considering winds, icing, turbulence, and cloud avoidance.</li>
+        <li><strong>Altitude Advisory</strong> &mdash; analyses conditions at multiple flight levels and suggests the best altitude considering winds, icing, turbulence, and cloud avoidance. An interactive <strong>altitude lever</strong> lets you probe other flight levels and instantly see how each advisory shifts versus your planned altitude.</li>
       </ul>
       <p>
         You can enable, disable, and tune the thresholds of each advisory in
@@ -132,12 +145,43 @@
         are used for icing and cloud detection.
       </p>
 
-      <h4>METAR/TAF Observations</h4>
+      <h4>METAR/TAF Observations &amp; SIGMETs</h4>
       <p>
         On the day of the flight, a METAR/TAF section is shown with current observations and
         TAF forecasts for your departure and arrival airports, fetched from official aviation
         weather sources. Useful for cross-referencing the NWP model output with real-time
         and near-term observations.
+      </p>
+      <p>
+        Alongside the airport observations, any <strong>SIGMETs</strong> that intersect your
+        route corridor (turbulence, icing, thunderstorms, mountain wave, etc.) are listed
+        with their hazard type, altitude band, and validity. When you refresh on the day of
+        the flight, a banner highlights any conditions that have <strong>worsened</strong>
+        since your last check &mdash; a degraded flight category, or a new or escalated
+        SIGMET &mdash; so changes don't slip by while the rest of the briefing stays put.
+      </p>
+
+      <h4>Weather-Based Alternates</h4>
+      <p>
+        As the flight gets close (about two days out), if your destination's forecast looks
+        marginal, Flyfun Weather suggests nearby <strong>alternate airports</strong> that
+        would fix the specific problem &mdash; a better flight category, lighter wind, or a
+        kinder crosswind. Each candidate is shown as reachable <strong>before</strong> the
+        destination (an early-decision diversion that avoids backtracking) or
+        <strong>after</strong> it, with the extra distance each option costs. These are
+        planning-grade divert ideas, not an operational alternate-minima calculation. Turn
+        them on with the <em>Alternates</em> preference in <a href="/settings.html">Settings</a>.
+      </p>
+
+      <h4>Is an Alternate Required?</h4>
+      <p>
+        For the destination, the briefing also estimates whether the regulations would
+        require you to <strong>file an alternate</strong>, computed two ways:
+        <strong>FAA</strong> (14 CFR 91.169 &mdash; a binary Yes/No) and <strong>EASA</strong>
+        Part-NCO (a <em>Likely / Marginal / Unlikely</em> confidence band). Because the
+        published plate minima aren't known, the unknown value is expressed as a plausible
+        range per approach type, which sets the width of the EASA band. Like the alternates
+        above, this is advisory planning guidance, never a go/no-go verdict.
       </p>
 
       <h4>Synopsis</h4>
@@ -263,7 +307,7 @@
       <ul>
         <li><strong>Language</strong> &mdash; choose the display language (English, French, German, Spanish).</li>
         <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password for GRAMET charts. Credentials are encrypted at rest.</li>
-        <li><strong>Usage &amp; Costs</strong> &mdash; view your briefing usage (this week, this month, and total) and per-briefing cost breakdown.</li>
+        <li><strong>Usage</strong> &mdash; view your briefing usage (this week, this month, and total).</li>
       </ul>
     </div>
 
@@ -425,6 +469,18 @@
       </p>
     </div>
 
+    <!-- Supporting the service (revealed by help-main.ts only when donations are enabled) -->
+    <div class="help-section" id="help-support-section" style="display:none;">
+      <h3>Supporting the Service</h3>
+      <p>
+        Flyfun Weather is free to use. Running the models, the analysis, and the AI briefings
+        does cost money, so if you find it useful you can optionally chip in from the
+        <a href="/donate.html">Support</a> page &mdash; every contribution helps keep the
+        service running for the whole pilot community. There is no paywall, and contributing
+        is entirely voluntary.
+      </p>
+    </div>
+
     <!-- Feedback -->
     <div class="help-section">
       <h3>Feedback</h3>
@@ -442,10 +498,17 @@
     <div class="help-section">
       <h3>Disclaimer</h3>
       <p>
-        Flyfun Weather is an <strong>experimental, non-certified</strong> tool for educational
-        and planning purposes. It is not a substitute for official weather briefings from
-        your national aviation authority. Always cross-check with official sources (METARs,
-        TAFs, SIGMETs, AIRMETs) before flying.
+        Flyfun Weather is designed to <strong>help and support your flight planning and
+        decision-making</strong> &mdash; giving you an early, multi-model picture of the
+        weather and surfacing the factors that matter for your route. It relies on automated
+        analysis and AI, which can make mistakes or miss things, so treat its output as one
+        input among many rather than the final word.
+      </p>
+      <p>
+        It is not a substitute for official weather briefings from your national aviation
+        authority. Always cross-check with official sources (METARs, TAFs, SIGMETs, AIRMETs)
+        before flying. The <strong>pilot in command remains the sole decision-maker</strong>
+        and is responsible for the safe conduct of the flight.
       </p>
       <p class="muted" style="margin-top: 0.5rem;">
         This application was built with AI assistance (Claude, Anthropic).
