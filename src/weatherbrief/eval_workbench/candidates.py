@@ -65,6 +65,7 @@ def select_candidates(
     while remaining and len(selected) < limit:
         best = None
         best_gain = None
+        best_new: list[str] = []
         for meta in remaining:
             new_cells = [s for s in meta.situations if covered[s] < min_per_cell]
             gain = len(new_cells) * _COVERAGE_WEIGHT + base_score(meta)

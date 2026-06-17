@@ -75,13 +75,18 @@ export async function initLabelPanel(flightId: string): Promise<void> {
       'box-shadow:0 4px 16px rgba(0,0,0,0.25);font-size:0.85rem;',
   );
 
-  panel.appendChild(el('div', {}, `<strong>Golden label</strong> — ${pack.route}`));
-  const modelLine = el(
-    'div',
-    {},
-    `<span class="recon" style="color:#888">model said: ${pack.assessment || '—'}` +
-      `${pack.faithful ? '' : ' · reconstructed context'}</span>`,
-  );
+  // Static markup only via innerHTML; the dynamic route/assessment go through
+  // textContent so a crafted value can't inject markup (dev-only, but correct).
+  const title = el('div');
+  title.innerHTML = '<strong>Golden label</strong> — ';
+  title.appendChild(document.createTextNode(pack.route));
+  panel.appendChild(title);
+
+  const modelLine = el('div');
+  modelLine.style.cssText = 'color:#888;font-size:0.75rem';
+  modelLine.textContent =
+    `model said: ${pack.assessment || '—'}` +
+    `${pack.faithful ? '' : ' · reconstructed context'}`;
   panel.appendChild(modelLine);
 
   // Per-guidance G/A/R selectors.

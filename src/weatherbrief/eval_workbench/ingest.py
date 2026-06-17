@@ -22,6 +22,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from weatherbrief.eval_workbench.corpus import (
+    CORPUS_META_FILE,
+    LABEL_FILE,
     CorpusMeta,
     CorpusPack,
     load_label,
@@ -37,9 +39,11 @@ from weatherbrief.models import RouteAdvisoriesManifest
 
 logger = logging.getLogger(__name__)
 
-# Pack artifacts that are pure derived images / bulky and not needed to render
-# the briefing view from the corpus. Skipped on copy to keep corpus dirs lean.
-_SKIP_ON_COPY = {"__pycache__"}
+# Names never copied from the source pack into the corpus dir: build noise, plus
+# the corpus' own committed files. The golden label.json especially MUST survive
+# a re-pull, and corpus_meta.json is regenerated after the copy — so a source
+# pack that happened to contain either must never overwrite the corpus copy.
+_SKIP_ON_COPY = {"__pycache__", LABEL_FILE, CORPUS_META_FILE}
 
 
 def load_dwd_translated(pack_dir: Path) -> list | None:
@@ -146,6 +150,10 @@ def build_corpus_meta(pack_dir: Path, *, notes: str = "") -> CorpusMeta | None:
 
     route = " -> ".join(wp.icao for wp in snapshot.route.waypoints)
     waypoints = [wp.icao for wp in snapshot.route.waypoints]
+    # One corpus entry per (route, target, days-out, fetch *day*). Day precision
+    # is intentional: re-pulling the same scenario rebuilds corpus_meta.json but
+    # preserves any label.json (it's in _SKIP_ON_COPY). Sub-day fetch precision
+    # would fragment the corpus without adding a meaningfully different scenario.
     corpus_id = corpus_id_for(route, snapshot.target_date, snapshot.days_out,
                               snapshot.fetch_date)
 
@@ -177,7 +185,12 @@ def build_corpus_meta(pack_dir: Path, *, notes: str = "") -> CorpusMeta | None:
 
 
 def _copy_artifacts(src: Path, dest: Path) -> None:
-    """Copy pack artifacts into the corpus dir, preserving an existing label."""
+    """Copy pack artifacts into the corpus dir.
+
+    The corpus' committed files (label.json, corpus_meta.json) are in
+    ``_SKIP_ON_COPY``, so a re-pull never overwrites a golden label even if the
+    source path overlapped a corpus dir.
+    """
     dest.mkdir(parents=True, exist_ok=True)
     for item in src.iterdir():
         if item.name in _SKIP_ON_COPY:

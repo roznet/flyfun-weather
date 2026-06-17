@@ -101,8 +101,11 @@ async function init(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     if (covEl) covEl.textContent = '';
     if (packsEl) {
-      packsEl.innerHTML = `<p>Workbench unavailable: ${msg}. Is
-        <code>WEATHERBRIEF_EVAL_WORKBENCH=1</code> set and are you an admin?</p>`;
+      // textContent (not innerHTML): the error string is server/network-derived
+      // and must not be parsed as HTML even on this dev-only admin page.
+      packsEl.textContent =
+        `Workbench unavailable: ${msg}. Is WEATHERBRIEF_EVAL_WORKBENCH=1 set ` +
+        `and are you an admin?`;
     }
   }
 }
