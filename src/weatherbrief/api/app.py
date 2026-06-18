@@ -474,7 +474,15 @@ def create_app() -> FastAPI:
         send_magic_link_email=send_magic_link_email,
     )
     app.include_router(create_autorouter_router())
-    app.include_router(create_oauth_router())
+    app.include_router(
+        create_oauth_router(
+            scopes_supported=["mcp", "flights:read"],
+            permission_descriptions=[
+                "View your flight list",
+                "Export individual flight details",
+            ],
+        )
+    )
     app.include_router(auth_router)
 
     # Dev-only endpoint: issue a JWT for the dev user without OAuth

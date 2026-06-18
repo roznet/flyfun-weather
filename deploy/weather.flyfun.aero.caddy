@@ -17,6 +17,23 @@ weather.flyfun.aero {
         respond `{"applinks":{"apps":[],"details":[{"appID":"M7QSSF3624.net.ro-z.flyfun-weather","paths":["/auth/callback"]}]}}`
     }
 
+    # OAuth 2.1 Authorization Server metadata (RFC 8414) — lets native/third-party
+    # apps treat weather.flyfun.aero as the issuer and discover the OAuth endpoints.
+    handle /.well-known/oauth-authorization-server* {
+        header Content-Type application/json
+        respond `{
+  "issuer": "https://weather.flyfun.aero",
+  "authorization_endpoint": "https://weather.flyfun.aero/oauth/authorize",
+  "token_endpoint": "https://weather.flyfun.aero/oauth/token",
+  "registration_endpoint": "https://weather.flyfun.aero/oauth/register",
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "token_endpoint_auth_methods_supported": ["client_secret_post"],
+  "code_challenge_methods_supported": ["S256"],
+  "scopes_supported": ["mcp", "flights:read"]
+}`
+    }
+
     reverse_proxy localhost:8020 {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto {scheme}
