@@ -482,6 +482,12 @@ def create_app() -> FastAPI:
     # No default_scope: an omitted scope is rejected, never silently granted.
     app.include_router(
         create_oauth_router(
+            # Unauthenticated MCP/OAuth users land on the standard login chooser
+            # (Google + Apple + email magic-link) instead of jumping straight into
+            # Google. The authorize endpoint stashes the resume URL in the
+            # ``oauth_next`` session key, so any provider the user picks resumes
+            # the flow — no ``?next=`` propagation needed here.
+            login_path="/login.html",
             scopes={
                 "flights:read": [
                     "View your flight list",
