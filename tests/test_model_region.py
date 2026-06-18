@@ -63,6 +63,20 @@ class TestDetectModelRegion:
         route = _route("kjfk", "kord")
         assert detect_model_region(route) == ModelRegion.NORTH_AMERICA
 
+    def test_intermediate_nav_fix_ignored(self):
+        """Only origin/destination count; nav fixes like KONAN/CINDY don't.
+
+        A purely European route (LF→LS) routed via fixes whose names start
+        with North-American ICAO prefixes must stay EUROPE.
+        """
+        route = _route("LFPB", "KONAN", "CINDY", "LSGS")
+        assert detect_model_region(route) == ModelRegion.EUROPE
+
+    def test_intermediate_european_fix_on_us_route_ignored(self):
+        """Symmetric: a US route via an oddly-named fix stays NORTH_AMERICA."""
+        route = _route("KJFK", "EAGLE", "KORD")
+        assert detect_model_region(route) == ModelRegion.NORTH_AMERICA
+
 
 # --- _should_skip_for_region ---
 
