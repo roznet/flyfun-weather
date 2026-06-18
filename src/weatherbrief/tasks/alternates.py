@@ -566,6 +566,9 @@ def run_alternates(
             # The candidate approach gate below is per-candidate, not keyed here.
             require_approach = dest_ctx.cat_idx >= _REQUIRE_APPROACH_FROM
 
+        # ``dest_ctx`` is always set here: the first batch either assigns it or
+        # returns early above, and every later batch follows that first one.
+        assert dest_ctx is not None
         # Build this batch's alternates (a single malformed airport skips only
         # itself, not the stage — _build_alternate returns None for it).
         for c in batch:
