@@ -140,6 +140,21 @@ class TestRequiredIcaoPrefixes:
         route = _route("lfpb", "eddk")
         assert route_covers_prefixes(route, ["LF"])
 
+    def test_five_letter_fix_does_not_cover_prefix(self):
+        """A nav fix like LFXYZ must not count as a French airport."""
+        route = _route("EGLL", "LFXYZ", "EDDK")
+        assert not route_covers_prefixes(route, ["LF"])
+
+    def test_intermediate_french_airport_covers_prefix(self):
+        """A real 4-letter French airport en route still counts."""
+        route = _route("EGLL", "LFPB", "EDDK")
+        assert route_covers_prefixes(route, ["LF"])
+
+    def test_navaid_does_not_cover_prefix(self):
+        """A 2-3 letter navaid starting with the prefix must not count."""
+        route = _route("EGLL", "LFA", "EDDK")
+        assert not route_covers_prefixes(route, ["LF"])
+
     def test_skip_meteofrance_on_non_french_route(self):
         """MeteoFrance skipped for Germany-only route."""
         ep = MODEL_ENDPOINTS["meteofrance"]

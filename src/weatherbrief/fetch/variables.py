@@ -227,12 +227,31 @@ def build_hourly_params(endpoint: ModelEndpoint) -> str:
 _NORTH_AMERICA_PREFIXES = ("K", "C", "P")
 
 
+def _is_icao_airport(code: str) -> bool:
+    """True if ``code`` looks like a 4-letter ICAO *airport* identifier.
+
+    Country-prefix matching must only count real airports. Named navigation
+    fixes (5 letters, e.g. KONAN, CINDY) and navaids (2-3 letters) can begin
+    with a country prefix purely by coincidence and would otherwise produce
+    false positives.
+    """
+    return len(code) == 4 and code.isalpha()
+
+
 def route_covers_prefixes(route, prefixes: list[str]) -> bool:
-    """Return True if at least one waypoint ICAO starts with any of the given prefixes."""
+    """Return True if at least one *airport* on the route has an ICAO code
+    starting with any of the given prefixes.
+
+    Only 4-letter ICAO airport codes are considered (see ``_is_icao_airport``);
+    intermediate navigation fixes are ignored. Airports are matched anywhere on
+    the route (not just origin/destination) so an intermediate fuel stop in,
+    e.g., France still pulls in Météo-France.
+    """
     if not route or not route.waypoints:
         return False
+    pfx = tuple(prefixes)
     return any(
-        wp.icao.upper().startswith(tuple(prefixes))
+        _is_icao_airport(icao := wp.icao.upper()) and icao.startswith(pfx)
         for wp in route.waypoints
     )
 
