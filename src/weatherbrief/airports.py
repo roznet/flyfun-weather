@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 from euro_aip.storage.database_storage import DatabaseStorage
 from timezonefinder import TimezoneFinder
 
+from weatherbrief.fetch.route_walk import walk_route
 from weatherbrief.models import RunwayEnd, Waypoint
 
 if TYPE_CHECKING:
@@ -53,6 +54,40 @@ def _load_airport_model(db_path: str):
 def get_timezone(lat: float, lon: float) -> str | None:
     """Return the IANA timezone name for a lat/lon, or None if unknown."""
     return _timezone_finder().timezone_at(lat=lat, lng=lon)
+
+
+# IANA timezones identifying the countries we gate country-specific weather
+# models on. Mainland coverage is sufficient — a route over French or UK soil
+# returns these from the timezone polygons. Extend as country-specific models
+# are added.
+_COUNTRY_TIMEZONES: dict[str, frozenset[str]] = {
+    "FR": frozenset({"Europe/Paris"}),
+    "GB": frozenset({"Europe/London"}),
+}
+_TZ_TO_COUNTRY: dict[str, str] = {
+    tz: iso for iso, tzs in _COUNTRY_TIMEZONES.items() for tz in tzs
+}
+
+
+def route_countries(route, spacing_nm: float = 25.0) -> set[str]:
+    """ISO-3166 alpha-2 countries (from the gated set) the route passes over.
+
+    Samples the great-circle route every ``spacing_nm`` (named waypoints are
+    always included) and maps each point to a country via timezone polygons.
+    Detects genuine overflight — a route crossing France without landing there
+    still reports ``"FR"`` — which ICAO-prefix matching cannot.
+
+    Only countries in ``_COUNTRY_TIMEZONES`` are reported; that is all the
+    model gate needs, so no full boundary dataset is required. ``spacing_nm``
+    of 25 keeps even a thin corner-clip from slipping between samples while
+    staying a handful of sub-millisecond lookups per route.
+    """
+    found: set[str] = set()
+    for lat, lon, *_ in walk_route(route, spacing_nm):
+        iso = _TZ_TO_COUNTRY.get(get_timezone(lat, lon) or "")
+        if iso:
+            found.add(iso)
+    return found
 
 
 def is_known_waypoint(code: str, db_path: str) -> bool:

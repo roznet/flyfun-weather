@@ -79,19 +79,43 @@ def _open_meteo_live_horizons() -> dict[str, datetime]:
 
 
 def _should_skip_for_region(endpoint, route_region: ModelRegion, route=None) -> bool:
-    """Return True if a model's coverage region doesn't match the route.
+    """Return True if a model's coverage doesn't match the route.
 
     Two-level check:
-    1. Broad region (EUROPE / NORTH_AMERICA / GLOBAL)
-    2. Country-level ICAO prefix (e.g. MeteoFrance requires an LF airport)
+    1. Broad region (EUROPE / NORTH_AMERICA / GLOBAL), from origin/destination.
+    2. Country presence (e.g. Météo-France requires the route to touch France),
+       detected from route geometry — catches overflight, not just landings.
     """
     if endpoint.region != ModelRegion.GLOBAL and route_region != ModelRegion.GLOBAL:
         if endpoint.region != route_region:
             return True
-    if endpoint.required_icao_prefixes and route is not None:
-        if not route_covers_prefixes(route, endpoint.required_icao_prefixes):
+    if endpoint.required_country and route is not None:
+        if not _route_in_required_country(endpoint, route):
             return True
     return False
+
+
+def _route_in_required_country(endpoint, route) -> bool:
+    """Whether ``route`` passes through ``endpoint.required_country``.
+
+    Uses coordinate-based detection (timezone polygons over the route's
+    great-circle samples). If that can't run (e.g. timezone data unavailable),
+    falls back to the airport ICAO-prefix heuristic; if even that is absent we
+    keep the model rather than wrongly dropping it.
+    """
+    try:
+        from weatherbrief.airports import route_countries
+
+        return endpoint.required_country in route_countries(route)
+    except Exception:
+        logger.warning(
+            "Country detection failed for %s; falling back to ICAO prefixes",
+            endpoint.name,
+            exc_info=True,
+        )
+        if endpoint.required_icao_prefixes:
+            return route_covers_prefixes(route, endpoint.required_icao_prefixes)
+        return True
 
 
 @dataclass
