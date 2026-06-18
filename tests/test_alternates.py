@@ -489,3 +489,138 @@ def test_grib_helper_priority_resolves_contextvar_vs_explicit():
     copy_context().run(_run)
 
     assert seen == [int(DecodePriority.INTERACTIVE), int(DecodePriority.BACKGROUND)]
+
+
+# ---------------------------------------------------------------------------
+# Batched nearest-first fetch with early stop (#271 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _mk_candidates(specs):
+    """Build (candidates, snaps) for the batched-fetch tests.
+
+    ``specs[i]`` is a dict with optional ``qualifies`` / ``major`` flags. Each
+    candidate sits a little farther from the destination (EGPF) than the last,
+    so the nearest-first sort preserves index order and batch i covers a known
+    slice. Qualifying candidates get VFR weather + ILS (likely under both
+    regimes); the rest get a sub-minima ceiling but keep their ILS so the
+    approach gate does NOT drop them (they're real rows that simply don't
+    qualify as an alternate).
+    """
+    candidates = []
+    snaps = {"EGPF": _all_models("EGPF", ceiling=900.0, vis_m=9999.0)}  # MVFR dest
+    for i, spec in enumerate(specs):
+        icao = f"EGX{i:02d}"
+        ap = _FakeAirport(
+            icao, 55.87 + 0.05 * (i + 1), -4.43,
+            type="large_airport" if spec.get("major") else "small_airport",
+            has_approach=True, best_approach="ILS",
+        )
+        if spec.get("qualifies"):
+            snaps[icao] = _all_models(icao, ceiling=5000.0, vis_m=9999.0)
+        else:
+            snaps[icao] = _all_models(icao, ceiling=300.0, vis_m=9999.0)
+        candidates.append((ap, icao))
+    return candidates, snaps
+
+
+def _run_batched(route, candidates, snaps):
+    """Drive run_alternates with a *per-batch* fetch side effect.
+
+    Returns ``(result, fetch_calls)`` where ``fetch_calls`` is the list of
+    icao-lists passed to each ``_fetch_eta_snapshots`` call — so a test can
+    assert how many batches actually hit the network and which airports they
+    covered.
+    """
+    near = [
+        {"airport": ap, "enroute_distance_nm": None, "segment_distance_nm": 5.0}
+        for ap, _icao in candidates
+    ]
+    model = _FakeModel(near, all_airports=[])
+    calls: list[list[str]] = []
+
+    def fake_fetch(fetch_airports, eta_dt):
+        icaos = [a.icao for a in fetch_airports]
+        calls.append(icaos)
+        return {ic: snaps[ic] for ic in icaos if ic in snaps}
+
+    with patch("weatherbrief.airports._load_airport_model", return_value=model), \
+         patch("weatherbrief.airports.get_runway_ends", return_value={}), \
+         patch.object(alt_mod, "_fetch_eta_snapshots", side_effect=fake_fetch):
+        result = run_alternates(route, DEPARTURE, "/fake/nav.db", now=NOW)
+    return result, calls
+
+
+def test_qualifies_both_regimes_requires_both():
+    def mk(**kw):
+        return alt_mod.AlternateAirport(
+            icao="T", lat=0.0, lon=0.0, distance_from_dest_nm=1.0,
+            position="after", flight_category="VFR", **kw,
+        )
+
+    # Good weather + ILS → likely under both.
+    assert alt_mod._qualifies_both_regimes(
+        mk(ceiling_ft=5000, visibility_m=9999, best_approach_type="ILS", has_instrument_approach=True)
+    ) is True
+    # VFR field, no approach, good weather → visual divert qualifies under both.
+    assert alt_mod._qualifies_both_regimes(
+        mk(ceiling_ft=5000, visibility_m=9999, best_approach_type=None, has_instrument_approach=False)
+    ) is True
+    # FAA-only fail (vis below FAA's 2 SM but above EASA's 1500 m) → not both.
+    assert alt_mod._qualifies_both_regimes(
+        mk(ceiling_ft=5000, visibility_m=2000, best_approach_type="ILS", has_instrument_approach=True)
+    ) is False
+    # Sub-minima ceiling → unlikely under both.
+    assert alt_mod._qualifies_both_regimes(
+        mk(ceiling_ft=300, visibility_m=9999, best_approach_type="ILS", has_instrument_approach=True)
+    ) is False
+
+
+def test_batched_fetch_stops_after_close_qualifier():
+    # Only the closest candidate qualifies → the first batch is enough; the far
+    # candidates are never fetched.
+    specs = [{"qualifies": i == 0} for i in range(20)]
+    candidates, snaps = _mk_candidates(specs)
+    result, calls = _run_batched(_route(), candidates, snaps)
+
+    assert result is not None
+    assert len(calls) == 1                       # one batch hit the network
+    assert result.candidates_evaluated == alt_mod.ALT_BATCH_SIZE
+    fetched = {ic for call in calls for ic in call}
+    assert "EGX09" not in fetched                # a batch-2 field stayed untouched
+
+
+def test_batched_fetch_continues_to_later_batch():
+    # Nothing in batch 1 qualifies; a batch-2 field does → exactly two batches.
+    specs = [{"qualifies": i == 9} for i in range(20)]
+    candidates, snaps = _mk_candidates(specs)
+    result, calls = _run_batched(_route(), candidates, snaps)
+
+    assert len(calls) == 2
+    assert result.candidates_evaluated == 2 * alt_mod.ALT_BATCH_SIZE
+
+
+def test_batched_fetch_major_does_not_satisfy_stop():
+    # A qualifying *major* in batch 1 must NOT end the search — we keep going
+    # until a qualifying non-major (batch 2) is found.
+    specs = [{"qualifies": False} for _ in range(20)]
+    specs[0] = {"qualifies": True, "major": True}
+    specs[9] = {"qualifies": True}
+    candidates, snaps = _mk_candidates(specs)
+    result, calls = _run_batched(_route(), candidates, snaps)
+
+    assert len(calls) == 2
+    assert result.candidates_evaluated == 2 * alt_mod.ALT_BATCH_SIZE
+    rows = {a.icao: a for a in result.alternates}
+    assert rows["EGX00"].is_major is True        # major returned, just not a stop trigger
+
+
+def test_batched_fetch_exhausts_when_nothing_qualifies():
+    # No qualifying candidate anywhere → fetch every batch up to the cap and
+    # return the full set, exactly as before batching.
+    specs = [{"qualifies": False} for _ in range(20)]
+    candidates, snaps = _mk_candidates(specs)
+    result, calls = _run_batched(_route(), candidates, snaps)
+
+    assert len(calls) == 3                        # 8 + 8 + 4
+    assert result.candidates_evaluated == 20

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from weatherbrief.analysis.airport_consensus import consensus, enrich_wind, snap_to_dict
@@ -35,7 +36,8 @@ logger = logging.getLogger(__name__)
 # Candidate-selection geometry defaults (NM).
 ALT_CORRIDOR_NM = 40.0  # near-route corridor half-width
 ALT_DEST_RADIUS_NM = 50.0  # great-circle radius around the destination
-ALT_MAX_CANDIDATES = 30  # cap fetched candidates (the N×3 lite-sounding cost)
+ALT_MAX_CANDIDATES = 30  # absolute cap on fetched candidates (the N×3 lite-sounding cost)
+ALT_BATCH_SIZE = 8  # fetch candidates in nearest-first batches of this size (#271 follow-up)
 ALT_POSITION_MARGIN_NM = 10.0  # along-track slack before calling an airport "before"
 ALT_DEFAULT_MIN_RUNWAY_FT = 2000  # conservative default when no aircraft profile is known
 
@@ -215,6 +217,155 @@ def _assess(
     return per_model, consensus(per_model, mode="worst")
 
 
+@dataclass(frozen=True)
+class _DestContext:
+    """Destination-derived values needed to build each candidate's vs-dest deltas.
+
+    Assembled once from the destination assessment so the per-candidate builder
+    (which runs once per batch) stays a pure function of the candidate.
+    """
+
+    enroute_nm: float  # destination along-track distance (for before/after)
+    gc_from_origin_nm: float  # great-circle origin→destination (for detour_early)
+    cat_idx: int  # destination flight-category severity index
+    wind_kt: float | None
+    crosswind_kt: float | None
+
+
+def _build_alternate(
+    c: dict,
+    by_icao: dict[str, dict[str, dict]],
+    runways: dict,
+    origin,
+    dest_ctx: _DestContext,
+) -> AlternateAirport | None:
+    """Assemble one ``AlternateAirport`` from a candidate's fetched snapshots.
+
+    Returns ``None`` when the candidate has no model snapshot at the ETA hour, or
+    when its assessment raises (a single malformed airport must skip only itself,
+    not abort the stage). Extracted so the batched fetch loop can build each
+    batch's candidates without duplicating this logic.
+    """
+    ap = c["airport"]
+    try:
+        assessed = _assess(ap.ident, by_icao, runways)
+    except Exception:
+        logger.debug("Alternates: assessment failed for %s", ap.ident, exc_info=True)
+        return None
+    if assessed is None:
+        return None
+    per_model, cons = assessed
+
+    # Suitability: instrument approach + best precision tier (minima proxy).
+    has_iap = False
+    best_approach_type = None
+    try:
+        approaches = ap.procedures_query.approaches()
+        has_iap = approaches.exists()
+        if has_iap:
+            best = approaches.most_precise()
+            best_approach_type = best.approach_type if best is not None else None
+    except Exception:
+        logger.debug("Alternates: approach query failed for %s", ap.ident, exc_info=True)
+
+    # Geometry: before/after + detour pair.
+    enroute = c.get("enroute_distance_nm")
+    if enroute is not None and enroute < dest_ctx.enroute_nm - ALT_POSITION_MARGIN_NM:
+        position = "before"
+    else:
+        position = "after"
+    dist_from_dest = c["distance_from_dest_nm"]
+    gc_dep_alt = _haversine_nm(origin.lat, origin.lon, ap.latitude_deg, ap.longitude_deg)
+    detour_early_nm = round(gc_dep_alt - dest_ctx.gc_from_origin_nm, 1)
+    detour_late_nm = round(dist_from_dest, 1)
+
+    # Assessment vs destination, per axis.
+    alt_cat = cons["flight_category"]
+    alt_idx = _cat_idx(alt_cat)
+    alt_wind = cons.get("wind_speed_kt")
+    alt_xw = cons.get("crosswind_kt")
+
+    better_category = alt_idx < dest_ctx.cat_idx
+    better_wind = (
+        alt_wind is not None and dest_ctx.wind_kt is not None and alt_wind < dest_ctx.wind_kt
+    )
+    better_crosswind = (
+        alt_xw is not None and dest_ctx.crosswind_kt is not None and alt_xw < dest_ctx.crosswind_kt
+    )
+    not_worse_cat = alt_idx <= dest_ctx.cat_idx
+    not_worse_wind = alt_wind is None or dest_ctx.wind_kt is None or alt_wind <= dest_ctx.wind_kt
+    not_worse_xw = (
+        alt_xw is None or dest_ctx.crosswind_kt is None or alt_xw <= dest_ctx.crosswind_kt
+    )
+    dominates = (
+        not_worse_cat
+        and not_worse_wind
+        and not_worse_xw
+        and (better_category or better_wind or better_crosswind)
+    )
+
+    return AlternateAirport(
+        icao=ap.ident,
+        name=ap.name,
+        lat=ap.latitude_deg,
+        lon=ap.longitude_deg,
+        distance_from_dest_nm=round(dist_from_dest, 1),
+        enroute_distance_nm=enroute,
+        segment_distance_nm=c.get("segment_distance_nm"),
+        position=position,
+        detour_early_nm=detour_early_nm,
+        detour_late_nm=detour_late_nm,
+        flight_category=alt_cat,
+        wind_speed_kt=cons.get("wind_speed_kt"),
+        crosswind_kt=cons.get("crosswind_kt"),
+        headwind_kt=cons.get("headwind_kt"),
+        best_runway_id=next(
+            (d.get("best_runway_id") for d in per_model.values() if d.get("best_runway_id")),
+            None,
+        ),
+        ceiling_ft=cons.get("ceiling_ft"),
+        visibility_m=cons.get("visibility_m"),
+        agreement=cons.get("agreement", {}),
+        per_model=per_model,
+        has_instrument_approach=has_iap,
+        best_approach_type=best_approach_type,
+        longest_runway_ft=ap.longest_runway_length_ft,
+        has_hard_runway=bool(ap.has_hard_runway),
+        point_of_entry=bool(ap.point_of_entry),
+        is_major=ap.type == "large_airport",
+        better_category=better_category,
+        better_wind=better_wind,
+        better_crosswind=better_crosswind,
+        dominates_destination=dominates,
+    )
+
+
+def _qualifies_both_regimes(cand: AlternateAirport) -> bool:
+    """True when a candidate is a "likely" alternate under BOTH FAA and EASA.
+
+    Computed from the candidate's NWP-consensus ceiling/visibility — the same
+    inputs the alternate-requirement post-step falls back to when no TAF covers
+    the ETA (TAFs only exist at D-0; the alternates stage runs D-2 inward). Used
+    only to decide whether the batched fetch can stop early; the authoritative,
+    TAF-aware qualification is still written later by the post-step.
+    """
+    from weatherbrief.analysis.alternate_requirement import (
+        compute_easa_qual,
+        compute_faa_qual,
+    )
+    from weatherbrief.models.alternate_requirement import BandVerdict
+
+    faa = compute_faa_qual(
+        cand.ceiling_ft, cand.visibility_m,
+        cand.best_approach_type, cand.has_instrument_approach,
+    )
+    easa = compute_easa_qual(
+        cand.ceiling_ft, cand.visibility_m,
+        cand.best_approach_type, cand.has_instrument_approach,
+    )
+    return faa.verdict == BandVerdict.LIKELY and easa.verdict == BandVerdict.LIKELY
+
+
 def run_alternates(
     route: RouteConfig,
     target_time: datetime,
@@ -348,141 +499,89 @@ def run_alternates(
             len(filtered), max_candidates,
         )
 
-    # --- 5. Fetch destination + candidates at ETA (shared per-model split) ---
-    fetch_airports = [WatchlistAirport(icao=dest.icao, lat=dest.lat, lon=dest.lon)]
-    for c in capped:
-        ap = c["airport"]
-        fetch_airports.append(
-            WatchlistAirport(icao=ap.ident, lat=ap.latitude_deg, lon=ap.longitude_deg)
-        )
-
-    by_icao = _fetch_eta_snapshots(fetch_airports, eta_dt)
-    fetch_icaos = [a.icao for a in fetch_airports]
-    try:
-        runways = get_runway_ends(fetch_icaos, airports_db_path)
-    except Exception:
-        logger.warning("Alternates: runway lookup failed", exc_info=True)
-        runways = {}
-
-    # --- Destination assessment (drives axes + the instrument-approach gate) ---
-    dest_assessed = _assess(dest.icao, by_icao, runways)
-    if dest_assessed is None:
-        logger.info("Alternates: no destination snapshot at ETA; skipping stage")
-        return None
-    _, dest_cons = dest_assessed
-    dest_category = dest_cons["flight_category"]
-    dest_wind = dest_cons.get("wind_speed_kt")
-    dest_crosswind = dest_cons.get("crosswind_kt")
-    # Destination NWP-consensus ceiling/vis at ETA (worst across models) — the
-    # regulatory-trigger NWP fallback (#249) when no destination TAF is fetched.
-    dest_ceiling_ft = dest_cons.get("ceiling_ft")
-    dest_visibility_m = dest_cons.get("visibility_m")
-    dest_idx = _cat_idx(dest_category)
-    # Informational only: is the destination itself MVFR/IFR/LIFR (i.e. you'd
-    # need an instrument approach to get into the *destination*). The candidate
-    # approach gate below is per-candidate and does NOT key off this.
-    require_approach = dest_idx >= _REQUIRE_APPROACH_FROM
-
-    # --- Build each alternate ---
+    # --- 5. Batched fetch (nearest-to-dest first), stop once a non-major
+    #        candidate qualifies under BOTH FAA and EASA ---------------------
+    # Fetching every candidate's lite sounding across 3 models is the dominant
+    # cost (ALT_MAX_CANDIDATES exists for it). Most marginal-destination cases
+    # are resolved by a field very close to the destination, so we fetch in
+    # nearest-first batches of ALT_BATCH_SIZE and stop as soon as one *non-major*
+    # candidate is a "likely" alternate under FAA *and* EASA. Major fields may
+    # appear (and are flagged) but never satisfy the stop condition — the pilot
+    # needs a usable non-major divert. When nothing qualifies we exhaust the cap
+    # and return the full set, exactly as before.
+    dest_wa = WatchlistAirport(icao=dest.icao, lat=dest.lat, lon=dest.lon)
+    by_icao: dict[str, dict[str, dict]] = {}
+    runways: dict = {}
     alternates: list[AlternateAirport] = []
-    for c in capped:
-        ap = c["airport"]
-        # Assessment reads fetched snapshots through the shared assembly; a
-        # single malformed airport must skip only that candidate, not abort the
-        # whole stage (the pipeline's catch would otherwise drop the section).
+    dest_ctx: _DestContext | None = None
+    dest_category = None
+    dest_crosswind = None
+    dest_ceiling_ft = None
+    dest_visibility_m = None
+    require_approach = False
+    evaluated_count = 0
+
+    # ``or [0]`` guarantees one iteration even with no candidates, so the
+    # destination itself is still fetched + assessed (it gates the whole stage).
+    batch_starts = list(range(0, len(capped), ALT_BATCH_SIZE)) or [0]
+    for batch_idx, batch_start in enumerate(batch_starts):
+        batch = capped[batch_start:batch_start + ALT_BATCH_SIZE]
+
+        # Bundle the destination into the first batch's fetch (one round trip).
+        fetch_airports: list[WatchlistAirport] = [dest_wa] if batch_idx == 0 else []
+        for c in batch:
+            ap = c["airport"]
+            fetch_airports.append(
+                WatchlistAirport(icao=ap.ident, lat=ap.latitude_deg, lon=ap.longitude_deg)
+            )
+
+        by_icao.update(_fetch_eta_snapshots(fetch_airports, eta_dt))
         try:
-            assessed = _assess(ap.ident, by_icao, runways)
+            runways.update(get_runway_ends([a.icao for a in fetch_airports], airports_db_path))
         except Exception:
-            logger.debug("Alternates: assessment failed for %s", ap.ident, exc_info=True)
-            continue
-        if assessed is None:
-            continue
-        per_model, cons = assessed
+            logger.warning("Alternates: runway lookup failed", exc_info=True)
 
-        # Suitability: instrument approach + best precision tier (minima proxy).
-        # The gate itself is applied *after* the loop so we can detect when the
-        # airport DB simply has no procedure data and degrade gracefully.
-        has_iap = False
-        best_approach_type = None
-        try:
-            approaches = ap.procedures_query.approaches()
-            has_iap = approaches.exists()
-            if has_iap:
-                best = approaches.most_precise()
-                best_approach_type = best.approach_type if best is not None else None
-        except Exception:
-            logger.debug("Alternates: approach query failed for %s", ap.ident, exc_info=True)
+        # Destination assessment (drives axes + the instrument-approach gate).
+        if batch_idx == 0:
+            dest_assessed = _assess(dest.icao, by_icao, runways)
+            if dest_assessed is None:
+                logger.info("Alternates: no destination snapshot at ETA; skipping stage")
+                return None
+            _, dest_cons = dest_assessed
+            dest_category = dest_cons["flight_category"]
+            dest_crosswind = dest_cons.get("crosswind_kt")
+            # Destination NWP-consensus ceiling/vis at ETA (worst across models) —
+            # the regulatory-trigger NWP fallback (#249) when no dest TAF exists.
+            dest_ceiling_ft = dest_cons.get("ceiling_ft")
+            dest_visibility_m = dest_cons.get("visibility_m")
+            dest_ctx = _DestContext(
+                enroute_nm=dest_enroute_nm,
+                gc_from_origin_nm=gc_dep_dest,
+                cat_idx=_cat_idx(dest_category),
+                wind_kt=dest_cons.get("wind_speed_kt"),
+                crosswind_kt=dest_crosswind,
+            )
+            # Informational only: is the destination itself MVFR/IFR/LIFR (i.e.
+            # you'd need an instrument approach to get into the *destination*).
+            # The candidate approach gate below is per-candidate, not keyed here.
+            require_approach = dest_ctx.cat_idx >= _REQUIRE_APPROACH_FROM
 
-        # Geometry: before/after + detour pair.
-        enroute = c.get("enroute_distance_nm")
-        if enroute is not None and enroute < dest_enroute_nm - ALT_POSITION_MARGIN_NM:
-            position = "before"
-        else:
-            position = "after"
-        dist_from_dest = c["distance_from_dest_nm"]
-        gc_dep_alt = _haversine_nm(origin.lat, origin.lon, ap.latitude_deg, ap.longitude_deg)
-        detour_early_nm = round(gc_dep_alt - gc_dep_dest, 1)
-        detour_late_nm = round(dist_from_dest, 1)
+        # Build this batch's alternates (a single malformed airport skips only
+        # itself, not the stage — _build_alternate returns None for it).
+        for c in batch:
+            alt = _build_alternate(c, by_icao, runways, origin, dest_ctx)
+            if alt is not None:
+                alternates.append(alt)
+        evaluated_count += len(batch)
 
-        # Assessment vs destination, per axis.
-        alt_cat = cons["flight_category"]
-        alt_idx = _cat_idx(alt_cat)
-        alt_wind = cons.get("wind_speed_kt")
-        alt_xw = cons.get("crosswind_kt")
-
-        better_category = alt_idx < dest_idx
-        better_wind = (
-            alt_wind is not None and dest_wind is not None and alt_wind < dest_wind
-        )
-        better_crosswind = (
-            alt_xw is not None and dest_crosswind is not None and alt_xw < dest_crosswind
-        )
-        not_worse_cat = alt_idx <= dest_idx
-        not_worse_wind = alt_wind is None or dest_wind is None or alt_wind <= dest_wind
-        not_worse_xw = (
-            alt_xw is None or dest_crosswind is None or alt_xw <= dest_crosswind
-        )
-        dominates = (
-            not_worse_cat
-            and not_worse_wind
-            and not_worse_xw
-            and (better_category or better_wind or better_crosswind)
-        )
-
-        alternates.append(AlternateAirport(
-            icao=ap.ident,
-            name=ap.name,
-            lat=ap.latitude_deg,
-            lon=ap.longitude_deg,
-            distance_from_dest_nm=round(dist_from_dest, 1),
-            enroute_distance_nm=enroute,
-            segment_distance_nm=c.get("segment_distance_nm"),
-            position=position,
-            detour_early_nm=detour_early_nm,
-            detour_late_nm=detour_late_nm,
-            flight_category=alt_cat,
-            wind_speed_kt=cons.get("wind_speed_kt"),
-            crosswind_kt=cons.get("crosswind_kt"),
-            headwind_kt=cons.get("headwind_kt"),
-            best_runway_id=next(
-                (d.get("best_runway_id") for d in per_model.values() if d.get("best_runway_id")),
-                None,
-            ),
-            ceiling_ft=cons.get("ceiling_ft"),
-            visibility_m=cons.get("visibility_m"),
-            agreement=cons.get("agreement", {}),
-            per_model=per_model,
-            has_instrument_approach=has_iap,
-            best_approach_type=best_approach_type,
-            longest_runway_ft=ap.longest_runway_length_ft,
-            has_hard_runway=bool(ap.has_hard_runway),
-            point_of_entry=bool(ap.point_of_entry),
-            is_major=ap.type == "large_airport",
-            better_category=better_category,
-            better_wind=better_wind,
-            better_crosswind=better_crosswind,
-            dominates_destination=dominates,
-        ))
+        # Stop as soon as a non-major candidate qualifies under both regimes.
+        if any(not a.is_major and _qualifies_both_regimes(a) for a in alternates):
+            logger.info(
+                "Alternates: qualifying non-major alternate after %d candidate(s) "
+                "of %d capped; skipping the rest",
+                evaluated_count, len(capped),
+            )
+            break
 
     # Per-candidate instrument-approach gate (always applied, by the
     # candidate's *own* weather — not the destination's). A field that is
@@ -546,7 +645,7 @@ def run_alternates(
         radius_nm=radius_nm,
         require_approach=require_approach,
         approach_filter_relaxed=approach_filter_relaxed,
-        candidates_evaluated=len(capped),
+        candidates_evaluated=evaluated_count,
         alternates=alternates,
         nearest_improving=nearest_improving,
         computed_at=now,
