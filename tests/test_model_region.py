@@ -17,11 +17,33 @@ from weatherbrief.tasks.fetch import _should_skip_for_region
 
 # --- Fixtures ---
 
+# Real coordinates for the airports used in country-gating tests, so the
+# geometry-based detector resolves the right country. Unknown codes (nav-fix
+# names, navaids in prefix tests) fall back to (0, 0) — fine for the
+# ICAO-string-only checks that use them.
+_COORDS: dict[str, tuple[float, float]] = {
+    "EGTK": (51.8369, -1.3200),   # Oxford, UK
+    "EGLL": (51.4700, -0.4543),   # London Heathrow, UK
+    "LFPB": (48.9694, 2.4414),    # Paris Le Bourget, FR
+    "EDDK": (50.8659, 7.1427),    # Cologne, DE
+    "EDDM": (48.3538, 11.7861),   # Munich, DE
+    "LSGS": (46.2196, 7.3268),    # Sion, CH
+}
+
+
 def _route(*icaos: str) -> RouteConfig:
-    """Build a minimal RouteConfig from ICAO codes."""
+    """Build a minimal RouteConfig from ICAO codes (real coords when known)."""
     return RouteConfig(
         name="Test",
-        waypoints=[Waypoint(icao=icao, name=icao, lat=0, lon=0) for icao in icaos],
+        waypoints=[
+            Waypoint(
+                icao=icao,
+                name=icao,
+                lat=_COORDS.get(icao.upper(), (0.0, 0.0))[0],
+                lon=_COORDS.get(icao.upper(), (0.0, 0.0))[1],
+            )
+            for icao in icaos
+        ],
     )
 
 
@@ -112,10 +134,13 @@ class TestShouldSkipForRegion:
         assert not _should_skip_for_region(ep, ModelRegion.GLOBAL)
 
 
-# --- required_icao_prefixes ---
+# --- route_covers_prefixes (airport ICAO-prefix fallback) ---
 
-class TestRequiredIcaoPrefixes:
-    """Country-level ICAO prefix filtering (e.g. MeteoFrance → LF)."""
+class TestAirportPrefixFallback:
+    """ICAO-prefix matching, used as the fallback when geometry is unavailable.
+
+    Only real 4-letter ICAO airports count — nav fixes and navaids don't.
+    """
 
     def test_route_covers_french_prefix(self):
         route = _route("EGTK", "LFPB", "LSGS")
@@ -155,6 +180,12 @@ class TestRequiredIcaoPrefixes:
         route = _route("EGLL", "LFA", "EDDK")
         assert not route_covers_prefixes(route, ["LF"])
 
+
+# --- Country gating (geometry-based) ---
+
+class TestCountryGating:
+    """Country-specific models gated on the route's geometry (overflight)."""
+
     def test_skip_meteofrance_on_non_french_route(self):
         """MeteoFrance skipped for Germany-only route."""
         ep = MODEL_ENDPOINTS["meteofrance"]
@@ -162,9 +193,17 @@ class TestRequiredIcaoPrefixes:
         assert _should_skip_for_region(ep, ModelRegion.EUROPE, route)
 
     def test_keep_meteofrance_on_french_route(self):
-        """MeteoFrance kept when route touches France."""
+        """MeteoFrance kept when route lands in France."""
         ep = MODEL_ENDPOINTS["meteofrance"]
         route = _route("EGTK", "LFPB")
+        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
+
+    def test_keep_meteofrance_on_french_overflight(self):
+        """The headline gain: a route that overflies France without landing
+        there (London → Sion crosses French airspace) keeps MeteoFrance —
+        ICAO-prefix matching would have wrongly skipped it."""
+        ep = MODEL_ENDPOINTS["meteofrance"]
+        route = _route("EGLL", "LSGS")
         assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
 
     def test_skip_ukmo_on_non_uk_route(self):
@@ -179,16 +218,69 @@ class TestRequiredIcaoPrefixes:
         route = _route("EGLL", "LFPB")
         assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
 
-    def test_no_prefix_requirement_never_skips(self):
-        """Models without required_icao_prefixes are unaffected."""
+    def test_no_country_requirement_never_skips(self):
+        """Models without required_country are unaffected by the country gate."""
         ep = MODEL_ENDPOINTS["icon"]
         route = _route("EDDK", "EDDM")
         assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
 
-    def test_prefix_check_skipped_when_no_route(self):
-        """Backward compat: no route passed → prefix check not applied."""
+    def test_country_check_skipped_when_no_route(self):
+        """Backward compat: no route passed → country check not applied."""
         ep = MODEL_ENDPOINTS["meteofrance"]
         assert not _should_skip_for_region(ep, ModelRegion.EUROPE, None)
+
+    def test_falls_back_to_prefixes_when_detection_fails(self, monkeypatch):
+        """If geometry detection raises, fall back to the ICAO-prefix heuristic."""
+        import weatherbrief.airports as airports
+
+        def _boom(route, spacing_nm=25.0):
+            raise RuntimeError("timezone data unavailable")
+
+        monkeypatch.setattr(airports, "route_countries", _boom)
+        ep = MODEL_ENDPOINTS["meteofrance"]  # required_icao_prefixes=["LF"]
+        # French airport present → fallback keeps the model.
+        assert not _should_skip_for_region(
+            ep, ModelRegion.EUROPE, _route("EGTK", "LFPB")
+        )
+        # No French airport → fallback skips it.
+        assert _should_skip_for_region(
+            ep, ModelRegion.EUROPE, _route("EDDK", "EDDM")
+        )
+
+
+# --- route_countries (geometry → country) ---
+
+class TestRouteCountries:
+    def test_maps_timezones_to_countries(self, monkeypatch):
+        """Hermetic: stub the walk + timezone lookup, check the FR/GB mapping."""
+        import weatherbrief.airports as airports
+
+        monkeypatch.setattr(
+            airports,
+            "walk_route",
+            lambda route, spacing_nm: [
+                (51.47, -0.45, 0.0, None, None),   # London → Europe/London
+                (48.97, 2.44, 0.0, None, None),    # Paris → Europe/Paris
+            ],
+        )
+        monkeypatch.setattr(
+            airports,
+            "get_timezone",
+            lambda lat, lon: "Europe/London" if lon < 1 else "Europe/Paris",
+        )
+        assert airports.route_countries(object()) == {"GB", "FR"}
+
+    def test_ignores_ungated_countries(self, monkeypatch):
+        """Timezones outside the gated set (e.g. Germany) are not reported."""
+        import weatherbrief.airports as airports
+
+        monkeypatch.setattr(
+            airports,
+            "walk_route",
+            lambda route, spacing_nm: [(50.87, 7.14, 0.0, None, None)],
+        )
+        monkeypatch.setattr(airports, "get_timezone", lambda lat, lon: "Europe/Berlin")
+        assert airports.route_countries(object()) == set()
 
 
 # --- MODEL_ENDPOINTS region assignments ---
@@ -204,3 +296,10 @@ class TestModelEndpointRegions:
 
     def test_north_america_models(self):
         assert MODEL_ENDPOINTS["gem"].region == ModelRegion.NORTH_AMERICA
+
+    def test_country_gated_models(self):
+        assert MODEL_ENDPOINTS["meteofrance"].required_country == "FR"
+        assert MODEL_ENDPOINTS["ukmo"].required_country == "GB"
+        # Prefix fallback still declared alongside the country gate.
+        assert MODEL_ENDPOINTS["meteofrance"].required_icao_prefixes == ["LF"]
+        assert MODEL_ENDPOINTS["ukmo"].required_icao_prefixes == ["EG"]

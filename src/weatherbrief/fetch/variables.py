@@ -123,7 +123,14 @@ class ModelEndpoint:
     region: ModelRegion = ModelRegion.GLOBAL
     # If set, route must contain at least one airport whose ICAO starts with
     # one of these prefixes (e.g. ["LF"] for France, ["EG"] for UK).
+    # Used as a fallback when route geometry can't be resolved.
     required_icao_prefixes: list[str] | None = None
+    # If set, the route must pass through this ISO-3166 alpha-2 country,
+    # detected from the route geometry (great-circle samples → timezone
+    # polygons). Primary country gate; catches overflight that prefix
+    # matching misses. Falls back to required_icao_prefixes if geometry
+    # detection is unavailable.
+    required_country: str | None = None
 
 
 MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
@@ -163,6 +170,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         pressure_levels=list(UKMO_PRESSURE_LEVELS),
         region=ModelRegion.EUROPE,
         required_icao_prefixes=["EG"],
+        required_country="GB",
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",
@@ -175,6 +183,7 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         pressure_levels=list(METEOFRANCE_PRESSURE_LEVELS),
         region=ModelRegion.EUROPE,
         required_icao_prefixes=["LF"],
+        required_country="FR",
     ),
     "gem": ModelEndpoint(
         name="GEM",

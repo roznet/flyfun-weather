@@ -23,7 +23,7 @@ Each model has a `ModelEndpoint` dataclass (`name`, `base_url`, `max_days`, `mod
 | `meteofrance` | `/v1/meteofrance` | 6 | europe, needs `LF…` | No precip_probability, freezing_level, visibility, convective_inhibition, lifted_index, vertical_velocity |
 | `gem` | `/v1/gem` | 10 | north_america | No freezing_level, visibility, convective_inhibition, lifted_index, vertical_velocity |
 
-`region` (`ModelRegion.GLOBAL/EUROPE/NORTH_AMERICA`) and `required_icao_prefixes` let the pipeline skip models irrelevant to a route (`detect_model_region(route)`, `route_covers_prefixes(route, prefixes)`).
+`region` (`ModelRegion.GLOBAL/EUROPE/NORTH_AMERICA`) and `required_country` let the pipeline skip models irrelevant to a route (`_should_skip_for_region` in `tasks/fetch.py`). The broad region comes from `detect_model_region(route)`, which classifies on the **origin/destination** ICAO prefixes only (`K`/`C`/`P` → North America) — intermediate nav fixes like `KONAN`/`CINDY` are ignored so they can't misclassify a route. Country-specific models (Météo-France→`FR`, UKMO→`GB`) are gated on `airports.route_countries(route)`, which samples the great-circle route into timezone polygons and so detects genuine **overflight**, not just landings. If that geometry can't be resolved it falls back to `route_covers_prefixes(route, prefixes)` (4-letter ICAO airports only).
 
 `build_hourly_params()` constructs the API parameter string, excluding each model's unavailable variables. Pressure levels are **per-model** via `ModelEndpoint.pressure_levels` (named constants in `variables.py`):
 
