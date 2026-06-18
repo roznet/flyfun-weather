@@ -5,9 +5,10 @@ import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
   revokeAgent, fetchAdminFeedback, fetchAdminMetrics, fetchHubUsers,
   fetchApiUsage, updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply,
-  saveFeedbackNotes, reopenFeedback,
+  saveFeedbackNotes, reopenFeedback, fetchConnectedApps,
   type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
   type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse, type ApiUsageResponse,
+  type ConnectedApp,
 } from './adapters/admin-adapter';
 import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, flightTitle } from './utils';
 import { initTheme } from './theme';
@@ -33,7 +34,7 @@ async function init(): Promise<void> {
   // Load both tabs in parallel
   // Load API usage first so summary bar can include the API call count
   await loadApiUsage();
-  await Promise.all([loadUsers(), loadFeedback()]);
+  await Promise.all([loadUsers(), loadConnectedApps(), loadFeedback()]);
 }
 
 function setupPeriodToggle(): void {
@@ -554,6 +555,12 @@ async function loadUsers(): Promise<void> {
     const humans = users.filter(u => u.type !== 'agent');
     const agents = users.filter(u => u.type === 'agent');
 
+    // Collapsible-section counts
+    const usersCount = document.getElementById('users-count');
+    if (usersCount) usersCount.textContent = `(${total_humans})`;
+    const agentsCount = document.getElementById('agents-count');
+    if (agentsCount) agentsCount.textContent = `(${agents.length})`;
+
     // Summary bar
     renderSummaryBar(summaryBar, summary);
 
@@ -622,6 +629,41 @@ async function loadUsers(): Promise<void> {
     errorEl.textContent = `Failed to load users: ${err}`;
     errorEl.style.display = 'block';
   }
+}
+
+async function loadConnectedApps(): Promise<void> {
+  const tbody = document.getElementById('connected-apps-tbody');
+  const count = document.getElementById('connected-apps-count');
+  if (!tbody) return;
+  try {
+    const { apps } = await fetchConnectedApps();
+    if (count) count.textContent = `(${apps.length})`;
+    if (apps.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="muted" style="text-align:center;padding:1rem;">No apps connected yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = apps.map(renderConnectedAppRow).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:1rem;color:var(--danger);">Failed to load connected apps: ${escapeHtml(String(err))}</td></tr>`;
+  }
+}
+
+function renderConnectedAppRow(a: ConnectedApp): string {
+  const scopes = a.scopes.length
+    ? a.scopes.map(s => `<span class="badge badge-none" style="text-transform:none;">${escapeHtml(s)}</span>`).join(' ')
+    : '<span class="muted">full access</span>';
+  const lastUsed = a.last_used ? formatDate(a.last_used) : '<span class="muted">never</span>';
+  const registered = a.registered ? formatDate(a.registered) : '-';
+  // Show the opaque client_id as a hover title so two same-named apps stay distinguishable.
+  return `
+    <tr>
+      <td title="${escapeHtml(a.client_id)}">${escapeHtml(a.name)}</td>
+      <td>${scopes}</td>
+      <td class="num">${a.users}</td>
+      <td class="num">${a.tokens_active} / ${a.tokens_total}</td>
+      <td>${lastUsed}</td>
+      <td>${registered}</td>
+    </tr>`;
 }
 
 async function handleApprove(e: Event): Promise<void> {

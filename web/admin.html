@@ -75,6 +75,30 @@
       align-items: center;
       margin-bottom: 0.5rem;
     }
+    /* Collapsible admin sections (Users / Connected Apps / API Agents). */
+    .collapse-section > summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-bottom: 0.5rem;
+    }
+    .collapse-section > summary::-webkit-details-marker { display: none; }
+    .collapse-section > summary::before {
+      content: "▸";
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      transition: transform 0.15s ease;
+    }
+    .collapse-section[open] > summary::before { transform: rotate(90deg); }
+    .collapse-section > summary h3 { margin: 0; }
+    .collapse-section > summary .count {
+      font-size: 0.8rem;
+      font-weight: 400;
+      color: var(--text-muted);
+    }
+    .collapse-section > summary .summary-actions { margin-left: auto; }
     .token-modal-overlay {
       position: fixed;
       inset: 0;
@@ -374,8 +398,8 @@
       </div>
 
       <!-- All users -->
-      <div class="section">
-        <h3>Users</h3>
+      <details class="section collapse-section" open>
+        <summary><h3>Users</h3><span class="count" id="users-count"></span></summary>
         <div style="overflow-x:auto;">
           <table class="admin-table">
             <thead>
@@ -397,14 +421,42 @@
           </table>
         </div>
         <div id="users-footer" class="users-footer muted" style="display:none;"></div>
-      </div>
+      </details>
+
+      <!-- Connected apps (dynamically-registered OAuth clients: MCP, native/3rd-party) -->
+      <details class="section collapse-section" open>
+        <summary><h3>Connected Apps</h3><span class="count" id="connected-apps-count"></span></summary>
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.8rem;">
+          Apps users have connected via OAuth (MCP connector, native/third-party apps). Stats are
+          aggregated from the access tokens each app was issued.
+        </p>
+        <div style="overflow-x:auto;">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>App</th>
+                <th>Scopes</th>
+                <th style="text-align:center;">Users</th>
+                <th style="text-align:center;">Tokens (active/total)</th>
+                <th>Last Used</th>
+                <th>Registered</th>
+              </tr>
+            </thead>
+            <tbody id="connected-apps-tbody">
+              <tr><td colspan="6" class="muted" style="text-align:center;padding:1rem;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
 
       <!-- API Agents -->
-      <div id="agents-section" class="section">
-        <div class="section-header">
-          <h3>API Agents</h3>
-          <button class="btn btn-primary" id="btn-create-agent" style="font-size:0.8rem;">Create Agent</button>
-        </div>
+      <details id="agents-section" class="section collapse-section" open>
+        <summary>
+          <h3>API Agents</h3><span class="count" id="agents-count"></span>
+          <span class="summary-actions">
+            <button class="btn btn-primary" id="btn-create-agent" style="font-size:0.8rem;" onclick="event.stopPropagation()">Create Agent</button>
+          </span>
+        </summary>
         <div style="overflow-x:auto;">
           <table class="admin-table">
             <thead>
@@ -424,7 +476,7 @@
             </tbody>
           </table>
         </div>
-      </div>
+      </details>
     </div>
 
     <!-- Usage Analytics tab -->

@@ -900,6 +900,105 @@ def revoke_agent_token(
 
 
 # ---------------------------------------------------------------------------
+# Connected apps (dynamically-registered OAuth clients)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/connected-apps")
+def list_connected_apps(
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """List dynamically-registered OAuth apps (MCP connector, native/3rd-party
+    apps) with usage stats aggregated from the tokens they were issued.
+
+    One row per registered OAuth client. Only OAuth-issued tokens carry an
+    ``oauth_client_id``; cookie sessions and manually-created agent tokens are
+    excluded (they have no client). Read-only — no mutations.
+
+    OAuth tokens are few (one per user×app connection), so we fetch the
+    relevant rows and aggregate in Python — this keeps the active-user and
+    distinct-scope counts dialect-agnostic (SQLite dev / MySQL prod).
+    """
+    from flyfun_common.oauth.models import OAuthClientRow
+
+    token_rows = (
+        db.query(
+            ApiTokenRow.oauth_client_id,
+            ApiTokenRow.user_id,
+            ApiTokenRow.scope,
+            ApiTokenRow.revoked,
+            ApiTokenRow.last_used_at,
+            ApiTokenRow.created_at,
+        )
+        .filter(ApiTokenRow.oauth_client_id.isnot(None))
+        .all()
+    )
+
+    # Aggregate per client_id.
+    agg: dict[str, dict] = {}
+    for cid, user_id, scope, revoked, last_used, created in token_rows:
+        a = agg.setdefault(
+            cid,
+            {
+                "tokens_total": 0,
+                "tokens_active": 0,
+                "users": set(),
+                "users_active": set(),
+                "scopes": set(),
+                "last_used": None,
+                "first_seen": None,
+            },
+        )
+        a["tokens_total"] += 1
+        a["users"].add(user_id)
+        if not revoked:
+            a["tokens_active"] += 1
+            a["users_active"].add(user_id)
+        if scope:
+            a["scopes"].update(scope.split())
+        if last_used and (a["last_used"] is None or last_used > a["last_used"]):
+            a["last_used"] = last_used
+        if created and (a["first_seen"] is None or created < a["first_seen"]):
+            a["first_seen"] = created
+
+    clients = {}
+    if agg:
+        clients = {
+            c.id: c
+            for c in db.query(OAuthClientRow)
+            .filter(OAuthClientRow.id.in_(list(agg.keys())))
+            .all()
+        }
+
+    apps = []
+    for cid, a in agg.items():
+        client = clients.get(cid)
+        registered = None
+        if client and client.created_at:
+            registered = client.created_at.isoformat()
+        elif a["first_seen"]:
+            registered = a["first_seen"].isoformat()
+        apps.append(
+            {
+                "client_id": cid,
+                "name": (client.client_name if client and client.client_name else cid),
+                "scopes": sorted(a["scopes"]),
+                "users": len(a["users_active"]),
+                "users_total": len(a["users"]),
+                "tokens_active": a["tokens_active"],
+                "tokens_total": a["tokens_total"],
+                "last_used": a["last_used"].isoformat() if a["last_used"] else None,
+                "registered": registered,
+            }
+        )
+
+    # Most-recently-used first; never-used (None) sink to the bottom.
+    apps.sort(key=lambda x: x["last_used"] or "", reverse=True)
+    return {"apps": apps}
+
+
+# ---------------------------------------------------------------------------
 # API usage (subscription limit monitoring)
 # ---------------------------------------------------------------------------
 

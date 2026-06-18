@@ -84,6 +84,30 @@ export async function revokeAgentToken(userId: string, tokenId: number): Promise
   await apiFetch<unknown>(`/admin/agents/${userId}/tokens/${tokenId}`, { method: 'DELETE' });
 }
 
+// --- Connected apps (dynamically-registered OAuth clients) ---
+
+export interface ConnectedApp {
+  client_id: string;
+  name: string;
+  scopes: string[];
+  /** Distinct users with at least one active (non-revoked) token. */
+  users: number;
+  /** Distinct users ever connected, including revoked-only. */
+  users_total: number;
+  tokens_active: number;
+  tokens_total: number;
+  last_used: string | null;
+  registered: string | null;
+}
+
+export interface ConnectedAppsResponse {
+  apps: ConnectedApp[];
+}
+
+export async function fetchConnectedApps(): Promise<ConnectedAppsResponse> {
+  return apiFetch<ConnectedAppsResponse>('/admin/connected-apps');
+}
+
 // --- User Costs ---
 
 export interface UserCostUser {
