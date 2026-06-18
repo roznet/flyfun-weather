@@ -475,13 +475,25 @@ def create_app() -> FastAPI:
         send_magic_link_email=send_magic_link_email,
     )
     app.include_router(create_autorouter_router())
+    # The consent screen shows exactly the permissions of the requested scope
+    # (scope-derived in flyfun-common). "mcp" is full account access used by the
+    # MCP connector (mcp.flyfun.aero) and is intentionally NOT advertised in the
+    # weather.flyfun.aero discovery doc — third-party apps use "flights:read".
+    # No default_scope: an omitted scope is rejected, never silently granted.
     app.include_router(
         create_oauth_router(
-            scopes_supported=["mcp", "flights:read"],
-            permission_descriptions=[
-                "View your flight list",
-                "Export individual flight details",
-            ],
+            scopes={
+                "flights:read": [
+                    "View your flight list",
+                    "Export individual flight details",
+                ],
+                "mcp": [
+                    "View your flights and briefings",
+                    "Create, modify and delete flights and request briefings",
+                    "View airport weather forecasts",
+                    "Change your account settings",
+                ],
+            },
         )
     )
     app.include_router(auth_router)
