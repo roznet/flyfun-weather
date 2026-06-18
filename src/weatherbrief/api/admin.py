@@ -912,13 +912,19 @@ def list_connected_apps(
     """List dynamically-registered OAuth apps (MCP connector, native/3rd-party
     apps) with usage stats aggregated from the tokens they were issued.
 
-    One row per registered OAuth client. Only OAuth-issued tokens carry an
-    ``oauth_client_id``; cookie sessions and manually-created agent tokens are
-    excluded (they have no client). Read-only — no mutations.
+    One row per app **name** — multiple Dynamic Client Registrations that report
+    the same ``client_name`` (e.g. Claude re-registering on each reconnect) are
+    collapsed into a single row, so "Users" reflects distinct humans using the
+    app rather than per-registration counts. The ``registrations`` field exposes
+    how many underlying client_ids were merged. Apps whose registration has no
+    ``client_name`` fall back to grouping by their opaque client_id.
 
-    OAuth tokens are few (one per user×app connection), so we fetch the
-    relevant rows and aggregate in Python — this keeps the active-user and
-    distinct-scope counts dialect-agnostic (SQLite dev / MySQL prod).
+    Only OAuth-issued tokens carry an ``oauth_client_id``; cookie sessions and
+    manually-created agent tokens are excluded (they have no client).
+
+    OAuth tokens are few, so we fetch the relevant rows and aggregate in Python
+    — keeping the active-user and distinct-scope counts dialect-agnostic
+    (SQLite dev / MySQL prod). Read-only — no mutations.
     """
     from flyfun_common.oauth.models import OAuthClientRow
 
@@ -935,21 +941,40 @@ def list_connected_apps(
         .all()
     )
 
-    # Aggregate per client_id.
+    # Resolve client metadata (display name + registration date) for every
+    # referenced client_id, so we can group by the human-facing name.
+    client_ids = {row[0] for row in token_rows}
+    clients = {}
+    if client_ids:
+        clients = {
+            c.id: c
+            for c in db.query(OAuthClientRow)
+            .filter(OAuthClientRow.id.in_(list(client_ids)))
+            .all()
+        }
+
+    def _name_for(cid: str) -> str:
+        c = clients.get(cid)
+        return c.client_name if (c and c.client_name) else cid
+
+    # Aggregate per app name, merging all of that app's registrations.
     agg: dict[str, dict] = {}
     for cid, user_id, scope, revoked, last_used, created in token_rows:
+        name = _name_for(cid)
         a = agg.setdefault(
-            cid,
+            name,
             {
+                "client_ids": set(),
                 "tokens_total": 0,
                 "tokens_active": 0,
                 "users": set(),
                 "users_active": set(),
                 "scopes": set(),
                 "last_used": None,
-                "first_seen": None,
+                "registered": None,  # earliest registration across this app
             },
         )
+        a["client_ids"].add(cid)
         a["tokens_total"] += 1
         a["users"].add(user_id)
         if not revoked:
@@ -959,39 +984,25 @@ def list_connected_apps(
             a["scopes"].update(scope.split())
         if last_used and (a["last_used"] is None or last_used > a["last_used"]):
             a["last_used"] = last_used
-        if created and (a["first_seen"] is None or created < a["first_seen"]):
-            a["first_seen"] = created
-
-    clients = {}
-    if agg:
-        clients = {
-            c.id: c
-            for c in db.query(OAuthClientRow)
-            .filter(OAuthClientRow.id.in_(list(agg.keys())))
-            .all()
-        }
-
-    apps = []
-    for cid, a in agg.items():
         client = clients.get(cid)
-        registered = None
-        if client and client.created_at:
-            registered = client.created_at.isoformat()
-        elif a["first_seen"]:
-            registered = a["first_seen"].isoformat()
-        apps.append(
-            {
-                "client_id": cid,
-                "name": (client.client_name if client and client.client_name else cid),
-                "scopes": sorted(a["scopes"]),
-                "users": len(a["users_active"]),
-                "users_total": len(a["users"]),
-                "tokens_active": a["tokens_active"],
-                "tokens_total": a["tokens_total"],
-                "last_used": a["last_used"].isoformat() if a["last_used"] else None,
-                "registered": registered,
-            }
-        )
+        reg = client.created_at if (client and client.created_at) else created
+        if reg and (a["registered"] is None or reg < a["registered"]):
+            a["registered"] = reg
+
+    apps = [
+        {
+            "name": name,
+            "scopes": sorted(a["scopes"]),
+            "users": len(a["users_active"]),
+            "users_total": len(a["users"]),
+            "tokens_active": a["tokens_active"],
+            "tokens_total": a["tokens_total"],
+            "registrations": len(a["client_ids"]),
+            "last_used": a["last_used"].isoformat() if a["last_used"] else None,
+            "registered": a["registered"].isoformat() if a["registered"] else None,
+        }
+        for name, a in agg.items()
+    ]
 
     # Most-recently-used first; never-used (None) sink to the bottom.
     apps.sort(key=lambda x: x["last_used"] or "", reverse=True)

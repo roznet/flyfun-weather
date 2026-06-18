@@ -77,21 +77,33 @@ def _user_cookie() -> dict:
 
 def _seed_connected_apps(db_session) -> None:
     s = db_session()
-    # A connected "MCP" app: registered client + two tokens for two users,
-    # one of them revoked.
+    # "Claude" connected via Dynamic Client Registration TWICE — two distinct
+    # client_ids reporting the same name, registered on different dates. These
+    # must collapse into ONE row when grouped by name.
     s.add(OAuthClientRow(
-        id="mcp_client_1", client_secret_hash="x", client_name="Claude (MCP)",
-        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        id="claude_reg_1", client_secret_hash="x", client_name="Claude",
+        created_at=datetime(2026, 4, 9, tzinfo=timezone.utc),
     ))
+    s.add(OAuthClientRow(
+        id="claude_reg_2", client_secret_hash="x", client_name="Claude",
+        created_at=datetime(2026, 5, 12, tzinfo=timezone.utc),
+    ))
+    # First registration: admin's token (active) + a rotated-out revoked one.
     s.add(ApiTokenRow(
-        user_id=ADMIN_ID, token_hash="h1", oauth_client_id="mcp_client_1",
+        user_id=ADMIN_ID, token_hash="h1", oauth_client_id="claude_reg_1",
         scope="mcp", revoked=False,
         last_used_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
     ))
     s.add(ApiTokenRow(
-        user_id=REGULAR_ID, token_hash="h2", oauth_client_id="mcp_client_1",
+        user_id=ADMIN_ID, token_hash="h2", oauth_client_id="claude_reg_1",
         scope="mcp", revoked=True,
         last_used_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+    ))
+    # Second registration: a different user, active token (so 2 distinct users).
+    s.add(ApiTokenRow(
+        user_id=REGULAR_ID, token_hash="h3", oauth_client_id="claude_reg_2",
+        scope="mcp", revoked=False,
+        last_used_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
     ))
     # A read-only third-party app: one active flights:read token.
     s.add(OAuthClientRow(
@@ -99,13 +111,13 @@ def _seed_connected_apps(db_session) -> None:
         created_at=datetime(2026, 6, 17, tzinfo=timezone.utc),
     ))
     s.add(ApiTokenRow(
-        user_id=REGULAR_ID, token_hash="h3", oauth_client_id="sample_client_1",
+        user_id=REGULAR_ID, token_hash="h4", oauth_client_id="sample_client_1",
         scope="flights:read", revoked=False,
         last_used_at=datetime(2026, 6, 17, 12, tzinfo=timezone.utc),
     ))
     # A manually-created agent token (no oauth_client_id) — must be EXCLUDED.
     s.add(ApiTokenRow(
-        user_id=ADMIN_ID, token_hash="h4", oauth_client_id=None,
+        user_id=ADMIN_ID, token_hash="h5", oauth_client_id=None,
         scope=None, revoked=False,
     ))
     s.commit()
@@ -116,33 +128,36 @@ def test_connected_apps_requires_admin(client):
     assert client.get("/api/admin/connected-apps", cookies=_user_cookie()).status_code == 403
 
 
-def test_connected_apps_aggregates_and_excludes_non_oauth(client, db_session):
+def test_connected_apps_groups_by_name_and_excludes_non_oauth(client, db_session):
     _seed_connected_apps(db_session)
 
     resp = client.get("/api/admin/connected-apps", cookies=_admin_cookie())
     assert resp.status_code == 200
     apps = {a["name"]: a for a in resp.json()["apps"]}
 
-    # Only the two OAuth clients show up — the manual agent token is excluded.
-    assert set(apps) == {"Claude (MCP)", "flyfun-example"}
+    # Two app names — the manual agent token is excluded, and the two "Claude"
+    # registrations collapse into a single row.
+    assert set(apps) == {"Claude", "flyfun-example"}
 
-    mcp = apps["Claude (MCP)"]
-    assert mcp["scopes"] == ["mcp"]
-    assert mcp["tokens_total"] == 2
-    assert mcp["tokens_active"] == 1
-    assert mcp["users"] == 1        # only the non-revoked token's user counts as active
-    assert mcp["users_total"] == 2
-    assert mcp["last_used"].startswith("2026-06-18")
-    assert mcp["registered"].startswith("2026-06-01")
+    claude = apps["Claude"]
+    assert claude["registrations"] == 2          # both DCR registrations merged
+    assert claude["scopes"] == ["mcp"]
+    assert claude["tokens_total"] == 3           # 2 under reg_1 + 1 under reg_2
+    assert claude["tokens_active"] == 2          # one revoked under reg_1
+    assert claude["users"] == 2                  # admin + regular, distinct active users
+    assert claude["users_total"] == 2
+    assert claude["last_used"].startswith("2026-06-18")
+    assert claude["registered"].startswith("2026-04-09")  # earliest registration
 
     sample = apps["flyfun-example"]
+    assert sample["registrations"] == 1
     assert sample["scopes"] == ["flights:read"]
     assert sample["tokens_active"] == 1 and sample["tokens_total"] == 1
     assert sample["users"] == 1
 
     # Sorted most-recently-used first.
     names = [a["name"] for a in resp.json()["apps"]]
-    assert names == ["Claude (MCP)", "flyfun-example"]
+    assert names == ["Claude", "flyfun-example"]
 
 
 def test_connected_apps_empty(client):

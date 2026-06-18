@@ -639,12 +639,12 @@ async function loadConnectedApps(): Promise<void> {
     const { apps } = await fetchConnectedApps();
     if (count) count.textContent = `(${apps.length})`;
     if (apps.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="muted" style="text-align:center;padding:1rem;">No apps connected yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="muted" style="text-align:center;padding:1rem;">No apps connected yet.</td></tr>';
       return;
     }
     tbody.innerHTML = apps.map(renderConnectedAppRow).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:1rem;color:var(--danger);">Failed to load connected apps: ${escapeHtml(String(err))}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--danger);">Failed to load connected apps: ${escapeHtml(String(err))}</td></tr>`;
   }
 }
 
@@ -654,12 +654,17 @@ function renderConnectedAppRow(a: ConnectedApp): string {
     : '<span class="muted">full access</span>';
   const lastUsed = a.last_used ? formatDate(a.last_used) : '<span class="muted">never</span>';
   const registered = a.registered ? formatDate(a.registered) : '-';
-  // Show the opaque client_id as a hover title so two same-named apps stay distinguishable.
+  // >1 registration means the app re-registered (e.g. Claude via DCR on each
+  // reconnect); flag it so the merge is visible.
+  const regs = a.registrations > 1
+    ? `<span title="${a.registrations} OAuth client registrations merged">${a.registrations}</span>`
+    : String(a.registrations);
   return `
     <tr>
-      <td title="${escapeHtml(a.client_id)}">${escapeHtml(a.name)}</td>
+      <td>${escapeHtml(a.name)}</td>
       <td>${scopes}</td>
       <td class="num">${a.users}</td>
+      <td class="num">${regs}</td>
       <td class="num">${a.tokens_active} / ${a.tokens_total}</td>
       <td>${lastUsed}</td>
       <td>${registered}</td>

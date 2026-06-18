@@ -87,7 +87,6 @@ export async function revokeAgentToken(userId: string, tokenId: number): Promise
 // --- Connected apps (dynamically-registered OAuth clients) ---
 
 export interface ConnectedApp {
-  client_id: string;
   name: string;
   scopes: string[];
   /** Distinct users with at least one active (non-revoked) token. */
@@ -96,6 +95,8 @@ export interface ConnectedApp {
   users_total: number;
   tokens_active: number;
   tokens_total: number;
+  /** Number of OAuth client registrations merged under this app name. */
+  registrations: number;
   last_used: string | null;
   registered: string | null;
 }
