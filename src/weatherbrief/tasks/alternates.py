@@ -99,8 +99,17 @@ def _fetch_eta_snapshots(
     source of ECMWF visibility), with an Open-Meteo fallback when no local GRIB
     run is available (degraded — ECMWF visibility absent — but consensus still
     works). Each model's failure is non-fatal.
+
+    The three model passes run **concurrently** (issue #271): each pass is
+    independent (it writes only its own ``model`` key per icao), so the stage
+    cost collapses toward the *slowest single model* instead of the sum of all
+    three. The heavy GRIB decode already runs on the shared ``ProcessPoolExecutor``
+    via ``_dispatch_decode`` (throttled by ``GRIB_DECODE_WORKERS``), so the
+    threads here only overlap the Open-Meteo network waits and dispatch
+    submission — no new GIL contention, no extra peak decode concurrency.
     """
-    import requests
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from contextvars import copy_context
 
     from weatherbrief.fetch.model_status import fetch_model_metadata
     from weatherbrief.tasks.standalone_verification import (
@@ -113,46 +122,76 @@ def _fetch_eta_snapshots(
 
     sample_hours = [eta_dt.hour]
     by_icao: dict[str, dict[str, dict]] = {}
-    session = requests.Session()
+    # Single up-front metadata call — kept OUTSIDE the parallel region.
     metadata = fetch_model_metadata(_MODELS)
 
-    for model in _MODELS:
+    def _fetch_one_model(model: str) -> dict[str, dict]:
+        """Fetch one model's ETA-hour snapshots → ``{icao: snap}``.
+
+        Runs in its own worker thread with its **own** ``requests.Session``
+        (``requests.Session`` is not thread-safe, so it must not be shared
+        across model passes). Decode priority is inherited from the caller's
+        ContextVar (propagated via ``copy_context`` at submit time) — the
+        interactive briefing path resolves to INTERACTIVE.
+        """
+        import requests
+
         meta = metadata.get(model)
         if meta is None:
             logger.warning("Alternates: no model metadata for %s, skipping", model)
-            continue
+            return {}
         om_init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
         days = MODEL_FORECAST_DAYS.get(model, 4)
+        session = requests.Session()
 
         snaps: list[dict] = []
-        try:
-            if model == "ecmwf":
-                run_files = _select_ecmwf_grib_run(om_init_time, days)
-                if run_files is not None:
-                    snaps = fetch_ecmwf_grib_snapshots(
-                        run_files, airports, sample_hours, days,
-                    )
-                else:
-                    logger.info(
-                        "Alternates: no local ECMWF GRIB run; falling back to "
-                        "Open-Meteo (no ECMWF visibility)"
-                    )
-                    snaps, _ = _fetch_forecasts_for_model(
-                        model, om_init_time, airports, session, sample_hours,
-                    )
-                    _enrich_with_grib(snaps, model, om_init_time, airports, session)
+        if model == "ecmwf":
+            run_files = _select_ecmwf_grib_run(om_init_time, days)
+            if run_files is not None:
+                snaps = fetch_ecmwf_grib_snapshots(
+                    run_files, airports, sample_hours, days,
+                )
             else:
+                logger.info(
+                    "Alternates: no local ECMWF GRIB run; falling back to "
+                    "Open-Meteo (no ECMWF visibility)"
+                )
                 snaps, _ = _fetch_forecasts_for_model(
                     model, om_init_time, airports, session, sample_hours,
                 )
                 _enrich_with_grib(snaps, model, om_init_time, airports, session)
-        except Exception:
-            logger.warning("Alternates: %s fetch failed", model, exc_info=True)
-            continue
+        else:
+            snaps, _ = _fetch_forecasts_for_model(
+                model, om_init_time, airports, session, sample_hours,
+            )
+            _enrich_with_grib(snaps, model, om_init_time, airports, session)
 
+        result: dict[str, dict] = {}
         for snap in snaps:
             if _same_hour(snap["forecast_hour"], eta_dt):
-                by_icao.setdefault(snap["icao"], {})[model] = snap
+                result[snap["icao"]] = snap
+        return result
+
+    # Fan out the 3 model passes. ``copy_context().run`` propagates this
+    # thread's ContextVars (notably the decode priority set by the interactive
+    # briefing) into each worker — a bare ThreadPoolExecutor worker would start
+    # from default context and silently drop alternates decode to SCHEDULED.
+    with ThreadPoolExecutor(max_workers=len(_MODELS)) as executor:
+        futures = {
+            executor.submit(copy_context().run, _fetch_one_model, model): model
+            for model in _MODELS
+        }
+        for future in as_completed(futures):
+            model = futures[future]
+            try:
+                model_snaps = future.result()
+            except Exception:
+                # A single model's failure stays non-fatal (matches the prior
+                # per-model behaviour) — consensus still works on the rest.
+                logger.warning("Alternates: %s fetch failed", model, exc_info=True)
+                continue
+            for icao, snap in model_snaps.items():
+                by_icao.setdefault(icao, {})[model] = snap
 
     return by_icao
 
