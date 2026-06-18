@@ -240,11 +240,18 @@ def route_covers_prefixes(route, prefixes: list[str]) -> bool:
 def detect_model_region(route) -> ModelRegion:
     """Classify a route's region for model coverage filtering.
 
-    Checks ALL waypoint ICAO prefixes:
+    Only the origin and destination airports are considered — checking the
+    first letter of their ICAO codes:
     - K, C, P prefixes → NORTH_AMERICA
     - Everything else → EUROPE
 
-    If mixed, defaults to GLOBAL (no filtering — safe fallback).
+    Intermediate waypoints are deliberately ignored: they are often named
+    navigation fixes (e.g. KONAN, CINDY) whose names start with a
+    North-American ICAO prefix and would otherwise misclassify a European
+    route as NORTH_AMERICA.
+
+    If origin and destination disagree, defaults to GLOBAL (no filtering —
+    safe fallback).
 
     Takes a RouteConfig but declared untyped to avoid circular imports.
     """
@@ -252,7 +259,7 @@ def detect_model_region(route) -> ModelRegion:
         return ModelRegion.GLOBAL
 
     regions: set[ModelRegion] = set()
-    for wp in route.waypoints:
+    for wp in (route.waypoints[0], route.waypoints[-1]):
         icao = wp.icao.upper()
         if any(icao.startswith(p) for p in _NORTH_AMERICA_PREFIXES):
             regions.add(ModelRegion.NORTH_AMERICA)
