@@ -29,6 +29,7 @@ from flyfun_common.db import (
     ensure_dev_user,
     get_engine,
     init_shared_db,
+    register_scope_paths,
 )
 from flyfun_common.db.models import UserPreferencesRow
 
@@ -524,6 +525,17 @@ def create_app() -> FastAPI:
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")
     app.include_router(donations_router, prefix="/api")
+
+    # OAuth least-privilege: a token granted only the "flights:read" scope may
+    # reach ONLY these two read endpoints; anything else is 403 insufficient_scope.
+    # Unscoped tokens (cookie/manual/legacy) and broad scopes (mcp) are unaffected.
+    register_scope_paths(
+        "flights:read",
+        [
+            ("GET", r"/api/flights"),
+            ("GET", r"/api/flights/[^/]+/export"),
+        ],
+    )
 
     hub_router = create_hub_router(
         require_admin=require_admin,
