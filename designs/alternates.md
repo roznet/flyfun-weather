@@ -104,6 +104,23 @@ point-count-insensitive, so a few dozen alternates is effectively free on decode
 the real cost is N×3 lite soundings. Runway ends are fetched per-request via
 `weatherbrief.airports.get_runway_ends` (the map caches watchlist runways only).
 
+> **Batched, early-stopping fetch (latency optimisation, #271 follow-up).**
+> Because the N×3 lite-sounding fetch is the dominant cost, `run_alternates`
+> does **not** fetch the whole `max_candidates` pool up front. It fetches in
+> **nearest-to-destination-first batches** of `ALT_BATCH_SIZE` (8) and stops as
+> soon as **one non-major candidate qualifies as a "likely" alternate under
+> BOTH FAA and EASA** (`_qualifies_both_regimes`, computed from the candidate's
+> NWP-consensus ceiling/vis + `best_approach_type` — the same inputs the
+> regulatory post-step uses when no TAF is available). Major airports may appear
+> (and are flagged `is_major`) but **never** satisfy the stop condition — the
+> pilot needs a usable non-major divert. When nothing qualifies, the loop
+> exhausts the cap and returns the full set, exactly as before. The destination
+> is bundled into the first batch's fetch (one round trip). **Trade-off:** the
+> per-axis `nearest_improving` picks are computed over the *fetched* set, so an
+> improving-on-one-axis field that lives only in a skipped far batch can be
+> missed — deliberate, since the goal is "find a usable divert cheaply", and the
+> nearest improver is almost always among the closest (already-fetched) fields.
+
 ### Entry point
 ```python
 # tasks/alternates.py
@@ -124,8 +141,10 @@ run_alternates(
 
 Candidate selection: (1) geometry union of near-route corridor ∪ dest-radius;
 (2) drop departure + destination; (3) runway suitability (hard runway, length ≥
-min); (4) cap to nearest `max_candidates` by dest distance; (5) fresh fetch +
-shared assembly at ETA; (6) **per-candidate** approach gate (below).
+min); (4) cap to nearest `max_candidates` by dest distance; (5) batched
+nearest-first fresh fetch + shared assembly at ETA, stopping early once a
+non-major candidate qualifies under FAA+EASA (see "Batched, early-stopping
+fetch"); (6) **per-candidate** approach gate (below).
 
 > **No backend preference filtering (changed).** `large_airport` and
 > `scheduled_service` are **no longer dropped** server-side — that silently
@@ -146,16 +165,18 @@ gap between them surprised a reader (e.g. *"25 candidates within 50 nm" but only
 | 1. Geometry | corridor (≤`corridor_nm`) ∪ dest-radius (≤`radius_nm`) | — |
 | 2. Drop self | remove departure + destination | — |
 | 3. Runway suitability | drop no hard runway, runway `< min_runway_ft`, missing coords (`large_airport` / scheduled service are **kept**, just flagged `is_major`) | — |
-| 4. Cap | nearest `max_candidates` (30) by dest distance | **`candidates_evaluated`** (the "N candidates" headline) |
-| 5. Weather fetch | drop any candidate with **no model snapshot** at the ETA hour (`_assess` → None) | — |
+| 4. Cap | nearest `max_candidates` (30) by dest distance — bounds the *pool* the batched fetch draws from | — |
+| 5. Batched fetch | fetch the pool in nearest-first batches of `ALT_BATCH_SIZE` (8); **stop** once a non-major candidate qualifies under FAA+EASA; drop any candidate with **no model snapshot** at the ETA hour (`_assess` → None) | **`candidates_evaluated`** (= candidates actually fetched, the "N candidates" headline) |
 | 6. Approach gate | drop a field that is **itself** MVFR/IFR/LIFR *and* has **no published IAP** (unreachable in those conditions); VFR always kept, any field with an IAP always kept | — |
 | → | survivors, ranked closest-first | **`len(alternates)`** (returned to the client) |
 | 7. View filters (client) | hide `is_major` (default on) + max-distance-from-dest (default 100 nm) | the **rows the pilot sees** |
 
-So **`candidates_evaluated` is the post-cap count (stage 4)**, *not* the number
-returned. The returned list is what survives stages 5–6; the **shown** list is
-that minus the client-side view filters (stage 7). For a typical IFR destination
-the gate (stage 6) is the dominant server-side reducer — most nearby fields are
+So **`candidates_evaluated` is the number actually fetched (stage 5)** — which,
+thanks to the early stop, is often a single batch and *not* the full post-cap
+pool — *not* the number returned. The returned list is what survives stages 5–6;
+the **shown** list is that minus the client-side view filters (stage 7). For a
+typical IFR destination the gate (stage 6) is the dominant server-side reducer —
+most nearby fields are
 sub-VFR with no published approach.
 
 **Cap × majors interaction:** because majors now reach stage 4, they compete for
