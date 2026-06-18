@@ -107,7 +107,10 @@ def _route_in_required_country(endpoint, route) -> bool:
         from weatherbrief.airports import route_countries
 
         return endpoint.required_country in route_countries(route)
-    except Exception:
+    except (ImportError, OSError, RuntimeError):
+        # Degraded environment only: timezone library missing (ImportError) or
+        # its data unavailable (OSError/RuntimeError). Any other exception is a
+        # code defect and must propagate rather than silently fall back.
         logger.warning(
             "Country detection failed for %s; falling back to ICAO prefixes",
             endpoint.name,
