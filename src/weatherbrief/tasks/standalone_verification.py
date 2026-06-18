@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from itertools import batched
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import requests
 from sqlalchemy import select, tuple_
@@ -32,6 +33,9 @@ from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
 from weatherbrief.process_rss import current_rss_mb, log_memory
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
 from weatherbrief.tasks.edr_calibration import flush_accumulator
+
+if TYPE_CHECKING:
+    from weatherbrief.fetch.grib import DecodePriority
 
 logger = logging.getLogger(__name__)
 
@@ -530,11 +534,17 @@ def _enrich_with_grib(
     init_time: datetime,
     airports: list[WatchlistAirport],
     session: requests.Session,
+    priority: "int | DecodePriority | None" = None,
 ) -> None:
     """Enrich snapshot dicts with GRIB ceiling/cloud_base data in-place.
 
     Fetches GRIB cloud diagnostics for the model's forecast hours
     and maps nwp_ceiling_ft and cloud_base_ft onto the matching snapshot dicts.
+
+    ``priority`` is forwarded to the GFS/ICON cloud-diag fetchers. ``None``
+    (default) falls through to the decode-priority ContextVar — the interactive
+    alternates path inherits INTERACTIVE; the standalone cycle passes
+    ``DecodePriority.BACKGROUND`` explicitly.
     """
     from weatherbrief.tasks.standalone_grib import (
         AirportCeilingData,
@@ -575,6 +585,7 @@ def _enrich_with_grib(
     try:
         grib_data = fetch_fn(
             init_date, init_hour, forecast_hours, lats, lons, session=session,
+            priority=priority,
         )
     except Exception:
         logger.warning("GRIB enrichment failed for %s", model, exc_info=True)
@@ -640,6 +651,7 @@ def fetch_ecmwf_grib_snapshots(
     sample_hours: list[int],
     days: int,
     edr_acc: "EdrAccumulator | None" = None,
+    priority: "int | DecodePriority | None" = None,
 ) -> list[dict]:
     """Decode an ECMWF run on disk into standalone-snapshot dicts.
 
@@ -657,6 +669,11 @@ def fetch_ecmwf_grib_snapshots(
         airports: Watchlist airports to decode for.
         sample_hours: UTC hours to sample (e.g. [6, 9, 12, 15, 18]).
         days: Forecast horizon in days from init.
+        priority: Decode priority for the dispatched a1/a2 jobs. ``None``
+            (default) falls through to the decode-priority ContextVar via
+            ``_resolve_priority`` — the interactive alternates path inherits
+            INTERACTIVE; the standalone cycle passes
+            ``DecodePriority.BACKGROUND`` explicitly.
 
     Returns:
         Snapshot dicts with the same shape as ``_fetch_forecasts_for_model``
@@ -664,7 +681,7 @@ def fetch_ecmwf_grib_snapshots(
     """
     from datetime import time as dt_time
 
-    from weatherbrief.fetch.grib import DecodePriority, _dispatch_decode
+    from weatherbrief.fetch.grib import _dispatch_decode
     from weatherbrief.fetch.grib.decode import (
         build_ecmwf_surface_snapshot,
         build_pressure_levels_from_grib,
@@ -707,7 +724,7 @@ def fetch_ecmwf_grib_snapshots(
         try:
             data, _ = _dispatch_decode(
                 "decode_ecmwf_surface", str(a1_path), lats, lons,
-                priority=DecodePriority.BACKGROUND,
+                priority=priority,
             )
         except Exception:
             logger.warning("ECMWF a1 decode failed for step %dh", step_h, exc_info=True)
@@ -739,7 +756,7 @@ def fetch_ecmwf_grib_snapshots(
                 try:
                     pl_data, _ = _dispatch_decode(
                         "decode_ecmwf_pressure", str(a2_path), lats, lons,
-                        priority=DecodePriority.BACKGROUND,
+                        priority=priority,
                     )
                 except Exception:
                     logger.warning(
@@ -1190,6 +1207,7 @@ def run_standalone_cycle(
         raise ValueError("must enable at least one of fetch_forecasts or score_observations")
 
     from flyfun_common.db import SessionLocal
+    from weatherbrief.fetch.grib import DecodePriority
     from weatherbrief.fetch.model_status import fetch_model_metadata
 
     if fetch_forecasts and score_observations:
@@ -1280,6 +1298,10 @@ def run_standalone_cycle(
                         SAMPLE_HOURS_UTC,
                         MODEL_FORECAST_DAYS.get(model, 4),
                         edr_acc=edr_acc,
+                        # Standalone cycle decode stays deprioritised behind any
+                        # interactive briefing. (The cycle ContextVar also
+                        # resolves to BACKGROUND; explicit here for clarity.)
+                        priority=DecodePriority.BACKGROUND,
                     )
                     api_calls = 0
                     logger.info(
@@ -1296,7 +1318,10 @@ def run_standalone_cycle(
                     logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
                                 model, len(snapshots), api_calls)
 
-                    _enrich_with_grib(snapshots, model, init_time, airports, session)
+                    _enrich_with_grib(
+                        snapshots, model, init_time, airports, session,
+                        priority=DecodePriority.BACKGROUND,
+                    )
 
                 stored = _store_snapshots(snapshots, db)
                 db.commit()

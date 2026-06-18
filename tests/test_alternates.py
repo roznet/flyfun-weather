@@ -376,3 +376,116 @@ def test_shared_assembly_matches_map_queries():
     # consensus: identical category + worst crosswind across models.
     per_model = {"gfs": d_shared, "icon": dict(d_shared)}
     assert ac.consensus(per_model) == mq._consensus(per_model)
+
+
+# ---------------------------------------------------------------------------
+# Stage timing optimisation (issue #271): concurrent model passes + decode
+# priority inheritance.
+# ---------------------------------------------------------------------------
+
+
+def _meta(epoch: int):
+    """Minimal ModelMetadata stub for the up-front metadata call."""
+    from weatherbrief.fetch.model_status import ModelMetadata
+
+    return ModelMetadata(
+        model="x",
+        last_init_time=epoch,
+        last_availability_time=epoch,
+        update_interval_seconds=21600,
+    )
+
+
+def test_fetch_eta_snapshots_runs_models_concurrently_and_inherits_priority():
+    """The 3 model passes overlap (Change 1) and the decode priority set on the
+    caller's ContextVar reaches each worker thread (Change 1 × Change 2).
+
+    A ``threading.Barrier(3)`` proves concurrency without timing flakiness: a
+    serial loop can never get 3 threads to the barrier at once, so it would time
+    out and the model would drop out of the result. ``_resolve_priority`` is
+    recorded inside each worker to prove ``copy_context`` propagated the
+    INTERACTIVE ContextVar across the thread boundary.
+    """
+    import threading
+    from contextvars import copy_context
+
+    from weatherbrief.fetch.grib import (
+        DecodePriority,
+        _resolve_priority,
+        set_decode_priority,
+    )
+    from weatherbrief.tasks.airport_watchlist import WatchlistAirport
+
+    eta = datetime(2026, 6, 18, 12, 0, 0, tzinfo=timezone.utc)
+    airports = [WatchlistAirport(icao="EGTE", lat=50.73, lon=-3.41)]
+    meta_map = {m: _meta(int(eta.timestamp())) for m in alt_mod._MODELS}
+
+    barrier = threading.Barrier(len(alt_mod._MODELS), timeout=5)
+    resolved: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def fake_fetch_forecasts(model, init_time, airports, session, sample_hours=None, **kw):
+        # All three model passes must be in-flight at once, or this times out.
+        barrier.wait()
+        snap = {"icao": airports[0].icao, "model": model, "forecast_hour": eta}
+        return [snap], 0
+
+    def fake_enrich(snaps, model, init_time, airports, session, priority=None):
+        with lock:
+            resolved[model] = _resolve_priority(priority)
+
+    sv = "weatherbrief.tasks.standalone_verification"
+    with patch("weatherbrief.fetch.model_status.fetch_model_metadata", return_value=meta_map), \
+         patch(f"{sv}._fetch_forecasts_for_model", fake_fetch_forecasts), \
+         patch(f"{sv}._enrich_with_grib", fake_enrich), \
+         patch(f"{sv}._select_ecmwf_grib_run", return_value=None):
+        # Run inside a copied context so set_decode_priority can't leak out.
+        ctx = copy_context()
+
+        def _run():
+            set_decode_priority(DecodePriority.INTERACTIVE)
+            return alt_mod._fetch_eta_snapshots(airports, eta)
+
+        by_icao = ctx.run(_run)
+
+    # All three models contributed (barrier did not time out → ran concurrently).
+    assert set(by_icao["EGTE"].keys()) == set(alt_mod._MODELS)
+    # The INTERACTIVE ContextVar reached every worker thread.
+    assert resolved == {m: int(DecodePriority.INTERACTIVE) for m in alt_mod._MODELS}
+
+
+def test_grib_helper_priority_resolves_contextvar_vs_explicit():
+    """``fetch_gfs_cloud_diag`` lets ``priority=None`` fall through to the
+    ContextVar (INTERACTIVE for an interactive briefing), while an explicit
+    ``BACKGROUND`` (the standalone cycle) still wins over it.
+    """
+    from contextvars import copy_context
+
+    from weatherbrief.fetch.grib import (
+        DecodePriority,
+        _resolve_priority,
+        set_decode_priority,
+    )
+    from weatherbrief.tasks.standalone_grib import fetch_gfs_cloud_diag
+
+    seen: list[int] = []
+
+    def fake_dispatch(name, path, lats, lons, priority=None):
+        seen.append(_resolve_priority(priority))
+        return []  # empty decode → helper returns {} without touching GRIB
+
+    def _run():
+        set_decode_priority(DecodePriority.INTERACTIVE)
+        with patch("weatherbrief.tasks.standalone_grib.is_cached", return_value=True), \
+             patch("weatherbrief.fetch.grib._dispatch_decode", fake_dispatch):
+            # Interactive path: no explicit priority → inherits the ContextVar.
+            fetch_gfs_cloud_diag("20260618", 0, [6], [50.0], [0.0])
+            # Standalone path: explicit BACKGROUND wins over the ContextVar.
+            fetch_gfs_cloud_diag(
+                "20260618", 0, [6], [50.0], [0.0],
+                priority=DecodePriority.BACKGROUND,
+            )
+
+    copy_context().run(_run)
+
+    assert seen == [int(DecodePriority.INTERACTIVE), int(DecodePriority.BACKGROUND)]

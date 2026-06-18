@@ -18,10 +18,14 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import requests
 
 from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, is_cached, put_cached
+
+if TYPE_CHECKING:
+    from weatherbrief.fetch.grib import DecodePriority
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +46,22 @@ def fetch_gfs_cloud_diag(
     lons: list[float],
     data_dir: Path | None = None,
     session: requests.Session | None = None,
+    priority: "int | DecodePriority | None" = None,
 ) -> dict[int, list[AirportCeilingData]]:
     """Fetch GFS cloud diagnostics for airports at specified forecast hours.
+
+    Args:
+        priority: Decode priority for the dispatched cloud-diag jobs. ``None``
+            (default) falls through to the decode-priority ContextVar via
+            ``_resolve_priority`` — so an interactive briefing's alternates
+            decode inherits INTERACTIVE. The standalone verification cycle
+            passes ``DecodePriority.BACKGROUND`` explicitly.
 
     Returns:
         Dict mapping forecast_hour → list of AirportCeilingData (same order as lats/lons).
         Missing hours are omitted from the dict.
     """
-    from weatherbrief.fetch.grib import DecodePriority, _dispatch_decode
+    from weatherbrief.fetch.grib import _dispatch_decode
     from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
     from weatherbrief.fetch.grib.gfs_idx import plan_cloud_diag_byte_ranges
     from weatherbrief.fetch.grib.grib_fetch import fetch_cloud_diag_ranges, fetch_idx
@@ -89,7 +101,7 @@ def fetch_gfs_cloud_diag(
         try:
             decoded = _dispatch_decode(
                 "decode_gfs_cloud_diag", str(run_dir / ck), lats, lons,
-                priority=DecodePriority.BACKGROUND,
+                priority=priority,
             )
         except Exception:
             logger.warning("GFS cloud diag decode failed f%03d", fhour, exc_info=True)
@@ -123,12 +135,14 @@ def fetch_icon_cloud_diag(
     lons: list[float],
     data_dir: Path | None = None,
     session: requests.Session | None = None,
+    priority: "int | DecodePriority | None" = None,
 ) -> dict[int, list[AirportCeilingData]]:
     """Fetch ICON-EU cloud diagnostics for airports at specified forecast hours.
 
-    Same interface as fetch_gfs_cloud_diag but uses DWD ICON-EU data source.
+    Same interface as fetch_gfs_cloud_diag (incl. the ``priority`` pass-through)
+    but uses DWD ICON-EU data source.
     """
-    from weatherbrief.fetch.grib import DecodePriority, _dispatch_decode
+    from weatherbrief.fetch.grib import _dispatch_decode
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
 
@@ -161,7 +175,7 @@ def fetch_icon_cloud_diag(
         try:
             decoded = _dispatch_decode(
                 "decode_icon_cloud_diag", str(run_dir / ck), lats, lons,
-                priority=DecodePriority.BACKGROUND,
+                priority=priority,
             )
         except Exception:
             logger.warning("ICON cloud diag decode failed f%03d", fhour, exc_info=True)
