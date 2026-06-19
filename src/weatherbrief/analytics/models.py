@@ -128,3 +128,33 @@ class AnalyticsBriefingFeatureDailyRow(Base):
     briefings_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     briefings_with_feature: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AnalyticsXsectionConfigDailyRow(Base):
+    """Daily per-dimension breakdown of cross-section display config.
+
+    Rolled up from ``xsection.viewed`` snapshot events. Each row is one
+    ``(day, dimension, value)`` bucket:
+
+    * scalar dimensions (``theme``, ``preset``, ``layout``, …) — ``views`` is
+      the count of cross-section views that had that value;
+    * the ``"layer"`` dimension — one row per enabled layer id, ``views`` is
+      the count of views with that layer enabled (per-layer attachment).
+
+    The denominator (total xsection views / unique viewers that day) comes
+    from ``analytics_event_daily`` for ``xsection.viewed``; the client divides
+    to get shares and attachment percentages. Kept forever, like the other
+    ``*_daily`` rollups.
+    """
+
+    __tablename__ = "analytics_xsection_config_daily"
+    __table_args__ = (
+        PrimaryKeyConstraint("day", "dimension", "value", name="pk_axcd_day_dim_val"),
+        Index("ix_axcd_day", "day"),
+    )
+
+    day: Mapped[date_t] = mapped_column(Date, nullable=False)
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False)
+    value: Mapped[str] = mapped_column(String(64), nullable=False)
+    views: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unique_anons: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -66,6 +66,19 @@ interface DigestResponse {
   text: string;
 }
 
+interface XsectionConfigBucket {
+  value: string;
+  views: number;
+  unique_anons: number;
+}
+
+interface XsectionConfigResponse {
+  window: { start: string; end: string; days: number };
+  total_views: number;
+  unique_viewers: number;
+  dimensions: Record<string, XsectionConfigBucket[]>;
+}
+
 async function loadAll(days: number): Promise<void> {
   const loading = document.getElementById('ua-loading')!;
   const page = document.getElementById('ua-content')!;
@@ -75,15 +88,17 @@ async function loadAll(days: number): Promise<void> {
   errBox.style.display = 'none';
 
   try {
-    const [summary, shape, timeseries, digest] = await Promise.all([
+    const [summary, shape, timeseries, xsection, digest] = await Promise.all([
       apiFetch<SummaryResponse>(`/admin/usage/summary?days=${days}`),
       apiFetch<ShapeResponse>(`/admin/usage/briefing-shape?days=${days}`),
       apiFetch<TimeseriesResponse>(`/admin/usage/timeseries?days=${days}`),
+      apiFetch<XsectionConfigResponse>(`/admin/usage/xsection-config?days=${days}`),
       apiFetch<DigestResponse>('/admin/usage/digest'),
     ]);
     renderSummary(summary);
     renderTimeseries(timeseries);
     renderShape(shape);
+    renderXsectionConfig(xsection);
     renderDigest(digest);
     loading.style.display = 'none';
     page.style.display = '';
@@ -284,6 +299,73 @@ function formatKey(dim: keyof ShapeResponse, key: string | null): string {
     return key === '1' || key === 'true' ? 'yes' : 'no';
   }
   return key;
+}
+
+// Display order + labels for the scalar config dimensions. The ``layer``
+// dimension is rendered separately (attachment %, not share-of-views).
+const _XSECTION_DIM_LABELS: Array<[string, string]> = [
+  ['theme', 'Theme'],
+  ['preset', 'Preset'],
+  ['layout', 'Layout'],
+  ['cloud_style', 'Cloud style'],
+  ['display_mode', 'Display mode'],
+  ['model', 'Model'],
+  ['route_graph_visible', 'Route graph shown'],
+  ['map_fronts_visible', 'Map fronts shown'],
+  ['route_graph_left_metric', 'Route graph (left)'],
+  ['route_graph_right_metric', 'Route graph (right)'],
+  ['map_color_metric', 'Map color metric'],
+  ['map_width_metric', 'Map width metric'],
+];
+
+function renderXsectionConfig(x: XsectionConfigResponse): void {
+  const totalEl = document.getElementById('xsection-total-views');
+  if (totalEl) totalEl.textContent = x.total_views.toLocaleString();
+
+  const grid = document.getElementById('xsection-config-grid');
+  if (!grid) return;
+
+  const total = x.total_views;
+  if (total === 0) {
+    grid.innerHTML =
+      '<div class="shape-card"><div class="muted" style="font-size:0.85rem;">No cross-section views in this window.</div></div>';
+    return;
+  }
+
+  // ``pct`` is share of all views — for scalar dims the buckets are mutually
+  // exclusive (one value per view); for layers it's attachment % (a view can
+  // contribute to several layers, so these don't sum to 100).
+  const card = (label: string, buckets: XsectionConfigBucket[], suffix: string): string => {
+    if (!buckets || buckets.length === 0) {
+      return `<div class="shape-card"><h4>${escapeHtml(label)}</h4><div class="muted" style="font-size:0.85rem;">no data</div></div>`;
+    }
+    const rows = buckets
+      .map((b) => {
+        const pct = (b.views * 100) / total;
+        const pctStr = Number.isInteger(pct) ? pct.toFixed(0) : pct.toFixed(1);
+        return `
+          <div class="shape-row">
+            <span class="key">${escapeHtml(b.value)}</span>
+            <span class="count">${b.views.toLocaleString()} · ${pctStr}%${suffix}</span>
+          </div>`;
+      })
+      .join('');
+    return `<div class="shape-card"><h4>${escapeHtml(label)}</h4>${rows}</div>`;
+  };
+
+  const cards: string[] = [];
+  for (const [key, label] of _XSECTION_DIM_LABELS) {
+    const buckets = x.dimensions[key];
+    if (!buckets || buckets.length === 0) continue;
+    cards.push(card(label, buckets, ''));
+  }
+  // Layers last — attachment %, already sorted desc by the server.
+  const layers = x.dimensions['layer'];
+  if (layers && layers.length > 0) {
+    cards.push(card('Layers (attachment %)', layers, ''));
+  }
+
+  grid.innerHTML = cards.join('') || '<div class="shape-card"><div class="muted" style="font-size:0.85rem;">no data</div></div>';
 }
 
 function renderDigest(d: DigestResponse): void {

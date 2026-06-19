@@ -36,6 +36,12 @@ class Event(StrEnum):
     BRIEFING_REFRESH_REQUESTED = "briefing.refresh_requested"
     BRIEFING_REFRESHED = "briefing.refreshed"
 
+    # Cross-section snapshot -------------------------------------------------
+    # One snapshot per cross-section view carrying the current display config
+    # (theme/preset/layout/layers/…). Rolled up into per-dimension
+    # distributions, not the briefing-feature attachment rollup.
+    XSECTION_VIEWED = "xsection.viewed"
+
     # Visualization features -------------------------------------------------
     FORECAST_MAP_OPENED = "forecast_map.opened"
     FORECAST_MAP_LAYER_CHANGED = "forecast_map.layer_changed"
@@ -90,3 +96,42 @@ KNOWN_FEATURES: tuple[str, ...] = (
     "manual_refresh",
     "detailed_mode",
 )
+
+
+# ---------------------------------------------------------------------------
+# Cross-section config snapshot (``xsection.viewed``)
+# ---------------------------------------------------------------------------
+#
+# The snapshot event's ``props`` are rolled up into a per-dimension breakdown
+# in ``analytics_xsection_config_daily``. Two kinds of dimension:
+#
+# * Scalar dimensions — each props key is a single low-cardinality value
+#   (enum/id/bool). One view contributes one ``(dimension, value)`` row.
+#   Booleans are normalised to ``"true"``/``"false"`` so they GROUP BY as
+#   strings.
+# * Set dimensions — the props key holds an array; each element becomes a
+#   value under a single output dimension. ``layers`` → dimension ``"layer"``,
+#   one row per *enabled layer* per view (the per-layer attachment signal).
+#
+# The rollup is generic over whatever keys are present, so adding/removing a
+# dimension here is the only change needed (plus the mirrored client props).
+XSECTION_SCALAR_DIMENSIONS: tuple[str, ...] = (
+    "theme",
+    "preset",
+    "layout",
+    "cloud_style",
+    "display_mode",
+    "model",
+    "route_graph_visible",
+    "map_fronts_visible",
+    # Optional medium-cardinality metrics (omitted by the client when N/A).
+    "route_graph_left_metric",
+    "route_graph_right_metric",
+    "map_color_metric",
+    "map_width_metric",
+)
+
+# Array-valued props key → output dimension name for each element.
+XSECTION_SET_DIMENSIONS: dict[str, str] = {
+    "layers": "layer",
+}
