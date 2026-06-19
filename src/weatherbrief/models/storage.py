@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
@@ -81,7 +81,9 @@ class Flight(BaseModel):
 class AdvisoryChip(BaseModel):
     """One named advisory concern, for the flights-list summary chips."""
 
-    status: str  # "RED" | "AMBER"
+    # Uppercase to match the TypeScript ``'RED' | 'AMBER'`` union the card
+    # renders; deliberately distinct from ``AdvisoryStatus`` (lowercase).
+    status: Literal["RED", "AMBER"]
     name: str  # catalog display name, e.g. "Convection"
 
 

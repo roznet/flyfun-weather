@@ -8,9 +8,6 @@ export interface AircraftInfo {
   nickname: string | null;
 }
 
-/** Summary of a flight's latest briefing pack, inlined in /flights responses.
- *  Carries everything the flights-list card and the debrief form need, so the
- *  page renders without per-flight /packs/latest round-trips. */
 /** One named advisory concern for the flights-list summary chips. */
 export interface AdvisoryChip {
   status: 'RED' | 'AMBER';
@@ -24,6 +21,9 @@ export interface AdvisorySummary {
   top: AdvisoryChip[];
 }
 
+/** Summary of a flight's latest briefing pack, inlined in /flights responses.
+ *  Carries everything the flights-list card and the debrief form need, so the
+ *  page renders without per-flight /packs/latest round-trips. */
 export interface BriefingStatusInfo {
   assessment: string | null;
   assessment_reason: string | null;

@@ -57,6 +57,7 @@ from weatherbrief.storage.sounding_profiles import (
 from weatherbrief.tasks.route_weather import run_realtime_refresh
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models import (
+    AdvisorySummary,
     BriefingPackMeta,
     DiagnosticPublic,
     Flight,
@@ -1318,7 +1319,7 @@ def _assessment_from_advisories(
 
 
 def _advisory_summary_from_manifest(
-    manifest: "RouteAdvisoriesManifest | None",
+    manifest: "_RouteAdvisoriesManifest | None",
     pack_path: Path,
 ) -> "AdvisorySummary | None":
     """Denormalize a compact RED/AMBER summary for the flights-list card.
