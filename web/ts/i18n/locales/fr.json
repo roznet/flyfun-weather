@@ -17,6 +17,7 @@
   "flights.advRedCount": "{count} RED",
   "flights.advAmberCount": "{count} AMBER",
   "flights.advSummaryTitle": "Points de vigilance à examiner",
+  "flights.advMore": "+{count} autres",
   "flights.pastBadge": "Passé",
   "flights.queuedBadge": "En file d'attente",
   "flights.refreshingBadge": "Actualisation",

@@ -71,9 +71,17 @@ function advisorySummaryHtml(lb: BriefingStatusInfo): string {
     return `<span class="adv-chip"><span class="badge ${cls}">${letter}</span> ${escapeHtml(chip.name)}</span>`;
   }).join('');
 
-  return `<div class="flight-advisory-summary" title="${escapeHtml(t('flights.advSummaryTitle'))}">
+  // Concerns beyond the 3 shown rows — counts already convey the totals, this
+  // just makes the overflow explicit ("+2 more"). Severity is in the counts.
+  const moreCount = summary.red + summary.amber - summary.top.length;
+  const more = moreCount > 0
+    ? `<span class="adv-more">${escapeHtml(t('flights.advMore', { count: moreCount }))}</span>`
+    : '';
+
+  const label = t('flights.advSummaryTitle');
+  return `<div class="flight-advisory-summary" title="${escapeHtml(label)}" role="group" aria-label="${escapeHtml(label)}">
     <div class="adv-counts">${counts.join(' ')}</div>
-    <div class="adv-chips">${chips}</div>
+    <div class="adv-chips">${chips}${more}</div>
   </div>`;
 }
 
@@ -164,23 +172,25 @@ function renderFlightCard(
     <div class="flight-card${selectedClass}${isShared ? ' flight-card-shared' : ''}" data-id="${escapeHtml(f.id)}">
       ${selectControl}
       <div class="flight-card-main">
-        <div class="flight-header">
-          ${sharedBadge}${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
-          <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
-          <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>${debriefPill}
+        <div class="flight-card-body">
+          <div class="flight-header">
+            ${sharedBadge}${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
+            <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
+            <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>${debriefPill}
+          </div>
+          ${ownerLine}
+          ${routeLine}
+          <div class="flight-status">
+            ${refreshBadge}${packInfo}
+          </div>
+          <div class="flight-actions">
+            <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
+            ${debriefAction}
+            ${ownerOnlyActions}
+          </div>
+          <div class="debrief-host" data-flight-id="${escapeHtml(f.id)}"></div>
         </div>
-        ${ownerLine}
-        ${routeLine}
-        <div class="flight-status">
-          ${refreshBadge}${packInfo}
-          ${lb ? advisorySummaryHtml(lb) : ''}
-        </div>
-        <div class="flight-actions">
-          <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>
-          ${debriefAction}
-          ${ownerOnlyActions}
-        </div>
-        <div class="debrief-host" data-flight-id="${escapeHtml(f.id)}"></div>
+        ${lb ? advisorySummaryHtml(lb) : ''}
       </div>
     </div>
   `;

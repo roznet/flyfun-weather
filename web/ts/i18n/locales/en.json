@@ -19,6 +19,7 @@
   "flights.advRedCount": "{count} RED",
   "flights.advAmberCount": "{count} AMBER",
   "flights.advSummaryTitle": "Advisory concerns to review",
+  "flights.advMore": "+{count} more",
   "flights.pastBadge": "Past",
   "flights.queuedBadge": "Queued",
   "flights.refreshingBadge": "Refreshing",

@@ -337,6 +337,16 @@ label {
 .flight-card-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+/* Left column: header, route, status, actions. Takes all remaining width so
+   the advisory summary hugs the right edge. */
+.flight-card-body {
+  flex: 1;
+  min-width: 0;
 }
 
 .selection-bar {
@@ -476,36 +486,49 @@ label {
 
 .pack-info { color: var(--text-muted); }
 
-/* Per-flight advisory summary chips — pushed to the right of the status row,
-   filling the previously-empty space. An attention-director, not a verdict. */
+/* Per-flight advisory summary — a top-right column filling the previously-empty
+   space: RED/AMBER counts on top, then up to 3 named concerns stacked one per
+   row. An attention-director ("what to look at"), not a verdict. */
 .flight-advisory-summary {
-  margin-left: auto;
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.35rem 0.5rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  font-size: 0.85rem;
 }
 .flight-advisory-summary .adv-counts {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.3rem;
 }
 .flight-advisory-summary .adv-chips {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
 }
+/* badges line up in a left column so R/A scan vertically as a mini-table */
 .flight-advisory-summary .adv-chip {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.3rem;
   font-size: 0.8rem;
   color: var(--text-muted);
-  white-space: nowrap;
 }
-/* On narrow cards drop the named chips, keep the counts. */
+/* Overflow hint for concerns beyond the 3 shown rows — aligned under the names,
+   not the badge column, and visually quieter than a real concern. */
+.flight-advisory-summary .adv-more {
+  margin-left: calc(1.1rem + 0.3rem);
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+/* On narrow screens the right column has nowhere to go — hide the whole summary
+   rather than squeeze it; the GREEN/AMBER/RED status badge still conveys risk. */
 @media (max-width: 560px) {
-  .flight-advisory-summary .adv-chips { display: none; }
+  .flight-advisory-summary { display: none; }
 }
 
 .flight-actions {

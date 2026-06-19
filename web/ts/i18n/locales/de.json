@@ -17,6 +17,7 @@
   "flights.advRedCount": "{count} RED",
   "flights.advAmberCount": "{count} AMBER",
   "flights.advSummaryTitle": "Zu prüfende Hinweise",
+  "flights.advMore": "+{count} weitere",
   "flights.pastBadge": "Vergangen",
   "flights.queuedBadge": "Warteschlange",
   "flights.refreshingBadge": "Wird aktualisiert",
