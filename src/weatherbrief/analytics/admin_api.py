@@ -23,6 +23,7 @@ from weatherbrief.analytics.models import (
     AnalyticsEventDailyRow,
     AnalyticsFlightDimRow,
     AnalyticsSessionRow,
+    AnalyticsXsectionConfigDailyRow,
 )
 from weatherbrief.api.admin import require_admin
 
@@ -293,6 +294,76 @@ def briefing_shape(
         "by_seq": _count_by(AnalyticsBriefingDimRow.briefing_seq),
     }
     return {dim: _sort_buckets(dim, buckets) for dim, buckets in raw.items()}
+
+
+@router.get("/xsection-config")
+def xsection_config(
+    _admin_id: Annotated[str, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+    days: int = Query(_DEFAULT_WINDOW_DAYS, ge=1, le=_MAX_WINDOW_DAYS),
+) -> dict:
+    """Per-dimension breakdown of the cross-section display config.
+
+    Sums ``analytics_xsection_config_daily`` over the window grouped by
+    ``dimension`` → sorted ``[{value, views, unique_anons}]``. ``total_views``
+    / ``unique_viewers`` (the denominator for shares and per-layer attachment)
+    come from ``analytics_event_daily`` for ``xsection.viewed``.
+    """
+    start_day, end_day, _start_dt, _end_dt = _window(days)
+
+    # Denominator: total xsection views + unique viewers in the window, from
+    # the per-event daily rollup (same source the events table uses, so the
+    # numbers reconcile). unique_viewers is summed across days → a user active
+    # on multiple days counts once per day (slight overcount — acceptable for
+    # a share denominator, matches the feature-table convention).
+    total_views = int(db.scalar(
+        select(func.coalesce(func.sum(AnalyticsEventDailyRow.total_count), 0))
+        .where(AnalyticsEventDailyRow.event == Event.XSECTION_VIEWED.value)
+        .where(AnalyticsEventDailyRow.day >= start_day)
+        .where(AnalyticsEventDailyRow.day <= end_day)
+    ) or 0)
+    unique_viewers = int(db.scalar(
+        select(func.coalesce(func.sum(AnalyticsEventDailyRow.unique_anons), 0))
+        .where(AnalyticsEventDailyRow.event == Event.XSECTION_VIEWED.value)
+        .where(AnalyticsEventDailyRow.day >= start_day)
+        .where(AnalyticsEventDailyRow.day <= end_day)
+    ) or 0)
+
+    rows = db.execute(
+        select(
+            AnalyticsXsectionConfigDailyRow.dimension,
+            AnalyticsXsectionConfigDailyRow.value,
+            func.coalesce(func.sum(AnalyticsXsectionConfigDailyRow.views), 0),
+            func.coalesce(func.sum(AnalyticsXsectionConfigDailyRow.unique_anons), 0),
+        )
+        .where(AnalyticsXsectionConfigDailyRow.day >= start_day)
+        .where(AnalyticsXsectionConfigDailyRow.day <= end_day)
+        .group_by(
+            AnalyticsXsectionConfigDailyRow.dimension,
+            AnalyticsXsectionConfigDailyRow.value,
+        )
+    ).all()
+
+    dimensions: dict[str, list[dict]] = {}
+    for dimension, value, views, uniq in rows:
+        dimensions.setdefault(dimension, []).append(
+            {"value": value, "views": int(views), "unique_anons": int(uniq)}
+        )
+    # Within each dimension, biggest bucket first (matches the "what's most
+    # used" reading); the layer dimension's attachment % then sorts desc too.
+    for buckets in dimensions.values():
+        buckets.sort(key=lambda b: b["views"], reverse=True)
+
+    return {
+        "window": {
+            "start": start_day.isoformat(),
+            "end": end_day.isoformat(),
+            "days": days,
+        },
+        "total_views": total_views,
+        "unique_viewers": unique_viewers,
+        "dimensions": dimensions,
+    }
 
 
 @router.get("/digest")

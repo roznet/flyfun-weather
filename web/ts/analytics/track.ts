@@ -29,7 +29,11 @@ const SESSION_IDLE_MS = 30 * 60 * 1000;
 const FLUSH_INTERVAL_MS = 10_000;
 const ENDPOINT = '/api/events';
 
-type Props = Record<string, string | number | boolean | null>;
+// Arrays of strings are allowed for bounded *set* dimensions (e.g. the
+// cross-section's enabled-layer ids). They serialise to a JSON array in the
+// stored props blob; the server rollup iterates them. Keep set values
+// low-cardinality bounded id lists — never free text or unbounded counts.
+type Props = Record<string, string | number | boolean | null | string[]>;
 
 interface QueuedEvent {
   event: EventName;

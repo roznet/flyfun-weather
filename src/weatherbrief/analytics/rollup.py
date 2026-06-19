@@ -25,12 +25,18 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import case, delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from weatherbrief.analytics.events import FEATURE_OF, Event
+from weatherbrief.analytics.events import (
+    FEATURE_OF,
+    XSECTION_SCALAR_DIMENSIONS,
+    XSECTION_SET_DIMENSIONS,
+    Event,
+)
 from weatherbrief.analytics.models import (
     AnalyticsBriefingFeatureDailyRow,
     AnalyticsEventDailyRow,
     AnalyticsEventRow,
     AnalyticsSessionRow,
+    AnalyticsXsectionConfigDailyRow,
 )
 
 logger = logging.getLogger(__name__)
@@ -210,7 +216,111 @@ def rollup_day(db: Session, day: date) -> dict[str, int]:
     )
     n_features += 1
 
-    return {"events": n_events, "features": n_features, "briefings": briefings_total}
+    # ---- xsection_config_daily -------------------------------------------
+    n_xsection = _rollup_xsection_config(db, day, day_start, day_end)
+
+    return {
+        "events": n_events,
+        "features": n_features,
+        "briefings": briefings_total,
+        "xsection_config": n_xsection,
+    }
+
+
+def _rollup_xsection_config(
+    db: Session,
+    day: date,
+    day_start: datetime,
+    day_end: datetime,
+) -> int:
+    """Roll up ``xsection.viewed`` snapshots into per-dimension breakdowns.
+
+    Idempotent (DELETE+INSERT on the day). Volume is one row per cross-section
+    view, so we pull ``(props, anon_id)`` and aggregate in Python — no
+    dialect-specific JSON functions, identical on SQLite/MySQL.
+
+    For each scalar dimension present in ``props`` we increment a
+    ``(dimension, value)`` bucket; for the ``layers`` array we increment a
+    ``("layer", layer_id)`` bucket per enabled layer. ``unique_anons`` per
+    bucket is the size of the distinct anon set. Malformed/empty ``props`` are
+    skipped without error.
+
+    Returns the number of breakdown rows written.
+    """
+    db.execute(
+        delete(AnalyticsXsectionConfigDailyRow).where(
+            AnalyticsXsectionConfigDailyRow.day == day,
+        )
+    )
+
+    rows = db.execute(
+        select(AnalyticsEventRow.props, AnalyticsEventRow.anon_id)
+        .where(AnalyticsEventRow.event == Event.XSECTION_VIEWED.value)
+        .where(AnalyticsEventRow.ts >= day_start)
+        .where(AnalyticsEventRow.ts < day_end)
+    ).all()
+
+    # (dimension, value) -> [views, set-of-anon-ids]
+    views: dict[tuple[str, str], int] = {}
+    anons: dict[tuple[str, str], set[str]] = {}
+
+    def _bump(dimension: str, value: str, anon_id: str | None) -> None:
+        key = (dimension, value)
+        views[key] = views.get(key, 0) + 1
+        if anon_id is not None:
+            anons.setdefault(key, set()).add(anon_id)
+
+    for props_json, anon_id in rows:
+        try:
+            props = json.loads(props_json or "{}")
+        except Exception:
+            continue
+        if not isinstance(props, dict):
+            continue
+
+        for dim in XSECTION_SCALAR_DIMENSIONS:
+            if dim not in props:
+                continue
+            raw = props[dim]
+            if raw is None:
+                continue
+            # Normalise booleans to "true"/"false" so they GROUP BY cleanly;
+            # everything else is a bounded enum/id stringified and truncated
+            # to the column width as a defensive cap.
+            if isinstance(raw, bool):
+                value = "true" if raw else "false"
+            else:
+                value = str(raw)[:64]
+            _bump(dim, value, anon_id)
+
+        for props_key, dimension in XSECTION_SET_DIMENSIONS.items():
+            arr = props.get(props_key)
+            if not isinstance(arr, list):
+                continue
+            # De-dupe within a single view so a malformed payload listing a
+            # layer twice can't double-count attachment for that view.
+            seen: set[str] = set()
+            for elem in arr:
+                if elem is None:
+                    continue
+                value = str(elem)[:64]
+                if value in seen:
+                    continue
+                seen.add(value)
+                _bump(dimension, value, anon_id)
+
+    for (dimension, value), n_views in views.items():
+        db.add(
+            AnalyticsXsectionConfigDailyRow(
+                day=day,
+                dimension=dimension,
+                value=value,
+                views=n_views,
+                unique_anons=len(anons.get((dimension, value), ())),
+            )
+        )
+
+    return len(views)
 
 
 def _extract_detailed_mode(
@@ -295,7 +405,9 @@ def run_rollup_and_retention(db: Session) -> dict:
     counts = rollup_day(db, yesterday)
     purged = purge_old_events(db)
     logger.info(
-        "analytics rollup: day=%s events=%d features=%d briefings=%d purged=%d",
-        yesterday, counts["events"], counts["features"], counts["briefings"], purged,
+        "analytics rollup: day=%s events=%d features=%d briefings=%d "
+        "xsection_config=%d purged=%d",
+        yesterday, counts["events"], counts["features"], counts["briefings"],
+        counts["xsection_config"], purged,
     )
     return {"day": yesterday.isoformat(), "purged": purged, **counts}

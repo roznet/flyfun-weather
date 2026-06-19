@@ -52,6 +52,40 @@ import { maybeOfferTour } from './tour/tour-offer';
 import { initBriefingLayout } from './managers/sidebar-layout';
 
 
+// --- Cross-section config snapshot (analytics, #232) -----------------------
+// Build the ``xsection.viewed`` snapshot props from current store state. Read
+// at the briefing.opened lifecycle point (after vizSettings hydrated from
+// localStorage + preset resolved) so it reflects what's actually on screen,
+// not defaults. All values are low-cardinality enums/ids/bools; ``layers`` is
+// the bounded set of enabled layer ids. Keep keys in sync with
+// ``XSECTION_SCALAR_DIMENSIONS`` / ``XSECTION_SET_DIMENSIONS`` in events.py.
+function buildXsectionSnapshotProps(
+  s: BriefingState,
+): Record<string, string | number | boolean | string[]> {
+  const v = s.vizSettings;
+  // A layer is enabled unless explicitly set to ``false`` (mirrors the store's
+  // own toggle semantics in toggleLayer).
+  const layers = Object.keys(v.enabledLayers).filter(
+    (id) => v.enabledLayers[id] !== false,
+  );
+  return {
+    theme: v.vizTheme ?? 'standard',
+    preset: v.activePreset ?? 'custom',
+    layout: v.layout,
+    cloud_style: v.cloudStyle ?? 'square',
+    display_mode: s.displayMode,
+    model: s.selectedModel,
+    route_graph_visible: v.routeGraphVisible,
+    map_fronts_visible: v.mapFrontsVisible ?? false,
+    route_graph_left_metric: v.routeGraphLeftMetric,
+    route_graph_right_metric: v.routeGraphRightMetric,
+    map_color_metric: v.mapColorMetric,
+    map_width_metric: v.mapWidthMetric,
+    layers,
+  };
+}
+
+
 // --- Route-map gated front lines (experimental #196) -----------------------
 // The 2-D TFP=0 front axes for the *selected* model, drawn on the route map when
 // the fronts layer is on. Reuses the same precomputed Hewson snapshot + the same
@@ -1617,6 +1651,12 @@ async function init(): Promise<void> {
     if (s.flight && s.currentPack) {
       setBriefingContext(s.flight.id, s.currentPack.fetch_timestamp);
       track(EVENTS.BRIEFING_OPENED, { days_out: s.currentPack.days_out });
+      // Snapshot the cross-section display config as it is right now — the
+      // store is hydrated from localStorage and any preset already resolved,
+      // so this captures the persisted steady state even for users who never
+      // change a setting. One event per view; navigating to another briefing
+      // is a fresh page load and re-emits.
+      track(EVENTS.XSECTION_VIEWED, buildXsectionSnapshotProps(s));
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories, s.digestPending, () => store.getState().generateDigest());
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
