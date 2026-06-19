@@ -734,6 +734,13 @@ export function reportPdfUrl(flightId: string, timestamp: string): string {
   return `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/report.pdf`;
 }
 
+/** Fetch the flight as a cross-app FlightExchange JSON payload (the format
+ *  MyGAR / Manifest6 and other flyfun apps import). Returns the raw envelope
+ *  dict so callers can serialize it to a downloadable file. */
+export async function fetchFlightExchange(flightId: string): Promise<unknown> {
+  return apiFetch<unknown>(`/flights/${encodeURIComponent(flightId)}/export`);
+}
+
 // --- Email ---
 
 export async function sendEmail(flightId: string, timestamp: string): Promise<void> {

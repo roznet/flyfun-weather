@@ -999,6 +999,46 @@ label {
   align-items: center;
   gap: 0.25rem;
 }
+
+/* Download menu: icon button that pops a small format chooser below it. */
+.download-menu {
+  position: relative;
+  display: inline-flex;
+}
+.download-menu-list {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 60;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+}
+.download-menu-list[hidden] {
+  display: none;
+}
+.download-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.download-menu-item:hover {
+  background: var(--bg);
+}
 .btn-icon {
   display: inline-flex;
   align-items: center;

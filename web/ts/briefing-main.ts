@@ -1405,10 +1405,43 @@ async function init(): Promise<void> {
     dateInput.focus();
   }
 
-  // --- Wire PDF download button ---
+  // --- Wire download menu (PDF report + FlightExchange export) ---
   const pdfBtn = document.getElementById('pdf-btn') as HTMLButtonElement;
-  if (pdfBtn) {
-    pdfBtn.addEventListener('click', () => {
+  const downloadMenu = document.getElementById('download-menu');
+  const downloadMenuList = document.getElementById('download-menu-list');
+  if (pdfBtn && downloadMenu && downloadMenuList) {
+    // Localize menu labels (HTML carries English defaults).
+    const pdfItem = document.getElementById('download-pdf-item');
+    const exchangeItem = document.getElementById('download-exchange-item');
+    if (pdfItem) pdfItem.textContent = t('download.pdf');
+    if (exchangeItem) exchangeItem.textContent = t('download.flightExchange');
+    pdfBtn.setAttribute('aria-label', t('download.menu'));
+    pdfBtn.setAttribute('title', t('download.menu'));
+
+    function closeDownloadMenu(): void {
+      downloadMenuList!.hidden = true;
+      pdfBtn!.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('click', onOutsideClick);
+    }
+    function onOutsideClick(e: MouseEvent): void {
+      if (!downloadMenu!.contains(e.target as Node)) closeDownloadMenu();
+    }
+
+    pdfBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = downloadMenuList.hidden;
+      if (open) {
+        downloadMenuList.hidden = false;
+        pdfBtn.setAttribute('aria-expanded', 'true');
+        // Defer so this same click doesn't immediately close the menu.
+        setTimeout(() => document.addEventListener('click', onOutsideClick), 0);
+      } else {
+        closeDownloadMenu();
+      }
+    });
+
+    pdfItem?.addEventListener('click', () => {
+      closeDownloadMenu();
       const { flight, currentPack } = store.getState();
       if (flight && currentPack) {
         window.open(
@@ -1417,6 +1450,42 @@ async function init(): Promise<void> {
         );
       }
     });
+
+    exchangeItem?.addEventListener('click', async () => {
+      closeDownloadMenu();
+      const { flight } = store.getState();
+      if (!flight) return;
+      try {
+        const exchange = await api.fetchFlightExchange(flight.id);
+        const slug = [flight.waypoints[0], flight.waypoints[flight.waypoints.length - 1]]
+          .filter(Boolean)
+          .join('-')
+          .toLowerCase() || 'flight';
+        downloadJsonFile(
+          exchange,
+          `flightexchange_${slug}_${flight.target_date}.json`,
+        );
+      } catch (err) {
+        ui.renderError(
+          err instanceof Error ? err.message : t('download.exchangeFailed'),
+        );
+      }
+    });
+  }
+
+  /** Trigger a client-side download of a JSON object as a file. */
+  function downloadJsonFile(data: unknown, filename: string): void {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   // --- Wire email button ---
