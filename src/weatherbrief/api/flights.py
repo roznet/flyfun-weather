@@ -20,7 +20,7 @@ from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
 from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.fetch.variables import dual_model_horizon_days
-from weatherbrief.models import Flight, FlightDebrief
+from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.storage.flights import (
@@ -31,6 +31,7 @@ from weatherbrief.storage.flights import (
     list_flights_with_role,
     load_flight,
     pack_has_advisories,
+    parse_advisory_summary,
     safe_path_component,
     save_flight,
     subscribe_flight,
@@ -124,6 +125,10 @@ class BriefingStatusInfo(BaseModel):
     days_out: int | None = None
     fetch_timestamp: str | None = None
     has_advisories: bool = False
+    # Compact RED/AMBER advisory breakdown + top named categories for the
+    # flights-list card chips. Read straight from the denormalized pack column
+    # (no per-flight route_advisories.json parse). None for old packs.
+    advisory_summary: AdvisorySummary | None = None
 
 
 class FlightResponse(BaseModel):
@@ -512,6 +517,7 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
             days_out=row.days_out,
             fetch_timestamp=row.fetch_timestamp.isoformat(),
             has_advisories=pack_has_advisories(row.artifact_path),
+            advisory_summary=parse_advisory_summary(row.advisory_summary_json),
         )
         for row in rows
     }

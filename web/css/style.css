@@ -476,6 +476,38 @@ label {
 
 .pack-info { color: var(--text-muted); }
 
+/* Per-flight advisory summary chips — pushed to the right of the status row,
+   filling the previously-empty space. An attention-director, not a verdict. */
+.flight-advisory-summary {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem 0.5rem;
+}
+.flight-advisory-summary .adv-counts {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+.flight-advisory-summary .adv-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.flight-advisory-summary .adv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* On narrow cards drop the named chips, keep the counts. */
+@media (max-width: 560px) {
+  .flight-advisory-summary .adv-chips { display: none; }
+}
+
 .flight-actions {
   display: flex;
   gap: 0.5rem;

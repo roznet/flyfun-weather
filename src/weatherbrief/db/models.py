@@ -224,6 +224,10 @@ class BriefingPackRow(Base):
     )
     assessment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     assessment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Compact RED/AMBER advisory breakdown (AdvisorySummary JSON) denormalized
+    # at briefing-build time for the flights-list card chips. NULL for packs
+    # created before issue #276 / before their next refresh.
+    advisory_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Long-range outlook (beyond the GRIB horizon), shown instead of the
     # traffic-light assessment. Mutually exclusive with ``assessment``.
     outlook: Mapped[str | None] = mapped_column(String(32), nullable=True)

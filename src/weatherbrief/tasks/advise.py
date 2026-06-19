@@ -15,7 +15,9 @@ from typing import Callable
 
 from weatherbrief.models import (
     AdvisoryAggregation,
+    AdvisoryChip,
     AdvisoryStatus,
+    AdvisorySummary,
     AirportConditions,
     AltitudeTableResult,
     ElevationProfile,
@@ -650,6 +652,47 @@ def derive_assessment_from_advisories(
             concern_parts.append(f"{adv.advisory_id}={adv.aggregate_status.upper()}")
     reason = ", ".join(concern_parts) if concern_parts else "All clear"
     return (assessment, reason)
+
+
+# Cap on the number of named category chips surfaced on the flights-list card.
+# Mirrors the briefing-page glance summary's intent: a few "what to look at"
+# cues, not an exhaustive list.
+ADVISORY_SUMMARY_TOP_CAP = 3
+
+
+def summarize_advisories(manifest: RouteAdvisoriesManifest) -> AdvisorySummary:
+    """Denormalize a manifest into a compact RED/AMBER summary for the card.
+
+    Counts RED and AMBER advisories and builds a severity-ordered list of up
+    to ``ADVISORY_SUMMARY_TOP_CAP`` named category chips (RED first, then
+    AMBER), mapping each ``advisory_id`` to its catalog display name. GREEN and
+    UNAVAILABLE advisories are excluded entirely. Keeps the server-side
+    severity rules consistent with the client glance summary
+    (``web/ts/managers/briefing-ui.ts`` ``renderAdvisoryChips``).
+    """
+    names = {entry.id: entry.name for entry in manifest.catalog}
+
+    red: list[RouteAdvisoryResult] = []
+    amber: list[RouteAdvisoryResult] = []
+    for adv in manifest.advisories:
+        if adv.aggregate_status == AdvisoryStatus.RED:
+            red.append(adv)
+        elif adv.aggregate_status == AdvisoryStatus.AMBER:
+            amber.append(adv)
+
+    top = [
+        AdvisoryChip(status="RED", name=names.get(adv.advisory_id, adv.advisory_id))
+        for adv in red
+    ] + [
+        AdvisoryChip(status="AMBER", name=names.get(adv.advisory_id, adv.advisory_id))
+        for adv in amber
+    ]
+
+    return AdvisorySummary(
+        red=len(red),
+        amber=len(amber),
+        top=top[:ADVISORY_SUMMARY_TOP_CAP],
+    )
 
 
 def run_alt_from_pack(

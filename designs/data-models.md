@@ -261,6 +261,8 @@ Persisted as a `BriefingPackRow` in the DB (`_meta_to_row`/`_apply_meta_to_row` 
 
 Other fields: `artifact_path` (pack directory), `models_skipped_region` (models out of coverage), `llm_digest_requested` (whether the AI digest was requested for this pack; defaults True so legacy packs read as "still generating" not "off"), `digest_trace_id` (LangSmith root run id of the digest LLM call, #244; used by the feedback endpoint), `alt_assessment`/`alt_assessment_reason`/`has_alt_advisories` (optional same-day alternate departure), and DWD + Met Office surface-chart references (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). `is_historical` is a `@computed_field` (true when `days_out < 0`).
 
+`advisory_summary: AdvisorySummary | None` (#276) is a compact RED/AMBER breakdown (`red`/`amber` counts + a severity-ordered `top: list[AdvisoryChip]` capped at 3, each a `status`+`name`) denormalized at briefing-build time via `tasks/advise.py:summarize_advisories` and persisted to the `advisory_summary_json` column. It lets the flights-list card render per-flight summary chips straight from the DB — never re-parsing `route_advisories.json` per flight. NULL for old packs (set on next refresh); `storage/flights.py:parse_advisory_summary` tolerates malformed/legacy values by degrading to None.
+
 `BriefingPackMeta.diagnostics: list[Diagnostic]` carries structured pipeline events from every stage (fetch, analyze, advisories, gramet, skewt, digest). See the **Diagnostic** section below.
 
 ## Diagnostic (`models/diagnostic.py`)

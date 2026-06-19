@@ -78,6 +78,26 @@ class Flight(BaseModel):
         return self.departure_time.hour
 
 
+class AdvisoryChip(BaseModel):
+    """One named advisory concern, for the flights-list summary chips."""
+
+    status: str  # "RED" | "AMBER"
+    name: str  # catalog display name, e.g. "Convection"
+
+
+class AdvisorySummary(BaseModel):
+    """Compact per-flight advisory breakdown denormalized onto the pack.
+
+    Small by design — persisted as JSON on ``BriefingPackRow`` so the
+    flights-list card can show RED/AMBER counts + top categories without
+    reading ``route_advisories.json`` per flight on every page load.
+    """
+
+    red: int = 0
+    amber: int = 0
+    top: list[AdvisoryChip] = Field(default_factory=list)  # severity-ordered, capped at 3
+
+
 class BriefingPackMeta(BaseModel):
     """Metadata for one fetch — lightweight index for history listing."""
 
@@ -96,6 +116,10 @@ class BriefingPackMeta(BaseModel):
     llm_digest_requested: bool = True
     assessment: Optional[str] = None  # GREEN/AMBER/RED from digest (short range)
     assessment_reason: Optional[str] = None
+    # Compact RED/AMBER advisory breakdown denormalized at briefing-build time
+    # so the flights-list card renders the per-flight summary chips without
+    # reading route_advisories.json. None for old packs (set on next refresh).
+    advisory_summary: Optional[AdvisorySummary] = None
     # Long-range (beyond the GRIB horizon) outlook, in place of the traffic-light
     # assessment: TRENDING_SETTLED / MIXED_SIGNALS / TRENDING_UNSETTLED. Mutually
     # exclusive with ``assessment`` — a long-range pack shows a soft outlook, not

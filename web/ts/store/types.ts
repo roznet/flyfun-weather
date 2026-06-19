@@ -11,6 +11,19 @@ export interface AircraftInfo {
 /** Summary of a flight's latest briefing pack, inlined in /flights responses.
  *  Carries everything the flights-list card and the debrief form need, so the
  *  page renders without per-flight /packs/latest round-trips. */
+/** One named advisory concern for the flights-list summary chips. */
+export interface AdvisoryChip {
+  status: 'RED' | 'AMBER';
+  name: string;
+}
+
+/** Compact per-flight advisory breakdown denormalized onto the latest pack. */
+export interface AdvisorySummary {
+  red: number;
+  amber: number;
+  top: AdvisoryChip[];
+}
+
 export interface BriefingStatusInfo {
   assessment: string | null;
   assessment_reason: string | null;
@@ -23,6 +36,9 @@ export interface BriefingStatusInfo {
   days_out: number | null;
   fetch_timestamp: string | null;
   has_advisories: boolean;
+  // Compact RED/AMBER breakdown + top named categories for the card chips.
+  // null for old packs (pre-#276 or not yet refreshed).
+  advisory_summary?: AdvisorySummary | null;
 }
 
 export interface FlightResponse {

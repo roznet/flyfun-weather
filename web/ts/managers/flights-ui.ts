@@ -41,6 +41,42 @@ function statusBadge(lb: BriefingStatusInfo): string {
   return `<span class="badge ${assessmentClass(lb.assessment)}">${escapeHtml(lb.assessment || '—')}</span>`;
 }
 
+// Severity → badge color class + single-letter badge, matching the briefing
+// page's advisory chips (briefing-ui.ts renderAdvisoryChips) for consistency.
+const ADV_CHIP_CLASS: Record<string, string> = { RED: 'badge-red', AMBER: 'badge-amber' };
+const ADV_CHIP_LETTER: Record<string, string> = { RED: 'R', AMBER: 'A' };
+
+/** Per-flight advisory summary chips for the card's right side.
+ *
+ * An attention-director ("what to look at"), not a verdict — it complements
+ * the GREEN/AMBER/RED status badge. Renders nothing when the flight has no
+ * advisories or the summary is empty (all-green / old packs without the
+ * denormalized column). */
+function advisorySummaryHtml(lb: BriefingStatusInfo): string {
+  if (!lb.has_advisories) return '';
+  const summary = lb.advisory_summary;
+  if (!summary || (summary.red === 0 && summary.amber === 0)) return '';
+
+  const counts: string[] = [];
+  if (summary.red > 0) {
+    counts.push(`<span class="badge badge-red">${t('flights.advRedCount', { count: summary.red })}</span>`);
+  }
+  if (summary.amber > 0) {
+    counts.push(`<span class="badge badge-amber">${t('flights.advAmberCount', { count: summary.amber })}</span>`);
+  }
+
+  const chips = summary.top.map(chip => {
+    const cls = ADV_CHIP_CLASS[chip.status] ?? 'badge-none';
+    const letter = ADV_CHIP_LETTER[chip.status] ?? '';
+    return `<span class="adv-chip"><span class="badge ${cls}">${letter}</span> ${escapeHtml(chip.name)}</span>`;
+  }).join('');
+
+  return `<div class="flight-advisory-summary" title="${escapeHtml(t('flights.advSummaryTitle'))}">
+    <div class="adv-counts">${counts.join(' ')}</div>
+    <div class="adv-chips">${chips}</div>
+  </div>`;
+}
+
 /** Track whether the past-flights section is expanded. */
 let pastExpanded = false;
 
@@ -137,6 +173,7 @@ function renderFlightCard(
         ${routeLine}
         <div class="flight-status">
           ${refreshBadge}${packInfo}
+          ${lb ? advisorySummaryHtml(lb) : ''}
         </div>
         <div class="flight-actions">
           <button class="btn btn-primary btn-briefing" data-id="${escapeHtml(f.id)}">${t('flights.btnBriefing')}</button>

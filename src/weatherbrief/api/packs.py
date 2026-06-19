@@ -1222,6 +1222,13 @@ def _build_pack_meta(
             result.route_advisories_manifest, pack_path,
         )
 
+    # Compact RED/AMBER breakdown for the flights-list card chips. Denormalized
+    # from the same in-memory manifest used for the assessment above — the list
+    # path reads it straight from the DB column, never re-parsing the JSON.
+    advisory_summary = _advisory_summary_from_manifest(
+        result.route_advisories_manifest, pack_path,
+    )
+
     has_digest = False if provisional else (result.digest_path is not None)
 
     return BriefingPackMeta(
@@ -1234,6 +1241,7 @@ def _build_pack_meta(
         llm_digest_requested=result.llm_digest_requested,
         assessment=assessment,
         assessment_reason=assessment_reason,
+        advisory_summary=advisory_summary,
         outlook=outlook,
         outlook_reason=outlook_reason,
         # NULL on the provisional pass (digest hasn't run); set on finalize from
@@ -1307,6 +1315,46 @@ def _assessment_from_advisories(
             adv_path, exc_info=True,
         )
         return (None, None)
+
+
+def _advisory_summary_from_manifest(
+    manifest: "RouteAdvisoriesManifest | None",
+    pack_path: Path,
+) -> "AdvisorySummary | None":
+    """Denormalize a compact RED/AMBER summary for the flights-list card.
+
+    Prefers the in-memory manifest; falls back to reading
+    ``route_advisories.json`` from disk only when the caller didn't supply
+    one (legacy callers / tests that hand-build a partial BriefingResult).
+    Returns ``None`` when no manifest is available — the card renders nothing
+    in that case, same as for old packs without the column. Broad ``except``
+    mirrors ``_assessment_from_advisories``: persisting the pack must never
+    abort because of a summary-derivation hiccup.
+    """
+    from weatherbrief.tasks.advise import summarize_advisories
+
+    if manifest is not None:
+        try:
+            return summarize_advisories(manifest)
+        except Exception:
+            logger.warning(
+                "Could not summarize advisories from in-memory manifest — leaving NULL",
+                exc_info=True,
+            )
+            return None
+
+    adv_path = Path(pack_path) / "route_advisories.json"
+    if not adv_path.exists():
+        return None
+    try:
+        loaded = _RouteAdvisoriesManifest.model_validate_json(adv_path.read_text())
+        return summarize_advisories(loaded)
+    except Exception:
+        logger.warning(
+            "Could not summarize advisories from %s — leaving NULL",
+            adv_path, exc_info=True,
+        )
+        return None
 
 
 def _persist_pack_provisional(

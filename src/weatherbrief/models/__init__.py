@@ -130,6 +130,8 @@ from weatherbrief.models.observations import (  # noqa: F401
     SigmetAlongRoute,
 )
 from weatherbrief.models.storage import (  # noqa: F401
+    AdvisoryChip,
+    AdvisorySummary,
     BriefingPackMeta,
     Flight,
     FlightDebrief,
