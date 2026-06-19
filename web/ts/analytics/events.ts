@@ -16,6 +16,9 @@ export const EVENTS = {
   BRIEFING_REFRESH_REQUESTED: 'briefing.refresh_requested',
   BRIEFING_REFRESHED: 'briefing.refreshed',
 
+  // Cross-section snapshot (one per view, carries current display config)
+  XSECTION_VIEWED: 'xsection.viewed',
+
   // Visualization features
   FORECAST_MAP_OPENED: 'forecast_map.opened',
   FORECAST_MAP_LAYER_CHANGED: 'forecast_map.layer_changed',
