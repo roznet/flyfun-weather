@@ -24,7 +24,13 @@ from weatherbrief.db.models import (
     FlightRow,
     FlightSubscriptionRow,
 )
-from weatherbrief.models import BriefingPackMeta, Diagnostic, Flight, FlightProfile
+from weatherbrief.models import (
+    AdvisorySummary,
+    BriefingPackMeta,
+    Diagnostic,
+    Flight,
+    FlightProfile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +219,9 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.llm_digest_requested = meta.llm_digest_requested
     row.assessment = meta.assessment
     row.assessment_reason = meta.assessment_reason
+    row.advisory_summary_json = (
+        meta.advisory_summary.model_dump_json() if meta.advisory_summary else None
+    )
     row.outlook = meta.outlook
     row.outlook_reason = meta.outlook_reason
     row.digest_trace_id = meta.digest_trace_id
@@ -323,6 +332,23 @@ def _parse_diagnostics(raw: str | None) -> list[Diagnostic]:
     return out
 
 
+def parse_advisory_summary(raw: str | None) -> AdvisorySummary | None:
+    """Parse advisory_summary_json into a typed AdvisorySummary, tolerantly.
+
+    Returns ``None`` for NULL/empty (old packs) and for any malformed or
+    legacy shape — one corrupt row must never take down the flight-list
+    endpoint, so validation failures degrade to "no summary" rather than
+    raising. Shared by the meta round-trip and the flights-list builder.
+    """
+    if not raw:
+        return None
+    try:
+        return AdvisorySummary.model_validate_json(raw)
+    except (PydanticValidationError, ValueError):
+        logger.debug("Skipping unparseable advisory_summary_json: %r", raw[:200])
+        return None
+
+
 def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
     return BriefingPackMeta(
         id=row.id,
@@ -335,6 +361,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         llm_digest_requested=row.llm_digest_requested,
         assessment=row.assessment,
         assessment_reason=row.assessment_reason,
+        advisory_summary=parse_advisory_summary(row.advisory_summary_json),
         outlook=row.outlook,
         outlook_reason=row.outlook_reason,
         digest_trace_id=row.digest_trace_id,
