@@ -16,7 +16,7 @@ When you sign in with Google, the server receives your **email address** and **d
 
 ### Apple Sign-In
 
-When you sign in with Apple, Apple's **Private Relay** system is used. The server receives a private relay email address — I never see your real email unless you choose to share it. Your display name may also be provided depending on your Apple ID settings.
+When you sign in with Apple, Apple's **Private Relay** system is used. The server receives a private relay email address — I never see your real email unless you choose to share it. Your display name may also be provided depending on your Apple ID settings. For the Apple part of the sign-in flow Apple acts as an independent data controller; see [Apple's Privacy Policy](https://www.apple.com/legal/privacy/) for how Apple handles that data.
 
 ---
 
