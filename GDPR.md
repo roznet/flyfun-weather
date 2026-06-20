@@ -30,15 +30,28 @@ If you spot something we've missed or got wrong, please open a
 | Lawful basis (Art. 6) | ✅ Believe fine |
 | Consent handling (Art. 7) | ✅ Implemented (contact consent) |
 | Security of processing (Art. 32) | ✅ Implemented (PII log-masking shipped) |
-| EU data residency | ✅ Implemented |
+| Data residency (UK, EU-adequate) | ✅ Implemented |
 | International transfers (Art. 44–49) | 🟡 Email covered via Resend SCCs (auto-executed); confirm other processors |
 | Processor agreements / DPAs (Art. 28) | 🟡 Resend DPA in force; confirm remaining processors |
 | Right to data portability (Art. 20) | ✅ Implemented (self-service JSON export) |
-| Breach notification process (Art. 33–34) | ❌ Outstanding (no documented process) |
+| Breach notification process (Art. 33–34) | ✅ Implemented (runbook in `SECURITY.md`) |
 | Records of processing (Art. 30) | 🟡 Likely exempt (small scale) — this doc serves as informal record |
 | DPO / EU representative | 🟡 Believe not required (small scale, no large-scale special-category processing) |
 
 ✅ implemented · 🟡 partial / needs confirmation · ❌ outstanding
+
+### Applicable law & supervisory authority
+
+The controller is established in the **United Kingdom**, so the governing regime is the
+**UK GDPR + Data Protection Act 2018** and the lead supervisory authority is the
+**Information Commissioner's Office (ICO)**. UK GDPR is the retained version of the EU
+GDPR — the article numbers and obligations referenced throughout this document are
+materially identical. Because the app also serves pilots in the EU/EEA, **EU GDPR
+applies in parallel** by territorial scope (Art. 3(2)) for those users.
+
+*International transfers note:* email delivery (Resend) transfers data to the US. As a UK
+controller these are UK→US transfers covered by the **UK International Data Transfer
+Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8.
 
 ---
 
@@ -105,19 +118,21 @@ If you spot something we've missed or got wrong, please open a
   an API key can't silently export prompt content (SECURITY_AUDIT 2026-06-L5,
   fixed 2026-06-11).
 
-### 7. EU data residency — ✅
+### 7. Data residency — ✅
 
-- The server is hosted on DigitalOcean in an **EU region**. Database, briefing files,
-  and credentials all reside there. No replication to other regions beyond what email
-  delivery requires.
+- The server is hosted on DigitalOcean in the **UK (London) region**. The UK holds an
+  EU data-protection **adequacy decision**, so data stored there is recognised as
+  adequately protected for EU/EEA users. Database, briefing files, and credentials all
+  reside there. No replication to other regions beyond what email delivery requires.
 
 ### 8. International transfers (Art. 44–49) — 🟡
 
 - **No personal data is sent to LLM providers** (OpenAI / Anthropic) — only anonymized
   weather context. This is the most sensitive outbound path and it carries no PII.
 - **Email (Resend / SMTP)** does transfer the user's email address to a US processor.
-  Resend publishes a DPA that incorporates **Standard Contractual Clauses** for EU→US
-  transfer (see https://resend.com/security/gdpr), which is a valid transfer mechanism.
+  Resend publishes a DPA that incorporates **Standard Contractual Clauses** for
+  international transfer (UK→US via the UK IDTA Addendum, EU→US via the EU SCCs; see
+  https://resend.com/security/gdpr), which is a valid transfer mechanism.
   Resend's DPA is **pre-signed by Resend and considered fully executed on account
   signup** — no separate acceptance step is required, so it is already in force for us.
   A copy of the DPA can be downloaded from the Resend dashboard for our records.
@@ -147,21 +162,31 @@ If you spot something we've missed or got wrong, please open a
 - Code: `src/weatherbrief/api/account_export.py`; tests in
   `tests/test_account_export.py`. Shipped 2026-06-20.
 
-### 11. Breach notification (Art. 33–34) — ❌ Outstanding
+### 11. Breach notification (Art. 33–34) — ✅
 
-- No documented breach-detection/notification process exists.
-- **Plan:** write a short runbook covering how a suspected breach is identified,
-  assessed, and (if required) reported within 72 hours.
+- A documented process is maintained in [`SECURITY.md`](./SECURITY.md): record →
+  contain & assess → notify the **ICO within 72 hours** of becoming aware (unless the
+  breach is unlikely to be risky) → notify affected users without undue delay if the
+  breach is **high risk**, in plain language. All breaches are documented per Art. 33(5).
+- `SECURITY.md` also provides a **private reporting channel** (GitHub's "Report a
+  vulnerability") so a suspected breach can reach the maintainer without public
+  disclosure — this shortens time-to-awareness, which is when the 72-hour clock starts.
+- If a breach affects EU/EEA users, the relevant EU authority would be notified in
+  addition to the ICO (Art. 3(2)).
 
 ### 12. Records of processing (Art. 30) — 🟡
 
 - Art. 30 has a small-organization exemption that likely applies. This document, plus
   `PRIVACY.md`, serves as an informal record of processing activities in the meantime.
 
-### 13. DPO / EU representative — 🟡
+### 13. DPO / UK & EU representative — 🟡
 
 - We believe a Data Protection Officer is **not required**: processing is small-scale
   and does not involve large-scale or systematic special-category data.
+- As a UK-established controller the **ICO** is the supervisory authority. An EU
+  representative (Art. 27) could in principle be needed for offering services to EU
+  residents, but the Art. 27 exemption for occasional, low-risk processing is likely to
+  apply at this scale.
 - **To revisit** if the user base or data scope grows materially.
 
 ---
@@ -177,14 +202,15 @@ If you spot something we've missed or got wrong, please open a
    sites (`SECURITY_AUDIT.md` L-new-8), shipped 2026-06-20.
 4. ✅ **LangSmith tracing default** — `LANGCHAIN_TRACING_V2` defaults to `false`
    (`SECURITY_AUDIT.md` 2026-06-L5), fixed 2026-06-11.
-5. **Breach-notification runbook** (Art. 33–34) — short documented process. *Docs, on us.*
+5. ✅ **Breach-notification runbook** (Art. 33–34) — documented in `SECURITY.md`
+   (UK GDPR / ICO, 72-hour process), shipped 2026-06-20.
 6. **Review PIREP anonymization** when that feature is built (Art. 17). *Future.*
 
 ---
 
 ## Our current public answer
 
-> FlyFun Weather is privacy-by-design: EU-hosted, data-minimizing, with a published
+> FlyFun Weather is privacy-by-design: UK-hosted (EU-adequate), data-minimizing, with a published
 > privacy policy and full self-service account deletion. No personal data is sent to
 > LLM providers — only anonymized weather context. We have not undergone a formal
 > legal review, but we have implemented everything we understand GDPR to require and

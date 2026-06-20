@@ -116,7 +116,7 @@ The app tracks the real cost of each briefing (LLM tokens, infrastructure share,
 
 ## Hosting & Data Location
 
-- The server is hosted on **DigitalOcean** in the **EU** region
+- The server is hosted on **DigitalOcean** in the **UK** (London region), which holds an EU data-protection adequacy decision
 - All data (database, briefing files, credentials) resides on that server
 - No data is replicated to other regions or services beyond what's needed for email delivery
 
