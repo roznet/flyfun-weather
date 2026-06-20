@@ -62,30 +62,45 @@ ADVISORIES = {
     ],
 }
 
+def _point(idx, dist, icao, valid, eta, gfs, ecmwf):
+    return {
+        "point_index": idx,
+        "distance_from_origin_nm": dist,
+        "waypoint_icao": icao,
+        "forecast_hour": valid,
+        "interpolated_time": eta,
+        "sounding": {"gfs": gfs, "ecmwf": ecmwf},
+    }
+
+
 ROUTE_ANALYSES = {
     "analyses": [
-        {
-            "point_index": 0,
-            "distance_from_origin_nm": 0.0,
-            "waypoint_icao": "LFMD",
-            "sounding": {
-                "gfs": {"convective": {"risk_level": "low", "cape_jkg": 800.0,
-                                       "cover_pct": 5.0, "method": "thermo"}},
-                "ecmwf": {"convective": {"risk_level": "moderate", "cape_jkg": 2600.0,
-                                         "cover_pct": 0.0, "method": "thermo"}},
+        _point(
+            0, 0.0, "LFMD", "2026-06-21T13:00:00+00:00", "2026-06-21T13:05:00+00:00",
+            gfs={
+                "convective": {"risk_level": "low", "cape_jkg": 800.0, "method": "thermo", "top_ft": 18000.0},
+                "convective_thermo": {"risk_level": "low", "cape_jkg": 800.0, "top_ft": 18000.0},
+                "convective_nwp": {"risk_level": "none", "cape_jkg": None, "cover_pct": 5.0, "top_ft": None},
             },
-        },
-        {
-            "point_index": 1,
-            "distance_from_origin_nm": 40.0,
-            "waypoint_icao": "PERUS",
-            "sounding": {
-                "gfs": {"convective": {"risk_level": "low", "cape_jkg": 950.0,
-                                       "cover_pct": 10.0, "method": "thermo"}},
-                "ecmwf": {"convective": {"risk_level": "extreme", "cape_jkg": 2970.0,
-                                         "cover_pct": 0.0, "method": "thermo"}},
+            ecmwf={
+                "convective": {"risk_level": "moderate", "cape_jkg": 2600.0, "method": "thermo", "top_ft": 25000.0},
+                "convective_thermo": {"risk_level": "moderate", "cape_jkg": 2600.0, "top_ft": 25000.0},
+                "convective_nwp": {"risk_level": "none", "cape_jkg": None, "cover_pct": 0.0, "top_ft": None},
             },
-        },
+        ),
+        _point(
+            1, 40.0, "PERUS", "2026-06-21T14:00:00+00:00", "2026-06-21T15:20:00+00:00",
+            gfs={
+                "convective": {"risk_level": "low", "cape_jkg": 950.0, "method": "thermo", "top_ft": 19000.0},
+                "convective_thermo": {"risk_level": "low", "cape_jkg": 950.0, "top_ft": 19000.0},
+                "convective_nwp": {"risk_level": "none", "cape_jkg": None, "cover_pct": 10.0, "top_ft": None},
+            },
+            ecmwf={
+                "convective": {"risk_level": "extreme", "cape_jkg": 2970.0, "method": "thermo", "top_ft": 27000.0},
+                "convective_thermo": {"risk_level": "extreme", "cape_jkg": 2970.0, "top_ft": 27000.0},
+                "convective_nwp": {"risk_level": "none", "cape_jkg": None, "cover_pct": 0.0, "top_ft": None},
+            },
+        ),
     ],
 }
 
@@ -99,6 +114,7 @@ class FakeClient:
         self._advisories = overrides.get("advisories", ADVISORIES)
         self._route_analyses = overrides.get("route_analyses", ROUTE_ANALYSES)
         self._digest_context = overrides.get("digest_context", "ADVISORIES\nconvective: red\n")
+        self._freshness = overrides.get("freshness", {"fresh": True})
 
     def __enter__(self):
         return self
@@ -111,6 +127,9 @@ class FakeClient:
 
     def get_latest_pack(self, flight_id):
         return self._pack
+
+    def get_freshness(self, flight_id):
+        return self._freshness
 
     def get_advisories(self, flight_id, timestamp):
         return self._advisories
@@ -156,15 +175,17 @@ def test_summarize_emits_discoverability_hints():
     conv = next(a for a in out if a["id"] == "convective")
     green = next(a for a in out if a["id"] == "cloud_top")
 
-    # Layer A hints on the red advisory with disagreement + cross-check
+    # Layer A hints on the red advisory with a cross-check. Flags are neutral
+    # (no "model_disagreement" that would prime a red→amber downgrade).
     assert conv["cross_check_present"] is True
-    assert conv["model_disagreement"] is True  # amber + red
+    assert conv["per_model_present"] is True
+    assert "model_disagreement" not in conv
     assert conv["detail_tool"] == "get_advisory_detail"
     assert conv["name"] == "Convective Activity"
 
-    # Quiet, all-green advisory: no drill pointer, no false signals
+    # Quiet, all-green advisory: no drill pointer, no cross-check signal
     assert green["cross_check_present"] is False
-    assert green["model_disagreement"] is False
+    assert green["per_model_present"] is True
     assert "detail_tool" not in green
 
 
@@ -176,18 +197,23 @@ def test_convective_detail_cape_peak_cover_method():
     detail = server._convective_detail(ROUTE_ANALYSES, ["gfs", "ecmwf"])
 
     ec = detail["ecmwf"]
-    assert ec["cape_range_jkg"] == [2600, 2970]
-    assert ec["peak"]["cape_jkg"] == 2970
-    assert ec["peak"]["distance_nm"] == 40.0
-    assert ec["peak"]["waypoint_icao"] == "PERUS"
-    # cover ~0 = "blue sky" signal preserved
-    assert ec["max_cover_pct"] == 0
-    assert ec["peak"]["cover_pct"] == 0
+    # thermo (parcel/CAPE) view
+    assert ec["thermo"]["cape_range_jkg"] == [2600, 2970]
+    assert ec["thermo"]["peak"]["cape_jkg"] == 2970
+    # parcel-derived "tops" the digest narrates (EL), reconciles with cover ~0
+    assert ec["thermo"]["peak"]["el_top_ft"] == 27000
+    assert ec["thermo"]["peak"]["distance_nm"] == 40.0
+    assert ec["thermo"]["peak"]["waypoint_icao"] == "PERUS"
+    # diurnal/time axis: forecast valid-time vs flight ETA at the peak
+    assert ec["thermo"]["peak"]["valid_time"] == "2026-06-21T14:00:00+00:00"
+    assert ec["thermo"]["peak"]["eta"] == "2026-06-21T15:20:00+00:00"
+    # nwp scheme: cover ~0 = "blue sky" signal preserved
+    assert ec["nwp"]["max_cover_pct"] == 0
     assert ec["assessment_method"] == "thermo"
 
     gfs = detail["gfs"]
-    assert gfs["cape_range_jkg"] == [800, 950]
-    assert gfs["max_cover_pct"] == 10
+    assert gfs["thermo"]["cape_range_jkg"] == [800, 950]
+    assert gfs["nwp"]["max_cover_pct"] == 10
 
 
 def test_convective_detail_skips_absent_model():
@@ -208,8 +234,9 @@ def test_get_advisory_detail_convective(patch_client):
     assert "cross_check" in ec
     # guardrail framing present
     assert "not a downgrade" in res["cross_check_note"]
-    # convective specialization attached
-    assert res["convective"]["ecmwf"]["peak"]["cape_jkg"] == 2970
+    # convective specialization attached, with provenance note
+    assert res["convective"]["ecmwf"]["thermo"]["peak"]["cape_jkg"] == 2970
+    assert "blue sky" in res["convective_note"]
     assert res["flight_id"] == "flight-1"
 
 
@@ -230,6 +257,18 @@ def test_get_advisory_detail_processing(patch_client):
     patch_client(refresh={"active": True})
     res = server.get_advisory_detail("flight-1", "convective")
     assert res["status"] == "processing"
+
+
+def test_get_advisory_detail_surfaces_staleness(patch_client):
+    patch_client(freshness={
+        "fresh": False,
+        "stale_models": ["ecmwf", "gfs"],
+        "model_init_times": {"ecmwf": 0, "gfs": 6},
+    })
+    res = server.get_advisory_detail("flight-1", "convective")
+    assert res["stale"] is True
+    assert "ecmwf" in res["stale_models"]
+    assert "refresh_briefing" in res["stale_note"]
 
 
 # --------------------------------------------------------------------------

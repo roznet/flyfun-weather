@@ -129,8 +129,13 @@ mcp = FastMCP(
         "(e.g. 'why is convective red when it looks like blue sky?'), call "
         "get_advisory_detail (and get_digest_context for the deepest context) "
         "before answering — never explain a red/amber from the aggregate status "
-        "alone. Treat cross-check notes as context for the discussion, not a "
-        "reason to downgrade an advisory.\n\n"
+        "alone. Treat cross-check notes and per-model splits as context for the "
+        "discussion, not a reason to downgrade an advisory.\n\n"
+        "Provenance note: the AI digest narrates 'convective tops' that are "
+        "parcel-derived (the thermodynamic equilibrium level from CAPE), NOT the "
+        "model's own convective cloud field. A convective advisory driven RED by "
+        "high CAPE while the model's convective cover is ~0 ('blue sky') is "
+        "consistent, not contradictory — explain it, don't argue it down.\n\n"
         "All tools return a web_url for the full interactive briefing with "
         "cross-sections, Skew-T diagrams, and route maps — present this link "
         "to the pilot for visual details."
@@ -440,37 +445,33 @@ def get_briefing(
     return result
 
 
-_GRADED_STATUSES = ("green", "amber", "red")
-
-
 def _summarize_advisories(advisories: dict) -> list[dict]:
     """Extract advisory information for the agent, retaining per-model detail.
 
     Unlike a flat status list, this keeps each model's status/detail and the
     ``cross_check`` note plus the ``parameters_used`` thresholds, so the agent
-    can see model disagreement and the reasoning behind a grade directly in the
-    briefing output. That visible disagreement is the primary discoverability
+    can see the per-model split and the reasoning behind a grade directly in
+    the briefing output. That visible detail is the primary discoverability
     hook (Layer A): it provokes the follow-up question and a ``detail_tool``
     pointer names the drill-down tool.
 
-    The cross-check is display-only **context for discussion**, never a
-    downgrade signal (#178) — high CAPE matters even when the deterministic
-    model scheme is quiet.
+    The hint flags are deliberately **neutral** (``cross_check_present`` /
+    ``per_model_present``, never "model_disagreement"): a valenced flag would
+    prime the exact red→amber downgrade the guardrail forbids. The cross-check
+    is display-only **context for discussion**, never a downgrade signal
+    (#178) — high CAPE matters even when the deterministic model scheme is
+    quiet.
     """
     catalog = {c.get("id"): c for c in advisories.get("catalog", [])}
     results = []
     for adv in advisories.get("advisories", []):
         adv_id = adv.get("advisory_id")
         per_model: list[dict] = []
-        graded: set[str] = set()
         cross_check_present = False
         for m in adv.get("per_model", []):
-            status = m.get("status")
-            if status in _GRADED_STATUSES:
-                graded.add(status)
             entry_m: dict[str, Any] = {
                 "model": m.get("model"),
-                "status": status,
+                "status": m.get("status"),
                 "detail": m.get("detail"),
                 "affected_pct": m.get("affected_pct"),
             }
@@ -480,7 +481,6 @@ def _summarize_advisories(advisories: dict) -> list[dict]:
                 entry_m["cross_check"] = cc
             per_model.append(entry_m)
 
-        model_disagreement = len(graded) > 1
         entry: dict[str, Any] = {
             "id": adv_id,
             "status": adv.get("aggregate_status"),
@@ -488,7 +488,7 @@ def _summarize_advisories(advisories: dict) -> list[dict]:
             "per_model": per_model,
             "parameters_used": adv.get("parameters_used", {}),
             "cross_check_present": cross_check_present,
-            "model_disagreement": model_disagreement,
+            "per_model_present": bool(per_model),
         }
         cat = catalog.get(adv_id)
         if cat:
@@ -496,10 +496,9 @@ def _summarize_advisories(advisories: dict) -> list[dict]:
             entry["category"] = cat.get("category")
 
         # Layer A: point the agent at the drill-down tool whenever there is
-        # something worth explaining (a non-green grade, model disagreement, or
-        # a cross-check note). Green-and-quiet advisories omit it to avoid
-        # nudging wasteful drills.
-        if entry["status"] in ("amber", "red") or cross_check_present or model_disagreement:
+        # something worth explaining (a non-green grade or a cross-check note).
+        # Green-and-quiet advisories omit it to avoid nudging wasteful drills.
+        if entry["status"] in ("amber", "red") or cross_check_present:
             entry["detail_tool"] = "get_advisory_detail"
 
         results.append(entry)
@@ -695,6 +694,23 @@ def get_advisory_detail(
         catalog = {c.get("id"): c for c in advisories.get("catalog", [])}
         result = _advisory_detail(adv, catalog.get(advisory_id))
 
+        # Per-briefing staleness so a forensic per-model answer carries the
+        # caveat: reasoning on stale data is confidently-wrong territory.
+        try:
+            freshness = client.get_freshness(flight_id)
+            if not freshness.get("fresh", True):
+                result["stale"] = True
+                result["stale_models"] = freshness.get("stale_models", [])
+                result["model_init_times"] = freshness.get("model_init_times", {})
+                result["stale_note"] = (
+                    "Models have updated since this briefing was generated. This "
+                    "drill-down reflects the run used at briefing time, not the "
+                    "latest — caveat any forensic reasoning and suggest "
+                    "refresh_briefing for current data."
+                )
+        except httpx.HTTPStatusError:
+            pass
+
         if advisory_id == "convective":
             try:
                 route_analyses = client.get_route_analyses(flight_id, timestamp)
@@ -703,6 +719,15 @@ def get_advisory_detail(
             if route_analyses:
                 models = [m.get("model") for m in adv.get("per_model", [])]
                 result["convective"] = _convective_detail(route_analyses, models)
+                result["convective_note"] = (
+                    "thermo.peak.el_top_ft is parcel-derived (the equilibrium "
+                    "level the digest narrates as 'convective tops'), NOT the "
+                    "model's convective cloud field. nwp.max_cover_pct ~0 means "
+                    "the model's own convective scheme is quiet ('blue sky'); "
+                    "high CAPE with cover ~0 is the expected pattern, not a "
+                    "contradiction. assessment_method is which derivation graded "
+                    "the route."
+                )
 
         result["flight_id"] = flight_id
         result["web_url"] = _flight_web_url(flight_id)
@@ -748,54 +773,83 @@ def _advisory_detail(adv: dict, catalog_entry: dict | None) -> dict[str, Any]:
 def _convective_detail(route_analyses: dict, models: list[str]) -> dict[str, Any]:
     """Per-model convective drill-down from the route analyses soundings.
 
-    For each model: CAPE range across the route, the peak point (CAPE, cover %,
-    location), the max convective cover %, and which assessment method
-    (thermo vs NWP) each point used. ``cover_pct`` near 0 is the model scheme
-    saying "blue sky" even when CAPE (thermo) is high — the apparent
-    contradiction the cross-check explains.
+    Splits the two independent derivations so a digest that narrates "tops to
+    27,000 ft" reconciles with a quiet model scheme:
+
+    - ``thermo`` — the CAPE/parcel view: CAPE range across the route and the
+      peak point (CAPE, the equilibrium-level top the digest calls "convective
+      tops", location, and the forecast valid-time vs flight ETA so the diurnal
+      timing is explicit).
+    - ``nwp`` — the model's own convective scheme: max convective cover %
+      (``~0`` is the machine-readable "blue sky" signal) and its convective top.
+    - ``assessment_method`` — which derivation actually graded the route.
+
+    cover ~0 next to high CAPE is the expected pattern, not a contradiction —
+    this surfaces the data so it can be explained, never argued down.
     """
     points = route_analyses.get("analyses", [])
     out: dict[str, Any] = {}
     for model in models:
-        capes: list[float] = []
-        peak: dict | None = None
-        max_cover: float | None = None
+        thermo_capes: list[float] = []
+        thermo_peak: dict | None = None
+        nwp_max_cover: float | None = None
+        nwp_peak_top: float | None = None
         method_counts: dict[str, int] = {}
         for p in points:
             sounding = (p.get("sounding") or {}).get(model)
             if not sounding:
                 continue
-            conv = sounding.get("convective")
-            if not conv:
-                continue
-            method = conv.get("method")
+            resolved = sounding.get("convective")
+            method = resolved.get("method") if resolved else None
             if method:
                 method_counts[method] = method_counts.get(method, 0) + 1
-            cover = conv.get("cover_pct")
-            if cover is not None:
-                max_cover = cover if max_cover is None else max(max_cover, cover)
-            cape = conv.get("cape_jkg")
-            if cape is not None:
-                capes.append(cape)
-                if peak is None or cape > peak["cape_jkg"]:
-                    peak = {
-                        "cape_jkg": round(cape),
-                        "cover_pct": round(cover) if cover is not None else None,
-                        "risk_level": conv.get("risk_level"),
-                        "method": method,
-                        "distance_nm": p.get("distance_from_origin_nm"),
-                        "waypoint_icao": p.get("waypoint_icao"),
-                    }
-        if not capes and not method_counts:
+
+            # Parcel/CAPE view — explicit thermo, falling back to the resolved
+            # assessment for old packs that never split the two.
+            thermo = sounding.get("convective_thermo") or resolved
+            if thermo:
+                cape = thermo.get("cape_jkg")
+                if cape is not None:
+                    thermo_capes.append(cape)
+                    if thermo_peak is None or cape > thermo_peak["cape_jkg"]:
+                        top = thermo.get("top_ft")
+                        thermo_peak = {
+                            "cape_jkg": round(cape),
+                            "el_top_ft": round(top) if top is not None else None,
+                            "risk_level": thermo.get("risk_level"),
+                            "distance_nm": p.get("distance_from_origin_nm"),
+                            "waypoint_icao": p.get("waypoint_icao"),
+                            "valid_time": p.get("forecast_hour"),
+                            "eta": p.get("interpolated_time"),
+                        }
+
+            # Model's own convective scheme.
+            nwp = sounding.get("convective_nwp")
+            if nwp:
+                cover = nwp.get("cover_pct")
+                if cover is not None:
+                    nwp_max_cover = cover if nwp_max_cover is None else max(nwp_max_cover, cover)
+                top = nwp.get("top_ft")
+                if top is not None:
+                    nwp_peak_top = top if nwp_peak_top is None else max(nwp_peak_top, top)
+
+        if not thermo_capes and not method_counts and nwp_max_cover is None:
             continue
         out[model] = {
-            "cape_range_jkg": [round(min(capes)), round(max(capes))] if capes else None,
-            "peak": peak,
-            "max_cover_pct": round(max_cover) if max_cover is not None else None,
             "assessment_method": (
                 max(method_counts, key=lambda k: method_counts[k]) if method_counts else None
             ),
             "method_counts": method_counts,
+            "thermo": {
+                "cape_range_jkg": (
+                    [round(min(thermo_capes)), round(max(thermo_capes))] if thermo_capes else None
+                ),
+                "peak": thermo_peak,
+            },
+            "nwp": {
+                "max_cover_pct": round(nwp_max_cover) if nwp_max_cover is not None else None,
+                "peak_top_ft": round(nwp_peak_top) if nwp_peak_top is not None else None,
+            },
         }
     return out
 
@@ -816,8 +870,13 @@ def get_digest_context(
     Use when the user wants the deepest possible context behind the briefing —
     e.g. to reconcile a red/amber advisory with the digest narrative, or to see
     every advisory, route statistic, and the raw DWD synoptic overview exactly
-    as the digest LLM received them. This is the maximum detail exposed over MCP;
-    pair it with get_advisory_detail when diagnosing a specific advisory.
+    as the digest LLM received them.
+
+    This is the maximum detail exposed over MCP and a genuine last resort: the
+    text can be large (typically a few KB up to tens of KB) and will consume a
+    meaningful slice of the context window. Do NOT fetch it reflexively —
+    prefer get_advisory_detail for a targeted, structured drill-down, and reach
+    for this only when you specifically need the byte-faithful LLM input.
 
     Returns the plain-text digest context, or status 'none' for older briefings
     that predate this artifact / had no digest generated.
