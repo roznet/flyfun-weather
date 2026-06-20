@@ -30,6 +30,29 @@ export interface FrontCrossing {
 
 export type FrontCoLocation = 'dry' | 'partly' | 'wet' | 'convective';
 
+export type FrontTilt = 'coldward' | 'upright' | 'warmward';
+
+/** One pressure level's node in a vertically-linked front chain. */
+export interface FrontChainNode {
+  level_hPa: number;        // 925 / 850 / 700
+  distance_km: number;      // along-route position of the crossing at this level
+  kind: FrontKind;
+  intensity: FrontIntensity;
+  gradient: number;
+  delta_theta_e: number;
+}
+
+/** A single front linked across pressure levels — the same air-mass boundary
+ *  seen at 925/850/700, displaced toward the cold air with height. The cross-
+ *  section connects the nodes into one slanted line. `n_levels` is the depth
+ *  (1 = shallow/single-level). */
+export interface FrontChain {
+  nodes: FrontChainNode[];  // ordered bottom→top (925→850→700)
+  kind: FrontKind;          // consensus kind
+  n_levels: number;
+  tilt: FrontTilt;
+}
+
 export interface FrontProximity {
   distance_km: number;
   lat: number;
@@ -60,6 +83,7 @@ export interface RouteFrontsManifest {
   gate_config: Record<string, unknown>;
   models: string[];
   per_model: Record<string, RouteFrontAnalysis[]>;  // match by level_hPa
+  front_chains?: Record<string, FrontChain[]>;      // model → vertically-linked chains
   models_without_snapshot: string[];
   snapshot_inits: Record<string, string>;
   notes: string[];

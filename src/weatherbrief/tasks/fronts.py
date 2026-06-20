@@ -57,6 +57,8 @@ from weatherbrief.hewson.precompute import (
     snapshot_for_window,
 )
 from weatherbrief.models import (
+    FrontChainModel,
+    FrontChainNodeModel,
     FrontCrossingModel,
     FrontDecisionModel,
     FrontProximityModel,
@@ -232,51 +234,185 @@ def _colocate(analyses, model: str, dist_km: float, level_hpa: int):
     return category, weather_top_ft
 
 
-def _stamp_vertical_coherence(
-    analyses: list[RouteFrontAnalysisModel], tolerance_km: float
-) -> None:
-    """Mutate ``analyses`` (one per level, same model) so each crossing carries
-    ``vertical_levels`` — the count of distinct levels detecting that feature.
+# Vertical-linking budget — how far apart (along-route km) two crossings on
+# adjacent levels may sit and still be the *same* sloping front. A front tilts
+# back over the cold air with height, so the upper-level crossing is displaced;
+# the budget bounds that displacement from textbook frontal slopes:
+#   925→850 (~760 m gap): cold ~1:50–1:100 → ~40–75 km; warm ~1:150 → ~110 km
+#   850→700 (~1500 m gap): cold ~75–150 km; warm ~225 km
+# These are wider than the 60 km ``merge_km`` (which collapses duplicates *at one
+# level*) — the old coherence cluster reused merge_km and so under-linked warm
+# fronts. Warm fronts get a slope multiplier (shallower slope, larger displacement).
+_LINK_BUDGET_KM: dict[tuple[int, int], float] = {
+    (925, 850): 100.0,
+    (850, 700): 170.0,
+}
+_WARM_LINK_FACTOR = 1.4   # warm fronts slope shallower → allow more displacement
+_UPRIGHT_KM = 30.0        # |head−base| below this reads as a near-vertical front
 
-    A genuine front slopes through several pressure levels, so the same crossing
-    appears at ~the same along-route distance on 850 *and* 925 (and maybe 700).
-    A shallow / artifactual boundary shows on one level only. We cluster all
-    crossings across levels by along-route distance and stamp every member with
-    how many distinct levels its cluster spans.
 
-    Clustering is **complete-linkage**: a crossing joins a cluster only if it is
-    within ``tolerance_km`` of the cluster's *first* (nearest) member, so the
-    whole cluster span stays ≤ ``tolerance_km``. Single-linkage (compare to the
-    last member) would let a shallow feature chain into a distant front through
-    intermediate crossings and inherit a multi-level count it doesn't deserve —
-    the false-positive this signal exists to suppress. ``tolerance_km`` is the
-    same "same physical front" distance as ``merge_km``.
+def _kinds_compatible(a: str, b: str) -> bool:
+    """True if two crossings could belong to one front by type.
 
-    ``vertical_levels`` counts only **successfully analyzed** levels: if a level
-    raised in ``compute_route_fronts`` (bad grid, NaN field) it isn't in
-    ``analyses``, so a genuinely multi-level front can read as single-level. The
-    effect is conservative (caps to AMBER, never inflates a RED) and the failure
-    is logged upstream.
+    cold↔cold and warm↔warm link; ``quasi-stationary`` is an advection-only label
+    (weak cross-front wind) and wildcards — it links to either. cold↔warm never
+    links: two genuinely different boundaries that happen to be vertically near.
     """
-    items: list[tuple[int, FrontCrossingModel]] = sorted(
-        ((a.level_hPa, c) for a in analyses for c in a.crossings),
-        key=lambda lc: lc[1].distance_km,
-    )
-    if not items:
-        return
-    cluster: list[tuple[int, FrontCrossingModel]] = [items[0]]
-    clusters: list[list[tuple[int, FrontCrossingModel]]] = [cluster]
-    for lvl_c in items[1:]:
-        # vs cluster[0] (the nearest member) → bounds total span ≤ tolerance_km.
-        if lvl_c[1].distance_km - cluster[0][1].distance_km <= tolerance_km:
-            cluster.append(lvl_c)
-        else:
-            cluster = [lvl_c]
-            clusters.append(cluster)
-    for cl in clusters:
-        n_levels = len({lvl for lvl, _ in cl})
-        for _, c in cl:
+    if a == b:
+        return True
+    return "quasi-stationary" in (a, b)
+
+
+def _link_budget_km(lower: int, upper: int, kind_a: str, kind_b: str) -> float:
+    """Max along-route displacement for a link between adjacent levels."""
+    base = _LINK_BUDGET_KM.get((lower, upper))
+    if base is None:
+        # Non-adjacent / unknown pair: scale the 925→850 budget by the level gap.
+        base = _LINK_BUDGET_KM[(925, 850)] * abs(lower - upper) / 75.0
+    if "warm" in (kind_a, kind_b):
+        base *= _WARM_LINK_FACTOR
+    return base
+
+
+def _consensus_kind(kinds: Sequence[str]) -> str:
+    """Front kind for a chain: majority of the decisive (non-quasi) labels, else
+    quasi-stationary. Ties fall to the first decisive label (bottom-most node)."""
+    decisive = [k for k in kinds if k != "quasi-stationary"]
+    if not decisive:
+        return "quasi-stationary"
+    return Counter(decisive).most_common(1)[0][0]
+
+
+def _chain_tilt(base_dist: float, head_dist: float, base_delta_theta_e: float) -> str:
+    """Geometry label for the rendered slant.
+
+    The cold side is where θe is lower. ``delta_theta_e`` is θe(downroute) −
+    θe(uproute), so cold air is downroute (larger distance) when it is negative.
+    A front sloping back over the cold air with height (the norm) therefore has
+    its upper/head node displaced toward the cold side. ``coldward`` = that norm,
+    ``warmward`` = the anomalous opposite, ``upright`` = near-vertical.
+    """
+    disp = head_dist - base_dist
+    if abs(disp) < _UPRIGHT_KM:
+        return "upright"
+    # Cold air is downroute (larger distance) when Δθe < 0, so the cold direction
+    # in distance is +1 then, −1 otherwise.
+    cold_dir = 1.0 if base_delta_theta_e < 0 else -1.0
+    return "coldward" if (disp * cold_dir) > 0 else "warmward"
+
+
+def _link_front_chains(
+    analyses: list[RouteFrontAnalysisModel],
+) -> list[FrontChainModel]:
+    """Link crossings across 925/850/700 into sloping front chains; also stamp
+    ``vertical_levels`` on every crossing (chain depth) for the marker/advisory.
+
+    A genuine front slopes through several pressure levels, so the same air-mass
+    boundary shows up at ~the same along-route distance on each level, displaced
+    toward the cold air with height. We grow chains bottom→top: starting from the
+    lowest level's crossings, each level up attaches to the best open chain whose
+    head is one level below it, subject to physical gates —
+
+      * **kind-compatible** (:func:`_kinds_compatible`) — cold↔cold / warm↔warm,
+        quasi wildcards; a cold front never links to a warm front nearby;
+      * **same Δθe sign** — both flying into colder air or both into warmer;
+        it is the same boundary only if the air-mass contrast points the same way;
+      * **within the slope budget** (:func:`_link_budget_km`) — bounded by
+        textbook frontal slope, wider than ``merge_km`` and wider for warm fronts.
+
+    Among candidates that pass, the one whose displacement is *coldward* (the
+    physical norm) and smallest wins — a soft directional prior, not a hard gate,
+    because the 3-level data is coarse and occlusions genuinely tilt the other way.
+
+    Crossings that attach to nothing become single-level chains (``n_levels == 1``)
+    — shallow / suspect, but kept so the count and the marker still reflect them.
+    Replaces the old distance-only coherence cluster, which ignored kind / Δθe sign
+    and reused the too-tight ``merge_km`` (under-linking warm fronts).
+    """
+    by_level: dict[int, list[FrontCrossingModel]] = {}
+    for a in analyses:
+        if a.crossings:
+            by_level[a.level_hPa] = sorted(a.crossings, key=lambda c: c.distance_km)
+    if not by_level:
+        return []
+
+    # Bottom→top: 925, 850, 700 (descending hPa = ascending altitude).
+    levels = sorted(by_level, reverse=True)
+
+    # A chain is the list of (level, crossing) nodes accumulated so far; its head
+    # is the last (highest) node. ``open_chains`` may still grow upward.
+    chains: list[list[tuple[int, FrontCrossingModel]]] = []
+    open_chains: list[list[tuple[int, FrontCrossingModel]]] = []
+
+    for li, level in enumerate(levels):
+        crossings = by_level[level]
+        if li == 0:
+            for c in crossings:
+                ch = [(level, c)]
+                chains.append(ch)
+                open_chains.append(ch)
+            continue
+
+        used_chains: set[int] = set()
+        still_open: list[list[tuple[int, FrontCrossingModel]]] = []
+        for c in crossings:
+            best_idx: int | None = None
+            best_score = float("inf")
+            for idx, ch in enumerate(open_chains):
+                if idx in used_chains:
+                    continue
+                h_level, head = ch[-1]
+                if not _kinds_compatible(head.kind, c.kind):
+                    continue
+                if np.sign(head.delta_theta_e) != np.sign(c.delta_theta_e):
+                    continue
+                disp = c.distance_km - head.distance_km
+                budget = _link_budget_km(h_level, level, head.kind, c.kind)
+                if abs(disp) > budget:
+                    continue
+                # Soft coldward prior: penalise anti-slope links, then prefer the
+                # nearest. Cold air is downroute (larger distance) when Δθe < 0, so
+                # the cold direction in distance is +1 then, −1 otherwise; a
+                # coldward link (the physical norm) has disp in that direction.
+                cold_dir = 1.0 if head.delta_theta_e < 0 else -1.0
+                anti = disp * cold_dir < 0
+                score = abs(disp) + (budget if anti else 0.0)
+                if score < best_score:
+                    best_score, best_idx = score, idx
+            if best_idx is not None:
+                open_chains[best_idx].append((level, c))
+                used_chains.add(best_idx)
+                still_open.append(open_chains[best_idx])
+            else:
+                ch = [(level, c)]
+                chains.append(ch)
+                still_open.append(ch)
+        open_chains = still_open
+
+    # Stamp vertical_levels (chain depth) back onto every crossing, then project.
+    out: list[FrontChainModel] = []
+    for ch in chains:
+        n_levels = len({lvl for lvl, _ in ch})
+        for _, c in ch:
             c.vertical_levels = n_levels
+        ordered = sorted(ch, key=lambda lc: -lc[0])  # 925→850→700 (bottom→top)
+        base_lvl, base_c = ordered[0]
+        head_lvl, head_c = ordered[-1]
+        out.append(FrontChainModel(
+            nodes=[
+                FrontChainNodeModel(
+                    level_hPa=lvl, distance_km=c.distance_km, kind=c.kind,
+                    intensity=c.intensity, gradient=c.gradient,
+                    delta_theta_e=c.delta_theta_e,
+                )
+                for lvl, c in ordered
+            ],
+            kind=_consensus_kind([c.kind for _, c in ordered]),
+            n_levels=n_levels,
+            tilt=_chain_tilt(base_c.distance_km, head_c.distance_km,
+                             base_c.delta_theta_e),
+        ))
+    return out
 
 
 def _persistence(source, model, lat, lon, level_hpa, eta_hour, gradient_min):
@@ -458,6 +594,7 @@ def compute_route_fronts(
     terrain_mask, terrain_elevation = _load_terrain_cache(output_dir)
 
     per_model: dict[str, list[RouteFrontAnalysisModel]] = {}
+    front_chains: dict[str, list[FrontChainModel]] = {}
     per_model_primary: dict[str, int] = {}
     snapshot_inits: dict[str, str] = {}
     missing: list[str] = []
@@ -550,13 +687,18 @@ def compute_route_fronts(
                 )
                 continue
             analyses.append(_to_analysis_model(result))
-        # Cross-level coherence: stamp each crossing with how many levels see it,
-        # so the advisory / cross-section can down-weight single-level (shallow)
-        # detections. Per-model — vertical slope is a within-model property.
-        _stamp_vertical_coherence(analyses, base_config.merge_km)
+        # Vertical linking: associate crossings across 925/850/700 into sloping
+        # front chains (kind / Δθe-sign / slope-budget gated) and stamp each
+        # crossing with its chain depth (vertical_levels) so the advisory /
+        # cross-section can down-weight single-level (shallow) detections. The
+        # chains drive the cross-section's slanted front lines. Per-model —
+        # vertical slope is a within-model property.
+        chains = _link_front_chains(analyses)
         if analyses:
             per_model[model] = analyses
             per_model_primary[model] = model_primary
+            if chains:
+                front_chains[model] = chains
 
     # Representative manifest-wide primary (display / back-compat): the modal
     # per-model value, falling back to the legacy default when nothing detected.
@@ -590,6 +732,7 @@ def compute_route_fronts(
         gate_config=base_config.with_overrides(level_hPa=primary_level).to_dict(),
         models=list(per_model.keys()),
         per_model=per_model,
+        front_chains=front_chains,
         models_without_snapshot=missing,
         snapshot_inits=snapshot_inits,
         notes=notes,

@@ -1,6 +1,6 @@
 /** Shared types for the cross-section and map visualizations. */
 
-import type { FrontCrossing, FrontProximity } from '../types/fronts';
+import type { FrontCrossing, FrontProximity, FrontChain } from '../types/fronts';
 
 // --- Settings ---
 
@@ -168,6 +168,10 @@ export interface VizFronts {
   nearest: FrontProximity | null;
   /** Pressure level (hPa) the crossings were detected at — for tooltip provenance. */
   primaryLevelHpa: number;
+  /** Vertically-linked front chains (the same boundary across 925/850/700) for
+   *  the rendered model — drives the slanted front lines. Empty on pre-linking
+   *  packs (the renderer falls back to vertical markers from `crossings`). */
+  chains: FrontChain[];
 }
 
 /** METAR-reporting airport projected onto the cross-section X axis. */

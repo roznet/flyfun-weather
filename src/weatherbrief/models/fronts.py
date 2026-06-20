@@ -45,6 +45,37 @@ class FrontCrossingModel(BaseModel):
     vertical_levels: int | None = None
 
 
+class FrontChainNodeModel(BaseModel):
+    """One pressure level's view of a vertically-linked front (a chain node)."""
+
+    level_hPa: int             # 925 / 850 / 700
+    distance_km: float         # along-route position of the crossing at this level
+    kind: str                  # "cold" | "warm" | "quasi-stationary"
+    intensity: str             # "significant" | "classical" | "sharp"
+    gradient: float            # |∇θe|  K/100km
+    delta_theta_e: float       # signed θe jump across the window, K
+
+
+class FrontChainModel(BaseModel):
+    """A single physical front linked across pressure levels (issue #196).
+
+    A front is a sloping 3-D surface: the same air-mass boundary shows up at
+    ~the same along-route distance on 925 / 850 / 700, displaced toward the cold
+    air with height. ``nodes`` are the per-level crossings the linker associated
+    into one feature, ordered bottom→top (925→850→700). ``n_levels`` is the depth
+    (1 = shallow / single-level / suspect; ≥2 = a front that slopes through the
+    GA flight band). ``tilt`` describes the geometry the cross-section draws:
+    ``coldward`` is the meteorological norm (sloping back over cold air),
+    ``upright`` is near-vertical, ``warmward`` is anomalous (occlusion or coarse-
+    data noise). The cross-section connects the nodes into one slanted line.
+    """
+
+    nodes: list[FrontChainNodeModel] = Field(default_factory=list)
+    kind: str                  # consensus kind across nodes
+    n_levels: int              # distinct levels in the chain (depth)
+    tilt: str = "upright"      # "coldward" | "upright" | "warmward"
+
+
 class FrontProximityModel(BaseModel):
     """Nearest gated front to the route (on- or off-track) + approach sense."""
 
@@ -121,6 +152,10 @@ class RouteFrontsManifest(BaseModel):
     models: list[str] = Field(default_factory=list)
     # model → analyses (one per level the model has; match by level_hPa).
     per_model: dict[str, list[RouteFrontAnalysisModel]] = Field(default_factory=dict)
+    # model → vertically-linked front chains (the same boundary associated across
+    # 925/850/700). Drives the cross-section's slanted front lines. Empty on
+    # pre-#196-linking packs; consumers fall back to the per-level crossings.
+    front_chains: dict[str, list[FrontChainModel]] = Field(default_factory=dict)
     # Models requested but with no precompute snapshot (degraded gracefully).
     models_without_snapshot: list[str] = Field(default_factory=list)
     # Snapshot init each model's detection read (model → ISO 8601 Z).
