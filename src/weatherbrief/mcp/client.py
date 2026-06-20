@@ -143,6 +143,8 @@ class WeatherbriefClient:
     def get_digest_context(self, flight_id: str, timestamp: str) -> str | None:
         """Get the exact plain-text context the LLM digest saw, if persisted."""
         try:
+            # text/plain response — intentionally bypasses _get(), whose .json()
+            # decode would fail on this endpoint.
             r = self._client.get(
                 f"/api/flights/{flight_id}/packs/{timestamp}/digest/context",
             )

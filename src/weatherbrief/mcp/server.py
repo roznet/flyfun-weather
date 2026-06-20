@@ -485,8 +485,6 @@ def _summarize_advisories(advisories: dict) -> list[dict]:
             "id": adv_id,
             "status": adv.get("aggregate_status"),
             "detail": adv.get("aggregate_detail"),
-            "per_model": per_model,
-            "parameters_used": adv.get("parameters_used", {}),
             "cross_check_present": cross_check_present,
             "per_model_present": bool(per_model),
         }
@@ -495,10 +493,15 @@ def _summarize_advisories(advisories: dict) -> list[dict]:
             entry["name"] = cat.get("name")
             entry["category"] = cat.get("category")
 
-        # Layer A: point the agent at the drill-down tool whenever there is
-        # something worth explaining (a non-green grade or a cross-check note).
-        # Green-and-quiet advisories omit it to avoid nudging wasteful drills.
+        # Layer A: expand the full per-model detail + thresholds, and point the
+        # agent at the drill-down tool, only when there is something worth
+        # explaining (a non-green grade or a cross-check note). Green-and-quiet
+        # advisories keep just the ``*_present`` flags so every get_briefing
+        # call stays compact — their per-model data is almost always noise, and
+        # the agent can still call get_advisory_detail explicitly if asked.
         if entry["status"] in ("amber", "red") or cross_check_present:
+            entry["per_model"] = per_model
+            entry["parameters_used"] = adv.get("parameters_used", {})
             entry["detail_tool"] = "get_advisory_detail"
 
         results.append(entry)
@@ -792,6 +795,7 @@ def _convective_detail(route_analyses: dict, models: list[str]) -> dict[str, Any
     for model in models:
         thermo_capes: list[float] = []
         thermo_peak: dict | None = None
+        thermo_peak_cape: float | None = None  # raw CAPE for comparison (output rounds)
         nwp_max_cover: float | None = None
         nwp_peak_top: float | None = None
         method_counts: dict[str, int] = {}
@@ -811,7 +815,8 @@ def _convective_detail(route_analyses: dict, models: list[str]) -> dict[str, Any
                 cape = thermo.get("cape_jkg")
                 if cape is not None:
                     thermo_capes.append(cape)
-                    if thermo_peak is None or cape > thermo_peak["cape_jkg"]:
+                    if thermo_peak is None or cape > thermo_peak_cape:
+                        thermo_peak_cape = cape
                         top = thermo.get("top_ft")
                         thermo_peak = {
                             "cape_jkg": round(cape),
@@ -846,12 +851,25 @@ def _convective_detail(route_analyses: dict, models: list[str]) -> dict[str, Any
                 ),
                 "peak": thermo_peak,
             },
-            "nwp": {
-                "max_cover_pct": round(nwp_max_cover) if nwp_max_cover is not None else None,
-                "peak_top_ft": round(nwp_peak_top) if nwp_peak_top is not None else None,
-            },
+            "nwp": _nwp_block(nwp_max_cover, nwp_peak_top),
         }
     return out
+
+
+def _nwp_block(max_cover: float | None, peak_top: float | None) -> dict[str, Any]:
+    """Model convective-scheme summary. ``max_cover_pct`` and ``peak_top_ft``
+    are maximized independently across the route, so they may come from
+    different points — the note guards against reading them as one peak."""
+    block: dict[str, Any] = {
+        "max_cover_pct": round(max_cover) if max_cover is not None else None,
+        "peak_top_ft": round(peak_top) if peak_top is not None else None,
+    }
+    if max_cover is not None or peak_top is not None:
+        block["note"] = (
+            "max_cover_pct and peak_top_ft are independent route-wide maxima "
+            "and may come from different points"
+        )
+    return block
 
 
 # ---------------------------------------------------------------------------
