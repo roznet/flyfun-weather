@@ -4,7 +4,7 @@
 
 ## Intent
 
-Radical cost transparency, not monetization. Every briefing's real cost is computed in USD and shown to users. The service is free and sponsored by the operator. If costs outgrow sponsorship, voluntary **donations** offset them (Stripe, web-only, multi-currency — see [Donations (Stripe)](#donations-stripe--planned) below); users always see actual costs, in their local currency. Donations are tracked in a dedicated `donation_ledger`, **not** `spending_limit` (which is an unrelated per-user *spend* balance).
+Radical cost transparency, not monetization. Every briefing's real cost is computed in USD and shown to users. The service is free and sponsored by the operator. If costs outgrow sponsorship, voluntary **donations** offset them (Stripe, web-only, multi-currency — **live in prod since 2026-06-19**, see [Donations (Stripe)](#donations-stripe) below); users always see actual costs, in their local currency. Donations are tracked in a dedicated `donation_ledger`. (The old per-user `spending_limit` spend balance has been fully retired — see [`spending_limit` retired](#what-spending_limit-was--now-retired).)
 
 ## Architecture
 
@@ -31,13 +31,12 @@ Briefing refresh completes
       1. Load active CostConfigRow
       2. compute_cost() → CostBreakdown (pure math)
       3. charge_briefing() → record_cost() to shared cost_ledger
-      4. Deduct from UserRow.spending_limit; auto-reload if ≤ 0
 ```
 
 Cost computation failures are caught and logged — they never block the briefing.
-
-> Step 4 is **slated for removal** — nothing reads `spending_limit` to gate anything.
-> See [Donations → Retiring `spending_limit`](#what-spending_limit-is-and-is-not).
+`charge_briefing()` only appends the cost row now — the old `spending_limit`
+decrement + `$5` auto-reload churn was removed (issue #186), so there is no
+per-user balance write and no `topup`/auto-reload noise in the ledger.
 
 ## Cost Formula
 
@@ -161,12 +160,16 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 
 ## Donations (Stripe)
 
-> **Status: built.** flyfun-common ships the shared Stripe/FX/ledger plumbing
-> (≥0.5.0); weatherbrief adds the impact math, endpoints, webhook, and web UI
-> (issue #186). The only remaining manual step is the Stripe account setup
-> (test/live keys, a recurring price, the registered webhook endpoint).
-> Voluntary, unconditional donations to offset running cost. No perks, no
-> goods/services in return — see "VAT & legal" below.
+> **Status: LIVE in prod since 2026-06-19** (issue #186). flyfun-common ships the
+> shared Stripe/FX/ledger plumbing; weatherbrief adds the impact math, endpoints,
+> webhook, and web UI. Going live was a config switch (set `STRIPE_SECRET_KEY` in
+> env + restart — no redeploy), not a code change. Voluntary, unconditional
+> donations to offset running cost. No perks, no goods/services in return — see
+> "VAT & legal" below.
+>
+> The subsections below ("Architecture (proposed)", "API endpoints (proposed)")
+> were written as a plan but are **all built and shipped** — read them as the
+> as-built description; the file/endpoint inventory is current.
 
 ### Goals
 
@@ -178,28 +181,27 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 - Show the **community total**: "donations this year cover ~5 months of running costs"
   / "~4 users for a full year".
 
-### What `spending_limit` is (and is not) — being retired
+### What `spending_limit` was — now retired
 
-`UserRow.spending_limit` is a **per-user spend balance**, not a donation store.
-`charge_briefing()` decrements it by each briefing's USD cost; when it hits 0,
-`_auto_reload()` resets it to $5 and logs a $0 `topup` entry. It never blocks anything
-(auto-reload keeps the free tier flowing) and is not shown in the UI.
+`UserRow.spending_limit` used to be a **per-user spend balance** (not a donation
+store): `charge_briefing()` decremented it per briefing and `_auto_reload()` reset
+it to $5 with a $0 `topup` entry on hitting 0. It never blocked anything and was
+never shown. It was write-only churn, and its only reader (flyfun-common's
+`check_budget()`) was itself unused.
 
-**Decision: retire it.** Nothing reads `spending_limit` to gate anything — the
-decrement/auto-reload is write-only churn, and its only reader (flyfun-common's
-`check_budget()`) is itself unused (called only by its own test; no other flyfun app
-references the column). Removed in two steps:
+**Done — both steps shipped (issue #186):**
 
-- **weatherbrief:** `charge_briefing()` drops the decrement + `_auto_reload` and just
-  records cost (also removes the `topup`/auto-reload noise from the ledger).
-- **flyfun-common:** drop the `spending_limit` column and `check_budget()` — foldable
-  into the `donation_ledger` migration, since that already touches the shared `users`
-  schema. An orphaned column is harmless in the interim (SQLAlchemy ignores it).
+- **weatherbrief:** `charge_briefing()` no longer decrements or auto-reloads; it
+  just records the cost row (no more `topup`/auto-reload noise). Verify: there is
+  no `spending_limit`/`_auto_reload`/`with_for_update` anywhere in `src/`.
+- **flyfun-common:** the `spending_limit` column is **dropped** from `UserRow`
+  (folded into the `donation_ledger` migration, which already touched the shared
+  `users` schema).
 
 Donations are a different shape entirely — *money in* with currency, a Stripe reference,
-and refund status — so they get their own ledger (`donation_ledger`) regardless.
+and refund status — so they live in their own ledger (`donation_ledger`).
 
-### Architecture (proposed)
+### Architecture (as built)
 
 Money handling is cross-app, like `cost_ledger`, so it lives in **flyfun-common**:
 
@@ -377,7 +379,7 @@ Frozen dataclasses (`ProgramEconomics`, `DonationImpact`, `YearlyImpact`,
 thin formatter (i18n-friendly). Every path returns a neutral empty state when
 there are no donations or `active_users == 0`.
 
-### API endpoints (proposed)
+### API endpoints (as built — all live under `/api/donations`)
 
 | Endpoint | Method | Auth | Purpose |
 |----------|--------|------|---------|
@@ -438,8 +440,8 @@ there are no donations or `active_users == 0`.
 - **Pure computation module** (`costs.py`): frozen dataclasses, no DB imports, fully testable. The API layer handles DB/ORM.
 - **Shared cost_ledger**: All flyfun apps write to the same table via `flyfun_common.costs.record_cost()`. Cross-app cost visibility without a separate hub service.
 - **USD everywhere**: No credits abstraction. Cost is always positive USD. Simpler, honest.
-- **No balance displayed**: The service is free — showing a spend balance is misleading. Donations are surfaced as *impact* (coverage), never a balance — see [Donations (Stripe)](#donations-stripe--planned).
-- **spending_limit is a spend balance, not donations**: `UserRow.spending_limit` decrements per briefing and auto-reloads at $5 USD; never shown, never blocks. Donations are tracked separately in `donation_ledger` — see [Donations (Stripe)](#donations-stripe--planned).
+- **No balance displayed**: The service is free — showing a spend balance is misleading. Donations are surfaced as *impact* (coverage), never a balance — see [Donations (Stripe)](#donations-stripe).
+- **spending_limit retired**: the old per-user `UserRow.spending_limit` spend balance (decrement + $5 auto-reload) is gone — column dropped in flyfun-common, churn removed from `charge_briefing()`. Donations live in `donation_ledger` — see [`spending_limit` retired](#what-spending_limit-was--now-retired).
 - **Failure-safe charging**: `_charge_briefing_cost()` catches all exceptions. Broken cost system never blocks a briefing.
 - **Versioned configs**: Admin updates create a new row. Old configs remain for auditing.
 - **Program report ≠ amortized per-briefing**: For operator-facing reporting, fixed cost is the *real* rate-card amount prorated to the window, and variable is the *actual* token+storage from the ledger — not the `est`-amortized share each briefing was charged. The two intentionally diverge at low volume.
@@ -447,7 +449,7 @@ there are no donations or `active_users == 0`.
 
 ## Gotchas
 
-- `charge_briefing()` uses `with_for_update()` on the user row to prevent concurrent balance corruption.
+- `charge_briefing()` no longer touches the user row at all (no `with_for_update`, no balance) — it only appends a ledger row. Don't reintroduce a per-user balance read here.
 - The transparency endpoint is public (no auth) — intentionally exposes the cost structure.
 - Historical `description` fields may still contain "credits" text from before the migration.
 - `detail_json` holds the full CostBreakdown; `metadata_json` is for lightweight context. Don't mix them.

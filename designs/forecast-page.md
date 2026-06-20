@@ -45,7 +45,7 @@ The page hosts four tabs (`forecast`, `synoptic`, `climatology`, `stats`). Only 
 
 ### Forecast Overview
 - ~620 airport markers (watchlist) on a Leaflet map, color-coded by selectable metric
-- **Metrics** (9): Flight Category, Wind Speed, Crosswind, Headwind, Ceiling, Visibility, CAPE, Convective Risk, Cloud Cover
+- **Metrics** (10): Flight Category, Alternate Required (FAA/EASA, #249), Wind Speed, Crosswind, Headwind, Ceiling, Visibility, CAPE, Convective Risk, Cloud Cover
 - **Controls**: Day (D-0 to D-3), hour (sample hours), model selector
 - **Model modes**: Worst consensus, Majority consensus, or individual model (GFS/ICON/ECMWF)
 - **Agreement indicator**: Border color shows model divergence (good/moderate/poor) in consensus modes
@@ -112,6 +112,7 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 | Metric | Scale |
 |--------|-------|
 | Flight Category | VFR=green, MVFR=blue, IFR=red, LIFR=purple |
+| Alternate Required | No=green, Yes=red (FAA/EASA alternate-required flag; ordinal no<yes for consensus) |
 | Wind Speed | Green (<10kt) → dark red (35+kt) |
 | Crosswind | Green (<5kt) → dark red (25+kt), best-runway selection |
 | Headwind | Green (<10kt) → dark red (30+kt), negative = tailwind, best-runway selection |
@@ -137,7 +138,7 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 - Data source pipeline: [metar-taf-accuracy.md](./metar-taf-accuracy.md)
 - Flight category logic: `src/weatherbrief/analysis/airport_conditions.py`
 - Model comparison: `src/weatherbrief/analysis/comparison.py`
-- Consensus (server): `src/weatherbrief/analysis/airport_consensus.py` (`consensus`, `_enrich_wind`)
+- Consensus (server): `src/weatherbrief/analysis/airport_consensus.py` (`consensus`, `enrich_wind`; re-exported into `map_queries.py` as `_consensus`/`_enrich_wind`)
 - Consensus (client): `web/ts/visualization/weather-map-consensus.ts` (`computeConsensus`)
 - API: `src/weatherbrief/api/maps.py`, `src/weatherbrief/api/airport_profile.py` (airport-profile SSE)
 - Queries: `src/weatherbrief/tasks/map_queries.py`

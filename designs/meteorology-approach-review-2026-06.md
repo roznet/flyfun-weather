@@ -47,8 +47,10 @@ escape-logic issues — plus a small number of genuine bugs.
 > `_descend_below_icing` rewrite resolved §2.1 (min→max), §2.2 (terrain floor),
 > and §2.3 (warm-nose / freezing-rain guard) together. §2.4 (IENG vapor
 > density), §2.5 (E-Shear units), and §2.6 (negative-Ri storage) are also fixed.
-> Still open: §2.7's `analysis.md` Ogimet-table drift (the `≤0 NONE / 0–30
-> LIGHT` line — a different doc, not this review).
+> Re-verified 2026-06-20: §2.7's `analysis.md` Ogimet-table drift is also now
+> fixed — `analysis.md` reads `< 10 NONE / 10–30 LIGHT`, matching
+> `icing.py:53-55`. All §2 findings are resolved. (Line numbers below have
+> drifted by a few lines as code moved; the resolutions still hold.)
 
 ### 2.1 `_descend_below_icing`: code contradicts its own docstring, and the wrong way
 
@@ -104,7 +106,8 @@ land short") — and see §5.1 for the missing freezing-precipitation advisory.
 > **RESOLVED (guard).** `advisories.py:566-571` now sets the per-model escape to
 > `None` when `precipitation.freezing_rain_risk` is set, and returns a "no
 > descent escape" advisory when every model is FZRA. The standalone
-> `FreezingPrecipEvaluator` proposed in §5.1 is still a separate open item.
+> `FreezingPrecipEvaluator` proposed in §5.1 has since been built
+> (`advisories/freezing_precip.py`, auto-registered) — see §5.1.
 
 ### 2.4 IENG convective term: level vapor density hard-coded to 0
 
@@ -153,8 +156,9 @@ VWS direction inverted. Fixed in code — see meteorology-decisions §8.)*
 > **RESOLVED.** `e_shear.py:35-37` now scales SI shear to the formula's
 > calibration units via `_VWS_SCALE` (m/s/m → kt/1000ft) and `_HWS_SCALE`
 > (m/s/m → kt/100nm); the old 1e3/1e5 factors are gone. (meteorology-decisions
-> §8b — note: a pinning unit test was recommended; confirm one exists before
-> relying on this staying fixed.)
+> §8b. The recommended pinning test now exists — `tests/test_e_shear.py`
+> asserts unit-calibrated outcomes, e.g. 20 kt/1000 ft VWS → MODERATE,
+> 25 → SEVERE, 10 → NONE, and HWS in kt/100 nm.)
 
 ### 2.6 Statically unstable layers are invisible to the Richardson CAT path
 
@@ -174,10 +178,11 @@ as SEVERE CAT (or at least MODERATE), not as missing data.
 
 ### 2.7 Doc drift (minor, but in safety tables)
 
-- `analysis.md` Ogimet risk table says "≤0 NONE / 0–30 LIGHT"; code
-  (`icing.py:53-55`) is `<10 NONE / 10–30 LIGHT`. `analysis-metrics.md` has the
+- ~~`analysis.md` Ogimet risk table says "≤0 NONE / 0–30 LIGHT"; code
+  (`icing.py:53-55`) is `<10 NONE / 10–30 LIGHT`.~~ RESOLVED — `analysis.md`
+  now reads `< 10 NONE / 10–30 LIGHT`. `analysis-metrics.md` already had the
   correct table.
-- `_descend_below_icing` docstring vs code (§2.1).
+- ~~`_descend_below_icing` docstring vs code (§2.1).~~ RESOLVED (see §2.1).
 
 ---
 
@@ -375,7 +380,13 @@ realized/potential gate applies to what's drawn.
 Ordered by estimated decision value per implementation effort. The first three
 fill genuine hazard gaps; the rest are refinements.
 
-### 5.1 Freezing precipitation / SLD route advisory (highest value)
+> **Implementation status (2026-06-20):** §5.1, §5.2, and §5.3 have all been
+> built since this review — `advisories/freezing_precip.py`,
+> `advisories/llws.py`, and `advisories/density_altitude.py` (all
+> auto-registered via the registry's pkgutil module-walk). §5.4–5.6 remain
+> open ideas.
+
+### 5.1 Freezing precipitation / SLD route advisory (highest value) — BUILT
 
 The deadliest GA icing scenario — FZRA/FZDZ below cloud — is currently
 **computed but never advised**: `precipitation.py` detects warm noses, ice
@@ -389,7 +400,7 @@ SLD is also the one icing hazard the "icing only inside cloud bands" invariant
 structurally cannot represent — worth a dedicated cross-section marker (e.g.
 hatched band from cloud base to the sub-zero ground).
 
-### 5.2 LLWS / approach-shear advisory
+### 5.2 LLWS / approach-shear advisory — BUILT (`advisories/llws.py`)
 
 `bulk_shear_0_1km_kt` is computed for every sounding and consumed by nothing.
 Combine: 0–1 km shear > 20 kt, gust factor, and a surface-based inversion with
@@ -398,7 +409,7 @@ levels) into a departure/arrival wind-shear advisory. All inputs exist; this is
 an evaluator-only change and addresses a top-3 GA approach hazard that nothing
 in the current 14 covers.
 
-### 5.3 Density altitude / performance advisory
+### 5.3 Density altitude / performance advisory — BUILT (`advisories/density_altitude.py`)
 
 T, dewpoint, QNH, and field elevation are all in `airport_conditions`. Compute
 DA at departure/arrival at ETD/ETA; AMBER/RED on user-tunable thresholds

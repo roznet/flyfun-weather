@@ -2,9 +2,16 @@
 
 > Per-model convective data pipeline, dual-method assessment, source inconsistencies, and recommendations.
 
-_Code references verified against the repo on 2026-06-13._
+_Code references verified against the repo on 2026-06-20._
 
 > 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [meteorology-decisions.md](./meteorology-decisions.md) §4–§5 — read before changing thresholds or the DD/NWP boundary.
+
+**Key code paths** (bare filenames below refer to these):
+- `analysis/sounding/convective.py` — `assess_convective_thermo`, `assess_convective_nwp`, `classify_regime`, `effective_cape` (alias `_effective_cape`), `convection_realized`, `convective_cross_check` / `ConvectiveCrossCheck`
+- `analysis/sounding/thermodynamics.py` — `compute_indices_core` (all three CAPE variants), `compute_derived_levels_core` (omega 700)
+- `analysis/sounding/__init__.py` — orchestrates the lite/full passes; sets `cape_raw_vs_calc_divergent`
+- `analysis/advisories/convective.py` — `ConvectiveEvaluator` (reads resolved slot + runs the cross-check)
+- `fetch/variables.py` (`NWP_CAPE_TYPE`, line 83), `fetch/grib/fill.py`, `analysis/spatial_interpolation.py`, `analysis/comparison.py`, `tasks/advise.py`
 
 ## Overview
 
@@ -189,6 +196,18 @@ Both layers share the same color palette (via exports from `thermo-convective-bg
 - HIGH/EXTREME at any point → RED
 - Below-threshold points counted; percentage determines AMBER vs GREEN
 - Parameters: `min_risk` (default 2 = LOW), `affected_pct_amber` (20%), `affected_pct_red` (50%)
+
+### Stage 8: DD-vs-Model Cross-Check
+
+`convective.py:convective_cross_check(thermo, nwp)` → `ConvectiveCrossCheck | None`. The evaluator runs this per route point using `convective_thermo` explicitly (never the resolved slot — it must stay a DD-vs-NWP comparison even if the user picked NWP). It compares the CAPE-derived thermo risk against the model's **independent** convective signal (`cover_pct`, or convective base/top geometry for ICON/ECMWF — the model's `risk_level` is deliberately NOT used as it is near-circular with thermo).
+
+Fires only on two material divergences (else `None`):
+- `dd_not_corroborated` — thermo MODERATE+ but model scheme quiet (cover ≤ 10%, no convective geom)
+- `model_active_dd_quiet` — thermo NONE/MARGINAL but model scheme active (cover ≥ 25%, or convective geom present)
+
+LOW thermo is intentionally in neither band. The result never changes the grade — it is surfaced in the advisory popup and LLM digest only (the convective DD-vs-model cross-check initiative). Cover thresholds are tunable module constants (`_XCHECK_MODEL_QUIET_COVER_PCT`, `_XCHECK_MODEL_ACTIVE_COVER_PCT`).
+
+Note: this is distinct from the unused `cape_raw_vs_calc_divergent` flag (Bugs #3/#5) — that compares raw NWP CAPE vs MetPy CAPE magnitudes; this cross-check compares the thermo *tier* against the model's *convective scheme*.
 
 ---
 

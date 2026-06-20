@@ -32,7 +32,7 @@ $EVAL_CORPUS_DIR/<corpus_id>/                    ── corpus pack (payload git
    ├─ briefing.json, forecasts.json, route_advisories.json, digest.json, …
    ├─ corpus_meta.json   (committed — anonymized descriptor)
    └─ label.json         (committed — the SME's golden label)
-   │  /eval.html  →  /flight.html?id=eval-<corpus_id>  (standard view + panel)
+   │  /eval.html  →  /briefing.html?flight=eval-<corpus_id>  (standard view + panel)
    ▼
 run_digest_eval.py --guidance <preset>           ── scores model vs golden
 ```
@@ -89,9 +89,10 @@ API: `src/weatherbrief/api/eval_workbench.py` — `GET /api/eval/packs`,
 `GET /api/eval/coverage`, `GET /api/eval/packs/{id}`,
 `POST /api/eval/packs/{id}/label`. Mounted conditionally in `api/app.py`.
 
-Frontend: `web/eval.html` + `web/ts/eval/eval-main.ts` (list + coverage grid);
+Frontend: `web/eval.html` + `web/ts/eval/eval-main.ts` (list + coverage grid,
+links each pack to `/briefing.html?flight=eval-<id>`);
 `web/ts/eval/label-panel.ts` (in-view panel, lazy-imported by
-`web/ts/flight-main.ts` when the flight id starts with `eval-`). esbuild entry
+`web/ts/briefing-main.ts` when the flight id starts with `eval-`). esbuild entry
 `build:eval`/`dev:eval` in `web/package.json`.
 
 Scripts: `scripts/export_eval_candidates.py` (select → manifest),
@@ -116,13 +117,13 @@ of truth — **not yet wired** (see next stages).
 Run in a worktree with a real `DATA_DIR` and a dev server:
 
 1. `python3 -m venv venv && source venv/bin/activate && pip install -e ".[dev]"`.
-2. `pytest tests/eval_workbench/ -q` — should pass (11 tests; pure logic).
+2. `pytest tests/eval_workbench/ -q` — should pass (13 tests; pure logic).
 3. Build a tiny corpus: `python scripts/pull_eval_corpus.py --from data/packs`
    (or via `export_eval_candidates.py` → manifest). Confirm
    `$EVAL_CORPUS_DIR/<id>/corpus_meta.json` written, payloads copied.
 4. `WEATHERBRIEF_EVAL_WORKBENCH=1` + `/devserver`; open `/eval.html` — list +
-   coverage render. Open a pack → `/flight.html?id=eval-<id>` should render the
-   **full standard briefing** (cross-section, advisories, digest, skew-T) and
+   coverage render. Open a pack → `/briefing.html?flight=eval-<id>` should render
+   the **full standard briefing** (cross-section, advisories, digest, skew-T) and
    the labelling panel should dock bottom-right, blind by default.
 5. Save a label → confirm `label.json` written; reload shows it pre-selected.
 6. `python scripts/run_digest_eval.py --guidance balanced --dry-run` picks up the

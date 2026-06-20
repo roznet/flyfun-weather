@@ -221,7 +221,7 @@ Light cycle (fetch_forecasts=False, score=True):
 
 ### Sounding Enrichment
 
-Full cycles fetch pressure-level data alongside surface fields from Open-Meteo. Each snapshot is enriched via `analyze_sounding()`:
+Full cycles fetch pressure-level data alongside surface fields from Open-Meteo. Each snapshot is enriched via `analyze_sounding_lite()` (the lite path — it does NOT compute Richardson/stability indicators, which is why the inline EDR calibration accumulator collects zero data; see [EDR calibration inert]):
 
 - `sounding_ceiling_ft` — thermodynamic ceiling from pressure levels
 - `sounding_cloud_base_ft` — lowest BKN/OVC cloud layer base
@@ -435,7 +435,8 @@ Phase E — Finalize
 **15nm** default (tighter than the 30nm briefing corridor). This balances:
 - Enough airports for meaningful coverage
 - Not so many that we store noise from distant fields
-- Configurable via env var `VERIFICATION_CORRIDOR_NM`
+
+Set by `_DEFAULT_CORRIDOR_NM = 15.0` in `tasks/verification.py`, threaded through `gather_airports`/`collect_and_store` as a `corridor_nm` parameter (NOT an env var — change the constant or pass the arg).
 
 ## Scoring Logic
 
@@ -616,23 +617,30 @@ rwy_ends = runway_data.get(obs.icao, [])
 ## CLI Interface
 
 ```bash
-# Manual collection for a specific flight
+# Manual collection (all active flights, or one via --flight-id; --corridor NM)
 python -m weatherbrief.verify collect --flight-id "LFPG-EDDF-2026-04-01-abc123"
 
-# Score observations against all packs for a flight  
-python -m weatherbrief.verify score --flight-id "LFPG-EDDF-2026-04-01-abc123"
+# Score completed flights (no flag scores all; --flight-id for one)
+python -m weatherbrief.verify score
 
-# Backfill: re-process past flights (fetch historical METARs if available)
-python -m weatherbrief.verify backfill --since 2026-01-01
+# Backfill: re-run scoring after code changes (--flight-id optional)
+python -m weatherbrief.verify backfill --flight-id "LFPG-EDDF-2026-04-01-abc123"
 
 # Export accuracy data
 python -m weatherbrief.verify export --format csv --output accuracy.csv
 python -m weatherbrief.verify export --format json --output accuracy.json
 
-# Summary statistics
-python -m weatherbrief.verify stats
-python -m weatherbrief.verify stats --model gfs --days-out 1
-python -m weatherbrief.verify stats --icao LFPG
+# Summary statistics (--source flight|standalone, --model, --icao)
+python -m weatherbrief.verify stats --source standalone
+
+# Standalone cycle (subprocess entry point): --light | --forecast-only,
+# plus --with-rollup / --background as the scheduler invokes it
+python -m weatherbrief.verify standalone --light --with-rollup --background
+
+# Discover watchlist airports; rebuild dashboard cache; monthly rollup
+python -m weatherbrief.verify discover --prefixes LF,ED,EG
+python -m weatherbrief.verify rebuild-cache
+python -m weatherbrief.verify rollup-summary
 ```
 
 ## Data Volume

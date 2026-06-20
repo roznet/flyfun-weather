@@ -93,7 +93,7 @@ Key exports: `DecodePriority`, `PriorityDecodeDispatcher`, `set_decode_priority`
 → Full doc: grib-decode-dispatcher.md
 
 ### multi-user-deployment
-Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth via flyfun-common (OAuth, JWT, cross-subdomain SSO), MySQL/SQLite DB schema, rate limiting, encrypted credentials, account deletion, admin hub, Resend email, deploy commands, env vars.
+Deployment architecture for weather.flyfun.aero: Docker on DigitalOcean, auth via flyfun-common (OAuth, JWT, cross-subdomain SSO), MySQL/SQLite DB schema, rate limiting, encrypted credentials, account deletion + GDPR data export, admin hub, Resend email, deploy commands, env vars.
 → Full doc: multi-user-deployment.md
 
 ### cost-attribution
@@ -107,7 +107,7 @@ Key exports: `AppState`, `BriefingViewModel`, `CachingBriefingRepository`, `Cros
 → Full doc: ios-app-overview.md
 
 ### ios-app-architecture
-Tech stack (SwiftUI, SwiftData, MapKit, iOS 18+), MVVM + Repository pattern, layer responsibilities, Google OAuth + Apple Sign In flow, library reuse (RZFlight, RZUtils, RZSkewT).
+Tech stack (SwiftUI, no SwiftData, MapKit, iOS 26.2+), MVVM + Repository pattern, layer responsibilities, Google OAuth + Apple Sign In via FlyFunCommon, library reuse (FlyFunCommon, RZFlight, RZUtils, RZSkewT).
 → Full doc: ios-app-architecture.md
 
 ### ios-app-data-models
@@ -150,7 +150,7 @@ Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_fligh
 → Full doc: metar-taf-accuracy.md
 
 ### frontal-detection
-Zone-scale frontal presence detection from 850hPa gridded fields. Two-pass anomaly filtering, dual T850+θe gradient thresholding, 18 European zones, cross-front wind classification, clearance timing. CLI-only (not yet in pipeline).
+Zone-scale frontal presence detection from 850hPa gridded fields. Two-pass anomaly filtering, dual T850+θe gradient thresholding, 20 European zones, cross-front wind classification, clearance timing. Integrated-but-experimental: per-leg Hewson path wired into pipeline/scheduler (gated by `auto_front_detection`); zone-aggregation path is CLI-only.
 Key exports: `compute_frontal_zones_dual`, `classify_front_type`, `build_zone_timeseries`, `find_fronts_in_regions`, `find_frontal_clearance_time`, `compute_timing_spread`
 → Full doc: frontal-detection.md
 

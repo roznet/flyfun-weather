@@ -219,7 +219,7 @@ For multi-model, the client fetches `sounding-profile` for each model individual
 
 ### 6. Interaction
 
-**UX entry point**: The Skew-T section below the cross-section starts **empty** (placeholder text: "Click a waypoint on the cross-section to view its Skew-T"). When the user clicks a **waypoint** on the cross-section, the Skew-T loads for that `point_index` and selected model. Clicking a different waypoint updates the Skew-T. Interpolated mid-route points do not trigger a Skew-T — only named waypoints. This matches the iOS app's tap-to-inspect pattern.
+**UX entry point**: The Skew-T section below the cross-section starts **empty** (placeholder text: "Click a point on the cross-section to view its Skew-T"). When the user clicks a point on the cross-section, the Skew-T loads for that `point_index` and selected model. Clicking a different point updates the Skew-T. (As-built note: the original plan restricted this to named waypoints, but Phase 1 shipped with *any* route point — waypoint or interpolated — triggering a load; see [skewt-canvas.md](../skewt-canvas.md).) This matches the iOS app's tap-to-inspect pattern.
 
 **Click-to-inspect**: Click or long-hover on any pressure level → tooltip showing all values at that level:
 - T, Td, DD, RH, wind speed/direction

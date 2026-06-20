@@ -9,8 +9,9 @@
 > remain unbuilt, all deliberately deferred (memory is not a
 > constraint post-upgrade). The active investigation is complete;
 > this doc is now mostly a historical record of the measurements and
-> reasoning. Candidate to fold the durable B-3 architecture into a
-> proper design doc and archive the rest. Two leftover Phase A nits
+> reasoning. The durable B-3 architecture has since been folded into
+> its own design doc (`designs/grib-decode-dispatcher.md`, in INDEX),
+> so this plan is now a candidate to archive. Two leftover Phase A nits
 > (`_stage_label` dead branch in `scripts/profile_refresh.py`,
 > WARNING-on-full-failure in `fetch_icon_eu_fields`) are still
 > unaddressed but low priority.

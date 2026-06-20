@@ -1,5 +1,7 @@
 # Standalone Airport Verification Pipeline
 
+> **STATUS: BUILT & SUPERSEDED (historical plan).** This was the original design proposal; the feature has shipped and is in production. The authoritative, as-built design now lives in [`../metar-taf-accuracy.md`](../metar-taf-accuracy.md) (INDEX: `metar-taf-accuracy`). Read THAT for current truth — this file is kept only as a record of the original intent and rejected options. Notable divergences from the as-built system: the single combined "5 sample hours" cycle became **three decoupled loops** (METAR ingest every 30 min, forecast fetch at 07/19Z, scoring at 06/09/12/15/18Z); cycles run in an isolated **subprocess** (#236); a **daily** rollup (`verification_daily_stats`) was added alongside the monthly one; the watchlist grew to **~830** airports. Recommend moving to `archive/`.
+
 > Flight-independent NWP accuracy dataset: predict weather at ~276 METAR-reporting airports across Western/Central Europe, then score against actual METARs at multiple lead times (D-0 through D-7).
 
 ## Context

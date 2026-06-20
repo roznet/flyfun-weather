@@ -32,7 +32,7 @@ US models on Open-Meteo use the `ncep_` prefix:
 - `ncep_hrrr_conus`, `ncep_nam_conus`, `ncep_nbm_conus`
 - `ncep_gfs_graphcast025`
 
-Bare names (`gfs`, `hrrr`, `nbm`) are rejected by the API. Add explicit `model_param` entries when registering in `MODEL_ENDPOINTS` (see `fetch/variables.py:129`).
+Bare names (`gfs`, `hrrr`, `nbm`) are rejected by the API. Add explicit `model_param` entries when registering in `MODEL_ENDPOINTS` (`fetch/variables.py`). No `ncep_` US models are registered there yet.
 
 ## Storage growth
 
@@ -52,7 +52,7 @@ Score table growth is the storage concern. Activate the existing `verification_m
 
 ## Implementation order
 
-1. **Pre-req**: standalone-verification parallelisation (issue #110 — chunk-level parallelism inside `_fetch_forecasts_for_model`) merged and validated in prod. Distinct from issue #112, which parallelises the per-model loop in the *briefing* pipeline; that's already shipped and unrelated to standalone capacity headroom.
+1. **Pre-req: DONE.** Standalone-verification parallelisation (issue #110 — chunk-level parallelism inside `_fetch_forecasts_for_model`) is shipped: `ThreadPoolExecutor` over airport chunks in `standalone_verification.py` (~line 438). Distinct from issue #112, which parallelises the per-model loop in the *briefing* pipeline; also shipped, unrelated to standalone capacity headroom. The remaining steps below are all unbuilt as of 2026-06-20.
 2. Add `region` column to watchlist JSON and `AirportForecastSnapshotRow` (alembic migration)
 3. Extend `STANDALONE_MODELS` to be region-aware: `{"eu": ["gfs", "icon", "ecmwf"], "us": ["gfs", "ecmwf"]}`
 4. Add 13Z and 01Z to `FORECAST_FETCH_HOURS_UTC` for the US region (or split the loop)

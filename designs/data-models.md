@@ -207,7 +207,7 @@ FlightProfile(
 )
 ```
 
-- One default profile per user (auto-created on first access, migrates legacy `defaults_json`)
+- One default profile per user (auto-created on first access, migrating legacy settings out of `UserPreferencesRow.app_prefs_json`)
 - Settings applied dynamically at briefing refresh time — not stored on Flight
 - Flexible JSON allows adding new settings without migrations
 - `system_template_key` (optional) marks a profile cloned from a built-in system template; `created_at`/`updated_at` are aware-UTC timestamps
@@ -257,7 +257,7 @@ BriefingPackMeta(
 )
 ```
 
-Persisted as a `BriefingPackRow` in the DB (`_meta_to_row`/`_apply_meta_to_row` in `storage/flights.py`), not a `pack.json` file. `id` is the DB primary key. `fetch_timestamp` is a timezone-aware UTC datetime (stored as `DATETIME(6)` in MySQL, text in SQLite). `assessment` and `assessment_reason` are denormalized from the digest for quick display. `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)". `model_sources` maps each model to its freshness source key (e.g. `ecmwf:direct`).
+Persisted as a `BriefingPackRow` in the DB (`_meta_to_row`/`_apply_meta_to_row` in `storage/flights.py`), not a `pack.json` file. `id` is the DB primary key. `fetch_timestamp` is a timezone-aware UTC datetime (stored as `DATETIME(6)` in MySQL, text in SQLite). `assessment` and `assessment_reason` are denormalized from the digest for quick display (`outlook`/`outlook_reason` replace them for long-range packs beyond the GRIB horizon — a soft TRENDING_SETTLED/MIXED_SIGNALS/TRENDING_UNSETTLED outlook, mutually exclusive with the traffic-light `assessment`). `model_init_times` records the NWP model initialization timestamps at fetch time — used by the freshness check to determine if new model runs are available. `grib_init_times` records the initialization timestamps of GRIB2 data sources (GFS, ICON-EU) when they differ from the Open-Meteo init times — displayed in the freshness bar as "GFS 12Z (GRIB 18Z)". `model_sources` maps each model to its freshness source key (e.g. `ecmwf:direct`).
 
 Other fields: `artifact_path` (pack directory), `models_skipped_region` (models out of coverage), `llm_digest_requested` (whether the AI digest was requested for this pack; defaults True so legacy packs read as "still generating" not "off"), `digest_trace_id` (LangSmith root run id of the digest LLM call, #244; used by the feedback endpoint), `alt_assessment`/`alt_assessment_reason`/`has_alt_advisories` (optional same-day alternate departure), and DWD + Met Office surface-chart references (`{dwd,metoffice}_charts_run_cycle`/`_default_id`/`_in_coverage`/`_within_horizon`). `is_historical` is a `@computed_field` (true when `days_out < 0`).
 

@@ -194,7 +194,7 @@ if not status.fresh:
 
 Nine tracked source/model pairs (`SOURCE_REGISTRY` in `fetch/freshness/registry.py`): 3 direct GRIB (`ecmwf:direct`, `gfs:noaa`, `icon_eu:dwd`) + 6 Open-Meteo republishes (`gfs/ecmwf/icon/meteofrance/ukmo/gem:openmeteo`). Each `SourceConfig` carries schedule (cycles, delivery_offset, horizon) plus descriptive metadata (model/provider label, role, resolution, coverage, pressure_levels) feeding `/api/data-sources` and the help-page table.
 
-The legacy `fetch/model_status.py` module (`fetch_model_metadata`, `compute_next_update`) is still imported by `_finalize_refresh` to record per-model Open-Meteo init times on each pack. `check_freshness` and `compute_next_update` are no longer consumed by the freshness endpoint.
+The legacy `fetch/model_status.py` module (`fetch_model_metadata`, `check_freshness`, `compute_next_update`) is no longer consumed by the freshness endpoint. `fetch_model_metadata` survives as a direct Open-Meteo init-time probe used by `tasks/alternates.py`, `tasks/standalone_verification.py`, and `frontal/` (grid + CLI).
 
 → Full doc: [freshness-markers.md](./freshness-markers.md)
 
@@ -224,7 +224,7 @@ grib_init_times, grib_skip_reasons = enrich_forecasts(
 | `ecmwf_fetch.py` | Parse ECPDS filenames, scan delivery directory, find latest run. No HTTP — files land on local disk via ECPDS push |
 | `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points. Chunked ICON-EU decoder (`decode_icon_eu_per_point_chunked()`) processes one variable at a time with explicit `gc.collect()` between — peak ~270MB vs ~800MB. ECMWF decoders handle multi-grid files (first-wins per point) |
 | `fill.py` | Time-axis fill of GRIB-enriched fields. Linear interp for GFS cloud diagnostics (window-midpoint, see meteorology-decisions §3) and CLW/ICMR when `gfs_init` is provided; forward-fill for ICON-EU/ECMWF and the GFS fallback path. Also hosts `apply_gfs_rh_condensate_gate` — drops GFS phantom layers where pressure-level RH and condensate disagree with the averaged cover |
-| `cache.py` | Disk cache per model (`data/.cache/grib/{model}/{date}_{cycle}z/`) with 48h TTL |
+| `cache.py` | Disk cache per model (`data/.cache/grib/{model}/{date}_{cycle}z/`). Per-model TTL via `MODEL_TTL_SECONDS` (GFS 24h, ICON-EU 12h; 12h fallback) — ECMWF reads local ECPDS disk so it isn't cached here |
 
 ### How It Works
 

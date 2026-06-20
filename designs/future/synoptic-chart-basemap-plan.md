@@ -21,10 +21,10 @@ Route overlay is out of scope (maps page is flight-independent), same as #164.
 | Fact | Detail |
 |---|---|
 | Met Office charts merged | `fetch/metoffice_charts.py`, `tasks/metoffice_charts.py`, API endpoints in `packs.py` — all in main. |
-| Met Office **is calibrated** | The "PLACEHOLDER" comment header at `metoffice_charts.py:104` is **stale**; `_CHART_CALIBRATIONS["colour"]` has a real homography (max err 1.33 px). `is_calibrated("colour")` → True. |
+| Met Office **is calibrated** | `metoffice_charts.py` `_CHART_CALIBRATIONS["colour"]` has a real homography (calibrated 2026-05-29 from 8 graticule crossings, max err 1.33 px, rms 0.58 px). `is_calibrated("colour")` → True. |
 | Identical projection recipe | Both sources: pyproj polar-stereo + 8-coeff 2D homography. `lonlat_to_chart_pixel` is duplicated near-verbatim in both modules. |
 | Three calibration variants | DWD `analysis` (4389×3114, lat_ts=90, lon_0=10); DWD `icon` (800×653, lat_ts=60, lon_0=5); Met Office `colour` (800×540, lat_ts=60, lon_0=0). |
-| Front polylines are cheap | `synoptic-map.ts:134 setFronts()` draws `L.polyline` from lat/lon. In `L.CRS.Simple` they reproject **natively** once fed chart-pixel coords as latLng — no canvas math. The grid cells are the hard part. |
+| Front polylines are cheap | `synoptic-map.ts` `setFronts()` draws `L.polyline` from lat/lon. In `L.CRS.Simple` they reproject **natively** once fed chart-pixel coords as latLng — no canvas math. The grid cells are the hard part. |
 | Chart-id / offset sets differ | DWD: `ana,036,048,060,084,108`. Met Office: `ana,012,024,036,048,060,072,096,120` (finer + longer → **better time-match basemap**). |
 | Extensive Python duplication | `select_default_chart_id`, `cache_root`, `cycle_dir`, `list_cycles`, meta read/write, `_atomic_write_bytes`, `resolve_chart_path`, `chart_meta`, `evict_old_cycles`, `lonlat_to_chart_pixel`, `build_route_overlay`, `ChartFetchResult`, `RefreshReport`, `_fetch_one` — all mirrored. Source-specific only: cycle discovery (Last-Modified vs JSON index), chart-id set, calibrations, native sizes, file extension, keep-count. |
 
@@ -120,10 +120,11 @@ catch standalone than after the renderer exists.
   issued_at, charts: [ { id, offset_h, chart_type, native_size, valid_time } ] }
   ] }`. DWD always included; Met Office only if `_metoffice_charts_allowed`.
   Latest cycle per source via the shared base's `list_cycles`.
-- `GET /api/synoptic-charts/{source}/{run_cycle}/{chart_id}.{ext}` → shared
-  serve helper: validate `source` slug, `run_cycle` (`YYYY-MM-DDTHHZ` regex),
-  `chart_id` allowlist; `Cache-Control: public, max-age=31536000, immutable`;
-  gate Met Office; 404 if evicted.
+- `GET /api/synoptic-charts/{source}/{run_cycle}/{chart_id}` (as built: no
+  `.{ext}` suffix on the route) → shared serve helper (`serve_chart_bytes`):
+  validate `source` slug, `run_cycle`, `chart_id` allowlist; long immutable
+  `Cache-Control`; gate Met Office (404 not 403 so non-admins can't probe);
+  404 if evicted.
 - Refactor the existing flight-scoped chart endpoints in `packs.py` to call the
   same shared serve helper (behavior unchanged).
 

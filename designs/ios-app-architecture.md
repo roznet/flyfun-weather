@@ -14,8 +14,8 @@
 | **Architecture** | **MVVM + Repository** | Natural fit for SwiftUI. Repos abstract API vs cache — offline-ready from day one. |
 | **Cross-section** | **SwiftUI Canvas** | Immediate-mode 2D, equivalent to HTML Canvas. No WKWebView. |
 | **Route graph** | **Swift Charts** | 2D charts, dual axes, extensible. |
-| **Auth** | **ASWebAuthenticationSession + Sign in with Apple** | Native OAuth, no token-paste friction. |
-| **Deps** | **RZFlight + RZSkewT + RZUtils(Swift/SwiftUI/Universal)** via SPM | Airport data, Skew-T rendering, storage, logging. |
+| **Auth** | **ASWebAuthenticationSession + Sign in with Apple**, driven by `FlyFunAuthService` (FlyFunCommon) | Native OAuth, no token-paste friction. Shared auth/session code across flyfun apps. |
+| **Deps** | **FlyFunCommon + RZFlight + RZSkewT + RZUtils(Swift/SwiftUI/Universal)** via SPM | FlyFunCommon = shared auth/session/keychain (`github.com/roznet/flyfun-common`); RZ* = airport data, Skew-T rendering, storage, logging. |
 | **Project location** | `app/flyfun-weather/` in flyfun-weather repo | Keep API contracts in sync. |
 
 ## High-Level Components
@@ -85,13 +85,15 @@ final class CachingBriefingRepository: BriefingRepository { ... }
 | **Domain** | Forecast/assessment view models | `Assessment`, `VizData` (`Models/Domain/`); API DTOs in `Models/API/` |
 | **Location** | Live aircraft position projected onto route. `FlightTrackingService` wraps `CLLocationManager` at `kCLLocationAccuracyBest`. | `FlightTrackingService` (Core Location) |
 | **Storage** | Offline-first persistence | `BriefingCacheStore` (actor, on-disk pack cache), `PirepOfflineStore` (queued PIREPs), `UserPreferencesStore` (UserDefaults) |
-| **Sync** | Server communication, auth, queue flush | `APIClient` (`RollingBearerSession`), `KeychainBearerTokenStore`, SSE refresh, PIREP batch flush |
+| **Sync** | Server communication, auth, queue flush | `APIClient` (wraps `RollingBearerSession` from FlyFunCommon), `KeychainBearerTokenStore` (FlyFunCommon), SSE refresh, PIREP batch flush |
 
 ## Authentication Flow
 
-Two auth methods:
+App-side auth is driven by `FlyFunAuthService` (FlyFunCommon), constructed in `LoginView` with `callbackScheme: "flyfunweather"`. The view calls `authService.exchangeAppleCredential(...)` / `authService.signIn(provider: "google")`, gets a JWT back, and hands it to `appState.signIn(token:)`. Two methods:
 1. **Sign in with Apple** — native `SignInWithAppleButton` → identity token exchanged with server via `POST /auth/apple/token` (flyfun-common). Bundle ID must be in `APPLE_APP_IDS` env var.
 2. **Google OAuth** — `ASWebAuthenticationSession` → server redirects to `flyfunweather://auth/callback?token=<jwt>`.
+
+(There is also a debug-only `/auth/dev-token` path in `LoginView` for simulator/dev sign-in.)
 
 ```
 ┌─────────┐                ┌─────────────┐            ┌────────┐
@@ -126,10 +128,11 @@ Two auth methods:
 
 ## Existing Library Reuse
 
-SPM-linked: **RZFlight, RZSkewT, RZUtils, RZUtilsSwift, RZUtilsSwiftUI, RZUtilsUniversal**. Directly imported in app sources today:
+SPM-linked: **FlyFunCommon, RZFlight, RZSkewT, RZUtils, RZUtilsSwift, RZUtilsSwiftUI, RZUtilsUniversal**. Directly imported in app sources today:
 
 | Library | What's Reused |
 |---------|---------------|
+| **FlyFunCommon** | imported by `AppState` — `FlyFunAuthService` (Apple/Google sign-in), `RollingBearerSession` (token-refresh URLSession, 401 → `onUnauthorized`), `KeychainBearerTokenStore`. Shared across flyfun apps; repo `github.com/roznet/flyfun-common`. |
 | **RZSkewT** | `SkewTView` in `SkewTDetailView` — see rzskewt entry in INDEX |
 | **RZFlight** | imported by `FlightTrackingService` (airport/aviation types + `RouteGeometry`, a `public enum` in RZFlight's `Route+Geometry.swift` — `directDistanceNm`, `perpendicularDistanceAndRatio` for projecting live position onto the route) |
 

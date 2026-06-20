@@ -8,8 +8,9 @@
 > the grid is **0.25° / 35-60°N, -20-28°E** (not 0.5°), `_MIN_FRONTAL_POINTS = 32` (not 8),
 > and the module set grew well beyond the plan: a **Hewson TFP route locator**
 > (`detect.compute_hewson_diagnostics`, `sources.py`, `route_sampling.py`, `gates.py`'s
-> `FrontGateConfig` preset registry, `contour_fronts.py`, `case.py`) plus a `hewson/`
-> package, `api/hewson_map.py`, `models/fronts.py`, `tasks/fronts.py`, and DB storage. The
+> `FrontGateConfig` preset registry, `contour_fronts.py`, `case.py`) plus a top-level `src/weatherbrief/hewson/`
+> package (precompute/era5_case/cli — NOT under `frontal/`), `api/hewson_map.py`,
+> `models/fronts.py`, `tasks/fronts.py`, and DB storage. The
 > project **pivoted from zone-level detection toward per-leg Hewson advisories** — see
 > `designs/future/hewson-fields-aviation-advisories.md` and `designs/future/front-calibration.md`.
 >

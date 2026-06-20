@@ -190,6 +190,7 @@ Also supports `run_advisories_from_pack()` for re-evaluation from saved artifact
 |----------|--------|---------|
 | `.../packs/{ts}/advisories` | GET | Return saved advisories JSON |
 | `.../packs/{ts}/advisories/recalculate` | POST | Re-evaluate with user prefs (enabled IDs + param overrides) |
+| `.../packs/{ts}/advisories/altitude-table` | GET | Return the precomputed altitude table persisted at refresh (#259) — cheap cached path the slider indexes into; 404 on pre-precompute packs (client falls back to POST sweep) |
 | `.../packs/{ts}/advisories/altitude-table` | POST | Altitude sweep (`step_ft` 500–5000, default 2000) → `AltitudeTableResult` |
 | `.../packs/{ts}/advisories/alt` | GET | Return saved alt-departure advisories JSON |
 | `.../packs/{ts}/advisories/alt/compute` | POST | Compute alt-departure advisories on-demand (requires flight `alt_departure_time`) |

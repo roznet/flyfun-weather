@@ -26,7 +26,7 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 - Advisory dashboard — 3-column grid on iPad, model status badges as colored capsules, short names (MF for Météo-France)
 - Airport conditions — departure/arrival side-by-side on iPad
 - Cross-section — Canvas renderer aligned with the web (smooth/soft cloud bands). Layer stack under `Views/CrossSection/Layers/` includes cloud bands (soft + NWP variants), icing (model, Ogimet NWP, SFIP), CAT, inversions, convective towers/background (thermo + NWP), terrain, temperature lines, reference lines. Model selector. Layer toggle chips.
-- Native Skew-T — tap cross-section point → `SkewTView` (RZSkewT package) renders below with thermodynamics, wind barbs, CAPE/CIN shading, LCL/LFC/EL markers, FL labels
+- Native Skew-T — tap cross-section point → `SkewTDetailView` (in `Views/CrossSection/`) renders `SkewTView` from the RZSkewT package below with thermodynamics, wind barbs, CAPE/CIN shading, LCL/LFC/EL markers, FL labels
 - Route map, digest view
 - PIREPs tab — read-only list for the flight, expandable rows with severity bars, hazard icons, own-badge. Tab gated by `userPreferences.pirepCanView`; in-flight reporting gated by `pirepCanPublish` (server flags, refreshed when the briefing opens)
 

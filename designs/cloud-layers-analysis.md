@@ -11,7 +11,7 @@ _Code references verified against the repo on 2026-06-13._
 > synthesized bands. The `EnhancedCloudLayer.source` enum no longer carries
 > `"synthesized"` at runtime.
 >
-> **Known minor item (code kept as-is, decision 2026-06-06):** `advise.py:109`
+> **Known minor item (code kept as-is, decision 2026-06-06):** `advise.py:112`
 > labels any non-`grib` NWP layer set `cloud_method_effective="nwp_synthesized"`,
 > which mislabels genuine `nwp_3d` layers (ECMWF/ICON). Cosmetic — affects only
 > that metadata string; not corrected in code.
@@ -142,7 +142,7 @@ Reverted so `nwp_cloud_layers` is strictly model-native; the tier below now appl
 - **Coverage from %:** ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (Tier 0 classifies each level individually then splits on category change; Tiers 1–2 use bulk band %)
 - **Output:** Stored in `SoundingAnalysis.nwp_cloud_layers`
 - **Source tracking:** `EnhancedCloudLayer.source` ∈ {"dd", "nwp_3d", "grib"} at runtime (the "synthesized" source was removed when nwp_cloud_layers became strictly model-native; the model.py comment still lists it as a historical value).
-- **Method tracking:** `cloud_method_effective` records "dd" or "nwp". Note `advise.py:109` still emits "nwp_synthesized" for any non-`grib` source set — a stale metadata label that now also catches `nwp_3d` (cosmetic; see banner).
+- **Method tracking:** `cloud_method_effective` records "dd" or "nwp". Note `advise.py:112` still emits "nwp_synthesized" for any non-`grib` source set — a stale metadata label that now also catches `nwp_3d` (cosmetic; see banner).
 - **Quantitative metadata:** `EnhancedCloudLayer.mean_cloud_cover_pct` carries the underlying numeric — mean `cloud_area_fraction_pct` across the (homogeneous) deck for `nwp_3d`, the band's `cover_pct` for `grib` (incl. convective). Surfaced in the cross-section tooltip as `(CC nn%)`. Null for `dd` (uses `mean_dewpoint_depression_c` instead).
 
 | Model | NWP Cloud Layers Result | Source Tag | Notes |

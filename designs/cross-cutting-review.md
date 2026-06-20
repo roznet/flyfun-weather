@@ -2,7 +2,7 @@
 
 > Pipeline interdependencies, method coupling, inconsistencies, and simplification opportunities across the three subsystems.
 
-_Code references verified against the repo on 2026-06-06; re-checked 2026-06-13: findings #1/#5/#6/A/B/C remain fixed in code; open findings #2/#3/#4 still open. Embedded line numbers are approximate — the sounding pipeline (`__init__.py`) was reorganized into lite/heavy passes since the original review._
+_Code references verified against the repo on 2026-06-06; re-checked 2026-06-13 and 2026-06-20: findings #1/#5/#6/A/B/C remain fixed in code (icing + cloud-uncertainty now call `convective.effective_cape(indices)`; NWP enrichment moved ahead of consumers); open findings #2/#3/#4 still open. Embedded line numbers are approximate — the sounding pipeline (`__init__.py`) was reorganized into lite/heavy passes since the original review, so the in-text `__init__.py` line refs no longer match (the live icing call is now ~`__init__.py:416`, the gate at `advisories.py:162`)._
 
 ## Pipeline Order & Data Flow
 

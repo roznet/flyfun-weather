@@ -10,7 +10,7 @@ Detect fronts at zone scale (~200-400km) to answer "which fronts are active, whe
 
 Cross-section annotation is explicitly deferred — the cross-section already shows front effects (cloud, icing, wind shifts) at route-point resolution.
 
-**Integration status**: CLI-only development tool. Not yet integrated into the briefing pipeline or scheduler. Calibration-first approach — validate detection quality before production integration.
+**Integration status**: integrated but experimental. The per-leg Hewson direction is wired into the briefing pipeline (`pipeline.py` / `advise.py` call `run_fronts`, gated by the `auto_front_detection` pref, default off) and the Hewson fields are precomputed by `run_hewson_precompute_loop` in `scheduler.py` (06Z/18Z). The original **zone-aggregation** path (zones.py + tracking.py) remains CLI-only — calibration-first, never wired into a briefing. Baselines for the zone path still pending the ERA5 retrospective set (see Calibration).
 
 ## Architecture
 

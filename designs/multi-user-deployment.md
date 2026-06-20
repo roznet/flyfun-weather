@@ -144,7 +144,9 @@ Admin endpoints accept both JWT cookies (browser sessions) and Bearer API tokens
 
 ### Account Deletion
 
-`DELETE /auth/me/account` triggers `_on_delete_user()` callback: cascade-deletes all flights (which cascade-deletes packs), profiles, aircraft, device tokens, usage records, feedback, and removes artifact files from disk. PIREPs are **anonymized** (user_id/aircraft_id set to NULL) rather than deleted — observation data is preserved.
+`DELETE /auth/me/account` triggers `_on_delete_user()` callback (in `api/app.py`): cascade-deletes all flights (which cascade-deletes packs), profiles, aircraft, device tokens, usage records, feedback, and removes artifact files from disk. PIREPs are **anonymized** (user_id/aircraft_id set to NULL) rather than deleted — observation data is preserved.
+
+`GET /api/account/export` (in `api/account_export.py`) is the GDPR right-to-portability counterpart: a read-only JSON dump of everything `_on_delete_user` would erase. Keep the two mirrored — when a new user-owned table is added, wire it into both. Secrets/server-internal columns are stripped via a per-table omit-list (e.g. the device-token value). PII must not be logged in the clear: use `mask_email()` from `privacy.py` (GDPR ops-logging rule).
 
 ### Admin Hub (Cross-App)
 

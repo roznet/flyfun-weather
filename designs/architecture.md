@@ -36,7 +36,7 @@ analyze_waypoint()  (per waypoint)
     ↓
 analyze_all_route_points()  → RouteAnalysesManifest (full route analysis)
     ↓
-evaluate_all(RouteContext)  → RouteAdvisoriesManifest (20 hazard evaluators)
+evaluate_all(RouteContext)  → RouteAdvisoriesManifest (22 hazard evaluators)
     ↓
 ForecastSnapshot  (root object, saved as briefing.json + forecasts.json)
     ↓
@@ -66,6 +66,8 @@ src/weatherbrief/
 │   ├── advisories.py  # Route advisory + manifest models
 │   ├── airport_conditions.py # Airport flight-category/wind condition models
 │   ├── observations.py # METAR/TAF + SIGMET models (AirportObservation, RouteObservations, RouteSigmets)
+│   ├── alternates.py / alternate_requirement.py # Alternate selection + EASA requirement models
+│   ├── fronts.py       # Hewson front-crossing route models
 │   ├── diagnostic.py / diagnostic_codes.py # Per-point diagnostic flags + code catalog
 │   ├── verification.py # METAR/TAF verification + digest models
 │   └── storage.py     # Flight, BriefingPackMeta
@@ -118,7 +120,10 @@ src/weatherbrief/
 ├── analysis/
 │   ├── wind.py        # Headwind/crosswind decomposition
 │   ├── comparison.py  # Multi-model divergence scoring (22 thresholds)
-│   ├── advisories/    # Route advisory evaluators (20 registered hazard types — see advisories.md)
+│   ├── airport_conditions.py / airport_consensus.py # Airport flight-category/wind + multi-model consensus
+│   ├── route_geometry.py / spatial_interpolation.py # Route geometry + spatial field interpolation helpers
+│   ├── alternate_requirement.py / sun.py # EASA alternate requirement logic, sun position/glare
+│   ├── advisories/    # Route advisory evaluators (22 registered hazard types — see advisories.md)
 │   │   ├── __init__.py      # evaluate_all(), get_catalog()
 │   │   ├── registry.py      # @register decorator, auto-discovery
 │   │   ├── _helpers.py      # Shared: format_extent, pct_above_threshold, terrain lookup
@@ -140,6 +145,8 @@ src/weatherbrief/
 │       ├── thermodynamics.py  # MetPy indices + derived levels
 │       ├── clouds.py       # Cloud layers from dewpoint depression
 │       ├── icing.py        # Icing zones from wet-bulb + Ogimet index
+│       ├── wet_bulb.py     # Wet-bulb temperature computation
+│       ├── edr.py          # EDR turbulence estimate (calibration inert, see project_edr_calibration_inert)
 │       ├── icing_common.py # Shared icing helpers across methods
 │       ├── sfip.py         # SFIP NWP-based icing potential index
 │       ├── sld.py          # Supercooled large droplet risk
@@ -155,6 +162,9 @@ src/weatherbrief/
 │   ├── llm_config.py  # LLM config schema + factory
 │   ├── llm_digest.py  # LangGraph digest pipeline
 │   ├── prompt_builder.py  # Context assembly for LLM
+│   ├── outlook.py      # Long-range outlook haiku digest (see project_longrange_outlook)
+│   ├── guardrails.py   # Digest output guardrail checks
+│   ├── langsmith_feedback.py # LangSmith eval feedback hooks
 │   ├── dwd_translate.py # DE→EN translation for DWD synoptic text
 │   └── format_utils.py / exceptions.py # Shared formatting helpers + digest exceptions
 ├── db/
@@ -181,8 +191,12 @@ src/weatherbrief/
 │   ├── admin.py       # Admin: user list, approval, usage overview, per-user costs, API agent/token mgmt
 │   ├── deps.py        # Shared FastAPI dependencies (auth, DB session)
 │   ├── tokens.py      # API token mgmt for the current user
+│   ├── account_export.py # GDPR Art. 20 export: user downloads JSON of all their data
+│   ├── donations.py   # Stripe donation checkout + webhook (see project_donations_live)
 │   ├── aircraft.py / pireps.py / debriefs.py # iOS companion: aircraft registry, PIREPs, post-flight debrief
 │   ├── maps.py / hewson_map.py / climatology.py / airport_profile.py # Forecast/front/climatology map + airport-profile endpoints
+│   ├── synoptic_charts.py / _chart_serving.py # DWD/Met Office surface-front chart serving
+│   ├── eval_workbench.py # Digest eval workbench (admin/dev, gated; see digest-eval-workbench.md)
 │   ├── data_sources.py / models.py / messages.py / validation.py / user_migrations.py # Source registry, model metadata, in-app messages, input validation, per-user migrations
 ├── costs.py           # Pure cost computation (no DB/IO): CostConfig, CostBreakdown, compute_cost()
 ├── report/
@@ -208,7 +222,10 @@ src/weatherbrief/
 ├── verify/            # Standalone verification CLI entry
 ├── debriefs/          # Post-flight debrief stats + taxonomy
 ├── scenario/          # Scenario measurement helpers
+├── eval_workbench/    # Digest eval replay harness (see digest-eval-workbench.md)
 ├── atmo.py / units.py # Atmospheric constants + region-aware unit conversion
+├── impact.py          # Shared route-impact summarization helpers
+├── privacy.py         # PII-safe logging helpers (mask_email for ops logs)
 └── process_memory_sampler.py / process_rss.py # Memory instrumentation
 ```
 
@@ -228,6 +245,8 @@ web/
 ├── maps.html          # Pan-European forecast/front maps
 ├── verification.html  # METAR/TAF verification dashboard
 ├── pireps.html        # PIREP feed
+├── donate.html / donate-thanks.html / donate-cancel.html # Stripe donation flow pages
+├── eval.html          # Digest eval workbench page (admin/dev)
 ├── help.html / privacy.html # Help & documentation, privacy policy
 ├── css/style.css      # Shared styles
 ├── ts/
@@ -259,7 +278,7 @@ web/
 │   │   │   └── constants.ts     # Shared layout constants
 │   │   ├── route-map/           # Leaflet geographic route visualization
 │   │   │   ├── renderer.ts      # Leaflet map lifecycle, segment polylines, waypoints
-│   │   │   ├── metrics.ts       # 13-metric registry (MapMetric objects)
+│   │   │   ├── metrics.ts       # 19-metric registry (MapMetric objects)
 │   │   │   ├── segment-style.ts # Pure: computeSegmentStyles() → {color, weight}[]
 │   │   │   ├── interaction.ts   # Hover, click, tooltip, sync callbacks
 │   │   │   ├── altitude-slider.ts # Range input for level-dependent metrics
@@ -269,6 +288,11 @@ web/
 │   │   ├── data-extract.ts      # Transform API data → VizRouteData
 │   │   ├── scales.ts            # Shared color/opacity scales for all three renderers
 │   │   ├── layer-legends.ts     # Legend entries for all layers
+│   │   ├── skewt/               # Canvas Skew-T renderer (see skewt-canvas.md)
+│   │   ├── weather-map.ts / synoptic-map.ts / weather-map-consensus.ts # Pan-European forecast + synoptic/front overlay maps
+│   │   ├── climatology-map.ts / climatology-tab.ts / climatology-datasets.ts # Climatology map dataset views
+│   │   ├── hewson-grid-layer.ts / hewson-colormaps.ts / front-style.ts # Hewson front grid overlay + styling
+│   │   ├── airport-profile-panel.ts / pirep-map.ts / surface-obscuration.ts # Airport profile panel, PIREP map, surface obscuration
 │   │   └── types.ts             # Shared viz type definitions
 │   ├── utils.ts       # Shared utilities (API base, auth checks, centralized nav banner)
 │   ├── theme.ts       # Dark/light/system theme: persistence, toggle UI, matchMedia listener
@@ -280,7 +304,9 @@ web/
 │   ├── maps-main.ts       # Forecast/front maps page entry
 │   ├── verification-main.ts # Verification dashboard entry
 │   ├── pireps-main.ts     # PIREP feed entry
-│   └── help-main.ts       # Help page entry
+│   ├── donate-main.ts     # Donation page entry
+│   ├── help-main.ts       # Help page entry
+│   └── eval/              # Digest eval workbench UI (admin/dev)
 └── dist/              # esbuild output (committed)
 ```
 
@@ -387,13 +413,14 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/feedback/admin/{id}/send` | POST | Send reply email to user + set status=replied (admin) |
 | `/api/feedback/admin/{id}/notes` | PUT | Save internal admin notes (admin) |
 | `/auth/me/account` | DELETE | Delete own account (cascades flights, profiles, artifacts) |
+| `/api/account/export` | GET | GDPR Art. 20: download JSON of all own data (read-only mirror of account delete) |
 | `/api/admin/hub/*` | various | Cross-app admin hub (users, costs) via flyfun-common |
 | `/api/refresh/active` | GET | List all currently active refreshes |
 | `/api/refresh/stats` | GET | Average refresh time (7-day window, for progress hint) |
 | `/api/flights/{id}/packs/refresh/status` | GET | Refresh status for a specific flight |
 | `/api/admin/metrics` | GET | Queue depth, active refreshes, timing stats (admin) |
 
-The table above covers the core flight/pack/admin surface. Additional feature areas mount their own routers (see linked docs): iOS companion (`/api/aircraft`, `/api/pireps`, `/api/observations`, `/api/companion`, flight debriefs), forecast/front/climatology maps (`/api/maps`, `/api/hewson`, `/api/climatology`, `/api/airport-profile`), METAR/TAF verification (`/api/verification`), in-app messages, model/data-source metadata, and per-user API token management. The MCP server (fastmcp) exposes a separate tool surface.
+The table above covers the core flight/pack/admin surface. Additional feature areas mount their own routers (see linked docs): iOS companion (`/api/aircraft`, `/api/pireps`, `/api/observations`, `/api/companion`, flight debriefs), forecast/front/climatology maps (`/api/maps`, `/api/hewson`, `/api/climatology`, `/api/airport-profile`), synoptic/front chart serving (`/api/charts`), METAR/TAF verification (`/api/verification`), Stripe donations (`/api/donations`, see project_donations_live), in-app messages, model/data-source metadata, and per-user API token management. The MCP server (fastmcp) exposes a separate tool surface.
 
 **Shareable briefing links**: any authenticated user can view any flight's briefings via direct URL. Only the flight owner can refresh, delete, or trigger email. The frontend conditionally shows action buttons based on ownership.
 

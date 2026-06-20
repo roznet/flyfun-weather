@@ -9,17 +9,15 @@ Items to periodically review. When resolved, move to the bottom under "Resolved"
 **Added:** 2026-03-27
 **Location:** `src/weatherbrief/api/packs.py` — `get_bundle()`
 
-The bundle endpoint builds the entire JSON response in memory before gzip-compressing it. For long flights (~60 route points x 3 models = 180 sounding profiles), this involves:
+The bundle endpoint builds the entire JSON response in memory before gzip-compressing it. For long flights (~60 route points x 3 models = 180 sounding profiles), the worst case involves loading `cross_section.json` (can be tens of MB) fully into memory and holding the full JSON dict + serialized payload + gzip output simultaneously.
 
-- Loading `cross_section.json` (can be tens of MB) fully into memory
-- Calling `_build_sounding_profile()` ~180 times, each doing Pydantic model validation
-- Holding the full JSON dict + serialized payload + gzip output simultaneously
+**Partially mitigated (the sounding-profile cost):** `get_bundle()` now prefers a gzipped sounding sidecar written at refresh time (`read_sounding_sidecar` from `storage/sounding_profiles.py`) instead of building all ~180 profiles on the fly. Only packs that predate the sidecar fall back to `build_sounding_sidecar(ra_data, cs_data)` (which still re-reads `cross_section.json` and rebuilds every profile). So the heavy MetPy/Pydantic recompute is gone for the common path; what remains is the in-memory assembly + gzip of the whole bundle.
 
-For the short flights tested so far (8 points, 472KB uncompressed, 47KB gzip) this is fine. For very long routes the uncompressed bundle could reach 50-60MB, meaning ~100-200MB transient memory per concurrent request.
+For the short flights tested so far (8 points, 472KB uncompressed, 47KB gzip) this is fine. For very long routes the uncompressed bundle could still reach 50-60MB, meaning ~100-200MB transient memory per concurrent request.
 
-**Options if this becomes a problem:**
+**Options if the remaining in-memory assembly becomes a problem:**
 - Stream the gzip output instead of building in memory
-- Pre-compute and cache the bundle on disk after each refresh
+- Pre-compute and cache the *entire* bundle on disk after each refresh (the sounding-sidecar precompute is a first step in this direction)
 - Limit concurrency on this endpoint (similar to existing `plot_limiter`)
 
 ---
@@ -88,7 +86,7 @@ for GFS cloud diagnostics (`_interp_gfs_diag_hourly`) and adds an
 RH/condensate gate (`apply_gfs_rh_condensate_gate`) that drops any band
 whose pressure-level RH and condensate inside `[base_ft, top_ft]` don't
 support the averaged cover. ICON-EU / ECMWF publish instantaneous cover
-and are unaffected. See [meteorology-decisions.md §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate)
+and are unaffected. See [meteorology-decisions.md §3](../meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate)
 for the full rationale.
 
 The longer-term cleanup — drop the averaged MCDC entirely and re-derive

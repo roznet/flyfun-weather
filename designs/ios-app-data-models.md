@@ -4,7 +4,7 @@
 
 ## Architecture (as built)
 
-Despite what `ios-app-architecture.md` says about SwiftData, **no `@Model` classes exist**. The
+**No `@Model` classes / SwiftData exist anywhere** (grep `import SwiftData` is empty). The
 model layer is three plain-struct tiers, all under
 `app/flyfun-weather/flyfun-weather/Models/` (+ two persistence actors under `Services/`):
 
@@ -101,8 +101,9 @@ persisted entity.
 
 ## Key Choices
 
-- **No SwiftData** — persistence is hand-rolled JSON-on-disk via two actors. The architecture doc's
-  "SwiftData" row is aspirational/stale; this is the reality the model layer is built on.
+- **No SwiftData** — persistence is hand-rolled JSON-on-disk via two actors (`BriefingCacheStore`,
+  `PirepOfflineStore`) plus `UserPreferencesStore` (UserDefaults). Chosen over a DB for the
+  cache-the-pack model.
 - **API structs are the source of truth** — Domain `Viz*` structs are derived per-render; nothing is
   persisted in Domain shape.
 - **Client UUIDs for PIREPs** — `SubmitPirepRequest.clientUuid` lets the offline queue retry without
@@ -113,6 +114,6 @@ persisted entity.
 ## References
 
 - [Architecture](./ios-app-architecture.md) — MVVM + Repository, the caching repo, layer split.
-  Note: its "SwiftData" persistence claim does not match the built model layer.
+  Its persistence row agrees: file-based JSON + UserDefaults, no SwiftData.
 - [Server API](./ios-app-server-api.md) — server-side shapes these structs decode.
 - [Sync & Prompting](./ios-app-sync-prompting.md) — PIREP offline-sync flow.

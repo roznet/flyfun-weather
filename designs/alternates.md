@@ -237,7 +237,8 @@ if days_out <= 2 and options.compute_alternates \
 
 Preference wiring copies the `auto_front_detection` pattern: `compute_alternates`
 on the profile-settings model (`api/profiles.py`), read in `api/packs.py`
-(`profile_settings.get("compute_alternates", False)`), set on `BriefingOptions`.
+(`profile_settings.get("compute_alternates", True)` — default-on post-graduation),
+set on `BriefingOptions`.
 
 ### Regulatory layer — separate co-located subsystem (#249)
 `run_alternates` does NOT compute regulatory minima. A **pipeline post-step**
