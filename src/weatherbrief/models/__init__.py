@@ -92,6 +92,8 @@ from weatherbrief.models.advisories import (  # noqa: F401
     RouteAdvisoryResult,
 )
 from weatherbrief.models.fronts import (  # noqa: F401
+    FrontChainModel,
+    FrontChainNodeModel,
     FrontCrossingModel,
     FrontDecisionModel,
     FrontProximityModel,

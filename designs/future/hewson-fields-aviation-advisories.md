@@ -362,10 +362,19 @@ Sibling to the map layer — overlays Hewson information on the existing route c
 
 **Phase D.1 (Open-Meteo era — now)**:
 - Reads the **precompute snapshot** at each waypoint × {925, 850, 700} via bilinear-sample
-- Renders 3 horizontal **bands** at 2,500 / 5,000 / 10,000 ft, coloured by the selected metric
-- Same colormap as the map (consistency)
-- Metric picker shared with the map — changing the map metric changes the cross-section bands
 - Cost: <1 ms per briefing (just three bilinear samples per waypoint)
+
+> **As-built note (drift correction, 2026-06-19):** the "3 horizontal θe bands
+> coloured by the selected metric" originally specified here were **not** built.
+> What shipped (#196) is a **front-marker** layer
+> (`web/ts/visualization/cross-section/layers/fronts-markers.ts`): it draws the
+> *detected front lines* on the cross-section, not a continuous metric field.
+> As of the vertical-linking work it draws each front as a **slanted line**
+> through its per-level crossing positions (see §7.9.1), falling back to a
+> vertical marker per crossing on pre-linking packs. The generic per-metric band
+> overlay (θe / |∇θe| / advection shaded across the column) remains unbuilt and is
+> still a reasonable future addition; it would sit alongside the front-line layer,
+> not replace it.
 
 **Phase D.2 (GRIB era — later, gated on native-GRIB ingestion)**:
 - Per-briefing **stencil** sampling: around each waypoint, extract a 3×3 (or 5×5 for cleaner 2nd derivatives) stencil from the briefing's already-loaded GRIB at each of the **25+ native pressure levels** the ingestion subsets
@@ -375,6 +384,63 @@ Sibling to the map layer — overlays Hewson information on the existing route c
 - Reuses the same `CrossSectionLayer` surfaces — UI doesn't change, data source upgrades silently
 
 The 3-level precompute is kept small on purpose: it exists to feed the map, and the map shows one level at a time anyway. Adding levels to the precompute just to support the cross-section would be wasteful when the cross-section can draw from richer per-briefing data.
+
+### 7.9.1 Vertical linking of front lines across levels (#196, added 2026-06-19)
+
+A front is a sloping 3-D surface, so the *same* air-mass boundary is detected at
+~the same along-route distance on 925, 850 and 700 — displaced toward the cold
+air with height. The pipeline links those per-level crossings into **front
+chains** so the cross-section can draw one **slanted line** per front (tilting
+back over the cold air) instead of three independent vertical markers, and so we
+know a front's **depth** (how many levels it spans = shallow vs. deep).
+
+**History.** The first cut of this was `_stamp_vertical_coherence` in
+`tasks/fronts.py`: it clustered crossings across levels purely by along-route
+distance (complete-linkage, reusing the 60 km `merge_km`) and stamped each with a
+`vertical_levels` count used to dim single-level (shallow/suspect) detections.
+That count was correct in spirit but had two weaknesses — it ignored *what kind*
+of boundary each crossing was, and 60 km is too tight for warm fronts (which
+slope shallowly and can sit 100–200 km apart between levels), so it under-linked
+them.
+
+**As-built (`_link_front_chains`).** It now grows chains bottom→top (925→850→700),
+attaching each level's crossing to the best open chain one level below, gated on:
+- **kind-compatible** — cold↔cold / warm↔warm; quasi-stationary (an advection-only
+  label) wildcards. A cold front never links to a nearby warm front.
+- **same Δθe sign** — the air-mass contrast must point the same way (both flying
+  into colder air, or both into warmer); otherwise it is a different boundary.
+- **slope budget** — max along-route displacement per level pair, derived from
+  textbook frontal slope (925→850 ≈ 100 km, 850→700 ≈ 170 km for cold; ×1.4 for
+  warm). Wider than `merge_km`, and the reason warm fronts now link.
+
+Among passing candidates a **soft coldward prior** (the physical norm — the front
+shifts toward the cold air with height) breaks ties; it is *not* a hard gate,
+because the 3-level data is coarse and occlusions genuinely tilt the other way.
+Unattached crossings become single-level chains (`n_levels == 1`, drawn faint).
+
+**Artifact.** `route_fronts.json` gains `front_chains: {model → [FrontChain]}`,
+each chain carrying its ordered per-level `nodes` (level, distance, kind,
+intensity, gradient, Δθe), a consensus `kind`, `n_levels` (depth), and a `tilt`
+diagnostic (`coldward` / `upright` / `warmward`). `vertical_levels` is still
+stamped on each crossing (now from chain membership) so the marker opacity and
+the `fronts` advisory keep working unchanged.
+
+**Rendering.** `fronts-markers.ts` draws each chain as a slanted polyline through
+its node positions (x = along-route distance at that level, y = the level's
+representative altitude 2,500/5,000/10,000 ft), colour = kind, weight =
+intensity, opacity = depth, with a node dot per level and a dashed extrapolation
+to the column edges. Single-level chains draw as a short faint tick; pre-linking
+packs (no `front_chains`) fall back to the original vertical markers.
+
+**Honesty.** With only 3 levels and the §8 ±50–100 km per-level positional
+uncertainty, the slope is a 2-segment sketch, not a surveyed surface — present it
+qualitatively. The clean version arrives with the Phase D.2 **GRIB stencil**: with
+25+ native levels the front falls out as the locus of max gradient / TFP=0 *in the
+(along-route × pressure) plane*, so vertical continuity is intrinsic and no
+cross-level association heuristic is needed. The linker is the deliberate
+3-level stopgap that proves the UX until then. **Calibration of the link gates
+against a known frontal case (Storm Ciarán, the May-4 fronts) is still pending**
+— the thresholds above are physically-motivated defaults, not validated numbers.
 
 ## 8. Accuracy expectations
 
@@ -628,7 +694,7 @@ Opens after Phase D so the map + cross-section surface has something to show moi
 | **Phase D.0** (precompute loop) | ✅ Done (2026-04-24) — `run_hewson_precompute_loop` + `weatherbrief.hewson.run_once()` + `python -m weatherbrief.hewson` CLI |
 | **Phase D.1** (backend endpoints) | ✅ Done (2026-04-25, PR #96) — `/api/hewson-map`, `/api/hewson-map/manifest`, `/api/hewson-map/all-metrics`; admin-gated via `_synoptic_auth = require_admin` while calibrating |
 | **Phase D.2** (map layer + tooltips + ERA5 cases) | ✅ Done (2026-04-25, PR #96) — Synoptic Forecast tab on `/maps.html`, canvas grid overlay, cursor-following tooltip with all 6 metrics, default/storm scale toggle, briefing-style (i) modal with Discuss-with-AI prompts, `era5-case` CLI for historical events (Storm Ciarán test case) |
-| Phase D.3 (cross-section θe bands) | Full 3-band θe visualization still pending; the **front-marker** cross-section layer shipped in #196 (`layers/fronts-markers.ts`) as the first Phase D.3 layer |
+| Phase D.3 (cross-section θe bands) | Generic per-metric θe band overlay still **unbuilt** (and optional — see §7.9 drift note). What shipped (#196, `layers/fronts-markers.ts`) is the **front-line** layer: vertical markers per crossing, now upgraded to **slanted vertically-linked front lines** (§7.9.1, `_link_front_chains` + `front_chains` artifact). Link-gate calibration still pending. |
 | Phase D.4 (stencil in GRIB era) | Gated on native-GRIB ingestion being live for the user's briefing model |
 | **Phase C data layer** (#195 Part 1) | ✅ Done — `FrontGateConfig` + `HewsonFieldSource` (snapshot/case), candidate/decision split, `run_fronts` stage + `route_fronts.json` + `auto_front_detection` pref + `GET .../route-fronts`, 2-D TFP=0 extractor + `GET /api/hewson-map/fronts` + synoptic-map overlay, `front-calibrate` sweep CLI + DWD chart overlay. Detection reads the precompute snapshot — milliseconds, zero fetch. |
 | **Phase C advisory evaluators** (#196 Part 2) | ✅ Done — `fronts` advisory evaluator (`analysis/advisories/fronts.py`, `default_enabled=False`, auto-enabled when `route_fronts.json` present, RED on sharp / AMBER on classical+closing); `route_fronts` on `RouteContext` populated in the 3 `tasks/advise.py` sites; pipeline runs fronts *before* advisories; recalc re-runs/clears the artifact per pref; AI digest picks it up via the generic advisory loop; route-map `frontsGroup` overlay + toggle; cross-section `fronts-markers` layer; `routeFronts` in the briefing store + `fetchRouteFronts` adapter (non-blocking); "Experimental Auto Front Detection" settings toggle (`auto_front_detection`). Synoptic maps-page overlay left gated by `_synoptic_auth` for now (testers) — pref is the long-term gate. |

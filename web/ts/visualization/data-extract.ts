@@ -175,8 +175,10 @@ function buildFronts(
     if (better) nearest = nf;
   }
 
-  if (crossings.length === 0 && !nearest) return null;
-  return { crossings, nearest, primaryLevelHpa: manifest.primary_level_hPa };
+  const chains = manifest.front_chains?.[model] ?? [];
+
+  if (crossings.length === 0 && !nearest && chains.length === 0) return null;
+  return { crossings, nearest, primaryLevelHpa: manifest.primary_level_hPa, chains };
 }
 
 /**

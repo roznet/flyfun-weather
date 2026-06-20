@@ -13,8 +13,8 @@ from weatherbrief.tasks.artifacts import load_route_fronts
 from weatherbrief.models.fronts import FrontCrossingModel, RouteFrontAnalysisModel
 from weatherbrief.tasks.fronts import (
     _colocate,
+    _link_front_chains,
     _persistence,
-    _stamp_vertical_coherence,
     compute_route_fronts,
     nearest_cruise_level,
     run_fronts,
@@ -310,67 +310,85 @@ def _analysis(level: int, *crossings: FrontCrossingModel) -> RouteFrontAnalysisM
     )
 
 
-class TestVerticalCoherence:
-    """Cross-level stamping: a real front slopes through several levels; a
-    single-level detection is shallow/suspect (vertical_levels == 1)."""
+class TestVerticalLinking:
+    """Cross-level linking: a real front slopes through several levels into one
+    chain; the linker gates on kind, Δθe sign, and a slope budget, and stamps
+    each crossing with its chain depth (vertical_levels; 1 = shallow/suspect)."""
 
-    def test_same_feature_across_two_levels_is_coherent(self):
-        # Cold front seen at 850 (387 km) and 925 (355 km) — 32 km apart, within
-        # merge_km (60) → one feature spanning 2 levels.
+    def test_same_feature_across_two_levels_links(self):
+        # Cold front at 925 (355 km) and 850 (387 km) — 32 km apart, well inside
+        # the 925→850 budget → one chain spanning 2 levels.
         analyses = [_analysis(850, _xing(387.0)), _analysis(925, _xing(355.0))]
-        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
+        chains = _link_front_chains(analyses)
+        assert len(chains) == 1
+        assert chains[0].n_levels == 2
+        assert [n.level_hPa for n in chains[0].nodes] == [925, 850]  # bottom→top
+        assert chains[0].kind == "cold"
         assert analyses[0].crossings[0].vertical_levels == 2
         assert analyses[1].crossings[0].vertical_levels == 2
 
     def test_single_level_feature_is_shallow(self):
-        # A 925-only boundary far from any other-level crossing → vertical_levels 1.
+        # A 925-only boundary far from any other-level crossing → 2 singleton chains.
         analyses = [_analysis(925, _xing(84.0)), _analysis(850, _xing(387.0))]
-        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
-        shallow = analyses[0].crossings[0]
-        deep = analyses[1].crossings[0]
-        assert shallow.vertical_levels == 1
-        assert deep.vertical_levels == 1  # 850 one is also alone here
+        chains = _link_front_chains(analyses)
+        assert sorted(c.n_levels for c in chains) == [1, 1]
+        assert analyses[0].crossings[0].vertical_levels == 1
+        assert analyses[1].crossings[0].vertical_levels == 1
 
-    def test_three_levels_cluster_together(self):
+    def test_three_levels_link_into_one_sloping_chain(self):
+        # 925@350, 850@370, 700@390: gaps 20 + 20, each within budget → one
+        # 3-level chain. Δθe < 0 (cold downroute) and the front shifts to larger
+        # distance with height → the physical coldward slope.
         analyses = [
             _analysis(925, _xing(350.0)),
             _analysis(850, _xing(370.0)),
             _analysis(700, _xing(390.0)),
         ]
-        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
+        chains = _link_front_chains(analyses)
+        assert len(chains) == 1 and chains[0].n_levels == 3
+        assert chains[0].tilt == "coldward"
         assert all(a.crossings[0].vertical_levels == 3 for a in analyses)
 
-    def test_two_distinct_features_not_merged(self):
-        # An early 925 feature (84 km) and a late front on 850+925 (~355-387):
-        # early stays single-level, late spans 2.
+    def test_warm_front_displaced_beyond_merge_km_still_links(self):
+        # The key improvement over the old merge_km (60 km) cluster: a warm front
+        # slopes shallowly, so 925→850 can be ~90 km apart and still be one front.
         analyses = [
-            _analysis(925, _xing(84.0), _xing(355.0)),
-            _analysis(850, _xing(387.0)),
+            _analysis(925, _xing(200.0, kind="warm", delta_theta_e=12.0, advection=2.0)),
+            _analysis(850, _xing(290.0, kind="warm", delta_theta_e=12.0, advection=2.0)),
         ]
-        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
-        early = analyses[0].crossings[0]
-        late_925 = analyses[0].crossings[1]
-        late_850 = analyses[1].crossings[0]
-        assert early.vertical_levels == 1
-        assert late_925.vertical_levels == 2 and late_850.vertical_levels == 2
+        chains = _link_front_chains(analyses)
+        assert len(chains) == 1 and chains[0].n_levels == 2
+        assert chains[0].kind == "warm"
 
-    def test_complete_linkage_prevents_chaining(self):
-        # 925@250, 850@300, 700@360: single-linkage would chain all three
-        # (gaps 50, 60) into one 110 km cluster → every crossing vlev=3, inflating
-        # a shallow 250 km feature. Complete-linkage caps the span at tolerance:
-        # {250, 300} cluster (span 50), and 360 splits off alone.
+    def test_kind_mismatch_does_not_link(self):
+        # A cold front at 925 and a warm front at 850 sitting nearby are two
+        # different boundaries — never one chain.
         analyses = [
-            _analysis(925, _xing(250.0)),
-            _analysis(850, _xing(300.0)),
-            _analysis(700, _xing(360.0)),
+            _analysis(925, _xing(300.0, kind="cold", delta_theta_e=-12.0)),
+            _analysis(850, _xing(320.0, kind="warm", delta_theta_e=12.0, advection=2.0)),
         ]
-        _stamp_vertical_coherence(analyses, tolerance_km=60.0)
-        assert analyses[0].crossings[0].vertical_levels == 2  # 925@250 with 850@300
-        assert analyses[1].crossings[0].vertical_levels == 2  # 850@300
-        assert analyses[2].crossings[0].vertical_levels == 1  # 700@360 not chained
+        chains = _link_front_chains(analyses)
+        assert sorted(c.n_levels for c in chains) == [1, 1]
 
-    def test_empty_is_noop(self):
-        _stamp_vertical_coherence([], tolerance_km=60.0)  # no crash
+    def test_opposite_delta_theta_e_sign_does_not_link(self):
+        # Same kind label but the air-mass contrast points opposite ways → not the
+        # same boundary.
+        analyses = [
+            _analysis(925, _xing(300.0, kind="cold", delta_theta_e=-12.0)),
+            _analysis(850, _xing(315.0, kind="cold", delta_theta_e=12.0)),
+        ]
+        chains = _link_front_chains(analyses)
+        assert sorted(c.n_levels for c in chains) == [1, 1]
+
+    def test_beyond_slope_budget_does_not_link(self):
+        # 925@250 and 850@400 are 150 km apart — past the 100 km cold 925→850
+        # budget → two separate chains.
+        analyses = [_analysis(925, _xing(250.0)), _analysis(850, _xing(400.0))]
+        chains = _link_front_chains(analyses)
+        assert sorted(c.n_levels for c in chains) == [1, 1]
+
+    def test_empty_returns_no_chains(self):
+        assert _link_front_chains([]) == []
 
 
 class TestNearestCruiseLevel:
@@ -406,6 +424,17 @@ class TestComputeRouteFronts:
         assert len(a.crossings) >= 1
         assert a.crossings[0].kind == "cold"
         assert a.decisions  # candidate/decision trace stamped in
+
+        # The meridional cold front is the same boundary at all three levels, so
+        # the linker chains it vertically (depth ≥ 2) and exposes it in front_chains.
+        chains = manifest.front_chains["ecmwf"]
+        assert chains, "expected at least one linked front chain"
+        deepest = max(chains, key=lambda c: c.n_levels)
+        assert deepest.n_levels >= 2
+        assert deepest.kind == "cold"
+        assert [n.level_hPa for n in deepest.nodes] == sorted(
+            (n.level_hPa for n in deepest.nodes), reverse=True
+        )  # ordered bottom→top (925→850→700)
 
     def test_gate_config_stamped(self, tmp_path):
         out_dir = tmp_path / "hewson"

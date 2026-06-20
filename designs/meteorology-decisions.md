@@ -1169,3 +1169,48 @@ selection is **NCO.OP.143** (tiered DH+200/1500 m, DH+400/3000 m, or no-IAP
 2000 ft/5000 m); FAA is 14 CFR 91.169 (2000/3 trigger, 600-2 / 800-2 alternate).
 The conservatism above is only in the *conditional-group* handling and in
 bracketing the unknown plate DH with a high-side proxy range.
+
+---
+
+## 13. Vertical linking of Hewson front lines across pressure levels
+
+**Date:** 2026-06-19
+**Status:** Implemented (experimental, gated by `auto_front_detection`); link-gate
+calibration pending.
+**Context:** Fronts are detected independently at 925/850/700 hPa
+(`tasks/fronts.py`, see [hewson-fields-aviation-advisories.md](./future/hewson-fields-aviation-advisories.md)
+§7.9.1). A front is a sloping surface, so the same boundary appears at all three
+levels, displaced toward the cold air with height. We associate those per-level
+crossings into one **chain** to (a) draw a single slanted front line on the
+cross-section and (b) know the front's depth (shallow single-level vs. deep).
+
+### Decision
+
+`_link_front_chains` grows chains bottom→top, attaching a crossing to a chain one
+level below it only when **all** hold: kind-compatible (cold↔cold / warm↔warm,
+quasi wildcards), **same Δθe sign** (same air-mass-contrast direction), and within
+a **frontal-slope budget** (925→850 ≈ 100 km, 850→700 ≈ 170 km, ×1.4 for warm
+fronts). A **soft coldward prior** breaks ties (prefer the physically-normal slope
+back over the cold air) but does not reject anti-slope links.
+
+### Rejected alternatives
+
+- **Distance-only clustering at `merge_km` (the prior `_stamp_vertical_coherence`).**
+  Ignored front kind and Δθe sign (could link a cold front to a nearby warm one),
+  and 60 km is too tight for warm fronts (shallow slope → 100–200 km between
+  levels) so it under-linked them. Kept only its `vertical_levels` output, now
+  derived from chain depth.
+- **Hard directional (coldward) gate.** Rejected: with only 3 levels and ±50–100 km
+  per-level positional uncertainty (§8), plus genuine occlusions that tilt the
+  other way, a hard gate would drop real links. Used as a soft tie-break instead.
+- **Per-metric θe bands as the cross-section front visual.** The original §7.9 plan;
+  never built and not the right primitive for *front lines* (it shades a field, it
+  doesn't draw the boundary). The slanted-line layer is what shipped.
+
+### Honesty / open item
+
+The slope budgets and the upright threshold are **physically-motivated defaults,
+not validated numbers** — calibration against a known frontal case (Storm Ciarán,
+the May-4 fronts) is still pending. With 3 levels the slant is a 2-segment sketch;
+the clean version is the Phase D.2 GRIB stencil (detect in the along-route ×
+pressure plane, continuity intrinsic, no association heuristic).
