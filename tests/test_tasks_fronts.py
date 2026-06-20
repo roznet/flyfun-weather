@@ -387,6 +387,28 @@ class TestVerticalLinking:
         chains = _link_front_chains(analyses)
         assert sorted(c.n_levels for c in chains) == [1, 1]
 
+    def test_zero_delta_theta_e_still_links(self):
+        # A crossing with exactly Δθe == 0 carries no contrast direction; it must
+        # not be rejected by np.sign(0) against a signed same-kind neighbour
+        # within budget (PR #280 review #4).
+        analyses = [
+            _analysis(925, _xing(300.0, delta_theta_e=0.0)),
+            _analysis(850, _xing(320.0, delta_theta_e=-10.0)),
+        ]
+        chains = _link_front_chains(analyses)
+        assert len(chains) == 1 and chains[0].n_levels == 2
+
+    def test_chain_nodes_carry_co_location(self):
+        # co_location propagates to chain nodes so the cross-section can draw the
+        # convective glyph (PR #280 review #2).
+        analyses = [
+            _analysis(925, _xing(300.0, co_location="convective")),
+            _analysis(850, _xing(320.0, co_location="wet")),
+        ]
+        chains = _link_front_chains(analyses)
+        assert len(chains) == 1
+        assert [n.co_location for n in chains[0].nodes] == ["convective", "wet"]
+
     def test_empty_returns_no_chains(self):
         assert _link_front_chains([]) == []
 

@@ -364,7 +364,14 @@ def _link_front_chains(
                 h_level, head = ch[-1]
                 if not _kinds_compatible(head.kind, c.kind):
                     continue
-                if np.sign(head.delta_theta_e) != np.sign(c.delta_theta_e):
+                # Same air-mass-contrast direction. A crossing with exactly
+                # Δθe == 0 carries no direction, so don't let np.sign(0)==0
+                # spuriously reject it against any signed neighbour — treat zero
+                # as compatible and rely on the other gates.
+                if (
+                    head.delta_theta_e != 0.0 and c.delta_theta_e != 0.0
+                    and np.sign(head.delta_theta_e) != np.sign(c.delta_theta_e)
+                ):
                     continue
                 disp = c.distance_km - head.distance_km
                 budget = _link_budget_km(h_level, level, head.kind, c.kind)
@@ -403,7 +410,7 @@ def _link_front_chains(
                 FrontChainNodeModel(
                     level_hPa=lvl, distance_km=c.distance_km, kind=c.kind,
                     intensity=c.intensity, gradient=c.gradient,
-                    delta_theta_e=c.delta_theta_e,
+                    delta_theta_e=c.delta_theta_e, co_location=c.co_location,
                 )
                 for lvl, c in ordered
             ],

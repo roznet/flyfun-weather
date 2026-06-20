@@ -74,16 +74,21 @@ function renderChain(
     ctx.stroke();
     ctx.setLineDash([]);
   } else {
-    // Dashed extrapolation to the column edges (the surface continues beyond the
-    // outermost detected levels), then the solid slanted line through the nodes.
-    const topX = extendTo(pts[1], pts[0], yTop);          // above the top node
-    const botX = extendTo(pts[pts.length - 2], pts[pts.length - 1], yBottom);
+    // Dashed extrapolation beyond the outermost detected levels (the surface
+    // continues past them). pts are ordered bottom→top (925→850→700), so pts[0]
+    // is the visually-bottom node and pts[last] the top. Extrapolate above the
+    // top node along the *top* segment's slope, and below the bottom node along
+    // the *bottom* segment's slope, so the dashed meets the solid without a kink.
+    const topNode = pts[pts.length - 1];
+    const botNode = pts[0];
+    const topX = extendTo(pts[pts.length - 2], topNode, yTop);   // top segment → above top node
+    const botX = extendTo(pts[1], botNode, yBottom);             // bottom segment → below bottom node
     ctx.setLineDash([5, 5]);
     ctx.globalAlpha = chainAlpha(chain) * 0.5;
     ctx.beginPath();
     ctx.moveTo(topX, yTop);
-    ctx.lineTo(pts[0].x, pts[0].y);
-    ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    ctx.lineTo(topNode.x, topNode.y);
+    ctx.moveTo(botNode.x, botNode.y);
     ctx.lineTo(botX, yBottom);
     ctx.stroke();
     ctx.setLineDash([]);
@@ -95,16 +100,28 @@ function renderChain(
     ctx.stroke();
   }
 
-  // Node dot at each detected level.
-  for (const p of pts) {
+  // Node dot at each detected level; a small triangle below a convective node
+  // (towers above an overflown front) — mirrors the vertical-marker glyph so the
+  // convective indicator isn't lost when a front renders as a chain.
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
     ctx.beginPath();
     ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
     ctx.fill();
+    if (chain.nodes[i].co_location === 'convective') {
+      const ty = p.y + 5;
+      ctx.beginPath();
+      ctx.moveTo(p.x, ty);
+      ctx.lineTo(p.x - 5, ty + 8);
+      ctx.lineTo(p.x + 5, ty + 8);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
-  // Kind-initial chip — at the column top for a single-level line, at the top
-  // node for a slanted chain.
-  const top = pts[0];
+  // Kind-initial chip — at the column top for a single-level line, at the
+  // visually-top node (pts[last] = 700 hPa) for a slanted chain.
+  const top = pts.length === 1 ? pts[0] : pts[pts.length - 1];
   const label = frontKindLabel(chain.kind).charAt(0).toUpperCase();
   ctx.font = 'bold 11px system-ui, sans-serif';
   const tw = ctx.measureText(label).width;

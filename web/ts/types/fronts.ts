@@ -40,6 +40,7 @@ export interface FrontChainNode {
   intensity: FrontIntensity;
   gradient: number;
   delta_theta_e: number;
+  co_location?: FrontCoLocation | null;  // weather at this node (drives the convective glyph)
 }
 
 /** A single front linked across pressure levels — the same air-mass boundary

@@ -54,6 +54,10 @@ class FrontChainNodeModel(BaseModel):
     intensity: str             # "significant" | "classical" | "sharp"
     gradient: float            # |∇θe|  K/100km
     delta_theta_e: float       # signed θe jump across the window, K
+    # Weather co-located with this node's crossing — lets the cross-section flag a
+    # convective node (towers above an overflown front) the way the vertical
+    # markers do. None when no per-model column was available.
+    co_location: str | None = None   # "dry"|"partly"|"wet"|"convective"
 
 
 class FrontChainModel(BaseModel):
