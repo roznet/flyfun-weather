@@ -128,9 +128,15 @@ mcp = FastMCP(
         "When the user questions, doubts, or wants to understand an advisory "
         "(e.g. 'why is convective red when it looks like blue sky?'), call "
         "get_advisory_detail (and get_digest_context for the deepest context) "
-        "before answering — never explain a red/amber from the aggregate status "
-        "alone. Treat cross-check notes and per-model splits as context for the "
-        "discussion, not a reason to downgrade an advisory.\n\n"
+        "before answering. The per-model split and cross_check note in "
+        "get_briefing are only a hook — they are NOT the full picture: the "
+        "per-point reconciliation data (e.g. CAPE vs the model's own cloud "
+        "cover, the peak location and valid-time) lives ONLY in "
+        "get_advisory_detail. So whenever an advisory carries cross_check_present "
+        "or the user asks 'why', drill in first — do not answer from the "
+        "get_briefing summary alone even though it looks sufficient. Treat "
+        "cross-check notes and per-model splits as context for the discussion, "
+        "not a reason to downgrade an advisory.\n\n"
         "Provenance note: the AI digest narrates 'convective tops' that are "
         "parcel-derived (the thermodynamic equilibrium level from CAPE), NOT the "
         "model's own convective cloud field. A convective advisory driven RED by "
@@ -395,14 +401,32 @@ def get_briefing(
 
         timestamp = pack["fetch_timestamp"]
 
-        # Check freshness
+        # Check freshness. Prefer the tiered refresh-gate decision (what the web
+        # refresh button actually does at this lead time) over the raw ``fresh``
+        # min-rule: the min-rule flips to stale whenever *any* model has a newer
+        # run, even when the gate has decided a refresh isn't worthwhile yet —
+        # which surfaced as a false "needs refresh" right after a manual refresh.
         try:
             freshness = client.get_freshness(flight_id)
-            is_fresh = freshness.get("fresh", True)
+            decision = freshness.get("refresh_decision") or {}
+            mode = decision.get("mode")
+            if mode is not None:
+                # "none" → nothing worthwhile to refresh; "full"/"realtime" → an
+                # update the button would actually fetch.
+                is_fresh = mode == "none"
+            else:
+                # Gate didn't run (no flight ctx) — fall back to the min-rule.
+                is_fresh = freshness.get("fresh", True)
             stale_models = freshness.get("stale_models", [])
+            stale_reason = decision.get("reason")
+            pending_models = decision.get("pending_models", [])
+            eta_useful = decision.get("eta_useful")
         except httpx.HTTPStatusError:
             is_fresh = True
             stale_models = []
+            stale_reason = None
+            pending_models = []
+            eta_useful = None
 
         status = "ready" if is_fresh else "stale"
 
@@ -418,10 +442,15 @@ def get_briefing(
 
         if not is_fresh:
             result["stale_models"] = stale_models
-            result["stale_note"] = (
-                "Weather models have updated since this briefing. "
-                "Call refresh_briefing for the latest data."
-            )
+            # Use the gate's own reason so the note matches the web button — and
+            # only when a refresh is genuinely worthwhile (mode != "none").
+            note = stale_reason or "Newer model data is available for this briefing."
+            note += " Call refresh_briefing for the latest data."
+            if pending_models:
+                note += f" Awaiting updated runs: {', '.join(pending_models)}."
+            if eta_useful:
+                note += f" Useful refresh ETA: {eta_useful}."
+            result["stale_note"] = note
 
         # Fetch advisories
         advisories = client.get_advisories(flight_id, timestamp)
