@@ -1,6 +1,6 @@
 # FlyFun Weather — Privacy & Data Practices
 
-*Last updated: 2026-04-20*
+*Last updated: 2026-06-20*
 
 This document explains what data the app collects, why, and what I do (and don't do) with it.
 FlyFun Weather is a personal project — I'm a single developer, not a company.
@@ -129,7 +129,7 @@ The app interacts with these external services during normal operation:
 | Service | Data Sent | Purpose |
 |---------|-----------|---------|
 | **Open-Meteo** | Coordinates, altitudes | Weather forecast data |
-| **Autorouter** | Your credentials + route | GRAMET cross-section images |
+| **Autorouter** | OAuth access token + route | GRAMET cross-section images |
 | **OpenAI / Anthropic** | Weather data context (no personal info) | LLM-generated briefing digest |
 | **SMTP / Resend** | Your email + briefing summary | Email delivery |
 | **Google / Apple OAuth** | OAuth tokens | Authentication |
@@ -147,6 +147,18 @@ The complete source code is open source. You can verify every claim in this docu
 - Usage tracking: `src/weatherbrief/api/usage.py`
 - Cost tracking: `src/weatherbrief/api/credits.py`
 - Email sending: `src/weatherbrief/notify/email.py`
+- Account data export: `src/weatherbrief/api/account_export.py`
+- Email masking in logs: `src/weatherbrief/privacy.py`
+
+---
+
+## Data Export
+
+You can download a complete, machine-readable (JSON) copy of the personal data held about your account — account details, preferences, flights, briefings, feedback, and usage history — at any time:
+
+- **Web app:** Settings > Download my data
+
+Encrypted credentials (e.g. your Autorouter token) and server-internal values are intentionally excluded for security.
 
 ---
 

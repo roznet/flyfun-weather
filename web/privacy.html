@@ -14,7 +14,7 @@
     </div>
 
     <div class="help-section">
-      <p><em>Last updated: 2026-04-20</em></p>
+      <p><em>Last updated: 2026-06-20</em></p>
       <p>
         This document explains what data the app collects, why, and what I do (and don't do) with it.
         FlyFun Weather is a personal project &mdash; I'm a single developer, not a company.
@@ -28,8 +28,7 @@
       <h4>Google Sign-In</h4>
       <p>
         When you sign in with Google, the server receives your <strong>email address</strong> and
-        <strong>display name</strong> from Google's OAuth flow. These are stored in the database
-        to identify your account.
+        <strong>display name</strong> during sign-in. These are stored to identify your account.
       </p>
       <h4>Apple Sign-In</h4>
       <p>
@@ -46,14 +45,14 @@
       <ul>
         <li>Email address (or Apple private relay address)</li>
         <li>Display name</li>
-        <li>OAuth provider (Google or Apple)</li>
+        <li>Sign-in provider (Google or Apple)</li>
         <li>Account creation and last login timestamps</li>
       </ul>
       <h4>Flights &amp; Briefings</h4>
       <ul>
         <li>Your saved routes, waypoints, departure times, and flight parameters</li>
-        <li>Generated briefing packs (weather data, advisories, GRAMET cross-sections, Skew-T charts, LLM digests)</li>
-        <li>Briefing artifacts are stored as files on the server, organized by user</li>
+        <li>Generated briefings (weather data, advisories, GRAMET cross-sections, Skew-T charts, AI-generated summaries)</li>
+        <li>Briefing files are stored on the server, organized by user</li>
       </ul>
       <h4>Preferences</h4>
       <ul>
@@ -92,16 +91,16 @@
     <div class="help-section">
       <h3>Autorouter Integration</h3>
       <p>
-        If you use the Autorouter integration (for GRAMET cross-section data), the app uses
-        <strong>OAuth2 authorization</strong> to connect to your Autorouter account. You are redirected
-        to autorouter.aero to authorize access &mdash; your Autorouter password is never shared with
-        or stored by this app.
+        If you use the Autorouter integration (for GRAMET cross-section data), the app uses a
+        <strong>secure authorization process</strong> to connect to your Autorouter account. You are
+        redirected to autorouter.aero to authorize access &mdash; your Autorouter password is never
+        shared with or stored by this app.
       </p>
       <h4>What is stored</h4>
       <p>
         After authorization, an <strong>access token</strong> (valid for approximately one year) is stored
-        encrypted at rest using Fernet symmetric encryption (AES-128-CBC). This token allows the app to
-        fetch GRAMET data on your behalf. No username or password is stored.
+        <strong>encrypted</strong> on the server. This token allows the app to fetch GRAMET data on your
+        behalf. No username or password is stored.
       </p>
       <p>You can disconnect your Autorouter account at any time from your settings, which removes the stored token.</p>
     </div>
@@ -111,8 +110,8 @@
       <h4>What Is Tracked</h4>
       <p>Every briefing refresh logs:</p>
       <ul>
-        <li>Number of API calls made (Open-Meteo, GRAMET, LLM)</li>
-        <li>LLM model used and token counts (input/output)</li>
+        <li>Number of data requests made (weather models, GRAMET, AI)</li>
+        <li>Which AI model was used and how much text it processed</li>
         <li>Briefing size and processing time</li>
         <li>Whether the refresh was manual or automatic</li>
       </ul>
@@ -125,6 +124,12 @@
       <p>
         There are <strong>no third-party analytics</strong>, no tracking pixels, no cookies beyond the
         authentication session cookie. I don't use Google Analytics or any similar service.
+      </p>
+      <h4>Cost Model</h4>
+      <p>
+        The app tracks the real cost of each briefing (AI usage, infrastructure share, storage) and makes
+        this <strong>available publicly</strong>, so anyone can see what the app costs to run. You can also
+        see your own usage and cost breakdown in the app.
       </p>
     </div>
 
@@ -141,13 +146,29 @@
         </thead>
         <tbody>
           <tr><td style="padding:0.5em;">Open-Meteo</td><td style="padding:0.5em;">Coordinates, altitudes</td><td style="padding:0.5em;">Weather forecast data</td></tr>
-          <tr><td style="padding:0.5em;">Autorouter</td><td style="padding:0.5em;">OAuth token + route</td><td style="padding:0.5em;">GRAMET cross-section images</td></tr>
-          <tr><td style="padding:0.5em;">OpenAI / Anthropic</td><td style="padding:0.5em;">Weather data context (no personal info)</td><td style="padding:0.5em;">LLM-generated briefing digest</td></tr>
+          <tr><td style="padding:0.5em;">Autorouter</td><td style="padding:0.5em;">Access token + route</td><td style="padding:0.5em;">GRAMET cross-section images</td></tr>
+          <tr><td style="padding:0.5em;">OpenAI / Anthropic</td><td style="padding:0.5em;">Weather data context (no personal info)</td><td style="padding:0.5em;">AI-generated briefing summary</td></tr>
           <tr><td style="padding:0.5em;">SMTP / Resend</td><td style="padding:0.5em;">Your email + briefing summary</td><td style="padding:0.5em;">Email delivery</td></tr>
-          <tr><td style="padding:0.5em;">Google / Apple OAuth</td><td style="padding:0.5em;">OAuth tokens</td><td style="padding:0.5em;">Authentication</td></tr>
+          <tr><td style="padding:0.5em;">Google / Apple</td><td style="padding:0.5em;">Sign-in tokens</td><td style="padding:0.5em;">Authentication (sign-in)</td></tr>
         </tbody>
       </table>
-      <p>No personal information (name, email, routes) is sent to LLM providers &mdash; only anonymized weather data context.</p>
+      <p>No personal information (name, email, routes) is sent to AI providers &mdash; only anonymized weather data.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>Data Export</h3>
+      <p>
+        You can download a complete, machine-readable (JSON) copy of the personal data held about your
+        account &mdash; account details, preferences, flights, briefings, feedback, and usage history &mdash;
+        at any time:
+      </p>
+      <ul>
+        <li><strong>Web app:</strong> Settings &gt; Download my data</li>
+      </ul>
+      <p>
+        Encrypted credentials (e.g. your Autorouter token) and server-internal values are intentionally
+        excluded for security.
+      </p>
     </div>
 
     <div class="help-section">
@@ -165,7 +186,7 @@
     <div class="help-section">
       <h3>Data Retention &amp; Hosting</h3>
       <ul>
-        <li><strong>Briefing artifacts</strong> (weather files, charts) are cleaned up automatically after a period to manage disk space</li>
+        <li><strong>Briefing files</strong> (weather data, charts) are cleaned up automatically after a period to manage disk space</li>
         <li><strong>Account data and flight history</strong> are retained as long as your account exists</li>
         <li>The server is hosted on <strong>DigitalOcean</strong> in the <strong>EU</strong> region</li>
         <li>No data is replicated to other regions or services beyond what's needed for email delivery</li>
@@ -175,10 +196,13 @@
     <div class="help-section">
       <h3>Open Source &amp; Auditability</h3>
       <p>
-        The complete source code is <a href="https://github.com/roznet/flyfun-weather">open source</a>.
-        You can verify every claim in this document by reading the code yourself.
-        If you identify any issues, please raise a
-        <a href="https://github.com/roznet/flyfun-weather/issues">GitHub issue</a>.
+        The complete source code is <a href="https://github.com/roznet/flyfun-weather">open source</a>,
+        so you can verify every claim on this page by reading the code yourself &mdash; or ask your
+        favorite AI coding agent to review it for you. A more detailed technical breakdown of exactly
+        where each of these practices lives in the code is in the project's
+        <a href="https://github.com/roznet/flyfun-weather/blob/main/PRIVACY.md">PRIVACY.md</a>.
+        If you spot any issue, please raise a
+        <a href="https://github.com/roznet/flyfun-weather/issues">GitHub issue</a> and I will address it.
       </p>
     </div>
 

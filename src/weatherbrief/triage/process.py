@@ -98,12 +98,15 @@ def _check_rate_limit(db: Session, user_id: str) -> bool:
 
 
 def _feedback_to_prompt_dict(fb: FeedbackRow, user: UserRow) -> dict:
-    """Build the dict expected by load_prompt() from DB rows."""
+    """Build the dict expected by load_prompt() from DB rows.
+
+    Deliberately omits the user's name and email: triage only needs the
+    feedback content, and we do not send identifying PII to the LLM (see
+    PRIVACY.md). ``user`` is still accepted for signature stability.
+    """
     return {
         "category": fb.category or "",
         "comment": fb.comment or "",
-        "user_email": user.email or "",
-        "user_name": user.display_name or "",
         "flight_id": fb.flight_id or "",
         "pack_timestamp": fb.pack_timestamp.isoformat() if fb.pack_timestamp else "N/A",
         "feedback_created_at": fb.created_at.isoformat() if fb.created_at else "",

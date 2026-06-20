@@ -265,19 +265,27 @@
         <!-- Your Data -->
         <div class="section">
           <h3>Your Data</h3>
+
+          <h4>Export</h4>
           <p class="muted section-hint">
             Download a complete copy of the personal data we hold about you (account, flights, briefings, preferences, feedback) as a JSON file.
           </p>
           <button type="button" id="btn-export-data" class="btn btn-secondary">Download my data</button>
-        </div>
 
-        <!-- Danger Zone -->
-        <div class="section danger-zone">
-          <h3>Delete Account</h3>
+          <h4 style="margin-top:1.5rem">Privacy</h4>
           <p class="muted section-hint">
-            Permanently delete your account and all associated data (flights, briefings, profiles). This action cannot be undone.
+            Read what data the app collects, why, and what we do (and don't do) with it.
           </p>
-          <button type="button" id="btn-delete-account" class="btn btn-danger">Delete Account</button>
+          <a href="/privacy.html" class="btn btn-secondary">Privacy &amp; Data Practices</a>
+
+          <!-- Delete account: destructive, kept visually distinct -->
+          <div class="danger-zone">
+            <h4 style="margin-top:0">Delete Account</h4>
+            <p class="muted section-hint">
+              Permanently delete your account and all associated data (flights, briefings, profiles). This action cannot be undone.
+            </p>
+            <button type="button" id="btn-delete-account" class="btn btn-danger">Delete Account</button>
+          </div>
         </div>
       </div>
 

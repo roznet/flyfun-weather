@@ -17,10 +17,11 @@ DEFAULT_TEMPLATE = "triage_prompt_v1.md"
 def load_prompt(item: dict, *, template: str = DEFAULT_TEMPLATE) -> str:
     """Read the prompt template and substitute feedback placeholders.
 
-    User-authored fields (comment, user_name, user_email) are wrapped in an
-    `<UNTRUSTED_INPUT_xxx>` block with a random per-invocation delimiter,
-    and any literal occurrence of the delimiter tags is stripped from the
-    user values so they cannot break out of the block.
+    The user-authored ``comment`` is wrapped in an `<UNTRUSTED_INPUT_xxx>`
+    block with a random per-invocation delimiter, and any literal occurrence
+    of the delimiter tags is stripped from it so it cannot break out of the
+    block. Identifying PII (name, email) is intentionally NOT sent to the LLM
+    (see PRIVACY.md).
     """
     path = _CONFIGS_DIR / template
     if not path.exists():
@@ -40,8 +41,6 @@ def load_prompt(item: dict, *, template: str = DEFAULT_TEMPLATE) -> str:
         "pack_timestamp": item.get("pack_timestamp", "N/A"),
         "feedback_created_at": item.get("feedback_created_at", ""),
         "comment": _untrusted("comment"),
-        "user_email": _untrusted("user_email"),
-        "user_name": _untrusted("user_name"),
     }
 
     for key, value in replacements.items():
