@@ -69,6 +69,11 @@ async function init(): Promise<void> {
     });
   });
 
+  // Build the quick-navigation sidebar from the guide's section headings.
+  // Built last so it reflects sections removed/revealed above (Getting Access,
+  // Support). maybeShowSupportSection() rebuilds it again once it resolves.
+  buildHelpToc();
+
   // Check if URL has ?tab=... to auto-switch. This is also the shareable
   // deep link target (e.g. /whats-new redirects to ?tab=whats-new).
   const params = new URLSearchParams(window.location.search);
@@ -76,6 +81,88 @@ async function init(): Promise<void> {
   if (initialTab === 'whats-new' || initialTab === 'data-sources') {
     switchTab(initialTab, 'deeplink');
   }
+}
+
+// --- Quick-navigation sidebar (Table of contents) ---
+
+let tocObserver: IntersectionObserver | null = null;
+
+/** Turn a heading label into a stable, URL-safe id. */
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/** Build (or rebuild) the on-this-page sidebar from the visible guide
+ *  sections. Idempotent — safe to call again after a section is revealed. */
+function buildHelpToc(): void {
+  const guide = document.getElementById('tab-guide');
+  if (!guide) return;
+
+  // Collect only currently-visible sections that have an <h3> heading.
+  const sections = Array.from(guide.querySelectorAll<HTMLElement>(':scope > .help-section'))
+    .filter((sec) => getComputedStyle(sec).display !== 'none' && sec.querySelector('h3'));
+  if (sections.length < 2) return;
+
+  const items = sections.map((sec) => {
+    const h3 = sec.querySelector('h3')!;
+    const label = (h3.textContent || '').trim();
+    if (!sec.id) sec.id = `sec-${slugify(label)}`;
+    return { id: sec.id, label };
+  });
+
+  // Replace any previous nav so reveals/removals stay in sync.
+  guide.querySelector('.help-toc')?.remove();
+
+  const nav = document.createElement('nav');
+  nav.className = 'help-toc';
+  nav.setAttribute('aria-label', t('nav.help'));
+  nav.innerHTML = `
+    <p class="help-toc-title">${escapeHtml(t('help.onThisPage'))}</p>
+    <ul>
+      ${items.map((it) => `<li><a class="help-toc-link" href="#${it.id}">${escapeHtml(it.label)}</a></li>`).join('')}
+    </ul>`;
+  guide.insertBefore(nav, guide.firstChild);
+  guide.classList.add('with-toc');
+
+  // Smooth-scroll on click without leaving a #hash jump in history.
+  nav.querySelectorAll<HTMLAnchorElement>('.help-toc-link').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      const id = a.getAttribute('href')?.slice(1);
+      const target = id ? document.getElementById(id) : null;
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+
+  setupTocScrollSpy(nav, items.map((it) => it.id));
+}
+
+/** Highlight the TOC link whose section is currently near the top. */
+function setupTocScrollSpy(nav: HTMLElement, ids: string[]): void {
+  tocObserver?.disconnect();
+  const linkFor = (id: string) =>
+    nav.querySelector<HTMLAnchorElement>(`.help-toc-link[href="#${id}"]`);
+
+  tocObserver = new IntersectionObserver(
+    (entries) => {
+      // Pick the highest-on-screen intersecting section.
+      const visible = entries
+        .filter((en) => en.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (!visible.length) return;
+      const activeId = (visible[0].target as HTMLElement).id;
+      nav.querySelectorAll('.help-toc-link.active').forEach((el) => el.classList.remove('active'));
+      linkFor(activeId)?.classList.add('active');
+    },
+    { rootMargin: '0px 0px -70% 0px', threshold: 0 },
+  );
+
+  ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) tocObserver!.observe(el);
+  });
 }
 
 /** Show the "Supporting the service" help section only when the global
@@ -87,7 +174,10 @@ async function maybeShowSupportSection(): Promise<void> {
     const prefs = await fetchPreferences();
     if (prefs.donations_enabled) {
       const el = document.getElementById('help-support-section');
-      if (el) el.style.display = '';
+      if (el) {
+        el.style.display = '';
+        buildHelpToc(); // re-include the now-visible Support section
+      }
     }
   } catch {
     // non-critical — leave the section hidden

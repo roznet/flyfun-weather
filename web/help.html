@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <div class="container">
+  <div class="container help-layout">
     <div class="page-header">
       <h1>Help &amp; Guide</h1>
       <div class="header-right">
@@ -459,6 +459,51 @@
       </table>
     </div>
 
+    <!-- MCP server / AI assistant integration -->
+    <div class="help-section">
+      <h3>AI Assistant Integration (MCP)</h3>
+      <p>
+        Flyfun Weather runs an <a href="https://modelcontextprotocol.io/" target="_blank" rel="noopener">MCP</a>
+        server, so you can work with your briefings from inside an AI assistant such as
+        <a href="https://claude.ai/" target="_blank" rel="noopener">Claude</a>. Instead of clicking through the
+        site, you simply ask in plain language.
+      </p>
+      <h4>What you can do</h4>
+      <ul>
+        <li>
+          <strong>Ask questions about a briefing.</strong> This is the highlight &mdash; interrogate the
+          weather the way you'd ask a fellow pilot. <em>&ldquo;Why is the convective advisory red when it
+          looks like blue sky?&rdquo;</em>, <em>&ldquo;What's the freezing level along the route?&rdquo;</em>,
+          <em>&ldquo;Where do the models disagree?&rdquo;</em> The assistant drills into the per-model split,
+          cross-checks, and AI digest to explain the reasoning, not just the headline colour.
+        </li>
+        <li>
+          <strong>Build it into your flight-planning workflow.</strong> Create a flight from a route, let the
+          briefing generate automatically, then pull the weather assessment, advisories, and METAR/TAF &mdash;
+          all in one conversation. <em>&ldquo;Create a flight LFMD to EGTF tomorrow morning and tell me if the
+          weather works.&rdquo;</em> You can also refresh a stale briefing when a newer model run lands.
+        </li>
+      </ul>
+      <p class="muted">
+        Every answer links back to the full interactive briefing here on the site for cross-sections,
+        Skew-T diagrams, and route maps.
+      </p>
+      <h4>How to connect</h4>
+      <p>In <a href="https://claude.ai/" target="_blank" rel="noopener">claude.ai</a>:</p>
+      <ol>
+        <li>Open <strong>Settings &rarr; Customize</strong> (or <strong>Connectors</strong>).</li>
+        <li>Under <strong>Connectors</strong>, press <strong>+</strong> (<em>Add custom connector</em>).</li>
+        <li>
+          Enter the server URL:
+          <code>https://mcp.flyfun.aero/weather</code>
+        </li>
+      </ol>
+      <p class="muted">
+        You'll be asked to sign in with your Flyfun Weather account the first time, so the assistant
+        only ever sees your own flights and briefings.
+      </p>
+    </div>
+
     <!-- Early Access (hidden when signed in) -->
     <div class="help-section" id="getting-access">
       <h3>Getting Access</h3>
@@ -466,18 +511,6 @@
         Flyfun Weather is currently in early preview. To request access,
         <a href="/login.html">sign in</a>
         and wait for an email confirmation that your account has been enabled.
-      </p>
-    </div>
-
-    <!-- Supporting the service (revealed by help-main.ts only when donations are enabled) -->
-    <div class="help-section" id="help-support-section" style="display:none;">
-      <h3>Supporting the Service</h3>
-      <p>
-        Flyfun Weather is free to use. Running the models, the analysis, and the AI briefings
-        does cost money, so if you find it useful you can optionally chip in from the
-        <a href="/donate.html">Support</a> page &mdash; every contribution helps keep the
-        service running for the whole pilot community. There is no paywall, and contributing
-        is entirely voluntary.
       </p>
     </div>
 
@@ -513,6 +546,16 @@
       <p class="muted" style="margin-top: 0.5rem;">
         This application was built with AI assistance (Claude, Anthropic).
       </p>
+    </div>
+
+    <!-- Support Flyfun (revealed by help-main.ts only when donations are enabled) -->
+    <div class="help-section" id="help-support-section" style="display:none;">
+      <h3>Support Flyfun Weather</h3>
+      <p class="muted">
+        Flyfun Weather is free and sponsored by the operator. Voluntary donations
+        offset the running cost and keep it free for everyone &mdash; no perks, no premium tier.
+      </p>
+      <a href="/donate.html" class="btn btn-primary btn-sm">Support the service</a>
     </div>
 
     </div><!-- /tab-guide -->

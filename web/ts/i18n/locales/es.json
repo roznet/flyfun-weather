@@ -702,6 +702,7 @@
   "legend.sld.severe": "Severe",
   "legend.sld.severeDesc": "Heavy freezing rain (deep warm nose) \u2014 avoid",
   "help.startTourBtn": "Iniciar la visita interactiva",
+  "help.onThisPage": "En esta página",
   "help.startTourHint": "Un recorrido de 9 pasos sobre un briefing real \u2014 avisos, secci\u00f3n transversal, gr\u00e1fico de ruta, Skew-T. Dos minutos.",
   "tour.welcome.title": "Bienvenido a su briefing",
   "tour.welcome.desc": "Esta visita r\u00e1pida recorre las principales partes de un briefing de vuelo. Puede pulsar Omitir en cualquier momento \u2014 nada de aqu\u00ed modifica su vuelo.",

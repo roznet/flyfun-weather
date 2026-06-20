@@ -4286,6 +4286,63 @@ label {
   margin-bottom: 0.5rem;
 }
 
+/* ---- Help table-of-contents sidebar (guide tab only, JS-injected) ---- */
+/* Widen the page when the TOC is present so content keeps its reading width. */
+.container.help-layout { max-width: 1180px; }
+
+/* #tab-guide gets .with-toc from help-main.ts once the nav is injected.
+   The nav lives in column 1 and spans the full height so it stays sticky;
+   sections are pinned to column 2 without needing a wrapper element. */
+#tab-guide.with-toc {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 1.75rem;
+  align-items: start;
+}
+#tab-guide.with-toc > .help-section { grid-column: 2; }
+#tab-guide.with-toc > .help-toc { grid-column: 1; grid-row: 1 / span 100; }
+
+.help-toc {
+  position: sticky;
+  top: 0.75rem;
+  align-self: start;
+  max-height: calc(100vh - 1.5rem);
+  overflow-y: auto;
+  font-size: 0.82rem;
+}
+.help-toc-title {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem;
+  padding-left: 0.6rem;
+}
+.help-toc ul { list-style: none; margin: 0; padding: 0; }
+.help-toc-link {
+  display: block;
+  padding: 0.3rem 0.6rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  line-height: 1.35;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.help-toc-link:hover { color: var(--text); background: var(--surface); }
+.help-toc-link.active {
+  color: var(--primary);
+  border-left-color: var(--primary);
+  font-weight: 600;
+}
+
+.help-section { scroll-margin-top: 0.75rem; }
+
+@media (max-width: 760px) {
+  #tab-guide.with-toc { display: block; }
+  .help-toc { display: none; }
+}
+
 .help-tip {
   background: rgba(37, 99, 235, 0.06);
   border-left: 3px solid var(--primary);

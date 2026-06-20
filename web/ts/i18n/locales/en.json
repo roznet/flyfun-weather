@@ -814,6 +814,7 @@
   "debrief.infoBtn": "About this form",
   "help.startTourBtn": "Take the interactive tour",
   "help.startTourHint": "A 9-step walkthrough on a real briefing — advisories, cross-section, route graph, Skew-T. Two minutes.",
+  "help.onThisPage": "On this page",
   "tour.welcome.title": "Welcome to your briefing",
   "tour.welcome.desc": "This quick tour walks through the main parts of a flight briefing. You can hit Skip anytime — nothing here changes your flight.",
   "tour.displayMode.title": "Compact vs. full details",
