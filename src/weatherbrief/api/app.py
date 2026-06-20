@@ -60,6 +60,8 @@ from weatherbrief.api.synoptic_charts import router as synoptic_charts_router
 from weatherbrief.api.data_sources import router as data_sources_router
 from weatherbrief.api.models import router as models_router
 from weatherbrief.api.tokens import router as tokens_router
+from weatherbrief.api.account_export import router as account_export_router
+from weatherbrief.privacy import mask_email
 from weatherbrief.api.usage import router as usage_router
 from flyfun_common.admin_hub import create_hub_router
 
@@ -127,7 +129,7 @@ def _on_new_user(user, request, db):
             base_url = base_url.replace("http://", "https://")
         send_welcome_email(user.email, user.display_name, base_url)
     except Exception:
-        logger.warning("Failed to send welcome email for new user %s", user.email, exc_info=True)
+        logger.warning("Failed to send welcome email for new user %s", mask_email(user.email), exc_info=True)
 
 
 @asynccontextmanager
@@ -520,6 +522,7 @@ def create_app() -> FastAPI:
     app.include_router(flights_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")
+    app.include_router(account_export_router, prefix="/api")
     app.include_router(profiles_router, prefix="/api")
     app.include_router(profiles_admin_router, prefix="/api")
     app.include_router(usage_router, prefix="/api")

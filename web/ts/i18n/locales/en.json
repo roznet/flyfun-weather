@@ -519,6 +519,8 @@
   "settings.deleteAccountConfirm": "Are you sure you want to delete your account? All your flights, briefings, and settings will be permanently removed.",
   "settings.deleteAccountDoubleConfirm": "This cannot be undone. Are you sure you want to permanently delete your account and all data?",
   "settings.deleteAccountFailed": "Failed to delete account: {error}",
+  "settings.exportDataDone": "Your data export has been downloaded.",
+  "settings.exportDataFailed": "Failed to export your data: {error}",
 
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",

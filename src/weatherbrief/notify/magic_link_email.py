@@ -17,6 +17,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from weatherbrief.notify.email import SmtpConfig, send_message
+from weatherbrief.privacy import mask_email
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ def send_magic_link_email(
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    logger.info("Sending magic-link sign-in email to %s", email)
+    logger.info("Sending magic-link sign-in email to %s", mask_email(email))
     try:
         send_message(msg)
     except Exception:

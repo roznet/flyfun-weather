@@ -443,6 +443,8 @@
   "settings.deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer votre compte ? Tous vos vols, briefings et paramètres seront définitivement supprimés.",
   "settings.deleteAccountDoubleConfirm": "Cette action est irréversible. Êtes-vous sûr de vouloir supprimer définitivement votre compte et toutes vos données ?",
   "settings.deleteAccountFailed": "Échec de la suppression du compte : {error}",
+  "settings.exportDataDone": "L'export de vos données a été téléchargé.",
+  "settings.exportDataFailed": "Échec de l'export de vos données : {error}",
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
   "usage.gramet": "GRAMET",

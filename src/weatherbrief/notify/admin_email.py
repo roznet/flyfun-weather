@@ -17,6 +17,7 @@ from email.mime.text import MIMEText
 from urllib.parse import urlencode
 
 from weatherbrief.notify.email import SmtpConfig, send_message
+from weatherbrief.privacy import mask_email
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +70,13 @@ def send_new_user_notification(
     admin_emails = get_admin_emails()
 
     if is_dev_mode() or not admin_emails:
-        logger.info("New user signup (auto-approved): %s (%s)", email, user_id)
+        logger.info("New user signup (auto-approved): %s (%s)", mask_email(email), user_id)
         return
 
     try:
         smtp_config = SmtpConfig.from_env()
     except ValueError:
-        logger.warning("SMTP not configured — cannot send admin notification for %s", email)
+        logger.warning("SMTP not configured — cannot send admin notification for %s", mask_email(email))
         return
 
     admin_page_url = f"{base_url}/admin.html"
@@ -111,9 +112,12 @@ def send_new_user_notification(
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    logger.info("Sending admin notification for new user %s to %s", email, admin_emails)
+    logger.info(
+        "Sending admin notification for new user %s to %s",
+        mask_email(email), mask_email(admin_emails),
+    )
     send_message(msg, smtp_config)
-    logger.info("Admin notification sent for %s", email)
+    logger.info("Admin notification sent for %s", mask_email(email))
 
 
 def send_welcome_email(
@@ -128,13 +132,13 @@ def send_welcome_email(
     from flyfun_common.auth import is_dev_mode
 
     if is_dev_mode():
-        logger.info("Welcome email (dev mode, not sent): %s", email)
+        logger.info("Welcome email (dev mode, not sent): %s", mask_email(email))
         return
 
     try:
         smtp_config = SmtpConfig.from_env()
     except ValueError:
-        logger.warning("SMTP not configured — cannot send welcome email to %s", email)
+        logger.warning("SMTP not configured — cannot send welcome email to %s", mask_email(email))
         return
 
     esc_name = html.escape(name or "there")
@@ -187,9 +191,9 @@ def send_welcome_email(
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    logger.info("Sending welcome email to %s", email)
+    logger.info("Sending welcome email to %s", mask_email(email))
     send_message(msg, smtp_config)
-    logger.info("Welcome email sent to %s", email)
+    logger.info("Welcome email sent to %s", mask_email(email))
 
 
 CATEGORY_LABELS = {
@@ -224,7 +228,7 @@ def send_feedback_notification(
     admin_emails = get_admin_emails()
 
     if is_dev_mode() or not admin_emails:
-        logger.info("Feedback from %s: [%s] %s", user_email, category, comment)
+        logger.info("Feedback from %s: [%s] %s", mask_email(user_email), category, comment)
         return
 
     try:
@@ -286,7 +290,7 @@ def send_feedback_notification(
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    logger.info("Sending feedback notification to %s", admin_emails)
+    logger.info("Sending feedback notification to %s", mask_email(admin_emails))
     send_message(msg, smtp_config)
     logger.info("Feedback notification sent")
 
@@ -310,13 +314,13 @@ def send_feedback_reply(
     from flyfun_common.auth import is_dev_mode
 
     if is_dev_mode():
-        logger.info("Feedback reply (dev mode, not sent) to %s: %s", to_email, reply_text[:100])
+        logger.info("Feedback reply (dev mode, not sent) to %s: %s", mask_email(to_email), reply_text[:100])
         return
 
     try:
         smtp_config = SmtpConfig.from_env()
     except ValueError:
-        logger.warning("SMTP not configured — cannot send feedback reply to %s", to_email)
+        logger.warning("SMTP not configured — cannot send feedback reply to %s", mask_email(to_email))
         return
 
     category_label = CATEGORY_LABELS.get(category, category)
@@ -376,8 +380,8 @@ def send_feedback_reply(
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    logger.info("Sending feedback reply to %s", to_email)
+    logger.info("Sending feedback reply to %s", mask_email(to_email))
     send_message(msg, smtp_config)
-    logger.info("Feedback reply sent to %s", to_email)
+    logger.info("Feedback reply sent to %s", mask_email(to_email))
 
 

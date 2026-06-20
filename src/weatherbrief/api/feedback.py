@@ -22,6 +22,7 @@ from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FeedbackRow, FlightRow
+from weatherbrief.privacy import mask_email
 from weatherbrief.triage.security import scan_for_exfil
 
 logger = logging.getLogger(__name__)
@@ -386,7 +387,7 @@ def send_feedback_reply_email(
     row.status = "replied"
     row.replied_at = datetime.now(timezone.utc)
     db.flush()
-    logger.info("Feedback #%d reply sent to %s", feedback_id, user.email)
+    logger.info("Feedback #%d reply sent to %s", feedback_id, mask_email(user.email))
     return {"id": feedback_id, "status": "replied", "sent_to": user.email}
 
 

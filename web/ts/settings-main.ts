@@ -624,6 +624,27 @@ async function init(): Promise<void> {
   // Aircraft tab
   initAircraftTab();
 
+  // Export my data (GDPR data portability)
+  const exportDataBtn = document.getElementById('btn-export-data');
+  exportDataBtn?.addEventListener('click', async () => {
+    try {
+      const resp = await fetch('/api/account/export');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'flyfun-weather-export.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showStatus(t('settings.exportDataDone'));
+    } catch (err) {
+      showStatus(t('settings.exportDataFailed', { error: String(err) }), true);
+    }
+  });
+
   // Delete account
   const deleteAccountBtn = document.getElementById('btn-delete-account');
   deleteAccountBtn?.addEventListener('click', async () => {

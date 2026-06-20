@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.auth import is_dev_mode
 from weatherbrief.api.security import audit_pack_access
 from weatherbrief.db.models import BriefingUsageRow
+from weatherbrief.privacy import mask_email
 from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
 from weatherbrief.api.validation import WAYPOINT_RE
@@ -1930,7 +1931,7 @@ async def refresh_briefing_stream(
                         if user and user.email:
                             pack_dir = Path(pack_path)
                             send_briefing_email([user.email], flight, meta, pack_dir, base_url=base_url)
-                            logger.info("Refresh completion email sent to %s for %s", user.email, flight_id)
+                            logger.info("Refresh completion email sent to %s for %s", mask_email(user.email), flight_id)
                     finally:
                         email_db.close()
                 except Exception as email_exc:

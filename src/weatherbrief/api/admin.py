@@ -31,6 +31,7 @@ from flyfun_common.admin import (
     TOKEN_PREFIX,
 )
 from flyfun_common.db.models import CostLedgerRow
+from weatherbrief.privacy import mask_email
 from weatherbrief.db.models import (
     BriefingUsageRow, FlightRow,
 )
@@ -499,7 +500,7 @@ def approve_user(
     already = user.approved
     user.approved = True
     db.flush()
-    logger.info("User %s (%s) approved by admin", user.email, user.id)
+    logger.info("User %s (%s) approved by admin", mask_email(user.email), user.id)
     audit_admin_action(
         "approve_user", _admin_id, request,
         target_user_id=user.id, details=f"email={user.email}",
@@ -611,10 +612,10 @@ def one_click_approve(
     db.flush()
 
     if already:
-        logger.info("One-click approve for %s — already approved", user.email)
+        logger.info("One-click approve for %s — already approved", mask_email(user.email))
         status_msg = f"{user.display_name} ({user.email}) was already approved."
     else:
-        logger.info("One-click approve for %s — approved", user.email)
+        logger.info("One-click approve for %s — approved", mask_email(user.email))
         status_msg = f"{user.display_name} ({user.email}) has been approved!"
         _send_welcome(user.email, user.display_name, request)
     audit_admin_action(
@@ -635,7 +636,7 @@ def _send_welcome(email: str, name: str, request: Request) -> None:
             base_url = base_url.replace("http://", "https://")
         send_welcome_email(email, name, base_url)
     except Exception:
-        logger.warning("Failed to send welcome email to %s", email, exc_info=True)
+        logger.warning("Failed to send welcome email to %s", mask_email(email), exc_info=True)
 
 
 def _approve_html(status_msg: str) -> str:

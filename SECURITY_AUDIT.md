@@ -693,7 +693,7 @@ log { format filter { query { delete code; delete state; delete id_token } } }
 
 **L-new-7. Audit log is stdout-only, not tamper-evident.** *`src/weatherbrief/api/security.py:24-25`.* Design doc claim of "audit-logged admin actions" only holds to the extent that container logs are shipped off-host. Ship audit events to a separate WORM sink (S3 with object-lock, systemd-journald + immutable rsyslog relay, or a dedicated log bucket).
 
-**L-new-8. Email addresses are logged at INFO across `admin_email.py`, `email.py`, `scheduler.py`, `admin.py`.** GDPR-adjacent PII. Use a user-id (or hashed email) in ops logs; route full-content logs through a separate "privacy" logger that production log config drops.
+**L-new-8. Email addresses are logged at INFO across `admin_email.py`, `email.py`, `scheduler.py`, `admin.py`.** _FIXED 2026-06-20._ GDPR-adjacent PII. Fixed: a `mask_email` helper (`src/weatherbrief/privacy.py`) masks every ops log line to `b***@gmail.com` (keeps domain for debuggability); applied across `admin_email.py`, `email.py`, `magic_link_email.py`, `scheduler.py`, `feedback.py`, `packs.py`, `app.py`, `admin.py`. Email *bodies* and DB audit trails legitimately retain addresses.
 
 **L-new-9. Uvicorn default access log includes query strings.** *`Dockerfile:58`.* If any endpoint ever accepts a token in a query param (future bug), it lands in logs. The iOS `flyfun://auth/callback?token=<jwt>` redirect (H8) is an example — the token doesn't hit *this* server log, but the pattern is fragile. Filter or disable uvicorn access log.
 

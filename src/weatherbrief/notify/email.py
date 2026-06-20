@@ -16,6 +16,7 @@ import httpx
 from pydantic import BaseModel
 
 from weatherbrief.digest.outlook import OUTLOOK_LABELS
+from weatherbrief.privacy import mask_email
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.models.airport_conditions import FLIGHT_CATEGORY_COLORS
 
@@ -529,6 +530,6 @@ def send_briefing_email(
     ))
 
     # Send
-    logger.info("Sending briefing email to %s", recipients)
+    logger.info("Sending briefing email to %s", mask_email(recipients))
     send_message(msg, smtp_config)
     logger.info("Briefing email sent successfully")

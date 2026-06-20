@@ -443,6 +443,8 @@
   "settings.deleteAccountConfirm": "Möchten Sie Ihr Konto wirklich löschen? Alle Ihre Flüge, Briefings und Einstellungen werden dauerhaft entfernt.",
   "settings.deleteAccountDoubleConfirm": "Dies kann nicht rückgängig gemacht werden. Sind Sie sicher, dass Sie Ihr Konto und alle Daten dauerhaft löschen möchten?",
   "settings.deleteAccountFailed": "Konto konnte nicht gelöscht werden: {error}",
+  "settings.exportDataDone": "Ihr Datenexport wurde heruntergeladen.",
+  "settings.exportDataFailed": "Datenexport fehlgeschlagen: {error}",
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
   "usage.gramet": "GRAMET",

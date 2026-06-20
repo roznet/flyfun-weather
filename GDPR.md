@@ -29,11 +29,11 @@ If you spot something we've missed or got wrong, please open a
 | Right to erasure (Art. 17) | ✅ Implemented |
 | Lawful basis (Art. 6) | ✅ Believe fine |
 | Consent handling (Art. 7) | ✅ Implemented (contact consent) |
-| Security of processing (Art. 32) | 🟡 Mostly — two known fixes outstanding |
+| Security of processing (Art. 32) | ✅ Implemented (PII log-masking shipped) |
 | EU data residency | ✅ Implemented |
 | International transfers (Art. 44–49) | 🟡 Email covered via Resend SCCs (auto-executed); confirm other processors |
 | Processor agreements / DPAs (Art. 28) | 🟡 Resend DPA in force; confirm remaining processors |
-| Right to data portability (Art. 20) | ❌ Outstanding (no data export yet) |
+| Right to data portability (Art. 20) | ✅ Implemented (self-service JSON export) |
 | Breach notification process (Art. 33–34) | ❌ Outstanding (no documented process) |
 | Records of processing (Art. 30) | 🟡 Likely exempt (small scale) — this doc serves as informal record |
 | DPO / EU representative | 🟡 Believe not required (small scale, no large-scale special-category processing) |
@@ -91,14 +91,19 @@ If you spot something we've missed or got wrong, please open a
   Anonymization is a recognized approach, but this is a future feature — flagged here
   so it is reviewed when built.
 
-### 6. Security of processing (Art. 32) — 🟡
+### 6. Security of processing (Art. 32) — ✅
 
 - Autorouter access tokens are encrypted at rest (Fernet / AES-128-CBC); no
   passwords are stored.
 - OAuth-based authentication; session cookie scoped to `.flyfun.aero`.
 - A standing security review is maintained in [`SECURITY_AUDIT.md`](./SECURITY_AUDIT.md).
-- **Outstanding (GDPR-adjacent), see below:** email addresses logged at INFO level;
-  LangSmith tracing default-on risk.
+- **Email addresses are no longer logged in the clear.** A `mask_email` helper
+  (`src/weatherbrief/privacy.py`) reduces every ops log line to
+  `b***@gmail.com`, applied across the email, admin, scheduler, feedback and
+  packs paths (SECURITY_AUDIT L-new-8, fixed 2026-06-20).
+- **LangSmith tracing** defaults to `false` with a privacy comment so filling in
+  an API key can't silently export prompt content (SECURITY_AUDIT 2026-06-L5,
+  fixed 2026-06-11).
 
 ### 7. EU data residency — ✅
 
@@ -128,11 +133,19 @@ If you spot something we've missed or got wrong, please open a
 - **To confirm:** that the remaining processors' standard DPAs are accepted/in force,
   so we can say "DPA in place" for each rather than "DPA available."
 
-### 10. Right to data portability (Art. 20) — ❌ Outstanding
+### 10. Right to data portability (Art. 20) — ✅
 
-- We support deletion but do **not** yet offer a "download my data" export.
-- **Plan:** add a data-export endpoint that returns the user's account data, flights,
-  preferences, and feedback in a machine-readable format (e.g. JSON).
+- A self-service **"Download my data"** button in web Settings calls
+  `GET /api/account/export` and downloads a single JSON document containing the
+  user's account, preferences, flights (with briefing-pack metadata and
+  debriefs), aircraft, profiles, usage records, PIREPs, feedback and device
+  registrations.
+- The export mirrors the deletion inventory (`_on_delete_user`) so the data we
+  *return* matches the data we *hold*. Secrets and server-internal fields
+  (encrypted credentials, push-token values, integrity HMACs, AI-triage
+  internals, file paths, OAuth `provider_sub`) are deliberately excluded.
+- Code: `src/weatherbrief/api/account_export.py`; tests in
+  `tests/test_account_export.py`. Shipped 2026-06-20.
 
 ### 11. Breach notification (Art. 33–34) — ❌ Outstanding
 
@@ -155,15 +168,15 @@ If you spot something we've missed or got wrong, please open a
 
 ## Outstanding items (action list)
 
-1. **Data export endpoint** (Art. 20) — implement "download my data" (JSON). *Code, on us.*
+1. ✅ **Data export endpoint** (Art. 20) — shipped 2026-06-20
+   (`src/weatherbrief/api/account_export.py` + Settings "Download my data").
 2. **Confirm processor DPAs accepted** — Resend ✅ (auto-executed on signup; download
    copy for records). Still confirm: DigitalOcean, Google, Apple, OpenAI/Anthropic.
    *Admin, mostly checkbox.*
-3. **Stop logging email PII at INFO** — route email addresses to a privacy logger or
-   use hashed/user-id references in ops logs (`SECURITY_AUDIT.md` L-new-8). *Code, on us.*
-4. **LangSmith tracing default** — ensure `LANGCHAIN_TRACING_V2` defaults to `false` so
-   prompt content (potential PII context) isn't exported without an explicit consent
-   surface (`SECURITY_AUDIT.md` 2026-06-L5). *Code/config, on us.*
+3. ✅ **Stop logging email PII at INFO** — `mask_email` applied across all ops log
+   sites (`SECURITY_AUDIT.md` L-new-8), shipped 2026-06-20.
+4. ✅ **LangSmith tracing default** — `LANGCHAIN_TRACING_V2` defaults to `false`
+   (`SECURITY_AUDIT.md` 2026-06-L5), fixed 2026-06-11.
 5. **Breach-notification runbook** (Art. 33–34) — short documented process. *Docs, on us.*
 6. **Review PIREP anonymization** when that feature is built (Art. 17). *Future.*
 

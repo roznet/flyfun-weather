@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.db import SessionLocal
 from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FlightRow
+from weatherbrief.privacy import mask_email
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.freshness.markers import MarkerStore
@@ -469,7 +470,7 @@ def _try_send_email(
         from weatherbrief.notify.email import send_briefing_email
 
         send_briefing_email([user.email], flight, meta, pack_path, base_url=base_url)
-        logger.info("Auto-refresh email sent for %s to %s", flight.id, user.email)
+        logger.info("Auto-refresh email sent for %s to %s", flight.id, mask_email(user.email))
     except Exception:
         logger.warning("Auto-refresh email failed for %s", flight.id, exc_info=True)
 

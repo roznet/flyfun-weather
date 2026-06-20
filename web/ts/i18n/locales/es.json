@@ -443,6 +443,8 @@
   "settings.deleteAccountConfirm": "¿Está seguro de que desea eliminar su cuenta? Todos sus vuelos, briefings y configuraciones se eliminarán permanentemente.",
   "settings.deleteAccountDoubleConfirm": "Esta acción no se puede deshacer. ¿Está seguro de que desea eliminar permanentemente su cuenta y todos los datos?",
   "settings.deleteAccountFailed": "Error al eliminar la cuenta: {error}",
+  "settings.exportDataDone": "La exportación de tus datos se ha descargado.",
+  "settings.exportDataFailed": "Error al exportar tus datos: {error}",
   "usage.briefings": "Briefings",
   "usage.openMeteo": "Open-Meteo",
   "usage.gramet": "GRAMET",
