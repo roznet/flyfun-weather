@@ -3158,6 +3158,27 @@ def get_digest_json(
     return FileResponse(json_path, media_type="application/json")
 
 
+@router.get("/{timestamp}/digest/context")
+def get_digest_context(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the exact plain-text context that was fed to the LLM digest.
+
+    This is ``digest_context.txt`` — the byte-faithful input the digest LLM
+    saw (every advisory, route stats, raw DWD overview). Written per pack at
+    digest time (``tasks/outputs.py``); 404 for older packs that predate it
+    or when the digest was not generated.
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    ctx_path = pack_dir / "digest_context.txt"
+    if not ctx_path.exists():
+        raise HTTPException(status_code=404, detail="Digest context not available")
+    return FileResponse(ctx_path, media_type="text/plain")
+
+
 @router.get("/{timestamp}/dwd-chart/{chart_id}")
 def get_dwd_chart(
     flight_id: str,

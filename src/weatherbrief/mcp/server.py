@@ -125,6 +125,12 @@ mcp = FastMCP(
         "5. get_airport_weather — quick forecast + METAR for specific airports\n\n"
         "Briefing generation takes ~2 minutes. If get_briefing returns "
         "status='processing', tell the user and check again shortly.\n\n"
+        "When the user questions, doubts, or wants to understand an advisory "
+        "(e.g. 'why is convective red when it looks like blue sky?'), call "
+        "get_advisory_detail (and get_digest_context for the deepest context) "
+        "before answering — never explain a red/amber from the aggregate status "
+        "alone. Treat cross-check notes as context for the discussion, not a "
+        "reason to downgrade an advisory.\n\n"
         "All tools return a web_url for the full interactive briefing with "
         "cross-sections, Skew-T diagrams, and route maps — present this link "
         "to the pilot for visual details."
@@ -164,6 +170,36 @@ def _get_client() -> WeatherbriefClient:
 
 def _flight_web_url(flight_id: str) -> str:
     return f"{WEATHER_BASE_URL}/briefing.html?flight={flight_id}"
+
+
+def _resolve_pack(client: WeatherbriefClient, flight_id: str) -> tuple[str | None, dict | None]:
+    """Resolve the latest pack timestamp for a flight, or a status dict.
+
+    Returns ``(timestamp, None)`` when a pack exists, or ``(None, status)``
+    when there is none / one is still generating — the status dict is shaped
+    like the other tools' early returns so callers can return it directly.
+    """
+    try:
+        refresh_info = client.get_refresh_status(flight_id)
+        if refresh_info.get("active"):
+            return None, {
+                "status": "processing",
+                "flight_id": flight_id,
+                "message": "Briefing is being generated. Check again in ~1-2 minutes.",
+                "web_url": _flight_web_url(flight_id),
+            }
+    except httpx.HTTPStatusError:
+        pass
+
+    pack = client.get_latest_pack(flight_id)
+    if pack is None:
+        return None, {
+            "status": "none",
+            "flight_id": flight_id,
+            "message": "No briefing exists yet. Call refresh_briefing to generate one.",
+            "web_url": _flight_web_url(flight_id),
+        }
+    return pack["fetch_timestamp"], None
 
 
 def _error_result(message: str, code: int | None = None) -> dict:
@@ -404,20 +440,68 @@ def get_briefing(
     return result
 
 
+_GRADED_STATUSES = ("green", "amber", "red")
+
+
 def _summarize_advisories(advisories: dict) -> list[dict]:
-    """Extract the key advisory information for the agent."""
+    """Extract advisory information for the agent, retaining per-model detail.
+
+    Unlike a flat status list, this keeps each model's status/detail and the
+    ``cross_check`` note plus the ``parameters_used`` thresholds, so the agent
+    can see model disagreement and the reasoning behind a grade directly in the
+    briefing output. That visible disagreement is the primary discoverability
+    hook (Layer A): it provokes the follow-up question and a ``detail_tool``
+    pointer names the drill-down tool.
+
+    The cross-check is display-only **context for discussion**, never a
+    downgrade signal (#178) — high CAPE matters even when the deterministic
+    model scheme is quiet.
+    """
+    catalog = {c.get("id"): c for c in advisories.get("catalog", [])}
     results = []
     for adv in advisories.get("advisories", []):
-        entry = {
-            "id": adv.get("advisory_id"),
+        adv_id = adv.get("advisory_id")
+        per_model: list[dict] = []
+        graded: set[str] = set()
+        cross_check_present = False
+        for m in adv.get("per_model", []):
+            status = m.get("status")
+            if status in _GRADED_STATUSES:
+                graded.add(status)
+            entry_m: dict[str, Any] = {
+                "model": m.get("model"),
+                "status": status,
+                "detail": m.get("detail"),
+                "affected_pct": m.get("affected_pct"),
+            }
+            cc = m.get("cross_check")
+            if cc:
+                cross_check_present = True
+                entry_m["cross_check"] = cc
+            per_model.append(entry_m)
+
+        model_disagreement = len(graded) > 1
+        entry: dict[str, Any] = {
+            "id": adv_id,
             "status": adv.get("aggregate_status"),
             "detail": adv.get("aggregate_detail"),
+            "per_model": per_model,
+            "parameters_used": adv.get("parameters_used", {}),
+            "cross_check_present": cross_check_present,
+            "model_disagreement": model_disagreement,
         }
-        for cat in advisories.get("catalog", []):
-            if cat.get("id") == adv.get("advisory_id"):
-                entry["name"] = cat.get("name")
-                entry["category"] = cat.get("category")
-                break
+        cat = catalog.get(adv_id)
+        if cat:
+            entry["name"] = cat.get("name")
+            entry["category"] = cat.get("category")
+
+        # Layer A: point the agent at the drill-down tool whenever there is
+        # something worth explaining (a non-green grade, model disagreement, or
+        # a cross-check note). Green-and-quiet advisories omit it to avoid
+        # nudging wasteful drills.
+        if entry["status"] in ("amber", "red") or cross_check_present or model_disagreement:
+            entry["detail_tool"] = "get_advisory_detail"
+
         results.append(entry)
     return results
 
@@ -542,6 +626,265 @@ def get_airport_weather(
         return _error_result(f"API error: {e.response.text}", e.response.status_code)
     except ValueError as e:
         return _error_result(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_advisory_detail
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_advisory_detail(
+    flight_id: Annotated[
+        str,
+        Field(description="Flight ID from list_flights or create_flight"),
+    ],
+    advisory_id: Annotated[
+        str,
+        Field(description="Advisory id to drill into, e.g. 'convective', 'fiki_icing', 'cloud_top' (the 'id' field from get_briefing's advisories)"),
+    ],
+) -> dict[str, Any]:
+    """Drill into ONE advisory to explain WHY it is red/amber (or any grade).
+
+    Use this when the user asks why an advisory is red/amber, questions a
+    result that looks inconsistent (e.g. "red convective but clear skies"),
+    doubts a grade, or wants the per-model breakdown and cross-check reasoning.
+    Never explain a red/amber from the aggregate status alone — call this first.
+
+    Returns a server-side summary (never the raw forecast grid):
+    - per-model status, detail, affected extent, and the cross-check note
+    - parameters_used: the thresholds that produced the grade
+    - for the convective advisory: per-model CAPE range + the location (nm /
+      waypoint) of the peak, the convective cover % (cover ≈ 0 is the
+      machine-readable "blue sky" signal), and whether the assessment used the
+      thermo (CAPE-derived) or NWP (model-scheme) method.
+
+    The cross-check is **context for discussion, not a downgrade signal** — high
+    CAPE matters even when the model's own convective scheme is quiet. Use it to
+    EXPLAIN the grade, not to argue it down.
+    """
+    try:
+        client = _get_client()
+    except ValueError as e:
+        return _error_result(str(e))
+
+    with client:
+        try:
+            timestamp, status = _resolve_pack(client, flight_id)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"API error: {e.response.text}", e.response.status_code)
+        if status is not None:
+            return status
+
+        try:
+            advisories = client.get_advisories(flight_id, timestamp)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"API error: {e.response.text}", e.response.status_code)
+        if not advisories:
+            return _error_result("No advisories available for this briefing.")
+
+        adv = next(
+            (a for a in advisories.get("advisories", []) if a.get("advisory_id") == advisory_id),
+            None,
+        )
+        if adv is None:
+            available = [a.get("advisory_id") for a in advisories.get("advisories", [])]
+            return _error_result(
+                f"Advisory '{advisory_id}' not found. Available: {', '.join(available)}"
+            )
+
+        catalog = {c.get("id"): c for c in advisories.get("catalog", [])}
+        result = _advisory_detail(adv, catalog.get(advisory_id))
+
+        if advisory_id == "convective":
+            try:
+                route_analyses = client.get_route_analyses(flight_id, timestamp)
+            except httpx.HTTPStatusError:
+                route_analyses = None
+            if route_analyses:
+                models = [m.get("model") for m in adv.get("per_model", [])]
+                result["convective"] = _convective_detail(route_analyses, models)
+
+        result["flight_id"] = flight_id
+        result["web_url"] = _flight_web_url(flight_id)
+
+    return result
+
+
+def _advisory_detail(adv: dict, catalog_entry: dict | None) -> dict[str, Any]:
+    """Build a generic per-model drill-down summary for one advisory."""
+    per_model: list[dict] = []
+    for m in adv.get("per_model", []):
+        entry_m: dict[str, Any] = {
+            "model": m.get("model"),
+            "status": m.get("status"),
+            "detail": m.get("detail"),
+            "affected_pct": m.get("affected_pct"),
+            "affected_nm": m.get("affected_nm"),
+            "total_nm": m.get("total_nm"),
+        }
+        cc = m.get("cross_check")
+        if cc:
+            entry_m["cross_check"] = cc
+        per_model.append(entry_m)
+
+    result: dict[str, Any] = {
+        "advisory_id": adv.get("advisory_id"),
+        "aggregate_status": adv.get("aggregate_status"),
+        "aggregate_detail": adv.get("aggregate_detail"),
+        "per_model": per_model,
+        "parameters_used": adv.get("parameters_used", {}),
+        "cross_check_note": (
+            "Cross-check notes are display-only context for discussion, not a "
+            "downgrade signal. Explain the grade with them; do not argue it down."
+        ),
+    }
+    if catalog_entry:
+        result["name"] = catalog_entry.get("name")
+        result["category"] = catalog_entry.get("category")
+        result["description"] = catalog_entry.get("description")
+    return result
+
+
+def _convective_detail(route_analyses: dict, models: list[str]) -> dict[str, Any]:
+    """Per-model convective drill-down from the route analyses soundings.
+
+    For each model: CAPE range across the route, the peak point (CAPE, cover %,
+    location), the max convective cover %, and which assessment method
+    (thermo vs NWP) each point used. ``cover_pct`` near 0 is the model scheme
+    saying "blue sky" even when CAPE (thermo) is high — the apparent
+    contradiction the cross-check explains.
+    """
+    points = route_analyses.get("analyses", [])
+    out: dict[str, Any] = {}
+    for model in models:
+        capes: list[float] = []
+        peak: dict | None = None
+        max_cover: float | None = None
+        method_counts: dict[str, int] = {}
+        for p in points:
+            sounding = (p.get("sounding") or {}).get(model)
+            if not sounding:
+                continue
+            conv = sounding.get("convective")
+            if not conv:
+                continue
+            method = conv.get("method")
+            if method:
+                method_counts[method] = method_counts.get(method, 0) + 1
+            cover = conv.get("cover_pct")
+            if cover is not None:
+                max_cover = cover if max_cover is None else max(max_cover, cover)
+            cape = conv.get("cape_jkg")
+            if cape is not None:
+                capes.append(cape)
+                if peak is None or cape > peak["cape_jkg"]:
+                    peak = {
+                        "cape_jkg": round(cape),
+                        "cover_pct": round(cover) if cover is not None else None,
+                        "risk_level": conv.get("risk_level"),
+                        "method": method,
+                        "distance_nm": p.get("distance_from_origin_nm"),
+                        "waypoint_icao": p.get("waypoint_icao"),
+                    }
+        if not capes and not method_counts:
+            continue
+        out[model] = {
+            "cape_range_jkg": [round(min(capes)), round(max(capes))] if capes else None,
+            "peak": peak,
+            "max_cover_pct": round(max_cover) if max_cover is not None else None,
+            "assessment_method": (
+                max(method_counts, key=lambda k: method_counts[k]) if method_counts else None
+            ),
+            "method_counts": method_counts,
+        }
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_digest_context
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_digest_context(
+    flight_id: Annotated[
+        str,
+        Field(description="Flight ID from list_flights or create_flight"),
+    ],
+) -> dict[str, Any]:
+    """Get the exact text input the AI weather digest saw for this flight.
+
+    Use when the user wants the deepest possible context behind the briefing —
+    e.g. to reconcile a red/amber advisory with the digest narrative, or to see
+    every advisory, route statistic, and the raw DWD synoptic overview exactly
+    as the digest LLM received them. This is the maximum detail exposed over MCP;
+    pair it with get_advisory_detail when diagnosing a specific advisory.
+
+    Returns the plain-text digest context, or status 'none' for older briefings
+    that predate this artifact / had no digest generated.
+    """
+    try:
+        client = _get_client()
+    except ValueError as e:
+        return _error_result(str(e))
+
+    with client:
+        try:
+            timestamp, status = _resolve_pack(client, flight_id)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"API error: {e.response.text}", e.response.status_code)
+        if status is not None:
+            return status
+
+        try:
+            context = client.get_digest_context(flight_id, timestamp)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"API error: {e.response.text}", e.response.status_code)
+
+    if not context:
+        return {
+            "status": "none",
+            "flight_id": flight_id,
+            "message": "No digest context available for this briefing.",
+            "web_url": _flight_web_url(flight_id),
+        }
+
+    return {
+        "status": "ready",
+        "flight_id": flight_id,
+        "briefing_timestamp": timestamp,
+        "digest_context": context,
+        "web_url": _flight_web_url(flight_id),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prompt: explain_advisory
+# ---------------------------------------------------------------------------
+
+@mcp.prompt()
+def explain_advisory(
+    flight_id: Annotated[
+        str,
+        Field(description="Flight ID to investigate"),
+    ],
+    advisory_id: Annotated[
+        str,
+        Field(description="Advisory to explain, e.g. 'convective'"),
+    ] = "convective",
+) -> str:
+    """On-ramp for an in-depth, per-model discussion of one advisory's grade."""
+    return (
+        f"For flight {flight_id}, explain why the '{advisory_id}' advisory has its "
+        "current status. First call get_briefing to see the per-model split and any "
+        f"cross-check notes, then get_advisory_detail('{flight_id}', '{advisory_id}') "
+        "for the per-model breakdown — for convective that includes CAPE range, the "
+        "location of the peak, convective cover % (cover ~0 means the model scheme "
+        "sees blue sky), and whether the thermo or NWP method was used. Pull "
+        "get_digest_context if you need the exact LLM input. Explain the grade from "
+        "that evidence, including when high CAPE drives a red while the model's own "
+        "convective scheme is quiet. Treat the cross-check as context for the "
+        "discussion, not a reason to downgrade the advisory."
+    )
 
 
 # ---------------------------------------------------------------------------
