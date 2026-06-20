@@ -54,15 +54,54 @@ def _load_run_one():
     return module.run_one
 
 
+def _git_tracked_fixture_ids() -> set[str] | None:
+    """Fixture dir names that git tracks, or ``None`` if git is unavailable.
+
+    The committed fixtures are the small hand-authored ones; the gitignored
+    local prod packs (often 100+) are eval scratch, not a pass/fail gate.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "tests/eval_data/digests"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    names: set[str] = set()
+    for line in out.splitlines():
+        # "tests/eval_data/digests/<id>/digest.json" -> "<id>"
+        parts = Path(line).relative_to("tests/eval_data/digests").parts
+        if len(parts) >= 2:  # skip top-level files like index.json
+            names.add(parts[0])
+    return names
+
+
 def _committed_fixture_ids() -> list[str]:
-    """Fixture ids that are actually present on disk (committed synthetic
-    ones — most index entries come from gitignored local packs)."""
+    """Fixture ids that are *committed* to git (the small hand-authored gate).
+
+    This is deliberately NOT every fixture on disk: the deterministic guardrail
+    unit-test gate only runs against tracked fixtures so it stays green and
+    reproducible in CI. Re-running the guardrails over freshly generated output
+    from the latest prod packs is an eval, not a unit test — that lives in
+    ``scripts/run_digest_eval.py`` / the ``/eval-check`` skill, not here.
+    """
     if not EVAL_DIR.exists():
         return []
+    tracked = _git_tracked_fixture_ids()
     ids = []
     for child in sorted(EVAL_DIR.iterdir()):
-        if child.is_dir() and (child / "digest.json").exists() and (child / "context.txt").exists():
-            ids.append(child.name)
+        if not (child.is_dir() and (child / "digest.json").exists() and (child / "context.txt").exists()):
+            continue
+        # When git is unavailable (e.g. source tarball), fall back to all
+        # on-disk fixtures so the gate still runs.
+        if tracked is not None and child.name not in tracked:
+            continue
+        ids.append(child.name)
     return ids
 
 
