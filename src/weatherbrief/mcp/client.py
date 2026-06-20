@@ -110,6 +110,15 @@ class WeatherbriefClient:
                 return None
             raise
 
+    def get_route_analyses(self, flight_id: str, timestamp: str) -> dict | None:
+        """Get the per-point route analyses (soundings per model) for a pack."""
+        try:
+            return self._get(f"/flights/{flight_id}/packs/{timestamp}/route-analyses")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
     def get_digest_json(self, flight_id: str, timestamp: str) -> dict | None:
         try:
             return self._get(f"/flights/{flight_id}/packs/{timestamp}/digest/json")
@@ -123,6 +132,19 @@ class WeatherbriefClient:
         try:
             r = self._client.get(
                 f"/api/flights/{flight_id}/packs/{timestamp}/digest",
+            )
+            r.raise_for_status()
+            return r.text
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    def get_digest_context(self, flight_id: str, timestamp: str) -> str | None:
+        """Get the exact plain-text context the LLM digest saw, if persisted."""
+        try:
+            r = self._client.get(
+                f"/api/flights/{flight_id}/packs/{timestamp}/digest/context",
             )
             r.raise_for_status()
             return r.text
