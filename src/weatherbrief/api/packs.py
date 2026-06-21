@@ -2574,7 +2574,11 @@ def recalculate_advisories(
     """
     from weatherbrief.tasks.advise import run_advisories_from_pack
 
-    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    # Owner-only: this endpoint *persists* recomputed advisories/fronts into the
+    # pack dir, so a mere viewer of a shared flight must not be able to overwrite
+    # the owner's stored artifacts under the viewer's own profile/thresholds.
+    # (Mirror of compute_alt_advisories, which is also owner-gated.)
+    flight = _load_owned_flight(db, flight_id, user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
     ra_path = pack_dir / "route_analyses.json"

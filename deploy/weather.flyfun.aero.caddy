@@ -37,6 +37,13 @@ weather.flyfun.aero {
 }`
     }
 
+    # Don't expose client-side recon surface: the app's StaticFiles mount serves
+    # the whole web/ tree, including raw TypeScript sources (/ts/*) and esbuild
+    # sourcemaps (*.js.map). Block them at the edge — the bundled /dist/*.js is
+    # all the browser needs.
+    @client_sources path /ts/* *.map
+    respond @client_sources 404
+
     reverse_proxy localhost:8020 {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto {scheme}
