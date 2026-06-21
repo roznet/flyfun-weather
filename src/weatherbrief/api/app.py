@@ -330,6 +330,19 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    else:
+        # Production: permit browser-based MCP/OAuth flows from Claude clients
+        # only (claude.ai / claude.com and their subdomains). Scoped — never a
+        # wildcard in prod — so untrusted origins can't make credentialed
+        # cross-origin reads. Auth (OAuth bearer token) remains the real guard;
+        # this just unblocks the browser side of the connector handshake.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"https://([a-z0-9-]+\.)*(claude\.ai|claude\.com)",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # Log Pydantic request-validation failures so 422s are diagnosable.
     # FastAPI's default returns the detail to the client but logs nothing;
