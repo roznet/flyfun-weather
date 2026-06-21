@@ -122,3 +122,9 @@ scoped `claude.ai`/`claude.com` CORS allowlist).
 - The MCP suite (`tests/test_mcp_advisory_detail.py`) still exercises the same
   shapers via `weatherbrief.mcp.server` aliases — proof the two front-doors share
   one implementation.
+- `tests/test_agent_endpoints.py` — `TestClient` smoke tests for the part unique
+  to `api.agent`: the in-process route wiring the shaper/MCP suites don't reach.
+  Covers `getBriefing` (happy path + `none` envelope), the ownership gate (a
+  private flight owned by another user 404s on `getBriefing` / `getDigestContext`),
+  and the advisory-not-found 404 (not a 500 when an advisory dict has no
+  `advisory_id`). The latter two were verified to fail against the pre-fix code.
