@@ -275,13 +275,10 @@ def get_briefing(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Get the latest weather briefing for a flight.
-
-    Returns the overall assessment (GREEN/AMBER/RED), route advisories, AI
-    weather digest, and a link to the full interactive briefing.
-
-    Status values: ready (fresh), stale (models updated since), processing
-    (generating now), none (call refresh_briefing first).
+    """Latest weather briefing for a flight: overall assessment
+    (GREEN/AMBER/RED), route advisories, AI digest, and a link to the full
+    briefing. Status: ready (fresh), stale (models updated since), processing
+    (generating), none (call refreshBriefing first).
     """
     pack, timestamp, status = _resolve_latest_pack(db, user_id, flight_id)
     if status is not None:
@@ -389,16 +386,10 @@ def get_advisory_detail(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Drill into ONE advisory to explain WHY it is red/amber (or any grade).
-
-    Use this when the user asks why an advisory is red/amber, questions a result
-    that looks inconsistent (e.g. "red convective but clear skies"), or wants the
-    per-model breakdown and cross-check reasoning. Never explain a red/amber from
-    the aggregate status alone — call this first.
-
-    The cross-check is context for discussion, not a downgrade signal — high CAPE
-    matters even when the model's own convective scheme is quiet. Use it to
-    EXPLAIN the grade, not to argue it down.
+    """Drill into ONE advisory to explain WHY it is red/amber: the per-model
+    and cross-check breakdown. Use when the user questions a grade or a result
+    that looks inconsistent (e.g. red convective but clear skies). The
+    cross-check EXPLAINS the grade, never a downgrade signal.
     """
     pack, timestamp, status = _resolve_latest_pack(db, user_id, flight_id)
     if status is not None:
@@ -460,13 +451,10 @@ def get_digest_context(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Get the exact text input the AI weather digest saw for this flight.
-
-    Use when the user wants the deepest possible context behind the briefing —
-    e.g. to reconcile a red/amber advisory with the digest narrative. The text
-    can be large (a few KB up to tens of KB); prefer get_advisory_detail for a
-    targeted drill-down and reach for this only when you need the byte-faithful
-    LLM input.
+    """The exact text the AI weather digest saw for this flight. Use for the
+    deepest context behind a briefing — e.g. to reconcile a red/amber advisory
+    with the digest narrative. Can be large (KB to tens of KB); prefer
+    getAdvisoryDetail for a targeted drill-down.
     """
     pack, timestamp, status = _resolve_latest_pack(db, user_id, flight_id)
     if status is not None:
@@ -511,14 +499,11 @@ def get_airport_weather(
     db: Session = Depends(get_db),
     airports_db: str = Depends(maps_api._airports_db),
 ) -> dict[str, Any]:
-    """Get weather forecasts and observations for specific airports.
-
-    Returns multi-model predictions (GFS, ICON, ECMWF) with consensus flight
-    category and agreement scoring. For today (day=0), also includes the latest
-    METAR and TAF from the verification cache (may be up to ~3 hours old).
-
-    Airports not in the monitoring network resolve to the nearest monitored
-    airport (with distance noted). Non-European airports return as 'unsupported'.
+    """Weather forecasts and observations for specific airports: multi-model
+    predictions (GFS, ICON, ECMWF) with consensus flight category and
+    agreement. day=0 also includes the latest METAR/TAF (up to ~3h old).
+    Unknown airports snap to the nearest monitored one; non-European return
+    'unsupported'.
     """
     return maps_api.get_airport_weather(
         icao=icao, day=day, hour=hour, _user_id=user_id, db=db, airports_db=airports_db,
