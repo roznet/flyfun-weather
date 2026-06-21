@@ -130,11 +130,12 @@ The app interacts with these external services during normal operation:
 |---------|-----------|---------|
 | **Open-Meteo** | Coordinates, altitudes | Weather forecast data |
 | **Autorouter** | OAuth access token + route | GRAMET cross-section images |
-| **OpenAI / Anthropic** | Weather data context (no personal info) | LLM-generated briefing digest |
+| **OpenAI / Anthropic** | Weather + route context (airports, dates, positions); no account identifiers | LLM-generated briefing digest |
+| **LangSmith** (when LLM tracing is enabled) | The LLM run trace (same weather/route context) and your digest 👍/👎 rating and any comment | Digest quality monitoring |
 | **SMTP / Resend** | Your email + briefing summary | Email delivery |
 | **Google / Apple OAuth** | OAuth tokens | Authentication |
 
-No personal information (name, email, routes) is sent to LLM providers — only anonymized weather data context.
+No account identifiers (your name or email) are sent to LLM providers. The context that is sent describes the weather along your route — airports, dates and approximate positions — which carries no personal identifiers. Where LLM-quality tracing is enabled it goes to LangSmith under a data-processing agreement (EU data residency).
 
 ---
 

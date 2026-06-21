@@ -28,7 +28,7 @@ If you spot something we've missed or got wrong, please open a
 | Data minimization (Art. 5) | ✅ Implemented |
 | Right to erasure (Art. 17) | ✅ Implemented |
 | Lawful basis (Art. 6) | ✅ Believe fine |
-| Consent handling (Art. 7) | ✅ Implemented (contact consent) |
+| Feedback contact basis (Art. 6) | ✅ Legitimate interest — pre-ticked, easily-declined contact box on user-initiated feedback |
 | Security of processing (Art. 32) | ✅ Implemented (PII log-masking shipped) |
 | Data residency (UK, EU-adequate) | ✅ Implemented |
 | International transfers (Art. 44–49) | ✅ All transfers under SCC-backed DPAs (Resend, DigitalOcean, Google, Anthropic) or independent controller (Apple); no PII to LLM providers |
@@ -81,18 +81,25 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
 
 - **Contract** — processing flights/briefings is necessary to provide the service the
   user signed up for.
-- **Consent** — sign-in via Google/Apple OAuth; explicit opt-in consent flag
-  (`contact_ok`) before we reply to feedback.
+- **Consent** — sign-in via Google/Apple OAuth is the user's explicit choice of
+  provider.
 - **Legitimate interest** — minimal usage/cost logging for rate-limiting and cost
-  transparency (no profiling).
+  transparency (no profiling); and replying to feedback the user themselves chose
+  to send, unless they have declined contact (see §4).
 - **Why we think we're fine:** each processing activity maps to a clear basis; none
   rely on opaque or bundled consent.
 
-### 4. Consent handling (Art. 7) — ✅
+### 4. Feedback contact (Art. 6(1)(f) legitimate interest) — ✅
 
-- Feedback replies are gated on an explicit `contact_ok` consent checkbox; a bare
-  thumbs-up does not silently opt the user into being contacted.
-- **Why we think we're fine:** consent is specific, unbundled, and opt-in.
+- When a user submits feedback they may be contacted about it. The feedback form
+  shows a **pre-ticked** "you may contact me about this" checkbox (`contact_ok`,
+  default on) that the user can untick to decline; if unticked, the reply path is
+  closed and we never contact them.
+- Because the box is pre-ticked, we do **not** treat this as Art. 7 opt-in
+  consent (a pre-ticked box is not valid consent under Recital 32). Instead the
+  basis is **legitimate interest** in responding to a question/report the user
+  themselves initiated — narrow, expected, trivially declined, and never used for
+  marketing or shared with anyone.
 
 ### 5. Right to erasure (Art. 17) — ✅
 

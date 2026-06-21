@@ -1,11 +1,116 @@
 # Security Audit — Flyfun Weather
 
 **Initial audit:** 2026-02-26
-**Prior updates:** 2026-03-23, 2026-04-20 (fresh first-principles review), 2026-05-20 (magic-link / rolling-session auth surface)
-**Current audit:** 2026-06-11 (fresh full-stack review by five parallel independent workstreams — auth/sessions, API authorization/IDOR, injection/SSRF/prompt-injection, frontend/XSS, secrets/deploy/dependencies — run blind to this document, then reconciled against prior findings; model: Fable 5 / 1M)
+**Prior updates:** 2026-03-23, 2026-04-20 (fresh first-principles review), 2026-05-20 (magic-link / rolling-session auth surface), 2026-06-11 (five parallel blind workstreams)
+**Current audit:** 2026-06-20 (fresh full-stack review by six parallel independent workstreams — auth/sessions/OAuth, API authorization/IDOR, injection/SSRF/prompt-injection, frontend/XSS/CSP, secrets/deploy/dependencies, PII/privacy/GDPR — run blind to this document, then reconciled against it. Targeted the new OAuth 2.1 / MCP-OAuth / DCR / token-scope surface and the GDPR data-export/PII-masking work, both of which postdate the 2026-06-11 pass. `flyfun-common` **was** in-checkout this time (source `~/Developer/public/flyfun-common`, git `0.5.3`, matching the prod pin) so OAuth findings are confirmed against real library code, not call sites; model: Opus 4.8 / 1M)
 **Scope:** Full-stack review — FastAPI backend, shared `flyfun-common` auth library, SQLAlchemy/MySQL/SQLite storage, vanilla TypeScript frontend, Docker/Caddy deployment, MCP server, iOS sync endpoints, Claude-CLI feedback triage.
 
 > **Note on paths:** `flyfun-common` was restructured since the 2026-04-20 audit — its Python package now lives under `flyfun-common/python/src/flyfun_common/…` (the older sections of this document reference the pre-move `flyfun-common/src/flyfun_common/…` paths). The 2026-06-11 pass ran against a checkout **without** `flyfun-common` vendored or installed, so findings inside that library rest on call sites, tests, and design docs, and are flagged accordingly.
+
+---
+
+## 2026-06-20 Re-Audit
+
+### Summary
+
+Sixth full-stack pass, run blind then reconciled against this document. Concentrated on the surface that landed **after** the 2026-06-11 audit: the OAuth 2.1 Authorization Server, MCP-OAuth, Dynamic Client Registration (DCR), persisted API-token **scopes**, and the GDPR data-export / deletion / email-masking / triage-PII-removal work. `flyfun-common` was present this pass (source at `~/Developer/public/flyfun-common`, git HEAD `0.5.3` = the `>=0.5.3` prod pin; the editable install's metadata still self-reports `0.5.0`, a stale-metadata artifact only — the imported code is 0.5.3), so the OAuth findings below are confirmed against actual library code.
+
+The durable picture from prior passes holds: **no SQLi, no command injection, no path traversal, no SSRF, no unsafe deserialization** (all re-verified from scratch); object-level authorization is broadly strong; the GDPR export/deletion path is genuinely well-built (IDOR-safe, excludes server secrets, anonymizes PIREPs); `mask_email` is applied broadly; the triage LLM no longer receives name/email. JWT handling, PKCE (mandatory `S256`), and auth-code single-use+replay-revocation are all sound.
+
+The **new OAuth Authorization Server is where the new risk concentrates.** Three Highs, all confirmed in `flyfun-common` source: open/unthrottled Dynamic Client Registration, a consent CSRF that is not bound to the specific authorization request (consent/scope-swap), and OAuth refresh tokens that never expire with no revoke-all path. Plus a confirmed **Medium cross-tenant write** in `recalculate_advisories` (a viewer of a shared flight overwrites the owner's stored advisories), a scope-model footgun (`mcp` = full access via "unregistered scope ⇒ allow"), and several privacy gaps where prod **LangSmith** tracing and feedback egress contradict `PRIVACY.md`/`GDPR.md`.
+
+### New findings (this pass)
+
+| ID | Sev | Headline |
+|----|-----|----------|
+| 2026-06-20-H1 | **High** | Dynamic Client Registration (`POST /oauth/register`) is unauthenticated and unthrottled — enables consent-screen phishing (register a client with an attacker-controlled `redirect_uri`, drive a victim through the *genuine* FlyFun consent screen, harvest the auth code) and unbounded DB-row spam. Spammed/unused clients are invisible to the connected-apps admin view (it lists only token-bearing clients). |
+| 2026-06-20-H2 | **High** | OAuth consent CSRF is not bound to the authorization request. The session `oauth_csrf` is a single reusable value (read with `.get()`, never `pop`) and is not keyed to `client_id`/`redirect_uri`/`scope`/`code_challenge`; all request-defining params are trusted hidden form fields. With the Starlette session cookie set `SameSite=None`, a cross-site auto-POST can approve a *different* client/scope than the one the user saw (consent/scope swap). |
+| 2026-06-20-H3 | **High** | OAuth refresh tokens never expire (`OAuthRefreshTokenRow.expires_at` left `NULL` at issuance and rotation), and `logout-all`/`tokens_valid_after` does not revoke them or `ff_` API tokens. A leaked refresh token = indefinite, self-renewing account access with no kill switch. |
+| 2026-06-20-M1 | Medium | **Cross-tenant write.** `recalculate_advisories` (`packs.py:2561`) is viewer-gated (`_load_flight_or_404`) but persists into the **owner's** pack dir — overwrites `route_advisories.json` and rewrites/deletes `route_fronts.json` computed under the *caller's* profile/thresholds/locale. Any authenticated viewer of a shared (non-private) flight corrupts the owner's stored advisories. Sibling `compute_alt_advisories` (`:2375`) correctly uses `_load_owned_flight` — confirms this is a bug, not design. |
+| 2026-06-20-M2 | Medium | Scope model is "**unregistered scope ⇒ full access**" (`_enforce_scope` is default-allow for any scope not in the limited allowlist; only `flights:read` is registered as limited). `mcp` is therefore a full-access scope, and the MCP `TokenVerifier` hardcodes `scopes=["mcp"]` for any API-valid token. Not directly exploitable today (the weather API re-enforces per request), but a scope/audience-confusion footgun: any future MCP tool trusting `AccessToken.scopes` treats a read-only token as full-access. Combine with H2 and a "read-only" client can request `scope=mcp`. |
+| 2026-06-20-M3 | Medium | **Privacy/policy divergence — LangSmith egress.** In prod (`LANGCHAIN_TRACING_V2=true`) the digest LLM trace exports the route (ICAO sequence + dates + ~11 km-rounded coords) to LangSmith (US), and digest thumb feedback sends the raw user `comment` to LangSmith. `PRIVACY.md` states "No personal information (name, email, routes) is sent to LLM providers" and does not list LangSmith as a processor. |
+| 2026-06-20-M4 | Medium | **Consent divergence.** Feedback `contact_ok` defaults `True` (`server_default="1"`; migration 065 docstring: "It is an opt-out"), but `GDPR.md` §4 claims consent is "opt-in" and "a bare thumbs-up does not silently opt the user in." Either flip the server default to `False` or correct the policy wording. |
+| 2026-06-20-M5 | Medium | The 422 `RequestValidationError` handler (`app.py:344-399`) redacts only credential-named keys (`password|secret|token|api_key|authorization`) but still logs the full body + per-field `input`, so a malformed `POST /api/flights` writes flight **PII** (route/waypoints/departure/tail) to journald. The 2026-06-11 M3 fix closed the *credential* leak but not the PII leak on the same handler. |
+| 2026-06-20-M6 | Medium | Full TypeScript sources (`/ts/**.ts`) **and** sourcemaps (`*.js.map`) served publicly (`app.py` mounts all of `web/`; esbuild builds `--sourcemap`). Recon surface — no secrets present (re-verified), but hands an attacker the complete client logic + internal comments. (Escalation of prior I1 to Medium.) |
+| 2026-06-20-L1 | Low | DCR `_validate_redirect_uri` accepts any HTTPS host and any reverse-DNS private-use scheme with no host allowlist / ownership proof (the danger is H1+phishing; exact-match at authorize prevents per-code substitution). |
+| 2026-06-20-L2 | Low | No per-email aggregate cap on concurrently-live magic-link/OTP tokens — each live token grants its own 5-guess budget, so the 6-digit OTP brute-force bound is only as strong as `check_email_request_rate`. |
+| 2026-06-20-L3 | Low | Used/expired `OAuthAuthorizationCodeRow` rows are never GC'd (only marked `used`) — unbounded table growth; the magic-link purge pattern exists to mirror. |
+| 2026-06-20-L4 | Low | Starlette session cookie signed with `JWT_SECRET` (key reuse, compounds H3 carry-forward) and set `SameSite=None` app-wide (only the Apple `form_post` callback needs it) — the `None` is what makes H2 reachable cross-site. |
+| 2026-06-20-L5 | Low | `CostLedgerRow` rows are orphaned (not anonymized) after account deletion — `user_id` retained as a now-dangling pseudonymous string; defensible accounting retention but not disclosed in `PRIVACY.md`. |
+| 2026-06-20-L6 | Low | flyfun-common Autorouter token-exchange error path logs full `resp.text` / decoded `token_data` (credentials-grade) on non-200. |
+| 2026-06-20-L7 | Low | `settings.html:173,205` `target="_blank"` without `rel="noopener"` (reverse-tabnabbing; targets are trusted constants). Dev-only eval-workbench `corpus_id` is path-joined without `safe_path_component` (`eval_workbench/corpus.py`) — not exploitable (prod-disabled, admin-gated, single-segment path param). |
+| 2026-06-20-I1 | Info | Defense-in-depth: a consistent set of map/cross-section Leaflet tooltips interpolate server-supplied **enum** identifiers (ICAO, model keys, flight category, SIGMET hazard/qualifier, front kind/intensity) into `innerHTML` without `escapeHtml` — adjacent free-text fields (raw METAR/SIGMET) *are* escaped. Not attacker-controlled today; wrap for consistency. |
+| 2026-06-20-I2 | Info | `run_guardrails` (digest coordinate-leak / fabricated-source / number-traceability checks) gates only CI/eval, not the live serving path — wire it in as an injection/hallucination backstop. Local `.env` is mode `0644`. |
+
+### Remediation status — fixed this round (2026-06-20/21)
+
+All three Highs and most of the addressed Mediums were remediated in the same
+cycle as this audit. The OAuth fixes ship in **`flyfun-common` 0.6.0** (published
+to PyPI, git tag `v0.6.0`, commit `437e7ef`); weather pins `>=0.6.0` and adds
+migration **073** (`oauth_clients.registered_ip`) in commits `3ca80823`
+(code/deps) and `45fbf9f1` (docs).
+
+| ID | Status | What shipped |
+|----|--------|--------------|
+| H1 | **FIXED** — residual deferred (stale-client GC; show all clients in admin view) | `POST /oauth/register` is now per-IP **and** global sliding-window rate-limited (1 h) and records `registered_ip` (new column, migration 073). Open registration preserved for MCP connectors; abuse bounded. |
+| H2 | **FIXED** — residual deferred (`SameSite=None`→`Lax`, defense-in-depth) | The consent POST is bound to a fingerprint of the rendered `client_id\|redirect_uri\|scope\|code_challenge`; a replayed/swapped POST no longer matches the session and is rejected. |
+| H3 | **FIXED** — residual deferred (revoke-all / disconnect kill-switch) | OAuth refresh tokens now get a **90-day sliding** expiry, set at issuance *and* rotation. Active connectors never re-login; idle/leaked tokens expire. |
+| M1 | **FIXED** | `recalculate_advisories` owner-gated (`_load_owned_flight`), closing the cross-tenant write. |
+| M2 | **OPEN (deferred)** | Scope default-allow → default-deny redesign. Not exploitable today (the weather API re-enforces per request); tracked as a standalone task. |
+| M3 | **RESOLVED (docs)** | Owner confirms routes are not personal data and LangSmith operates under a DPA (EU residency). `PRIVACY.md` corrected (no account identifiers to LLM providers; LangSmith disclosed as a processor); `GDPR.md` updated. |
+| M4 | **FIXED (docs)** | `GDPR.md` §4 reframed as Art. 6(1)(f) legitimate interest (pre-ticked, easily-declined contact box on user-initiated feedback), matching the opt-out code — instead of the inaccurate Art. 7 "opt-in" claim. |
+| M5 | **FIXED** | The 422 handler now logs only field locations/types + body *key names*, never field values or the raw body. |
+| M6 | **FIXED** | Caddy 404s `/ts/*` and `*.map`; raw TypeScript sources + sourcemaps no longer served. |
+
+Test coverage added with the fixes: new flyfun-common tests for all three Highs
+(DCR 429 + per-IP, source-IP capture, consent-swap rejection + matching-request
+success, sliding expiry at issuance and rotation). Full flyfun-common suite (165)
+and the weather auth/token/connected-apps/preferences tests pass. **The three
+Highs take effect once `flyfun-common 0.6.0` is deployed; M1/M5/M6 take effect
+with the next weather deploy** (both pending push/deploy at the time of writing).
+
+The findings above describe the **as-discovered** state (pre-fix); the
+remediations are summarised here and annotated inline in the roadmap.
+
+### Detail on the three Highs (as discovered — `flyfun-common` 0.5.3 source; all now FIXED in 0.6.0, see remediation table)
+
+**H1 — Unauthenticated DCR.** `oauth/router.py:217` — `async def register(body, db)` has no auth dependency and no rate limiter; advertised publicly via Caddy. RFC 7591 permits open registration, but with an attacker-chosen `client_name` (rendered on the consent page — HTML-escaped, so no XSS) and `redirect_uri`, plus the genuine, correctly-signed FlyFun consent screen, this is a code-harvesting phishing primitive. **Fix:** rate-limit per IP, cap client rows, optionally require an authenticated session (tie client→user) or initial-access-token; GC clients that never complete an authorization; surface *all* registered clients in the admin view. **Fixed (0.6.0):** per-IP + global sliding-window rate limit on `/oauth/register` with `registered_ip` recorded (migration 073). Deferred: stale-client GC and admin visibility of all clients.
+
+**H2 — Consent not bound to request.** `router.py:313-314` stores one `oauth_csrf` per session; `:349-351` validates with `.get()` (reusable) and compares only the token, while `client_id`/`redirect_uri`/`scope`/`code_challenge` are trusted hidden fields re-validated only for *existence*. **Fix:** store a single-use nonce keyed to a hash of (`client_id`,`redirect_uri`,`scope`,`code_challenge`); on POST recompute and compare, `pop` the nonce, re-display consent on mismatch. Set the session cookie `SameSite=Lax` (special-case only the Apple callback) and split `SESSION_SECRET` from `JWT_SECRET`. **Fixed (0.6.0):** the consent POST is bound to a `sha256(client_id\|redirect_uri\|scope\|code_challenge)` fingerprint stored at render time; a mismatched (swapped/CSRF'd) POST is rejected. Deferred: `SameSite=Lax` migration (Apple-callback-scoped) and the `SESSION_SECRET` split — defense-in-depth now that the swap is closed.
+
+**H3 — Non-expiring refresh tokens.** `oauth/models.py:54` makes `expires_at` nullable; issuance (`router.py:563`) and rotation (`:653`) omit it, and `_handle_refresh_token` treats `NULL` as valid. Access tokens expire (7 d) but the refresh token self-renews forever; `logout-all` bumps `tokens_valid_after`, which `_decode_user_id` ignores for `ff_`/OAuth tokens (`deps.py:140-143`). **Fix:** set an absolute `expires_at` (e.g. 30–90 d) at issuance and rotation; add a disconnect/revoke path that kills the `OAuthRefreshTokenRow` family + linked `ApiTokenRow`. **Fixed (0.6.0):** refresh tokens now get a 90-day *sliding* expiry, set at both issuance and rotation (configurable via `refresh_token_days`). Deferred: the `logout-all`/disconnect revoke-all kill-switch for the refresh family + `ff_` tokens.
+
+### Carry-forward statuses re-verified 2026-06-20
+
+| Prior ID | Title | Status | Evidence |
+|----------|-------|--------|----------|
+| H3 | Single `JWT_SECRET` reuse | **OPEN (re-verified)** | Still signs JWTs + Starlette session (`app.py:314`, `secret_key=get_jwt_secret()`) + pack-integrity HMAC (`storage/flights.py:150-159`, deliberately routed through `get_jwt_secret()`). See new L4. |
+| H6 | No Python lockfile / unpinned deps | **OPEN (re-verified)** | `pyproject.toml` all `>=` floors incl. `flyfun-common>=0.5.3`; `Dockerfile:33` `pip install -e .`; no `requirements/constraints/uv.lock` tracked. npm side still correct (`npm ci` + committed lockfile). |
+| H7 | Rate limiting on auth/token endpoints | **PARTIAL** | DCR (`/oauth/register`) is now rate-limited (H1 fix, 0.6.0). `api/tokens.py` and the approval endpoint remain unthrottled — still open. |
+| M-new-9 | `/api/refresh/active` cross-tenant leak | **OPEN (re-verified)** | `packs.py:2003` (`/refresh/active`) still returns every user's `flight_id`/`user_id` to any authenticated caller. |
+| M-prior-8 | `_load_flight_or_404` fail-open default | **OPEN (re-verified)** | `flights.py:1867` still skips the privacy check when `viewer_id is None`. No caller triggers it today; latent footgun. (And M1 above shows the *viewer-gated* variant being misused for a write path.) |
+| M-new-1 | CSP `script-src 'unsafe-inline'` | **OPEN (re-verified)** | `deploy/weather.flyfun.aero.caddy` still allows `'unsafe-inline'` for script+style — would not backstop a DOM-XSS. Rest of header suite is strong. |
+| M2 (06-11) | Digest prompt-injection fencing | **PARTIAL (residual unchanged)** | System-prompt "data not instructions" rule present; random-delimiter fencing (as triage does) still not applied to METAR/SIGMET/AFD blocks in `prompt_builder.py`. Blast radius still well-contained (no tools, structured output, escaped sink). |
+| I1 (06-11) | Client sources served publicly | **FIXED (M6)** | Caddy now 404s `/ts/*` and `*.map`. (App still mounts all of `web/`; a `dist`-only mount remains a possible defence-in-depth follow-up.) |
+| C1 / triage PI | Triage prompt injection | **FIXED (intact)** | Random-delimiter fencing + tool allowlist (Read/Grep/Glob) + output exfil-scan re-verified. |
+| — | GDPR export / deletion / email-mask / triage-PII | **Confirmed solid (new code)** | Export IDOR-safe (`current_user_id` only, no client ID), `_EXCLUDE` drops secrets; deletion anonymizes PIREPs + wipes packs/prefs/creds; `mask_email` broadly applied; triage prompt carries only category/comment/timestamps. |
+
+Positives re-confirmed from scratch this pass (independent of prior text): ORM-only DB access (sole raw `text()` is internal MySQL partition DDL in `tasks/retention.py`, not user-reachable); `safe_path_component` + ICAO/model/chart-id/run-cycle allowlists on every file-serving path; no `eval`/`exec`/`shell=True`/pickle/unsafe-yaml; no user-controlled outbound URL (no SSRF); admin gating present on **all** admin routes (full enumeration across admin/credits/analytics/messages/profiles/feedback/eval-workbench/hub); PKCE `S256` mandatory; JWT decode pinned to `HS256`, prod refuses missing/dev-default secret; auth-code single-use with replay-revocation; Apple native-token path pins `RS256`+aud+iss against Apple JWKS; unverified provider emails discarded before admin-email match; `flyfun_auth` cookie `HttpOnly`+`SameSite=Lax`+`Secure`; CORS `*` is dev-gated only; `/docs` disabled in prod; Docker non-root UID 2000 + `.dockerignore` excludes `.env`/`.git`/secrets; loopback-bound upstream ports; analytics genuinely pseudonymous (no stored IP, refuses to attach `user_id`); no bearer token in browser web-storage (HttpOnly cookie auth); free-text user fields (PIREP remarks, names, admin replies, donor messages, digest prose) escaped at every web sink.
+
+### Priority roadmap (this pass)
+
+**Done this round (2026-06-20/21)** — see the remediation table above:
+- ✅ **H1/H2/H3 — OAuth AS** (rate-limited DCR, request-bound consent, 90-day sliding refresh expiry) — `flyfun-common` 0.6.0.
+- ✅ **M1 — `recalculate_advisories`** owner-gated.
+- ✅ **M3/M4 — privacy truth-up** (`PRIVACY.md` + `GDPR.md`).
+- ✅ **M5 — 422 handler** logs names/types only.
+- ✅ **M6/I1 — `/ts/` + sourcemaps** blocked at Caddy.
+
+**Remaining, in priority order:**
+1. **M2** — scope model default-allow → default-deny (register `mcp`'s full path set; MCP verifier reports real scope). Footgun, not exploitable today; standalone task.
+2. **H1/H2/H3 residuals** — stale-client GC + admin visibility of all clients; `SameSite=Lax` session (Apple-scoped) + `SESSION_SECRET` split; refresh revoke-all / disconnect kill-switch.
+3. **Carry-forwards**: **H6** (Python lockfile), **H7** (rate-limit `api/tokens.py` + approval endpoint), **H3/L4** (split the master secret), **M-new-9** (`/refresh/active` cross-tenant scope), **M-prior-8** (`_load_flight_or_404` fail-open), **M-new-1** (CSP `'unsafe-inline'`), **M2-06-11** (digest random-delimiter fencing).
+4. **Low/Info**: L1 (DCR redirect_uri allowlist), L2 (per-email OTP cap), L3 (auth-code GC — folds into H1 GC), L5 (CostLedger anonymize on delete), L6 (Autorouter error logging), L7 (`rel=noopener`), I1/I2 (tooltip escaping, wire `run_guardrails`).
 
 ---
 
