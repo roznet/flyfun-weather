@@ -103,6 +103,37 @@ def test_summarize_advisories_green_with_cross_check_expands():
 
 
 # --------------------------------------------------------------------------
+# advisory_detail — per-model drill-down + load-bearing guardrail note
+# --------------------------------------------------------------------------
+
+def test_advisory_detail_injects_cross_check_note_and_per_model():
+    adv = {
+        "advisory_id": "convective",
+        "aggregate_status": "red",
+        "aggregate_detail": "EXTREME over 57%",
+        "per_model": [
+            {"model": "gfs", "status": "red", "detail": "d", "affected_pct": 57,
+             "affected_nm": 80, "total_nm": 140, "cross_check": "CAPE 2200 J/kg"},
+        ],
+        "parameters_used": {"cape_red": 1500},
+    }
+    catalog = {"name": "Convective", "category": "convective", "description": "desc"}
+    out = views.advisory_detail(adv, catalog)
+    # The cross-check guardrail note is deliberately load-bearing — always present.
+    assert out["cross_check_note"] == views.CROSS_CHECK_NOTE
+    assert out["aggregate_status"] == "red"
+    assert out["per_model"][0]["cross_check"] == "CAPE 2200 J/kg"
+    assert out["per_model"][0]["affected_nm"] == 80
+    assert out["name"] == "Convective"
+
+
+def test_advisory_detail_without_catalog_entry_omits_name():
+    out = views.advisory_detail({"advisory_id": "cloud_top", "per_model": []}, None)
+    assert out["cross_check_note"] == views.CROSS_CHECK_NOTE
+    assert "name" not in out
+
+
+# --------------------------------------------------------------------------
 # convective_detail — thermo vs nwp split + blue-sky signal
 # --------------------------------------------------------------------------
 

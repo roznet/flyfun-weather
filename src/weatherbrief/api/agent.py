@@ -95,6 +95,10 @@ def _resolve_latest_pack(db: Session, user_id: str, flight_id: str):
     status dict mirrors the MCP early-return shapes so callers return it
     directly. Mirrors ``mcp.server._resolve_pack`` but in-process.
     """
+    # Ownership gate first — match every packs.py read endpoint and avoid
+    # leaking pack existence / refresh state for a flight the user can't see.
+    flights_api._load_flight_or_404(db, flight_id, viewer_id=user_id)
+
     refresh = packs_api.get_refresh_status(flight_id=flight_id, user_id=user_id)
     if refresh.get("active"):
         return None, None, _processing(flight_id)
@@ -394,9 +398,10 @@ def get_advisory_detail(
     )
     if adv is None:
         available = [a.get("advisory_id") for a in advisories.get("advisories", [])]
+        listed = ", ".join(x for x in available if x)
         raise HTTPException(
             status_code=404,
-            detail=f"Advisory '{advisory_id}' not found. Available: {', '.join(available)}",
+            detail=f"Advisory '{advisory_id}' not found. Available: {listed}",
         )
 
     catalog = {c.get("id"): c for c in advisories.get("catalog", [])}
