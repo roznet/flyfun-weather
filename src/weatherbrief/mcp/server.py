@@ -26,6 +26,7 @@ import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth import AccessToken, RemoteAuthProvider, TokenVerifier
 from fastmcp.server.dependencies import get_http_request
+from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 
 from weatherbrief.mcp.client import API_BASE, WeatherbriefClient
@@ -225,7 +226,10 @@ def _error_result(message: str, code: int | None = None) -> dict:
 # Tool: list_flights
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    title="List Flights",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+)
 def list_flights() -> dict[str, Any]:
     """List the user's upcoming flights with briefing status.
 
@@ -270,7 +274,15 @@ def list_flights() -> dict[str, Any]:
 # Tool: create_flight
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    title="Create Flight",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 def create_flight(
     waypoints: Annotated[
         list[str],
@@ -348,7 +360,10 @@ def create_flight(
 # Tool: get_briefing
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    title="Get Flight Briefing",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+)
 def get_briefing(
     flight_id: Annotated[
         str,
@@ -561,7 +576,15 @@ def _summarize_altitude_table(table: dict) -> dict:
 # Tool: refresh_briefing
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    title="Refresh Briefing",
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
 def refresh_briefing(
     flight_id: Annotated[
         str,
@@ -623,7 +646,10 @@ def refresh_briefing(
 # Tool: get_airport_weather
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    title="Get Airport Weather",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+)
 def get_airport_weather(
     icao_codes: Annotated[
         list[str],
@@ -663,7 +689,10 @@ def get_airport_weather(
 # Tool: get_advisory_detail
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    title="Get Advisory Detail",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+)
 def get_advisory_detail(
     flight_id: Annotated[
         str,
@@ -905,7 +934,10 @@ def _nwp_block(max_cover: float | None, peak_top: float | None) -> dict[str, Any
 # Tool: get_digest_context
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(
+    title="Get Digest Context",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+)
 def get_digest_context(
     flight_id: Annotated[
         str,
@@ -967,7 +999,7 @@ def get_digest_context(
 # Prompt: explain_advisory
 # ---------------------------------------------------------------------------
 
-@mcp.prompt()
+@mcp.prompt(title="Explain Advisory")
 def explain_advisory(
     flight_id: Annotated[
         str,
