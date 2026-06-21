@@ -88,6 +88,13 @@ Actions require a pre-registered confidential client** (you type `client_id` +
 client through the existing **DCR endpoint** so the secret is hashed the way the
 token endpoint verifies it:
 
+> **Requires `flyfun-common >= 0.6.1` (PKCE optional).** The Claude/MCP flow is
+> OAuth 2.1 + PKCE; the AS originally *required* `code_challenge`. ChatGPT GPT
+> Actions are confidential clients that authenticate with `client_secret` and
+> **do not send PKCE**, so they 422'd at `/oauth/authorize`. `0.6.1` makes PKCE
+> optional-when-absent / enforced-when-present (safe because the token endpoint
+> always requires a valid `client_secret`). This connector depends on it.
+
 OAuth endpoints (from `deploy/weather.flyfun.aero.caddy`):
 - authorize: `https://weather.flyfun.aero/oauth/authorize`
 - token: `https://weather.flyfun.aero/oauth/token` (`client_secret_post`)
@@ -98,22 +105,46 @@ OAuth endpoints (from `deploy/weather.flyfun.aero.caddy`):
 1. In ChatGPT (Pro/Team/Enterprise/Edu) **create the Custom GPT**, add an
    **Action**, and import the schema from `https://weather.flyfun.aero/agent/v1/openapi.json`.
 2. Set Authentication = **OAuth**, scope `mcp`, token exchange = **POST**.
-   Authorization URL / Token URL as above. Save the GPT — ChatGPT now shows its
-   **callback URL**: `https://chatgpt.com/aip/g-<gpt-id>/oauth/callback`.
-3. **Provision the client** with that callback as the redirect URI, e.g.:
+   Authorization URL / Token URL as above. The Client ID/Secret fields won't let
+   you save empty — enter a placeholder (`temp`) for now. Save the GPT — ChatGPT
+   now shows its **callback URL**, e.g.
+   `https://chat.openai.com/aip/g-<gpt-id>/oauth/callback`.
+3. **Provision the client** with that callback as the redirect URI. Register
+   **both** the `chat.openai.com` and `chatgpt.com` variants — ChatGPT uses either:
    ```bash
    curl -sX POST https://weather.flyfun.aero/oauth/register \
      -H 'Content-Type: application/json' \
      -d '{"client_name":"FlyFun Weather GPT",
-          "redirect_uris":["https://chatgpt.com/aip/g-<gpt-id>/oauth/callback"]}'
+          "redirect_uris":["https://chat.openai.com/aip/g-<gpt-id>/oauth/callback",
+                           "https://chatgpt.com/aip/g-<gpt-id>/oauth/callback"]}'
    ```
    The response returns `client_id` + `client_secret` (shown once).
-4. Paste `client_id` + `client_secret` into the GPT builder's OAuth panel.
+4. Paste the real `client_id` + `client_secret` over the placeholders, Save.
 5. Open the GPT, run a tool → complete the FlyFun login + `mcp` consent → tools work.
+
+The GPT's **Instructions / Description / conversation starters** to paste into the
+builder live in [`chatgpt-connector-gpt-config.md`](chatgpt-connector-gpt-config.md).
 
 **No CORS change is required**: Actions are called server-to-server by OpenAI, not
 from a browser (unlike the Claude MCP connector, whose browser handshake needs the
 scoped `claude.ai`/`claude.com` CORS allowlist).
+
+### Operational gotchas (learned the hard way)
+
+- **The GPT id (`g-…`) changes when you save/re-save the GPT.** A callback copied
+  from a draft won't match the id ChatGPT actually sends, giving
+  `400 {"detail":"redirect_uri not registered"}`. There is **no DCR *update*
+  endpoint**, so read the real `redirect_uri` from the server log
+  (`docker logs weatherbrief | grep /oauth/authorize`) and update the client's
+  `oauth_clients.redirect_uris_json` directly (a parameterized SQL `UPDATE` on the
+  prod MySQL keyed by `client_id`). The `client_id`/`secret` stay the same, so the
+  builder needs no change.
+- **Operation descriptions must be ≤300 chars** or the Action validator flags them
+  and silently truncates the overflow — which once cut the load-bearing
+  `getAdvisoryDetail` guardrail. Kept in check by the trimmed docstrings in `agent.py`.
+- **"object schema missing properties" warnings are harmless** — the endpoints
+  return free-form `dict` (`type: object`, no declared fields). Actions still
+  import and run; it's cosmetic, not a blocker.
 
 ## Testing
 
