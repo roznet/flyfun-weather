@@ -167,6 +167,13 @@ Pilot post-flight judgement (cancelled/flown) on past flights — Phase 1 of #92
 Key exports: `FlightDebrief`, `Decision`, `ConditionTag`, `OutcomeValue`, `compute_stats`, `upsert_debrief`, `list_debriefed_flight_ids`
 → Full doc: debrief.md
 
+## Connectors (agent integrations)
+
+### chatgpt-connector [project]
+Native ChatGPT support (Custom GPT + OpenAPI Action) as the sibling of the Claude MCP connector: two thin front-doors over one core. Shared response shaping + meteorological guardrails in `connectors/views.py`; the ChatGPT REST router (`api/agent.py`, mounted `/agent/v1`) reuses upstream logic in-process (read endpoints via the same helpers, write endpoints by calling the existing route handlers directly). Isolated OpenAPI at `/agent/v1/openapi.json`; OAuth reuses the `mcp` scope with a pre-provisioned (DCR-registered) confidential client. No CORS change (server-to-server).
+Key exports: `summarize_advisories`, `summarize_altitude_table`, `advisory_detail`, `convective_detail`, `briefing_freshness_status`, `agent.router`
+→ Full doc: chatgpt-connector.md
+
 ## Infrastructure & operations
 
 ### grib-decode-dispatcher [project]

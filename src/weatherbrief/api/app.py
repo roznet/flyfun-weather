@@ -33,6 +33,7 @@ from flyfun_common.db import (
 )
 from flyfun_common.db.models import UserPreferencesRow
 
+from weatherbrief.api.agent import router as agent_router
 from weatherbrief.api.aircraft import router as aircraft_router
 from weatherbrief.api.debriefs import router as debriefs_router
 from weatherbrief.api.pireps import router as pireps_router
@@ -546,6 +547,59 @@ def create_app() -> FastAPI:
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")
     app.include_router(donations_router, prefix="/api")
+
+    # ChatGPT Custom GPT / OpenAPI front-door. Mounted at its OWN /agent/v1
+    # prefix (not /api) and served with an isolated OpenAPI schema below, so the
+    # tiny 7-operation contract pasted into the Custom GPT builder is decoupled
+    # from the app's large internal API surface. Auth reuses the existing OAuth
+    # "mcp" scope (broad-scope/unscoped tokens are unaffected by scope gating).
+    app.include_router(agent_router)
+
+    @app.get("/agent/v1/openapi.json", include_in_schema=False)
+    def agent_openapi():
+        """Isolated OpenAPI schema for the Custom GPT Action.
+
+        Only the ``/agent/v1`` operations, plus the OAuth2 authorization-code
+        security scheme pointing at weather.flyfun.aero. This is the document a
+        Custom GPT imports; the GPT then needs a pre-provisioned OAuth client
+        (client_id + secret) whose redirect_uri allowlists the GPT's
+        ``/aip/g-<id>/oauth/callback``.
+        """
+        from fastapi.openapi.utils import get_openapi
+
+        schema = get_openapi(
+            title="FlyFun Weather — Pilot Briefing Tools",
+            version="1.0.0",
+            description=(
+                "Aviation weather briefing tools for GA flight planning in Europe: "
+                "multi-model forecasts, route advisories, AI weather digests, and "
+                "METAR/TAF observations for ~620 European airports. Briefing "
+                "generation takes ~2 minutes; if a briefing is 'processing', tell "
+                "the user and check again shortly. When the user questions or "
+                "doubts an advisory, call getAdvisoryDetail (and getDigestContext "
+                "for the deepest context) before answering — the cross-check is "
+                "context for discussion, never a downgrade signal."
+            ),
+            routes=agent_router.routes,
+        )
+        weather_base = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
+        schema["servers"] = [{"url": weather_base}]
+        schema.setdefault("components", {})["securitySchemes"] = {
+            "oauth2": {
+                "type": "oauth2",
+                "flows": {
+                    "authorizationCode": {
+                        "authorizationUrl": f"{weather_base}/oauth/authorize",
+                        "tokenUrl": f"{weather_base}/oauth/token",
+                        "scopes": {
+                            "mcp": "Full access to your flights, briefings, and account settings",
+                        },
+                    },
+                },
+            },
+        }
+        schema["security"] = [{"oauth2": ["mcp"]}]
+        return schema
 
     # OAuth least-privilege: a token granted only the "flights:read" scope may
     # reach ONLY these two read endpoints; anything else is 403 insufficient_scope.
