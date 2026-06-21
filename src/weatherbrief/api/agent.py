@@ -25,6 +25,7 @@ same OAuth-bearer / api-token stack as the rest of the app, using the existing
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Annotated, Any
@@ -42,6 +43,8 @@ from weatherbrief.api import packs as packs_api
 from weatherbrief.connectors import views
 
 WEATHER_BASE_URL = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent/v1", tags=["agent"])
 
@@ -111,14 +114,28 @@ def _resolve_latest_pack(db: Session, user_id: str, flight_id: str):
 
 
 def _freshness_dict(db: Session, user_id: str, flight_id: str) -> dict[str, Any]:
-    """Build the ``/packs/freshness`` payload in-process (DataStatus + gate)."""
+    """Build the ``/packs/freshness`` payload in-process (DataStatus + gate).
+
+    Degrades gracefully: if the status/gate computation throws unexpectedly the
+    briefing should still render rather than 500, so we fall back to a
+    ready/fresh payload (``briefing_freshness_status`` reads ``fresh`` → ready).
+    This mirrors the MCP server, which wraps its ``/packs/freshness`` call in a
+    ``try/except`` and falls back to ``{"status": "ready", "is_fresh": True}``.
+    Ownership errors from ``_load_flight_or_404`` still propagate as 403/404.
+    """
     flight = flights_api._load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = packs_api.list_packs(db, flight_id)
     if not packs:
         return {"fresh": False}
-    status = packs_api._build_data_status(packs[0], flight)
-    status.refresh_decision = packs_api.decide_refresh(status, packs_api._days_out_now(flight))
-    return status.model_dump()
+    try:
+        status = packs_api._build_data_status(packs[0], flight)
+        status.refresh_decision = packs_api.decide_refresh(
+            status, packs_api._days_out_now(flight)
+        )
+        return status.model_dump()
+    except Exception:
+        logger.exception("freshness computation failed for flight %s; assuming fresh", flight_id)
+        return {"fresh": True}
 
 
 # ---------------------------------------------------------------------------

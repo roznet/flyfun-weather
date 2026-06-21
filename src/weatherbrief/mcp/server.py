@@ -31,20 +31,10 @@ from pydantic import AnyHttpUrl, Field
 
 from weatherbrief.connectors.views import (
     CONVECTIVE_NOTE as _CONVECTIVE_NOTE,
-)
-from weatherbrief.connectors.views import (
     advisory_detail as _advisory_detail,
-)
-from weatherbrief.connectors.views import (
     briefing_freshness_status as _briefing_freshness_status,
-)
-from weatherbrief.connectors.views import (
     convective_detail as _convective_detail,
-)
-from weatherbrief.connectors.views import (
     summarize_advisories as _summarize_advisories,
-)
-from weatherbrief.connectors.views import (
     summarize_altitude_table as _summarize_altitude_table,
 )
 from weatherbrief.mcp.client import API_BASE, WeatherbriefClient
