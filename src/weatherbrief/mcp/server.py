@@ -654,8 +654,9 @@ def get_advisory_detail(
         )
         if adv is None:
             available = [a.get("advisory_id") for a in advisories.get("advisories", [])]
+            listed = ", ".join(x for x in available if x)
             return _error_result(
-                f"Advisory '{advisory_id}' not found. Available: {', '.join(available)}"
+                f"Advisory '{advisory_id}' not found. Available: {listed}"
             )
 
         catalog = {c.get("id"): c for c in advisories.get("catalog", [])}
