@@ -974,6 +974,21 @@ def test_nwp_corroboration_capped_at_high():
     assert result.risk_level == ConvectiveRisk.HIGH  # not bumped past HIGH
 
 
+def test_nwp_firing_gate_and_cin_double_suppression():
+    """Dry-firing deep tower under a strong cap drops two levels (gate + CIN).
+
+    The firing gate and CIN suppression are independent physical suppressors
+    (not firing AND capped), so both applying is intentional and bounded at
+    NONE. (#283 review M3)
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0, cin_surface_jkg=-250.0)
+    # FL300 (HIGH) + cover 5% (dry → gate → MODERATE) + CIN -250 (→ CIN → LOW).
+    diag = NWPCloudDiagnostics(convective_cover_pct=5.0, convective_top_ft=30000.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.LOW
+
+
 def test_nwp_corroboration_only_on_realized_cell():
     """Strong native index on a DRY tower does not bump (gate holds down instead)."""
     indices = ThermodynamicIndices(cape_surface_jkg=40.0)
@@ -1214,6 +1229,23 @@ def test_cross_check_cover_with_geom_not_quiet():
         base_ft=4000.0,
         top_ft=18000.0,
         method="nwp",
+    )
+    assert convective_cross_check(thermo, nwp) is None
+
+
+def test_cross_check_skips_cape_fallback():
+    """No cross-check when NWP is the CAPE fallback — comparison is circular (#283 review I1).
+
+    A diagnostic carrying only stability indices (no cloud content) reaches the
+    fallback path with all firing channels absent, which would otherwise read
+    model_quiet and spuriously fire dd_not_corroborated against a MODERATE+ DD.
+    """
+    thermo = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cape_jkg=1100.0, method="thermo"
+    )
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cover_pct=None, top_ft=None,
+        method="nwp_cape_fallback",
     )
     assert convective_cross_check(thermo, nwp) is None
 

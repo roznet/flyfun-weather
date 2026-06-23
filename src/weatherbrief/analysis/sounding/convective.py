@@ -398,7 +398,7 @@ def assess_convective_thermo(
       is where surface-based CAPE over-reads a dry, poorly-mixed column.
     - WEAK_INSTABILITY / THERMAL: scored on potential CAPE with the generic
       strong-CIN suppression (intentionally not ML-tempered — see
-      designs/future/meteorology-decision.md).
+      designs/meteorology-decisions.md §4).
 
     Independently, ``elevated_convection`` flags a most-unstable parcel sitting
     well above the surface (MU ≫ SB) — convection possible aloft even when the
@@ -562,7 +562,12 @@ def _nwp_cape_fallback_risk(cape: float | None) -> ConvectiveRisk:
     """CAPE-threshold risk for models with no native convective scheme output.
 
     Mirrors the pre-#283 NWP behaviour (and the DD thresholds) for the fallback
-    path only — a model that emits neither a convective top nor cover.
+    path only — a model that emits neither a convective top nor cover. Note the
+    MARGINAL bar here (``cape >= 10``) is intentionally looser than
+    ``_risk_from_cape``'s (which also requires LFC and EL): the fallback has no
+    sounding geometry to gate on, so it keys on CAPE alone. Practical impact is
+    nil — production never reaches this path (build_* return None for empty
+    diagnostics).
     """
     if cape is None:
         return ConvectiveRisk.NONE
@@ -853,6 +858,13 @@ def convective_cross_check(
       (e.g. GFS Sun morning over Reims: cover 46.8%, top FL332, DD only marginal).
     """
     if nwp is None or thermo is None:
+        return None
+    if nwp.method == "nwp_cape_fallback":
+        # Circular: the fallback is CAPE-scored like thermo (no native scheme
+        # output), so a quiet/active comparison would re-derive thermo against
+        # itself. Skip it — same reasoning the dd_nwp_agreement convective block
+        # used before it was removed. (#283 review) Reachable when a diagnostic
+        # carries only stability indices (ml_cape/kx/...) and no cloud content.
         return None
 
     precip = nwp.convective_precip_mm_h

@@ -417,25 +417,19 @@ Note: Entirely dependent on MetPy quality from 13-28 pressure levels.
 
 ## Recommendations
 
-### 1. ~~Use NWP raw CAPE when available~~ ✅ IMPLEMENTED
+### 1. ~~Use NWP raw CAPE when available~~ ✅ IMPLEMENTED (MetPy-primary, NWP fallback)
 
-The model's own CAPE computation uses full vertical resolution (50–140 levels) vs MetPy's 8–28 levels. When `nwp_cape_jkg` is available, it should at minimum participate in `_effective_cape()`:
+`effective_cape()` takes `max(SB, MU, ML)` over the **MetPy** variants and uses `nwp_cape_jkg` **only as a last-resort fallback when no MetPy variant is available** — NWP raw CAPE is *not* folded into the max pool. Rationale (see the `effective_cape` docstring): model-native CAPE can diverge significantly from sounding-derived values (different parcel selection, virtual-temperature corrections), so including it in the max pool could inflate convective risk when the sounding doesn't support it. `test_effective_cape_nwp_raw_fallback_only` pins this behaviour.
 
 ```python
-def _effective_cape(indices: ThermodynamicIndices) -> float | None:
-    values = [
-        v for v in (
-            indices.cape_surface_jkg,
-            indices.cape_most_unstable_jkg,
-            indices.cape_mixed_layer_jkg,  # Fix bug #2
-            indices.nwp_cape_jkg,          # Use raw NWP
-        )
-        if v is not None
-    ]
-    return max(values) if values else None
+def effective_cape(indices) -> float | None:
+    metpy = [v for v in (indices.cape_surface_jkg,
+                         indices.cape_most_unstable_jkg,
+                         indices.cape_mixed_layer_jkg) if v is not None]
+    if metpy:
+        return max(metpy)
+    return indices.nwp_cape_jkg  # fallback only
 ```
-
-This is conservative (never underestimates) and handles the CAPE type heterogeneity by taking the maximum.
 
 ### 2. ~~Enable ICON-EU NWP convective assessment~~ ✅ IMPLEMENTED
 
