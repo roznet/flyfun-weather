@@ -224,6 +224,14 @@ def _lerp_diagnostics(
         convective_top_ft=_lerp_optional(
             a.convective_top_ft, b.convective_top_ft, frac,
         ),
+        # Native convective realization + stability (#283 Phase 2).
+        convective_precip_mm_h=_lerp_optional(
+            a.convective_precip_mm_h, b.convective_precip_mm_h, frac,
+        ),
+        k_index=_lerp_optional(a.k_index, b.k_index, frac),
+        total_totals=_lerp_optional(a.total_totals, b.total_totals, frac),
+        ml_cape_jkg=_lerp_optional(a.ml_cape_jkg, b.ml_cape_jkg, frac),
+        ml_cin_jkg=_lerp_optional(a.ml_cin_jkg, b.ml_cin_jkg, frac),
         total_cover_pct=_lerp_optional(
             a.total_cover_pct, b.total_cover_pct, frac,
         ),

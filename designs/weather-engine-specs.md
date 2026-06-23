@@ -129,9 +129,9 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Publication delay:** ~6–8h after init time
 - **Naming convention:** `dest_feed_model_class_stream_type_baseTime_validTime_step[_expver]` — no `.grib2` extension by default. `expver` is absent on prod operational files, and `X0080` on TPREd Release Candidate files (ECMWF_ACCEPT_RCP_EXPVER=1 opt-in for staging).
 - **Pressure-level (a2):** t, r, u, v, z, w, gh, cc, clwc, ciwc — **full sounding replacement** (replaces Open-Meteo pressure levels entirely). Post-amendment (2026-04-22): `d` (divergence) was dropped, `gh` (geopotential height) added at all 25 levels, removing the hypsometric fallback from the decode path. `z` is still delivered only at 1 hPa (catalogue limitation).
-- **Surface (a1) — cloud diagnostics:** ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l → `NWPCloudDiagnostics` (hcct → `convective_top_ft`; deg0l → `freezing_level_ft` + overwrites `hourly.freezing_level_m`)
+- **Surface (a1) — cloud diagnostics:** ceil, cbh, lcc, mcc, hcc, tcc, hcct, deg0l, **kx, totalx, mlcape100, mlcin100, cp** → `NWPCloudDiagnostics` (hcct → `convective_top_ft`; deg0l → `freezing_level_ft` + overwrites `hourly.freezing_level_m`; kx/totalx → `k_index`/`total_totals`; mlcape100/mlcin100 → `ml_cape_jkg`/`ml_cin_jkg`; **cp** is accumulated-since-init, de-accumulated by step-difference in the ECMWF merge loop → `convective_precip_mm_h`). These feed the model-native convective track's firing gate + corroboration (#283).
 - **Surface (a1) — surface snapshot:** t2m, d2m, u10, v10, fg10, vis, tp, sf, mucape, sp → `build_ecmwf_surface_snapshot` (unit-converted), consumed by the standalone verification pipeline only — NOT yet wired into the user-facing forecast (which still uses Open-Meteo surface fields)
-- **Surface (a1) — delivered but not yet processed:** 10fg, blh, capes, cp, degm10l, fzra, kx, lsp, mlcape100, mlcin100, msl, ptype, totalx
+- **Surface (a1) — delivered but not yet processed:** 10fg, blh, capes, degm10l, fzra, lsp, msl, ptype
 - **Multi-grid:** Files may contain multiple geographic sub-grids; cfgrib splits into separate Datasets, decoder uses first-wins per point
 - **No HTTP, no cache** — local disk I/O, no byte-range download needed
 
@@ -147,7 +147,7 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Domain:** 29.5–70.5°N, 23.5°W–62.5°E
 - **Variables fetched:**
   - Model-level: QC, QI, CLC, P, T, QV, U, V, W — **full sounding replacement** (replaces Open-Meteo pressure levels entirely)
-  - Single-level: CEILING, HBAS_CON/HTOP_CON, CLCL/CLCM/CLCH/CLCT → `NWPCloudDiagnostics`
+  - Single-level: CEILING, HBAS_CON/HTOP_CON, CLCL/CLCM/CLCH/CLCT, **CAPE_ML/CIN_ML** → `NWPCloudDiagnostics` (cape_ml/cin_ml → `ml_cape_jkg`/`ml_cin_jkg`, instantaneous, feed the native convective track #283). RAIN_CON (convective rain, accumulated-since-init) is **not yet fetched** — it would need step-difference de-accumulation in the ICON merge path; the firing gate is missing-data-safe meanwhile.
 - **Model levels → pressure levels:** Log-pressure interpolation using P field; 40 model levels → standard pressure levels (`EXTENDED_PRESSURE_LEVELS`, 28-level set)
 - **Single-level → NWPCloudDiagnostics:** Heights in meters converted to feet (× 3.28084)
 - **W → omega:** physical vertical velocity (m/s) converted to omega (`vertical_velocity_pa_s`) per level via −ρ·g·w

@@ -574,6 +574,90 @@ def _nwp_cape_fallback_risk(cape: float | None) -> ConvectiveRisk:
     return ConvectiveRisk.NONE
 
 
+# Firing gate (#283 Phase 2). A MODERATE+ tower is only kept there when the
+# model's own scheme *realized* convection — measurable convective precip OR
+# meaningful convective cover. A deep-but-dry tower (precip≈0 / no cover — the
+# capped or elevated case) is held down one level. This is the native-side
+# mirror of the parcel-EL over-read fix (meteorology-decisions §6). Missing data
+# never holds down: we suppress only on positive evidence of no firing (safety
+# asymmetry), so a model that simply doesn't emit precip keeps its tower tier.
+_FIRING_PRECIP_MM_H = 0.1
+_FIRING_COVER_PCT = 15.0
+
+# Native corroboration (#283 Phase 2). A *realized* MODERATE+ cell whose own
+# model-native instability indices are strong is bumped up one level (capped at
+# HIGH — only an overshooting ≥FL380 tower yields EXTREME). Thresholds are a
+# defensible v1, pending calibration. Note these are the model's NATIVE kx /
+# totalx / conv-precip (on NWPCloudDiagnostics), not the DD-derived indices.
+_CORROB_K_INDEX = 35.0
+_CORROB_TOTAL_TOTALS = 50.0
+_CORROB_PRECIP_MM_H = 0.5
+
+
+def _convection_realized_nwp(diag: NWPCloudDiagnostics) -> bool:
+    """True when the model's convective scheme actually fired here (#283).
+
+    Realized = measurable convective precip OR meaningful convective cover.
+    Unknown (both absent) is NOT realized — but see ``_apply_firing_gate``: a
+    not-realized tower is only held down on *positive* dry evidence, never on
+    missing data.
+    """
+    precip = diag.convective_precip_mm_h
+    cover = diag.convective_cover_pct
+    return (precip is not None and precip > _FIRING_PRECIP_MM_H) or (
+        cover is not None and cover > _FIRING_COVER_PCT
+    )
+
+
+def _apply_firing_gate(
+    risk: ConvectiveRisk, diag: NWPCloudDiagnostics
+) -> tuple[ConvectiveRisk, str | None]:
+    """Gate a MODERATE+ tower on realized convection, then corroborate (#283).
+
+    Returns the adjusted risk and an optional driver/suppressor note. The gate
+    only acts on MODERATE+ (a shallow tower is already low); corroboration only
+    acts on a *realized* cell (strong instability confirms severity, it does not
+    create a cell from nothing).
+    """
+    if _RISK_LEVELS.index(risk) < _RISK_LEVELS.index(ConvectiveRisk.MODERATE):
+        return risk, None
+
+    precip = diag.convective_precip_mm_h
+    cover = diag.convective_cover_pct
+    realized = _convection_realized_nwp(diag)
+
+    if not realized:
+        # Hold down one level only on positive dry evidence (precip ~0 or cover
+        # ≤ threshold). Missing data → keep the tower tier (conservative).
+        dry = (precip is not None and precip <= _FIRING_PRECIP_MM_H) or (
+            cover is not None and cover <= _FIRING_COVER_PCT
+        )
+        if dry:
+            return _down_one(risk), (
+                "Deep tower but the model's convective scheme is dry here "
+                "(no convective precip / cover) — held down one level"
+            )
+        return risk, None
+
+    # Realized cell — strong native instability corroborates one level up.
+    corroborators: list[str] = []
+    if diag.k_index is not None and diag.k_index > _CORROB_K_INDEX:
+        corroborators.append(f"K-index {diag.k_index:.0f}")
+    if diag.total_totals is not None and diag.total_totals > _CORROB_TOTAL_TOTALS:
+        corroborators.append(f"Total Totals {diag.total_totals:.0f}")
+    if precip is not None and precip > _CORROB_PRECIP_MM_H:
+        corroborators.append(f"convective precip {precip:.1f} mm/h")
+    if corroborators and _RISK_LEVELS.index(risk) < _RISK_LEVELS.index(
+        ConvectiveRisk.HIGH
+    ):
+        return _up_one(risk), (
+            "Model-native severity corroborated ("
+            + ", ".join(corroborators)
+            + ")"
+        )
+    return risk, None
+
+
 def _has_native_cloud_content(diag: NWPCloudDiagnostics) -> bool:
     """True when GRIB enrichment populated *any* native cloud diagnostic.
 
@@ -682,12 +766,25 @@ def assess_convective_nwp(
     # Risk from the validated native fields (NOT CAPE).
     risk = _native_convective_risk(top_ft, cover)
 
-    # Keep the strong-CIN suppression (#283 Phase 1: partially handles a capped
-    # tower the scheme reports but won't realize; CIN < -200 → one level down).
-    if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
+    # Firing gate + native corroboration (#283 Phase 2): hold a deep-but-dry
+    # tower down one level, or bump a realized cell up on strong native indices.
+    drivers: list[str] = []
+    suppressors: list[str] = []
+    risk, gate_note = _apply_firing_gate(risk, nwp_diagnostics)
+    if gate_note is not None:
+        (drivers if "corroborated" in gate_note else suppressors).append(gate_note)
+
+    # Keep the strong-CIN suppression (#283: partially handles a capped tower the
+    # scheme reports but won't realize; CIN < -200 → one level down). Prefer the
+    # model's own ML-CIN when present, else the DD surface CIN.
+    eff_cin = nwp_diagnostics.ml_cin_jkg if nwp_diagnostics.ml_cin_jkg is not None else cin
+    if eff_cin is not None and eff_cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
         risk = _down_one(risk)
+        suppressors.append(f"Strong cap (CIN {eff_cin:.0f} J/kg) holds the tower down")
 
     return ConvectiveAssessment(
+        drivers=drivers,
+        suppressors=suppressors,
         risk_level=risk,
         cape_jkg=cape,
         cin_jkg=cin,
@@ -702,16 +799,23 @@ def assess_convective_nwp(
         base_ft=base_ft,
         top_ft=top_ft,
         cover_pct=cover,
+        convective_precip_mm_h=nwp_diagnostics.convective_precip_mm_h,
         method=method,
     )
 
 
 # Convective DD-vs-model cross-check thresholds (tunable module constants).
-# These gate the "does the model's own convective scheme corroborate the
-# CAPE-derived risk" signal surfaced in the advisory popup and LLM digest.
-# They never affect the grade.
-_XCHECK_MODEL_QUIET_COVER_PCT = 10.0   # cover <= this (and no convective geom) => model "quiet"
+# These gate the "does the model's own convective scheme corroborate the DD
+# (CAPE-derived) risk" signal surfaced in the advisory popup and LLM digest.
+# They never affect the grade (details-only; safety asymmetry — a quiet model
+# may comment but must never pull a DD RED down). Keyed on the model's native
+# *firing* signal (#283 follow-up): convective precip, meaningful cover, or a
+# deep tower — NOT bare convective-geometry presence (which over-fires on
+# shallow Cu).
+_XCHECK_MODEL_QUIET_COVER_PCT = 10.0   # cover <= this counts toward "quiet"
 _XCHECK_MODEL_ACTIVE_COVER_PCT = 25.0  # cover >= this => model "active"
+_XCHECK_DEEP_TOP_FL = 200              # tower >= FL200 => deep cell ("active")
+_XCHECK_QUIET_TOP_FL = 120             # tower < FL120 (or none) counts toward "quiet"
 
 
 class ConvectiveCrossCheck(NamedTuple):
@@ -730,40 +834,49 @@ def convective_cross_check(
     thermo: ConvectiveAssessment | None,
     nwp: ConvectiveAssessment | None,
 ) -> ConvectiveCrossCheck | None:
-    """Cross-check the chosen thermo risk against the model's convective scheme.
+    """Cross-check the chosen thermo (DD) risk against the model's native scheme.
 
-    The genuinely independent signal is the model's convective-cover diagnostic
-    (``cover_pct``) or, for models that only emit convective geometry (ICON-EU
-    hybrid, ECMWF hcct), the presence of a convective base/top. The model's own
-    ``risk_level`` is deliberately NOT used: it is derived from the same CAPE
-    thresholds as thermo, so comparing the two would be near-circular.
+    The genuinely independent signal is whether the model's own scheme *fired* a
+    cell here (#283 follow-up): convective precip > the firing gate, meaningful
+    convective cover (≥ ``_XCHECK_MODEL_ACTIVE_COVER_PCT``), or a deep tower
+    (≥ ``_XCHECK_DEEP_TOP_FL``). Bare convective-geometry presence is NOT enough
+    — a shallow Cu top would otherwise spuriously read "active". The model's
+    ``risk_level`` is not compared directly here; this stays a DD-vs-firing
+    cross-check (the risk-level comparison lived in ``dd_nwp_agreement``, now
+    removed for convective — see ``designs/advisories.md``).
 
     Returns ``None`` (silent) unless one of two material divergences fires:
     - ``dd_not_corroborated`` — thermo MODERATE+ but the model scheme is quiet
-      (low cover, no convective geometry).
-    - ``model_active_dd_quiet`` — thermo NONE/MARGINAL but the model scheme is
-      active (meaningful cover, or convective geometry present).
-
-    A model that reports convective base/top but no ``cover_pct`` (ECMWF/ICON)
-    counts as model-active.
+      (no precip, low/no cover, no deep tower) — the capped / loaded-gun
+      false-alarm (e.g. ECMWF over Reims, CIN −360, dry till afternoon).
+    - ``model_active_dd_quiet`` — thermo NONE/MARGINAL but the model fired
+      (e.g. GFS Sun morning over Reims: cover 46.8%, top FL332, DD only marginal).
     """
     if nwp is None or thermo is None:
         return None
 
-    model_has_geom = nwp.base_ft is not None and nwp.top_ft is not None
+    precip = nwp.convective_precip_mm_h
+    cover = nwp.cover_pct
+    top_fl = nwp.top_ft / 100.0 if nwp.top_ft is not None else None
+
     model_active = (
-        nwp.cover_pct is not None and nwp.cover_pct >= _XCHECK_MODEL_ACTIVE_COVER_PCT
-    ) or (nwp.cover_pct is None and model_has_geom)
+        (precip is not None and precip > _FIRING_PRECIP_MM_H)
+        or (cover is not None and cover >= _XCHECK_MODEL_ACTIVE_COVER_PCT)
+        or (top_fl is not None and top_fl >= _XCHECK_DEEP_TOP_FL)
+    )
+    # Quiet requires positive evidence of no firing on every available channel:
+    # no convective precip, low/no cover, and no all-but-shallow tower. The gap
+    # between the quiet and active bands (e.g. cover 10–25%, tower FL120–200) is
+    # intentionally *neither* — only material divergences fire.
     model_quiet = (
-        nwp.cover_pct is not None
-        and nwp.cover_pct <= _XCHECK_MODEL_QUIET_COVER_PCT
-        and not model_has_geom
+        not model_active
+        and (precip is None or precip <= _FIRING_PRECIP_MM_H)
+        and (cover is None or cover <= _XCHECK_MODEL_QUIET_COVER_PCT)
+        and (top_fl is None or top_fl < _XCHECK_QUIET_TOP_FL)
     )
 
-    # LOW is intentionally in neither band: it is too weak to call a quiet model
-    # a "missed" high risk (dd_not_corroborated), yet not weak enough for an
-    # active model to be a surprise (model_active_dd_quiet). Only material
-    # divergences fire — LOW thermo never triggers a cross-check.
+    # LOW is intentionally in neither thermo band: too weak to call a quiet model
+    # a "missed" high risk, yet not weak enough for an active model to surprise.
     thermo_high = _RISK_LEVELS.index(thermo.risk_level) >= _RISK_LEVELS.index(
         ConvectiveRisk.MODERATE
     )
@@ -771,20 +884,23 @@ def convective_cross_check(
 
     if thermo_high and model_quiet:
         cape_txt = f" (CAPE {thermo.cape_jkg:.0f})" if thermo.cape_jkg is not None else ""
+        cover_txt = f"cover {cover:.0f}%" if cover is not None else "no convective precip/cover"
         note = (
-            f"DD {thermo.risk_level.value.upper()}{cape_txt} but model convective "
-            f"cover {nwp.cover_pct:.0f}% — not corroborated by model scheme"
+            f"DD {thermo.risk_level.value.upper()}{cape_txt} but model scheme quiet "
+            f"({cover_txt}) — not corroborated by the model's own convection"
         )
         return ConvectiveCrossCheck(direction="dd_not_corroborated", note=note)
 
     if thermo_low and model_active:
         bits: list[str] = []
-        if nwp.cover_pct is not None:
-            bits.append(f"{nwp.cover_pct:.0f}% cover")
-        if nwp.top_ft is not None:
-            bits.append(f"tops {nwp.top_ft:.0f}ft")
+        if precip is not None and precip > _FIRING_PRECIP_MM_H:
+            bits.append(f"{precip:.1f} mm/h conv precip")
+        if cover is not None and cover >= _XCHECK_MODEL_ACTIVE_COVER_PCT:
+            bits.append(f"{cover:.0f}% cover")
+        if top_fl is not None and top_fl >= _XCHECK_DEEP_TOP_FL:
+            bits.append(f"tops FL{top_fl:.0f}")
         desc = " / ".join(bits) if bits else "model scheme"
-        note = f"model convective scheme active ({desc}) despite weak DD instability"
+        note = f"model convective scheme fired ({desc}) despite weak DD instability"
         return ConvectiveCrossCheck(direction="model_active_dd_quiet", note=note)
 
     return None

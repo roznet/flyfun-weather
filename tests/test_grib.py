@@ -1050,6 +1050,37 @@ class TestBuildIconCloudDiagnostics:
         # Low/mid/high not populated when only ceiling provided
         assert diag.low.cover_pct is None
 
+    def test_ml_cape_cin_surfaced(self):
+        """ICON mixed-layer CAPE/CIN (cape_ml/cin_ml) surfaced on the diag (#283)."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        raw = {"ml_cape_jkg": 850.0, "ml_cin_jkg": -120.0}
+        diag = build_icon_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.ml_cape_jkg == 850.0
+        assert diag.ml_cin_jkg == -120.0
+
+    def test_ecmwf_native_stability_surfaced(self):
+        """ECMWF a1 native stability indices surfaced on the diag (#283).
+
+        kx/totalx/mlcape100/mlcin100 are instantaneous and surfaced directly
+        (cp is accumulated and rate-computed in the merge loop, not here).
+        """
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        raw = {
+            "k_index_c": 38.0,
+            "total_totals_c": 52.0,
+            "ml_cape_jkg": 1200.0,
+            "ml_cin_jkg": -45.0,
+        }
+        diag = build_ecmwf_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.k_index == 38.0
+        assert diag.total_totals == 52.0
+        assert diag.ml_cape_jkg == 1200.0
+        assert diag.ml_cin_jkg == -45.0
+
     def test_cloud_cover_percentages(self):
         """CLCL/CLCM/CLCH/CLCT cloud cover percentages stored correctly."""
         from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics

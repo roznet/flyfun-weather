@@ -70,10 +70,15 @@ ICON_EU_MODEL_LEVEL_MAX = 74
 # in the sounding analysis (or omitted — not critical for core analysis).
 ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
 
-# Single-level cloud diagnostic variables
+# Single-level cloud diagnostic variables.
+# cape_ml / cin_ml (mixed-layer CAPE/CIN, instantaneous) added for the
+# native convective track (#283 Phase 2). rain_con (convective rain) is
+# accumulated since init and needs step-difference de-accumulation — deferred
+# (the firing gate is missing-data-safe, so ICON keeps its tower-top tier).
 ICON_EU_CLOUD_DIAG_VARIABLES = (
     "ceiling", "hbas_con", "htop_con",
     "clcl", "clcm", "clch", "clct",
+    "cape_ml", "cin_ml",
 )
 
 # Parallel download settings

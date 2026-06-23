@@ -1219,8 +1219,12 @@ pressure plane, continuity intrinsic, no association heuristic).
 ## 14. NWP convective track made model-native (tower-top driven, not CAPE)
 
 **Date:** 2026-06-23
-**Status:** Implemented Phase 1 (#283). Phase 2 (decode unused native precip /
-stability fields + a realized-convection firing gate) deferred — see below.
+**Status:** Implemented Phase 1 + Phase 2 (#283). Phase 2 adds the
+realized-convection firing gate, native-corroboration modifiers, the inline
+cross-check re-key, the dd_nwp_agreement reconciliation, and decoding of the
+ECMWF a1 native fields + ICON mixed-layer CAPE/CIN. Remaining decode gaps
+(ICON `rain_con`, GFS `CPRAT`) are noted at the end — the analysis already
+consumes them when present and the firing gate is missing-data-safe without them.
 **Context:** §5 documented, and §4d's "two independent tracks" framing assumed,
 that the NWP convective track is the model's *own* convective scheme. But
 `assess_convective_nwp` set its **risk level from CAPE** on every path (GFS
@@ -1283,7 +1287,8 @@ is DD this is a no-op. The per-model thermo tier is untouched (DD stays pure).
    as a yes/no firing gate (Phase 2).
 2. **Independence restores the diagnostic.** With NWP native, the Reims cases
    verify: GFS Sun (cover 46.8%, top FL332) → HIGH while ECMWF morning is capped
-   → NONE, so `dd_nwp_agreement` fires on the real divergence DD can't see.
+   → NONE, so the convective cross-check fires on the real divergence DD can't
+   see (the inline `convective_cross_check`, not `dd_nwp_agreement` — see Phase 2).
 3. **Safety asymmetry over purity for the *grade*.** Under-warning a capped
    loaded gun is worse than over-warning, so the aggregate floors at DD; the
    native view still drives the cross-section and the cross-check.
@@ -1296,19 +1301,73 @@ is DD this is a no-op. The per-model thermo tier is untouched (DD stays pure).
   fallback purely due to horizon has `nwp_diagnostics = None` → no NWP track,
   same as a non-native model.
 
-### Phase 2 (deferred follow-up, tracked in #283)
+### Phase 2 — firing gate, modifiers, and the inline cross-check re-key
 
-Decode the native fields delivered-but-unused — ECMWF `cp`/`kx`/`totalx`/
-`mlcape100`/`mlcin100`, ICON `rain_con`/`cape_ml`/`cin_ml`, GFS `ACPCP`/`CPRAT`
-— extend `NWPCloudDiagnostics`, gap-fill (time + spatial), and add a
-**realized-convection firing gate** (MODERATE+ only when the scheme realized
-convection: conv precip > 0.1 mm/h OR cover > 15%) plus stability modifiers
-(K-index / Total-Totals / `rain_con` corroboration). This is the native-side
-mirror of §6's parcel-EL over-read fix. Requires real-GRIB validation and
-touches the fetch/decode pipeline, so it is intentionally separated from the
-Phase-1 risk-logic change.
+**Firing gate (`_apply_firing_gate`).** A MODERATE+ tower is only kept there
+when the model's own scheme *realized* convection — `convective_precip_mm_h >
+0.1` OR `convective_cover_pct > 15`. A deep-but-dry tower (the capped / elevated
+case) is held down one level. This is the native-side mirror of §6's parcel-EL
+over-read fix. Crucially it is **missing-data-safe**: a not-realized tower is
+held down only on *positive* dry evidence (precip ~0 or cover ≤ threshold), never
+on absent data — so a model that simply doesn't emit precip (ICON without
+`rain_con`, ECMWF before `cp` lands) keeps its tower-top tier rather than being
+wrongly suppressed (safety asymmetry).
 
-### Files changed (Phase 1)
+**Native corroboration.** A *realized* MODERATE+ cell whose own model-native
+indices are strong (`k_index > 35`, `total_totals > 50`, or conv precip >
+0.5 mm/h) is bumped up one level, capped at HIGH (only a ≥FL380 tower yields
+EXTREME). These are the model's NATIVE kx/totalx/precip on
+`NWPCloudDiagnostics`, not the DD-derived indices — the NWP track stays
+independent. CIN suppression now prefers the model's own `ml_cin` when present.
+
+**Inline cross-check re-key (the follow-up's primary ask).**
+`convective_cross_check` (consumed by the convective advisory's per-point
+`cross_check` note — *details-only, never grades*) previously keyed
+`model_active` on bare convective-geometry presence, which would over-fire on
+shallow Cu now that any tower is decoded. It is re-keyed to the native **firing**
+signal: precip > the gate, cover ≥ 25%, or a tower ≥ FL200 ("active"); no precip
+AND low/no cover AND no deep tower ("quiet"); the gap is intentionally neither.
+This makes the two directions fire on the real Reims cases — Sat ECMWF (capped,
+dry) → `dd_not_corroborated`; Sun GFS (cover 46.8%, FL332, DD marginal) →
+`model_active_dd_quiet`.
+
+**dd_nwp_agreement reconciliation (avoid double-reporting).** With the NWP
+convective risk now native, the `dd_nwp_agreement` convective category
+(`_risk_distance ≥ 2`) would report the *same* divergence as the inline
+cross-check. Per the follow-up's preferred option, the **convective category is
+removed from `dd_nwp_agreement`** (it stays focused on freezing-level + cloud
+overlap); the richer, convective-specific inline cross-check is the single source
+of truth. Documented in `designs/advisories.md`.
+
+**Decoding.** ECMWF a1 delivers `cp`/`kx`/`totalx`/`mlcape100`/`mlcin100`
+already (no extra download): `kx`/`totalx`/`mlcape100`/`mlcin100` are surfaced
+instantaneously in `build_ecmwf_cloud_diagnostics`; `cp` is accumulated since
+init, so its mm/h rate is computed by step-difference in the ECMWF merge loop
+(mirroring `tp`/`sf`) and injected onto the diagnostics. ICON adds the
+instantaneous `cape_ml`/`cin_ml` single-level products. New `NWPCloudDiagnostics`
+fields are forward-filled automatically (fill.py `model_copy`) and added to the
+spatial-interp `_lerp_diagnostics`.
+
+### Remaining decode gaps (small, low-risk)
+
+- **ICON `rain_con`** (convective rain) is accumulated since init and would need
+  new step-difference machinery in the ICON merge path (ICON has no accumulated
+  single-level field today). Deferred — needs real-GRIB validation of the
+  product/shortName and cadence. ICON's firing gate is missing-data-safe, so
+  ICON keeps its tower-top tier meanwhile.
+- **GFS `CPRAT`/`ACPCP`** (convective precip): GFS always emits convective
+  *cover*, which already drives the firing gate, so GFS precip is redundant for
+  the gate. Deferred (the `.idx` byte-range + shortName needs validation).
+
+### Caveat
+
+The firing-gate / corroboration thresholds and the cross-check bands are a
+**defensible v1**, not calibrated numbers — wire into the digest-eval corpus
+replay. The convective-precip rate is resolution-dependent (per the issue's
+gotcha), which is exactly why tower top is the primary scale and precip is only
+a yes/no firing gate.
+
+### Files changed (Phase 1 + Phase 2)
 
 - `src/weatherbrief/analysis/sounding/convective.py` — native risk
   (`_CONV_TOP_FL_THRESHOLDS`, `_CONV_COVER_PCT_THRESHOLDS`, `_up_one`,
