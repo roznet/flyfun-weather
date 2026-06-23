@@ -646,7 +646,7 @@ class ConvectiveAssessment(BaseModel):
     base_ft: Optional[float] = None  # thermo: lfc_altitude_ft (or lcl fallback); NWP: convective_base_ft
     top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft
     cover_pct: Optional[float] = None  # NWP only; thermo: None
-    method: str = "thermo"  # "thermo", "nwp", or "nwp_hybrid"
+    method: str = "thermo"  # "thermo", "nwp", "nwp_hybrid", "nwp_lcl_top", "nwp_cape_fallback"
 
 
 class CATRiskLayer(BaseModel):

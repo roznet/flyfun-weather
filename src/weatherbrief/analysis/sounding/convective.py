@@ -166,13 +166,17 @@ def convection_realized(
     ``REGIME_CIN_CAP``, −50) with no countervailing instability (ML-CAPE ≥
     ``REGIME_CAPE_LOW`` (300) or a lifted index ≤ ``LI_REALIZED`` (−2)).
 
-    NWP convective cloud (``method`` != "thermo") is realized by construction.
+    Native NWP convective cloud (a model-native ``method`` — "nwp" / "nwp_hybrid"
+    / "nwp_lcl_top") is realized by construction. The CAPE-derived fallback
+    (``"nwp_cape_fallback"``, #283) is treated like ``"thermo"`` — it is parcel
+    CAPE under another name, so it goes through the same realized-vs-potential
+    gate rather than being trusted as a native firing signal.
     Unknown data defaults to realized — we downgrade only on *positive* evidence
     the instability is weak, so a real signal is never silently hidden. Callers own
     data extraction (and any DD→NWP lifted-index fallback); this owns the logic and
     the shared thresholds. See ``meteorology-decisions.md`` §4 (tier) and §6 (gate).
     """
-    if (method or "thermo") != "thermo":
+    if (method or "thermo") not in ("thermo", "nwp_cape_fallback"):
         return True
     if not (cin_jkg is not None and cin_jkg <= REGIME_CIN_CAP):
         return True
@@ -191,6 +195,12 @@ def _down_one(risk: ConvectiveRisk) -> ConvectiveRisk:
     """Drop risk by one ordinal level (clamped at NONE)."""
     idx = _RISK_LEVELS.index(risk)
     return _RISK_LEVELS[idx - 1] if idx > 0 else risk
+
+
+def _up_one(risk: ConvectiveRisk) -> ConvectiveRisk:
+    """Raise risk by one ordinal level (clamped at EXTREME)."""
+    idx = _RISK_LEVELS.index(risk)
+    return _RISK_LEVELS[idx + 1] if idx < len(_RISK_LEVELS) - 1 else risk
 
 
 def _elevated_instability(indices: ThermodynamicIndices) -> bool:
@@ -474,92 +484,214 @@ def assess_convective_thermo(
 assess_convective = assess_convective_thermo
 
 
+# Convective tower-top → severity. ``convective_top_ft`` is the model's own
+# convective cloud-top height (AMSL feet on NWPCloudDiagnostics); /100 → FL.
+# This is the one native field common to all three GRIB models (GFS, ECMWF,
+# ICON), it is resolution-robust (unlike convective-precip *rate*), and it
+# separates shallow Cu from a mature Cb — so it is the primary native scale.
+# (#283; thresholds are a defensible v1 pending PIREP/digest-eval calibration.)
+_CONV_TOP_FL_THRESHOLDS = [
+    (380, ConvectiveRisk.EXTREME),   # overshooting / severe
+    (280, ConvectiveRisk.HIGH),      # mature Cb / thunderstorm
+    (200, ConvectiveRisk.MODERATE),  # deep Cu / small Cb
+    (120, ConvectiveRisk.LOW),       # towering Cu
+    (0,   ConvectiveRisk.MARGINAL),  # convective cloud present but shallow (<FL120)
+]
+
+# Convective areal-cover bands (%). Used as the base scale only when a model
+# reports cover but no tower top (the depth is then unknown, so even numerous
+# cells cap at MODERATE), and — via ``_COVER_NUMEROUS_PCT`` — as an up-one
+# corroboration on the top-derived tier.
+_CONV_COVER_PCT_THRESHOLDS = [
+    (60, ConvectiveRisk.MODERATE),   # widespread
+    (35, ConvectiveRisk.LOW),        # numerous
+    (15, ConvectiveRisk.MARGINAL),   # scattered
+]
+
+# Cover at/above this is "numerous": bumps the tower-top tier up one level
+# (more cells along the route), capped at HIGH — areal cover alone never
+# implies EXTREME, which requires an overshooting (≥FL380) tower.
+_COVER_NUMEROUS_PCT = 35.0
+
+
+def _risk_from_conv_top(top_ft: float) -> ConvectiveRisk:
+    """Native risk tier from a model convective tower top (feet AMSL → FL)."""
+    fl = top_ft / 100.0
+    for min_fl, level in _CONV_TOP_FL_THRESHOLDS:
+        if fl >= min_fl:
+            return level
+    return ConvectiveRisk.NONE  # unreachable (0-FL threshold catches top_ft >= 0)
+
+
+def _risk_from_conv_cover(cover_pct: float) -> ConvectiveRisk:
+    """Native risk tier from convective areal cover when no tower top is known."""
+    for min_pct, level in _CONV_COVER_PCT_THRESHOLDS:
+        if cover_pct >= min_pct:
+            return level
+    return ConvectiveRisk.NONE  # isolated / none
+
+
+def _native_convective_risk(
+    top_ft: float | None,
+    cover_pct: float | None,
+) -> ConvectiveRisk:
+    """Model-native convective risk: tower top primary, cover secondary.
+
+    Driven by the model's own convective-scheme output (#283), NOT by CAPE —
+    so the NWP track is a genuinely independent assessment from the DD
+    (parcel-CAPE) track. When a top is present it sets the tier; numerous cover
+    (≥35%) bumps it up one level (capped at HIGH). When only cover is present it
+    sets a depth-unknown tier (capped at MODERATE). A quiet scheme (no top, no
+    meaningful cover) is NONE — the model says it is not producing convection.
+    """
+    if top_ft is not None:
+        risk = _risk_from_conv_top(top_ft)
+        if (
+            cover_pct is not None
+            and cover_pct >= _COVER_NUMEROUS_PCT
+            and _RISK_LEVELS.index(risk) < _RISK_LEVELS.index(ConvectiveRisk.HIGH)
+        ):
+            risk = _up_one(risk)
+        return risk
+    if cover_pct is not None:
+        return _risk_from_conv_cover(cover_pct)
+    return ConvectiveRisk.NONE
+
+
+def _nwp_cape_fallback_risk(cape: float | None) -> ConvectiveRisk:
+    """CAPE-threshold risk for models with no native convective scheme output.
+
+    Mirrors the pre-#283 NWP behaviour (and the DD thresholds) for the fallback
+    path only — a model that emits neither a convective top nor cover.
+    """
+    if cape is None:
+        return ConvectiveRisk.NONE
+    for threshold, level in _CAPE_THRESHOLDS:
+        if cape >= threshold:
+            return level
+    if cape >= 10:
+        return ConvectiveRisk.MARGINAL
+    return ConvectiveRisk.NONE
+
+
+def _has_native_cloud_content(diag: NWPCloudDiagnostics) -> bool:
+    """True when GRIB enrichment populated *any* native cloud diagnostic.
+
+    A native GRIB model (GFS/ECMWF/ICON) always emits cloud-cover / ceiling /
+    freezing-level content even where its convective scheme is quiet, so a diag
+    carrying any of these is from a native model — a quiet convective scheme
+    there genuinely means "no convection", not "no scheme". A completely empty
+    diagnostics object (build_* returns None for that in production, so this is
+    a defensive/synthetic case) is treated as "no native scheme" → CAPE
+    fallback. (#283)
+    """
+    return any(
+        v is not None
+        for v in (
+            diag.convective_cover_pct,
+            diag.convective_base_ft,
+            diag.convective_top_ft,
+            diag.total_cover_pct,
+            diag.boundary_cover_pct,
+            diag.ceiling_ft,
+            diag.freezing_level_ft,
+            diag.low.cover_pct,
+            diag.mid.cover_pct,
+            diag.high.cover_pct,
+        )
+    )
+
+
 def assess_convective_nwp(
     indices: ThermodynamicIndices,
     nwp_diagnostics: NWPCloudDiagnostics | None,
 ) -> ConvectiveAssessment | None:
-    """Assess convective risk from NWP model convective cloud parameterization.
+    """Assess convective risk from the model's own convective-scheme output.
 
-    Returns None when nwp_diagnostics is None (GRIB2 data unavailable).
-    Risk is driven by convective_cover_pct thresholds. Thermodynamic indices
-    are preserved for context. Severity modifiers are computed from the same
-    indices as the thermo method.
+    Returns None when ``nwp_diagnostics`` is None (no GRIB enrichment for this
+    model — e.g. AROME / UKMO / Météo-France, which are Open-Meteo-only).
+
+    For GRIB models (GFS, ECMWF, ICON-EU) the risk level is **model-native**
+    (#283): driven by the convective tower top (``convective_top_ft``) and, where
+    available, the convective cover fraction — NOT by CAPE. This makes the NWP
+    track independent of the DD (parcel-CAPE) track, so ``dd_nwp_agreement`` can
+    fire on real divergence and a quiet model (capped / not firing) reads NONE
+    even where DD reads HIGH. Thermodynamic indices are preserved for context
+    and severity modifiers, and the existing strong-CIN suppression still
+    partially handles capped towers.
+
+    A CAPE-threshold fallback (``method="nwp_cape_fallback"``) is used only when
+    the diagnostics carry no native cloud content at all; the distinct method
+    lets ``dd_nwp_agreement`` skip the (then-circular) DD-vs-NWP comparison.
     """
     if nwp_diagnostics is None:
         return None
 
     cover = nwp_diagnostics.convective_cover_pct
+    base = nwp_diagnostics.convective_base_ft
+    top = nwp_diagnostics.convective_top_ft
+    lcl = indices.lcl_altitude_ft
     cape = _effective_cape(indices)
+    cin = indices.cin_surface_jkg
     modifiers = _severity_modifiers(indices, cape)
 
-    if cover is not None:
-        # Full NWP path: risk from CAPE (same as thermo), cover is informational.
-        # NWP provides better convective geometry (base/top) than thermo (LFC/EL).
-        risk = ConvectiveRisk.NONE
-        if cape is not None:
-            for threshold, level in _CAPE_THRESHOLDS:
-                if cape >= threshold:
-                    risk = level
-                    break
-            if risk == ConvectiveRisk.NONE and cape >= 10:
-                risk = ConvectiveRisk.MARGINAL
-        method = "nwp"
-    elif (
-        nwp_diagnostics.convective_base_ft is not None
-        and nwp_diagnostics.convective_top_ft is not None
-    ):
-        # Hybrid path (e.g. ICON-EU): no cover_pct but GRIB base/top exist.
-        # Derive risk from CAPE thresholds (same as thermo) and pair with
-        # NWP geometric bounds for a more accurate convective envelope.
-        risk = ConvectiveRisk.NONE
-        if cape is not None:
-            for threshold, level in _CAPE_THRESHOLDS:
-                if cape >= threshold:
-                    risk = level
-                    break
-            # Marginal: meaningful CAPE with defined base/top.
-            # ICON can report convective geometry with negligible CAPE (<10 J/kg);
-            # filter that noise — 10 J/kg is well below the LOW threshold (50).
-            if risk == ConvectiveRisk.NONE and cape >= 10:
-                risk = ConvectiveRisk.MARGINAL
-        method = "nwp_hybrid"
-    elif (
-        nwp_diagnostics.convective_top_ft is not None
-        and indices.lcl_altitude_ft is not None
-        and nwp_diagnostics.convective_top_ft > indices.lcl_altitude_ft
-    ):
-        # LCL-anchored (e.g. ECMWF hcct): model gives convective top height
-        # but no base — use LCL as the convective base proxy. Risk from CAPE
-        # thresholds; base = LCL, top = hcct. Guard against hcct ≤ LCL
-        # (rare elevated-convection artefact) so downstream never sees
-        # base ≥ top.
-        risk = ConvectiveRisk.NONE
-        if cape is not None:
-            for threshold, level in _CAPE_THRESHOLDS:
-                if cape >= threshold:
-                    risk = level
-                    break
-            if risk == ConvectiveRisk.NONE and cape >= 10:
-                risk = ConvectiveRisk.MARGINAL
-        method = "nwp_lcl_top"
-    else:
-        return None
+    # Fallback: no native convective scheme output (and no native cloud content
+    # at all). Score on CAPE, as the DD track does, but mark it distinctly so
+    # the now-circular DD-vs-NWP comparison is skipped downstream.
+    if not _has_native_cloud_content(nwp_diagnostics):
+        risk = _nwp_cape_fallback_risk(cape)
+        if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
+            risk = _down_one(risk)
+        return ConvectiveAssessment(
+            risk_level=risk,
+            cape_jkg=cape,
+            cin_jkg=cin,
+            lcl_altitude_ft=lcl,
+            lfc_altitude_ft=indices.lfc_altitude_ft,
+            el_altitude_ft=indices.el_altitude_ft,
+            bulk_shear_0_6km_kt=indices.bulk_shear_0_6km_kt,
+            lifted_index=indices.lifted_index,
+            k_index=indices.k_index,
+            total_totals=indices.total_totals,
+            severe_modifiers=modifiers,
+            base_ft=None,
+            top_ft=None,
+            cover_pct=None,
+            method="nwp_cape_fallback",
+        )
 
-    # Suppress by one level if strong CIN cap (same as thermo path)
-    cin = indices.cin_surface_jkg
+    # Native path. Determine which convective geometry this model exposes
+    # (preserving the method strings consumed by dd_nwp_agreement / front
+    # co-location) and the base/top envelope to attach.
+    if cover is not None:
+        # GFS: convective cover always present (0% when quiet).
+        method, base_ft, top_ft = "nwp", base, top
+    elif base is not None and top is not None:
+        # ICON-EU: convective base + top, no cover fraction.
+        method, base_ft, top_ft = "nwp_hybrid", base, top
+    elif top is not None and lcl is not None and top > lcl:
+        # ECMWF hcct: convective top only — use LCL as the base proxy. The
+        # top > LCL guard rejects the rare sub-LCL hcct artefact.
+        method, base_ft, top_ft = "nwp_lcl_top", lcl, top
+    else:
+        # Native model, quiet convective scheme at this point (no cover, no
+        # usable geometry, or a sub-LCL hcct artefact). Keep a real NONE
+        # assessment — not None — so the DD-vs-NWP comparison can still fire.
+        method, base_ft, top_ft = "nwp", None, None
+
+    # Risk from the validated native fields (NOT CAPE).
+    risk = _native_convective_risk(top_ft, cover)
+
+    # Keep the strong-CIN suppression (#283 Phase 1: partially handles a capped
+    # tower the scheme reports but won't realize; CIN < -200 → one level down).
     if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
         risk = _down_one(risk)
-
-    # LCL-anchored path uses LCL as the convective base proxy
-    base_ft = nwp_diagnostics.convective_base_ft
-    if method == "nwp_lcl_top":
-        base_ft = indices.lcl_altitude_ft
 
     return ConvectiveAssessment(
         risk_level=risk,
         cape_jkg=cape,
         cin_jkg=cin,
-        lcl_altitude_ft=indices.lcl_altitude_ft,
+        lcl_altitude_ft=lcl,
         lfc_altitude_ft=indices.lfc_altitude_ft,
         el_altitude_ft=indices.el_altitude_ft,
         bulk_shear_0_6km_kt=indices.bulk_shear_0_6km_kt,
@@ -568,7 +700,7 @@ def assess_convective_nwp(
         total_totals=indices.total_totals,
         severe_modifiers=modifiers,
         base_ft=base_ft,
-        top_ft=nwp_diagnostics.convective_top_ft,
+        top_ft=top_ft,
         cover_pct=cover,
         method=method,
     )

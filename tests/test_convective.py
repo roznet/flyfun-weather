@@ -559,59 +559,163 @@ def test_nwp_returns_none_when_no_diagnostics():
     assert assess_convective_nwp(indices, None) is None
 
 
-def test_nwp_returns_none_when_no_cover_no_bounds():
-    """Returns None when cover_pct, base, and top are all None."""
+def test_nwp_cape_fallback_when_no_native_content():
+    """Empty diagnostics (no native scheme output) → CAPE fallback, not None.
+
+    A diag with no convective fields AND no native cloud content at all (a
+    defensive/synthetic case — production build_* returns None for that) scores
+    on CAPE like the DD track, marked ``nwp_cape_fallback`` so dd_nwp_agreement
+    skips the circular comparison. (#283)
+    """
     indices = ThermodynamicIndices(cape_surface_jkg=500.0)
-    diag = NWPCloudDiagnostics()  # all None
-    assert assess_convective_nwp(indices, diag) is None
+    diag = NWPCloudDiagnostics()  # all None → no native cloud content
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_cape_fallback"
+    assert result.risk_level == ConvectiveRisk.MODERATE  # CAPE 500 → MODERATE
+    assert result.cover_pct is None
+    assert result.top_ft is None
 
 
-def test_nwp_risk_from_cape_not_cover():
-    """NWP full path uses CAPE thresholds, not cover — cover is informational."""
-    # High CAPE + low cover → HIGH (not LOW as cover thresholds would give)
-    indices = ThermodynamicIndices(cape_surface_jkg=1500.0)
-    diag = NWPCloudDiagnostics(convective_cover_pct=15.0)
+def test_nwp_cape_fallback_cin_suppression():
+    """CAPE fallback still applies strong-CIN suppression."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0, cin_surface_jkg=-250.0)
+    diag = NWPCloudDiagnostics()
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_cape_fallback"
+    assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH → MODERATE
+
+
+def test_nwp_quiet_native_returns_none_risk_not_none():
+    """Native model, quiet convective scheme → NONE-risk assessment (not None).
+
+    Cloud content present (total_cover) marks it native; no convective top/cover
+    means the model is not producing convection here → NONE. Returned as a real
+    assessment so dd_nwp_agreement can compare it against a HIGH DD track. (#283)
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=1500.0)  # DD would be HIGH
+    diag = NWPCloudDiagnostics(total_cover_pct=40.0)  # native content, no convection
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method != "nwp_cape_fallback"
+    assert result.risk_level == ConvectiveRisk.NONE
+    assert result.top_ft is None
+
+
+def test_nwp_risk_from_native_top_not_cape():
+    """Native path: risk from convective tower top, NOT CAPE. (#283)"""
+    # Low CAPE but a deep model tower (FL300) → HIGH from the native top.
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    diag = NWPCloudDiagnostics(convective_cover_pct=10.0, convective_top_ft=30000.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.HIGH  # FL300 >= 280
+    assert result.cover_pct == 10.0  # preserved as context
+
+
+def test_nwp_top_tiering():
+    """Tower-top FL thresholds map to native risk tiers."""
+    for top_ft, expected in [
+        (40000.0, ConvectiveRisk.EXTREME),  # FL400 >= 380
+        (30000.0, ConvectiveRisk.HIGH),     # FL300 >= 280
+        (22000.0, ConvectiveRisk.MODERATE), # FL220 >= 200
+        (15000.0, ConvectiveRisk.LOW),      # FL150 >= 120
+        (8000.0, ConvectiveRisk.MARGINAL),  # FL80 present but shallow
+    ]:
+        indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+        diag = NWPCloudDiagnostics(convective_cover_pct=0.0, convective_top_ft=top_ft)
+        result = assess_convective_nwp(indices, diag)
+        assert result is not None
+        assert result.risk_level == expected, f"top={top_ft}: want {expected}, got {result.risk_level}"
+
+
+def test_nwp_cover_modifier_bumps_one_level():
+    """Numerous cover (>=35%) bumps the tower-top tier up one level, capped HIGH."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    # FL220 (MODERATE) + 50% cover → HIGH.
+    diag = NWPCloudDiagnostics(convective_cover_pct=50.0, convective_top_ft=22000.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
     assert result.risk_level == ConvectiveRisk.HIGH
-    assert result.cover_pct == 15.0  # preserved as context
 
 
-def test_nwp_low_cape_high_cover_not_dangerous():
-    """Low CAPE + high cover → low risk despite widespread convection."""
+def test_nwp_cover_modifier_capped_at_high():
+    """Cover bump never creates EXTREME — that needs a >=FL380 tower."""
     indices = ThermodynamicIndices(cape_surface_jkg=40.0)
-    diag = NWPCloudDiagnostics(convective_cover_pct=80.0)
+    # FL300 (HIGH) + 60% cover → stays HIGH (no bump past HIGH).
+    diag = NWPCloudDiagnostics(convective_cover_pct=60.0, convective_top_ft=30000.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
-    assert result.risk_level == ConvectiveRisk.MARGINAL  # CAPE 40 >= 10 → marginal
-    assert result.cover_pct == 80.0
+    assert result.risk_level == ConvectiveRisk.HIGH
 
 
-def test_nwp_cape_thresholds():
-    """NWP full path follows same CAPE thresholds as thermo."""
-    diag = NWPCloudDiagnostics(convective_cover_pct=50.0)
-
-    for cape, expected in [
-        (2500, ConvectiveRisk.EXTREME),
-        (1200, ConvectiveRisk.HIGH),
-        (400, ConvectiveRisk.MODERATE),
-        (80, ConvectiveRisk.LOW),
-        (15, ConvectiveRisk.MARGINAL),
-        (0, ConvectiveRisk.NONE),
+def test_nwp_cover_only_scale_when_no_top():
+    """Cover present but no tower top → depth-unknown scale, capped MODERATE."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    for cover, expected in [
+        (80.0, ConvectiveRisk.MODERATE),  # widespread
+        (50.0, ConvectiveRisk.LOW),       # numerous
+        (20.0, ConvectiveRisk.MARGINAL),  # scattered
+        (5.0, ConvectiveRisk.NONE),       # isolated
+        (0.0, ConvectiveRisk.NONE),       # quiet
     ]:
-        indices = ThermodynamicIndices(cape_surface_jkg=float(cape))
+        diag = NWPCloudDiagnostics(convective_cover_pct=cover)
         result = assess_convective_nwp(indices, diag)
         assert result is not None
-        assert result.risk_level == expected, f"CAPE={cape}: expected {expected}, got {result.risk_level}"
+        assert result.risk_level == expected, f"cover={cover}: want {expected}, got {result.risk_level}"
 
 
-def test_nwp_no_cape_no_risk():
-    """No CAPE data with cover → NONE risk."""
-    indices = ThermodynamicIndices()
-    diag = NWPCloudDiagnostics(convective_cover_pct=80.0)
+def test_nwp_gfs_sun_reims_high():
+    """Regression (#283): GFS Sun LFQA — cover 46.8%, top FL332 → HIGH.
+
+    GFS's own scheme is firing in the morning (matches Windy). Uses GFS's own
+    indices (its CIN is weaker than ECMWF's loaded-gun −360, which belongs to a
+    different model), so no cap suppression applies and the deep firing tower
+    reads HIGH.
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=1225.0, cin_surface_jkg=-50.0)
+    diag = NWPCloudDiagnostics(convective_cover_pct=46.8, convective_top_ft=33200.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.HIGH
+
+
+def test_nwp_gfs_sat_reims_none():
+    """Regression (#283): GFS Sat LFQA — cover 0%, no top → NONE."""
+    indices = ThermodynamicIndices(cape_surface_jkg=2006.0, cin_surface_jkg=-104.0)
+    diag = NWPCloudDiagnostics(convective_cover_pct=0.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
     assert result.risk_level == ConvectiveRisk.NONE
+
+
+def test_nwp_ecmwf_sun_morning_capped_none_while_dd_high():
+    """Regression (#283): ECMWF Sun morning — hcct sentinel (no top), native
+    cloud content present → NONE, while DD reads HIGH → dd_nwp_agreement fires."""
+    indices = ThermodynamicIndices(cape_surface_jkg=1225.0, cin_surface_jkg=-360.0)
+    # hcct sentinel decodes convective_top_ft to None; ECMWF still emits cover/
+    # ceiling content (here total_cover) so it is recognised as native.
+    diag = NWPCloudDiagnostics(total_cover_pct=30.0)
+    nwp = assess_convective_nwp(indices, diag)
+    dd = assess_convective_thermo(indices)
+    assert nwp is not None and dd is not None
+    assert nwp.risk_level == ConvectiveRisk.NONE
+    assert dd.risk_level in (ConvectiveRisk.HIGH, ConvectiveRisk.MODERATE)
+    # The two independent tracks diverge by >= 2 tiers → comparison is meaningful.
+    order = list(ConvectiveRisk)
+    assert abs(order.index(dd.risk_level) - order.index(nwp.risk_level)) >= 2
+    assert nwp.method != "nwp_cape_fallback"
+
+
+def test_nwp_icon_shallow_cu_marginal():
+    """Regression (#283): ICON shallow Cu FL111 → MARGINAL (not a storm)."""
+    indices = ThermodynamicIndices(cape_surface_jkg=300.0)
+    diag = NWPCloudDiagnostics(convective_base_ft=4000.0, convective_top_ft=11100.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_hybrid"
+    assert result.risk_level == ConvectiveRisk.MARGINAL
 
 
 def test_nwp_preserves_thermo_indices():
@@ -666,8 +770,8 @@ def test_nwp_severity_modifiers():
 # ---------------------------------------------------------------------------
 
 
-def test_nwp_hybrid_uses_cape_risk():
-    """Hybrid path: CAPE-based risk when cover_pct absent but base/top exist."""
+def test_nwp_hybrid_uses_native_top_risk():
+    """Hybrid path (#283): risk from the native tower top, not CAPE."""
     indices = ThermodynamicIndices(cape_surface_jkg=500.0)
     diag = NWPCloudDiagnostics(
         convective_base_ft=5000.0,
@@ -676,14 +780,14 @@ def test_nwp_hybrid_uses_cape_risk():
     result = assess_convective_nwp(indices, diag)
     assert result is not None
     assert result.method == "nwp_hybrid"
-    assert result.risk_level == ConvectiveRisk.MODERATE  # 500 >= 300
+    assert result.risk_level == ConvectiveRisk.HIGH  # FL350 >= 280
     assert result.base_ft == 5000.0
     assert result.top_ft == 35000.0
     assert result.cover_pct is None
 
 
-def test_nwp_hybrid_marginal_low_cape():
-    """Hybrid path: small positive CAPE → MARGINAL."""
+def test_nwp_hybrid_shallow_top_marginal():
+    """Hybrid path: a shallow tower (FL150) → LOW regardless of CAPE."""
     indices = ThermodynamicIndices(cape_surface_jkg=20.0)
     diag = NWPCloudDiagnostics(
         convective_base_ft=3000.0,
@@ -691,11 +795,11 @@ def test_nwp_hybrid_marginal_low_cape():
     )
     result = assess_convective_nwp(indices, diag)
     assert result is not None
-    assert result.risk_level == ConvectiveRisk.MARGINAL
+    assert result.risk_level == ConvectiveRisk.LOW  # FL150 >= 120
 
 
-def test_nwp_hybrid_no_cape_no_risk():
-    """Hybrid path: no CAPE data → NONE risk but still returns assessment."""
+def test_nwp_hybrid_top_drives_risk_without_cape():
+    """Hybrid path: native top drives risk even with no CAPE data (#283)."""
     indices = ThermodynamicIndices()
     diag = NWPCloudDiagnostics(
         convective_base_ft=3000.0,
@@ -703,15 +807,19 @@ def test_nwp_hybrid_no_cape_no_risk():
     )
     result = assess_convective_nwp(indices, diag)
     assert result is not None
-    assert result.risk_level == ConvectiveRisk.NONE
+    assert result.risk_level == ConvectiveRisk.MODERATE  # FL250 >= 200
     assert result.method == "nwp_hybrid"
 
 
-def test_nwp_hybrid_returns_none_partial_bounds():
-    """Returns None when only base exists (no top) and no cover."""
+def test_nwp_base_only_quiet_none_risk():
+    """Base present but no top and no cover → quiet native NONE assessment."""
     indices = ThermodynamicIndices(cape_surface_jkg=500.0)
     diag = NWPCloudDiagnostics(convective_base_ft=5000.0)
-    assert assess_convective_nwp(indices, diag) is None
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.NONE
+    assert result.top_ft is None
+    assert result.method != "nwp_cape_fallback"
 
 
 def test_nwp_hybrid_preserves_modifiers():
@@ -744,7 +852,7 @@ def test_nwp_full_path_preferred_over_hybrid():
 
 
 def test_nwp_lcl_top_uses_lcl_as_base():
-    """LCL-anchored path (ECMWF hcct): base=LCL when no convective_base_ft."""
+    """LCL-anchored path (ECMWF hcct): base=LCL, risk from native top (#283)."""
     indices = ThermodynamicIndices(
         cape_surface_jkg=800.0,
         lcl_altitude_ft=3500.0,
@@ -755,26 +863,31 @@ def test_nwp_lcl_top_uses_lcl_as_base():
     assert result.method == "nwp_lcl_top"
     assert result.base_ft == 3500.0
     assert result.top_ft == 28000.0
-    assert result.risk_level == ConvectiveRisk.MODERATE  # 800 >= 300
+    assert result.risk_level == ConvectiveRisk.HIGH  # FL280 >= 280
 
 
-def test_nwp_lcl_top_returns_none_when_hcct_below_lcl():
-    """LCL-anchored guard: hcct ≤ LCL yields None, not base > top."""
+def test_nwp_lcl_top_quiet_when_hcct_below_lcl():
+    """LCL-anchored guard: a sub-LCL hcct artefact → quiet NONE (top dropped)."""
     indices = ThermodynamicIndices(
         cape_surface_jkg=500.0,
         lcl_altitude_ft=8000.0,
     )
     diag = NWPCloudDiagnostics(convective_top_ft=6000.0)
-    assert assess_convective_nwp(indices, diag) is None
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.NONE
+    assert result.top_ft is None
+    assert result.method != "nwp_cape_fallback"
 
 
 def test_nwp_cin_suppression():
-    """Strong CIN cap reduces NWP risk by one level."""
+    """Strong CIN cap reduces the native NWP risk by one level."""
     indices = ThermodynamicIndices(
-        cape_surface_jkg=1500.0,  # HIGH
+        cape_surface_jkg=1500.0,
         cin_surface_jkg=-250.0,   # strong cap
     )
-    diag = NWPCloudDiagnostics(convective_cover_pct=50.0)
+    # FL300 tower → HIGH; strong cap suppresses one level → MODERATE.
+    diag = NWPCloudDiagnostics(convective_cover_pct=10.0, convective_top_ft=30000.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
     assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH → MODERATE

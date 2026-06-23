@@ -156,7 +156,22 @@ class ConvectiveEvaluator:
                 if conv is None:
                     continue
 
-                risk_idx = _RISK_ORDER.index(conv.risk_level)
+                # Guardrail (#283): the active track may now be the model-native
+                # NWP track (convective_method defaults to "nwp"), whose risk can
+                # read quiet where a capped loaded-gun DD reads HIGH — exactly
+                # where models under-fire. A quiet NWP must never *suppress* DD,
+                # so the grade floors at the DD tier (safety asymmetry,
+                # meteorology-decisions §4/§5). The two tracks stay independent;
+                # the divergence is surfaced via the cross-check below and the
+                # dd_nwp_agreement advisory, not blended into the DD tier. When
+                # the active track is DD this is a no-op.
+                graded_risk = conv.risk_level
+                if thermo_conv is not None and _RISK_ORDER.index(
+                    thermo_conv.risk_level
+                ) > _RISK_ORDER.index(graded_risk):
+                    graded_risk = thermo_conv.risk_level
+
+                risk_idx = _RISK_ORDER.index(graded_risk)
                 if risk_idx < _RISK_ORDER.index(min_risk):
                     continue
 
@@ -170,9 +185,9 @@ class ConvectiveEvaluator:
 
                 affected += 1
                 if risk_idx > _RISK_ORDER.index(worst_risk):
-                    worst_risk = conv.risk_level
+                    worst_risk = graded_risk
 
-                if conv.risk_level in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
+                if graded_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
                     has_high = True
 
                 if conv.cover_pct is not None:

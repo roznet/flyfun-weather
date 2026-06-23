@@ -628,19 +628,18 @@ convective-cloud-layer field; the time/location placement is exact, so the NWP
 signal is correctly located. The divergence from DD is real model
 inconsistency, surfaced (not hidden) — exactly what we want.
 
-**Known nuance (cross-ref §4d):** today the NWP convective *risk tier* is itself
-derived from CAPE thresholds on every model path (GFS cover branch included) —
-`convective_cover_pct` is attached as informational, and the convective base/top
-provide geometry, but the **risk level** is CAPE. So the genuinely
-model-native signal that exposes this divergence today is the `cover_pct`
-diagnostic and the cross-section NWP cloud layer, **not** the NWP risk *level*
-(which mostly tracks DD, by §4's design). Making the NWP tier itself
+**Known nuance (cross-ref §4d) — RESOLVED in §14 (2026-06-23, #283):** when this
+was written the NWP convective *risk tier* was itself derived from CAPE
+thresholds on every model path (GFS cover branch included) —
+`convective_cover_pct` was attached as informational, and the convective
+base/top provided geometry, but the **risk level** was CAPE. So the genuinely
+model-native signal that exposed this divergence was the `cover_pct` diagnostic
+and the cross-section NWP cloud layer, **not** the NWP risk *level* (which
+mostly tracked DD, by §4's design). Making the NWP tier itself
 cover/geometry-driven — so "NWP = native" holds end-to-end and
-`dd_nwp_agreement`'s convective category (currently near-circular) starts firing
-on real divergence — was considered here and **deferred**: the existing cover
-diagnostic + DD/NWP display already serve the goal, and a cover→risk mapping
-needs PIREP calibration (areal cover ≠ intensity; ICON/ECMWF have geometry but
-no cover). Tracked as a possible follow-up, not a correctness fix.
+`dd_nwp_agreement`'s convective category (then near-circular) starts firing on
+real divergence — was **deferred** here. **§14 implements it** (tower-top primary
+scale + cover modifier, CAPE fallback only for models with no native scheme).
 
 ### Implications
 
@@ -1214,3 +1213,112 @@ not validated numbers** — calibration against a known frontal case (Storm Ciar
 the May-4 fronts) is still pending. With 3 levels the slant is a 2-segment sketch;
 the clean version is the Phase D.2 GRIB stencil (detect in the along-route ×
 pressure plane, continuity intrinsic, no association heuristic).
+
+---
+
+## 14. NWP convective track made model-native (tower-top driven, not CAPE)
+
+**Date:** 2026-06-23
+**Status:** Implemented Phase 1 (#283). Phase 2 (decode unused native precip /
+stability fields + a realized-convection firing gate) deferred — see below.
+**Context:** §5 documented, and §4d's "two independent tracks" framing assumed,
+that the NWP convective track is the model's *own* convective scheme. But
+`assess_convective_nwp` set its **risk level from CAPE** on every path (GFS
+cover / ICON hybrid / ECMWF hcct), identical to the DD thermo tier. The
+model-native fields (GFS `convective_cover_pct`, ICON/ECMWF `convective_top_ft`)
+were only *attached* as geometry/context — they never drove the risk. So
+`convective_nwp.risk_level ≈ convective_thermo.risk_level` almost everywhere,
+`dd_nwp_agreement`'s convective category (`_risk_distance >= 2`) was effectively
+dead, and the "two independent assessments" were near-circular.
+
+### The decision
+
+`assess_convective_nwp` now derives its risk **from the model's own convective
+scheme**, not CAPE, for every GRIB model that exposes native fields:
+
+- **Primary scale — convective tower top → severity.** `convective_top_ft`
+  (the one native field common to GFS, ECMWF and ICON; resolution-robust, and it
+  separates shallow Cu from a mature Cb) maps to a tier via
+  `_CONV_TOP_FL_THRESHOLDS` (FL380 EXTREME / FL280 HIGH / FL200 MODERATE /
+  FL120 LOW / present-but-shallow MARGINAL).
+- **Cover modifier (GFS).** When `convective_cover_pct` is present, numerous
+  cover (≥35%) bumps the top-derived tier up one level, **capped at HIGH** —
+  areal cover alone never implies EXTREME (that needs a ≥FL380 tower). When a
+  model reports cover but *no* top, cover sets a depth-unknown tier capped at
+  MODERATE.
+- **Quiet scheme → NONE.** A native model with no convective top and no
+  meaningful cover (e.g. ECMWF at a capped morning point — hcct sentinel, no
+  convective cloud) reads **NONE**. It is returned as a real assessment (not
+  `None`) so `dd_nwp_agreement` can compare it against a HIGH DD track.
+- **CAPE fallback (`method="nwp_cape_fallback"`)** only when the diagnostics
+  carry *no* native cloud content at all (a defensive/synthetic case — the
+  GRIB builders return `None`, not an empty diag, in production; Open-Meteo-only
+  AROME/UKMO/MF have no diag → `None` → no NWP track). The distinct method lets
+  `dd_nwp_agreement` skip the now-circular DD-vs-NWP comparison, and
+  `convection_realized` treats it like `thermo` (CAPE under another name, so it
+  goes through the realized-vs-potential gate, not "native → realized").
+- **Existing strong-CIN suppression kept** (CIN < −200 → one level down). Phase
+  1 partial handling of a capped tower; the precip-based firing gate is Phase 2.
+- The `method` strings consumed downstream (`"nwp"` / `"nwp_hybrid"` /
+  `"nwp_lcl_top"`, plus front co-location's `method != "thermo"`) are preserved,
+  and `base_ft` / `top_ft` / `cover_pct` are populated exactly as before.
+
+### Guardrail — NWP-quiet must never downgrade DD (safety asymmetry)
+
+`convective_method` defaults to `"nwp"`, so the aggregate convective advisory
+(`analysis/advisories/convective.py`) grades on the now-native NWP track. A quiet
+NWP track at a capped loaded-gun point (where models under-fire — §4 reasoning 2)
+must **not** suppress a DD HIGH. The aggregate therefore floors the graded risk
+at the DD (thermo) tier: `graded_risk = max(active, convective_thermo)`. The two
+tracks stay independent — the divergence is **surfaced** (cross-check note +
+`dd_nwp_agreement`), never blended into the DD tier (§4d). When the active track
+is DD this is a no-op. The per-model thermo tier is untouched (DD stays pure).
+
+### Reasoning
+
+1. **Tower-top is the honest, resolution-robust native scale.** Precip *rate*
+   thresholds are resolution-dependent (0.8 mm/h at ECMWF ~9 km ≈ 3–5 mm/h at
+   AROME 1.3 km); tower top is instantaneous (no accumulation differencing) and
+   comparable across models, so it is the primary scale and precip is reserved
+   as a yes/no firing gate (Phase 2).
+2. **Independence restores the diagnostic.** With NWP native, the Reims cases
+   verify: GFS Sun (cover 46.8%, top FL332) → HIGH while ECMWF morning is capped
+   → NONE, so `dd_nwp_agreement` fires on the real divergence DD can't see.
+3. **Safety asymmetry over purity for the *grade*.** Under-warning a capped
+   loaded gun is worse than over-warning, so the aggregate floors at DD; the
+   native view still drives the cross-section and the cross-check.
+
+### Caveats / calibration (v1, not final)
+
+- Thresholds reproduce every Reims case checked but are **a defensible v1** —
+  tune against a labelled set via the digest-eval corpus replay.
+- ICON-EU native fields vanish beyond 120 h (ECMWF 168 h, GFS 384 h); a model in
+  fallback purely due to horizon has `nwp_diagnostics = None` → no NWP track,
+  same as a non-native model.
+
+### Phase 2 (deferred follow-up, tracked in #283)
+
+Decode the native fields delivered-but-unused — ECMWF `cp`/`kx`/`totalx`/
+`mlcape100`/`mlcin100`, ICON `rain_con`/`cape_ml`/`cin_ml`, GFS `ACPCP`/`CPRAT`
+— extend `NWPCloudDiagnostics`, gap-fill (time + spatial), and add a
+**realized-convection firing gate** (MODERATE+ only when the scheme realized
+convection: conv precip > 0.1 mm/h OR cover > 15%) plus stability modifiers
+(K-index / Total-Totals / `rain_con` corroboration). This is the native-side
+mirror of §6's parcel-EL over-read fix. Requires real-GRIB validation and
+touches the fetch/decode pipeline, so it is intentionally separated from the
+Phase-1 risk-logic change.
+
+### Files changed (Phase 1)
+
+- `src/weatherbrief/analysis/sounding/convective.py` — native risk
+  (`_CONV_TOP_FL_THRESHOLDS`, `_CONV_COVER_PCT_THRESHOLDS`, `_up_one`,
+  `_native_convective_risk`, `_nwp_cape_fallback_risk`,
+  `_has_native_cloud_content`), rewritten `assess_convective_nwp`,
+  `convection_realized` fallback handling.
+- `src/weatherbrief/analysis/advisories/convective.py` — DD-floor guardrail.
+- `src/weatherbrief/analysis/advisories/dd_nwp_agreement.py` — skip the
+  CAPE-fallback path in the convective comparison.
+- `src/weatherbrief/models/analysis.py` — `method` doc (new values).
+- `tests/test_convective.py` — native-top tiering, cover modifier + cap,
+  cover-only scale, CIN suppression, quiet-native NONE, CAPE-fallback path, and
+  the Reims regression anchors.
