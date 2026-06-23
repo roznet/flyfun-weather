@@ -175,10 +175,23 @@ class ConvectiveEvaluator:
                 if risk_idx < _RISK_ORDER.index(min_risk):
                     continue
 
-                # Skip if convective tops are well below cruise altitude
+                # Skip if convective tops are well below cruise altitude. When the
+                # DD floor raised the grade and the active (quiet NWP) track has no
+                # geometry (top_ft=None), fall back to the thermo EL so altitude
+                # awareness is preserved — otherwise top_ft=None bypasses the
+                # filter and fires the advisory for convection that tops out below
+                # cruise (#283 review I1). Pre-#283 this point used the thermo EL
+                # because a quiet NWP returned None and the slot fell back to DD.
+                check_top_ft = conv.top_ft
                 if (
-                    conv.top_ft is not None
-                    and conv.top_ft + top_clearance_ft <= cruise_ft
+                    check_top_ft is None
+                    and thermo_conv is not None
+                    and graded_risk != conv.risk_level
+                ):
+                    check_top_ft = thermo_conv.top_ft
+                if (
+                    check_top_ft is not None
+                    and check_top_ft + top_clearance_ft <= cruise_ft
                 ):
                     below_cruise_count += 1
                     continue

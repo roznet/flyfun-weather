@@ -137,33 +137,28 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 `convective.py:assess_convective_nwp()` → `ConvectiveAssessment | None`
 
 - **Input:** `ThermodynamicIndices` + `NWPCloudDiagnostics`
-- **Returns None when:** no diagnostics, or neither `convective_cover_pct` nor both base/top are available
-- **Two paths:**
+- **Returns None when:** no diagnostics (`nwp_diagnostics is None` — e.g. AROME/UKMO/Météo-France, Open-Meteo-only). With diagnostics present it always returns a real assessment (quiet scheme → `risk=NONE`), so the DD-vs-NWP cross-check can fire.
+- **Risk is model-native, NOT CAPE (#283).** The tier comes from the model's own convective-scheme output, making the NWP track genuinely independent of the DD (parcel-CAPE) track:
+  - **Primary scale — convective tower top** (`convective_top_ft`, the one native field common to GFS/ECMWF/ICON): `_CONV_TOP_FL_THRESHOLDS` (FL380 EXTREME / FL280 HIGH / FL200 MODERATE / FL120 LOW / present-but-shallow MARGINAL).
+  - **Cover modifier** (GFS, where `convective_cover_pct` is present): numerous cover (≥35%) bumps the top-derived tier up one level, capped at HIGH. Cover-only (no top) sets a depth-unknown tier capped at MODERATE.
+  - **Firing gate (Phase 2):** a MODERATE+ tower is only kept there when the scheme *realized* convection (`convective_precip_mm_h > 0.1` OR `convective_cover_pct > 15`); a deep-but-dry tower is held down one level. Missing-data-safe — held down only on positive dry evidence.
+  - **Native corroboration (Phase 2):** a realized MODERATE+ cell with strong native `k_index`/`total_totals`/conv-precip bumps up one level (capped HIGH).
+  - **Strong-CIN suppression** kept (prefers the model's own `ml_cin_jkg`, else DD `cin_surface_jkg`).
 
-**Full NWP path** (GFS — has `convective_cover_pct`): risk from effective CAPE thresholds (same as thermo); `cover_pct` is informational, carried for the DD-vs-model cross-check, not used to set the tier.
+**Method strings** (preserved; consumed by `dd_nwp_agreement` history and front co-location's `method != "thermo"`), set by which geometry the model exposes:
 
-- **Output:** `method="nwp"`, `cover_pct` set
+- **`"nwp"`** (GFS — has `convective_cover_pct`): cover present; `base_ft`/`top_ft` from GRIB. Quiet native points (no top/cover geometry) also use this method with `risk=NONE`.
+- **`"nwp_hybrid"`** (ICON-EU — has base+top, no cover): tower bounds from GRIB2 `convective_base_ft`/`convective_top_ft`.
+- **`"nwp_lcl_top"`** (ECMWF — has `hcct` top only): tower base = `indices.lcl_altitude_ft` (LCL proxy), top = `convective_top_ft`; the `top > LCL` guard rejects a sub-LCL hcct artefact (→ quiet NONE).
+- **`"nwp_cape_fallback"`**: only when the diagnostics carry *no* native cloud content at all (defensive — production builders return `None`, not an empty diag). CAPE-scored like DD, marked distinctly so the cross-check skips the circular comparison.
 
-**Hybrid NWP path** (ICON-EU — has base/top but no cover_pct):
-- Risk derived from `_effective_cape()` using the same CAPE thresholds as thermo
-- MARGINAL: any CAPE > 0 with defined base/top
-- Tower bounds from GRIB2 `convective_base_ft`/`convective_top_ft`
-- **Output:** `method="nwp_hybrid"`, `cover_pct=None`
-
-**LCL-anchored path** (ECMWF — has `hcct` top only, no base, no cover):
-- Risk derived from `_effective_cape()` same as hybrid path
-- Tower base = `indices.lcl_altitude_ft` (LCL proxies for convective cloud base)
-- Tower top = `nwp_diagnostics.convective_top_ft` (from ECMWF `hcct`)
-- Returns None when LCL is unavailable (insufficient sounding data)
-- **Output:** `method="nwp_lcl_top"`, `cover_pct=None`
-
-- **Severity modifiers:** same as thermo (computed from same indices)
+- **Severity modifiers:** same as thermo (computed from the same indices, descriptive text only — separate from the native risk tier).
 
 | Model | NWP Convective Result | Notes |
 |-------|----------------------|-------|
-| **GFS** | Full NWP (risk from CAPE thresholds; cover_pct informational, base/top from GRIB) | Only model with convective cover % |
-| **ICON-EU** | Hybrid NWP (CAPE risk + GRIB base/top) | `method="nwp_hybrid"` |
-| **ECMWF** | LCL-anchored (CAPE risk + LCL base + hcct top) | `method="nwp_lcl_top"` |
+| **GFS** | `method="nwp"` — risk from tower top + cover modifier; cover/base/top from GRIB | Only model with convective cover % |
+| **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` native | — |
+| **ECMWF** | `method="nwp_lcl_top"` — risk from tower top (`hcct`); LCL base; `cp`/`kx`/`totalx`/`mlcape`/`mlcin` native | — |
 | **Others** | None | No diagnostics at all |
 
 ### Stage 5: Resolution
@@ -196,16 +191,17 @@ Both layers share the same color palette (via exports from `thermo-convective-bg
 - HIGH/EXTREME at any point → RED
 - Below-threshold points counted; percentage determines AMBER vs GREEN
 - Parameters: `min_risk` (default 2 = LOW), `affected_pct_amber` (20%), `affected_pct_red` (50%)
+- **DD-floor guardrail (#283):** `convective_method` defaults to `"nwp"`, so the active slot is the model-native track. A quiet NWP must never *suppress* a DD HIGH (capped loaded gun — where models under-fire), so the graded risk floors at the DD (thermo) tier: `graded_risk = max(active, convective_thermo)`. The native divergence is surfaced via the cross-check below, not blended into the DD tier. The below-cruise altitude filter falls back to the thermo EL when the DD floor raised the grade and the quiet NWP track has no geometry (`top_ft=None`) — otherwise `top_ft=None` would bypass the filter (review I1).
 
 ### Stage 8: DD-vs-Model Cross-Check
 
-`convective.py:convective_cross_check(thermo, nwp)` → `ConvectiveCrossCheck | None`. The evaluator runs this per route point using `convective_thermo` explicitly (never the resolved slot — it must stay a DD-vs-NWP comparison even if the user picked NWP). It compares the CAPE-derived thermo risk against the model's **independent** convective signal (`cover_pct`, or convective base/top geometry for ICON/ECMWF — the model's `risk_level` is deliberately NOT used as it is near-circular with thermo).
+`convective.py:convective_cross_check(thermo, nwp)` → `ConvectiveCrossCheck | None`. The evaluator runs this per route point using `convective_thermo` explicitly (never the resolved slot — it must stay a DD-vs-NWP comparison even if the user picked NWP). It compares the DD (parcel-CAPE) thermo risk against the model's native **firing** signal (#283): convective precip > the gate, cover ≥ 25%, or a tower ≥ FL200. Bare convective-geometry presence is **not** enough — a shallow Cu top would otherwise spuriously read "active". (The model's `risk_level` is not compared directly here; the risk-level comparison that used to live in `dd_nwp_agreement` was removed for convective — this inline cross-check is the single source of truth, see `designs/advisories.md`.)
 
 Fires only on two material divergences (else `None`):
-- `dd_not_corroborated` — thermo MODERATE+ but model scheme quiet (cover ≤ 10%, no convective geom)
-- `model_active_dd_quiet` — thermo NONE/MARGINAL but model scheme active (cover ≥ 25%, or convective geom present)
+- `dd_not_corroborated` — thermo MODERATE+ but the scheme is quiet (no convective precip, low/no cover, no deep tower)
+- `model_active_dd_quiet` — thermo NONE/MARGINAL but the scheme fired (precip / cover ≥ 25% / tower ≥ FL200)
 
-LOW thermo is intentionally in neither band. The result never changes the grade — it is surfaced in the advisory popup and LLM digest only (the convective DD-vs-model cross-check initiative). Cover thresholds are tunable module constants (`_XCHECK_MODEL_QUIET_COVER_PCT`, `_XCHECK_MODEL_ACTIVE_COVER_PCT`).
+LOW thermo is intentionally in neither band; the gap between the quiet and active bands (e.g. cover 10–25%, tower FL120–200) is also neither. The result never changes the grade — it is surfaced in the advisory popup and LLM digest only. Thresholds are tunable module constants (`_FIRING_PRECIP_MM_H`, `_XCHECK_MODEL_QUIET_COVER_PCT`, `_XCHECK_MODEL_ACTIVE_COVER_PCT`, `_XCHECK_DEEP_TOP_FL`, `_XCHECK_QUIET_TOP_FL`).
 
 Note: this is distinct from the unused `cape_raw_vs_calc_divergent` flag (Bugs #3/#5) — that compares raw NWP CAPE vs MetPy CAPE magnitudes; this cross-check compares the thermo *tier* against the model's *convective scheme*.
 
@@ -307,23 +303,20 @@ This is the same silent fallback pattern identified in the cloud layers analysis
 
 ## Inconsistencies
 
-### 1. Asymmetric information between thermo and NWP methods
+### 1. Asymmetric information between thermo and NWP methods — by design (#283)
 
-The thermo method gets rich MetPy indices (CAPE, CIN, LCL, LFC, EL, shear, K-index, TT, LI, precipitable water) and produces severity modifiers. The NWP method gets only `convective_cover_pct` but then copies the same MetPy severity modifiers into its output. This means:
-- NWP risk is driven by CAPE thresholds (cover_pct is informational only)
-- NWP severity modifiers are driven by MetPy indices (sounding analysis)
-- These can disagree: high cover % (from model convective scheme) but low MetPy CAPE (from coarse pressure levels), or vice versa
+The two methods are now *deliberately* independent: thermo risk is parcel-CAPE-driven, NWP risk is model-native (tower top + cover/precip, NOT CAPE). The MetPy severity modifiers are still copied into the NWP output as descriptive text (separate from the native risk tier). These can disagree — high native cover/tower but low MetPy CAPE, or vice versa — and that disagreement is the **product goal**, surfaced via the inline cross-check (Stage 8). The historical "NWP risk is CAPE-driven, cover informational" framing no longer holds (#283).
 
-### 2. No CIN suppression in NWP method
+### 2. CIN suppression in the NWP method (#283)
 
-The thermo method suppresses risk by one level when CIN < −200 J/kg (generic strong-cap floor, in the THERMAL / WEAK_INSTABILITY regimes; the LOADED_GUN regime models the cap explicitly via omega gating — see Stage 4). The NWP method doesn't — if the model's convective scheme reports 50% convective cloud cover, the risk is MODERATE regardless of CIN. This is arguably correct (the model already accounts for CIN internally in its convective parameterization), but it means the two methods can disagree on risk level for the same atmospheric state.
+Both methods now apply strong-CIN suppression (CIN < −200 J/kg → one level down). The NWP method prefers the model's own `ml_cin_jkg` when present (ECMWF `mlcin100`, ICON `cin_ml`), falling back to the DD `cin_surface_jkg`. The realized-convection **firing gate** is the native-side analogue of the cap (a deep-but-dry tower is held down one level), so a capped tower the scheme reports but won't realize is no longer left at full risk.
 
 ### 3. MARGINAL risk handling differs between methods
 
 - **Thermo:** MARGINAL = any CAPE > 0 with defined LFC and EL (shallow convection possible)
-- **NWP:** MARGINAL = 10–25% convective cover
+- **NWP (#283):** MARGINAL = a convective tower present but shallow (< FL120), or scattered cover (15–35%) when no tower top is reported
 
-The thermo MARGINAL is very sensitive — any small positive CAPE with LFC/EL triggers it. The NWP MARGINAL requires the model's convective scheme to actually activate (10%+ cover). In practice, thermo produces many more MARGINAL points than NWP.
+The thermo MARGINAL is very sensitive — any small positive CAPE with LFC/EL triggers it. The NWP MARGINAL requires the model's convective scheme to actually produce a (shallow) tower or scattered cover. In practice, thermo produces many more MARGINAL points than NWP.
 
 Both the thermo visualization and the NWP visualization skip MARGINAL towers (render only LOW+), so this is mainly an advisory-level difference.
 
@@ -353,7 +346,7 @@ GRIB2      → NWPCloudDiagnostics.convective_{cover_pct,base_ft,top_ft}
 MetPy      → SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT, LI
 Analysis:
   Thermo assessment  → risk from max(SB,MU,ML,NWP) CAPE, CIN suppression, severity modifiers
-  NWP assessment     → risk from CAPE thresholds (cover_pct informational), GRIB base/top
+  NWP assessment     → risk from tower top (FL tiers) + cover modifier + firing gate (#283), GRIB base/top
 Visualization:
   Thermo towers      → LFC→EL (estimated if shallow), always available
   NWP towers         → GRIB convective base/top, available when GRIB enriched
@@ -369,7 +362,7 @@ GRIB2      → NWPCloudDiagnostics.convective_{base_ft,top_ft}  (no cover_pct)
 MetPy      → SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT
 Analysis:
   Thermo assessment  → risk from max(SB,MU,ML,NWP) CAPE, CIN suppression
-  NWP assessment     → Hybrid: CAPE-based risk + GRIB base/top (method="nwp_hybrid")
+  NWP assessment     → Hybrid: tower-top risk + GRIB base/top + cape_ml/cin_ml (method="nwp_hybrid", #283)
 Visualization:
   Thermo towers      → LFC→EL (estimated if shallow), always available
   NWP towers         → GRIB convective base/top, available via hybrid path
@@ -377,19 +370,22 @@ Advisory:
   ConvectiveEvaluator → reads active slot (user choice, both methods available)
 ```
 
-### ECMWF (Open-Meteo Only, MU-CAPE)
+### ECMWF (Full GRIB — IFS sounding + a1 surface diagnostics)
 
 ```
-Open-Meteo → cape_jkg (MU)
+Open-Meteo → cape_jkg (MU)   [surface fields; pressure levels replaced by IFS GRIB]
+GRIB2 (a1) → NWPCloudDiagnostics.convective_top_ft (hcct), cp→convective_precip_mm_h,
+             kx/totalx→k_index/total_totals, mlcape100/mlcin100→ml_cape/ml_cin
 MetPy      → SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT
 Analysis:
-  Thermo assessment  → risk from max(SB,MU) CAPE
-  NWP assessment     → None (no diagnostics)
+  Thermo assessment  → risk from max(SB,MU,ML) CAPE, CIN suppression
+  NWP assessment     → LCL-anchored: tower-top risk (hcct) + LCL base + firing gate/
+                       corroboration from cp/kx/totalx/mlcin (method="nwp_lcl_top", #283)
 Visualization:
   Thermo towers      → LFC→EL, always available
-  NWP towers         → NOT rendered
+  NWP towers         → LCL→hcct, available when GRIB enriched
 Advisory:
-  ConvectiveEvaluator → always uses thermo
+  ConvectiveEvaluator → reads active slot (user choice, both methods available)
 Note: ECMWF's MU-CAPE catches elevated convection that SB-CAPE misses.
       MetPy also computes MU-CAPE, so _effective_cape() benefits from both sources.
 ```
