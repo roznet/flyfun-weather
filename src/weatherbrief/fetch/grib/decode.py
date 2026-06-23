@@ -123,6 +123,8 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "clcm": "mid_cover_pct",
     "clch": "high_cover_pct",
     "clct": "total_cover_pct",
+    "cape_ml": "ml_cape_jkg",   # J/kg, mixed-layer CAPE (#283)
+    "cin_ml": "ml_cin_jkg",     # J/kg, mixed-layer CIN (#283)
 }
 
 # ECMWF single-level (a1) field mapping.
@@ -137,6 +139,12 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "cbh": "cloud_base_height_m",          # meters, 9999 = no cloud sentinel
     "hcct": "convective_cloud_top_m",      # meters, 9999 = no cloud sentinel
     "deg0l": "freezing_level_m",           # meters (geopotential height above MSL)
+    # Native convective realization + stability (#283 Phase 2, delivered in a1).
+    "cp": "conv_precip_m",                 # m water equiv, ACCUMULATED since init
+    "kx": "k_index_c",                     # °C (K-index)
+    "totalx": "total_totals_c",            # °C (Total Totals)
+    "mlcape100": "ml_cape_jkg",            # J/kg (mixed-layer CAPE, lowest 100 hPa)
+    "mlcin100": "ml_cin_jkg",              # J/kg (mixed-layer CIN, lowest 100 hPa)
     "lcc": "low_cover_frac",               # 0–1 fraction, ×100 during build
     "mcc": "mid_cover_frac",               # 0–1 fraction, ×100 during build
     "tcc": "total_cover_frac",             # 0–1 fraction, ×100 during build
@@ -1266,6 +1274,10 @@ def build_icon_cloud_diagnostics(
     def _pct(key: str) -> float | None:
         return raw.get(key)
 
+    def _num(key: str) -> float | None:
+        val = raw.get(key)
+        return float(val) if val is not None else None
+
     ceiling_ft = _m_to_ft("ceiling_m")
     convective_base_ft = _m_to_ft("convective_cloud_base_m")
     convective_top_ft = _m_to_ft("convective_cloud_top_m")
@@ -1273,6 +1285,8 @@ def build_icon_cloud_diagnostics(
     mid_cover = _pct("mid_cover_pct")
     high_cover = _pct("high_cover_pct")
     total_cover = _pct("total_cover_pct")
+    ml_cape = _num("ml_cape_jkg")  # instantaneous (#283)
+    ml_cin = _num("ml_cin_jkg")    # instantaneous (#283)
 
     # Only create diagnostics if at least one field is populated
     has_any = (
@@ -1283,6 +1297,8 @@ def build_icon_cloud_diagnostics(
         or mid_cover is not None
         or high_cover is not None
         or total_cover is not None
+        or ml_cape is not None
+        or ml_cin is not None
     )
     if not has_any:
         return None
@@ -1295,6 +1311,8 @@ def build_icon_cloud_diagnostics(
         ceiling_ft=ceiling_ft,
         convective_base_ft=convective_base_ft,
         convective_top_ft=convective_top_ft,
+        ml_cape_jkg=ml_cape,
+        ml_cin_jkg=ml_cin,
     )
 
 
@@ -1636,6 +1654,10 @@ def build_ecmwf_cloud_diagnostics(
             return None
         return round(val * 100.0, 1)
 
+    def _raw(key: str) -> float | None:
+        val = raw.get(key)
+        return float(val) if val is not None else None
+
     ceiling_ft = _m_to_ft("ceiling_m")
     cloud_base_ft = _m_to_ft("cloud_base_height_m")
     convective_top_ft = _m_to_ft("convective_cloud_top_m")
@@ -1644,6 +1666,13 @@ def build_ecmwf_cloud_diagnostics(
     mid_cover = _frac_to_pct("mid_cover_frac")
     high_cover = _frac_to_pct("high_cover_frac")
     total_cover = _frac_to_pct("total_cover_frac")
+    # Native stability indices (instantaneous — surfaced directly). Convective
+    # precip (cp) is accumulated since init, so its per-hour rate is computed by
+    # step-difference in the ECMWF merge loop, not here. (#283 Phase 2)
+    k_index = _raw("k_index_c")
+    total_totals = _raw("total_totals_c")
+    ml_cape = _raw("ml_cape_jkg")
+    ml_cin = _raw("ml_cin_jkg")
 
     has_any = (
         ceiling_ft is not None
@@ -1654,6 +1683,10 @@ def build_ecmwf_cloud_diagnostics(
         or mid_cover is not None
         or high_cover is not None
         or total_cover is not None
+        or k_index is not None
+        or total_totals is not None
+        or ml_cape is not None
+        or ml_cin is not None
     )
     if not has_any:
         return None
@@ -1666,6 +1699,10 @@ def build_ecmwf_cloud_diagnostics(
         ceiling_ft=ceiling_ft,
         convective_top_ft=convective_top_ft,
         freezing_level_ft=freezing_level_ft,
+        k_index=k_index,
+        total_totals=total_totals,
+        ml_cape_jkg=ml_cape,
+        ml_cin_jkg=ml_cin,
     )
 
 

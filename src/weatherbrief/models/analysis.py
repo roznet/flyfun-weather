@@ -155,6 +155,13 @@ class NWPCloudDiagnostics(BaseModel):
     convective_cover_pct: Optional[float] = None
     convective_base_ft: Optional[float] = None
     convective_top_ft: Optional[float] = None
+    # Native convective-scheme realization + stability (#283 Phase 2). All
+    # optional — only some models emit each, and only within their horizon.
+    convective_precip_mm_h: Optional[float] = None  # de-accumulated conv precip rate
+    k_index: Optional[float] = None                 # model-native K-index (°C)
+    total_totals: Optional[float] = None            # model-native Total Totals (°C)
+    ml_cape_jkg: Optional[float] = None             # mixed-layer CAPE (J/kg)
+    ml_cin_jkg: Optional[float] = None              # mixed-layer CIN (J/kg)
 
     total_cover_pct: Optional[float] = None
     boundary_cover_pct: Optional[float] = None
@@ -646,6 +653,7 @@ class ConvectiveAssessment(BaseModel):
     base_ft: Optional[float] = None  # thermo: lfc_altitude_ft (or lcl fallback); NWP: convective_base_ft
     top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft
     cover_pct: Optional[float] = None  # NWP only; thermo: None
+    convective_precip_mm_h: Optional[float] = None  # NWP native firing signal (#283); thermo: None
     method: str = "thermo"  # "thermo", "nwp", "nwp_hybrid", "nwp_lcl_top", "nwp_cape_fallback"
 
 

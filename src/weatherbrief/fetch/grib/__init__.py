@@ -2058,11 +2058,12 @@ def _enrich_ecmwf_inner(
     point_lats = [rp.lat for rp in route_points]
     point_lons = [rp.lon for rp in route_points]
 
-    # State for step-difference of accumulated surface fields (tp, sf) across
-    # consecutive a1 files. None = no prior step seen yet for that point.
+    # State for step-difference of accumulated surface fields (tp, sf, conv
+    # precip cp) across consecutive a1 files. None = no prior step for that point.
     n_points = len(route_points)
     prev_tp_per_point: list[float | None] = [None] * n_points
     prev_sf_per_point: list[float | None] = [None] * n_points
+    prev_cp_per_point: list[float | None] = [None] * n_points  # conv precip (#283)
     prev_a1_valid_utc: datetime | None = None
 
     # Filter steps to the flight window (with margin) up-front so we can
@@ -2141,6 +2142,27 @@ def _enrich_ecmwf_inner(
                     build_ecmwf_cloud_diagnostics(raw) if cov else None
                     for raw, cov in zip(sfc_data, sfc_covered)
                 ]
+                # Convective precip rate (#283): cp is accumulated since init, so
+                # difference it against the previous a1 step (mind the variable
+                # step cadence) and inject the mm/h rate onto the just-built
+                # diagnostics so it rides the same forward-fill / spatial-interp
+                # path as the rest of the cloud diagnostics.
+                cp_window_h: float | None = None
+                if prev_a1_valid_utc is not None:
+                    _dh = (valid_time - prev_a1_valid_utc).total_seconds() / 3600.0
+                    if _dh > 0:
+                        cp_window_h = _dh
+                if cp_window_h is not None:
+                    for i, (raw, cov) in enumerate(zip(sfc_data, sfc_covered)):
+                        diag_i = diagnostics[i] if i < len(diagnostics) else None
+                        if not cov or not raw or diag_i is None:
+                            continue
+                        cp = raw.get("conv_precip_m")
+                        pcp = prev_cp_per_point[i] if i < len(prev_cp_per_point) else None
+                        if cp is not None and pcp is not None:
+                            diag_i.convective_precip_mm_h = (
+                                max(0.0, (cp - pcp) / cp_window_h) * 1000.0
+                            )
                 _apply_cloud_diagnostics_to_sections(
                     ecmwf_sections, all_forecasts, route_points,
                     diagnostics, "ecmwf", valid_utc=valid_time,
@@ -2168,6 +2190,9 @@ def _enrich_ecmwf_inner(
                     sf = raw.get("snowfall_m_we")
                     if sf is not None:
                         prev_sf_per_point[i] = sf
+                    cp = raw.get("conv_precip_m")
+                    if cp is not None:
+                        prev_cp_per_point[i] = cp
                 prev_a1_valid_utc = valid_time
                 del sfc_data, sfc_covered, diagnostics
     _grib_gc()

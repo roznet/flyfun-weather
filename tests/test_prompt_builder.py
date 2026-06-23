@@ -290,4 +290,4 @@ def test_build_context_convective_cross_check_when_thermo_none(sample_snapshot):
     assert "Convective model scheme [gfs]" in context
     assert "cover=40%" in context
     assert "cross-check:" in context
-    assert "model convective scheme active" in context
+    assert "model convective scheme fired" in context

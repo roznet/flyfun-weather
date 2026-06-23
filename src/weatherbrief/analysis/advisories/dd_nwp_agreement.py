@@ -23,7 +23,6 @@ from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,
-    ConvectiveRisk,
     EnhancedCloudLayer,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
@@ -70,17 +69,6 @@ def _cloud_overlap_fraction(
     return _intersect_length() / union
 
 
-def _risk_distance(a: ConvectiveRisk | None, b: ConvectiveRisk | None) -> int:
-    """Categorical distance between two convective risk levels."""
-    if a is None or b is None:
-        return 0
-    order = list(ConvectiveRisk)
-    try:
-        return abs(order.index(a) - order.index(b))
-    except ValueError:
-        return 0
-
-
 @register
 class DDvsNWPAgreementEvaluator:
     """Within-model agreement between thermodynamic (DD) and NWP analysis tracks."""
@@ -93,10 +81,11 @@ class DDvsNWPAgreementEvaluator:
             short_description="Thermodynamic and model-native tracks agree",
             description=(
                 "Compares the sounding-derived (DD) and model-native (NWP) "
-                "analysis tracks for each model.  Disagreement between these "
-                "two independent derivations of the same variable flags "
-                "conditions the model handles poorly or where the sounding "
-                "diverges from the model's own cloud/convective scheme."
+                "analysis tracks for each model on freezing level and cloud "
+                "overlap.  Disagreement between these two independent "
+                "derivations flags conditions the model handles poorly. "
+                "Convective DD-vs-NWP divergence is reported separately by the "
+                "convective advisory's inline cross-check (#283)."
             ),
             category="model",
             default_enabled=False,
@@ -161,7 +150,7 @@ class DDvsNWPAgreementEvaluator:
             total = 0
             disagree_points = 0
             categories_triggered: dict[str, int] = {
-                "freezing": 0, "clouds": 0, "convective": 0,
+                "freezing": 0, "clouds": 0,
             }
 
             for rpa in ctx.analyses:
@@ -197,26 +186,17 @@ class DDvsNWPAgreementEvaluator:
                     if overlap < cloud_overlap_min:
                         disagreements.append("clouds")
 
-                # Convective risk category. The NWP track is now model-native
-                # (#283), so its risk level is a genuinely independent derivation
-                # from the DD (parcel-CAPE) track — this comparison is meaningful.
-                # Skip the CAPE-fallback path (``nwp_cape_fallback``): it is
-                # CAPE-derived like DD, so comparing the two would be circular.
-                dd_conv = sounding.convective_thermo
-                nwp_conv = sounding.convective_nwp
-                conv_comparable = (
-                    dd_conv is not None
-                    and nwp_conv is not None
-                    and nwp_conv.method != "nwp_cape_fallback"
-                )
-                if conv_comparable:
-                    if _risk_distance(dd_conv.risk_level, nwp_conv.risk_level) >= 2:
-                        disagreements.append("convective")
+                # Convective divergence is intentionally NOT compared here. The
+                # NWP convective track is now model-native (#283), so DD-vs-NWP
+                # convective disagreement is reported by the richer, convective-
+                # specific inline cross-check in analysis/advisories/convective.py
+                # (convective_cross_check). Reporting it here too would
+                # double-count the same divergence — so this advisory stays
+                # focused on freezing-level + cloud-overlap (see
+                # designs/advisories.md).
 
                 # Only count points where at least one comparison was possible
-                if (dd_fz is None and nwp_fz is None
-                        and not has_native_nwp
-                        and not conv_comparable):
+                if dd_fz is None and nwp_fz is None and not has_native_nwp:
                     continue
 
                 total += 1

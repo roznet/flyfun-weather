@@ -605,17 +605,17 @@ def test_nwp_quiet_native_returns_none_risk_not_none():
 
 def test_nwp_risk_from_native_top_not_cape():
     """Native path: risk from convective tower top, NOT CAPE. (#283)"""
-    # Low CAPE but a deep model tower (FL300) → HIGH from the native top.
+    # Low CAPE but a deep model tower (FL300) + firing cover → HIGH from the top.
     indices = ThermodynamicIndices(cape_surface_jkg=40.0)
-    diag = NWPCloudDiagnostics(convective_cover_pct=10.0, convective_top_ft=30000.0)
+    diag = NWPCloudDiagnostics(convective_cover_pct=20.0, convective_top_ft=30000.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
     assert result.risk_level == ConvectiveRisk.HIGH  # FL300 >= 280
-    assert result.cover_pct == 10.0  # preserved as context
+    assert result.cover_pct == 20.0  # preserved as context
 
 
 def test_nwp_top_tiering():
-    """Tower-top FL thresholds map to native risk tiers."""
+    """Tower-top FL thresholds map to native risk tiers (firing cover, no gate)."""
     for top_ft, expected in [
         (40000.0, ConvectiveRisk.EXTREME),  # FL400 >= 380
         (30000.0, ConvectiveRisk.HIGH),     # FL300 >= 280
@@ -624,7 +624,9 @@ def test_nwp_top_tiering():
         (8000.0, ConvectiveRisk.MARGINAL),  # FL80 present but shallow
     ]:
         indices = ThermodynamicIndices(cape_surface_jkg=40.0)
-        diag = NWPCloudDiagnostics(convective_cover_pct=0.0, convective_top_ft=top_ft)
+        # cover 20% (>15, <35): realized so the firing gate is a pass-through,
+        # and below the cover-bump threshold so the top alone sets the tier.
+        diag = NWPCloudDiagnostics(convective_cover_pct=20.0, convective_top_ft=top_ft)
         result = assess_convective_nwp(indices, diag)
         assert result is not None
         assert result.risk_level == expected, f"top={top_ft}: want {expected}, got {result.risk_level}"
@@ -886,11 +888,103 @@ def test_nwp_cin_suppression():
         cape_surface_jkg=1500.0,
         cin_surface_jkg=-250.0,   # strong cap
     )
-    # FL300 tower → HIGH; strong cap suppresses one level → MODERATE.
-    diag = NWPCloudDiagnostics(convective_cover_pct=10.0, convective_top_ft=30000.0)
+    # FL300 tower + firing cover (20%) → HIGH; strong cap suppresses → MODERATE.
+    diag = NWPCloudDiagnostics(convective_cover_pct=20.0, convective_top_ft=30000.0)
     result = assess_convective_nwp(indices, diag)
     assert result is not None
     assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH → MODERATE
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 firing gate + native corroboration (#283)
+# ---------------------------------------------------------------------------
+
+
+def test_nwp_firing_gate_holds_dry_tower_down():
+    """Deep tower but the scheme is dry (low cover) → held down one level."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    # FL300 (HIGH) + cover 5% (≤15, not firing) → held down to MODERATE.
+    diag = NWPCloudDiagnostics(convective_cover_pct=5.0, convective_top_ft=30000.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.MODERATE
+    assert any("dry" in s for s in result.suppressors)
+
+
+def test_nwp_firing_gate_holds_zero_precip_tower_down():
+    """Deep tower with explicit ~0 convective precip → held down one level."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=4000.0, convective_top_ft=30000.0,
+        convective_precip_mm_h=0.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH → held down
+
+
+def test_nwp_firing_gate_missing_data_keeps_tier():
+    """No cover and no precip (e.g. ICON deep tower, no rain_con) → keep tier.
+
+    Missing data must never hold down — safety asymmetry. (#283)
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    diag = NWPCloudDiagnostics(convective_base_ft=4000.0, convective_top_ft=30000.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.HIGH  # FL300, not held down
+    assert not any("dry" in s for s in result.suppressors)
+
+
+def test_nwp_firing_gate_realized_by_precip_keeps_tier():
+    """Convective precip above the firing gate → realized → keep the tier."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=4000.0, convective_top_ft=30000.0,
+        convective_precip_mm_h=1.5,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.HIGH
+
+
+def test_nwp_corroboration_bumps_realized_cell():
+    """A realized MODERATE cell with strong native K-index bumps to HIGH."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    # FL220 (MODERATE) + firing precip + K-index 40 → corroborated up to HIGH.
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=4000.0, convective_top_ft=22000.0,
+        convective_precip_mm_h=1.0, k_index=40.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.HIGH
+    assert any("corroborated" in d for d in result.drivers)
+
+
+def test_nwp_corroboration_capped_at_high():
+    """Corroboration never creates EXTREME — that needs a >=FL380 tower."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    diag = NWPCloudDiagnostics(
+        convective_cover_pct=50.0, convective_top_ft=30000.0,  # FL300 HIGH, firing
+        total_totals=60.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.HIGH  # not bumped past HIGH
+
+
+def test_nwp_corroboration_only_on_realized_cell():
+    """Strong native index on a DRY tower does not bump (gate holds down instead)."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    # FL220 (MODERATE) dry (cover 5%) + K-index 40: not realized → gate holds
+    # down to LOW; corroboration does not apply to an unrealized cell.
+    diag = NWPCloudDiagnostics(
+        convective_cover_pct=5.0, convective_top_ft=22000.0, k_index=40.0,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.risk_level == ConvectiveRisk.LOW
 
 
 # ---------------------------------------------------------------------------
@@ -1015,32 +1109,52 @@ def test_cross_check_dd_not_corroborated():
 
 
 def test_cross_check_model_active_dd_quiet():
-    """Thermo NONE + model cover 40% → model_active_dd_quiet."""
+    """Thermo NONE + model fired (cover 40%) → model_active_dd_quiet."""
     thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.NONE, method="thermo")
     nwp = ConvectiveAssessment(
-        risk_level=ConvectiveRisk.NONE, cover_pct=40.0, method="nwp"
+        risk_level=ConvectiveRisk.MODERATE, cover_pct=40.0, method="nwp"
     )
     xc = convective_cross_check(thermo, nwp)
     assert xc is not None
     assert xc.direction == "model_active_dd_quiet"
-    assert "active" in xc.note
+    assert "fired" in xc.note
     assert "40% cover" in xc.note
 
 
-def test_cross_check_geom_only_active():
-    """ECMWF/ICON geom-only (cover None + base/top) counts as model-active."""
-    thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.MARGINAL, method="thermo")
+def test_cross_check_precip_fired():
+    """Thermo NONE + model convective precip → model_active_dd_quiet (#283)."""
+    thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.NONE, method="thermo")
     nwp = ConvectiveAssessment(
-        risk_level=ConvectiveRisk.MARGINAL,
+        risk_level=ConvectiveRisk.MODERATE,
         cover_pct=None,
-        base_ft=4000.0,
-        top_ft=20000.0,
-        method="nwp_hybrid",
+        convective_precip_mm_h=1.2,
+        method="nwp_lcl_top",
     )
     xc = convective_cross_check(thermo, nwp)
     assert xc is not None
     assert xc.direction == "model_active_dd_quiet"
-    assert "tops 20000ft" in xc.note
+    assert "mm/h" in xc.note
+
+
+def test_cross_check_deep_tower_active():
+    """Deep tower (>=FL200) counts as fired; a shallow Cu top does NOT (#283)."""
+    thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.MARGINAL, method="thermo")
+    # Deep tower FL250 → active.
+    deep = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.HIGH, cover_pct=None,
+        base_ft=4000.0, top_ft=25000.0, method="nwp_hybrid",
+    )
+    xc = convective_cross_check(thermo, deep)
+    assert xc is not None
+    assert xc.direction == "model_active_dd_quiet"
+    assert "FL250" in xc.note
+
+    # Shallow Cu (FL90) → bare geometry, NOT active → no spurious cross-check.
+    shallow = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MARGINAL, cover_pct=None,
+        base_ft=3000.0, top_ft=9000.0, method="nwp_hybrid",
+    )
+    assert convective_cross_check(thermo, shallow) is None
 
 
 def test_cross_check_none_when_nwp_missing():
