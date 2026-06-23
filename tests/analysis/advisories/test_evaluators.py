@@ -164,6 +164,65 @@ class TestConvective:
         assert res_with.aggregate_status == res_without.aggregate_status
         assert res_with.per_model[0].status == res_without.per_model[0].status
 
+    def test_dd_floor_uses_thermo_el_for_altitude_filter(self):
+        """Regression (#283 review I1): when the DD floor raises a quiet-NWP
+        point and the active track has no geometry (top_ft=None), the below-cruise
+        filter falls back to the thermo EL so convection topping out below cruise
+        is still skipped — not counted via the None-top bypass."""
+        from datetime import datetime
+
+        from weatherbrief.models import (
+            ConvectiveAssessment,
+            ConvectiveRisk,
+            RoutePointAnalysis,
+            SoundingAnalysis,
+            ThermodynamicIndices,
+        )
+
+        # Capped loaded gun: DD reads HIGH, thermo EL tops out at FL180 (well
+        # below a FL300 cruise). The active (quiet ECMWF) NWP has no geometry.
+        thermo = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.HIGH, cape_jkg=1500.0,
+            top_ft=18000.0, method="thermo",
+        )
+        nwp_quiet = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.NONE, top_ft=None, method="nwp",
+        )
+
+        def _ctx(active: ConvectiveAssessment) -> RouteContext:
+            analyses = [
+                RoutePointAnalysis(
+                    point_index=i, lat=48.0 + i * 0.5, lon=2.0 + i * 0.5,
+                    distance_from_origin_nm=i * 20.0,
+                    interpolated_time=datetime(2026, 3, 1, 10, 0),
+                    forecast_hour=datetime(2026, 3, 1, 9, 0),
+                    track_deg=135.0,
+                    sounding={
+                        "gfs": SoundingAnalysis(
+                            indices=ThermodynamicIndices(),
+                            convective=active,
+                            convective_thermo=thermo,
+                            convective_nwp=nwp_quiet,
+                        )
+                    },
+                )
+                for i in range(10)
+            ]
+            return RouteContext(
+                analyses=analyses, cross_sections=[], elevation=None,
+                models=["gfs"], cruise_altitude_ft=30000,
+                flight_ceiling_ft=41000, total_distance_nm=200,
+            )
+
+        params = {
+            "min_risk": 2, "affected_pct_amber": 20,
+            "affected_pct_red": 50, "top_clearance_ft": 2000,
+        }
+        # Active = quiet NWP (DD floor raises grade to HIGH). Thermo EL FL180 +
+        # 2000 ft clearance = FL200 <= FL300 cruise → every point skipped → GREEN.
+        res = ConvectiveEvaluator.evaluate(_ctx(nwp_quiet), params)
+        assert res.aggregate_status == AdvisoryStatus.GREEN
+
 
 class TestCloudTop:
     def test_green_no_clouds(self, clear_context: RouteContext):

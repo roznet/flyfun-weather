@@ -1121,6 +1121,23 @@ def test_cross_check_model_active_dd_quiet():
     assert "40% cover" in xc.note
 
 
+def test_cross_check_dd_not_corroborated_trace_precip_note():
+    """Note distinguishes trace-but-present precip from absent precip (#283 M1)."""
+    thermo = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.MODERATE, cape_jkg=1100.0, method="thermo"
+    )
+    # Quiet: no cover, but precip present and <= the firing gate (trace).
+    nwp = ConvectiveAssessment(
+        risk_level=ConvectiveRisk.NONE, cover_pct=None,
+        convective_precip_mm_h=0.05, method="nwp_lcl_top",
+    )
+    xc = convective_cross_check(thermo, nwp)
+    assert xc is not None
+    assert xc.direction == "dd_not_corroborated"
+    assert "conv precip" in xc.note
+    assert "no convective precip/cover" not in xc.note
+
+
 def test_cross_check_precip_fired():
     """Thermo NONE + model convective precip → model_active_dd_quiet (#283)."""
     thermo = ConvectiveAssessment(risk_level=ConvectiveRisk.NONE, method="thermo")

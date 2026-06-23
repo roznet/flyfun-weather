@@ -884,7 +884,13 @@ def convective_cross_check(
 
     if thermo_high and model_quiet:
         cape_txt = f" (CAPE {thermo.cape_jkg:.0f})" if thermo.cape_jkg is not None else ""
-        cover_txt = f"cover {cover:.0f}%" if cover is not None else "no convective precip/cover"
+        if cover is not None:
+            cover_txt = f"cover {cover:.0f}%"
+        elif precip is not None:
+            # precip present but ≤ the firing gate — say so rather than imply absence
+            cover_txt = f"conv precip {precip:.1f} mm/h, no cover"
+        else:
+            cover_txt = "no convective precip/cover"
         note = (
             f"DD {thermo.risk_level.value.upper()}{cape_txt} but model scheme quiet "
             f"({cover_txt}) — not corroborated by the model's own convection"
