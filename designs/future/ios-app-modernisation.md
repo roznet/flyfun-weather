@@ -875,12 +875,53 @@ is **missing square entirely**.
   then carve into implementable plans (each its own `designs/` plan + GH issues).
 - **Every surface design carries a §1E "shared vs per-client" split** (what's a backend
   contract/registry/shaping vs what's iOS render) and notes any parity-map update.
-- **Foundational first step (do early, low-risk):** §1E mech 1+2 — schema-first contracts +
-  codegen and promoting the layer/metric registries — plus §5.3 "cheap wins". Unblocks
-  everything else and stops new drift while we design.
+- **Foundational first step = Phase 0 (§8):** iOS-only — decode the extended sounding fields +
+  advisory `cross_check` the server *already sends* (the §5.2 drop bug). **No backend.** Unblocks
+  the Skew-T side panel, cross-section readout, and advisory detail at once. (Schema codegen /
+  backend-served registries are a *later* anti-drift refinement, not a blocker.)
 
 ### References
 - `ios-app-overview.md`, `ios-app-ui.md`, `ios-app-architecture.md`, `ios-app-data-models.md`
 - `visualization.md`, `skewt-canvas.md`, `route-graph.md`, `briefing-sidebar.md` (web parity)
 - `advisories.md`, `digest.md`, `debrief.md` (feature depth to surface)
 - Memory: *progressive depth for all expertise*, *attention-director not go/no-go*
+
+---
+
+## 8. Implementation sequencing & tracking
+
+**Model: supervised autonomy in vertical chunks.** Not "one agent loose until done" — native-UI
+*feel* can't be agent-self-verified, and there are cross-stack/cross-repo seams. Each phase is a
+runnable slice an agent can largely implement, ending in a human checkpoint (build + sim +
+screenshots + eyeball feel + `/code-review`). The **web implementation is the porting reference**
+for most surfaces (high success rate — the agent translates, it doesn't invent).
+
+### Phases (dependency-ordered)
+
+| # | Chunk | Backend? | Deps | Definition of done |
+|---|---|:---:|---|---|
+| **0** | **Data plumbing (iOS-only)** — decode dropped `SoundingProfileLevel` extended fields; add `cross_check` to `ModelAdvisoryResult`; surface `parameters_used` | none | — | fixture-JSON decode tests pass; fields reach the view layer |
+| **1** | **Cross-section render parity** — cloud styles (§5.4 natural re-port + square), missing layers (scoped), LCL/LFC/EL lines | none | 0 | matches web for a reference flight (screenshot compare) |
+| **2** | **Backbone** — 4-tab restructure + shared state (`activePoint`/`selectedModel`/`focusIntent`/`selectedPack`) + connective header (§4.10) + skin tokens (§1C) | none | 0 | 4 tabs navigate, shared state wired, header persists, tokens applied; builds+runs |
+| **3** | **Cross-section interaction** — scrub + unified readout strip, config sheet (§4.5), route graph (Swift Charts §4.7), landscape focus | none | 1,2 | scrub + "Sounding ›" deep-link + config all work on sim |
+| **4** | **Skew-T pass** — RZSkewT package: overlay-band render, interactivity, side panel (iPhone single / iPad dual); overlays-follow-cross-section (§4.8) | none | 0,2 | Skew-T tab matches web overlays + variable(s); RZSkewT PR merged + version bumped |
+| **5** | **Brief + advisory detail** — digest decomposition + hero/watch/airports (§4.1), advisory ladder (§4.6); **+ the one backend endpoint** (`convective_detail` over REST, reusing `connectors/views.py`) | **yes (small)** | 0,2 | "why it's RED" story renders; endpoint has tests |
+| **6** | **Map tab** — segment metric overlay + altitude slider + legend + waypoint conditions (§4.9) | none | 0,2 | matches web map metrics |
+| **7** | **Flight management** — logbook (future/recent/past), create, native edit + re-briefing confirm (§4.4) | none | 2 | create→briefing; edit→regenerate works |
+
+- **Only backend touch in the whole plan: Phase 5's one small REST endpoint** (afternoon-sized,
+  reuses existing pure functions). Everything else is iOS app + the RZSkewT package.
+- **Most autonomy-friendly:** 0, 1, 6, 7 (testable / web-reference-matchable). **Supervise closest:**
+  2 (re-architects nav). Phase 1 is nav-independent → can run in parallel with 2.
+
+### Tracking — hybrid (doc = design, GitHub = execution)
+
+Don't duplicate the design into issues. **This doc stays the design of record** (the why, the §1E
+splits, parity); **GitHub tracks execution** and references doc §s.
+
+**Created 2026-06-23:** epic `roznet/flyfun-weather#285`; phases #286 (P0) · #287 (P1) · #288 (P2) ·
+#289 (P3) · #290 (P4) · #291 (P5) · #292 (P6) · #293 (P7); RZSkewT package `roznet/rzskewt#1` (↔ #290).
+- **1 epic / tracking issue** ("iOS app modernisation") — links this doc + the phase checklist.
+- **1 issue per phase (0–7)** — scope + DoD + link to the relevant §; task-level **checklists inside**
+  each; promote a checkbox to its own sub-issue only when chunky (RZSkewT package work, Phase-5 endpoint).
+- Project conventions: `Addresses #N` in PR **and** commit (close-on-deploy); `/code-review` per chunk.
