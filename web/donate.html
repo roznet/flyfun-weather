@@ -51,6 +51,25 @@
       min-height: 1.2rem; color: var(--accent, #2563eb); font-size: 0.85rem;
       font-weight: 600; margin-bottom: 0.75rem;
     }
+
+    .details-toggle {
+      margin-top: 0.6rem; padding: 0; background: none; border: none;
+      color: var(--accent, #2563eb); font-size: 0.85rem; font-weight: 600;
+      cursor: pointer; display: inline-flex; align-items: center; gap: 0.35rem;
+    }
+    .details-toggle .chevron { transition: transform 0.15s ease; display: inline-block; }
+    .details-toggle[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+
+    .donation-details { margin-top: 0.6rem; }
+    .donation-list { list-style: none; margin: 0; padding: 0; max-width: 24rem; }
+    .donation-list li {
+      display: flex; justify-content: space-between; gap: 1rem;
+      padding: 0.45rem 0.1rem; border-bottom: 1px solid var(--border);
+      font-size: 0.88rem;
+    }
+    .donation-list li:last-child { border-bottom: none; }
+    .donation-list .d-date { color: var(--text-muted); }
+    .donation-list .d-amount { font-weight: 600; font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
@@ -112,6 +131,15 @@
         <div id="personal-impact" class="impact-card">
           <div class="headline" id="personal-headline">—</div>
           <div class="sub" id="personal-sub"></div>
+        </div>
+        <!-- Expandable per-donation history (date + amount). Hidden until the
+             viewer opens it; populated from DonationMe.donations. -->
+        <button type="button" id="btn-details" class="details-toggle"
+                aria-expanded="false" aria-controls="donation-details" style="display:none;">
+          <span class="chevron" aria-hidden="true">▸</span> Details
+        </button>
+        <div id="donation-details" class="donation-details" hidden>
+          <ul id="donation-list" class="donation-list"></ul>
         </div>
       </div>
 

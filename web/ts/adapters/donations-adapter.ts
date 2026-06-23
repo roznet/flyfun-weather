@@ -48,10 +48,21 @@ export interface PersonalImpact {
   summary: string;
 }
 
+/** One past donation for the contribution-history details list.
+ * `amount`/`currency` are what the donor was charged (the truthful record);
+ * `amount_usd` is the canonical converted value; `date` is ISO-8601. */
+export interface DonationHistoryItem {
+  date: string;
+  amount: number;
+  currency: string;
+  amount_usd: number;
+}
+
 export interface DonationMe {
   total_usd: number;
   impact: DonationImpact;
   personal: PersonalImpact;
+  donations: DonationHistoryItem[];
   fx: FxBlock;
 }
 

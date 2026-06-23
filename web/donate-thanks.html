@@ -7,23 +7,125 @@
   <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
   <link rel="stylesheet" href="/css/style.css">
   <style>
-    .thanks { text-align: center; padding: 3rem 1rem; max-width: 50ch; margin: 0 auto; }
+    .thanks { text-align: center; padding: 3rem 1rem; max-width: 52ch; margin: 0 auto; }
     .thanks h1 { margin-bottom: 0.75rem; }
     .thanks p { color: var(--text-muted); margin-bottom: 1.5rem; }
+
+    .success-banner {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: var(--green-bg); color: var(--green);
+      border-radius: var(--radius); padding: 0.6rem 1rem;
+      font-weight: 600; margin-bottom: 1.25rem;
+    }
+    .success-banner svg { flex: 0 0 auto; }
+
+    /* Opt-in email confirmation block */
+    .email-optin {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1rem 1.25rem; margin: 0 auto 1.5rem; max-width: 46ch;
+      text-align: left;
+    }
+    .email-optin .note { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.85rem; }
+    .btn-email {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+    }
+    .btn-email svg { flex: 0 0 auto; }
+    .email-status { font-size: 0.85rem; margin: 0.75rem 0 0; min-height: 1.1rem; }
+    .email-status.ok { color: var(--green); font-weight: 600; }
+    .email-status.err { color: var(--danger); }
+
+    .actions { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="thanks">
       <h1>Thank you 💙</h1>
+
+      <div class="success-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 6 9 17l-5-5"></path>
+        </svg>
+        Your donation was completed successfully.
+      </div>
+
       <p>
-        Your donation helps keep Flyfun Weather free for every pilot. It's recorded
-        once Stripe confirms the payment — your contribution and its impact will show
-        up on the support page shortly.
+        Your donation helps keep Flyfun Weather free for every pilot. Your
+        contribution and its impact will show up on the support page shortly.
       </p>
-      <a href="/donate.html" class="btn btn-primary">Back to support</a>
-      <a href="/flights.html" class="btn btn-secondary">Go to my flights</a>
+
+      <!-- Opt-in email confirmation. Hidden when there's no session_id to
+           confirm (e.g. the page was opened directly). -->
+      <div class="email-optin" id="email-optin" style="display:none;">
+        <p class="note">
+          We respect your inbox and won't email you by default. If you'd like a
+          confirmation with the date and amount, press the button below.
+        </p>
+        <button type="button" id="btn-email" class="btn btn-secondary btn-email">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+            <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+          </svg>
+          Email me a confirmation
+        </button>
+        <p class="email-status" id="email-status" role="status" aria-live="polite"></p>
+      </div>
+
+      <div class="actions">
+        <a href="/donate.html" class="btn btn-primary">Back to support</a>
+        <a href="/flights.html" class="btn btn-secondary">Go to my flights</a>
+      </div>
     </div>
   </div>
+
+  <script>
+    // Self-contained: this static page has no bundle. The Checkout success URL
+    // carries ?session_id=… (Stripe substitutes {CHECKOUT_SESSION_ID}); we hand
+    // that to POST /api/donations/email-receipt, which reads the session from
+    // Stripe and emails a one-off receipt to the donor's checkout email.
+    (function () {
+      var sessionId = new URLSearchParams(location.search).get('session_id');
+      if (!sessionId) return; // direct visit, nothing to confirm
+
+      var optin = document.getElementById('email-optin');
+      var btn = document.getElementById('btn-email');
+      var status = document.getElementById('email-status');
+      optin.style.display = '';
+
+      btn.addEventListener('click', async function () {
+        btn.disabled = true;
+        var original = btn.innerHTML;
+        btn.textContent = 'Sending…';
+        status.className = 'email-status';
+        status.textContent = '';
+        try {
+          var resp = await fetch('/api/donations/email-receipt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId }),
+          });
+          if (!resp.ok) {
+            var detail = '';
+            try { detail = (await resp.json()).detail || ''; } catch (e) { /* */ }
+            throw new Error(detail || 'Request failed');
+          }
+          var data = await resp.json();
+          // Sent — swap the whole block for a confirmation line.
+          btn.style.display = 'none';
+          document.querySelector('#email-optin .note').style.display = 'none';
+          status.className = 'email-status ok';
+          status.textContent = '✓ Confirmation sent to ' + (data.email || 'your email') + '.';
+        } catch (err) {
+          btn.disabled = false;
+          btn.innerHTML = original;
+          status.className = 'email-status err';
+          status.textContent =
+            'Could not send the email right now. Your donation is safely recorded — please try again later.';
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -177,6 +177,61 @@ function renderPersonal(me: DonationMe): void {
   // Prefer the retrospective personal panel; fall back to program-average impact.
   const phrase = me.personal && !me.personal.empty ? me.personal.summary : me.impact.summary;
   sub.textContent = phrase ? `Your support ${phrase}.` : 'Thank you for your support.';
+  renderDonationHistory(me);
+}
+
+/** Populate the expandable per-donation list (date + charged amount) and wire
+ * its toggle. Amounts show what was actually charged — a truthful record that
+ * doesn't shift when the display currency changes. */
+function renderDonationHistory(me: DonationMe): void {
+  const btn = document.getElementById('btn-details') as HTMLButtonElement | null;
+  const panel = document.getElementById('donation-details');
+  const list = document.getElementById('donation-list');
+  if (!btn || !panel || !list) return;
+
+  const items = me.donations || [];
+  if (items.length === 0) {
+    btn.style.display = 'none';
+    return;
+  }
+  btn.style.display = '';
+
+  list.innerHTML = items
+    .map((d) => {
+      const date = new Date(d.date).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+      return `<li><span class="d-date">${date}</span><span class="d-amount">${formatCharged(
+        d.amount,
+        d.currency,
+      )}</span></li>`;
+    })
+    .join('');
+
+  // Attach the toggle once (renderPersonal re-runs on currency change).
+  if (btn.dataset.wired !== '1') {
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', () => {
+      const open = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', String(!open));
+      panel.hidden = open;
+    });
+  }
+}
+
+/** Format a charged amount in its own currency (not the display fx currency). */
+function formatCharged(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
 }
 
 function initCurrency(): void {

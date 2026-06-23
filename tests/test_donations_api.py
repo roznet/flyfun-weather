@@ -153,7 +153,11 @@ class TestCheckout:
         assert captured["currency"] == "EUR"
         assert captured["service"] == SERVICE
         assert captured["user_id"] == DEV_USER_ID
-        assert captured["success_url"].endswith("/donate-thanks.html")
+        # Logged-in donor → Checkout email is pre-filled from the account.
+        assert captured["customer_email"] == "dev@localhost"
+        # Success URL carries the Stripe session-id template so the thank-you
+        # page can offer an opt-in email receipt.
+        assert "/donate-thanks.html?session_id={CHECKOUT_SESSION_ID}" in captured["success_url"]
         assert captured["cancel_url"].endswith("/donate-cancel.html")
 
     def test_anonymous_allowed(self, make_client, monkeypatch):
@@ -168,6 +172,8 @@ class TestCheckout:
         r = client.post("/api/donations/checkout", json={"amount": 10})
         assert r.status_code == 200
         assert captured["user_id"] is None
+        # Anonymous donor → no account email to pre-fill.
+        assert captured["customer_email"] is None
 
     def test_rejects_bad_amount(self, make_client):
         client = make_client()
@@ -201,6 +207,107 @@ class TestCheckout:
         monkeypatch.setattr(donations, "create_checkout_session", _raise)
         r = make_client().post("/api/donations/checkout", json={"amount": 10})
         assert r.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Opt-in email receipt
+# ---------------------------------------------------------------------------
+
+
+def _receipt(payment_status="paid", service=SERVICE, user_id=None,
+             email="donor@example.com", amount=25.0, currency="EUR",
+             created=1_700_000_000):
+    from flyfun_common.payments import CheckoutReceipt
+
+    return CheckoutReceipt(
+        session_id="cs_test_1", service=service, user_id=user_id,
+        payment_status=payment_status, amount=amount, currency=currency,
+        email=email, created=created,
+    )
+
+
+class TestEmailReceipt:
+    def test_prefers_account_email_for_attributed_donation(self, make_client, monkeypatch):
+        # Donation attributed to DEV_USER_ID → goes to the account contact email
+        # (dev@localhost from the fixture), NOT the Checkout email.
+        captured = {}
+
+        monkeypatch.setattr(donations, "retrieve_checkout_receipt",
+                            lambda sid: _receipt(user_id=DEV_USER_ID,
+                                                 email="typed-at-stripe@example.com"))
+        monkeypatch.setattr(donations, "send_donation_receipt_email",
+                            lambda **kw: captured.update(kw))
+        r = make_client().post("/api/donations/email-receipt",
+                               json={"session_id": "cs_test_1"})
+        assert r.status_code == 200, r.text
+        assert captured["email"] == "dev@localhost"  # account, not the Stripe contact
+        assert r.json()["email"] == "d***@localhost"
+
+    def test_anonymous_falls_back_to_checkout_email(self, make_client, monkeypatch):
+        captured = {}
+
+        monkeypatch.setattr(donations, "retrieve_checkout_receipt",
+                            lambda sid: _receipt(user_id=None, email="donor@example.com"))
+        monkeypatch.setattr(donations, "send_donation_receipt_email",
+                            lambda **kw: captured.update(kw))
+        r = make_client().post("/api/donations/email-receipt",
+                               json={"session_id": "cs_test_1"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["sent"] is True
+        assert body["email"] == "d***@example.com"  # masked, not the raw address
+        assert captured["amount"] == 25.0
+        assert captured["currency"] == "EUR"
+        assert captured["email"] == "donor@example.com"
+        # created → tz-aware UTC datetime
+        assert captured["donated_at"].tzinfo is not None
+
+    def test_rejects_unpaid_session(self, make_client, monkeypatch):
+        monkeypatch.setattr(donations, "retrieve_checkout_receipt",
+                            lambda sid: _receipt(payment_status="unpaid"))
+        monkeypatch.setattr(donations, "send_donation_receipt_email",
+                            lambda **kw: pytest.fail("must not send for unpaid"))
+        r = make_client().post("/api/donations/email-receipt",
+                               json={"session_id": "cs_x"})
+        assert r.status_code == 409
+
+    def test_rejects_other_service(self, make_client, monkeypatch):
+        monkeypatch.setattr(donations, "retrieve_checkout_receipt",
+                            lambda sid: _receipt(service="some-other-app"))
+        monkeypatch.setattr(donations, "send_donation_receipt_email",
+                            lambda **kw: pytest.fail("must not send for other service"))
+        r = make_client().post("/api/donations/email-receipt",
+                               json={"session_id": "cs_x"})
+        assert r.status_code == 404
+
+    def test_rejects_session_without_email(self, make_client, monkeypatch):
+        monkeypatch.setattr(donations, "retrieve_checkout_receipt",
+                            lambda sid: _receipt(email=None))
+        r = make_client().post("/api/donations/email-receipt",
+                               json={"session_id": "cs_x"})
+        assert r.status_code == 422
+
+    def test_stripe_not_configured_returns_503(self, make_client, monkeypatch):
+        from flyfun_common.payments import StripeNotConfigured
+
+        def _raise(sid):
+            raise StripeNotConfigured("no key")
+
+        monkeypatch.setattr(donations, "retrieve_checkout_receipt", _raise)
+        r = make_client().post("/api/donations/email-receipt",
+                               json={"session_id": "cs_x"})
+        assert r.status_code == 503
+
+    def test_send_failure_returns_502(self, make_client, monkeypatch):
+        def _boom(**kw):
+            raise RuntimeError("smtp down")
+
+        monkeypatch.setattr(donations, "retrieve_checkout_receipt",
+                            lambda sid: _receipt())
+        monkeypatch.setattr(donations, "send_donation_receipt_email", _boom)
+        r = make_client().post("/api/donations/email-receipt",
+                               json={"session_id": "cs_x"})
+        assert r.status_code == 502
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +490,20 @@ class TestMe:
         body = make_client().get("/api/donations/me?currency=NOK").json()
         assert body["fx"]["currency"] == "NOK"
         assert body["fx"]["rate"] == pytest.approx(10.0)
+
+    def test_donation_history_newest_first_excludes_refunds(self, make_client, session_factory):
+        _record_donation(session_factory, 10.0, provider_ref="pi_a", year=2025)
+        _record_donation(session_factory, 25.0, provider_ref="pi_b", year=2026)
+        _record_donation(session_factory, 99.0, provider_ref="pi_r",
+                         status="refunded", year=2026)
+        body = make_client().get("/api/donations/me").json()
+        hist = body["donations"]
+        assert len(hist) == 2  # refunded one excluded
+        # newest first
+        assert hist[0]["amount"] == pytest.approx(25.0)
+        assert hist[1]["amount"] == pytest.approx(10.0)
+        assert hist[0]["currency"] == "USD"
+        assert hist[0]["date"].startswith("2026-")
 
 
 class TestSummary:

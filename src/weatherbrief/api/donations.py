@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common import fx
 from flyfun_common.db import current_user_id, get_db, optional_user_id
+from flyfun_common.db.models import UserRow
 from flyfun_common.payments import (
     StripeNotConfigured,
     create_checkout_session,
@@ -34,8 +35,10 @@ from flyfun_common.payments import (
     get_donation,
     get_user_total_usd,
     get_year_total_usd,
+    list_user_donations,
     mark_refunded,
     record_donation,
+    retrieve_checkout_receipt,
     retrieve_net_ratio,
     set_net_usd,
     verify_webhook_event,
@@ -51,6 +54,8 @@ from weatherbrief.api.preferences import (
     usd_fx_block,
 )
 from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow
+from weatherbrief.notify.donation_email import send_donation_receipt_email
+from weatherbrief.privacy import mask_email
 from weatherbrief.impact import (
     ProgramEconomics,
     choose_translation,
@@ -122,7 +127,13 @@ def _redirect_urls(request: Request) -> tuple[str, str]:
     """
     base = os.environ.get("WEATHERBRIEF_BASE_URL") or str(request.base_url)
     base = base.rstrip("/")
-    return f"{base}/donate-thanks.html", f"{base}/donate-cancel.html"
+    # Stripe substitutes the literal {CHECKOUT_SESSION_ID} template in the
+    # success URL with the real session id on redirect, so the thank-you page
+    # can offer an opt-in email receipt (see POST /donations/email-receipt).
+    return (
+        f"{base}/donate-thanks.html?session_id={{CHECKOUT_SESSION_ID}}",
+        f"{base}/donate-cancel.html",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +179,15 @@ def create_checkout(
             detail=f"amount must be between {_MIN_AMOUNT:.0f} and {_MAX_AMOUNT:.0f}",
         )
 
+    # Pre-fill the (mandatory, non-removable) Stripe Checkout email field for
+    # logged-in donors so they don't retype it — and so the Checkout contact
+    # matches their account email.
+    customer_email: str | None = None
+    if viewer_id:
+        user = db.get(UserRow, viewer_id)
+        if user and user.email:
+            customer_email = user.email
+
     success_url, cancel_url = _redirect_urls(request)
     try:
         session = create_checkout_session(
@@ -178,6 +198,7 @@ def create_checkout(
             cancel_url=cancel_url,
             service=SERVICE,
             user_id=viewer_id,
+            customer_email=customer_email,
             product_name="Donation to FlyFun Weather",
         )
     except StripeNotConfigured:
@@ -319,6 +340,84 @@ def _handle_charge_refunded(db: Session, charge: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Opt-in email receipt (post-donation thank-you page)
+# ---------------------------------------------------------------------------
+
+
+class EmailReceiptRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=255)
+
+
+class EmailReceiptResponse(BaseModel):
+    sent: bool
+    email: str  # masked, for a "sent to j***@example.com" confirmation
+
+
+@router.post("/email-receipt", response_model=EmailReceiptResponse)
+def send_email_receipt(
+    body: EmailReceiptRequest, db: Session = Depends(get_db)
+) -> EmailReceiptResponse:
+    """Send an opt-in confirmation email for a just-completed donation.
+
+    We don't email donors by default (respect-your-inbox). The thank-you page
+    surfaces a single button that calls this with the Checkout ``session_id``
+    from the redirect. We read the session straight from Stripe — not the local
+    ledger — so we avoid racing the async webhook, then send a one-off receipt
+    confirming the date and amount.
+
+    The receipt goes to the **account that made the donation** (its contact
+    email), falling back to the address entered at Checkout only for anonymous
+    donors. Either way the recipient is derived from the donation itself, so a
+    forged ``session_id`` can't be used to spam an arbitrary inbox.
+    """
+    try:
+        receipt = retrieve_checkout_receipt(body.session_id)
+    except StripeNotConfigured:
+        raise HTTPException(status_code=503, detail="Donations are not configured")
+    except Exception:
+        logger.exception("Could not retrieve Checkout session for receipt")
+        raise HTTPException(status_code=502, detail="Could not look up the donation")
+
+    # Only confirm a paid session for this service; never email on an incomplete
+    # or unrelated (another flyfun app's) checkout.
+    if receipt.service and receipt.service != SERVICE:
+        raise HTTPException(status_code=404, detail="Unknown donation")
+    if receipt.payment_status != "paid":
+        raise HTTPException(status_code=409, detail="Donation is not completed yet")
+
+    # Prefer the donor's account contact email (attributed donations); fall back
+    # to the Checkout email for anonymous donors.
+    recipient: str | None = None
+    if receipt.user_id:
+        user = db.get(UserRow, receipt.user_id)
+        if user and user.email:
+            recipient = user.email
+    if not recipient:
+        recipient = receipt.email
+    if not recipient:
+        raise HTTPException(status_code=422, detail="No email is associated with this donation")
+
+    donated_at = (
+        datetime.fromtimestamp(receipt.created, tz=timezone.utc)
+        if receipt.created
+        else datetime.now(timezone.utc)
+    )
+    try:
+        send_donation_receipt_email(
+            email=recipient,
+            amount=receipt.amount,
+            currency=receipt.currency,
+            donated_at=donated_at,
+            base_url=os.environ.get("WEATHERBRIEF_BASE_URL", ""),
+        )
+    except Exception:
+        logger.exception("Failed to send donation receipt email")
+        raise HTTPException(status_code=502, detail="Could not send the confirmation email")
+
+    return EmailReceiptResponse(sent=True, email=mask_email(recipient))
+
+
+# ---------------------------------------------------------------------------
 # Read: viewer impact + public community summary
 # ---------------------------------------------------------------------------
 
@@ -363,10 +462,25 @@ class PersonalImpactResponse(BaseModel):
     summary: str
 
 
+class DonationHistoryItem(BaseModel):
+    """One past donation for the contribution-history details list.
+
+    ``amount``/``currency`` are what the donor was actually charged (the truthful
+    record); ``amount_usd`` is the canonical converted value. ``date`` is the
+    ISO-8601 timestamp the donation was recorded.
+    """
+
+    date: str
+    amount: float
+    currency: str
+    amount_usd: float
+
+
 class DonationMeResponse(BaseModel):
     total_usd: float
     impact: DonationImpactResponse
     personal: PersonalImpactResponse
+    donations: list[DonationHistoryItem]
     fx: FxBlock
 
 
@@ -393,11 +507,22 @@ def get_my_donations(
     site_covered = _site_covered(year_total, econ, now=now)
     personal = personal_impact(total, _lifetime, burn_rate, econ, site_covered=site_covered)
 
+    history = [
+        DonationHistoryItem(
+            date=row.created_at.isoformat(),
+            amount=round(row.amount, 2),
+            currency=row.currency,
+            amount_usd=round(row.amount_usd, 2),
+        )
+        for row in list_user_donations(db, viewer_id, service=SERVICE)
+    ]
+
     fx_block = fx_block_for_currency(currency) if currency else fx_block_for_user(db, viewer_id)
     return DonationMeResponse(
         total_usd=round(total, 2),
         impact=impact_to_dict(impact),
         personal=personal_to_dict(personal),
+        donations=history,
         fx=fx_block,
     )
 
