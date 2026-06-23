@@ -197,17 +197,26 @@ class DDvsNWPAgreementEvaluator:
                     if overlap < cloud_overlap_min:
                         disagreements.append("clouds")
 
-                # Convective risk category
+                # Convective risk category. The NWP track is now model-native
+                # (#283), so its risk level is a genuinely independent derivation
+                # from the DD (parcel-CAPE) track — this comparison is meaningful.
+                # Skip the CAPE-fallback path (``nwp_cape_fallback``): it is
+                # CAPE-derived like DD, so comparing the two would be circular.
                 dd_conv = sounding.convective_thermo
                 nwp_conv = sounding.convective_nwp
-                if dd_conv is not None and nwp_conv is not None:
+                conv_comparable = (
+                    dd_conv is not None
+                    and nwp_conv is not None
+                    and nwp_conv.method != "nwp_cape_fallback"
+                )
+                if conv_comparable:
                     if _risk_distance(dd_conv.risk_level, nwp_conv.risk_level) >= 2:
                         disagreements.append("convective")
 
                 # Only count points where at least one comparison was possible
                 if (dd_fz is None and nwp_fz is None
                         and not has_native_nwp
-                        and (dd_conv is None or nwp_conv is None)):
+                        and not conv_comparable):
                     continue
 
                 total += 1
