@@ -1244,6 +1244,34 @@ def decode_icon_eu_cloud_diag_per_point(
 _M_TO_FT = 3.28084
 
 
+def _opt_float(raw: dict[str, float], key: str) -> float | None:
+    """Pass a raw GRIB value through as a float, or None when absent.
+
+    Shared by the ICON-EU and ECMWF cloud-diagnostic builders for fields that
+    need no unit conversion (J/kg, °C). (#283)
+    """
+    val = raw.get(key)
+    return float(val) if val is not None else None
+
+
+def _k_index_to_c(raw: dict[str, float], key: str) -> float | None:
+    """K-index normalized to °C.
+
+    ECMWF GRIB2 delivers ``kx`` in Kelvin: the K-index formula
+    (T₈₅₀+Td₈₅₀+Td₇₀₀ − T₅₀₀ − T₇₀₀) has 3 positive and 2 negative temperature
+    terms, so a Kelvin computation carries a +273.15 offset. A real K-index in °C
+    never exceeds ~45, while a Kelvin one is always >100 — so a value above 100 is
+    unambiguously Kelvin and is converted. This is robust whether the source emits
+    K or °C (Total Totals is immune: its 2 positive / 2 negative terms cancel the
+    offset). (#283 review)
+    """
+    val = raw.get(key)
+    if val is None:
+        return None
+    val = float(val)
+    return val - 273.15 if val > 100.0 else val
+
+
 def build_icon_cloud_diagnostics(
     raw: dict[str, float],
 ) -> "NWPCloudDiagnostics | None":
@@ -1274,10 +1302,6 @@ def build_icon_cloud_diagnostics(
     def _pct(key: str) -> float | None:
         return raw.get(key)
 
-    def _num(key: str) -> float | None:
-        val = raw.get(key)
-        return float(val) if val is not None else None
-
     ceiling_ft = _m_to_ft("ceiling_m")
     convective_base_ft = _m_to_ft("convective_cloud_base_m")
     convective_top_ft = _m_to_ft("convective_cloud_top_m")
@@ -1285,8 +1309,8 @@ def build_icon_cloud_diagnostics(
     mid_cover = _pct("mid_cover_pct")
     high_cover = _pct("high_cover_pct")
     total_cover = _pct("total_cover_pct")
-    ml_cape = _num("ml_cape_jkg")  # instantaneous (#283)
-    ml_cin = _num("ml_cin_jkg")    # instantaneous (#283)
+    ml_cape = _opt_float(raw, "ml_cape_jkg")  # instantaneous (#283)
+    ml_cin = _opt_float(raw, "ml_cin_jkg")    # instantaneous (#283)
 
     # Only create diagnostics if at least one field is populated
     has_any = (
@@ -1654,10 +1678,6 @@ def build_ecmwf_cloud_diagnostics(
             return None
         return round(val * 100.0, 1)
 
-    def _raw(key: str) -> float | None:
-        val = raw.get(key)
-        return float(val) if val is not None else None
-
     ceiling_ft = _m_to_ft("ceiling_m")
     cloud_base_ft = _m_to_ft("cloud_base_height_m")
     convective_top_ft = _m_to_ft("convective_cloud_top_m")
@@ -1669,10 +1689,11 @@ def build_ecmwf_cloud_diagnostics(
     # Native stability indices (instantaneous — surfaced directly). Convective
     # precip (cp) is accumulated since init, so its per-hour rate is computed by
     # step-difference in the ECMWF merge loop, not here. (#283 Phase 2)
-    k_index = _raw("k_index_c")
-    total_totals = _raw("total_totals_c")
-    ml_cape = _raw("ml_cape_jkg")
-    ml_cin = _raw("ml_cin_jkg")
+    # kx arrives in Kelvin → normalized to °C (Total Totals is offset-immune).
+    k_index = _k_index_to_c(raw, "k_index_c")
+    total_totals = _opt_float(raw, "total_totals_c")
+    ml_cape = _opt_float(raw, "ml_cape_jkg")
+    ml_cin = _opt_float(raw, "ml_cin_jkg")
 
     has_any = (
         ceiling_ft is not None

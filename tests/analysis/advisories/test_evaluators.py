@@ -223,6 +223,60 @@ class TestConvective:
         res = ConvectiveEvaluator.evaluate(_ctx(nwp_quiet), params)
         assert res.aggregate_status == AdvisoryStatus.GREEN
 
+    def test_dd_floor_altitude_filter_uses_deeper_top(self):
+        """Regression (#283 review): when the DD floor applies and the NWP top is
+        non-None but shallow, the below-cruise filter uses the deeper DD EL — a
+        shallow NWP top must not filter out a point graded HIGH by a deep DD EL."""
+        from datetime import datetime
+
+        from weatherbrief.models import (
+            ConvectiveAssessment,
+            ConvectiveRisk,
+            RoutePointAnalysis,
+            SoundingAnalysis,
+            ThermodynamicIndices,
+        )
+
+        # NWP MODERATE, shallow top FL150; DD HIGH, EL FL350. Cruise FL300 sits
+        # above the NWP top but below the DD EL → the HIGH grade reaches cruise.
+        nwp_shallow = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.MODERATE, top_ft=15000.0, method="nwp",
+        )
+        thermo = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.HIGH, cape_jkg=1500.0,
+            top_ft=35000.0, method="thermo",
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0 + i * 0.5, lon=2.0 + i * 0.5,
+                distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0),
+                track_deg=135.0,
+                sounding={
+                    "gfs": SoundingAnalysis(
+                        indices=ThermodynamicIndices(),
+                        convective=nwp_shallow,
+                        convective_thermo=thermo,
+                        convective_nwp=nwp_shallow,
+                    )
+                },
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None,
+            models=["gfs"], cruise_altitude_ft=30000,
+            flight_ceiling_ft=41000, total_distance_nm=200,
+        )
+        params = {
+            "min_risk": 2, "affected_pct_amber": 20,
+            "affected_pct_red": 50, "top_clearance_ft": 2000,
+        }
+        res = ConvectiveEvaluator.evaluate(ctx, params)
+        # DD EL FL350 reaches FL300 cruise → not filtered → HIGH → RED.
+        assert res.aggregate_status == AdvisoryStatus.RED
+
 
 class TestCloudTop:
     def test_green_no_clouds(self, clear_context: RouteContext):

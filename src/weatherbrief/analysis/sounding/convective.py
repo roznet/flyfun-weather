@@ -619,16 +619,18 @@ def _convection_realized_nwp(diag: NWPCloudDiagnostics) -> bool:
 
 def _apply_firing_gate(
     risk: ConvectiveRisk, diag: NWPCloudDiagnostics
-) -> tuple[ConvectiveRisk, str | None]:
+) -> tuple[ConvectiveRisk, str | None, bool]:
     """Gate a MODERATE+ tower on realized convection, then corroborate (#283).
 
-    Returns the adjusted risk and an optional driver/suppressor note. The gate
-    only acts on MODERATE+ (a shallow tower is already low); corroboration only
-    acts on a *realized* cell (strong instability confirms severity, it does not
-    create a cell from nothing).
+    Returns ``(risk, note, is_driver)``: the adjusted risk, an optional note, and
+    whether that note is a *driver* (corroboration, True) or *suppressor* (gate
+    hold-down, False) — so the caller routes it without matching on wording. The
+    gate only acts on MODERATE+ (a shallow tower is already low); corroboration
+    only acts on a *realized* cell (strong instability confirms severity, it does
+    not create a cell from nothing).
     """
     if _RISK_LEVELS.index(risk) < _RISK_LEVELS.index(ConvectiveRisk.MODERATE):
-        return risk, None
+        return risk, None, False
 
     precip = diag.convective_precip_mm_h
     cover = diag.convective_cover_pct
@@ -644,8 +646,8 @@ def _apply_firing_gate(
             return _down_one(risk), (
                 "Deep tower but the model's convective scheme is dry here "
                 "(no convective precip / cover) — held down one level"
-            )
-        return risk, None
+            ), False
+        return risk, None, False
 
     # Realized cell — strong native instability corroborates one level up.
     corroborators: list[str] = []
@@ -662,8 +664,8 @@ def _apply_firing_gate(
             "Model-native severity corroborated ("
             + ", ".join(corroborators)
             + ")"
-        )
-    return risk, None
+        ), True
+    return risk, None, False
 
 
 def _has_native_cloud_content(diag: NWPCloudDiagnostics) -> bool:
@@ -781,9 +783,9 @@ def assess_convective_nwp(
     # tower down one level, or bump a realized cell up on strong native indices.
     drivers: list[str] = []
     suppressors: list[str] = []
-    risk, gate_note = _apply_firing_gate(risk, nwp_diagnostics)
+    risk, gate_note, gate_is_driver = _apply_firing_gate(risk, nwp_diagnostics)
     if gate_note is not None:
-        (drivers if "corroborated" in gate_note else suppressors).append(gate_note)
+        (drivers if gate_is_driver else suppressors).append(gate_note)
 
     # Keep the strong-CIN suppression (#283: partially handles a capped tower the
     # scheme reports but won't realize; CIN < -200 → one level down). Prefer the
