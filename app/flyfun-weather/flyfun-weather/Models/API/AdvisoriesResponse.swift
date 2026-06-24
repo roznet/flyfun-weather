@@ -31,6 +31,10 @@ struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
     let affectedPct: Double
     let affectedNm: Double
     let totalNm: Double
+    /// Display-only context explaining a grade (e.g. high CAPE while NWP scheme is
+    /// quiet). Present mainly for convective; nil otherwise. Per `CROSS_CHECK_NOTE`
+    /// this is an EXPLAINER, never an alert — render in neutral chrome, never amber/red.
+    let crossCheck: String?
 
     var id: String { model }
 }
