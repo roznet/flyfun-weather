@@ -1446,3 +1446,25 @@ def test_character_numerosity_nudge_clamps_at_widespread():
     pts = _pts(10, conv=8, realized=6, tt=60)
     # already widespread; nudge clamps (no organize signal) → widespread.
     assert classify_convective_character(pts) is ConvectiveCharacter.WIDESPREAD
+
+
+def test_character_k_nudge_plus_forcing_organizes_scattered():
+    # Scattered realized coverage (30%), very high K (numerous-storm
+    # environment), front present. The K nudge lifts SCATTERED → WIDESPREAD,
+    # then forcing relabels WIDESPREAD → ORGANIZED. This is INTENTIONAL
+    # (MCS-initiation: a moist numerous environment along a front), and is the
+    # documented limit of coverage-first protection — only ISOLATED (≤15%) is
+    # guaranteed safe, because the one-step nudge can lift it no higher than
+    # SCATTERED, which never reaches the widespread-only forcing gate.
+    pts = _pts(10, conv=5, realized=3, k=45)
+    assert (
+        classify_convective_character(pts, front_present=True)
+        is ConvectiveCharacter.ORGANIZED
+    )
+    # Contrast: the same K nudge + forcing on ISOLATED (10%) cannot organize —
+    # nudge lifts it only to SCATTERED, below the widespread forcing gate.
+    iso = _pts(20, conv=4, realized=2, k=45)
+    assert (
+        classify_convective_character(iso, front_present=True)
+        is ConvectiveCharacter.SCATTERED
+    )

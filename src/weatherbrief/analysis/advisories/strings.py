@@ -86,7 +86,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "convective_character.isolated": {
         "en": "Isolated cells — circumnavigable VFR with see-and-avoid, expect possible diversions",
-        "fr": "Cellules isolées — contournables en VFR à vue, dérouttements possibles",
+        "fr": "Cellules isolées — contournables en VFR à vue, déroutements possibles",
         "de": "Isolierte Zellen — VFR umfliegbar mit Sicht, mögliche Ausweichmanöver",
         "es": "Células aisladas — sorteables en VFR con ver-y-evitar, posibles desvíos",
     },
