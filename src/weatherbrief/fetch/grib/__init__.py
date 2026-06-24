@@ -2153,15 +2153,24 @@ def _enrich_ecmwf_inner(
                     if _dh > 0:
                         cp_window_h = _dh
                 if cp_window_h is not None:
+                    # diagnostics, sfc_data and prev_cp_per_point are all sized to
+                    # n_points (route_points), so index alignment is guaranteed —
+                    # the real per-point guard is the cov/raw/diag_i check below.
                     for i, (raw, cov) in enumerate(zip(sfc_data, sfc_covered)):
-                        diag_i = diagnostics[i] if i < len(diagnostics) else None
+                        diag_i = diagnostics[i]
                         if not cov or not raw or diag_i is None:
                             continue
                         cp = raw.get("conv_precip_m")
-                        pcp = prev_cp_per_point[i] if i < len(prev_cp_per_point) else None
+                        pcp = prev_cp_per_point[i]
                         if cp is not None and pcp is not None:
-                            diag_i.convective_precip_mm_h = (
-                                max(0.0, (cp - pcp) / cp_window_h) * 1000.0
+                            # Reconstruct rather than mutate in place so the
+                            # immutability contract of NWPCloudDiagnostics holds
+                            # even if it is ever frozen (review #284).
+                            diagnostics[i] = diag_i.model_copy(
+                                update={
+                                    "convective_precip_mm_h":
+                                        max(0.0, (cp - pcp) / cp_window_h) * 1000.0
+                                }
                             )
                 _apply_cloud_diagnostics_to_sections(
                     ecmwf_sections, all_forecasts, route_points,

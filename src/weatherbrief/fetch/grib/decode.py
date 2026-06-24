@@ -1264,6 +1264,11 @@ def _k_index_to_c(raw: dict[str, float], key: str) -> float | None:
     unambiguously Kelvin and is converted. This is robust whether the source emits
     K or °C (Total Totals is immune: its 2 positive / 2 negative terms cancel the
     offset). (#283 review)
+
+    Source unit reference: ECMWF GRIB2 parameter ``kx`` (paramId 260121,
+    "K index") is documented in Kelvin in the ECMWF parameter database
+    (https://codes.ecmwf.int/grib/param-db/260121). If that encoding ever
+    changes, re-verify here rather than relying solely on the >100 heuristic.
     """
     val = raw.get(key)
     if val is None:
