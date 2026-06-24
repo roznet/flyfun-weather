@@ -187,13 +187,19 @@ class ConvectiveEvaluator:
                 # filter and fires the advisory for convection that tops out below
                 # cruise (#283 review I1). Pre-#283 this point used the thermo EL
                 # because a quiet NWP returned None and the slot fell back to DD.
+                # When the DD floor raised the grade, the DD tower (EL) is what
+                # justifies it — so use the deeper of the active and thermo tops
+                # for altitude awareness. This covers both a missing NWP top
+                # (top_ft=None) and a shallow NWP top below the DD EL (#283
+                # review): otherwise a quiet/shallow NWP top would filter out a
+                # point graded HIGH by a DD tower that does reach cruise.
                 check_top_ft = conv.top_ft
-                if (
-                    check_top_ft is None
-                    and thermo_conv is not None
-                    and graded_risk != conv.risk_level
-                ):
-                    check_top_ft = thermo_conv.top_ft
+                if thermo_conv is not None and graded_risk != conv.risk_level:
+                    thermo_top = thermo_conv.top_ft
+                    if check_top_ft is None or (
+                        thermo_top is not None and thermo_top > check_top_ft
+                    ):
+                        check_top_ft = thermo_top
                 if (
                     check_top_ft is not None
                     and check_top_ft + top_clearance_ft <= cruise_ft

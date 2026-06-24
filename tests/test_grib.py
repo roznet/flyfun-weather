@@ -1081,6 +1081,30 @@ class TestBuildIconCloudDiagnostics:
         assert diag.ml_cape_jkg == 1200.0
         assert diag.ml_cin_jkg == -45.0
 
+    def test_ecmwf_k_index_kelvin_normalized(self):
+        """ECMWF kx arrives in Kelvin → normalized to °C (#283 review).
+
+        A Kelvin K-index (always >100) is converted; a °C one (never >100) is
+        passed through unchanged, so the corroboration threshold compares like
+        with like regardless of the source unit.
+        """
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        # Kelvin: 35 °C K-index encoded as 35 + 273.15 = 308.15.
+        kelvin = build_ecmwf_cloud_diagnostics({"k_index_c": 308.15})
+        assert kelvin is not None
+        assert abs(kelvin.k_index - 35.0) < 0.01
+
+        # Already °C: passed through unchanged.
+        celsius = build_ecmwf_cloud_diagnostics({"k_index_c": 35.0})
+        assert celsius is not None
+        assert celsius.k_index == 35.0
+
+        # Total Totals is offset-immune — never normalized.
+        tt = build_ecmwf_cloud_diagnostics({"total_totals_c": 52.0})
+        assert tt is not None
+        assert tt.total_totals == 52.0
+
     def test_cloud_cover_percentages(self):
         """CLCL/CLCM/CLCH/CLCT cloud cover percentages stored correctly."""
         from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
