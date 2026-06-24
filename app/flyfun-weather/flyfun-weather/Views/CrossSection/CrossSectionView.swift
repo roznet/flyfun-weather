@@ -8,7 +8,6 @@ struct CrossSectionView: View {
     let viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
     @State private var csVM = CrossSectionViewModel()
-    @State private var selectedPointIndex: Int?
     @State private var canvasSize: CGSize = .zero
 
     var body: some View {
@@ -20,16 +19,12 @@ struct CrossSectionView: View {
                 // Cross-section canvas
                 crossSectionCanvas
 
+                if let activePoint = viewModel.activePoint {
+                    CrossSectionActivePointBar(viewModel: viewModel, activePoint: activePoint)
+                }
+
                 // Route graph below
                 RouteGraphView(viewModel: viewModel, vizData: csVM.vizData)
-
-                // Skew-T detail for selected point
-                if let pointIndex = selectedPointIndex {
-                    Divider()
-                    SkewTDetailView(viewModel: viewModel, pointIndex: pointIndex)
-                        .frame(minHeight: 300)
-                        .transition(.move(edge: .bottom))
-                }
             }
         }
         .onChange(of: viewModel.selectedModel) {
@@ -188,11 +183,7 @@ struct CrossSectionView: View {
 
     /// Distance along route for the selected point, used to draw the vertical indicator.
     private var selectedDistanceNm: Double? {
-        guard let idx = selectedPointIndex,
-              case .loaded(let analyses) = viewModel.routeAnalysesState,
-              let rpa = analyses.analyses.first(where: { $0.pointIndex == idx })
-        else { return nil }
-        return rpa.distanceFromOriginNm
+        viewModel.activePoint?.distanceNm
     }
 
     // MARK: - Tap handling
@@ -221,12 +212,8 @@ struct CrossSectionView: View {
                 abs($1.distanceFromOriginNm - vizData.points[nearest.offset].distanceNm)
             })
             if let routePoint {
-                withAnimation {
-                    if selectedPointIndex == routePoint.pointIndex {
-                        selectedPointIndex = nil // toggle off
-                    } else {
-                        selectedPointIndex = routePoint.pointIndex
-                    }
+                withAnimation(.snappy) {
+                    viewModel.setActivePoint(routePoint)
                 }
                 logger.info("Tapped point \(routePoint.pointIndex) at \(routePoint.distanceFromOriginNm)nm")
             }
@@ -254,5 +241,48 @@ struct CrossSectionView: View {
                 logger.warning("vizData is nil after update")
             }
         }
+    }
+}
+
+private struct CrossSectionActivePointBar: View {
+    let viewModel: BriefingViewModel
+    let activePoint: BriefingActivePoint
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: WeatherTheme.Spacing.sm) {
+            Label(pointLabel, systemImage: "scope")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                .lineLimit(1)
+
+            Spacer()
+
+            Button {
+                viewModel.setFocusIntent(.init(
+                    target: .skewT,
+                    model: viewModel.selectedModel,
+                    pointIndex: activePoint.pointIndex,
+                    distanceNm: activePoint.distanceNm
+                ))
+            } label: {
+                Label("Sounding", systemImage: "chart.line.uptrend.xyaxis")
+                    .font(.caption.bold())
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, WeatherTheme.Spacing.lg)
+        .padding(.vertical, WeatherTheme.Spacing.sm)
+        .background(WeatherTheme.surface(colorScheme))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(WeatherTheme.border(colorScheme))
+                .frame(height: 0.5)
+        }
+    }
+
+    private var pointLabel: String {
+        let name = activePoint.waypointIcao ?? "Point \(activePoint.pointIndex)"
+        return "\(name) · \(Int(activePoint.distanceNm)) nm · \(viewModel.selectedModel.uppercased())"
     }
 }

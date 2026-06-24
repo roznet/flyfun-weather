@@ -26,6 +26,7 @@ struct RouteMapView: View {
                 let aircraftLocation = trackingService.currentLocation
                 let aircraftOpacity = trackingService.projectedPosition?.opacity ?? 0.3
                 let aircraftHeading = trackingService.projectedPosition?.headingDeg ?? 0
+                let activeRoutePoint = viewModel.routePoint(for: viewModel.activePoint)
                 Map(initialPosition: .region(mapVM.mapRegion)) {
                     MapPolyline(coordinates: mapVM.routeCoordinates)
                         .stroke(.blue, lineWidth: 3)
@@ -43,6 +44,19 @@ struct RouteMapView: View {
                                     .frame(width: 8, height: 8)
                             }
                         }
+                    }
+
+                    if let activeRoutePoint {
+                        Annotation("", coordinate: .init(latitude: activeRoutePoint.lat, longitude: activeRoutePoint.lon), anchor: .center) {
+                            ZStack {
+                                Circle()
+                                    .fill(.orange.opacity(0.20))
+                                Circle()
+                                    .stroke(.orange, lineWidth: 3)
+                            }
+                                .frame(width: 22, height: 22)
+                        }
+                        .annotationTitles(.hidden)
                     }
 
                     // Live aircraft position — drawn last so it renders on top

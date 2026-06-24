@@ -5,6 +5,7 @@ import SwiftUI
 struct BriefingContainerView: View {
     let flight: FlightResponse
     @Environment(AppState.self) private var appState
+    @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: BriefingViewModel?
     @State private var trackingService = FlightTrackingService()
     @State private var showingPirepSheet = false
@@ -22,36 +23,27 @@ struct BriefingContainerView: View {
         Group {
             if let viewModel {
                 VStack(spacing: 0) {
+                    BriefingHeaderView(
+                        viewModel: viewModel,
+                        trackingService: trackingService,
+                        isInFlightWindow: isInFlightWindow,
+                        canPublishPirep: appState.userPreferences.preferences.pirepCanPublish,
+                        reportPirep: { showingPirepSheet = true },
+                        startTracking: startTracking
+                    )
                     RefreshBannerView(state: viewModel.refreshState)
                     DownloadBannerView(state: viewModel.downloadState)
                     BriefingContentView(viewModel: viewModel, trackingService: trackingService)
                 }
+                .background(WeatherTheme.background(colorScheme))
             } else {
                 ProgressView("Loading briefing...")
             }
         }
         .navigationTitle(flight.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if let viewModel {
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        if isInFlightWindow && appState.userPreferences.preferences.pirepCanPublish {
-                            Button {
-                                showingPirepSheet = true
-                            } label: {
-                                Label("Report PIREP", systemImage: "square.and.pencil")
-                                    .font(.caption)
-                            }
-                        }
-                        BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,
-                                            isInFlightWindow: isInFlightWindow, startTracking: startTracking)
-                    }
-                }
-            }
-        }
         .sheet(isPresented: $showingPirepSheet) {
-            if let viewModel, let repo = appState.repository {
+            if let repo = appState.repository {
                 PirepReportingView(viewModel: PirepViewModel(flight: flight, repository: repo,
                                                                       offlineStore: appState.pirepOfflineStore),
                                    trackingService: trackingService)
@@ -87,6 +79,167 @@ struct BriefingContainerView: View {
         }
         let flightEndTime = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
         trackingService.start(routePoints: routePoints, flightEndTime: flightEndTime)
+    }
+}
+
+/// Persistent briefing chrome shared by all briefing tabs.
+private struct BriefingHeaderView: View {
+    @Bindable var viewModel: BriefingViewModel
+    var trackingService: FlightTrackingService
+    var isInFlightWindow: Bool
+    var canPublishPirep: Bool
+    var reportPirep: () -> Void
+    var startTracking: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WeatherTheme.Spacing.sm) {
+            HStack(alignment: .firstTextBaseline, spacing: WeatherTheme.Spacing.md) {
+                VStack(alignment: .leading, spacing: WeatherTheme.Spacing.xs) {
+                    Text(viewModel.flight.shortTitle)
+                        .font(.headline)
+                        .foregroundStyle(WeatherTheme.text(colorScheme))
+                        .lineLimit(1)
+                    Text(flightDetails)
+                        .font(.caption)
+                        .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: WeatherTheme.Spacing.sm)
+
+                if let assessment = viewModel.pack?.assessment {
+                    AssessmentStringBadge(status: assessment)
+                }
+            }
+
+            HStack(spacing: WeatherTheme.Spacing.sm) {
+                BriefingToolbarView(
+                    viewModel: viewModel,
+                    trackingService: trackingService,
+                    isInFlightWindow: isInFlightWindow,
+                    startTracking: startTracking
+                )
+
+                if isInFlightWindow && canPublishPirep {
+                    Button(action: reportPirep) {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .accessibilityLabel("Report PIREP")
+                }
+            }
+
+            HStack(spacing: WeatherTheme.Spacing.sm) {
+                statusPill(freshnessText, systemImage: freshnessIcon)
+                statusPill(cacheText, systemImage: cacheIcon)
+                if let activePointText {
+                    statusPill(activePointText, systemImage: "scope")
+                }
+            }
+
+            if let modelSummary {
+                Text(modelSummary)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, WeatherTheme.Spacing.lg)
+        .padding(.vertical, WeatherTheme.Spacing.md)
+        .background(WeatherTheme.surface(colorScheme))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(WeatherTheme.border(colorScheme))
+                .frame(height: 0.5)
+        }
+    }
+
+    private func statusPill(_ text: String, systemImage: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption2)
+            .lineLimit(1)
+            .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+            .padding(.horizontal, WeatherTheme.Spacing.sm)
+            .padding(.vertical, WeatherTheme.Spacing.xs)
+            .background(WeatherTheme.background(colorScheme), in: RoundedRectangle(cornerRadius: WeatherTheme.Radius.control))
+            .overlay {
+                RoundedRectangle(cornerRadius: WeatherTheme.Radius.control)
+                    .stroke(WeatherTheme.border(colorScheme), lineWidth: 0.5)
+            }
+    }
+
+    private var flightDetails: String {
+        var parts: [String] = []
+        if let date = viewModel.flight.departureDate {
+            parts.append("\(DateFormatter.shortDate.string(from: date)) \(DateFormatter.utcTime.string(from: date))")
+        }
+        parts.append("FL\(viewModel.flight.cruiseAltitudeFt / 100)")
+        parts.append(String(format: "%.1fh", viewModel.flight.flightDurationHours))
+        return parts.joined(separator: " · ")
+    }
+
+    private var freshnessText: String {
+        guard let status = viewModel.pack?.dataStatus else { return "Freshness pending" }
+        if status.fresh { return "Fresh" }
+        if status.staleModels.isEmpty { return "Stale data" }
+        let models = status.staleModels.map(\.shortModelName).joined(separator: "/")
+        return "Stale \(models)"
+    }
+
+    private var freshnessIcon: String {
+        if viewModel.pack?.dataStatus?.fresh == true { return "checkmark.seal" }
+        return "clock.badge.exclamationmark"
+    }
+
+    private var cacheText: String {
+        switch viewModel.downloadState {
+        case .downloaded:
+            return "Downloaded"
+        case .downloading:
+            return "Downloading"
+        case .error:
+            return "Download issue"
+        case .notDownloaded:
+            return "Online pack"
+        }
+    }
+
+    private var cacheIcon: String {
+        switch viewModel.downloadState {
+        case .downloaded:
+            return "arrow.down.circle.fill"
+        case .downloading:
+            return "arrow.down.circle"
+        case .error:
+            return "exclamationmark.arrow.circlepath"
+        case .notDownloaded:
+            return "wifi"
+        }
+    }
+
+    private var activePointText: String? {
+        guard let activePoint = viewModel.activePoint else { return nil }
+        let point = activePoint.waypointIcao ?? "Pt \(activePoint.pointIndex)"
+        return "\(point) · \(Int(activePoint.distanceNm)) nm"
+    }
+
+    private var modelSummary: String? {
+        guard let pack = viewModel.pack else { return nil }
+        if pack.modelInitTimes.isEmpty {
+            return viewModel.availableModels.isEmpty ? nil : "\(viewModel.availableModels.count) models available"
+        }
+        let summary = pack.modelInitTimes
+            .sorted { $0.key < $1.key }
+            .prefix(3)
+            .map { "\($0.key.shortModelName) \(formatModelInit($0.value))" }
+            .joined(separator: " · ")
+        let overflow = pack.modelInitTimes.count > 3 ? " · +\(pack.modelInitTimes.count - 3)" : ""
+        return summary + overflow
+    }
+
+    private func formatModelInit(_ value: Int) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(value))
+        return DateFormatter.utcTime.string(from: date)
     }
 }
 
@@ -336,32 +489,23 @@ private struct DownloadBannerView: View {
 private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
-    @Environment(AppState.self) private var appState
 
     var body: some View {
         TabView(selection: $viewModel.selectedTab) {
-            Tab("Advisories", systemImage: "exclamationmark.shield", value: BriefingTab.advisories) {
-                AdvisoryDashboardView(viewModel: viewModel)
+            Tab("Brief", systemImage: "doc.text.magnifyingglass", value: BriefingTab.brief) {
+                BriefTabView(viewModel: viewModel)
             }
 
             Tab("Cross-Section", systemImage: "chart.xyaxis.line", value: BriefingTab.crossSection) {
                 CrossSectionView(viewModel: viewModel, trackingService: trackingService)
             }
 
+            Tab("Skew-T", systemImage: "chart.line.uptrend.xyaxis", value: BriefingTab.skewT) {
+                SkewTTabView(viewModel: viewModel)
+            }
+
             Tab("Map", systemImage: "map", value: BriefingTab.map) {
                 RouteMapView(viewModel: viewModel, trackingService: trackingService)
-            }
-
-            Tab("Digest", systemImage: "doc.text", value: BriefingTab.digest) {
-                DigestView(viewModel: viewModel)
-            }
-
-            if appState.userPreferences.preferences.pirepCanView {
-                Tab("PIREPs", systemImage: "cloud.sun", value: BriefingTab.pireps) {
-                    PirepListView(pirepsState: viewModel.pirepsState) {
-                        await viewModel.loadPireps()
-                    }
-                }
             }
         }
     }

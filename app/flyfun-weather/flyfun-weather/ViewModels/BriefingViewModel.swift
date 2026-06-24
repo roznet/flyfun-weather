@@ -2,11 +2,50 @@ import Foundation
 import OSLog
 
 enum BriefingTab: String, Hashable {
-    case advisories
+    case brief
     case crossSection
+    case skewT
     case map
-    case digest
-    case pireps
+}
+
+struct BriefingActivePoint: Hashable, Sendable {
+    let pointIndex: Int
+    let distanceNm: Double
+    let waypointIcao: String?
+}
+
+struct BriefingFocusIntent: Hashable, Sendable {
+    enum Target: String, Hashable, Sendable {
+        case crossSection
+        case skewT
+        case map
+    }
+
+    let target: Target
+    let model: String?
+    let pointIndex: Int?
+    let distanceNm: Double?
+    let altitudeFt: Double?
+    let layerId: String?
+    let metricId: String?
+
+    init(
+        target: Target,
+        model: String? = nil,
+        pointIndex: Int? = nil,
+        distanceNm: Double? = nil,
+        altitudeFt: Double? = nil,
+        layerId: String? = nil,
+        metricId: String? = nil
+    ) {
+        self.target = target
+        self.model = model
+        self.pointIndex = pointIndex
+        self.distanceNm = distanceNm
+        self.altitudeFt = altitudeFt
+        self.layerId = layerId
+        self.metricId = metricId
+    }
 }
 
 /// Refresh pipeline state.
@@ -54,9 +93,12 @@ final class BriefingViewModel {
     private(set) var packCacheStatus: [String: Bool] = [:] // timestamp -> isCached
 
     // UI state
-    var selectedTab: BriefingTab = .advisories
+    var selectedTab: BriefingTab = .brief
     var selectedModel: String = "gfs"
+    var activePoint: BriefingActivePoint?
+    var focusIntent: BriefingFocusIntent?
     var availableModels: [String] = []
+    var selectedPack: PackMetaResponse? { pack }
     var selectedPackTimestamp: String = "" {
         didSet {
             guard oldValue != selectedPackTimestamp, !selectedPackTimestamp.isEmpty else { return }
@@ -361,6 +403,7 @@ final class BriefingViewModel {
         do {
             let response = try await repository.routeAnalyses(flightId: flight.id, timestamp: timestamp)
             routeAnalysesState = .loaded(response)
+            ensureActivePoint(in: response)
             if !response.models.isEmpty {
                 let raModels = response.models.sorted()
                 availableModels = raModels
@@ -373,6 +416,68 @@ final class BriefingViewModel {
             routeAnalysesState = .error(error)
             Self.logger.error("Failed to load route analyses: \(error)")
         }
+    }
+
+    func setActivePoint(_ point: RoutePointAnalysis?) {
+        guard let point else {
+            activePoint = nil
+            return
+        }
+        activePoint = BriefingActivePoint(
+            pointIndex: point.pointIndex,
+            distanceNm: point.distanceFromOriginNm,
+            waypointIcao: point.waypointIcao
+        )
+    }
+
+    func routePoint(for activePoint: BriefingActivePoint?) -> RoutePointAnalysis? {
+        guard let activePoint,
+              case .loaded(let analyses) = routeAnalysesState
+        else { return nil }
+        return analyses.analyses.first { $0.pointIndex == activePoint.pointIndex }
+    }
+
+    func setFocusIntent(_ intent: BriefingFocusIntent?) {
+        focusIntent = intent
+        guard let intent else { return }
+
+        if let model = intent.model,
+           availableModels.contains(model) {
+            selectedModel = model
+        }
+
+        if case .loaded(let analyses) = routeAnalysesState {
+            let targetPoint: RoutePointAnalysis?
+            if let pointIndex = intent.pointIndex {
+                targetPoint = analyses.analyses.first { $0.pointIndex == pointIndex }
+            } else if let distanceNm = intent.distanceNm {
+                targetPoint = analyses.analyses.min {
+                    abs($0.distanceFromOriginNm - distanceNm) < abs($1.distanceFromOriginNm - distanceNm)
+                }
+            } else {
+                targetPoint = nil
+            }
+            if let targetPoint {
+                setActivePoint(targetPoint)
+            }
+        }
+
+        switch intent.target {
+        case .crossSection:
+            selectedTab = .crossSection
+        case .skewT:
+            selectedTab = .skewT
+        case .map:
+            selectedTab = .map
+        }
+    }
+
+    private func ensureActivePoint(in analyses: RouteAnalysesResponse) {
+        if let activePoint,
+           analyses.analyses.contains(where: { $0.pointIndex == activePoint.pointIndex }) {
+            return
+        }
+        setActivePoint(analyses.analyses.first)
     }
 
     private func loadElevation(timestamp: String) async {
