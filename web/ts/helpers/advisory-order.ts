@@ -35,6 +35,7 @@ export const ADVISORY_PRIORITY: string[] = [
   'vmc_cruise',
   'enroute_precip',      // En-route Precipitation (visibility)
   'convective',
+  'convective_character',  // VFR avoidability — sits beside Convective Activity
   'fronts',
   'fiki_icing',
   'icing_escape',
