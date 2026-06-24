@@ -50,7 +50,7 @@ struct AdvisoryDashboardView: View {
             let sorted = response.advisories.sorted { severityOrder($0.aggregateStatus) > severityOrder($1.aggregateStatus) }
             LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 12) {
                 ForEach(sorted) { advisory in
-                    AdvisoryCardView(advisory: advisory, catalog: response.catalog)
+                    AdvisoryCardView(advisory: advisory, catalog: response.catalog, viewModel: viewModel)
                 }
             }
             .padding(.horizontal)
@@ -93,7 +93,10 @@ private struct ModelStatusBadge: View {
 struct AdvisoryCardView: View {
     let advisory: RouteAdvisoryResult
     let catalog: [AdvisoryCatalogEntry]
+    /// Needed for the Rung-3 "why it's RED" detail sheet (§4.6).
+    var viewModel: BriefingViewModel? = nil
     @State private var isExpanded = false
+    @State private var showingDetail = false
 
     private var catalogEntry: AdvisoryCatalogEntry? {
         catalog.first { $0.id == advisory.advisoryId }
@@ -130,6 +133,21 @@ struct AdvisoryCardView: View {
                 }
             }
 
+            // "Why it's RED ›" CTA — only when AMBER/RED (GREEN cards stay calm, §4.6 Rung 1).
+            if viewModel != nil, advisory.aggregateStatus == "amber" || advisory.aggregateStatus == "red" {
+                Button {
+                    showingDetail = true
+                } label: {
+                    HStack(spacing: 2) {
+                        Text("Why it's \(advisory.aggregateStatus.uppercased())")
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            }
+
             // Expanded detail
             if isExpanded {
                 Divider()
@@ -158,5 +176,11 @@ struct AdvisoryCardView: View {
         }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .sheet(isPresented: $showingDetail) {
+            if let viewModel {
+                AdvisoryDetailView(viewModel: viewModel, advisoryId: advisory.advisoryId,
+                                   fallbackName: catalogEntry?.name ?? advisory.advisoryId)
+            }
+        }
     }
 }

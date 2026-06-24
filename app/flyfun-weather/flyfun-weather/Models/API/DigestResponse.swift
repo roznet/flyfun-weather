@@ -31,6 +31,26 @@ struct DigestResponse: Codable, Sendable {
         return result
     }
 
+    /// Hazard narrative sections only (everything EXCEPT the synoptic overview),
+    /// for the Brief's DIGEST block. The synoptic overview is decomposed out and
+    /// rendered LAST as context (§4.1) — the web renders it first; iOS moves it
+    /// deliberately to the bottom.
+    var hazardSections: [(title: String, text: String)] {
+        var result: [(String, String)] = []
+        if let winds { result.append(("Winds", winds)) }
+        if let icing { result.append(("Icing", icing)) }
+        if let turbulence { result.append(("Turbulence", turbulence)) }
+        if let precipitation { result.append(("Precipitation", precipitation)) }
+        if let visibility { result.append(("Visibility", visibility)) }
+        if let trend { result.append(("Trend", trend)) }
+        if let modelAgreement { result.append(("Model Agreement", modelAgreement)) }
+        if let recommendations { result.append(("Recommendations", recommendations)) }
+        return result
+    }
+
+    /// The big-picture synoptic overview, rendered last in the Brief (§4.1).
+    var synopsis: String? { synoptic }
+
     /// Watch items as an array of strings.
     var watchItemsList: [String] {
         watchItems?.values ?? []

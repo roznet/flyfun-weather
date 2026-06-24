@@ -24,6 +24,11 @@ from flyfun_common.auth import is_dev_mode
 from weatherbrief.api.security import audit_pack_access
 from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.privacy import mask_email
+from weatherbrief.connectors.views import (
+    advisory_detail as _advisory_detail,
+    convective_detail as _convective_detail,
+    CONVECTIVE_NOTE,
+)
 from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
 from weatherbrief.api.validation import WAYPOINT_RE
@@ -2319,6 +2324,56 @@ def get_advisories(
     if not adv_path.exists():
         raise HTTPException(status_code=404, detail="Route advisories not available")
     return FileResponse(adv_path, media_type="application/json")
+
+
+@router.get("/{timestamp}/advisories/{advisory_id}/detail")
+def get_advisory_detail(
+    flight_id: str,
+    timestamp: str,
+    advisory_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Per-advisory drill-down for the iOS "why it's RED" ladder (§4.6).
+
+    The one backend touch of the iOS modernisation epic (#285): exposes the
+    same shaping the MCP/ChatGPT connectors already use — ``advisory_detail``
+    plus, for the convective advisory, ``convective_detail`` (the CAPE-vs-cover
+    reconciliation) — over REST so the iOS client doesn't re-derive it. Reuses
+    the pure functions in ``connectors/views.py`` (one source of truth across
+    web/iOS/MCP/ChatGPT).
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    adv_path = pack_dir / "route_advisories.json"
+    if not adv_path.exists():
+        raise HTTPException(status_code=404, detail="Route advisories not available")
+
+    advisories = json_mod.loads(adv_path.read_text())
+    adv = next(
+        (a for a in advisories.get("advisories", []) if a.get("advisory_id") == advisory_id),
+        None,
+    )
+    if adv is None:
+        available = [a.get("advisory_id") for a in advisories.get("advisories", [])]
+        raise HTTPException(
+            status_code=404,
+            detail=f"Advisory '{advisory_id}' not found. Available: {', '.join(available)}",
+        )
+
+    catalog = {c.get("id"): c for c in advisories.get("catalog", [])}
+    result = _advisory_detail(adv, catalog.get(advisory_id))
+
+    # The convective advisory carries the richest fill: per-model CAPE-vs-cover
+    # reconciliation (the "RED under blue sky" story with peak location + ETA).
+    if advisory_id == "convective":
+        ra_path = pack_dir / "route_analyses.json"
+        if ra_path.exists():
+            route_analyses = json_mod.loads(ra_path.read_text())
+            models = [m.get("model") for m in adv.get("per_model", []) if m.get("model")]
+            result["convective"] = _convective_detail(route_analyses, models)
+            result["convective_note"] = CONVECTIVE_NOTE
+
+    return result
 
 
 @router.get("/{timestamp}/route-fronts")
