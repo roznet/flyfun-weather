@@ -1,5 +1,19 @@
 import SwiftUI
 
+/// RGBA components in 0–1, used where a cloud style needs both the solid fill
+/// and a matching fully-transparent stop (e.g. natural-style radial gradients).
+struct RGBA: Sendable {
+    let r: Double
+    let g: Double
+    let b: Double
+    let a: Double
+
+    var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
+    /// Same hue, fully transparent — the outer stop of a soft blob gradient.
+    var clear: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: 0) }
+    func withAlpha(_ alpha: Double) -> Color { Color(.sRGB, red: r, green: g, blue: b, opacity: alpha) }
+}
+
 /// Color functions for cross-section layers. Port of web's scales.ts.
 nonisolated enum ColorScales {
     // MARK: - Icing risk
@@ -26,14 +40,22 @@ nonisolated enum ColorScales {
 
     // MARK: - Cloud fill from dewpoint depression
 
-    static func cloudFill(dewpointDepressionC: Double?, coverage: String) -> Color {
+    /// RGBA components (0–1) for a DD-sourced cloud fill. Mirrors web
+    /// `cloudFillFromDD`. Returned as a tuple so the natural style can build
+    /// both a solid and a fully-transparent gradient stop from the same colour.
+    static func cloudRGBA(dewpointDepressionC: Double?, coverage: String) -> RGBA {
         let dd = dewpointDepressionC ?? 1.5
         let t = min(max(dd / 3.0, 0), 1.0)
-        let r = (170 + 75 * t) / 255.0
-        let g = (170 + 75 * t) / 255.0
-        let b = (175 + 73 * t) / 255.0
-        let alpha = coverageAlpha(coverage, t: t)
-        return Color(.sRGB, red: r, green: g, blue: b, opacity: alpha)
+        return RGBA(
+            r: (170 + 75 * t) / 255.0,
+            g: (170 + 75 * t) / 255.0,
+            b: (175 + 73 * t) / 255.0,
+            a: coverageAlpha(coverage, t: t)
+        )
+    }
+
+    static func cloudFill(dewpointDepressionC: Double?, coverage: String) -> Color {
+        cloudRGBA(dewpointDepressionC: dewpointDepressionC, coverage: coverage).color
     }
 
     private static func coverageAlpha(_ coverage: String, t: Double) -> Double {
@@ -86,17 +108,32 @@ nonisolated enum ColorScales {
         }
     }
 
+    /// RGBA components (0–1) for an NWP cover%-derived cloud fill. Mirrors web
+    /// `nwpCloudFill`.
+    static func nwpCloudRGBA(pct: Double) -> RGBA {
+        let t = min(1.0, max(0.0, pct / 100.0))
+        // Brighter blue at low cover, darker at high cover.
+        return RGBA(
+            r: (210 - 60 * t) / 255.0,
+            g: (220 - 50 * t) / 255.0,
+            b: (235 - 20 * t) / 255.0,
+            a: 0.30 + 0.50 * t
+        )
+    }
+
     /// Blue-tinted fill from coverage percentage. Distinct hue from DD cloud layers
     /// so users can tell NWP and DD methods apart at a glance.
     static func nwpCloudFill(pct: Double) -> Color {
-        let t = min(1.0, max(0.0, pct / 100.0))
-        // Brighter blue at low cover, darker at high cover.
-        let r = (210 - 60 * t) / 255.0
-        let g = (220 - 50 * t) / 255.0
-        let b = (235 - 20 * t) / 255.0
-        let alpha = 0.30 + 0.50 * t
-        return Color(.sRGB, red: r, green: g, blue: b, opacity: alpha)
+        nwpCloudRGBA(pct: pct).color
     }
+
+    // MARK: - Stability lines (LCL / LFC / EL)
+    // Colours mirror the web cross-section theme `stability` block so parcel
+    // levels read identically across clients.
+
+    static let lclColor = Color(.sRGB, red: 76 / 255.0, green: 175 / 255.0, blue: 80 / 255.0)   // #4caf50
+    static let lfcColor = Color(.sRGB, red: 255 / 255.0, green: 152 / 255.0, blue: 0 / 255.0)   // #ff9800
+    static let elColor = Color(.sRGB, red: 244 / 255.0, green: 67 / 255.0, blue: 54 / 255.0)    // #f44336
 
     // MARK: - Soft cloud (GRAMET-style feathered fill)
 
