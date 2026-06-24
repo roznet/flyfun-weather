@@ -5,11 +5,14 @@ struct AddFlightView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel: AddFlightViewModel
     @State private var showFplSheet = false
+    @State private var showRebriefConfirm = false
 
+    /// Called with the created OR updated flight.
     let onCreated: (FlightResponse) -> Void
 
-    init(repository: any BriefingRepository, onCreated: @escaping (FlightResponse) -> Void) {
-        _viewModel = State(initialValue: AddFlightViewModel(repository: repository))
+    init(repository: any BriefingRepository, flight: FlightResponse? = nil,
+         onCreated: @escaping (FlightResponse) -> Void) {
+        _viewModel = State(initialValue: AddFlightViewModel(repository: repository, flight: flight))
         self.onCreated = onCreated
     }
 
@@ -29,23 +32,43 @@ struct AddFlightView: View {
                     }
                 }
             }
-            .navigationTitle("New Flight")
+            .navigationTitle(viewModel.isEditing ? "Edit Flight" : "New Flight")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        Task {
-                            if let flight = await viewModel.createFlight() {
-                                onCreated(flight)
-                                dismiss()
-                            }
+                    Button(viewModel.isEditing ? "Save" : "Create") {
+                        // Saving a forecast-affecting change regenerates the
+                        // briefing — never silently (§4.4).
+                        if viewModel.isEditing && viewModel.hasForecastAffectingChange {
+                            showRebriefConfirm = true
+                        } else {
+                            performSave()
                         }
                     }
                     .disabled(!viewModel.canSubmit)
                 }
+            }
+            .confirmationDialog(
+                "Regenerate briefing?",
+                isPresented: $showRebriefConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Save & Regenerate") { performSave() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This change affects the forecast and will regenerate the briefing.")
+            }
+        }
+    }
+
+    private func performSave() {
+        Task {
+            if let flight = await viewModel.save() {
+                onCreated(flight)
+                dismiss()
             }
         }
     }

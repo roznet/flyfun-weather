@@ -20,11 +20,37 @@ final class AddFlightViewModel {
     var isSubmitting: Bool = false
     var errorMessage: String?
 
+    /// Non-nil when editing an existing flight (the create form, pre-filled —
+    /// one form, two modes, §4.4).
+    let editingFlight: FlightResponse?
+
     private let repository: any BriefingRepository
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AddFlight")
 
-    init(repository: any BriefingRepository) {
+    init(repository: any BriefingRepository, flight: FlightResponse? = nil) {
         self.repository = repository
+        self.editingFlight = flight
+        if let flight {
+            waypointsText = flight.waypoints.joined(separator: " ")
+            if let date = flight.departureDate { departureDate = date }
+            cruiseAltitudeFt = flight.cruiseAltitudeFt
+            flightDurationHours = flight.flightDurationHours
+        }
+    }
+
+    var isEditing: Bool { editingFlight != nil }
+
+    /// Whether the edited fields differ from the original in a way that affects
+    /// the forecast (route/time/FL/duration) — all of them do, so any change
+    /// triggers the re-briefing cost confirm (§4.4).
+    var hasForecastAffectingChange: Bool {
+        guard let original = editingFlight else { return false }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return waypoints != original.waypoints.map { $0.uppercased() }
+            || formatter.string(from: departureDate) != (original.departureDate.map { formatter.string(from: $0) } ?? "")
+            || cruiseAltitudeFt != original.cruiseAltitudeFt
+            || abs(flightDurationHours - original.flightDurationHours) > 0.01
     }
 
     /// Parsed waypoints from the text field.
@@ -86,6 +112,38 @@ final class AddFlightViewModel {
         } catch {
             parseError = "Failed to parse: \(error.localizedDescription)"
             Self.logger.error("FPL parse error: \(error)")
+        }
+    }
+
+    /// Dispatch to create or update depending on the mode.
+    func save() async -> FlightResponse? {
+        isEditing ? await updateFlight() : await createFlight()
+    }
+
+    /// Update an existing flight. The server regenerates the briefing for the
+    /// changed parameters; the caller confirms the cost first (§4.4).
+    func updateFlight() async -> FlightResponse? {
+        guard let editingFlight, canSubmit else { return nil }
+        isSubmitting = true
+        errorMessage = nil
+        defer { isSubmitting = false }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let request = UpdateFlightRequest(
+            waypoints: waypoints,
+            departureTime: formatter.string(from: departureDate),
+            cruiseAltitudeFt: cruiseAltitudeFt,
+            flightDurationHours: flightDurationHours
+        )
+        do {
+            let flight = try await repository.updateFlight(flightId: editingFlight.id, request: request)
+            Self.logger.info("Updated flight \(flight.id): \(flight.shortTitle)")
+            return flight
+        } catch {
+            errorMessage = error.localizedDescription
+            Self.logger.error("Update flight failed: \(error)")
+            return nil
         }
     }
 
