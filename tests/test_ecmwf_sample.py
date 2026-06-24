@@ -1000,26 +1000,40 @@ class TestEcmwfSurfaceSnapshot:
         assert out["nwp_ceiling_ft"] is None
         assert out["cloud_base_ft"] is None
 
-    def test_native_convective_indices_passthrough(self):
-        """ECMWF kx/totalx map to nwp_k_index/nwp_total_totals as-is (no conv)."""
+    def test_native_convective_indices_normalized(self):
+        """ECMWF kx/totalx → nwp_k_index/nwp_total_totals.
+
+        kx is delivered in Kelvin (#283), so the snapshot normalizes it to °C via
+        _k_index_to_c (a value >100 is unambiguously Kelvin); Total Totals is
+        offset-immune and passes through. These derive from the same decoded
+        k_index_c / total_totals_c as the cloud-diag K/TT (single field-map key).
+        """
         from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
 
+        # Kelvin-encoded kx (305.15 K ≈ 32 °C) is normalized; totalx as-is.
         out = build_ecmwf_surface_snapshot({
-            "k_index_raw": 32.0, "total_totals_raw": 52.0,
+            "k_index_c": 305.15, "total_totals_c": 52.0,
         })
-        assert out["nwp_k_index"] == 32.0
+        assert out["nwp_k_index"] == pytest.approx(32.0)
         assert out["nwp_total_totals"] == 52.0
+        # Already-°C kx (≤100) passes through unchanged.
+        out_c = build_ecmwf_surface_snapshot({"k_index_c": 32.0})
+        assert out_c["nwp_k_index"] == pytest.approx(32.0)
         # Absent → None.
         out2 = build_ecmwf_surface_snapshot({"t2m": 283.15})
         assert out2["nwp_k_index"] is None
         assert out2["nwp_total_totals"] is None
 
     def test_field_map_has_native_indices(self):
-        """kx/totalx are in the ECMWF a1 decode field map (so they get decoded)."""
+        """kx/totalx are in the ECMWF a1 decode field map (so they get decoded).
+
+        Mapped once to k_index_c / total_totals_c — both the cloud-diag K/TT
+        (#283) and the character-advisory native indices (#294) read from these.
+        """
         from weatherbrief.fetch.grib.decode import _ECMWF_CLOUD_DIAG_FIELD_MAP
 
-        assert _ECMWF_CLOUD_DIAG_FIELD_MAP.get("kx") == "k_index_raw"
-        assert _ECMWF_CLOUD_DIAG_FIELD_MAP.get("totalx") == "total_totals_raw"
+        assert _ECMWF_CLOUD_DIAG_FIELD_MAP.get("kx") == "k_index_c"
+        assert _ECMWF_CLOUD_DIAG_FIELD_MAP.get("totalx") == "total_totals_c"
 
     def test_empty_input(self):
         from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
