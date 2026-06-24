@@ -868,6 +868,23 @@ def test_nwp_lcl_top_uses_lcl_as_base():
     assert result.risk_level == ConvectiveRisk.HIGH  # FL280 >= 280
 
 
+def test_nwp_lcl_top_keeps_tower_when_lcl_none():
+    """ECMWF hcct top with LCL unavailable still keeps the tower (#283 review Imp3).
+
+    The top > LCL artefact guard must not silently discard a valid tower when
+    LCL failed to compute (e.g. a very dry profile) — that would be a safety-
+    relevant under-warning. Base is then unknown (None); the tower drives risk.
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)  # no lcl_altitude_ft
+    diag = NWPCloudDiagnostics(convective_top_ft=28000.0)  # FL280
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_lcl_top"
+    assert result.top_ft == 28000.0
+    assert result.base_ft is None
+    assert result.risk_level == ConvectiveRisk.HIGH  # FL280 >= 280
+
+
 def test_nwp_lcl_top_quiet_when_hcct_below_lcl():
     """LCL-anchored guard: a sub-LCL hcct artefact → quiet NONE (top dropped)."""
     indices = ThermodynamicIndices(

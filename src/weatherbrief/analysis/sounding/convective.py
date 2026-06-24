@@ -489,6 +489,9 @@ assess_convective = assess_convective_thermo
 # This is the one native field common to all three GRIB models (GFS, ECMWF,
 # ICON), it is resolution-robust (unlike convective-precip *rate*), and it
 # separates shallow Cu from a mature Cb — so it is the primary native scale.
+# Note: these are *approximate* FLs — convective_top_ft is geometric AMSL height,
+# not pressure altitude, so in non-ISA conditions the true FL can differ by
+# ~100–200 ft. Acceptable for severity tiering at this calibration stage.
 # (#283; thresholds are a defensible v1 pending PIREP/digest-eval calibration.)
 _CONV_TOP_FL_THRESHOLDS = [
     (380, ConvectiveRisk.EXTREME),   # overshooting / severe
@@ -758,9 +761,12 @@ def assess_convective_nwp(
     elif base is not None and top is not None:
         # ICON-EU: convective base + top, no cover fraction.
         method, base_ft, top_ft = "nwp_hybrid", base, top
-    elif top is not None and lcl is not None and top > lcl:
+    elif top is not None and (lcl is None or top > lcl):
         # ECMWF hcct: convective top only — use LCL as the base proxy. The
-        # top > LCL guard rejects the rare sub-LCL hcct artefact.
+        # top > LCL guard rejects the rare sub-LCL hcct artefact. When LCL is
+        # unavailable (e.g. a very dry profile where MetPy can't compute it) we
+        # still keep the tower rather than silently discard a real cell (#283
+        # review) — the base is then unknown (None), but the tower drives risk.
         method, base_ft, top_ft = "nwp_lcl_top", lcl, top
     else:
         # Native model, quiet convective scheme at this point (no cover, no
@@ -782,6 +788,13 @@ def assess_convective_nwp(
     # Keep the strong-CIN suppression (#283: partially handles a capped tower the
     # scheme reports but won't realize; CIN < -200 → one level down). Prefer the
     # model's own ML-CIN when present, else the DD surface CIN.
+    #
+    # This stacks with the firing gate above: a deep-but-dry tower under a strong
+    # cap is held down TWICE (gate → one level for "not firing", CIN → one level
+    # for "capped"). That two-level drop is intentional — they are independent
+    # physical suppressors (no realized convection AND a strong inhibition) — and
+    # is bounded at NONE. Tune either threshold with the combined effect in mind.
+    # See tests/test_convective.py::test_nwp_firing_gate_and_cin_double_suppression.
     eff_cin = nwp_diagnostics.ml_cin_jkg if nwp_diagnostics.ml_cin_jkg is not None else cin
     if eff_cin is not None and eff_cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
         risk = _down_one(risk)
@@ -916,9 +929,15 @@ def convective_cross_check(
         if cover is not None and cover >= _XCHECK_MODEL_ACTIVE_COVER_PCT:
             bits.append(f"{cover:.0f}% cover")
         if top_fl is not None and top_fl >= _XCHECK_DEEP_TOP_FL:
-            bits.append(f"tops FL{top_fl:.0f}")
+            # Round to a conventional FL for display (top_fl is geometric AMSL).
+            bits.append(f"tops FL{round(top_fl / 10) * 10:.0f}")
         desc = " / ".join(bits) if bits else "model scheme"
-        note = f"model convective scheme fired ({desc}) despite weak DD instability"
+        dd_txt = (
+            "no DD instability"
+            if thermo.risk_level == ConvectiveRisk.NONE
+            else "marginal DD instability"
+        )
+        note = f"model convective scheme fired ({desc}) despite {dd_txt}"
         return ConvectiveCrossCheck(direction="model_active_dd_quiet", note=note)
 
     return None
