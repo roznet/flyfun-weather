@@ -296,6 +296,12 @@ class HourlyForecast(BaseModel):
     cape_jkg: Optional[float] = None
     convective_inhibition_jkg: Optional[float] = None
     lifted_index_raw: Optional[float] = None
+    # Model-native K-index / Total Totals from GRIB enrichment (ECMWF a1
+    # kx/totalx — issue #294). Index values (not absolute temperatures), used
+    # as-is. None for models without a native field. Copied onto
+    # ThermodynamicIndices.nwp_k_index/nwp_total_totals during sounding analysis.
+    nwp_k_index: Optional[float] = None
+    nwp_total_totals: Optional[float] = None
     visibility_m: Optional[float] = None
 
     # GFS cloud layer diagnostics from GRIB2 enrichment
@@ -408,6 +414,29 @@ class ConvectiveRegime(str, Enum):
         return self.value.replace("_", " ").title()
 
 
+class ConvectiveCharacter(str, Enum):
+    """VFR-avoidability character of route convection (per model).
+
+    Orthogonal to :class:`ConvectiveRisk` (severity): severity says how bad an
+    individual cell is, character says whether a VFR pilot can operate *around*
+    the convection. Drives the digest narrative + a dedicated graded advisory;
+    it never changes the severity advisory's colour. See issue #294.
+    """
+
+    NONE = "none"              # no convection worth characterising
+    ISOLATED = "isolated"      # discrete cells in clear air — circumnavigable VFR
+    SCATTERED = "scattered"    # gaps still threadable, but committing
+    WIDESPREAD = "widespread"  # high coverage, no reliable gaps to thread
+    EMBEDDED = "embedded"      # cells hidden in a stratiform deck — can't see/avoid
+    ORGANIZED = "organized"    # frontal / squall-line / forced system
+    UNKNOWN = "unknown"        # insufficient data to characterise
+
+    @property
+    def label(self) -> str:
+        """Human-readable title-case label for digests/UI (e.g. 'Isolated')."""
+        return self.value.title()
+
+
 class VerticalMotionClass(str, Enum):
     """Classification of the vertical motion profile."""
 
@@ -484,6 +513,13 @@ class ThermodynamicIndices(BaseModel):
     nwp_cape_type: Optional[str] = None  # "sb", "ml", "mu", "unknown"
     nwp_cin_jkg: Optional[float] = None
     nwp_lifted_index: Optional[float] = None
+    # Model-native K-index / Total Totals (full model vertical resolution),
+    # preferred over the MetPy-derived k_index/total_totals where available
+    # (currently ECMWF `kx`/`totalx` via ECPDS GRIB — issue #294). Kept as a
+    # separate NWP signal, like nwp_cape_jkg, so the two derivations stay
+    # independent (see meteorology-decisions.md §4d).
+    nwp_k_index: Optional[float] = None
+    nwp_total_totals: Optional[float] = None
     nwp_freezing_level_ft: Optional[float] = None
     cape_raw_vs_calc_divergent: Optional[bool] = None
 

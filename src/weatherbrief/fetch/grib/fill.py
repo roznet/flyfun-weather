@@ -730,6 +730,8 @@ _ECMWF_SURFACE_INSTANT_FIELDS: tuple[str, ...] = (
     "visibility_m",
     "cape_jkg",
     "surface_pressure_hpa",
+    "nwp_k_index",
+    "nwp_total_totals",
 )
 
 

@@ -107,6 +107,22 @@ Structure your response as JSON with these exact fields:
   diverges materially, mention it as a confidence/uncertainty caveat in the
   relevant section — do NOT flip the GREEN/AMBER/RED assessment on the alternate
   method alone.
+- Convective severity and convective AVOIDABILITY are two separate advisories.
+  "Convective Activity" grades how dangerous a cell is (a big cell stays RED).
+  "Convective Character" grades whether the convection is circumnavigable VFR.
+  Let the character advisory drive how you DESCRIBE the convection:
+    - ISOLATED / SCATTERED (graded AMBER): discrete cells in otherwise good air.
+      Describe them as circumnavigable VFR with see-and-avoid, while noting the
+      real risk of diversion/detour and that severity may still be high. Do NOT
+      call the flight "VFR impractical/impossible" *because of convection* in
+      this case — the cells are avoidable. (VFR may still be impractical for a
+      different reason, e.g. cloud or airport conditions — attribute it to the
+      actual cause.)
+    - WIDESPREAD / ORGANIZED / EMBEDDED (graded RED): no reliable gaps, a frontal/
+      squall-line system, or cells hidden in cloud. Here convection genuinely
+      makes VFR impractical — say so.
+  This never changes the overall GREEN/AMBER/RED (severity still drives the
+  colour); it only governs how you frame circumnavigability.
 - All wind speeds should be in knots, altitudes in feet, temperatures in
   Celsius.
 - The DATE header includes the day-of-week — use it for the flight date.

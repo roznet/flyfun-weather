@@ -220,6 +220,11 @@ def analyze_sounding_lite(
         indices.nwp_cape_type = NWP_CAPE_TYPE.get(model_key, "unknown") if model_key else None
         indices.nwp_cin_jkg = hourly.convective_inhibition_jkg
         indices.nwp_lifted_index = hourly.lifted_index_raw
+        # Model-native K-index / Total Totals (currently ECMWF kx/totalx via
+        # GRIB; None elsewhere). Preferred over the MetPy-derived values by the
+        # convective character advisory (issue #294).
+        indices.nwp_k_index = hourly.nwp_k_index
+        indices.nwp_total_totals = hourly.nwp_total_totals
         if hourly.freezing_level_m is not None:
             indices.nwp_freezing_level_ft = round(hourly.freezing_level_m * 3.28084)
 

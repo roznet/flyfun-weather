@@ -142,6 +142,31 @@ def max_terrain_near_point(
     return max_elev
 
 
+def showers_at_point(
+    cross_sections: list[RouteCrossSection],
+    model: str,
+    point_index: int,
+    target_time: datetime,
+) -> float | None:
+    """Convective precipitation (showers, mm) at a route point for one model.
+
+    ``showers`` is Open-Meteo's convective-only precip and is available for
+    every model — the uniform realized-convection signal used by the convective
+    character advisory (issue #294). Picks the hourly nearest ``target_time``.
+    Returns None when unavailable.
+    """
+    for cs in cross_sections:
+        if cs.model.value != model:
+            continue
+        if point_index >= len(cs.point_forecasts):
+            return None
+        hourly = cs.point_forecasts[point_index].at_time(target_time)
+        if hourly is None:
+            return None
+        return hourly.showers_mm
+    return None
+
+
 def wind_at_altitude(
     cross_sections: list[RouteCrossSection],
     model: str,

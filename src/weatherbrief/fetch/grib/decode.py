@@ -160,6 +160,11 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "sf": "snowfall_m_we",                 # m water equivalent, accumulated since init
     "mucape": "mucape_jkg",                # J/kg (most-unstable parcel CAPE)
     "sp": "surface_pressure_pa",           # Pa (used as anchor for sounding analysis)
+    # NOTE: ``kx``/``totalx`` are mapped once above (k_index_c / total_totals_c).
+    # The model-native convective indices feeding the convective character
+    # advisory (issue #294, nwp_k_index / nwp_total_totals) derive from those
+    # same decoded values in build_ecmwf_surface_snapshot — kx normalized from
+    # Kelvin via _k_index_to_c (#283 established the unit), totalx offset-immune.
 }
 
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
@@ -1769,6 +1774,8 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
         "surface_pressure_hpa": None,
         "nwp_ceiling_ft": None,
         "cloud_base_ft": None,
+        "nwp_k_index": None,
+        "nwp_total_totals": None,
     }
 
     if not raw:
@@ -1831,5 +1838,16 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
     cbh_m = raw.get("cloud_base_height_m")
     if cbh_m is not None and 0 <= cbh_m < _ECMWF_NO_CLOUD_SENTINEL_M:
         out["cloud_base_ft"] = cbh_m * _M_TO_FT
+
+    # Native convective indices for the character advisory (#294). Derived from
+    # the same decoded kx/totalx as the cloud-diag K/TT (#283): kx is delivered
+    # in Kelvin, so normalize to °C via _k_index_to_c — feeding it raw would make
+    # the K≥40 character nudge fire unconditionally. Total Totals is offset-immune.
+    kx = _k_index_to_c(raw, "k_index_c")
+    if kx is not None:
+        out["nwp_k_index"] = kx
+    totalx = raw.get("total_totals_c")
+    if totalx is not None:
+        out["nwp_total_totals"] = totalx
 
     return out

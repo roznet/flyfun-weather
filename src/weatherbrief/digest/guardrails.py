@@ -75,6 +75,34 @@ _FIGURE_FL_RE = re.compile(r"\bFL\s*(\d{2,3})\b", re.IGNORECASE)
 # Any run of digits, for building the set of numbers present in the context.
 _NUMBER_RE = re.compile(r"\d[\d,]*")
 
+# Convective character — the route-advisory line prompt_builder emits, e.g.
+#   "[AMBER] Convective Character: Isolated cells — circumnavigable VFR ..."
+# The status encodes avoidability: AMBER ⇒ isolated/scattered (circumnavigable);
+# RED ⇒ widespread/organized/embedded (genuinely VFR-impractical). The advisory
+# name is always English in context (catalog name), so this match is locale-
+# stable. We only police the AMBER case (issue #294).
+_CONV_CHARACTER_RE = re.compile(
+    r"\[(GREEN|AMBER|RED)\]\s+Convective Character\b", re.IGNORECASE
+)
+# Best-effort, multi-locale. A *convective* term AND an *absolute VFR-impractical*
+# term in the SAME sentence is the contradiction we flag — narrow on purpose so
+# it does not fire when VFR is impractical for an unrelated cause (cloud/airport).
+_CONV_TERM_RE = re.compile(
+    r"convect|thunderstorm|storm|\bcell|\bcb\b|gewitter|konvekt|zelle|"
+    r"orage|cellule|tormenta|c[ée]lula",
+    re.IGNORECASE,
+)
+_VFR_IMPRACTICAL_RE = re.compile(
+    r"vfr\s+(?:is\s+)?(?:impractical|impossible|not\s+(?:viable|possible|feasible))"
+    r"|not\s+(?:viable|possible|feasible)\s+(?:under|in|for)\s+vfr"
+    r"|vfr\s+nicht\s+(?:m[oö]glich|praktikabel|machbar|tauglich)"
+    r"|kein(?:e)?\s+(?:vfr|sichtflug)|sichtflug\s+nicht\s+m[oö]glich"
+    r"|vfr\s+(?:impraticable|impracticable|imposible|no\s+viable)"
+    r"|nicht\s+akzeptabel|inakzeptabel|unacceptable|not\s+acceptable"
+    r"|inacceptable|inaceptable|no-go",
+    re.IGNORECASE,
+)
+
 # Per-field bounds. ``max_sentences`` / ``max_chars`` catch runaway output;
 # ``min_chars`` catches empty/stub fields. Bounds are generous on purpose so a
 # different model or prompt variant that still respects the contract passes —
@@ -271,6 +299,42 @@ def check_number_traceability(
     return violations
 
 
+def check_convective_vfr_consistency(
+    digest: Mapping[str, object] | object, context: str
+) -> list[Violation]:
+    """Flag convection-attributed VFR-impracticality when it's circumnavigable.
+
+    When the deterministic Convective Character advisory is AMBER (isolated /
+    scattered = circumnavigable VFR), the output must not say *convection* makes
+    VFR impractical/impossible — the cells are avoidable (issue #294). Kept
+    deliberately narrow: only fires on a same-sentence convective-term +
+    absolute-impractical-term co-occurrence, AMBER only, so it does not trip when
+    VFR is impractical for an unrelated reason (cloud, airport). The briefer
+    prompt is the primary control; this is a best-effort backstop.
+    """
+    m = _CONV_CHARACTER_RE.search(context)
+    if m is None or m.group(1).upper() != "AMBER":
+        return []
+    out = _as_dict(digest)
+    violations: list[Violation] = []
+    for field in TEXT_FIELDS:
+        value = str(out.get(field, "") or "")
+        for sentence in re.split(r"(?<=[.!?])\s+", value):
+            if _CONV_TERM_RE.search(sentence) and _VFR_IMPRACTICAL_RE.search(sentence):
+                violations.append(
+                    Violation(
+                        "convective_vfr_consistency",
+                        field,
+                        "convection framed as making VFR impractical, but the "
+                        "Convective Character advisory is AMBER (isolated/scattered "
+                        "= circumnavigable) — attribute VFR-impracticality to its "
+                        "actual cause or soften",
+                    )
+                )
+                break  # one per field is enough
+    return violations
+
+
 def check_structure(
     digest: Mapping[str, object] | object,
     *,
@@ -355,4 +419,5 @@ def run_guardrails(
     violations.extend(check_coordinate_leak(digest))
     violations.extend(check_fabricated_sources(digest, context))
     violations.extend(check_number_traceability(digest, context))
+    violations.extend(check_convective_vfr_consistency(digest, context))
     return violations
