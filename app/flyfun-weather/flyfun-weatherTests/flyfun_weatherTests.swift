@@ -240,4 +240,128 @@ struct flyfun_weatherTests {
         #expect(convective.nwp?.maxCoverPct == 0)
     }
 
+    @MainActor
+    @Test func routeMapMetricsStyleSegmentsAndAltitudeLayers() throws {
+        let json = """
+        {
+          "route_name": "egtf-eglf",
+          "target_date": "2026-06-24",
+          "departure_time": "2026-06-24T12:00:00Z",
+          "flight_duration_hours": 1.0,
+          "total_distance_nm": 20.0,
+          "cruise_altitude_ft": 8000,
+          "models": ["gfs"],
+          "analyses": [
+            {
+              "point_index": 0,
+              "lat": 51.3,
+              "lon": -0.55,
+              "distance_from_origin_nm": 0.0,
+              "waypoint_icao": "EGTF",
+              "waypoint_name": "Fairoaks",
+              "interpolated_time": "2026-06-24T12:00:00Z",
+              "track_deg": 120.0,
+              "wind_components": {
+                "gfs": {
+                  "wind_speed_kt": 30.0,
+                  "wind_direction_deg": 270.0,
+                  "track_deg": 120.0,
+                  "headwind_kt": 18.0,
+                  "crosswind_kt": 12.0
+                }
+              },
+              "sounding": {
+                "gfs": {
+                  "indices": {
+                    "freezing_level_ft": 5000.0,
+                    "minus10c_level_ft": 10000.0,
+                    "minus20c_level_ft": 16000.0,
+                    "cape_surface_jkg": 1800.0
+                  },
+                  "cloud_layers": [
+                    {"base_ft": 7000.0, "top_ft": 9000.0, "coverage": "bkn"}
+                  ],
+                  "icing_zones": [
+                    {"base_ft": 6500.0, "top_ft": 9500.0, "risk": "moderate", "icing_type": "rime"}
+                  ],
+                  "sfip_zones": [
+                    {"base_ft": 6500.0, "top_ft": 9500.0, "risk": "moderate", "icing_type": "sfip", "mean_sfip100": 65.0, "variant": "sfip"}
+                  ],
+                  "vertical_motion": {
+                    "classification": "moderate",
+                    "cat_risk_layers": [
+                      {"base_ft": 7500.0, "top_ft": 9000.0, "risk": "moderate"}
+                    ]
+                  },
+                  "convective": {"risk_level": "high", "base_ft": 6000.0, "top_ft": 24000.0, "cape_jkg": 1800.0},
+                  "cloud_cover_low_pct": 40.0,
+                  "cloud_cover_mid_pct": 20.0,
+                  "cloud_cover_high_pct": 10.0,
+                  "nwp_cloud_diagnostics": {
+                    "low": {"cover_pct": 40.0, "base_ft": 4000.0, "top_ft": 8000.0},
+                    "mid": {"cover_pct": 20.0, "base_ft": 8000.0, "top_ft": 14000.0},
+                    "high": {"cover_pct": 10.0, "base_ft": 18000.0, "top_ft": 24000.0},
+                    "ceiling_ft": 2200.0
+                  }
+                }
+              },
+              "model_divergence": [{"variable": "temperature", "model_values": {"gfs": -6.0}, "mean": -6.0, "spread": 0.0, "agreement": "poor"}]
+            },
+            {
+              "point_index": 1,
+              "lat": 51.28,
+              "lon": -0.76,
+              "distance_from_origin_nm": 20.0,
+              "waypoint_icao": "EGLF",
+              "waypoint_name": "Farnborough",
+              "interpolated_time": "2026-06-24T12:20:00Z",
+              "track_deg": 120.0,
+              "wind_components": {
+                "gfs": {
+                  "wind_speed_kt": 24.0,
+                  "wind_direction_deg": 250.0,
+                  "track_deg": 120.0,
+                  "headwind_kt": 12.0,
+                  "crosswind_kt": 9.0
+                }
+              },
+              "sounding": {
+                "gfs": {
+                  "indices": {
+                    "freezing_level_ft": 6000.0,
+                    "minus10c_level_ft": 11000.0,
+                    "minus20c_level_ft": 17000.0,
+                    "cape_surface_jkg": 900.0
+                  },
+                  "cloud_layers": [],
+                  "icing_zones": [],
+                  "sfip_zones": [],
+                  "vertical_motion": {"classification": "smooth", "cat_risk_layers": []},
+                  "convective": {"risk_level": "moderate", "base_ft": 7000.0, "top_ft": 18000.0, "cape_jkg": 900.0},
+                  "cloud_cover_low_pct": 10.0,
+                  "cloud_cover_mid_pct": 10.0,
+                  "cloud_cover_high_pct": 0.0
+                }
+              },
+              "model_divergence": [{"variable": "temperature", "model_values": {"gfs": -4.0}, "mean": -4.0, "spread": 0.0, "agreement": "good"}]
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.weatherBrief.decode(RouteAnalysesResponse.self, from: json)
+        let routeMap = RouteMapViewModel()
+        routeMap.update(from: response)
+        let firstPoint = try #require(response.analyses.first)
+        let segments = routeMap.segments(colorMetric: .convectiveRisk, widthMetric: .headwind, model: "gfs", altitudeFt: 8000)
+
+        #expect(segments.count == 1)
+        #expect(segments.first?.valueDescription == "high")
+        #expect((segments.first?.width ?? 0) > 3)
+        #expect(RouteMapMetric.icingRiskAtLevel.value(for: firstPoint, model: "gfs", altitudeFt: 8000) == 2)
+        #expect(RouteMapMetric.sfipAtLevel.value(for: firstPoint, model: "gfs", altitudeFt: 8000) == 65)
+        #expect(RouteMapMetric.cloudAtLevel.value(for: firstPoint, model: "gfs", altitudeFt: 8000) == 70)
+        #expect(RouteMapMetric.tempAtLevel.value(for: firstPoint, model: "gfs", altitudeFt: 8000) == -6)
+    }
+
 }
