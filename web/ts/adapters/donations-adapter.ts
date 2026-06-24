@@ -116,6 +116,10 @@ export interface CheckoutRequest {
   amount: number;
   currency: string;
   recurring?: boolean;
+  // When false, a logged-in donor's account email is NOT pre-filled into Stripe
+  // Checkout, leaving the email field blank and editable. Defaults to true
+  // server-side; only send false to opt out. No effect for anonymous donors.
+  use_account_email?: boolean;
 }
 
 /** Create a Stripe Checkout Session and return its hosted redirect URL. */
