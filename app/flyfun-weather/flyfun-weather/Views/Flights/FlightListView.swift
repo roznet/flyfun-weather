@@ -9,6 +9,7 @@ struct FlightListView: View {
     @State private var selectedFlight: FlightResponse?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showAddFlight = false
+    @State private var editingFlight: FlightResponse?
     @State private var showSettings = false
     @State private var showSignOutWarning = false
 
@@ -20,13 +21,16 @@ struct FlightListView: View {
                         if flights.isEmpty {
                             emptyStateView
                         } else {
-                            List(flights, selection: $selectedFlight) { flight in
-                                let hasCached = viewModel.cachedFlightIds.contains(flight.id)
-                                NavigationLink(value: flight) {
-                                    FlightCardView(flight: flight, hasCachedData: hasCached,
-                                                   isOffline: viewModel.isOffline)
+                            List(selection: $selectedFlight) {
+                                ForEach(viewModel.sectionedFlights) { group in
+                                    Section {
+                                        ForEach(group.flights) { flight in
+                                            flightRow(flight, viewModel: viewModel)
+                                        }
+                                    } header: {
+                                        Label(group.section.title, systemImage: group.section.systemImage)
+                                    }
                                 }
-                                .disabled(viewModel.isOffline && !hasCached)
                             }
                             .refreshable {
                                 await viewModel.loadFlights()
@@ -108,6 +112,16 @@ struct FlightListView: View {
                     }
                 }
             }
+            .sheet(item: $editingFlight) { flight in
+                if let repo = appState.repository {
+                    AddFlightView(repository: repo, editing: flight) { updated in
+                        Task {
+                            await viewModel?.loadFlights()
+                            selectedFlight = updated
+                        }
+                    }
+                }
+            }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
@@ -120,7 +134,7 @@ struct FlightListView: View {
         } detail: {
             if let selectedFlight {
                 BriefingContainerView(flight: selectedFlight)
-                    .id(selectedFlight.id)
+                    .id(selectedFlight.briefingIdentity)
             } else {
                 ContentUnavailableView("Select a Flight", systemImage: "airplane",
                                        description: Text("Choose a flight from the list to view its briefing."))
@@ -135,6 +149,33 @@ struct FlightListView: View {
         .onChange(of: scenePhase) {
             if scenePhase == .active {
                 Task { await viewModel?.loadFlights() }
+            }
+        }
+    }
+
+    private func flightRow(_ flight: FlightResponse, viewModel: FlightListViewModel) -> some View {
+        let hasCached = viewModel.cachedFlightIds.contains(flight.id)
+        return NavigationLink(value: flight) {
+            FlightCardView(flight: flight, hasCachedData: hasCached, isOffline: viewModel.isOffline)
+        }
+        .disabled(viewModel.isOffline && !hasCached)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if !viewModel.isOffline && flight.role != .subscriber {
+                Button {
+                    editingFlight = flight
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+        }
+        .contextMenu {
+            if !viewModel.isOffline && flight.role != .subscriber {
+                Button {
+                    editingFlight = flight
+                } label: {
+                    Label("Edit Flight", systemImage: "pencil")
+                }
             }
         }
     }

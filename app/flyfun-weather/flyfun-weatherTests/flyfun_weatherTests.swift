@@ -364,4 +364,149 @@ struct flyfun_weatherTests {
         #expect(RouteMapMetric.tempAtLevel.value(for: firstPoint, model: "gfs", altitudeFt: 8000) == -6)
     }
 
+    @MainActor
+    @Test func flightListDecodesOperationalSectionsAndUpdateInvalidation() throws {
+        let flightsJson = """
+        [
+          {
+            "id": "future-flight",
+            "user_id": "user-1",
+            "profile_id": null,
+            "aircraft_id": 7,
+            "aircraft": {
+              "id": 7,
+              "icao_type": "SR22",
+              "type_name": "Cirrus SR22",
+              "tail_number": "N123AB",
+              "nickname": "N123AB"
+            },
+            "route_name": "egtf_eglf",
+            "waypoints": ["EGTF", "EGLF"],
+            "departure_time": "2099-06-24T12:00:00+00:00",
+            "alt_departure_time": null,
+            "target_date": "2099-06-24",
+            "target_time_utc": 12,
+            "cruise_altitude_ft": 8000,
+            "flight_ceiling_ft": 18000,
+            "flight_duration_hours": 1.5,
+            "private": false,
+            "auto_refresh": false,
+            "auto_refresh_hour": null,
+            "created_at": "2026-06-24T08:00:00+00:00",
+            "latest_briefing": {
+              "assessment": "green",
+              "assessment_reason": "Fine",
+              "outlook": null,
+              "outlook_reason": null,
+              "has_digest": true,
+              "days_out": 1,
+              "fetch_timestamp": "2026-06-24T09:00:00+00:00",
+              "has_advisories": true,
+              "advisory_summary": {
+                "red": 1,
+                "amber": 2,
+                "top": [{"status": "RED", "name": "Convection"}]
+              }
+            },
+            "role": "owner",
+            "owner_display_name": null,
+            "is_subscribed": false,
+            "debrief": null,
+            "section": "future",
+            "raw_route": null,
+            "parser_version": null,
+            "share_code": "abc123xy"
+          },
+          {
+            "id": "recent-flight",
+            "user_id": "user-1",
+            "profile_id": null,
+            "aircraft_id": null,
+            "aircraft": null,
+            "route_name": "egll_egkk",
+            "waypoints": ["EGLL", "EGKK"],
+            "departure_time": "2020-06-24T10:00:00+00:00",
+            "alt_departure_time": null,
+            "target_date": "2020-06-24",
+            "target_time_utc": 10,
+            "cruise_altitude_ft": 5000,
+            "flight_ceiling_ft": 12000,
+            "flight_duration_hours": 0.8,
+            "private": false,
+            "auto_refresh": false,
+            "auto_refresh_hour": null,
+            "created_at": "2020-06-23T08:00:00+00:00",
+            "latest_briefing": null,
+            "role": "owner",
+            "owner_display_name": null,
+            "is_subscribed": false,
+            "debrief": {
+              "flight_id": "recent-flight",
+              "decision": "flown",
+              "reasons": [],
+              "outcomes": {},
+              "note": null,
+              "created_at": "2020-06-24T12:00:00+00:00",
+              "updated_at": "2020-06-24T12:00:00+00:00"
+            },
+            "section": "recent",
+            "raw_route": null,
+            "parser_version": null,
+            "share_code": null
+          }
+        ]
+        """.data(using: .utf8)!
+
+        let flights = try JSONDecoder.weatherBrief.decode([FlightResponse].self, from: flightsJson)
+        let grouped = FlightListViewModel.groupFlights(flights)
+
+        #expect(grouped.map(\.section) == [.future, .recent])
+        #expect(grouped.first?.flights.first?.latestBriefing?.advisorySummary?.red == 1)
+        #expect(grouped.first?.flights.first?.aircraft?.displayName == "N123AB")
+        #expect(grouped.last?.flights.first?.debrief?.decision == "flown")
+
+        let updateJson = """
+        {
+          "id": "future-flight",
+          "user_id": "user-1",
+          "profile_id": null,
+          "aircraft_id": null,
+          "aircraft": null,
+          "route_name": "egtf_eglf",
+          "waypoints": ["EGTF", "EGLF"],
+          "departure_time": "2099-06-24T13:00:00+00:00",
+          "alt_departure_time": null,
+          "target_date": "2099-06-24",
+          "target_time_utc": 13,
+          "cruise_altitude_ft": 8000,
+          "flight_ceiling_ft": 18000,
+          "flight_duration_hours": 1.5,
+          "private": false,
+          "auto_refresh": false,
+          "auto_refresh_hour": null,
+          "created_at": "2026-06-24T08:00:00+00:00",
+          "latest_briefing": null,
+          "role": "owner",
+          "owner_display_name": null,
+          "is_subscribed": false,
+          "debrief": null,
+          "section": "future",
+          "raw_route": null,
+          "parser_version": null,
+          "share_code": null,
+          "invalidation": "refetch_needed"
+        }
+        """.data(using: .utf8)!
+
+        let update = try JSONDecoder.weatherBrief.decode(UpdateFlightResponse.self, from: updateJson)
+        #expect(update.flight.departureTime == "2099-06-24T13:00:00+00:00")
+        #expect(update.invalidation == .refetchNeeded)
+
+        let request = UpdateFlightRequest(aircraftId: 0, cruiseAltitudeFt: 9000)
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder.weatherBrief.encode(request)) as? [String: Any]
+        #expect(encoded?["aircraft_id"] as? Int == 0)
+        #expect(encoded?["cruise_altitude_ft"] as? Int == 9000)
+        #expect(encoded?["departure_time"] == nil)
+    }
+
 }

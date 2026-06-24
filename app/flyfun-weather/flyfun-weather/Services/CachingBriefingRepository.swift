@@ -37,10 +37,18 @@ final class CachingBriefingRepository: BriefingRepository {
         self.cache = cache
     }
 
-    // MARK: - Flight creation (pass-through, no caching)
+    // MARK: - Flight mutations (pass-through, no caching)
 
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
         try await online.createFlight(request)
+    }
+
+    func updateFlight(flightId: String, _ request: UpdateFlightRequest) async throws -> UpdateFlightResponse {
+        try await online.updateFlight(flightId: flightId, request)
+    }
+
+    func aircraft() async throws -> [AircraftResponse] {
+        try await online.aircraft()
     }
 
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
@@ -152,6 +160,14 @@ final class CachingBriefingRepository: BriefingRepository {
             endpoint: "advisory-detail-\(advisoryId)",
             pathSuffix: "advisories/\(advisoryId)/detail",
             writeThrough: true
+        )
+    }
+
+    func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws {
+        try await online.recalculateAdvisories(
+            flightId: flightId,
+            timestamp: timestamp,
+            cruiseAltitudeFt: cruiseAltitudeFt
         )
     }
 

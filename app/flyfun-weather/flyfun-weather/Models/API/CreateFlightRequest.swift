@@ -5,9 +5,77 @@ struct CreateFlightRequest: Encodable {
     let waypoints: [String]
     let departureTime: String
     var routeName: String = ""
-    var cruiseAltitudeFt: Int?
-    var flightCeilingFt: Int?
-    var flightDurationHours: Double?
+    var rawRoute: String? = nil
+    var cruiseAltitudeFt: Int? = nil
+    var flightCeilingFt: Int? = nil
+    var flightDurationHours: Double? = nil
+    var profileId: Int? = nil
+    var aircraftId: Int? = nil
+}
+
+/// Request body for PATCH /api/flights/{id}.
+struct UpdateFlightRequest: Encodable {
+    var profileId: Int? = nil
+    var aircraftId: Int? = nil
+    var departureTime: String? = nil
+    var cruiseAltitudeFt: Int? = nil
+    var flightCeilingFt: Int? = nil
+    var flightDurationHours: Double? = nil
+    var waypoints: [String]? = nil
+    var rawRoute: String? = nil
+}
+
+enum FlightInvalidation: String, Codable, Sendable {
+    case none
+    case advisoriesOnly = "advisories_only"
+    case refetchNeeded = "refetch_needed"
+
+    var needsRegeneration: Bool {
+        self != .none
+    }
+}
+
+struct UpdateFlightResponse: Decodable, Sendable {
+    let flight: FlightResponse
+    let invalidation: FlightInvalidation
+
+    private enum CodingKeys: String, CodingKey {
+        case invalidation
+    }
+
+    init(from decoder: Decoder) throws {
+        flight = try FlightResponse(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        invalidation = try container.decode(FlightInvalidation.self, forKey: .invalidation)
+    }
+}
+
+/// Aircraft entry from GET /api/aircraft for create/edit pickers.
+struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
+    let id: Int
+    let icaoType: String
+    let typeName: String
+    let tailNumber: String?
+    let nickname: String?
+    let isIfr: Bool
+    let isFiki: Bool
+    let cruiseSpeedKt: Int?
+    let ceilingFt: Int?
+    let isDefault: Bool
+    let createdAt: String
+
+    var displayName: String {
+        if let nickname, !nickname.isEmpty { return nickname }
+        if let tailNumber, !tailNumber.isEmpty { return tailNumber }
+        return typeName
+    }
+
+    var detailText: String {
+        var parts = [icaoType]
+        if let cruiseSpeedKt { parts.append("\(cruiseSpeedKt) kt") }
+        if let ceilingFt { parts.append("FL\(ceilingFt / 100)") }
+        return parts.joined(separator: " · ")
+    }
 }
 
 /// Request body for parsing an ICAO flight plan string.

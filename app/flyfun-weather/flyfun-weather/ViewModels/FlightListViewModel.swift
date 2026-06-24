@@ -9,6 +9,13 @@ enum LoadingState<T> {
     case error(Error)
 }
 
+struct FlightSectionGroup: Identifiable {
+    let section: FlightListSection
+    let flights: [FlightResponse]
+
+    var id: FlightListSection { section }
+}
+
 /// View model for the flight list screen.
 @Observable
 @MainActor
@@ -25,6 +32,11 @@ final class FlightListViewModel {
 
     init(repository: any BriefingRepository) {
         self.repository = repository
+    }
+
+    var sectionedFlights: [FlightSectionGroup] {
+        guard case .loaded(let flights) = state else { return [] }
+        return Self.groupFlights(flights)
     }
 
     func loadFlights() async {
@@ -45,6 +57,23 @@ final class FlightListViewModel {
         } catch {
             state = .error(error)
             Self.logger.error("Failed to load flights: \(error)")
+        }
+    }
+
+    static func groupFlights(_ flights: [FlightResponse]) -> [FlightSectionGroup] {
+        FlightListSection.allCases.compactMap { section in
+            let sectionFlights = flights
+                .filter { $0.displaySection == section }
+                .sorted { lhs, rhs in
+                    switch section {
+                    case .future:
+                        return (lhs.departureDate ?? .distantFuture) < (rhs.departureDate ?? .distantFuture)
+                    case .recent, .past:
+                        return (lhs.departureDate ?? .distantPast) > (rhs.departureDate ?? .distantPast)
+                    }
+                }
+            guard !sectionFlights.isEmpty else { return nil }
+            return FlightSectionGroup(section: section, flights: sectionFlights)
         }
     }
 }

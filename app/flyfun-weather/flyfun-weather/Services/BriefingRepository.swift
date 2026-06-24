@@ -4,11 +4,14 @@ import Foundation
 protocol BriefingRepository: Sendable {
     func flights() async throws -> [FlightResponse]
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse
+    func updateFlight(flightId: String, _ request: UpdateFlightRequest) async throws -> UpdateFlightResponse
+    func aircraft() async throws -> [AircraftResponse]
     func parseFpl(_ text: String) async throws -> ParseFplResponse
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
+    func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse
@@ -42,6 +45,15 @@ final class OnlineBriefingRepository: BriefingRepository {
         return try await client.request("/api/flights", method: "POST", body: body)
     }
 
+    func updateFlight(flightId: String, _ request: UpdateFlightRequest) async throws -> UpdateFlightResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/flights/\(flightId)", method: "PATCH", body: body)
+    }
+
+    func aircraft() async throws -> [AircraftResponse] {
+        try await client.request("/api/aircraft")
+    }
+
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
         let body = try JSONEncoder.weatherBrief.encode(ParseFplRequest(fplText: text))
         return try await client.request("/api/flights/parse-fpl", method: "POST", body: body)
@@ -61,6 +73,15 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse {
         try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/advisories/\(advisoryId)/detail")
+    }
+
+    func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws {
+        let encodedTimestamp = timestamp.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? timestamp
+        var path = "/api/flights/\(flightId)/packs/\(encodedTimestamp)/advisories/recalculate"
+        if let cruiseAltitudeFt {
+            path += "?cruise_altitude_ft=\(cruiseAltitudeFt)"
+        }
+        _ = try await client.requestDataURL(path, method: "POST")
     }
 
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse {

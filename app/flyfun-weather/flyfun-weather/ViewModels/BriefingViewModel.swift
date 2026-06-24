@@ -131,6 +131,15 @@ final class BriefingViewModel {
             async let dataTask: () = loadPackData(timestamp: pack.fetchTimestamp)
             _ = await (historyTask, dataTask)
             await checkCacheStatus()
+        } catch APIError.notFound {
+            Self.logger.info("No briefing pack yet for \(self.flight.id); starting initial refresh")
+            await refresh()
+            if pack == nil {
+                let error = APIError.notFound
+                advisoriesState = .error(error)
+                digestState = .error(error)
+                snapshotState = .error(error)
+            }
         } catch {
             Self.logger.error("Failed to load pack meta: \(error)")
             advisoriesState = .error(error)

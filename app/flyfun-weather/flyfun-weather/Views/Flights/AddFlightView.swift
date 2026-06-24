@@ -5,22 +5,29 @@ struct AddFlightView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel: AddFlightViewModel
     @State private var showFplSheet = false
+    @State private var showRebriefConfirmation = false
 
-    let onCreated: (FlightResponse) -> Void
+    let onSaved: (FlightResponse) -> Void
 
-    init(repository: any BriefingRepository, onCreated: @escaping (FlightResponse) -> Void) {
-        _viewModel = State(initialValue: AddFlightViewModel(repository: repository))
-        self.onCreated = onCreated
+    init(
+        repository: any BriefingRepository,
+        editing flight: FlightResponse? = nil,
+        onSaved: @escaping (FlightResponse) -> Void
+    ) {
+        _viewModel = State(initialValue: AddFlightViewModel(repository: repository, editing: flight))
+        self.onSaved = onSaved
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 fplSection
+                aircraftSection
                 waypointsSection
                 departureSection
                 altitudeSection
                 durationSection
+                statusSection
 
                 if let error = viewModel.errorMessage {
                     Section {
@@ -29,23 +36,29 @@ struct AddFlightView: View {
                     }
                 }
             }
-            .navigationTitle("New Flight")
+            .navigationTitle(viewModel.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        Task {
-                            if let flight = await viewModel.createFlight() {
-                                onCreated(flight)
-                                dismiss()
-                            }
-                        }
+                    Button(viewModel.submitTitle) {
+                        submit()
                     }
                     .disabled(!viewModel.canSubmit)
                 }
+            }
+            .alert("Regenerate briefing?", isPresented: $showRebriefConfirmation) {
+                Button("Continue") {
+                    Task { await submitEdit(regenerate: true) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will regenerate the briefing. Continue?")
+            }
+            .task {
+                await viewModel.loadAircraft()
             }
         }
     }
@@ -69,6 +82,36 @@ struct AddFlightView: View {
         }
     }
 
+    private var aircraftSection: some View {
+        Section {
+            Picker("Aircraft", selection: Binding(
+                get: { viewModel.selectedAircraftId ?? 0 },
+                set: { viewModel.selectedAircraftId = $0 == 0 ? nil : $0 }
+            )) {
+                Text("No aircraft").tag(0)
+                ForEach(viewModel.aircraftOptions) { aircraft in
+                    VStack(alignment: .leading) {
+                        Text(aircraft.displayName)
+                        Text(aircraft.detailText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(aircraft.id)
+                }
+            }
+
+            if viewModel.isLoadingAircraft {
+                HStack {
+                    ProgressView()
+                    Text("Loading aircraft…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Aircraft")
+        }
+    }
+
     private var waypointsSection: some View {
         Section {
             TextField("LFBO TOU LFMT", text: $viewModel.waypointsText)
@@ -89,7 +132,11 @@ struct AddFlightView: View {
 
     private var departureSection: some View {
         Section {
-            DatePicker("Date & Time", selection: $viewModel.departureDate)
+            if let range = viewModel.departureRange {
+                DatePicker("Date & Time", selection: $viewModel.departureDate, in: range)
+            } else {
+                DatePicker("Date & Time", selection: $viewModel.departureDate)
+            }
         } header: {
             Text("Departure")
         }
@@ -128,6 +175,45 @@ struct AddFlightView: View {
             )
         } header: {
             Text("Duration")
+        }
+    }
+
+    @ViewBuilder
+    private var statusSection: some View {
+        if viewModel.isSubmitting || viewModel.statusMessage != nil {
+            Section {
+                HStack(spacing: 12) {
+                    if viewModel.isSubmitting {
+                        ProgressView()
+                    }
+                    Text(viewModel.statusMessage ?? "Working…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func submit() {
+        if viewModel.isEditing {
+            if viewModel.requiresRebriefConfirmation {
+                showRebriefConfirmation = true
+            } else {
+                Task { await submitEdit(regenerate: false) }
+            }
+        } else {
+            Task {
+                if let flight = await viewModel.createFlight() {
+                    onSaved(flight)
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private func submitEdit(regenerate: Bool) async {
+        if let flight = await viewModel.saveEditedFlight(regenerate: regenerate) {
+            onSaved(flight)
+            dismiss()
         }
     }
 }
