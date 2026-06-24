@@ -145,6 +145,11 @@ class CheckoutRequest(BaseModel):
     amount: float = Field(..., gt=0)
     currency: str = "USD"
     recurring: bool = False
+    # When true (default) a logged-in donor's account email pre-fills the
+    # (locked) Stripe Checkout email field. Unchecking it omits customer_email so
+    # Stripe shows a blank, editable field — letting the donor use a different
+    # address. No effect for anonymous donors (they always type their email).
+    use_account_email: bool = True
 
 
 class CheckoutResponse(BaseModel):
@@ -181,9 +186,11 @@ def create_checkout(
 
     # Pre-fill the (mandatory, non-removable) Stripe Checkout email field for
     # logged-in donors so they don't retype it — and so the Checkout contact
-    # matches their account email.
+    # matches their account email. Stripe locks a pre-filled email; a donor who
+    # wants a different address opts out (use_account_email=False), leaving the
+    # field blank and editable at Checkout.
     customer_email: str | None = None
-    if viewer_id:
+    if viewer_id and body.use_account_email:
         user = db.get(UserRow, viewer_id)
         if user and user.email:
             customer_email = user.email

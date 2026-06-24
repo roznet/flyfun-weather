@@ -160,6 +160,23 @@ class TestCheckout:
         assert "/donate-thanks.html?session_id={CHECKOUT_SESSION_ID}" in captured["success_url"]
         assert captured["cancel_url"].endswith("/donate-cancel.html")
 
+    def test_opt_out_of_account_email(self, make_client, monkeypatch):
+        # Donor unchecks "use my account email" → don't pre-fill, so Stripe shows
+        # a blank, editable email field for a different address.
+        captured = {}
+
+        class _Sess:
+            url = "https://x/y"
+
+        monkeypatch.setattr(donations, "create_checkout_session",
+                            lambda **kw: captured.update(kw) or _Sess())
+        client = make_client()
+        r = client.post("/api/donations/checkout",
+                        json={"amount": 25, "use_account_email": False})
+        assert r.status_code == 200, r.text
+        assert captured["user_id"] == DEV_USER_ID  # still attributed to the account
+        assert captured["customer_email"] is None  # but email left for the donor to enter
+
     def test_anonymous_allowed(self, make_client, monkeypatch):
         captured = {}
 

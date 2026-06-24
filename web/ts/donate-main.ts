@@ -309,6 +309,13 @@ function initForm(): void {
   const btn = document.getElementById('btn-donate') as HTMLButtonElement;
   const amountInput = document.getElementById('input-amount') as HTMLInputElement;
   const recurring = document.getElementById('input-recurring') as HTMLInputElement;
+  const useAccountEmail = document.getElementById('input-use-account-email') as HTMLInputElement;
+
+  // The "use my account email" opt-out only makes sense when there's an account
+  // email to pre-fill — anonymous donors always type their email at Checkout.
+  if (isLoggedIn) {
+    document.getElementById('email-opt-row')!.style.display = '';
+  }
 
   // Typing a custom amount clears any active preset highlight + re-translates.
   amountInput.addEventListener('input', () => {
@@ -332,6 +339,8 @@ function initForm(): void {
         amount,
         currency: selectedCurrency,
         recurring: recurring.checked,
+        // Only meaningful for logged-in donors; harmless (and ignored) otherwise.
+        use_account_email: useAccountEmail.checked,
       });
       // Defense-in-depth: only ever navigate to a Stripe Checkout URL, never an
       // arbitrary (e.g. javascript:) scheme if the response were ever tampered with.
