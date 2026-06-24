@@ -88,8 +88,9 @@ private struct ModelStatusBadge: View {
     }
 }
 
-/// Single advisory card.
-private struct AdvisoryCardView: View {
+/// Single advisory card. Internal so the Brief tab (§4.1) can reuse it; Phase 5
+/// replaces this with the full advisory-detail ladder.
+struct AdvisoryCardView: View {
     let advisory: RouteAdvisoryResult
     let catalog: [AdvisoryCatalogEntry]
     @State private var isExpanded = false

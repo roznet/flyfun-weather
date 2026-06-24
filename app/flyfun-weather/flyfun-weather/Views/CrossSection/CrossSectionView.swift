@@ -8,7 +8,6 @@ struct CrossSectionView: View {
     let viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
     @State private var csVM = CrossSectionViewModel()
-    @State private var selectedPointIndex: Int?
     @State private var canvasSize: CGSize = .zero
 
     var body: some View {
@@ -23,8 +22,10 @@ struct CrossSectionView: View {
                 // Route graph below
                 RouteGraphView(viewModel: viewModel, vizData: csVM.vizData)
 
-                // Skew-T detail for selected point
-                if let pointIndex = selectedPointIndex {
+                // Skew-T detail for selected point (shared active point — the
+                // Skew-T tab reflects the same selection; Phase 3 swaps this
+                // inline panel for the scrub readout strip + "Sounding ›").
+                if let pointIndex = viewModel.activePointIndex {
                     Divider()
                     SkewTDetailView(viewModel: viewModel, pointIndex: pointIndex)
                         .frame(minHeight: 300)
@@ -188,7 +189,7 @@ struct CrossSectionView: View {
 
     /// Distance along route for the selected point, used to draw the vertical indicator.
     private var selectedDistanceNm: Double? {
-        guard let idx = selectedPointIndex,
+        guard let idx = viewModel.activePointIndex,
               case .loaded(let analyses) = viewModel.routeAnalysesState,
               let rpa = analyses.analyses.first(where: { $0.pointIndex == idx })
         else { return nil }
@@ -222,10 +223,10 @@ struct CrossSectionView: View {
             })
             if let routePoint {
                 withAnimation {
-                    if selectedPointIndex == routePoint.pointIndex {
-                        selectedPointIndex = nil // toggle off
+                    if viewModel.activePointIndex == routePoint.pointIndex {
+                        viewModel.activePointIndex = nil // toggle off
                     } else {
-                        selectedPointIndex = routePoint.pointIndex
+                        viewModel.activePointIndex = routePoint.pointIndex
                     }
                 }
                 logger.info("Tapped point \(routePoint.pointIndex) at \(routePoint.distanceFromOriginNm)nm")

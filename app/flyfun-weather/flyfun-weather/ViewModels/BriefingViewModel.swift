@@ -1,12 +1,30 @@
 import Foundation
 import OSLog
 
+/// Briefing-internal tabs (§4.1). iPhone = 4 tabs: Brief · Cross-section ·
+/// Skew-T · Map. PIREPs stays as a gated extra tab (deferred from the core
+/// set, but kept reachable so offline reporting doesn't regress). The Brief
+/// tab folds the old Advisories + Digest into one narrative scroll.
 enum BriefingTab: String, Hashable {
-    case advisories
+    case brief
     case crossSection
+    case skewT
     case map
-    case digest
     case pireps
+}
+
+/// Shared deep-link payload (§4.6/§4.7/§4.9): one `focusIntent` consumed by the
+/// target tab to open already-scrubbed to the right model / layer / point.
+struct FocusIntent: Equatable {
+    var model: String?
+    /// Cross-section layer id to enable (e.g. a convective layer).
+    var layerId: String?
+    /// Map metric id to select.
+    var mapMetricId: String?
+    var pointIndex: Int?
+    var distanceNm: Double?
+    var altitudeFt: Double?
+    var validTime: String?
 }
 
 /// Refresh pipeline state.
@@ -54,9 +72,17 @@ final class BriefingViewModel {
     private(set) var packCacheStatus: [String: Bool] = [:] // timestamp -> isCached
 
     // UI state
-    var selectedTab: BriefingTab = .advisories
+    var selectedTab: BriefingTab = .brief
     var selectedModel: String = "gfs"
     var availableModels: [String] = []
+
+    /// Shared active route point (§4.7) — the scrub/selected point on the
+    /// cross-section, reflected by the Skew-T tab and (later) the map. nil = no
+    /// point selected yet.
+    var activePointIndex: Int?
+
+    /// Pending deep-link payload; the target tab applies and clears it (§4.10).
+    var focusIntent: FocusIntent?
     var selectedPackTimestamp: String = "" {
         didSet {
             guard oldValue != selectedPackTimestamp, !selectedPackTimestamp.isEmpty else { return }

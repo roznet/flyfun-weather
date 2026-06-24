@@ -22,6 +22,8 @@ struct BriefingContainerView: View {
         Group {
             if let viewModel {
                 VStack(spacing: 0) {
+                    // Connective header (§4.10) — persists above all 4 tabs.
+                    BriefingHeaderView(viewModel: viewModel, flight: flight)
                     RefreshBannerView(state: viewModel.refreshState)
                     DownloadBannerView(state: viewModel.downloadState)
                     BriefingContentView(viewModel: viewModel, trackingService: trackingService)
@@ -115,31 +117,7 @@ private struct BriefingToolbarView: View {
                 }
             }
 
-            // Pack history picker
-            if viewModel.packHistory.count > 1 {
-                Menu {
-                    ForEach(viewModel.packHistory, id: \.fetchTimestamp) { pack in
-                        Button {
-                            viewModel.selectedPackTimestamp = pack.fetchTimestamp
-                        } label: {
-                            HStack {
-                                Text(viewModel.packLabel(for: pack))
-                                if viewModel.packCacheStatus[pack.fetchTimestamp] == true {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                        .foregroundStyle(.green)
-                                        .font(.caption2)
-                                }
-                                if pack.fetchTimestamp == viewModel.selectedPackTimestamp {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    Label(currentPackLabel, systemImage: "clock.arrow.circlepath")
-                        .font(.caption)
-                }
-            }
+            // Pack history picker now lives in the connective header (§4.10).
 
             // Download / cache button
             switch viewModel.downloadState {
@@ -187,13 +165,6 @@ private struct BriefingToolbarView: View {
             }
             .disabled(viewModel.refreshState.isRefreshing)
         }
-    }
-
-    private var currentPackLabel: String {
-        if let pack = viewModel.pack {
-            return viewModel.packLabel(for: pack)
-        }
-        return "History"
     }
 }
 
@@ -339,21 +310,23 @@ private struct BriefingContentView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
+        // iPhone = 4 tabs: Brief · Cross-section · Skew-T · Map (§4.1).
+        // PIREPs stays as a gated extra tab so offline reporting doesn't regress.
         TabView(selection: $viewModel.selectedTab) {
-            Tab("Advisories", systemImage: "exclamationmark.shield", value: BriefingTab.advisories) {
-                AdvisoryDashboardView(viewModel: viewModel)
+            Tab("Brief", systemImage: "doc.text.image", value: BriefingTab.brief) {
+                BriefView(viewModel: viewModel)
             }
 
             Tab("Cross-Section", systemImage: "chart.xyaxis.line", value: BriefingTab.crossSection) {
                 CrossSectionView(viewModel: viewModel, trackingService: trackingService)
             }
 
-            Tab("Map", systemImage: "map", value: BriefingTab.map) {
-                RouteMapView(viewModel: viewModel, trackingService: trackingService)
+            Tab("Skew-T", systemImage: "chart.dots.scatter", value: BriefingTab.skewT) {
+                SkewTTabView(viewModel: viewModel)
             }
 
-            Tab("Digest", systemImage: "doc.text", value: BriefingTab.digest) {
-                DigestView(viewModel: viewModel)
+            Tab("Map", systemImage: "map", value: BriefingTab.map) {
+                RouteMapView(viewModel: viewModel, trackingService: trackingService)
             }
 
             if appState.userPreferences.preferences.pirepCanView {
