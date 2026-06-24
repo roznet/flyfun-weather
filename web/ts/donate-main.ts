@@ -313,8 +313,9 @@ function initForm(): void {
 
   // The "use my account email" opt-out only makes sense when there's an account
   // email to pre-fill — anonymous donors always type their email at Checkout.
+  // The email note itself stays visible to everyone.
   if (isLoggedIn) {
-    document.getElementById('email-opt-row')!.style.display = '';
+    document.getElementById('use-account-email-label')!.style.display = '';
   }
 
   // Typing a custom amount clears any active preset highlight + re-translates.

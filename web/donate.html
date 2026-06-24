@@ -33,25 +33,9 @@
 
     .recurring-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; font-size: 0.9rem; }
 
-    /* "Use my account email" opt-out with an on-hover explanation. */
-    .email-opt-row { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.9rem; font-size: 0.9rem; }
-    .email-opt-label { display: inline-flex; align-items: center; gap: 0.5rem; margin: 0; }
-    .hint { position: relative; display: inline-flex; }
-    .hint .hint-mark {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 1.05rem; height: 1.05rem; border-radius: 50%;
-      border: 1px solid var(--border); color: var(--text-muted);
-      font-size: 0.72rem; font-weight: 700; cursor: help; user-select: none;
-    }
-    .hint .hint-pop {
-      position: absolute; left: 50%; bottom: calc(100% + 0.5rem); transform: translateX(-50%);
-      width: 17rem; max-width: 70vw; padding: 0.6rem 0.7rem; z-index: 5;
-      background: var(--surface); color: var(--text); border: 1px solid var(--border);
-      border-radius: var(--radius); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-      font-size: 0.8rem; font-weight: 400; line-height: 1.35;
-      opacity: 0; visibility: hidden; transition: opacity 0.12s ease;
-    }
-    .hint:hover .hint-pop, .hint:focus-within .hint-pop { opacity: 1; visibility: visible; }
+    /* "Use my account email" opt-out — shown to logged-in donors between the
+       Stripe note and the email-policy note. */
+    .email-opt-label { display: flex; align-items: center; gap: 0.5rem; margin: 0.75rem 0; font-size: 0.9rem; }
 
     #loading { text-align: center; padding: 3rem; color: var(--text-muted); }
     #error-message { color: var(--danger); text-align: center; padding: 1rem; display: none; }
@@ -192,32 +176,27 @@
           <input type="checkbox" id="input-recurring"> Make this a monthly donation
         </label>
 
-        <!-- Logged-in donors only (revealed by donate-main.ts): pre-fill the
-             account email into Stripe's locked email field, or opt out to enter
-             a different one. -->
-        <div class="email-opt-row" id="email-opt-row" style="display:none;">
-          <label class="email-opt-label">
-            <input type="checkbox" id="input-use-account-email" checked>
-            Use my account email
-          </label>
-          <span class="hint" tabindex="0" aria-label="Why we ask for an email">
-            <span class="hint-mark" aria-hidden="true">i</span>
-            <span class="hint-pop" role="tooltip">
-              Stripe, our payment provider, requires an email for your receipt.
-              Leave this checked to use your account email, or uncheck it to
-              enter a different email at checkout.
-            </span>
-          </span>
-        </div>
-
         <button type="button" id="btn-donate" class="btn btn-primary">Donate</button>
+
         <p class="sub" style="margin-top:0.75rem;">
-          Payments are processed by Stripe. We never see your card details.
+          Payments are processed by Stripe. We never see your card details, and
+          Stripe requires an email at checkout.
         </p>
+
         <p class="sub">
-          We will not email you, out of respect for your inbox — but you can always
-          come back to this page to see your previous donation.
+          We won't email you automatically, out of respect for your inbox — but
+          you can always return to this page to see your donation history, and
+          you'll have the option to email yourself a receipt from the confirmation
+          page.
         </p>
+
+        <!-- Logged-in donors only (revealed by donate-main.ts): pre-fill the
+             account email into Stripe's locked field, or opt out to enter a
+             different one at checkout. -->
+        <label class="email-opt-label" id="use-account-email-label" style="display:none;">
+          <input type="checkbox" id="input-use-account-email" checked>
+          Use my account email for Stripe
+        </label>
       </div>
     </div>
   </div>
