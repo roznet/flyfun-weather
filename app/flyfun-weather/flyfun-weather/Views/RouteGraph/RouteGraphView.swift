@@ -12,6 +12,9 @@ private struct ChartDataPoint: Identifiable {
 struct RouteGraphView: View {
     let viewModel: BriefingViewModel
     let vizData: VizRouteData?
+    /// Shared cross-section scrub cursor (§4.7) — one cursor, X-aligned, so the
+    /// route graph highlights the same distance the readout strip describes.
+    var scrubDistanceNm: Double? = nil
 
     @State private var leftMetricId = "headwind"
     @State private var rightMetricId = "cloud-cover"
@@ -71,6 +74,13 @@ struct RouteGraphView: View {
                 RuleMark(x: .value("Distance", wp.distanceNm))
                     .foregroundStyle(.gray.opacity(0.3))
                     .lineStyle(StrokeStyle(dash: [4, 4]))
+            }
+
+            // Shared scrub cursor — matches the cross-section's vertical indicator.
+            if let cursor = scrubDistanceNm {
+                RuleMark(x: .value("Distance", cursor))
+                    .foregroundStyle(.orange)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
             }
         }
         .chartXAxisLabel("Distance (nm)")

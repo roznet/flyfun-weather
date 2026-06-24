@@ -1,83 +1,140 @@
-import OSLog
 import SwiftUI
 
-private let logger = Logger(subsystem: "aero.flyfun.weather", category: "CrossSection")
-
-/// SwiftUI Canvas wrapper for the cross-section visualization.
+/// SwiftUI Canvas wrapper for the cross-section visualization (§4.7 interaction).
+/// Touch model (a): tap/drag = scrub → moves a continuous cursor that drives the
+/// readout strip and the shared active point; "Sounding ›" deep-links to the
+/// Skew-T tab. Config lives in a bottom sheet behind a "Layers" pill (§4.5);
+/// the model selector stays in the chrome. Landscape = full-bleed focus mode.
 struct CrossSectionView: View {
     let viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
     @State private var csVM = CrossSectionViewModel()
     @State private var canvasSize: CGSize = .zero
+    @State private var scrubDistanceNm: Double?
+    @State private var scrubAltitudeFt: Double?
+    @State private var showingConfig = false
+    @State private var chromeHidden = false
+    @Environment(\.verticalSizeClass) private var vSizeClass
+
+    /// iPhone landscape → immersive full-bleed focus mode (§4.7): cross-section
+    /// is a wide artifact, so landscape gives it the right aspect ratio.
+    private var isLandscapeFocus: Bool { vSizeClass == .compact }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // Layer toggle chips
-                layerChips
-
-                // Cross-section canvas
-                crossSectionCanvas
-
-                // Route graph below
-                RouteGraphView(viewModel: viewModel, vizData: csVM.vizData)
-
-                // Skew-T detail for selected point (shared active point — the
-                // Skew-T tab reflects the same selection; Phase 3 swaps this
-                // inline panel for the scrub readout strip + "Sounding ›").
-                if let pointIndex = viewModel.activePointIndex {
-                    Divider()
-                    SkewTDetailView(viewModel: viewModel, pointIndex: pointIndex)
-                        .frame(minHeight: 300)
-                        .transition(.move(edge: .bottom))
-                }
+        Group {
+            if isLandscapeFocus {
+                landscapeFocus
+            } else {
+                portrait
             }
         }
-        .onChange(of: viewModel.selectedModel) {
-            updateVizData()
-        }
-        .onChange(of: viewModel.routeAnalysesState.isLoaded) {
-            updateVizData()
-        }
-        .onChange(of: viewModel.elevationState.isLoaded) {
-            updateVizData()
-        }
-        .task {
-            updateVizData()
+        .onChange(of: viewModel.selectedModel) { updateVizData() }
+        .onChange(of: viewModel.routeAnalysesState.isLoaded) { updateVizData() }
+        .onChange(of: viewModel.elevationState.isLoaded) { updateVizData() }
+        .task { updateVizData() }
+        .sheet(isPresented: $showingConfig) {
+            CrossSectionConfigSheet(csVM: csVM)
         }
     }
+
+    // MARK: Portrait layout
+
+    private var portrait: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                chromeBar
+                CrossSectionReadoutView(
+                    vizData: csVM.vizData ?? emptyViz,
+                    scrubDistanceNm: scrubDistanceNm,
+                    scrubAltitudeFt: scrubAltitudeFt,
+                    onSounding: goToSounding
+                )
+                crossSectionCanvas
+                RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm)
+            }
+        }
+        .background(Theme.bg)
+    }
+
+    // MARK: Landscape immersive focus
+
+    private var landscapeFocus: some View {
+        ZStack(alignment: .topTrailing) {
+            crossSectionCanvas
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !chromeHidden {
+                VStack {
+                    CrossSectionReadoutView(
+                        vizData: csVM.vizData ?? emptyViz,
+                        scrubDistanceNm: scrubDistanceNm,
+                        scrubAltitudeFt: scrubAltitudeFt,
+                        onSounding: goToSounding
+                    )
+                    Spacer()
+                }
+                layersPill
+                    .padding(Theme.cardPadding)
+            }
+        }
+        .background(Theme.bg)
+        .onTapGesture(count: 2) { withAnimation { chromeHidden.toggle() } } // Photos-style chrome toggle
+    }
+
+    // MARK: Chrome bar (portrait)
+
+    private var chromeBar: some View {
+        HStack(spacing: Theme.spacingM) {
+            ModelSelectorView(selectedModel: Binding(
+                get: { viewModel.selectedModel },
+                set: { viewModel.selectedModel = $0 }
+            ), models: viewModel.availableModels)
+            Spacer()
+            layersPill
+        }
+        .padding(.horizontal, Theme.cardPadding)
+        .padding(.vertical, Theme.spacingS)
+    }
+
+    private var layersPill: some View {
+        Button {
+            showingConfig = true
+        } label: {
+            Label("Layers", systemImage: "slider.horizontal.3")
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Theme.primary.opacity(0.12), in: Capsule())
+                .foregroundStyle(Theme.primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Canvas
 
     @ViewBuilder
     private var crossSectionCanvas: some View {
         if let vizData = csVM.vizData {
-            // Read observable values here (view body) so SwiftUI tracks changes.
-            // Canvas closures are @escaping — observation doesn't work inside them.
-            // locationUpdateCount forces re-evaluation since CLLocation is a reference type.
             let _ = trackingService.locationUpdateCount
             let aircraft = aircraftPosition
-            let selectedNm = selectedDistanceNm
+            let cursor = scrubDistanceNm ?? activePointDistanceNm
             let layers = csVM.enabledLayers
 
             Canvas { context, size in
                 CrossSectionRenderer(data: vizData, enabledLayers: layers,
-                                     selectedDistanceNm: selectedNm,
+                                     selectedDistanceNm: cursor,
                                      aircraftPosition: aircraft)
                     .render(context: &context, size: size)
             }
             .frame(minHeight: 300)
-            .aspectRatio(2.0, contentMode: .fit)
+            .aspectRatio(isLandscapeFocus ? nil : 2.0, contentMode: .fit)
             .background(GeometryReader { geo in
                 Color.clear.onAppear { canvasSize = geo.size }
                     .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
             })
-            .onTapGesture { location in
-                handleTap(at: location)
-            }
+            .gesture(scrubGesture)
         } else {
             switch viewModel.routeAnalysesState {
             case .idle, .loading:
-                ProgressView("Loading cross-section...")
-                    .frame(minHeight: 300)
+                ProgressView("Loading cross-section...").frame(minHeight: 300)
             case .error(let error):
                 ContentUnavailableView("Cross-Section Unavailable", systemImage: "chart.xyaxis.line",
                                        description: Text(error.localizedDescription))
@@ -88,107 +145,44 @@ struct CrossSectionView: View {
         }
     }
 
-    private var layerChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                // Model selector
-                ModelSelectorView(selectedModel: Binding(
-                    get: { viewModel.selectedModel },
-                    set: { viewModel.selectedModel = $0 }
-                ), models: viewModel.availableModels)
+    // MARK: Scrub gesture (tap = zero-length drag)
 
-                Divider().frame(height: 20)
+    private var scrubGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in updateScrub(at: value.location) }
+    }
 
-                // Method-picker dropdowns: clouds / icing / turbulence / convection.
-                // Each is a single mutually-exclusive choice with a "None" option.
-                ForEach(LayerGroup.allCases.filter(\.isMethodGroup), id: \.self) { group in
-                    methodMenu(for: group)
-                }
+    private func updateScrub(at location: CGPoint) {
+        guard let vizData = csVM.vizData, canvasSize.width > 0, !vizData.points.isEmpty else { return }
+        let transform = CoordTransform(size: canvasSize,
+                                       maxDistanceNm: vizData.totalDistanceNm,
+                                       maxAltitudeFt: vizData.flightCeilingFt)
+        let dist = min(max(transform.xToDistance(location.x), 0), vizData.totalDistanceNm)
+        let alt = min(max(transform.yToAltitude(location.y), 0), vizData.flightCeilingFt)
+        scrubDistanceNm = dist
+        scrubAltitudeFt = alt
 
-                Divider().frame(height: 20)
-
-                // Toggle chips: terrain / reference / temperature / stability layers
-                // remain independently toggleable.
-                ForEach(CrossSectionLayer.allLayers.filter { !$0.group.isMethodGroup }, id: \.id) { layer in
-                    toggleChip(for: layer)
-                }
+        // Shared active point = nearest route point to the cursor (soundings are
+        // discrete, so the Skew-T snaps to the nearest point, not the raw x).
+        if case .loaded(let analyses) = viewModel.routeAnalysesState {
+            let nearest = analyses.analyses.min {
+                abs($0.distanceFromOriginNm - dist) < abs($1.distanceFromOriginNm - dist)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            viewModel.activePointIndex = nearest?.pointIndex
         }
     }
 
-    /// Dropdown menu for a method group (clouds / icing / turbulence / convection).
-    /// Items: "None" + each method in the group, with a checkmark on the active one.
-    @ViewBuilder
-    private func methodMenu(for group: LayerGroup) -> some View {
-        let active = csVM.activeMethod(for: group)
-        let activeLabel = active.flatMap { CrossSectionLayer.methodLabels[$0] } ?? "None"
-
-        Menu {
-            Button {
-                csVM.setMethod(nil, for: group)
-            } label: {
-                if active == nil {
-                    Label("None", systemImage: "checkmark")
-                } else {
-                    Text("None")
-                }
-            }
-            ForEach(CrossSectionLayer.methodGroupOrder[group] ?? [], id: \.self) { layerId in
-                Button {
-                    csVM.setMethod(layerId, for: group)
-                } label: {
-                    if active == layerId {
-                        Label(CrossSectionLayer.methodLabels[layerId] ?? layerId, systemImage: "checkmark")
-                    } else {
-                        Text(CrossSectionLayer.methodLabels[layerId] ?? layerId)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text("\(group.label): \(activeLabel)")
-                    .font(.caption2)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(active != nil ? Color.accentColor.opacity(0.15) : Color.clear)
-            .foregroundStyle(active != nil ? .primary : .secondary)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(active != nil ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 0.5))
+    private func goToSounding() {
+        // Ensure an active point, then switch to the Skew-T tab (§4.7 deep-link).
+        if viewModel.activePointIndex == nil, case .loaded(let analyses) = viewModel.routeAnalysesState {
+            viewModel.activePointIndex = analyses.analyses.first?.pointIndex
         }
+        viewModel.selectedTab = .skewT
     }
 
-    @ViewBuilder
-    private func toggleChip(for layer: any CrossSectionLayerProtocol) -> some View {
-        let enabled = csVM.enabledLayers[layer.id] ?? false
-        Button {
-            csVM.toggleLayer(layer.id)
-        } label: {
-            Text(layer.name)
-                .font(.caption2)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(enabled ? Color.accentColor.opacity(0.15) : Color.clear)
-                .foregroundStyle(enabled ? .primary : .secondary)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(enabled ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-    }
+    // MARK: Helpers
 
-    /// Aircraft position for cross-section overlay, from flight tracking service.
-    private var aircraftPosition: CrossSectionRenderer.AircraftPosition? {
-        guard trackingService.isTracking, let pos = trackingService.projectedPosition,
-              let altFt = pos.altitudeFt else { return nil }
-        return .init(distanceNm: pos.distanceNm, altitudeFt: altFt, opacity: pos.opacity)
-    }
-
-    /// Distance along route for the selected point, used to draw the vertical indicator.
-    private var selectedDistanceNm: Double? {
+    private var activePointDistanceNm: Double? {
         guard let idx = viewModel.activePointIndex,
               case .loaded(let analyses) = viewModel.routeAnalysesState,
               let rpa = analyses.analyses.first(where: { $0.pointIndex == idx })
@@ -196,64 +190,27 @@ struct CrossSectionView: View {
         return rpa.distanceFromOriginNm
     }
 
-    // MARK: - Tap handling
+    private var aircraftPosition: CrossSectionRenderer.AircraftPosition? {
+        guard trackingService.isTracking, let pos = trackingService.projectedPosition,
+              let altFt = pos.altitudeFt else { return nil }
+        return .init(distanceNm: pos.distanceNm, altitudeFt: altFt, opacity: pos.opacity)
+    }
 
-    private func handleTap(at location: CGPoint) {
-        guard let vizData = csVM.vizData else { return }
-        let points = vizData.points
-        guard !points.isEmpty, canvasSize.width > 0 else { return }
-
-        let transform = CoordTransform(
-            size: canvasSize,
-            maxDistanceNm: vizData.totalDistanceNm,
-            maxAltitudeFt: vizData.flightCeilingFt
-        )
-        let tapDistanceNm = transform.xToDistance(location.x)
-        let nearest = points.enumerated().min(by: {
-            abs($0.element.distanceNm - tapDistanceNm) < abs($1.element.distanceNm - tapDistanceNm)
-        })
-
-        guard let nearest else { return }
-
-        // Find the point_index from route analyses
-        if case .loaded(let analyses) = viewModel.routeAnalysesState {
-            let routePoint = analyses.analyses.min(by: {
-                abs($0.distanceFromOriginNm - vizData.points[nearest.offset].distanceNm) <
-                abs($1.distanceFromOriginNm - vizData.points[nearest.offset].distanceNm)
-            })
-            if let routePoint {
-                withAnimation {
-                    if viewModel.activePointIndex == routePoint.pointIndex {
-                        viewModel.activePointIndex = nil // toggle off
-                    } else {
-                        viewModel.activePointIndex = routePoint.pointIndex
-                    }
-                }
-                logger.info("Tapped point \(routePoint.pointIndex) at \(routePoint.distanceFromOriginNm)nm")
-            }
-        }
+    /// Empty placeholder so the readout strip can render before data loads.
+    private var emptyViz: VizRouteData {
+        VizRouteData(points: [], cruiseAltitudeFt: 0, ceilingAltitudeFt: 0, flightCeilingFt: 0,
+                     totalDistanceNm: 1, waypointMarkers: [], departureTime: "",
+                     flightDurationHours: 0, terrainProfile: nil)
     }
 
     private func updateVizData() {
         switch viewModel.routeAnalysesState {
-        case .idle:
-            logger.debug("updateVizData: routeAnalysesState is idle")
-        case .loading:
-            logger.debug("updateVizData: routeAnalysesState is loading")
-        case .error(let error):
-            logger.error("updateVizData: routeAnalysesState error: \(error)")
+        case .idle, .loading, .error:
+            break
         case .loaded(let analyses):
-            logger.info("updateVizData: loaded \(analyses.analyses.count) points, model=\(viewModel.selectedModel), models=\(analyses.models)")
             var elevation: ElevationResponse? = nil
-            if case .loaded(let elev) = viewModel.elevationState {
-                elevation = elev
-            }
+            if case .loaded(let elev) = viewModel.elevationState { elevation = elev }
             csVM.update(routeAnalyses: analyses, elevation: elevation, model: viewModel.selectedModel)
-            if let viz = csVM.vizData {
-                logger.info("vizData: \(viz.points.count) points, \(viz.totalDistanceNm)nm, ceiling=\(viz.flightCeilingFt)ft")
-            } else {
-                logger.warning("vizData is nil after update")
-            }
         }
     }
 }
