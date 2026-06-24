@@ -141,7 +141,12 @@ class ConvectiveEvaluator:
                 # scheme. Use convective_thermo explicitly (matches the digest
                 # and dd_nwp_agreement) so this stays a DD-vs-NWP comparison even
                 # if convective ever becomes the chosen (possibly NWP) method.
-                thermo_conv = sounding.convective_thermo or sounding.convective
+                # Do NOT fall back to sounding.convective: when the active track
+                # is the NWP one (convective_method="nwp") that would pass the
+                # NWP assessment as both sides → circular self-comparison the
+                # nwp_cape_fallback guard can't catch (#283 review). If thermo is
+                # missing, convective_cross_check returns None on its own.
+                thermo_conv = sounding.convective_thermo
                 xc = convective_cross_check(thermo_conv, sounding.convective_nwp)
                 if xc is not None:
                     xcheck_fired += 1
