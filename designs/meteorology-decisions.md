@@ -518,8 +518,11 @@ same logic the briefing uses.
 - **Explicit mid-level-RH entrainment suppressor** — currently the SB→ML gap
   carries the dry-column story; a direct mean-600–850-hPa-RH annotation (threaded
   like ω) would name the mechanism. Deferred.
-- **Open-Meteo `showers` (convective-only precip)** — not currently fetched;
-  would give a precip-based corroboration signal cleaner than total QPF.
+- **Open-Meteo `showers` (convective-only precip)** — *is* fetched and stored
+  (`HourlyForecast.showers_mm`, `fetch/open_meteo.py`, `fetch/variables.py`);
+  used in precipitation phase, and as the uniform cross-model realized-convection
+  signal for the convective character advisory (§14). (Earlier text said "not
+  fetched" — corrected 2026-06-24.)
 - **Cross-model NWP-consensus override** — belongs in the advisory aggregation
   layer (1 model HIGH while others dry → temper/annotate the aggregate).
 
@@ -1214,3 +1217,99 @@ not validated numbers** — calibration against a known frontal case (Storm Ciar
 the May-4 fronts) is still pending. With 3 levels the slant is a 2-segment sketch;
 the clean version is the Phase D.2 GRIB stencil (detect in the along-route ×
 pressure plane, continuity intrinsic, no association heuristic).
+
+---
+
+## 14. Convective character: a VFR-avoidability axis separate from severity
+
+**Date:** 2026-06-24
+**Status:** Implemented (issue #294). Thresholds are physically-motivated
+defaults — PIREP/radar calibration pending.
+**Context:** A RED convective advisory was narrating as "VFR impractical" even on
+days of *isolated* cells in otherwise-clear air. Two real cases anchor it:
+EDQT→EDDS 2026-06-16 (graded RED on 82–100% route coverage; reality was "few but
+nasty" cells the pilot circumnavigated VFR), and `lsgs_…_dikol_lfqa-2026-05-31`
+(anticyclone, no fronts, VFR observed, RED convective). The over-warning's root
+cause: the convective advisory's "% of route affected" measures *environment
+favorability* (CAPE ≥ MODERATE per point), not realized cell coverage — on a
+loaded-gun day that is ~the whole route while realized cells are few.
+
+### The decision
+
+Add a **second, orthogonal axis** — convective *character* (VFR avoidability) —
+computed per model and surfaced as its own graded advisory (`convective_character`).
+**Severity still owns the colour**: the existing `convective` advisory is
+unchanged, and a big cell still grades RED there regardless of character. The two
+axes are deliberately kept separate (mirrors §4d DD/NWP separation): severity =
+how bad a cell is (CAPE + shear + modifiers); character = whether you can operate
+around it.
+
+`ConvectiveCharacter`: NONE / ISOLATED / SCATTERED / WIDESPREAD / EMBEDDED /
+ORGANIZED. Advisory colour: NONE→GREEN, ISOLATED/SCATTERED→AMBER,
+WIDESPREAD/ORGANIZED/EMBEDDED→RED.
+
+### Classifier — coverage-first (the key ordering)
+
+Per `classify_convective_character` (`analysis/sounding/convective.py`):
+
+1. **EMBEDDED** if a majority of convective points sit under a BKN/OVC deck
+   (can't see the cells to avoid them).
+2. **Realized-coverage band** from the % of route points with *realized*
+   convection — `showers_mm` (uniform across all models), GFS `convective_cover_pct`,
+   or ICON/ECMWF convective geometry. ≤15% isolated, ≤40% scattered, else widespread.
+3. **K-index / Total Totals** (numerous-storm potential) nudge the band up one
+   step, never down.
+4. **Forcing** (front co-located / synoptic ascent / strong shear) only relabels a
+   *widespread* band as ORGANIZED.
+
+**Why coverage-first, not forcing-first:** EDQT had a trough axis and 28–38 kt
+shear (forcing present) yet was avoidable because a cap held it to a few realized
+cells. Forcing-first would have mislabelled it ORGANIZED→RED. Coverage-first keeps
+it ISOLATED→AMBER, matching ground truth; a genuine squall line still goes RED
+because it has *widespread realized showers*. Shear stays a *severity* signal
+(it makes cells nasty, not numerous).
+
+### Signals, and the per-model asymmetry
+
+- **`showers_mm`** is the uniform realized-convection signal (fetched for every
+  model — corrected a stale doc note in §4 claiming it wasn't).
+- **K-index / Total Totals** are coverage/numerosity indices, MetPy-derived for
+  all models. ECMWF additionally delivers **native `kx`/`totalx`** (a1 GRIB, full
+  IFS resolution); these are decoded into `nwp_k_index`/`nwp_total_totals` and
+  **preferred over the MetPy values for ECMWF** (kept as a separate NWP signal,
+  not folded into the severity tier). ICON publishes no native K/TT (its 28-level
+  full-sounding replacement makes MetPy K/TT trustworthy anyway).
+
+### Digest wiring + guardrail
+
+The advisory flows into the digest context automatically; `briefer_v1.md` instructs
+the LLM to let character drive *how it describes* convection (circumnavigable VFR
+for isolated/scattered; impractical for widespread/organized/embedded) without
+changing the colour. A conservative deterministic backstop
+(`check_convective_vfr_consistency`) flags only a same-sentence convective-term +
+absolute-VFR-impractical-term co-occurrence when the character advisory is AMBER —
+narrow on purpose so it doesn't fire when VFR is impractical for cloud/airport
+reasons.
+
+### Real-world validation needed
+
+- EDQT→EDDS 2026-06-16 should read ISOLATED/SCATTERED (AMBER); a documented
+  squall-line/MCS day should read WIDESPREAD/ORGANIZED (RED); an embedded-CB-in-
+  stratiform day EMBEDDED (RED). Tune `isolated_max_pct` / `scattered_max_pct` /
+  `embed_pct` / `organized_shear_kt` and the `showers` point threshold against
+  radar/lightning/PIREPs.
+- Confirm ECMWF native `kx`/`totalx` magnitudes match the index scale (pass-through
+  assumption — no K→°C conversion).
+
+### Files changed
+
+`models/analysis.py` (`ConvectiveCharacter`, `HourlyForecast.nwp_k_index/`
+`nwp_total_totals`, `ThermodynamicIndices.nwp_k_index/nwp_total_totals`),
+`analysis/sounding/convective.py` (`classify_convective_character`, `ConvCharPoint`),
+`analysis/sounding/__init__.py` (copy native K/TT onto indices),
+`analysis/advisories/convective_character.py` (new evaluator), `_helpers.py`
+(`showers_at_point`), `advisories/strings.py`, `digest/guardrails.py`,
+`configs/weather_digest/prompts/briefer_v1.md`, `fetch/grib/decode.py` +
+`__init__.py` + `fill.py` (ECMWF kx/totalx decode + plumb). Tests:
+`tests/test_convective.py`, `tests/test_digest_assertions.py`,
+`tests/test_ecmwf_sample.py`.

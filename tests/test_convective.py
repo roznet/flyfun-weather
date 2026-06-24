@@ -1053,3 +1053,103 @@ def test_threshold_boundaries_exclusive_inclusive():
     assert convection_realized(
         method="thermo", cin_jkg=-50.0, ml_cape_jkg=None, lifted_index=-2.0
     ) is True
+
+
+# ---------------------------------------------------------------------------
+# classify_convective_character (VFR avoidability — issue #294)
+# ---------------------------------------------------------------------------
+
+from weatherbrief.analysis.sounding.convective import (  # noqa: E402
+    ConvCharPoint,
+    classify_convective_character,
+)
+from weatherbrief.models import ConvectiveCharacter  # noqa: E402
+
+
+def _pts(n_total, *, conv=0, realized=0, embedded=0, k=None, tt=None):
+    """Build n_total points; the first `conv` are convective, of which
+    `realized` are realized and `embedded` are embedded."""
+    points = []
+    for i in range(n_total):
+        is_conv = i < conv
+        points.append(
+            ConvCharPoint(
+                is_convective=is_conv,
+                realized=is_conv and i < realized,
+                embedded=is_conv and i < embedded,
+                k_index=k if is_conv else None,
+                total_totals=tt if is_conv else None,
+            )
+        )
+    return points
+
+
+def test_character_none_when_no_points():
+    assert classify_convective_character([]) is ConvectiveCharacter.NONE
+
+
+def test_character_none_when_no_convection():
+    pts = _pts(10, conv=0)
+    assert classify_convective_character(pts) is ConvectiveCharacter.NONE
+
+
+def test_character_isolated_few_realized_cells():
+    # 20 points, 4 convective, only 2 realized (10% of route) → isolated.
+    pts = _pts(20, conv=4, realized=2)
+    assert classify_convective_character(pts) is ConvectiveCharacter.ISOLATED
+
+
+def test_character_scattered():
+    # 10 points, 5 convective, 3 realized (30%) → scattered.
+    pts = _pts(10, conv=5, realized=3)
+    assert classify_convective_character(pts) is ConvectiveCharacter.SCATTERED
+
+
+def test_character_widespread():
+    # 10 points, 8 convective, 6 realized (60%) → widespread.
+    pts = _pts(10, conv=8, realized=6)
+    assert classify_convective_character(pts) is ConvectiveCharacter.WIDESPREAD
+
+
+def test_character_embedded_takes_priority():
+    # Even with few realized cells, a majority embedded → embedded.
+    pts = _pts(20, conv=4, realized=2, embedded=3)
+    assert classify_convective_character(pts) is ConvectiveCharacter.EMBEDDED
+
+
+def test_character_organized_widespread_with_front():
+    pts = _pts(10, conv=8, realized=6)
+    assert (
+        classify_convective_character(pts, front_present=True)
+        is ConvectiveCharacter.ORGANIZED
+    )
+
+
+def test_character_organized_widespread_with_shear():
+    pts = _pts(10, conv=8, realized=6)
+    assert (
+        classify_convective_character(pts, shear_kt=40)
+        is ConvectiveCharacter.ORGANIZED
+    )
+
+
+def test_character_forcing_does_not_organize_isolated():
+    # EDQT-like: forcing (front + shear) present but only a few realized cells
+    # → stays ISOLATED (avoidable), not ORGANIZED. This is the ground-truth case.
+    pts = _pts(20, conv=8, realized=2)
+    assert (
+        classify_convective_character(pts, front_present=True, shear_kt=38)
+        is ConvectiveCharacter.ISOLATED
+    )
+
+
+def test_character_numerosity_nudges_band_up():
+    # Isolated by coverage (10%), but very high K → bumped to scattered.
+    pts = _pts(20, conv=4, realized=2, k=45)
+    assert classify_convective_character(pts) is ConvectiveCharacter.SCATTERED
+
+
+def test_character_numerosity_nudge_clamps_at_widespread():
+    pts = _pts(10, conv=8, realized=6, tt=60)
+    # already widespread; nudge clamps (no organize signal) → widespread.
+    assert classify_convective_character(pts) is ConvectiveCharacter.WIDESPREAD

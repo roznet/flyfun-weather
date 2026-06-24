@@ -6,10 +6,12 @@ and returns ConvectiveAssessment.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, NamedTuple
 
 from weatherbrief.models import (
     ConvectiveAssessment,
+    ConvectiveCharacter,
     ConvectiveRegime,
     ConvectiveRisk,
     NWPCloudDiagnostics,
@@ -656,3 +658,117 @@ def convective_cross_check(
         return ConvectiveCrossCheck(direction="model_active_dd_quiet", note=note)
 
     return None
+
+
+# --- Convective character (VFR avoidability) — issue #294 -------------------
+# A second axis, orthogonal to the severity tier above: does route convection
+# stay circumnavigable VFR (isolated / scattered) or is it genuinely
+# VFR-impractical (widespread / organized / embedded)? Severity owns the colour;
+# this owns the narrative + a dedicated graded advisory. Pure logic over
+# per-point inputs — the advisory layer extracts the inputs from the soundings.
+
+# Realized-coverage bands: % of *all* route points with realized convection.
+CHAR_ISOLATED_MAX_PCT = 15.0   # ≤ ⇒ isolated (discrete cells, wide gaps)
+CHAR_SCATTERED_MAX_PCT = 40.0  # ≤ ⇒ scattered; above ⇒ widespread
+# Fraction of *convective* points sitting under a BKN/OVC deck ⇒ embedded.
+CHAR_EMBED_PCT = 50.0
+# 0–6 km bulk shear (kt) at/above which a *widespread* band is called ORGANIZED.
+CHAR_ORGANIZED_SHEAR_KT = 35.0
+# K-index / Total Totals "numerous storms" thresholds — bump the band up one.
+CHAR_K_NUMEROUS = 40.0
+CHAR_TT_NUMEROUS = 55.0
+# Minimum NWP convective cover (%) counting a GFS point as realized convection.
+CHAR_COVER_REALIZED_PCT = 25.0
+
+
+class ConvCharPoint(NamedTuple):
+    """Per-route-point inputs to the convective-character classifier."""
+
+    is_convective: bool       # severity ≥ the min risk that counts (MODERATE+)
+    realized: bool            # model realizes convection here (showers/cover/geom)
+    embedded: bool            # convective point sits under a BKN/OVC deck
+    k_index: float | None     # native preferred, else MetPy
+    total_totals: float | None
+
+
+_CHAR_BAND_ORDER = (
+    ConvectiveCharacter.ISOLATED,
+    ConvectiveCharacter.SCATTERED,
+    ConvectiveCharacter.WIDESPREAD,
+)
+
+
+def _char_up_one(band: ConvectiveCharacter) -> ConvectiveCharacter:
+    """Bump a coverage band up one step (clamped at WIDESPREAD)."""
+    try:
+        i = _CHAR_BAND_ORDER.index(band)
+    except ValueError:
+        return band
+    return _CHAR_BAND_ORDER[min(i + 1, len(_CHAR_BAND_ORDER) - 1)]
+
+
+def classify_convective_character(
+    points: Sequence[ConvCharPoint],
+    *,
+    shear_kt: float | None = None,
+    front_present: bool = False,
+    synoptic_ascent: bool = False,
+    isolated_max_pct: float = CHAR_ISOLATED_MAX_PCT,
+    scattered_max_pct: float = CHAR_SCATTERED_MAX_PCT,
+    embed_pct: float = CHAR_EMBED_PCT,
+    organized_shear_kt: float = CHAR_ORGANIZED_SHEAR_KT,
+    k_numerous: float = CHAR_K_NUMEROUS,
+    tt_numerous: float = CHAR_TT_NUMEROUS,
+) -> ConvectiveCharacter:
+    """Classify route convective character (VFR avoidability) for one model.
+
+    Coverage-first: the *realized* extent (showers / model cover / convective
+    geometry) sets the band, K/TT nudges it up one step (potential numerosity),
+    and forcing (front / synoptic ascent / strong shear) only relabels a
+    *widespread* band as ORGANIZED. This ordering is deliberate — forcing with
+    only a few realized cells (a capped loaded gun strung along a trough) stays
+    avoidable, matching the EDQT→EDDS 2026-06-16 "few but nasty" ground truth
+    (issue #294). EMBEDDED (cells hidden in a deck) is checked first.
+
+    Severity owns the colour; this never downgrades it. Bands map to the
+    advisory colour in the evaluator (ISOLATED/SCATTERED→AMBER, the rest→RED).
+    """
+    total = len(points)
+    if total == 0:
+        return ConvectiveCharacter.NONE
+    conv = [p for p in points if p.is_convective]
+    if not conv:
+        return ConvectiveCharacter.NONE
+
+    # 1. Embedded — cells you cannot see to avoid because a deck hides them.
+    embedded = sum(1 for p in conv if p.embedded)
+    if 100.0 * embedded / len(conv) >= embed_pct:
+        return ConvectiveCharacter.EMBEDDED
+
+    # 2. Realized-coverage band (% of all route points with realized convection).
+    realized = sum(1 for p in conv if p.realized)
+    realized_pct = 100.0 * realized / total
+    if realized_pct <= isolated_max_pct:
+        band = ConvectiveCharacter.ISOLATED
+    elif realized_pct <= scattered_max_pct:
+        band = ConvectiveCharacter.SCATTERED
+    else:
+        band = ConvectiveCharacter.WIDESPREAD
+
+    # 3. Potential-numerosity nudge: a moist, numerous-storm environment bumps
+    #    the band up one step (never down). Uses the peak K/TT among cells.
+    k_max = max((p.k_index for p in conv if p.k_index is not None), default=None)
+    tt_max = max((p.total_totals for p in conv if p.total_totals is not None), default=None)
+    if (k_max is not None and k_max >= k_numerous) or (
+        tt_max is not None and tt_max >= tt_numerous
+    ):
+        band = _char_up_one(band)
+
+    # 4. Forcing relabels a widespread band as an organized system (both RED).
+    if band is ConvectiveCharacter.WIDESPREAD and (
+        front_present
+        or synoptic_ascent
+        or (shear_kt is not None and shear_kt >= organized_shear_kt)
+    ):
+        return ConvectiveCharacter.ORGANIZED
+    return band

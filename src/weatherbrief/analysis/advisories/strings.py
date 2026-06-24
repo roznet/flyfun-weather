@@ -77,6 +77,50 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Topes convectivos bajo altitud de crucero ({count} puntos)",
     },
 
+    # --- convective_character (VFR avoidability — issue #294) ---
+    "convective_character.none": {
+        "en": "No significant convective character",
+        "fr": "Pas de caractère convectif significatif",
+        "de": "Kein signifikanter Konvektionscharakter",
+        "es": "Sin carácter convectivo significativo",
+    },
+    "convective_character.isolated": {
+        "en": "Isolated cells — circumnavigable VFR with see-and-avoid, expect possible diversions",
+        "fr": "Cellules isolées — contournables en VFR à vue, dérouttements possibles",
+        "de": "Isolierte Zellen — VFR umfliegbar mit Sicht, mögliche Ausweichmanöver",
+        "es": "Células aisladas — sorteables en VFR con ver-y-evitar, posibles desvíos",
+    },
+    "convective_character.scattered": {
+        "en": "Scattered cells — VFR possible but committing; deviations likely",
+        "fr": "Cellules éparses — VFR possible mais engageant ; déviations probables",
+        "de": "Vereinzelte Zellen — VFR möglich, aber anspruchsvoll; Abweichungen wahrscheinlich",
+        "es": "Células dispersas — VFR posible pero comprometido; desviaciones probables",
+    },
+    "convective_character.widespread": {
+        "en": "Widespread convection — no reliable gaps for VFR",
+        "fr": "Convection étendue — pas de trouées fiables pour le VFR",
+        "de": "Verbreitete Konvektion — keine verlässlichen Lücken für VFR",
+        "es": "Convección generalizada — sin huecos fiables para VFR",
+    },
+    "convective_character.organized": {
+        "en": "Organized/frontal convection — VFR impractical",
+        "fr": "Convection organisée/frontale — VFR impraticable",
+        "de": "Organisierte/frontale Konvektion — VFR nicht praktikabel",
+        "es": "Convección organizada/frontal — VFR impracticable",
+    },
+    "convective_character.embedded": {
+        "en": "Embedded convection — cells hidden in cloud, VFR impractical",
+        "fr": "Convection noyée — cellules masquées dans les nuages, VFR impraticable",
+        "de": "Eingelagerte Konvektion — Zellen in Bewölkung verborgen, VFR nicht praktikabel",
+        "es": "Convección embebida — células ocultas en nubes, VFR impracticable",
+    },
+    "convective_character.unknown": {
+        "en": "Convective character indeterminate",
+        "fr": "Caractère convectif indéterminé",
+        "de": "Konvektionscharakter unbestimmt",
+        "es": "Carácter convectivo indeterminado",
+    },
+
     # --- airport_wind ---
     "airport_wind.calm": {
         "en": "calm",

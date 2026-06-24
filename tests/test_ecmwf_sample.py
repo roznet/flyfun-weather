@@ -1000,6 +1000,27 @@ class TestEcmwfSurfaceSnapshot:
         assert out["nwp_ceiling_ft"] is None
         assert out["cloud_base_ft"] is None
 
+    def test_native_convective_indices_passthrough(self):
+        """ECMWF kx/totalx map to nwp_k_index/nwp_total_totals as-is (no conv)."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
+
+        out = build_ecmwf_surface_snapshot({
+            "k_index_raw": 32.0, "total_totals_raw": 52.0,
+        })
+        assert out["nwp_k_index"] == 32.0
+        assert out["nwp_total_totals"] == 52.0
+        # Absent → None.
+        out2 = build_ecmwf_surface_snapshot({"t2m": 283.15})
+        assert out2["nwp_k_index"] is None
+        assert out2["nwp_total_totals"] is None
+
+    def test_field_map_has_native_indices(self):
+        """kx/totalx are in the ECMWF a1 decode field map (so they get decoded)."""
+        from weatherbrief.fetch.grib.decode import _ECMWF_CLOUD_DIAG_FIELD_MAP
+
+        assert _ECMWF_CLOUD_DIAG_FIELD_MAP.get("kx") == "k_index_raw"
+        assert _ECMWF_CLOUD_DIAG_FIELD_MAP.get("totalx") == "total_totals_raw"
+
     def test_empty_input(self):
         from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
 

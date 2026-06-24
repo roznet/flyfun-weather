@@ -2488,6 +2488,8 @@ _ECMWF_HOURLY_INSTANT_FIELDS: tuple[str, ...] = (
     "visibility_m",
     "cape_jkg",
     "surface_pressure_hpa",
+    "nwp_k_index",
+    "nwp_total_totals",
 )
 
 # Window-average surface fields. ECMWF a1 delivers these as cumulative-since-init,

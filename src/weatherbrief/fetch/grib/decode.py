@@ -152,6 +152,11 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "sf": "snowfall_m_we",                 # m water equivalent, accumulated since init
     "mucape": "mucape_jkg",                # J/kg (most-unstable parcel CAPE)
     "sp": "surface_pressure_pa",           # Pa (used as anchor for sounding analysis)
+    # Model-native convective indices (issue #294). Index values, not absolute
+    # temperatures — used as-is (no K→°C conversion). Feed the convective
+    # character advisory as the high-resolution ECMWF K/Total-Totals signal.
+    "kx": "k_index_raw",                   # K-index (numeric index value)
+    "totalx": "total_totals_raw",          # Total Totals index value
 }
 
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
@@ -1706,6 +1711,8 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
         "surface_pressure_hpa": None,
         "nwp_ceiling_ft": None,
         "cloud_base_ft": None,
+        "nwp_k_index": None,
+        "nwp_total_totals": None,
     }
 
     if not raw:
@@ -1768,5 +1775,13 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
     cbh_m = raw.get("cloud_base_height_m")
     if cbh_m is not None and 0 <= cbh_m < _ECMWF_NO_CLOUD_SENTINEL_M:
         out["cloud_base_ft"] = cbh_m * _M_TO_FT
+
+    # Native convective indices — pass through (index values, no unit conversion).
+    kx = raw.get("k_index_raw")
+    if kx is not None:
+        out["nwp_k_index"] = kx
+    totalx = raw.get("total_totals_raw")
+    if totalx is not None:
+        out["nwp_total_totals"] = totalx
 
     return out

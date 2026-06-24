@@ -11,6 +11,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     CATRiskLevel,
     CloudCoverage,
     ConvectiveAssessment,
+    ConvectiveCharacter,
     ConvectiveRegime,
     ConvectiveRisk,
     DerivedLevel,

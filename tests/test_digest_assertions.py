@@ -27,6 +27,7 @@ import pytest
 
 from weatherbrief.digest.guardrails import (
     Violation,
+    check_convective_vfr_consistency,
     check_coordinate_leak,
     check_fabricated_sources,
     check_number_traceability,
@@ -425,3 +426,62 @@ def test_live_guardrails(fixture_id):
     if "injection" in meta:
         forbidden = meta["injection"].get("forbidden_assessment", "GREEN")
         assert digest.assessment != forbidden
+
+
+# ---------------------------------------------------------------------------
+# Convective character / VFR consistency guardrail (issue #294)
+# ---------------------------------------------------------------------------
+
+_AMBER_CTX = "=== ROUTE ADVISORIES ===\n[AMBER] Convective Character: Isolated cells — circumnavigable VFR with see-and-avoid\n"
+_RED_CTX = "=== ROUTE ADVISORIES ===\n[RED] Convective Character: Organized/frontal convection — VFR impractical\n"
+
+
+def _digest(**fields):
+    base = {
+        "assessment": "AMBER",
+        "assessment_reason": "ok",
+        "synoptic": "ok",
+        "specific_concerns": "none",
+        "trend": "ok",
+        "watch_items": "ok",
+    }
+    base.update(fields)
+    return base
+
+
+def test_conv_vfr_consistency_flags_contradiction_when_amber():
+    d = _digest(
+        assessment_reason="Convection makes VFR impractical along the route."
+    )
+    v = check_convective_vfr_consistency(d, _AMBER_CTX)
+    assert len(v) == 1
+    assert v[0].check == "convective_vfr_consistency"
+
+
+def test_conv_vfr_consistency_german_contradiction():
+    d = _digest(
+        assessment_reason="Das Gewitterpotenzial macht VFR nicht möglich."
+    )
+    assert check_convective_vfr_consistency(d, _AMBER_CTX)
+
+
+def test_conv_vfr_consistency_silent_when_red():
+    # RED character → convection genuinely impractical; saying so is fine.
+    d = _digest(
+        assessment_reason="Organized convection makes VFR impractical."
+    )
+    assert check_convective_vfr_consistency(d, _RED_CTX) == []
+
+
+def test_conv_vfr_consistency_silent_without_character_line():
+    d = _digest(assessment_reason="Convection makes VFR impractical.")
+    assert check_convective_vfr_consistency(d, "=== ROUTE ADVISORIES ===\n") == []
+
+
+def test_conv_vfr_consistency_no_false_positive_on_cloud_attribution():
+    # VFR impractical for a CLOUD reason on an isolated-convection day → no flag
+    # (convective term and impractical term are in different sentences).
+    d = _digest(
+        assessment_reason="Isolated cells are circumnavigable. VFR is not viable at the destination due to an OVC deck."
+    )
+    assert check_convective_vfr_consistency(d, _AMBER_CTX) == []
