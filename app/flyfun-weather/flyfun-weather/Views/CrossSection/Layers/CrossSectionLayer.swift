@@ -52,8 +52,10 @@ enum CrossSectionLayer {
     static let allLayers: [any CrossSectionLayerProtocol] = [
         SoftCloudBandsLayer(source: .nwp),
         SoftCloudBandsLayer(source: .dd),
-        NwpCloudBandsLayer(),
-        CloudBandsLayer(),
+        CloudStyleBandsLayer(source: .nwp, style: .square),
+        CloudStyleBandsLayer(source: .dd, style: .square),
+        CloudStyleBandsLayer(source: .nwp, style: .natural),
+        CloudStyleBandsLayer(source: .dd, style: .natural),
         ThermoConvectiveBgLayer(),
         NwpConvectiveBgLayer(),
         IcingBandsLayer(),
@@ -65,6 +67,9 @@ enum CrossSectionLayer {
         TemperatureLinesLayer(metric: .freezingLevel),
         TemperatureLinesLayer(metric: .minus10c),
         TemperatureLinesLayer(metric: .minus20c),
+        StabilityLinesLayer(metric: .lcl),
+        StabilityLinesLayer(metric: .lfc),
+        StabilityLinesLayer(metric: .el),
         ReferenceLinesLayer(),
     ]
 
@@ -74,6 +79,8 @@ enum CrossSectionLayer {
     static let defaultEnabled: [String: Bool] = [
         "soft-nwp-cloud-bands": true,
         "soft-cloud-bands": false,
+        "square-nwp-cloud-bands": false,
+        "square-cloud-bands": false,
         "nwp-cloud-bands": false,
         "cloud-bands": false,
         "thermo-convective-bg": false,
@@ -87,6 +94,9 @@ enum CrossSectionLayer {
         "freezing-level": true,
         "minus-10c": false,
         "minus-20c": false,
+        "lcl": true,
+        "lfc": true,
+        "el": true,
         "reference-lines": true,
     ]
 
@@ -94,7 +104,11 @@ enum CrossSectionLayer {
     /// Used by the dropdown picker UI: "None" + each method, in this display order.
     /// Mirrors web's PREFERRED_METHOD_LAYER mapping in layer-registry.ts.
     static let methodGroupOrder: [LayerGroup: [String]] = [
-        .clouds: ["soft-nwp-cloud-bands", "soft-cloud-bands", "nwp-cloud-bands", "cloud-bands"],
+        .clouds: [
+            "soft-nwp-cloud-bands", "soft-cloud-bands",
+            "square-nwp-cloud-bands", "square-cloud-bands",
+            "nwp-cloud-bands", "cloud-bands",
+        ],
         .icing: ["icing-ogimet-nwp-bands", "icing-bands", "sfip-bands"],
         .turbulence: ["cat-bands"],
         .convection: ["nwp-convective-bg", "thermo-convective-bg"],
@@ -104,8 +118,10 @@ enum CrossSectionLayer {
     static let methodLabels: [String: String] = [
         "soft-nwp-cloud-bands": "Soft NWP",
         "soft-cloud-bands": "Soft DD",
-        "nwp-cloud-bands": "NWP",
-        "cloud-bands": "DD",
+        "square-nwp-cloud-bands": "Square NWP",
+        "square-cloud-bands": "Square DD",
+        "nwp-cloud-bands": "Natural NWP",
+        "cloud-bands": "Natural DD",
         "icing-ogimet-nwp-bands": "Ogimet-NWP",
         "icing-bands": "Ogimet-DD",
         "sfip-bands": "SFIP",

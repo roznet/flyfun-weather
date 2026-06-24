@@ -64,6 +64,9 @@ nonisolated enum ColorScales {
     static let freezingLevelColor = Color(.sRGB, red: 0, green: 188 / 255.0, blue: 212 / 255.0)
     static let minus10cColor = Color(.sRGB, red: 33 / 255.0, green: 150 / 255.0, blue: 243 / 255.0)
     static let minus20cColor = Color(.sRGB, red: 26 / 255.0, green: 35 / 255.0, blue: 126 / 255.0)
+    static let lclColor = Color(.sRGB, red: 76 / 255.0, green: 175 / 255.0, blue: 80 / 255.0)
+    static let lfcColor = Color(.sRGB, red: 1.0, green: 152 / 255.0, blue: 0)
+    static let elColor = Color(.sRGB, red: 244 / 255.0, green: 67 / 255.0, blue: 54 / 255.0)
 
     // MARK: - Reference
 

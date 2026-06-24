@@ -93,7 +93,13 @@ final class CrossSectionViewModel {
         )
 
         let cloudLayers = (sounding?.cloudLayers ?? []).map {
-            VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC)
+            VizCloudLayer(
+                baseFt: $0.baseFt,
+                topFt: $0.topFt,
+                coverage: $0.coverage,
+                meanDewpointDepressionC: $0.meanDewpointDepressionC,
+                meanCloudCoverPct: $0.meanCloudCoverPct
+            )
         }
 
         // nwp_cloud_layers: nil = no NWP source for this model; [] = clear sky.
@@ -101,7 +107,13 @@ final class CrossSectionViewModel {
         // "no data" (disable) from "clear sky" (render nothing).
         let nwpCloudLayers: [VizCloudLayer]? = sounding?.nwpCloudLayers.map { layers in
             layers.map {
-                VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC)
+                VizCloudLayer(
+                    baseFt: $0.baseFt,
+                    topFt: $0.topFt,
+                    coverage: $0.coverage,
+                    meanDewpointDepressionC: $0.meanDewpointDepressionC,
+                    meanCloudCoverPct: $0.meanCloudCoverPct
+                )
             }
         }
 

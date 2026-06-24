@@ -80,6 +80,7 @@ struct VizCloudLayer {
     let topFt: Double
     let coverage: String
     let meanDewpointDepressionC: Double?
+    let meanCloudCoverPct: Double?
 }
 
 struct VizIcingZone {
