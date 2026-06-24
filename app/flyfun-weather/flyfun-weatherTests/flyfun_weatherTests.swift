@@ -195,3 +195,62 @@ struct Phase0DataPlumbingTests {
         #expect(ecmwf.crossCheck == nil)
     }
 }
+
+// MARK: - Phase 4 (#290): Skew-T app wiring
+//
+// The extended thermodynamic indices (LCL/LFC/EL pressures, CIN, lifted index)
+// the server already sends now decode and feed the RZSkewT marker/index render.
+
+struct Phase4SkewTWiringTests {
+
+    private func decodeProfile(indicesJSON: String, levelsJSON: String = "[]") throws -> SoundingProfileResponse {
+        let json = """
+        {
+          "point_index": 1, "lat": 43.0, "lon": 5.0, "distance_from_origin_nm": 10.0,
+          "waypoint_icao": null, "model": "gfs", "time": "2026-06-24T12:00:00Z",
+          "cruise_altitude_ft": 8000,
+          "indices": \(indicesJSON),
+          "levels": \(levelsJSON)
+        }
+        """
+        return try JSONDecoder.weatherBrief.decode(SoundingProfileResponse.self, from: Data(json.utf8))
+    }
+
+    @Test func thermodynamicIndicesDecodesExtendedFields() throws {
+        let indices = """
+        {
+          "freezing_level_ft": 11000.0,
+          "lcl_altitude_ft": 3000.0, "lcl_pressure_hpa": 905.0,
+          "lfc_pressure_hpa": 820.0, "el_pressure_hpa": 300.0,
+          "cape_surface_jkg": 850.0, "cin_surface_jkg": -45.0,
+          "lifted_index": -3.5
+        }
+        """
+        let profile = try decodeProfile(indicesJSON: indices)
+        let idx = try #require(profile.indices)
+        #expect(idx.lclPressureHpa == 905.0)
+        #expect(idx.lfcPressureHpa == 820.0)
+        #expect(idx.elPressureHpa == 300.0)
+        #expect(idx.cinSurfaceJkg == -45.0)
+        #expect(idx.liftedIndex == -3.5)
+    }
+
+    /// Altitude→pressure fallback interpolates linearly from the sounding levels.
+    @Test func pressureInterpolationFromLevels() throws {
+        let levels = """
+        [
+          {"pressure_hpa": 1000, "altitude_ft": 0.0, "temperature_c": 15.0},
+          {"pressure_hpa": 900, "altitude_ft": 3000.0, "temperature_c": 9.0},
+          {"pressure_hpa": 800, "altitude_ft": 6000.0, "temperature_c": 3.0}
+        ]
+        """
+        let profile = try decodeProfile(indicesJSON: "null", levelsJSON: levels)
+        // Midway between 3000ft (900 hPa) and 6000ft (800 hPa) → ~850 hPa.
+        let p = try #require(SoundingProfileResponse.pressure(atAltitudeFt: 4500, levels: profile.levels))
+        #expect(abs(p - 850.0) < 0.001)
+        // Below the lowest level clamps to that level's pressure.
+        #expect(SoundingProfileResponse.pressure(atAltitudeFt: -100, levels: profile.levels) == 1000.0)
+        // nil altitude → nil.
+        #expect(SoundingProfileResponse.pressure(atAltitudeFt: nil, levels: profile.levels) == nil)
+    }
+}

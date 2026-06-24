@@ -15,11 +15,17 @@ extension SoundingProfileResponse {
             )
         }
 
-        let skewTIndices = indices.map {
+        let skewTIndices = indices.map { idx in
             SkewTIndices(
-                lclPressureHPa: $0.lclAltitudeFt != nil ? nil : nil, // pressure not in ThermodynamicIndices
-                capeSurfaceJkg: $0.capeSurfaceJkg,
-                freezingLevelFt: $0.freezingLevelFt
+                // Prefer the server's pressure; else convert the altitude using
+                // the sounding's own altitude↔pressure relationship (§4.8 Tier 0).
+                lclPressureHPa: idx.lclPressureHpa ?? Self.pressure(atAltitudeFt: idx.lclAltitudeFt, levels: self.levels),
+                lfcPressureHPa: idx.lfcPressureHpa ?? Self.pressure(atAltitudeFt: idx.lfcAltitudeFt, levels: self.levels),
+                elPressureHPa: idx.elPressureHpa ?? Self.pressure(atAltitudeFt: idx.elAltitudeFt, levels: self.levels),
+                capeSurfaceJkg: idx.capeSurfaceJkg,
+                cinSurfaceJkg: idx.cinSurfaceJkg,
+                freezingLevelFt: idx.freezingLevelFt,
+                liftedIndex: idx.liftedIndex
             )
         }
 
@@ -43,6 +49,30 @@ extension SoundingProfileResponse {
                 cruiseAltitudeFt: cruiseAltitudeFt.map(Double.init)
             )
         )
+    }
+
+    /// Interpolate the pressure (hPa) at a given altitude from the sounding's
+    /// own levels (linear in altitude). Used only when the server didn't send a
+    /// pressure for a parcel level. Returns nil if the altitude or levels are
+    /// missing.
+    static func pressure(atAltitudeFt altitudeFt: Double?, levels: [SoundingProfileLevel]) -> Double? {
+        guard let alt = altitudeFt else { return nil }
+        let pts = levels
+            .compactMap { lvl -> (alt: Double, p: Double)? in
+                guard let a = lvl.altitudeFt else { return nil }
+                return (a, Double(lvl.pressureHpa))
+            }
+            .sorted { $0.alt < $1.alt }
+        guard let first = pts.first, let last = pts.last else { return nil }
+        if alt <= first.alt { return first.p }
+        if alt >= last.alt { return last.p }
+        for i in 0..<(pts.count - 1) where alt >= pts[i].alt && alt <= pts[i + 1].alt {
+            let span = pts[i + 1].alt - pts[i].alt
+            guard span > 0 else { return pts[i].p }
+            let t = (alt - pts[i].alt) / span
+            return pts[i].p + (pts[i + 1].p - pts[i].p) * t
+        }
+        return nil
     }
 }
 
