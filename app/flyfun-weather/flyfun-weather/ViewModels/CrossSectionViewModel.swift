@@ -16,6 +16,16 @@ final class CrossSectionViewModel {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
     }
 
+    func setLayer(_ id: String, enabled: Bool) {
+        enabledLayers[id] = enabled
+    }
+
+    func applyLayerPreset(_ preset: [String: Bool]) {
+        for layer in CrossSectionLayer.allLayers {
+            enabledLayers[layer.id] = preset[layer.id] ?? false
+        }
+    }
+
     /// Currently-active method layer ID for a method group (clouds/icing/etc),
     /// or nil if all methods in the group are off.
     func activeMethod(for group: LayerGroup) -> String? {

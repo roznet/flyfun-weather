@@ -12,19 +12,24 @@ private struct ChartDataPoint: Identifiable {
 struct RouteGraphView: View {
     let viewModel: BriefingViewModel
     let vizData: VizRouteData?
-
-    @State private var leftMetricId = "headwind"
-    @State private var rightMetricId = "cloud-cover"
+    let selectedDistanceNm: Double?
+    @Binding var leftMetricId: String
+    @Binding var rightMetricId: String
+    var onScrubDistance: (Double) -> Void = { _ in }
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var leftMetric: RouteGraphMetric? { RouteGraphMetrics.metric(byId: leftMetricId) }
     private var rightMetric: RouteGraphMetric? { RouteGraphMetrics.metric(byId: rightMetricId) }
+    private var allowsRightMetric: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
         VStack(spacing: 4) {
             HStack {
                 metricPicker(selection: $leftMetricId, label: "Left")
                 Spacer()
-                metricPicker(selection: $rightMetricId, label: "Right")
+                if allowsRightMetric {
+                    metricPicker(selection: $rightMetricId, label: "Right")
+                }
             }
             .padding(.horizontal, 12)
 
@@ -38,7 +43,7 @@ struct RouteGraphView: View {
     private func chartView(vizData: VizRouteData, leftMetric: RouteGraphMetric) -> some View {
         let leftData = extractData(points: vizData.points, metric: leftMetric)
         let rightData: [ChartDataPoint] = {
-            guard rightMetricId != "none", let rm = rightMetric else { return [] }
+            guard allowsRightMetric, rightMetricId != "none", let rm = rightMetric else { return [] }
             return extractData(points: vizData.points, metric: rm)
         }()
 
@@ -54,7 +59,7 @@ struct RouteGraphView: View {
                 }
             }
 
-            if let rm = rightMetric, rightMetricId != "none" {
+            if allowsRightMetric, let rm = rightMetric, rightMetricId != "none" {
                 ForEach(rightData) { pt in
                     if rm.renderType == .bar {
                         BarMark(x: .value("Distance", pt.distance), y: .value(rm.label, pt.value))
@@ -72,6 +77,12 @@ struct RouteGraphView: View {
                     .foregroundStyle(.gray.opacity(0.3))
                     .lineStyle(StrokeStyle(dash: [4, 4]))
             }
+
+            if let selectedDistanceNm {
+                RuleMark(x: .value("Selected", selectedDistanceNm))
+                    .foregroundStyle(.orange)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
         }
         .chartXAxisLabel("Distance (nm)")
         .chartYAxis {
@@ -83,6 +94,22 @@ struct RouteGraphView: View {
         }
         .frame(height: 150)
         .padding(.horizontal, 12)
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                scrubGraph(at: value.location, proxy: proxy, geometry: geometry)
+                            }
+                            .onEnded { value in
+                                scrubGraph(at: value.location, proxy: proxy, geometry: geometry)
+                            }
+                    )
+            }
+        }
     }
 
     private func extractData(points: [VizPoint], metric: RouteGraphMetric) -> [ChartDataPoint] {
@@ -113,5 +140,14 @@ struct RouteGraphView: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    private func scrubGraph(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) {
+        let plotFrame = geometry[proxy.plotAreaFrame]
+        let x = location.x - plotFrame.origin.x
+        guard x >= 0, x <= plotFrame.width,
+              let distance: Double = proxy.value(atX: x)
+        else { return }
+        onScrubDistance(distance)
     }
 }
