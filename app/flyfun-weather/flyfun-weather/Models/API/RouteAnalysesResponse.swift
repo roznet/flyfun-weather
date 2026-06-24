@@ -56,6 +56,15 @@ struct ThermodynamicIndices: Codable, Sendable {
     let capeSurfaceJkg: Double?
     let soundingCeilingFt: Double?
     let nwpCeilingFt: Double?
+
+    // Phase 4 wiring — server already sends these; the Skew-T package renders
+    // LCL/LFC/EL markers + the lifted index / CIN from them. Pressures let the
+    // markers sit at the exact level without an altitude→pressure conversion.
+    let lclPressureHpa: Double?
+    let lfcPressureHpa: Double?
+    let elPressureHpa: Double?
+    let cinSurfaceJkg: Double?
+    let liftedIndex: Double?
 }
 
 struct EnhancedCloudLayer: Codable, Sendable {
