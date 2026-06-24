@@ -378,6 +378,15 @@ final class BriefingViewModel {
         }
     }
 
+    func advisoryDetail(advisoryId: String) async throws -> AdvisoryDetailResponse {
+        guard let pack else { throw APIError.notFound }
+        return try await repository.advisoryDetail(
+            flightId: flight.id,
+            timestamp: pack.fetchTimestamp,
+            advisoryId: advisoryId
+        )
+    }
+
     private func loadDigest(timestamp: String) async {
         digestState = .loading
         do {

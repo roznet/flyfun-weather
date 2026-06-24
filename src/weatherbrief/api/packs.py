@@ -46,6 +46,7 @@ def _validate_model(model: str) -> str:
     return model
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
+from weatherbrief.connectors import views
 from weatherbrief.digest.llm_digest import LongRangeDigest, ecmwf_grib_horizon_days
 from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.fetch.model_status import fetch_model_metadata
@@ -2861,6 +2862,67 @@ def altitude_table(
     return result.model_dump()
 
 
+@router.get("/{timestamp}/advisories/{advisory_id}/detail")
+def get_advisory_detail(
+    flight_id: str,
+    timestamp: str,
+    advisory_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get a structured per-advisory drill-down for native clients."""
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    adv_path = pack_dir / "route_advisories.json"
+    if not adv_path.exists():
+        raise HTTPException(status_code=404, detail="Route advisories not available")
+
+    advisories = json_mod.loads(adv_path.read_text())
+    adv = next(
+        (
+            item
+            for item in advisories.get("advisories", [])
+            if item.get("advisory_id") == advisory_id
+        ),
+        None,
+    )
+    if adv is None:
+        available = [
+            item.get("advisory_id")
+            for item in advisories.get("advisories", [])
+            if item.get("advisory_id")
+        ]
+        listed = ", ".join(available)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Advisory '{advisory_id}' not found. Available: {listed}",
+        )
+
+    catalog = {entry.get("id"): entry for entry in advisories.get("catalog", [])}
+    result = views.advisory_detail(adv, catalog.get(advisory_id))
+    result.update(
+        {
+            "flight_id": flight_id,
+            "briefing_timestamp": timestamp,
+            "route_name": advisories.get("route_name"),
+            "cruise_altitude_ft": advisories.get("cruise_altitude_ft"),
+            "flight_ceiling_ft": advisories.get("flight_ceiling_ft"),
+            "total_distance_nm": advisories.get("total_distance_nm"),
+            "models": advisories.get("models", []),
+            "aggregation": advisories.get("aggregation"),
+        }
+    )
+
+    if advisory_id == "convective":
+        route_analyses_path = pack_dir / "route_analyses.json"
+        if route_analyses_path.exists():
+            route_analyses = json_mod.loads(route_analyses_path.read_text())
+            models = [m.get("model") for m in adv.get("per_model", []) if m.get("model")]
+            result["convective"] = views.convective_detail(route_analyses, models)
+            result["convective_note"] = views.CONVECTIVE_NOTE
+
+    return result
+
+
 @router.get("/{timestamp}/elevation")
 def get_elevation(
     flight_id: str,
@@ -3497,5 +3559,4 @@ def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str
     if not pack_path.exists():
         raise HTTPException(status_code=404, detail="Pack not found")
     return pack_path
-
 

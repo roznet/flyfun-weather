@@ -214,7 +214,7 @@ private struct BriefAdvisorySection: View {
                 let sorted = response.advisories.sorted { severityOrder($0.aggregateStatus) > severityOrder($1.aggregateStatus) }
                 LazyVStack(spacing: WeatherTheme.Spacing.md) {
                     ForEach(sorted) { advisory in
-                        BriefAdvisoryCard(advisory: advisory, catalog: response.catalog)
+                        BriefAdvisoryCard(viewModel: viewModel, advisory: advisory, catalog: response.catalog)
                     }
                 }
                 .padding(.horizontal, WeatherTheme.Spacing.lg)
@@ -233,9 +233,11 @@ private struct BriefAdvisorySection: View {
 }
 
 private struct BriefAdvisoryCard: View {
+    let viewModel: BriefingViewModel
     let advisory: RouteAdvisoryResult
     let catalog: [AdvisoryCatalogEntry]
     @State private var isExpanded = false
+    @State private var showingDetail = false
     @Environment(\.colorScheme) private var colorScheme
 
     private var catalogEntry: AdvisoryCatalogEntry? {
@@ -244,18 +246,28 @@ private struct BriefAdvisoryCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: WeatherTheme.Spacing.sm) {
-            Button {
-                withAnimation(.snappy) { isExpanded.toggle() }
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: WeatherTheme.Spacing.sm) {
-                    AssessmentStringBadge(status: advisory.aggregateStatus)
-                    Text(catalogEntry?.name ?? advisory.advisoryId)
-                        .font(.headline)
-                        .foregroundStyle(WeatherTheme.text(colorScheme))
-                    Spacer()
+            HStack(alignment: .firstTextBaseline, spacing: WeatherTheme.Spacing.sm) {
+                AssessmentStringBadge(status: advisory.aggregateStatus)
+                Text(catalogEntry?.name ?? advisory.advisoryId)
+                    .font(.headline)
+                    .foregroundStyle(WeatherTheme.text(colorScheme))
+                    .lineLimit(2)
+                Spacer(minLength: WeatherTheme.Spacing.sm)
+                Button {
+                    showingDetail = true
+                } label: {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .foregroundStyle(WeatherTheme.primary(colorScheme))
+                }
+                .accessibilityLabel("Advisory detail")
+
+                Button {
+                    withAnimation(.snappy) { isExpanded.toggle() }
+                } label: {
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .foregroundStyle(WeatherTheme.mutedText(colorScheme))
                 }
+                .accessibilityLabel(isExpanded ? "Collapse advisory" : "Expand advisory")
             }
             .buttonStyle(.plain)
 
@@ -302,6 +314,13 @@ private struct BriefAdvisoryCard: View {
         }
         .padding(WeatherTheme.Spacing.lg)
         .weatherCard(colorScheme)
+        .sheet(isPresented: $showingDetail) {
+            AdvisoryDetailSheet(
+                viewModel: viewModel,
+                advisory: advisory,
+                catalogEntry: catalogEntry
+            )
+        }
     }
 
     private var parameterSummary: String {
@@ -317,6 +336,321 @@ private struct BriefAdvisoryCard: View {
         }
         return String(format: "%.1f", value)
     }
+}
+
+private struct AdvisoryDetailSheet: View {
+    let viewModel: BriefingViewModel
+    let advisory: RouteAdvisoryResult
+    let catalogEntry: AdvisoryCatalogEntry?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var state: LoadingState<AdvisoryDetailResponse> = .loading
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch state {
+                case .idle, .loading:
+                    ProgressView("Loading detail...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .error(let error):
+                    ContentUnavailableView {
+                        Label("Detail Unavailable", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(error.localizedDescription)
+                    } actions: {
+                        Button("Retry") {
+                            Task { await load() }
+                        }
+                    }
+                case .loaded(let detail):
+                    if detail.isEmpty {
+                        ContentUnavailableView(
+                            "No Detail Available",
+                            systemImage: "doc.text.magnifyingglass",
+                            description: Text("This advisory has no route-specific drilldown in the selected pack.")
+                        )
+                    } else {
+                        AdvisoryDetailContent(detail: detail, fallbackAdvisory: advisory, catalogEntry: catalogEntry)
+                    }
+                }
+            }
+            .navigationTitle(catalogEntry?.name ?? advisory.advisoryId)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task(id: advisory.advisoryId) {
+            await load()
+        }
+    }
+
+    private func load() async {
+        state = .loading
+        do {
+            state = .loaded(try await viewModel.advisoryDetail(advisoryId: advisory.advisoryId))
+        } catch {
+            state = .error(error)
+        }
+    }
+}
+
+private struct AdvisoryDetailContent: View {
+    let detail: AdvisoryDetailResponse
+    let fallbackAdvisory: RouteAdvisoryResult
+    let catalogEntry: AdvisoryCatalogEntry?
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: WeatherTheme.Spacing.lg) {
+                VStack(alignment: .leading, spacing: WeatherTheme.Spacing.sm) {
+                    HStack(spacing: WeatherTheme.Spacing.sm) {
+                        AssessmentStringBadge(status: detail.aggregateStatus ?? fallbackAdvisory.aggregateStatus)
+                        Text(detail.name ?? catalogEntry?.name ?? fallbackAdvisory.advisoryId)
+                            .font(.title3.bold())
+                            .foregroundStyle(WeatherTheme.text(colorScheme))
+                        Spacer()
+                    }
+
+                    Text(detail.aggregateDetail ?? fallbackAdvisory.aggregateDetail)
+                        .font(.subheadline)
+                        .foregroundStyle(WeatherTheme.text(colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: WeatherTheme.Spacing.xs) {
+                        if let routeName = detail.routeName {
+                            Label(routeName.uppercased(), systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                        }
+                        if let timestamp = detail.briefingTimestamp {
+                            Label(timestamp, systemImage: "calendar.badge.clock")
+                        }
+                        if let totalDistance = detail.totalDistanceNm {
+                            Label("\(formatNumber(totalDistance)) nm analysed", systemImage: "ruler")
+                        }
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                }
+                .padding(WeatherTheme.Spacing.lg)
+                .weatherCard(colorScheme)
+
+                if !detail.perModel.isEmpty {
+                    AdvisoryDetailSection(title: "Route Notes") {
+                        ForEach(detail.perModel) { model in
+                            AdvisoryDetailModelRow(model: model)
+                            if model.id != detail.perModel.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+
+                if let convective = detail.convective, !convective.isEmpty {
+                    AdvisoryDetailSection(title: "Convective Split") {
+                        ForEach(convective.keys.sorted(), id: \.self) { model in
+                            if let convectiveDetail = convective[model] {
+                                AdvisoryConvectiveDetailRow(model: model, detail: convectiveDetail)
+                                if model != convective.keys.sorted().last {
+                                    Divider()
+                                }
+                            }
+                        }
+                        if let note = detail.convectiveNote {
+                            Text(note)
+                                .font(.caption)
+                                .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                if !detail.parametersUsed.isEmpty {
+                    AdvisoryDetailSection(title: "Thresholds") {
+                        Text(parameterSummary(detail.parametersUsed))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                if let description = detail.description ?? catalogEntry?.description {
+                    AdvisoryDetailSection(title: "Implication") {
+                        Text(description)
+                            .font(.subheadline)
+                            .foregroundStyle(WeatherTheme.text(colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                if let note = detail.crossCheckNote {
+                    AdvisoryDetailSection(title: "Cross-Check") {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(WeatherTheme.Spacing.lg)
+        }
+        .background(WeatherTheme.background(colorScheme))
+    }
+
+    private func parameterSummary(_ parameters: [String: Double]) -> String {
+        parameters
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key): \(formatNumber($0.value))" }
+            .joined(separator: " · ")
+    }
+}
+
+private struct AdvisoryDetailSection<Content: View>: View {
+    let title: String
+    let content: Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WeatherTheme.Spacing.md) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(WeatherTheme.text(colorScheme))
+            content
+        }
+        .padding(WeatherTheme.Spacing.lg)
+        .weatherCard(colorScheme)
+    }
+}
+
+private struct AdvisoryDetailModelRow: View {
+    let model: AdvisoryDetailModelResult
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WeatherTheme.Spacing.xs) {
+            HStack {
+                BriefModelStatusBadge(model: model.model ?? "model", status: model.status ?? "unavailable")
+                Spacer()
+                if let affected = affectedText {
+                    Text(affected)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                }
+            }
+            if let detail = model.detail {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(WeatherTheme.text(colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let crossCheck = model.crossCheck, !crossCheck.isEmpty {
+                Label(crossCheck, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(WeatherTheme.primary(colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var affectedText: String? {
+        var parts: [String] = []
+        if let pct = model.affectedPct {
+            parts.append("\(formatNumber(pct))%")
+        }
+        if let nm = model.affectedNm {
+            if let total = model.totalNm {
+                parts.append("\(formatNumber(nm))/\(formatNumber(total)) nm")
+            } else {
+                parts.append("\(formatNumber(nm)) nm")
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+private struct AdvisoryConvectiveDetailRow: View {
+    let model: String
+    let detail: AdvisoryConvectiveDetail
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WeatherTheme.Spacing.xs) {
+            Text(model.shortModelName.uppercased())
+                .font(.caption.bold())
+                .foregroundStyle(WeatherTheme.text(colorScheme))
+
+            if let method = detail.assessmentMethod {
+                Label(method, systemImage: "switch.2")
+                    .font(.caption)
+                    .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+            }
+
+            if let range = detail.thermo?.capeRangeJkg, range.count == 2 {
+                Label("\(formatNumber(range[0]))-\(formatNumber(range[1])) J/kg CAPE", systemImage: "chart.line.uptrend.xyaxis")
+                    .font(.caption)
+                    .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+            }
+
+            if let peak = detail.thermo?.peak {
+                Text(peakSummary(peak))
+                    .font(.caption)
+                    .foregroundStyle(WeatherTheme.text(colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let nwp = detail.nwp {
+                Text(nwpSummary(nwp))
+                    .font(.caption)
+                    .foregroundStyle(WeatherTheme.mutedText(colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func peakSummary(_ peak: AdvisoryThermoPeak) -> String {
+        var parts: [String] = []
+        if let cape = peak.capeJkg {
+            parts.append("peak \(formatNumber(cape)) J/kg")
+        }
+        if let top = peak.elTopFt {
+            parts.append("tops \(formatNumber(top)) ft")
+        }
+        if let waypoint = peak.waypointIcao {
+            parts.append(waypoint)
+        } else if let distance = peak.distanceNm {
+            parts.append("\(formatNumber(distance)) nm")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func nwpSummary(_ nwp: AdvisoryNwpDetail) -> String {
+        var parts: [String] = []
+        if let cover = nwp.maxCoverPct {
+            parts.append("NWP cover \(formatNumber(cover))%")
+        }
+        if let top = nwp.peakTopFt {
+            parts.append("NWP tops \(formatNumber(top)) ft")
+        }
+        if let note = nwp.note {
+            parts.append(note)
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private func formatNumber(_ value: Double) -> String {
+    if value.rounded() == value {
+        return String(Int(value))
+    }
+    return String(format: "%.1f", value)
 }
 
 private struct BriefModelStatusBadge: View {

@@ -713,6 +713,100 @@ class TestPacksAPI:
         assert resp.status_code == 404
 
 
+class TestAdvisoryDetailAPI:
+    @pytest.fixture
+    def pack_with_advisory_detail(self, tmp_path, sample_pack, monkeypatch):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+        pack_dir = pack_dir_for(
+            DEV_USER_ID,
+            sample_pack.flight_id,
+            sample_pack.fetch_timestamp,
+        )
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / "route_advisories.json").write_text(json.dumps({
+            "advisories": [
+                {
+                    "advisory_id": "convective",
+                    "aggregate_status": "red",
+                    "aggregate_detail": "High CAPE along the middle third of the route",
+                    "per_model": [
+                        {
+                            "model": "gfs",
+                            "status": "red",
+                            "detail": "HIGH risk near EGTF",
+                            "affected_pct": 44.0,
+                            "affected_nm": 22.0,
+                            "total_nm": 50.0,
+                            "cross_check": {"note": "NWP scheme remains quiet"},
+                        }
+                    ],
+                    "parameters_used": {"affected_pct_red": 40.0},
+                }
+            ],
+            "catalog": [
+                {
+                    "id": "convective",
+                    "name": "Convective Activity",
+                    "category": "convective",
+                    "description": "Can fly around convective activity.",
+                }
+            ],
+            "route_name": "egtk-lsgs",
+            "cruise_altitude_ft": 8000,
+            "flight_ceiling_ft": 18000,
+            "total_distance_nm": 50.0,
+            "models": ["gfs"],
+            "aggregation": "worst",
+        }))
+        (pack_dir / "route_analyses.json").write_text(json.dumps({
+            "analyses": [
+                {
+                    "distance_from_origin_nm": 19.5,
+                    "waypoint_icao": "EGTF",
+                    "forecast_hour": 15,
+                    "interpolated_time": "2026-06-24T15:00:00Z",
+                    "sounding": {
+                        "gfs": {
+                            "convective": {"method": "thermo"},
+                            "convective_thermo": {
+                                "cape_jkg": 1840,
+                                "top_ft": 27000,
+                                "risk_level": "high",
+                            },
+                            "convective_nwp": {"cover_pct": 0, "top_ft": None},
+                        }
+                    },
+                }
+            ]
+        }))
+        return sample_pack
+
+    def test_get_advisory_detail_success(self, client, pack_with_advisory_detail):
+        ts = pack_with_advisory_detail.fetch_timestamp.isoformat()
+        fid = pack_with_advisory_detail.flight_id
+        resp = client.get(f"/api/flights/{fid}/packs/{ts}/advisories/convective/detail")
+        assert resp.status_code == 200, resp.text
+
+        body = resp.json()
+        assert body["advisory_id"] == "convective"
+        assert body["aggregate_status"] == "red"
+        assert body["name"] == "Convective Activity"
+        assert body["briefing_timestamp"] == ts
+        assert body["total_distance_nm"] == 50.0
+        assert body["per_model"][0]["affected_nm"] == 22.0
+        assert body["per_model"][0]["cross_check"] == {"note": "NWP scheme remains quiet"}
+        assert "downgrade signal" in body["cross_check_note"]
+        assert "convective_note" in body
+        assert body["convective"]["gfs"]["thermo"]["peak"]["el_top_ft"] == 27000
+
+    def test_get_advisory_detail_missing_id_is_404(self, client, pack_with_advisory_detail):
+        ts = pack_with_advisory_detail.fetch_timestamp.isoformat()
+        fid = pack_with_advisory_detail.flight_id
+        resp = client.get(f"/api/flights/{fid}/packs/{ts}/advisories/icing_escape/detail")
+        assert resp.status_code == 404, resp.text
+        assert "convective" in resp.json()["detail"]
+
+
 class TestPackArtifacts:
     """Test artifact serving (snapshot, gramet, skewt, digest)."""
 

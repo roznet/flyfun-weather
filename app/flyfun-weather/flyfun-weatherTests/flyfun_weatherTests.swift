@@ -182,4 +182,62 @@ struct flyfun_weatherTests {
         #expect(model.crossCheck == "Thermodynamic risk high while NWP cover is quiet")
     }
 
+    @Test func advisoryDetailDecodesStructuredCrossCheckAndConvectiveBlock() throws {
+        let json = """
+        {
+          "advisory_id": "convective",
+          "aggregate_status": "red",
+          "aggregate_detail": "High CAPE along the middle third of the route",
+          "name": "Convective Activity",
+          "description": "Can fly around convective activity.",
+          "flight_id": "flight-1",
+          "briefing_timestamp": "2026-06-24T12:00:00+00:00",
+          "route_name": "egtf-eglf",
+          "total_distance_nm": 50.0,
+          "per_model": [
+            {
+              "model": "gfs",
+              "status": "red",
+              "detail": "HIGH risk near EGTF",
+              "affected_pct": 44.0,
+              "affected_nm": 22.0,
+              "total_nm": 50.0,
+              "cross_check": {"note": "NWP scheme remains quiet"}
+            }
+          ],
+          "parameters_used": {"affected_pct_red": 40.0},
+          "cross_check_note": "Cross-checks explain the grade.",
+          "convective_note": "Convective split is explanatory.",
+          "convective": {
+            "gfs": {
+              "assessment_method": "thermo",
+              "method_counts": {"thermo": 1},
+              "thermo": {
+                "cape_range_jkg": [1840, 1840],
+                "peak": {
+                  "cape_jkg": 1840,
+                  "el_top_ft": 27000,
+                  "risk_level": "high",
+                  "distance_nm": 19.5,
+                  "waypoint_icao": "EGTF"
+                }
+              },
+              "nwp": {"max_cover_pct": 0, "peak_top_ft": null}
+            }
+          }
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.weatherBrief.decode(AdvisoryDetailResponse.self, from: json)
+        let model = try #require(response.perModel.first)
+        let convective = try #require(response.convective?["gfs"])
+
+        #expect(response.name == "Convective Activity")
+        #expect(response.totalDistanceNm == 50.0)
+        #expect(model.crossCheck == "note: NWP scheme remains quiet")
+        #expect(convective.assessmentMethod == "thermo")
+        #expect(convective.thermo?.peak?.elTopFt == 27000)
+        #expect(convective.nwp?.maxCoverPct == 0)
+    }
+
 }
