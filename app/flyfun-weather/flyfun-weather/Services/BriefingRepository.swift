@@ -4,6 +4,7 @@ import Foundation
 protocol BriefingRepository: Sendable {
     func flights() async throws -> [FlightResponse]
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse
+    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> FlightResponse
     func parseFpl(_ text: String) async throws -> ParseFplResponse
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
@@ -40,6 +41,13 @@ final class OnlineBriefingRepository: BriefingRepository {
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
         let body = try JSONEncoder.weatherBrief.encode(request)
         return try await client.request("/api/flights", method: "POST", body: body)
+    }
+
+    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> FlightResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        // Server returns UpdateFlightResponse (FlightResponse + invalidation hint);
+        // the extra key is ignored when decoding into FlightResponse.
+        return try await client.request("/api/flights/\(flightId)", method: "PATCH", body: body)
     }
 
     func parseFpl(_ text: String) async throws -> ParseFplResponse {

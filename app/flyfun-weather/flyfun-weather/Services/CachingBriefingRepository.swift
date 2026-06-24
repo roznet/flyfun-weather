@@ -43,6 +43,11 @@ final class CachingBriefingRepository: BriefingRepository {
         try await online.createFlight(request)
     }
 
+    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> FlightResponse {
+        // Editing is online-only (mode-A default, §4.4).
+        try await online.updateFlight(flightId: flightId, request: request)
+    }
+
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
         try await online.parseFpl(text)
     }

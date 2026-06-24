@@ -11,6 +11,7 @@ struct FlightListView: View {
     @State private var showAddFlight = false
     @State private var showSettings = false
     @State private var showSignOutWarning = false
+    @State private var editingFlight: FlightResponse?
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -20,13 +21,35 @@ struct FlightListView: View {
                         if flights.isEmpty {
                             emptyStateView
                         } else {
-                            List(flights, selection: $selectedFlight) { flight in
-                                let hasCached = viewModel.cachedFlightIds.contains(flight.id)
-                                NavigationLink(value: flight) {
-                                    FlightCardView(flight: flight, hasCachedData: hasCached,
-                                                   isOffline: viewModel.isOffline)
+                            // Utility logbook (§4.4): Future · Recent · Past.
+                            List(selection: $selectedFlight) {
+                                ForEach(Self.groupedFlights(flights), id: \.title) { group in
+                                    Section(group.title) {
+                                        ForEach(group.flights) { flight in
+                                            let hasCached = viewModel.cachedFlightIds.contains(flight.id)
+                                            NavigationLink(value: flight) {
+                                                FlightCardView(flight: flight, hasCachedData: hasCached,
+                                                               isOffline: viewModel.isOffline)
+                                            }
+                                            .disabled(viewModel.isOffline && !hasCached)
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                                Button {
+                                                    editingFlight = flight
+                                                } label: {
+                                                    Label("Edit", systemImage: "pencil")
+                                                }
+                                                .tint(.blue)
+                                            }
+                                            .contextMenu {
+                                                Button {
+                                                    editingFlight = flight
+                                                } label: {
+                                                    Label("Edit Flight", systemImage: "pencil")
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                                .disabled(viewModel.isOffline && !hasCached)
                             }
                             .refreshable {
                                 await viewModel.loadFlights()
@@ -111,6 +134,17 @@ struct FlightListView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
+            .sheet(item: $editingFlight) { flight in
+                if let repo = appState.repository {
+                    AddFlightView(repository: repo, flight: flight) { updated in
+                        Task {
+                            await viewModel?.loadFlights()
+                            // Re-open the (regenerated) briefing.
+                            selectedFlight = updated
+                        }
+                    }
+                }
+            }
             .alert("Sign Out?", isPresented: $showSignOutWarning) {
                 Button("Sign Out", role: .destructive) { appState.logout() }
                 Button("Cancel", role: .cancel) {}
@@ -137,6 +171,35 @@ struct FlightListView: View {
                 Task { await viewModel?.loadFlights() }
             }
         }
+    }
+
+    // MARK: - Logbook grouping (Future · Recent · Past, §4.4)
+
+    struct FlightGroup { let title: String; let flights: [FlightResponse] }
+
+    /// Group flights into Future (upcoming), Recent (flown in the last 7 days),
+    /// and Past. Future sorted soonest-first; the rest most-recent-first. Empty
+    /// groups are dropped.
+    static func groupedFlights(_ flights: [FlightResponse], now: Date = Date()) -> [FlightGroup] {
+        let recentCutoff = now.addingTimeInterval(-7 * 24 * 3600)
+        var future: [FlightResponse] = []
+        var recent: [FlightResponse] = []
+        var past: [FlightResponse] = []
+        for f in flights {
+            let dep = f.departureDate ?? now
+            if dep >= now { future.append(f) }
+            else if dep >= recentCutoff { recent.append(f) }
+            else { past.append(f) }
+        }
+        func date(_ f: FlightResponse) -> Date { f.departureDate ?? now }
+        future.sort { date($0) < date($1) }
+        recent.sort { date($0) > date($1) }
+        past.sort { date($0) > date($1) }
+        return [
+            FlightGroup(title: "Future", flights: future),
+            FlightGroup(title: "Recent", flights: recent),
+            FlightGroup(title: "Past", flights: past),
+        ].filter { !$0.flights.isEmpty }
     }
 
     private var emptyStateView: some View {

@@ -10,6 +10,17 @@ struct CreateFlightRequest: Encodable {
     var flightDurationHours: Double?
 }
 
+/// Request body for editing an existing flight via PATCH /api/flights/{id}.
+/// Date and origin/destination cannot change server-side; only forecast-
+/// affecting parameters (time-of-day, FL, ceiling, duration, route) are sent.
+struct UpdateFlightRequest: Encodable {
+    var waypoints: [String]?
+    var departureTime: String?
+    var cruiseAltitudeFt: Int?
+    var flightCeilingFt: Int?
+    var flightDurationHours: Double?
+}
+
 /// Request body for parsing an ICAO flight plan string.
 struct ParseFplRequest: Encodable {
     let fplText: String
