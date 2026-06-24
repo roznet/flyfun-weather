@@ -8,6 +8,7 @@ protocol BriefingRepository: Sendable {
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
+    func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse
@@ -56,6 +57,10 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/advisories")
+    }
+
+    func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse {
+        try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/advisories/\(advisoryId)/detail")
     }
 
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse {

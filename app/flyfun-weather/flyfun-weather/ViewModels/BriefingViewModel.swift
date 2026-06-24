@@ -147,6 +147,20 @@ final class BriefingViewModel {
         return prefix
     }
 
+    // MARK: - Advisory detail
+
+    /// Fetch the "why it's RED" drill-down for one advisory (§4.6) — per-model
+    /// detail, fired parameters, and (for convective) the CAPE-vs-cover
+    /// reconciliation. Backed by the Phase 5 REST endpoint.
+    func fetchAdvisoryDetail(advisoryId: String) async throws -> AdvisoryDetailResponse {
+        guard let pack else { throw APIError.notFound }
+        return try await repository.advisoryDetail(
+            flightId: flight.id,
+            timestamp: pack.fetchTimestamp,
+            advisoryId: advisoryId
+        )
+    }
+
     // MARK: - Sounding profile
 
     /// Fetch raw sounding profile for a route point (for Skew-T rendering).

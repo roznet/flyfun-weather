@@ -10,12 +10,15 @@ struct BriefView: View {
 
     var body: some View {
         ScrollView {
+            // §4.1 read-me-first order: HERO → DIGEST → WATCH → AIRPORTS →
+            // ADVISORIES → SYNOPSIS (last; context, not a quick-read).
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 heroSection
-                watchSection
                 digestSection
+                watchSection
                 AirportConditionsView(viewModel: viewModel)
                 advisoriesSection
+                synopsisSection
             }
             .padding(.vertical, Theme.cardPadding)
         }
@@ -68,7 +71,7 @@ struct BriefView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, Theme.cardPadding)
         case .loaded(let digest):
-            ForEach(digest.sections, id: \.title) { section in
+            ForEach(digest.hazardSections, id: \.title) { section in
                 VStack(alignment: .leading, spacing: Theme.spacingXS) {
                     Text(section.title)
                         .font(.headline)
@@ -81,6 +84,23 @@ struct BriefView: View {
             }
         case .error:
             EmptyView()
+        }
+    }
+
+    // MARK: Synopsis (last — context, not a quick-read)
+
+    @ViewBuilder
+    private var synopsisSection: some View {
+        if case .loaded(let digest) = viewModel.digestState, let synopsis = digest.synopsis {
+            VStack(alignment: .leading, spacing: Theme.spacingXS) {
+                Text("Synoptic Overview")
+                    .font(.headline)
+                    .foregroundStyle(Theme.text)
+                Text(synopsis)
+                    .font(.body)
+                    .foregroundStyle(Theme.textMuted)
+            }
+            .padding(.horizontal, Theme.cardPadding)
         }
     }
 
@@ -99,7 +119,7 @@ struct BriefView: View {
                     .font(.headline)
                     .foregroundStyle(Theme.text)
                 ForEach(sorted) { advisory in
-                    AdvisoryCardView(advisory: advisory, catalog: response.catalog)
+                    AdvisoryCardView(advisory: advisory, catalog: response.catalog, viewModel: viewModel)
                 }
             }
             .padding(.horizontal, Theme.cardPadding)

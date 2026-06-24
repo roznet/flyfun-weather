@@ -145,6 +145,15 @@ final class CachingBriefingRepository: BriefingRepository {
         try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: "advisories")
     }
 
+    func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse {
+        try await cachedOrFetch(
+            flightId: flightId, timestamp: timestamp,
+            endpoint: "advisory-detail-\(advisoryId)",
+            pathSuffix: "advisories/\(advisoryId)/detail",
+            writeThrough: true
+        )
+    }
+
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse {
         try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: "digest")
     }
