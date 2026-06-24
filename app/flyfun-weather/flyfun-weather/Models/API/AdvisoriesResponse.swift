@@ -31,6 +31,7 @@ struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
     let affectedPct: Double
     let affectedNm: Double
     let totalNm: Double
+    let crossCheck: String?
 
     var id: String { model }
 }

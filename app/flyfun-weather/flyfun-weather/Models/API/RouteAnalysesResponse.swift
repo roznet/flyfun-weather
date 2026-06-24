@@ -47,15 +47,32 @@ struct SoundingAnalysis: Codable, Sendable {
 }
 
 struct ThermodynamicIndices: Codable, Sendable {
+    let lclPressureHpa: Double?
     let freezingLevelFt: Double?
     let minus10cLevelFt: Double?
     let minus20cLevelFt: Double?
     let lclAltitudeFt: Double?
+    let lfcPressureHpa: Double?
     let lfcAltitudeFt: Double?
+    let elPressureHpa: Double?
     let elAltitudeFt: Double?
     let capeSurfaceJkg: Double?
+    let capeMostUnstableJkg: Double?
+    let capeMixedLayerJkg: Double?
+    let cinSurfaceJkg: Double?
+    let liftedIndex: Double?
+    let showalterIndex: Double?
+    let kIndex: Double?
+    let totalTotals: Double?
+    let precipitableWaterMm: Double?
     let soundingCeilingFt: Double?
     let nwpCeilingFt: Double?
+    let nwpCapeJkg: Double?
+    let nwpCapeType: String?
+    let nwpCinJkg: Double?
+    let nwpLiftedIndex: Double?
+    let nwpFreezingLevelFt: Double?
+    let capeRawVsCalcDivergent: Bool?
 }
 
 struct EnhancedCloudLayer: Codable, Sendable {
