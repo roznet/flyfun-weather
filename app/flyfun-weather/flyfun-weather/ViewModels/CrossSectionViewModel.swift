@@ -16,6 +16,53 @@ final class CrossSectionViewModel {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
     }
 
+    // MARK: - Presets (§4.5 — preset collapses every method/toggle; cloud STYLE
+    // is preset-driven appearance. Touching any control flips to Custom.)
+
+    enum Preset: String, CaseIterable, Identifiable {
+        case gramet = "GRAMET"
+        case windy = "Windy"
+        case foreFlight = "ForeFlight"
+        case custom = "Custom"
+        var id: String { rawValue }
+    }
+
+    func applyPreset(_ preset: Preset) {
+        switch preset {
+        case .gramet: enabledLayers = CrossSectionLayer.defaultEnabled
+        case .windy: enabledLayers = Self.preset(cloudMethod: "nwp-cloud-bands")       // natural
+        case .foreFlight: enabledLayers = Self.preset(cloudMethod: "square-nwp-cloud-bands") // square
+        case .custom: break
+        }
+    }
+
+    /// The preset matching the current layer set, or `.custom` if it's been
+    /// hand-tuned away from any preset.
+    var currentPreset: Preset {
+        for p in [Preset.gramet, .windy, .foreFlight] where enabledLayers == presetMap(p) {
+            return p
+        }
+        return .custom
+    }
+
+    private func presetMap(_ p: Preset) -> [String: Bool] {
+        switch p {
+        case .gramet: return CrossSectionLayer.defaultEnabled
+        case .windy: return Self.preset(cloudMethod: "nwp-cloud-bands")
+        case .foreFlight: return Self.preset(cloudMethod: "square-nwp-cloud-bands")
+        case .custom: return [:]
+        }
+    }
+
+    /// GRAMET defaults with the clouds method group swapped to `cloudMethod`.
+    private static func preset(cloudMethod: String) -> [String: Bool] {
+        var m = CrossSectionLayer.defaultEnabled
+        for id in CrossSectionLayer.methodGroupOrder[.clouds] ?? [] {
+            m[id] = (id == cloudMethod)
+        }
+        return m
+    }
+
     /// Currently-active method layer ID for a method group (clouds/icing/etc),
     /// or nil if all methods in the group are off.
     func activeMethod(for group: LayerGroup) -> String? {
