@@ -1,7 +1,7 @@
 """Unified admin daily digest email — HTML + plain text.
 
-Replaces the verification-only digest with a broader status email
-covering users, flights, performance, and verification.
+A broad daily status email covering users, flights & briefings,
+performance/resources, donations, and flight debriefs.
 """
 
 from __future__ import annotations
@@ -15,10 +15,6 @@ from weatherbrief.models.verification import AdminDigestData
 from weatherbrief.notify.email import SmtpConfig, send_message
 
 logger = logging.getLogger(__name__)
-
-# Accuracy color thresholds
-_GREEN = 80.0
-_AMBER = 60.0
 
 _FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"
 
@@ -45,22 +41,6 @@ _STYLE_METRIC = (
 )
 
 _STYLE_SECTION = "margin:20px 0 8px; font-size:15px;"
-
-
-def _accuracy_color(pct: float | None) -> str:
-    if pct is None:
-        return ""
-    if pct >= _GREEN:
-        return "background:#d1e7dd; color:#0f5132;"
-    if pct >= _AMBER:
-        return "background:#fff3cd; color:#664d03;"
-    return "background:#f8d7da; color:#842029;"
-
-
-def _fmt_pct(pct: float | None) -> str:
-    if pct is None:
-        return "\u2014"
-    return f"{pct:.0f}%"
 
 
 def _fmt_bytes(b: int) -> str:
@@ -168,39 +148,65 @@ def _build_html(data: AdminDigestData) -> str:
         )
     p.append("</table>")
 
-    # --- Verification ---
-    v = data.verification
-    p.append(f'<h3 style="{_STYLE_SECTION}">Verification</h3>')
-
-    if v.category_accuracy:
-        p.append(_render_accuracy_table(v))
+    # --- Donations ---
+    don = data.donations
+    p.append(f'<h3 style="{_STYLE_SECTION}">Donations</h3>')
+    if don.count > 0:
+        p.append("<div>")
+        p.append(_metric_pill("Donations", str(don.count)))
+        p.append(_metric_pill("Total", f"${don.total_usd:.2f}"))
+        p.append("</div>")
+        p.append(f'<table style="{_STYLE_TABLE}">')
+        p.append("<tr>")
+        for h_ in ("Donor", "Amount", "USD", "Type"):
+            p.append(f'<th style="{_STYLE_TH}">{h_}</th>')
+        p.append("</tr>")
+        for d_ in don.donations:
+            charged = f"{d_.amount:.2f} {html.escape(d_.currency)}"
+            kind = "recurring" if d_.recurring else "one-time"
+            p.append("<tr>")
+            p.append(f'<td style="{_STYLE_TD}">{html.escape(d_.donor or "anonymous")}</td>')
+            p.append(f'<td style="{_STYLE_TD}">{charged}</td>')
+            p.append(f'<td style="{_STYLE_TD}">${d_.amount_usd:.2f}</td>')
+            p.append(f'<td style="{_STYLE_TD}">{kind}</td>')
+            p.append("</tr>")
+        p.append("</table>")
     else:
-        p.append('<p style="color:#666; font-style:italic;">No verification data.</p>')
+        p.append('<p style="color:#666; font-style:italic;">No donations in this period.</p>')
 
-    # Wind advisory summary line
-    if v.wind_advisory:
-        wind_parts = []
-        for w in v.wind_advisory:
-            pct = _fmt_pct(w.accuracy_pct)
-            wind_parts.append(f"{html.escape(w.model.upper())}: {pct} (n={w.sample_count})")
-        p.append(
-            f'<p style="font-size:12px; color:#555; margin:8px 0;">'
-            f"Wind advisory: {' &middot; '.join(wind_parts)}</p>"
-        )
+    # --- Debriefs ---
+    db_ = data.debriefs
+    p.append(f'<h3 style="{_STYLE_SECTION}">Flight Debriefs</h3>')
+    if db_.total_count > 0:
+        p.append("<div>")
+        p.append(_metric_pill("Debriefed", str(db_.total_count)))
+        p.append(_metric_pill("Flown", str(db_.flown_count)))
+        p.append(_metric_pill("Cancelled", str(db_.cancelled_count)))
+        if db_.monitoring_count:
+            p.append(_metric_pill("Monitoring", str(db_.monitoring_count)))
+        p.append("</div>")
 
-    if v.notable_miss_count > 0:
-        p.append(
-            f'<p style="font-size:12px; color:#555; margin:4px 0;">'
-            f"Notable misses: {v.notable_miss_count}</p>"
-        )
-
-    if v.dashboard_url:
-        p.append(
-            f'<p style="margin:8px 0;">'
-            f'<a href="{html.escape(v.dashboard_url)}" '
-            f'style="color:#2563eb; text-decoration:none;">'
-            f"View full verification dashboard &rarr;</a></p>"
-        )
+        if db_.recent:
+            p.append(f'<table style="{_STYLE_TABLE}">')
+            p.append("<tr>")
+            for h_ in ("Route", "Decision", "Reasons", "Note"):
+                p.append(f'<th style="{_STYLE_TH}">{h_}</th>')
+            p.append("</tr>")
+            for r_ in db_.recent:
+                p.append("<tr>")
+                p.append(
+                    f'<td style="{_STYLE_TD} font-weight:600;">'
+                    f"{html.escape(r_.route_name)}</td>"
+                )
+                p.append(f'<td style="{_STYLE_TD}">{html.escape(r_.decision)}</td>')
+                p.append(f'<td style="{_STYLE_TD}">{html.escape(r_.summary)}</td>')
+                p.append(
+                    f'<td style="{_STYLE_TD} color:#555;">{html.escape(r_.note)}</td>'
+                )
+                p.append("</tr>")
+            p.append("</table>")
+    else:
+        p.append('<p style="color:#666; font-style:italic;">No debriefs in this period.</p>')
 
     # Footer
     p.append(
@@ -208,53 +214,6 @@ def _build_html(data: AdminDigestData) -> str:
         "Generated by FlyFun Weather</p>"
     )
     p.append("</div>")
-    return "".join(p)
-
-
-def _render_accuracy_table(v) -> str:
-    """Render model x D-0..D-3 accuracy table."""
-    today_map: dict[tuple[str, int], float | None] = {}
-    today_n: dict[tuple[str, int], int] = {}
-    for r in v.category_accuracy:
-        today_map[(r.model, r.days_out)] = r.accuracy_pct
-        today_n[(r.model, r.days_out)] = r.sample_count
-
-    models_set: set[str] = {r.model for r in v.category_accuracy}
-    models = sorted(m for m in models_set if m != "TAF")
-    if "TAF" in models_set:
-        models.append("TAF")
-
-    if not models:
-        return ""
-
-    days_out_cols = [0, 1, 2, 3]
-    p: list[str] = []
-    p.append(f'<table style="{_STYLE_TABLE}">')
-    p.append("<tr>")
-    p.append(f'<th style="{_STYLE_TH}">Model</th>')
-    for d in days_out_cols:
-        p.append(f'<th style="{_STYLE_TH} text-align:center;">D-{d}</th>')
-    p.append("</tr>")
-
-    for model in models:
-        p.append("<tr>")
-        p.append(
-            f'<td style="{_STYLE_TD} font-weight:600;">'
-            f"{html.escape(model.upper())}</td>"
-        )
-        for d in days_out_cols:
-            pct = today_map.get((model, d))
-            n = today_n.get((model, d), 0)
-            color = _accuracy_color(pct)
-            cell = _fmt_pct(pct)
-            if n > 0:
-                cell += f'<span style="font-size:10px; color:#999;"> ({n})</span>'
-            p.append(
-                f'<td style="{_STYLE_TD} text-align:center; {color}">{cell}</td>'
-            )
-        p.append("</tr>")
-
-    p.append("</table>")
     return "".join(p)
 
 
@@ -305,44 +264,41 @@ def _build_plain(data: AdminDigestData) -> str:
         lines.append(f"  Sample size:     {perf.briefing_count_for_perf}")
     lines.append("")
 
-    # Verification
-    v = data.verification
-    lines.append("VERIFICATION")
-    if v.category_accuracy:
-        models_set: set[str] = {r.model for r in v.category_accuracy}
-        models = sorted(m for m in models_set if m != "TAF")
-        if "TAF" in models_set:
-            models.append("TAF")
-
-        header = f"{'Model':<10}" + "".join(f"{'D-' + str(d):>8}" for d in (0, 1, 2, 3))
-        lines.append(f"  {header}")
-        lines.append(f"  {'-' * len(header)}")
-
-        today_map = {(r.model, r.days_out): r for r in v.category_accuracy}
-        for model in models:
-            row = f"{model.upper():<10}"
-            for d in (0, 1, 2, 3):
-                r = today_map.get((model, d))
-                if r and r.accuracy_pct is not None:
-                    row += f"{r.accuracy_pct:>7.0f}%"
-                else:
-                    row += f"{'--':>8}"
-            lines.append(f"  {row}")
+    # Donations
+    don = data.donations
+    lines.append("DONATIONS")
+    if don.count > 0:
+        lines.append(f"  Count: {don.count}   Total: ${don.total_usd:.2f}")
+        for d_ in don.donations:
+            kind = "recurring" if d_.recurring else "one-time"
+            charged = f"{d_.amount:.2f} {d_.currency}"
+            lines.append(
+                f"  - {d_.donor or 'anonymous'}: {charged} "
+                f"(${d_.amount_usd:.2f}, {kind})"
+            )
     else:
-        lines.append("  No verification data.")
+        lines.append("  No donations in this period.")
+    lines.append("")
 
-    if v.notable_miss_count > 0:
-        lines.append(f"  Notable misses: {v.notable_miss_count}")
-
-    if v.wind_advisory:
-        wind_parts = [
-            f"{w.model.upper()}: {_fmt_pct(w.accuracy_pct)} (n={w.sample_count})"
-            for w in v.wind_advisory
-        ]
-        lines.append(f"  Wind advisory: {', '.join(wind_parts)}")
-
-    if v.dashboard_url:
-        lines.append(f"  Dashboard: {v.dashboard_url}")
+    # Debriefs
+    db_ = data.debriefs
+    lines.append("FLIGHT DEBRIEFS")
+    if db_.total_count > 0:
+        summary = (
+            f"flown: {db_.flown_count}, cancelled: {db_.cancelled_count}"
+        )
+        if db_.monitoring_count:
+            summary += f", monitoring: {db_.monitoring_count}"
+        lines.append(f"  Debriefed: {db_.total_count}  ({summary})")
+        for r_ in db_.recent:
+            line = f"  - {r_.route_name} [{r_.decision}]"
+            if r_.summary:
+                line += f" — {r_.summary}"
+            lines.append(line)
+            if r_.note:
+                lines.append(f"      note: {r_.note}")
+    else:
+        lines.append("  No debriefs in this period.")
     lines.append("")
 
     return "\n".join(lines)

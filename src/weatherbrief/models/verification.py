@@ -219,13 +219,41 @@ class PerformanceSectionData(BaseModel):
     briefing_count_for_perf: int = 0  # sample size for avg stats
 
 
-class VerificationSectionData(BaseModel):
-    """Condensed verification stats for the admin digest."""
+class DonationInfo(BaseModel):
+    """A single donation made during the digest period."""
 
-    category_accuracy: list[CategoryAccuracyRow] = Field(default_factory=list)
-    notable_miss_count: int = 0
-    wind_advisory: list[WindAdvisoryStats] = Field(default_factory=list)
-    dashboard_url: str = ""
+    amount_usd: float = 0.0
+    amount: float = 0.0  # charged amount in `currency`
+    currency: str = "USD"  # ISO 4217 as charged
+    recurring: bool = False
+    donor: str = ""  # donor email if attributed, else "anonymous"
+
+
+class DonationsSectionData(BaseModel):
+    """Donations received during the admin digest period."""
+
+    count: int = 0
+    total_usd: float = 0.0
+    donations: list[DonationInfo] = Field(default_factory=list)
+
+
+class DebriefInfo(BaseModel):
+    """A single flight debrief filed during the digest period."""
+
+    route_name: str = ""
+    decision: str = ""  # cancelled | flown | monitoring
+    summary: str = ""  # reasons (cancelled) or worse-outcome categories (flown)
+    note: str = ""
+
+
+class DebriefsSectionData(BaseModel):
+    """Flight debriefs filed during the admin digest period."""
+
+    total_count: int = 0
+    flown_count: int = 0
+    cancelled_count: int = 0
+    monitoring_count: int = 0
+    recent: list[DebriefInfo] = Field(default_factory=list)  # last 5, newest first
 
 
 class AdminDigestData(BaseModel):
@@ -237,6 +265,5 @@ class AdminDigestData(BaseModel):
         default_factory=FlightsBriefingsSectionData
     )
     performance: PerformanceSectionData = Field(default_factory=PerformanceSectionData)
-    verification: VerificationSectionData = Field(
-        default_factory=VerificationSectionData
-    )
+    donations: DonationsSectionData = Field(default_factory=DonationsSectionData)
+    debriefs: DebriefsSectionData = Field(default_factory=DebriefsSectionData)

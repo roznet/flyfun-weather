@@ -1,11 +1,12 @@
 """Query functions for the unified admin daily digest.
 
-Gathers user, flight, briefing, cost, performance, and verification
-stats for a given time period.
+Gathers user, flight, briefing, cost, performance, donation, and
+flight-debrief stats for a given time period.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -14,23 +15,28 @@ from pathlib import Path
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from flyfun_common.db.models import CostLedgerRow, UserRow
-from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow
+from flyfun_common.db.models import CostLedgerRow, DonationRow, UserRow
+from weatherbrief.db.models import (
+    BriefingUsageRow,
+    FlightDebriefRow,
+    FlightRow,
+)
+from weatherbrief.debriefs.taxonomy import Decision, OutcomeValue
 from weatherbrief.models.verification import (
     AdminDigestData,
+    DebriefInfo,
+    DebriefsSectionData,
+    DonationInfo,
+    DonationsSectionData,
     FlightsBriefingsSectionData,
     NewUserInfo,
     PerformanceSectionData,
     UsersSectionData,
-    VerificationSectionData,
-)
-from weatherbrief.tasks.verification_stats import (
-    get_category_accuracy,
-    get_notable_misses,
-    get_wind_advisory_accuracy,
 )
 
 logger = logging.getLogger(__name__)
+
+_RECENT_DEBRIEF_LIMIT = 5
 
 _SERVICE = "flyfun-weather"
 
@@ -183,23 +189,97 @@ def _get_performance_section(
     )
 
 
-def _get_verification_section(
+def _get_donations_section(
     db: Session, since: datetime, until: datetime,
-    base_url: str = "",
-) -> VerificationSectionData:
-    """Condensed verification: accuracy matrix D-0..D-3, notable miss count, wind."""
-    # Use standalone source for broader coverage
-    accuracy = get_category_accuracy(db, since, until, source="standalone")
-    notable = get_notable_misses(db, since, until, source="standalone")
-    wind = get_wind_advisory_accuracy(db, since, until, source="standalone")
+) -> DonationsSectionData:
+    """Donations received in the period (succeeded only, refunds excluded)."""
+    rows = db.execute(
+        select(DonationRow)
+        .where(
+            DonationRow.service == _SERVICE,
+            DonationRow.status == "succeeded",
+            DonationRow.created_at.between(since, until),
+        )
+        .order_by(DonationRow.created_at.desc())
+    ).scalars().all()
 
-    dashboard_url = f"{base_url}/admin.html#verification" if base_url else ""
+    # Resolve donor emails for attributed donations in one query.
+    user_ids = {r.user_id for r in rows if r.user_id}
+    emails: dict[str, str] = {}
+    if user_ids:
+        emails = dict(
+            db.execute(
+                select(UserRow.id, UserRow.email).where(UserRow.id.in_(user_ids))
+            ).all()
+        )
 
-    return VerificationSectionData(
-        category_accuracy=accuracy,
-        notable_miss_count=len(notable),
-        wind_advisory=wind,
-        dashboard_url=dashboard_url,
+    donations = [
+        DonationInfo(
+            amount_usd=float(r.amount_usd),
+            amount=float(r.amount),
+            currency=r.currency,
+            recurring=bool(r.recurring),
+            donor=emails.get(r.user_id, "") if r.user_id else "anonymous",
+        )
+        for r in rows
+    ]
+
+    return DonationsSectionData(
+        count=len(donations),
+        total_usd=sum(d.amount_usd for d in donations),
+        donations=donations,
+    )
+
+
+def _debrief_summary(row: FlightDebriefRow) -> str:
+    """One-line reason summary: cancel reasons, or the categories that went worse."""
+    if row.decision == Decision.CANCELLED.value and row.reasons_json:
+        tags = json.loads(row.reasons_json)
+        return ", ".join(tags) if tags else ""
+    if row.decision == Decision.FLOWN.value and row.outcomes_json:
+        outcomes = json.loads(row.outcomes_json)
+        worse = [k for k, v in outcomes.items() if v == OutcomeValue.WORSE.value]
+        better = [k for k, v in outcomes.items() if v == OutcomeValue.BETTER.value]
+        bits = []
+        if worse:
+            bits.append("worse: " + ", ".join(worse))
+        if better:
+            bits.append("better: " + ", ".join(better))
+        return " · ".join(bits) if bits else "as forecast"
+    return ""
+
+
+def _get_debriefs_section(
+    db: Session, since: datetime, until: datetime,
+) -> DebriefsSectionData:
+    """Flight debriefs filed in the period: counts by decision + last 5 with reasons."""
+    rows = db.execute(
+        select(FlightDebriefRow, FlightRow.route_name)
+        .join(FlightRow, FlightDebriefRow.flight_id == FlightRow.id)
+        .where(FlightDebriefRow.created_at.between(since, until))
+        .order_by(FlightDebriefRow.created_at.desc())
+    ).all()
+
+    flown = sum(1 for d, _ in rows if d.decision == Decision.FLOWN.value)
+    cancelled = sum(1 for d, _ in rows if d.decision == Decision.CANCELLED.value)
+    monitoring = sum(1 for d, _ in rows if d.decision == Decision.MONITORING.value)
+
+    recent = [
+        DebriefInfo(
+            route_name=route_name or "(unnamed)",
+            decision=d.decision,
+            summary=_debrief_summary(d),
+            note=d.note or "",
+        )
+        for d, route_name in rows[:_RECENT_DEBRIEF_LIMIT]
+    ]
+
+    return DebriefsSectionData(
+        total_count=len(rows),
+        flown_count=flown,
+        cancelled_count=cancelled,
+        monitoring_count=monitoring,
+        recent=recent,
     )
 
 
@@ -222,5 +302,6 @@ def get_admin_digest_data(
         users=_get_users_section(db, since, until),
         flights_briefings=_get_flights_briefings_section(db, since, until),
         performance=_get_performance_section(db, since, until),
-        verification=_get_verification_section(db, since, until, base_url),
+        donations=_get_donations_section(db, since, until),
+        debriefs=_get_debriefs_section(db, since, until),
     )
