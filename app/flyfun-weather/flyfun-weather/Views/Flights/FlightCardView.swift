@@ -9,8 +9,18 @@ struct FlightCardView: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(flight.shortTitle)
-                    .font(.headline)
+                HStack(spacing: 6) {
+                    Text(flight.shortTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    if flight.role == .subscriber {
+                        Image(systemName: "person.2")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Shared flight")
+                    }
+                }
 
                 Text(flight.waypoints.joined(separator: " - "))
                     .font(.subheadline)
@@ -27,6 +37,13 @@ struct FlightCardView: View {
                     Label("FL\(flight.cruiseAltitudeFt / 100)", systemImage: "arrow.up.right")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if let aircraft = flight.aircraft {
+                        Label(aircraft.displayName, systemImage: "airplane")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
 

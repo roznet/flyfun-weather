@@ -33,18 +33,24 @@ struct FlightListView: View {
                                             }
                                             .disabled(viewModel.isOffline && !hasCached)
                                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                                Button {
-                                                    editingFlight = flight
-                                                } label: {
-                                                    Label("Edit", systemImage: "pencil")
+                                                // Subscribers can't edit shared flights, and editing
+                                                // is online-only (it regenerates the briefing).
+                                                if !viewModel.isOffline && flight.isEditable {
+                                                    Button {
+                                                        editingFlight = flight
+                                                    } label: {
+                                                        Label("Edit", systemImage: "pencil")
+                                                    }
+                                                    .tint(.blue)
                                                 }
-                                                .tint(.blue)
                                             }
                                             .contextMenu {
-                                                Button {
-                                                    editingFlight = flight
-                                                } label: {
-                                                    Label("Edit Flight", systemImage: "pencil")
+                                                if !viewModel.isOffline && flight.isEditable {
+                                                    Button {
+                                                        editingFlight = flight
+                                                    } label: {
+                                                        Label("Edit Flight", systemImage: "pencil")
+                                                    }
                                                 }
                                             }
                                         }

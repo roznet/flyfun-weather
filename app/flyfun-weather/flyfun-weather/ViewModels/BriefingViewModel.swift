@@ -16,6 +16,9 @@ enum BriefingTab: String, Hashable {
 /// Shared deep-link payload (§4.6/§4.7/§4.9): one `focusIntent` consumed by the
 /// target tab to open already-scrubbed to the right model / layer / point.
 struct FocusIntent: Equatable {
+    /// Which instrument tab should consume this intent.
+    enum Target: Equatable { case crossSection, skewT, map }
+    var target: Target = .crossSection
     var model: String?
     /// Cross-section layer id to enable (e.g. a convective layer).
     var layerId: String?
@@ -100,6 +103,41 @@ final class BriefingViewModel {
         self.flight = flight
         self.repository = repository
     }
+
+    // MARK: - Deep-link focus (§4.6/§4.7/§4.9)
+
+    /// Apply a deep-link intent: select the model, resolve and set the shared
+    /// active point, and switch to the target instrument tab. The target tab's
+    /// view consumes `focusIntent` (layer/metric to enable) and clears it.
+    func setFocusIntent(_ intent: FocusIntent?) {
+        focusIntent = intent
+        guard let intent else { return }
+
+        if let model = intent.model, availableModels.contains(model) {
+            selectedModel = model
+        }
+
+        if case .loaded(let analyses) = routeAnalysesState {
+            if let idx = intent.pointIndex,
+               analyses.analyses.contains(where: { $0.pointIndex == idx }) {
+                activePointIndex = idx
+            } else if let dist = intent.distanceNm,
+                      let nearest = analyses.analyses.min(by: {
+                          abs($0.distanceFromOriginNm - dist) < abs($1.distanceFromOriginNm - dist)
+                      }) {
+                activePointIndex = nearest.pointIndex
+            }
+        }
+
+        switch intent.target {
+        case .crossSection: selectedTab = .crossSection
+        case .skewT: selectedTab = .skewT
+        case .map: selectedTab = .map
+        }
+    }
+
+    /// The target tab calls this once it has applied the intent's layer/metric.
+    func clearFocusIntent() { focusIntent = nil }
 
     // MARK: - Initial load
 

@@ -16,8 +16,10 @@ struct RouteGraphView: View {
     /// route graph highlights the same distance the readout strip describes.
     var scrubDistanceNm: Double? = nil
 
-    @State private var leftMetricId = "headwind"
-    @State private var rightMetricId = "cloud-cover"
+    /// Lifted to the cross-section so the readout strip shares the same metric
+    /// selection (one unified cursor, §4.7).
+    @Binding var leftMetricId: String
+    @Binding var rightMetricId: String
 
     private var leftMetric: RouteGraphMetric? { RouteGraphMetrics.metric(byId: leftMetricId) }
     private var rightMetric: RouteGraphMetric? { RouteGraphMetrics.metric(byId: rightMetricId) }

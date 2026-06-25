@@ -72,6 +72,9 @@ struct EnhancedCloudLayer: Codable, Sendable {
     let topFt: Double
     let coverage: String
     let meanDewpointDepressionC: Double?
+    /// `mean_cloud_cover_pct` — model cloud fraction for NWP layers (band
+    /// cover% for GRIB, mean CAF for nwp_3d); nil for DD layers.
+    let meanCloudCoverPct: Double?
 }
 
 struct IcingZone: Codable, Sendable {

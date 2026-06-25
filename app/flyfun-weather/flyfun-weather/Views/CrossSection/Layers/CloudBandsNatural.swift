@@ -33,8 +33,10 @@ enum CloudBandSource {
         case .dd:
             return ColorScales.cloudRGBA(dewpointDepressionC: avgDD(cl, matched), coverage: cl.coverage)
         case .nwp:
-            let covA = ColorScales.coverageToPct(cl.coverage)
-            let covB = matched.map { ColorScales.coverageToPct($0.coverage) } ?? covA
+            // Prefer the granular model cloud fraction; fall back to the 4-bucket
+            // coverage category — matches web `NWP_SOURCE.matchedColor`.
+            let covA = cl.meanCloudCoverPct ?? ColorScales.coverageToPct(cl.coverage)
+            let covB = matched.map { $0.meanCloudCoverPct ?? ColorScales.coverageToPct($0.coverage) } ?? covA
             return ColorScales.nwpCloudRGBA(pct: (covA + covB) / 2)
         }
     }
@@ -190,6 +192,12 @@ private func drawNaturalCloudBand(
 }
 
 private func naturalFillFraction(_ cl: VizCloudLayer, _ matched: VizCloudLayer?, _ config: NaturalCloudConfig) -> Double {
+    // Prefer the granular cloud cover% when present (NWP); else the coverage
+    // bucket. Mirrors web `naturalFillFraction`.
+    if let covA = cl.meanCloudCoverPct {
+        let pct = matched?.meanCloudCoverPct.map { (covA + $0) / 2 } ?? covA
+        return max(config.minFillFraction, min(1.0, pct / 100))
+    }
     let a = config.fillFraction(forCoverage: cl.coverage)
     let b = matched.map { config.fillFraction(forCoverage: $0.coverage) } ?? a
     return max(config.minFillFraction, (a + b) / 2)

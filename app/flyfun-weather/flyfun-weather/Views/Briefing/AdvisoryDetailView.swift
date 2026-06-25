@@ -54,6 +54,7 @@ struct AdvisoryDetailView: View {
                         Text(desc).font(.body).foregroundStyle(Theme.textMuted)
                     }
                 }
+                showOnCrossSection(detail)   // RUNG 4 (§4.6)
             }
             .padding(Theme.cardPadding)
         }
@@ -155,6 +156,61 @@ struct AdvisoryDetailView: View {
                 }
             }
         }
+    }
+
+    // MARK: RUNG 4 — deep-link to the cross-section (§4.6)
+
+    /// "Show on cross-section ›" — jumps to the cross-section tab, enables this
+    /// advisory's layer, and scrubs to the convective peak point (when known).
+    private func showOnCrossSection(_ detail: AdvisoryDetailResponse) -> some View {
+        Button {
+            let (model, pointIndex) = peakModelAndPoint(detail)
+            viewModel.setFocusIntent(FocusIntent(
+                target: .crossSection,
+                model: model,
+                layerId: Self.crossSectionLayerId(for: advisoryId),
+                pointIndex: pointIndex
+            ))
+            dismiss()
+        } label: {
+            HStack {
+                Label("Show on cross-section", systemImage: "chart.xyaxis.line")
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption)
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(Theme.primary)
+            .padding(Theme.cardPadding)
+            .frame(maxWidth: .infinity)
+            .background(Theme.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.cornerRadius))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Representative cross-section layer for an advisory category; nil leaves
+    /// the default layers as-is (still jumps to the chart at the point).
+    private static func crossSectionLayerId(for advisoryId: String) -> String? {
+        switch advisoryId {
+        case "convective": return "thermo-convective-bg"
+        case "icing": return "icing-ogimet-nwp-bands"
+        case "turbulence", "cat": return "cat-bands"
+        default: return nil
+        }
+    }
+
+    /// The model + route point of the first resolvable convective peak (so the
+    /// cross-section opens at the peak for the model that drove the grade).
+    private func peakModelAndPoint(_ detail: AdvisoryDetailResponse) -> (String, Int?) {
+        guard case .loaded(let analyses) = viewModel.routeAnalysesState else {
+            return (detail.perModel.first?.model ?? viewModel.selectedModel, nil)
+        }
+        for m in detail.perModel {
+            if let icao = detail.convective?[m.model]?.thermo?.peak?.waypointIcao,
+               let p = analyses.analyses.first(where: { $0.waypointIcao == icao }) {
+                return (m.model, p.pointIndex)
+            }
+        }
+        return (detail.perModel.first?.model ?? viewModel.selectedModel, viewModel.activePointIndex)
     }
 
     // MARK: Building blocks

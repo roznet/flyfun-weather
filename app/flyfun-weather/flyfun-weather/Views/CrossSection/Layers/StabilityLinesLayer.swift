@@ -10,11 +10,14 @@ struct StabilityLinesLayer: CrossSectionLayerProtocol {
 
     let metric: Metric
 
+    // Layer IDs match the web (`lcl`/`lfc`/`el`) so persisted layer prefs sync
+    // web↔iOS and the advisory convective preset (`lines: ['lcl','lfc','el',…]`)
+    // targets them on deep-link.
     var id: String {
         switch metric {
-        case .lcl: "lcl-line"
-        case .lfc: "lfc-line"
-        case .el: "el-line"
+        case .lcl: "lcl"
+        case .lfc: "lfc"
+        case .el: "el"
         }
     }
 

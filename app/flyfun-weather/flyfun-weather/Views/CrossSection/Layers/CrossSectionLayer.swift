@@ -94,9 +94,11 @@ enum CrossSectionLayer {
         "freezing-level": true,
         "minus-10c": false,
         "minus-20c": false,
-        "lcl-line": false,
-        "lfc-line": false,
-        "el-line": false,
+        // Stability lines stay default-off (design §4.5 buries them as expert
+        // toggles / clean default view); IDs match web for prefs sync + presets.
+        "lcl": false,
+        "lfc": false,
+        "el": false,
         "reference-lines": true,
     ]
 

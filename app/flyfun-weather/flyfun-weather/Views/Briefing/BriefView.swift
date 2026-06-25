@@ -54,11 +54,28 @@ struct BriefView: View {
                     Text("Watch")
                         .font(.headline)
                         .foregroundStyle(Theme.text)
-                    FlowChips(items: items)
+                    FlowChips(items: items) { item in
+                        viewModel.setFocusIntent(FocusIntent(
+                            target: .crossSection,
+                            model: viewModel.selectedModel,
+                            layerId: Self.watchLayerId(for: item),
+                            pointIndex: viewModel.activePointIndex
+                        ))
+                    }
                 }
                 .padding(.horizontal, Theme.cardPadding)
             }
         }
+    }
+
+    /// Map a watch-item phrase to the cross-section layer it most relates to, so
+    /// the deep-link turns on the relevant view. nil → just jump to the chart.
+    private static func watchLayerId(for item: String) -> String? {
+        let s = item.lowercased()
+        if s.contains("ice") || s.contains("icing") { return "icing-ogimet-nwp-bands" }
+        if s.contains("conv") || s.contains("storm") || s.contains("cb") || s.contains("cape") { return "thermo-convective-bg" }
+        if s.contains("turb") || s.contains("shear") { return "cat-bands" }
+        return nil
     }
 
     // MARK: Digest hazard narrative
@@ -139,17 +156,24 @@ struct BriefView: View {
     }
 }
 
-/// Simple wrapping chip row for watch items (deep-link to instruments comes in
-/// Phase 3/5; for now they're glanceable chips).
+/// Wrapping chip row for watch items. Each chip deep-links to the cross-section
+/// at the shared active point (§4.7), enabling the layer its keyword implies.
 private struct FlowChips: View {
     let items: [String]
+    let onTap: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacingXS) {
             ForEach(items, id: \.self) { item in
-                Label(item, systemImage: "exclamationmark.circle")
+                Button { onTap(item) } label: {
+                    HStack(spacing: Theme.spacingXS) {
+                        Label(item, systemImage: "exclamationmark.circle")
+                        Image(systemName: "chevron.right").font(.caption2)
+                    }
                     .font(.subheadline)
                     .foregroundStyle(Theme.amber)
+                }
+                .buttonStyle(.plain)
             }
         }
     }

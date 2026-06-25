@@ -186,9 +186,9 @@ private enum LegendColors {
         case "freezing-level": return ColorScales.freezingLevelColor
         case "minus-10c": return ColorScales.minus10cColor
         case "minus-20c": return ColorScales.minus20cColor
-        case "lcl-line": return ColorScales.lclColor
-        case "lfc-line": return ColorScales.lfcColor
-        case "el-line": return ColorScales.elColor
+        case "lcl": return ColorScales.lclColor
+        case "lfc": return ColorScales.lfcColor
+        case "el": return ColorScales.elColor
         case "reference-lines": return ColorScales.cruiseAltitudeColor
         default: return Theme.textMuted
         }
