@@ -95,6 +95,13 @@ class ModelAdvisoryResult(BaseModel):
     affected_pct: float = 0.0
     affected_nm: float = 0.0
     total_nm: float = 0.0
+    # Optional second extent at a higher threshold (e.g. convective MODERATE+ vs
+    # the LOW-floor primary extent), so the aggregate can anchor its headline on
+    # actual concern rather than the min-threshold union (#300). Stays 0 for
+    # evaluators that don't populate it; convective sets it explicitly.
+    affected_mod_points: int = 0
+    affected_mod_pct: float = 0.0
+    affected_mod_nm: float = 0.0
     # Optional details-only metadata: divergence between the chosen method and
     # an independent second derivation (e.g. convective DD-vs-model scheme).
     # Never affects the grade; surfaced only in the info popup and LLM digest.
@@ -110,9 +117,15 @@ class ModelAdvisoryResult(BaseModel):
         affected: int,
         total: int,
         total_distance_nm: float,
+        affected_mod: int | None = None,
         cross_check: str | None = None,
     ) -> ModelAdvisoryResult:
-        """Build a result, computing pct and nm from point counts."""
+        """Build a result, computing pct and nm from point counts.
+
+        ``affected_mod`` is an optional higher-threshold count (e.g. convective
+        MODERATE+); its pct/nm are derived the same way as the primary extent.
+        """
+        mod = affected_mod or 0
         return cls(
             model=model,
             status=status,
@@ -122,6 +135,9 @@ class ModelAdvisoryResult(BaseModel):
             affected_pct=round(100 * affected / total, 1) if total > 0 else 0,
             affected_nm=round(total_distance_nm * affected / total, 1) if total > 0 else 0,
             total_nm=round(total_distance_nm, 1),
+            affected_mod_points=mod,
+            affected_mod_pct=round(100 * mod / total, 1) if total > 0 else 0,
+            affected_mod_nm=round(total_distance_nm * mod / total, 1) if total > 0 else 0,
             cross_check=cross_check,
         )
 

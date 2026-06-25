@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
@@ -12,7 +14,72 @@ from weatherbrief.analysis.advisories.cloud_top import CloudTopEvaluator
 from weatherbrief.analysis.advisories.model_agreement import ModelAgreementEvaluator
 from weatherbrief.analysis.advisories.vfr_feasibility import VFRFeasibilityEvaluator
 from weatherbrief.analysis.advisories.ifr_feasibility import IFRFeasibilityEvaluator
-from weatherbrief.models import AdvisoryStatus
+from weatherbrief.models import (
+    AdvisoryStatus,
+    ConvectiveAssessment,
+    ConvectiveRisk,
+    RoutePointAnalysis,
+    SoundingAnalysis,
+    ThermodynamicIndices,
+)
+
+# Default convective params (LOW floor drives colour, MODERATE+ anchors headline).
+_CONV_PARAMS = {
+    "min_risk": 2,
+    "affected_pct_amber": 20,
+    "affected_pct_red": 50,
+    "top_clearance_ft": 2000,
+}
+
+
+def _conv_route(
+    per_model_risks: dict[str, list[ConvectiveRisk]],
+    *,
+    total_nm: float = 200.0,
+    cruise_ft: int = 8000,
+) -> RouteContext:
+    """Build a RouteContext where each model carries an explicit per-point risk
+    list. All lists must share the same length (= number of route points).
+
+    Each point's convective assessment is a bare thermo-less CAPE risk (no
+    convective_thermo/convective_nwp), so the DD-floor and cross-check paths stay
+    inert — isolating the headline-wording logic under test.
+    """
+    lengths = {len(v) for v in per_model_risks.values()}
+    assert len(lengths) == 1, "all per-model risk lists must be the same length"
+    n = lengths.pop()
+    analyses = []
+    for i in range(n):
+        sounding = {
+            model: SoundingAnalysis(
+                indices=ThermodynamicIndices(),
+                convective=ConvectiveAssessment(
+                    risk_level=risks[i], cape_jkg=1000.0
+                ),
+            )
+            for model, risks in per_model_risks.items()
+        }
+        analyses.append(
+            RoutePointAnalysis(
+                point_index=i,
+                lat=48.0 + i * 0.5,
+                lon=2.0 + i * 0.5,
+                distance_from_origin_nm=i * (total_nm / max(n - 1, 1)),
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0),
+                track_deg=135.0,
+                sounding=sounding,
+            )
+        )
+    return RouteContext(
+        analyses=analyses,
+        cross_sections=[],
+        elevation=None,
+        models=list(per_model_risks.keys()),
+        cruise_altitude_ft=cruise_ft,
+        flight_ceiling_ft=18000,
+        total_distance_nm=total_nm,
+    )
 
 
 class TestIcingEscape:
@@ -276,6 +343,89 @@ class TestConvective:
         res = ConvectiveEvaluator.evaluate(ctx, params)
         # DD EL FL350 reaches FL300 cruise → not filtered → HIGH → RED.
         assert res.aggregate_status == AdvisoryStatus.RED
+
+
+class TestConvectiveHeadline:
+    """Headline wording (#300): anchor extent on MODERATE+, name the peak, and
+    show a cross-model range — never the LOW-floor union as one number."""
+
+    def test_moderate_plus_anchoring_not_low_union(self):
+        """6 HIGH + 18 LOW of 24 points: every point clears the LOW floor (100%)
+        but only 25% reaches MODERATE+. The headline extent must reflect the
+        MODERATE+ 25%, not the 100% LOW union, with the peak named separately."""
+        risks = [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 18
+        ctx = _conv_route({"gfs": risks})
+        res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+
+        assert res.aggregate_status == AdvisoryStatus.RED  # colour unchanged
+        m = res.per_model[0]
+        assert m.affected_points == 24
+        assert m.affected_mod_points == 6
+        # Per-model detail anchors on the MODERATE+ extent (25%) + peak HIGH.
+        assert "MODERATE+" in m.detail
+        assert "25%" in m.detail
+        assert "peak HIGH" in m.detail
+        assert "100%" not in m.detail  # the LOW union must not be the headline
+        # Single model → aggregate collapses to a single % (no range).
+        assert "25%" in res.aggregate_detail
+        assert "peak HIGH" in res.aggregate_detail
+        assert "across models" not in res.aggregate_detail
+
+    def test_cross_model_range(self):
+        """Three RED models with differing MODERATE+ coverage (25/50/75%) →
+        aggregate shows the range across the supporting models + peak."""
+        ctx = _conv_route(
+            {
+                "gfs": [ConvectiveRisk.HIGH] * 2 + [ConvectiveRisk.LOW] * 6,  # 25%
+                "icon": [ConvectiveRisk.HIGH] * 4 + [ConvectiveRisk.LOW] * 4,  # 50%
+                "ecmwf": [ConvectiveRisk.HIGH] * 6 + [ConvectiveRisk.LOW] * 2,  # 75%
+            }
+        )
+        res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+
+        assert res.aggregate_status == AdvisoryStatus.RED
+        assert "MODERATE+" in res.aggregate_detail
+        assert "25–75%" in res.aggregate_detail
+        assert "across models" in res.aggregate_detail
+        assert "peak HIGH" in res.aggregate_detail
+
+    def test_low_only_favorability_fallback(self):
+        """4 LOW + 6 NONE of 10: 40% clears the LOW floor (AMBER) but nothing
+        reaches MODERATE. Wording must be 'primed, not firing' favorability —
+        never 'MODERATE+ over 0%'."""
+        risks = [ConvectiveRisk.LOW] * 4 + [ConvectiveRisk.NONE] * 6
+        ctx = _conv_route({"gfs": risks})
+        res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+
+        assert res.aggregate_status == AdvisoryStatus.AMBER
+        m = res.per_model[0]
+        assert m.affected_points == 4
+        assert m.affected_mod_points == 0
+        assert "primed" in m.detail.lower()
+        assert "MODERATE+" not in m.detail
+        assert "40%" in m.detail
+        # Aggregate (single model) → favorability single %, no range/peak.
+        assert "primed" in res.aggregate_detail.lower()
+        assert "40%" in res.aggregate_detail
+        assert "across models" not in res.aggregate_detail
+        assert "peak" not in res.aggregate_detail.lower()
+
+    def test_range_collapses_when_models_agree(self):
+        """Two RED models with identical MODERATE+ coverage (50%) → the range
+        collapses to a single number; no '–' range, no 'across models'."""
+        ctx = _conv_route(
+            {
+                "gfs": [ConvectiveRisk.HIGH] * 4 + [ConvectiveRisk.LOW] * 4,  # 50%
+                "icon": [ConvectiveRisk.HIGH] * 4 + [ConvectiveRisk.LOW] * 4,  # 50%
+            }
+        )
+        res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+
+        assert res.aggregate_status == AdvisoryStatus.RED
+        assert "MODERATE+ over 50%" in res.aggregate_detail
+        assert "peak HIGH" in res.aggregate_detail
+        assert "across models" not in res.aggregate_detail
+        assert "–" not in res.aggregate_detail  # no en-dash range
 
 
 class TestCloudTop:
