@@ -47,7 +47,7 @@ struct AdvisoryDashboardView: View {
             ProgressView("Loading advisories...")
                 .padding()
         case .loaded(let response):
-            let sorted = response.advisories.sorted { severityOrder($0.aggregateStatus) > severityOrder($1.aggregateStatus) }
+            let sorted = response.advisories.sorted { severityRank($0.aggregateStatus) > severityRank($1.aggregateStatus) }
             LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 12) {
                 ForEach(sorted) { advisory in
                     AdvisoryCardView(advisory: advisory, catalog: response.catalog, viewModel: viewModel)
@@ -59,14 +59,6 @@ struct AdvisoryDashboardView: View {
         }
     }
 
-    private func severityOrder(_ status: String) -> Int {
-        switch status {
-        case "red": 3
-        case "amber": 2
-        case "green": 1
-        default: 0
-        }
-    }
 }
 
 /// Model name inside a colored status bubble.

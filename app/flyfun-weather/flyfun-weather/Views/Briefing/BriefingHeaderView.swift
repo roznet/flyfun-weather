@@ -42,13 +42,17 @@ struct BriefingHeaderView: View {
         }
     }
 
+    private static let dayTimeUTC: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "d MMM HH:mm"
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        return fmt
+    }()
+
     private var identityDetail: String {
         var parts: [String] = []
         if let date = flight.departureDate {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "d MMM HH:mm"
-            fmt.timeZone = TimeZone(identifier: "UTC")
-            parts.append("\(fmt.string(from: date)) UTC")
+            parts.append("\(Self.dayTimeUTC.string(from: date)) UTC")
         }
         parts.append("FL\(flight.cruiseAltitudeFt / 100)")
         return parts.joined(separator: " · ")

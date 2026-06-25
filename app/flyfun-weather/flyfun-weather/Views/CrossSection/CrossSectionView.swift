@@ -49,7 +49,7 @@ struct CrossSectionView: View {
             VStack(spacing: 0) {
                 chromeBar
                 CrossSectionReadoutView(
-                    vizData: csVM.vizData ?? emptyViz,
+                    vizData: csVM.vizData ?? Self.emptyViz,
                     scrubDistanceNm: scrubDistanceNm,
                     scrubAltitudeFt: scrubAltitudeFt,
                     onSounding: goToSounding,
@@ -72,7 +72,7 @@ struct CrossSectionView: View {
             if !chromeHidden {
                 VStack {
                     CrossSectionReadoutView(
-                        vizData: csVM.vizData ?? emptyViz,
+                        vizData: csVM.vizData ?? Self.emptyViz,
                         scrubDistanceNm: scrubDistanceNm,
                         scrubAltitudeFt: scrubAltitudeFt,
                         onSounding: goToSounding,
@@ -220,11 +220,10 @@ struct CrossSectionView: View {
     }
 
     /// Empty placeholder so the readout strip can render before data loads.
-    private var emptyViz: VizRouteData {
-        VizRouteData(points: [], cruiseAltitudeFt: 0, ceilingAltitudeFt: 0, flightCeilingFt: 0,
-                     totalDistanceNm: 1, waypointMarkers: [], departureTime: "",
-                     flightDurationHours: 0, terrainProfile: nil)
-    }
+    /// Static so it isn't re-allocated on every render pass (referenced twice).
+    private static let emptyViz = VizRouteData(points: [], cruiseAltitudeFt: 0, ceilingAltitudeFt: 0, flightCeilingFt: 0,
+                                               totalDistanceNm: 1, waypointMarkers: [], departureTime: "",
+                                               flightDurationHours: 0, terrainProfile: nil)
 
     private func updateVizData() {
         switch viewModel.routeAnalysesState {

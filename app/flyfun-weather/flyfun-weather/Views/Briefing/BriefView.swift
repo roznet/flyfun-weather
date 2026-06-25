@@ -130,7 +130,7 @@ struct BriefView: View {
             ProgressView("Loading advisories…")
                 .padding(.horizontal, Theme.cardPadding)
         case .loaded(let response):
-            let sorted = response.advisories.sorted { severityOrder($0.aggregateStatus) > severityOrder($1.aggregateStatus) }
+            let sorted = response.advisories.sorted { severityRank($0.aggregateStatus) > severityRank($1.aggregateStatus) }
             VStack(alignment: .leading, spacing: Theme.spacingM) {
                 Text("Advisories")
                     .font(.headline)
@@ -146,14 +146,6 @@ struct BriefView: View {
         }
     }
 
-    private func severityOrder(_ status: String) -> Int {
-        switch status {
-        case "red": 3
-        case "amber": 2
-        case "green": 1
-        default: 0
-        }
-    }
 }
 
 /// Wrapping chip row for watch items. Each chip deep-links to the cross-section

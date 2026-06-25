@@ -20,3 +20,14 @@ enum Assessment: String, Codable, CaseIterable {
         rawValue.uppercased()
     }
 }
+
+/// Sort rank for an assessment status string (red > amber > green > other).
+/// Shared so advisory lists order severity identically everywhere.
+func severityRank(_ status: String) -> Int {
+    switch status {
+    case "red": 3
+    case "amber": 2
+    case "green": 1
+    default: 0
+    }
+}

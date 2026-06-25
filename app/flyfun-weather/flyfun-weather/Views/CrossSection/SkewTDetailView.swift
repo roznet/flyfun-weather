@@ -55,6 +55,9 @@ extension SoundingProfileResponse {
     /// own levels (linear in altitude). Used only when the server didn't send a
     /// pressure for a parcel level. Returns nil if the altitude or levels are
     /// missing.
+    /// NOTE: linear-in-altitude is an approximation — pressure falls ~log with
+    /// altitude — but the error is only ~1–2 hPa over a 3000 ft inter-level gap,
+    /// fine for marker placement in this Tier-0 fallback; not worth a log interp.
     static func pressure(atAltitudeFt altitudeFt: Double?, levels: [SoundingProfileLevel]) -> Double? {
         guard let alt = altitudeFt else { return nil }
         let pts = levels

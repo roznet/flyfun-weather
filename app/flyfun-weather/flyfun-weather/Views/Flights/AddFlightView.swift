@@ -48,7 +48,7 @@ struct AddFlightView: View {
                 }
             }
             .confirmationDialog(
-                "Regenerate briefing?",
+                "This change requires a new briefing",
                 isPresented: $showRebriefConfirm,
                 titleVisibility: .visible
             ) {
@@ -57,7 +57,7 @@ struct AddFlightView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This change affects the forecast and will regenerate the briefing.")
+                Text("Route, time, altitude or duration changes affect the forecast, so saving regenerates the briefing. Cancel to leave the flight and its briefing unchanged.")
             }
             .task {
                 await viewModel.loadAircraft()

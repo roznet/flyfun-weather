@@ -237,9 +237,14 @@ struct AdvisoryDetailView: View {
         v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v)
     }
 
-    private func shortTime(_ iso: String) -> String {
-        guard let date = ISO8601DateFormatter().date(from: iso) else { return iso }
+    private static let isoParser = ISO8601DateFormatter()
+    private static let hhmmUTC: DateFormatter = {
         let fmt = DateFormatter(); fmt.dateFormat = "HH:mm"; fmt.timeZone = TimeZone(identifier: "UTC")
-        return "\(fmt.string(from: date))Z"
+        return fmt
+    }()
+
+    private func shortTime(_ iso: String) -> String {
+        guard let date = Self.isoParser.date(from: iso) else { return iso }
+        return "\(Self.hhmmUTC.string(from: date))Z"
     }
 }

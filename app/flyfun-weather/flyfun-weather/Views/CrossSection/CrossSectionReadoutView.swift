@@ -98,12 +98,18 @@ struct CrossSectionReadoutView: View {
         return s
     }
 
-    private func timeText(_ pt: VizPoint) -> String {
-        guard let date = ISO8601DateFormatter().date(from: pt.time) else { return "" }
+    // Formatters are expensive to build; scrubbing calls timeText per drag tick.
+    private static let isoParser = ISO8601DateFormatter()
+    private static let hhmmUTC: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm"
         fmt.timeZone = TimeZone(identifier: "UTC")
-        return "\(fmt.string(from: date))Z"
+        return fmt
+    }()
+
+    private func timeText(_ pt: VizPoint) -> String {
+        guard let date = Self.isoParser.date(from: pt.time) else { return "" }
+        return "\(Self.hhmmUTC.string(from: date))Z"
     }
 
     /// Per-layer values at the cursor: temperature, wind, cloud cover, plus any

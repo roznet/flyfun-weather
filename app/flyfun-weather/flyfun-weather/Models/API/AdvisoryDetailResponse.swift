@@ -11,7 +11,8 @@ struct AdvisoryDetailResponse: Codable, Sendable {
     let perModel: [ModelAdvisoryDetail]
     let parametersUsed: [String: Double]
     /// CARDINAL RULE: this is an EXPLAINER, never an alert — render in neutral
-    /// chrome, never amber/red. Always present in the response.
+    /// chrome, never amber/red. Optional/defensive: when present it's shown as
+    /// the explainer; absence simply omits it (decode stays resilient).
     let crossCheckNote: String?
     let name: String?
     let category: String?
