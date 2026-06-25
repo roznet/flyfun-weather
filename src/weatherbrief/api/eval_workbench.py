@@ -35,6 +35,7 @@ class LabelModel(BaseModel):
     assessments: dict[str, str] = Field(default_factory=dict)
     rationale: str = ""
     notes: str = ""
+    priority: int | None = None  # 1=revalidate-first .. 4=skip; None=untriaged
     labeled_by: str = ""
     labeled_at: str = ""
 
@@ -65,6 +66,7 @@ class LabelRequest(BaseModel):
     assessments: dict[str, str] = Field(default_factory=dict)
     rationale: str = ""
     notes: str = ""
+    priority: int | None = None
     labeled_by: str = ""
 
 
@@ -138,6 +140,7 @@ def save_corpus_label(
             assessments=body.assessments,
             rationale=body.rationale.strip(),
             notes=body.notes.strip(),
+            priority=body.priority,
             labeled_by=body.labeled_by.strip() or admin_id,
             labeled_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )

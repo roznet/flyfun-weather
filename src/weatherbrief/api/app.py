@@ -440,6 +440,7 @@ def create_app() -> FastAPI:
         db=Depends(_get_db),
     ):
         from weatherbrief.notify.admin_email import is_admin_email
+        from weatherbrief.eval_workbench.config import eval_workbench_enabled
 
         import json as _json
 
@@ -468,6 +469,9 @@ def create_app() -> FastAPI:
             "setup_completed": prefs.setup_completed if prefs else False,
             "synoptic_forecast_map_enabled": synoptic_enabled,
             "units_region": units_region,
+            # Dev-only golden-labelling workbench: never set in prod, so the
+            # Settings link stays hidden there even for admins.
+            "eval_workbench_enabled": eval_workbench_enabled(),
         }
 
     # Auth router from flyfun-common (with weather-specific on_new_user callback)

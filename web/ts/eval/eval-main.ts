@@ -8,6 +8,7 @@ interface Label {
   assessments: Record<string, string>;
   rationale: string;
   notes: string;
+  priority?: number | null;
   labeled_by: string;
   labeled_at: string;
 }
@@ -66,10 +67,18 @@ function renderPacks(packs: CorpusPackSummary[]): string {
   if (packs.length === 0) {
     return '<p>No corpus packs yet. Run <code>scripts/pull_eval_corpus.py</code>.</p>';
   }
-  const rows = packs
+  // Triage order: by priority (1 first, untriaged last), then unlabelled first
+  // so the queue surfaces the most-interesting, not-yet-done packs at the top.
+  const prio = (p: CorpusPackSummary): number => p.label?.priority ?? 9;
+  const sorted = [...packs].sort(
+    (a, b) => prio(a) - prio(b) || Number(a.is_labeled) - Number(b.is_labeled),
+  );
+  const rows = sorted
     .map((p) => {
       const g = p.label?.assessments || {};
       const recon = p.faithful ? '' : ' <span class="recon">reconstructed</span>';
+      const pr = p.label?.priority;
+      const prCell = pr ? `<span class="badge prio p${pr}">P${pr}</span>` : '<span class="sit">—</span>';
       // Open the full briefing view (where the SME actually judges the weather),
       // not the flight summary page. The pack timestamp pins the briefing to this
       // corpus pack; the virtual-flight resolver serves it from disk.
@@ -77,6 +86,7 @@ function renderPacks(packs: CorpusPackSummary[]): string {
         `/briefing.html?flight=${encodeURIComponent(p.flight_id)}` +
         `&pack=${encodeURIComponent(p.fetch_timestamp)}`;
       return `<tr>
+        <td>${prCell}</td>
         <td><a href="${open}">${esc(p.route)}</a> <span class="sit">d${p.days_out}</span>${recon}</td>
         <td>${badge(p.assessment)}</td>
         <td>${badge(g.conservative)} ${badge(g.balanced)} ${badge(g.tolerant)}</td>
@@ -86,6 +96,7 @@ function renderPacks(packs: CorpusPackSummary[]): string {
     .join('');
   return `<table class="eval-table">
     <thead><tr>
+      <th>Pri</th>
       <th>Route — open to label</th>
       <th>Model</th>
       <th>Golden (cons / bal / tol)</th>

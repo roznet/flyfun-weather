@@ -68,8 +68,22 @@ class CorpusLabel(BaseModel):
     assessments: dict[str, str] = Field(default_factory=dict)  # guidance -> G/A/R
     rationale: str = ""
     notes: str = ""
+    # SME curation priority, set during triage independently of the G/A/R label:
+    # 1 = very interesting, revalidate first; 2 = good; 3 = normal/simple;
+    # 4 = skip / not interesting. None = untriaged. Used to order the labelling
+    # queue, subset regression runs, and decide what to promote into the corpus.
+    priority: int | None = None
     labeled_by: str = ""
     labeled_at: str = ""
+
+    @field_validator("priority")
+    @classmethod
+    def _check_priority(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if value not in (1, 2, 3, 4):
+            raise ValueError("priority must be 1-4 or null")
+        return value
 
     @field_validator("assessments")
     @classmethod

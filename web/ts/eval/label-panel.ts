@@ -26,9 +26,18 @@ interface Label {
   assessments: Record<string, string>;
   rationale: string;
   notes: string;
+  priority?: number | null;
   labeled_by: string;
   labeled_at: string;
 }
+
+// Curation priority (set during triage, independent of the G/A/R label).
+const PRIORITIES: Array<[number, string]> = [
+  [1, '1 · very interesting — revalidate first'],
+  [2, '2 · good'],
+  [3, '3 · normal / simple'],
+  [4, '4 · skip / not interesting'],
+];
 
 interface CorpusPackSummary {
   corpus_id: string;
@@ -168,6 +177,33 @@ export async function initLabelPanel(flightId: string): Promise<void> {
     body.appendChild(row);
   }
 
+  // Curation priority row (1–4). Independent of G/A/R so a pack can be triaged
+  // (or marked skip) before it's labelled. Hover for what each level means.
+  let chosenPriority: number | null = pack.label?.priority ?? null;
+  const prow = el('div', {}, '<span style="display:inline-block;width:6rem">priority</span>');
+  prow.style.cssText = 'flex:0 0 auto;margin:0.15rem 0';
+  const priorityPaint: Array<() => void> = [];
+  for (const [val, title] of PRIORITIES) {
+    const b = el('button', { textContent: String(val), title }) as HTMLButtonElement;
+    b.type = 'button';
+    b.style.cssText =
+      'margin-right:0.25rem;width:2rem;border-radius:4px;cursor:pointer;' +
+      'border:1px solid var(--border,#ccc);background:transparent;color:inherit';
+    const paint = () => {
+      b.style.background = chosenPriority === val ? '#3367d6' : 'transparent';
+      b.style.color = chosenPriority === val ? '#fff' : 'inherit';
+    };
+    b.addEventListener('click', () => {
+      // Click the active one again to clear back to untriaged.
+      chosenPriority = chosenPriority === val ? null : val;
+      priorityPaint.forEach((f) => f());
+    });
+    paint();
+    priorityPaint.push(paint);
+    prow.appendChild(b);
+  }
+  body.appendChild(prow);
+
   // Text fields flex to fill spare vertical space and are independently
   // resizable; rationale gets the larger share.
   const rationale = el('textarea', {
@@ -243,10 +279,13 @@ export async function initLabelPanel(flightId: string): Promise<void> {
             assessments: chosen,
             rationale: rationale.value,
             notes: notes.value,
+            priority: chosenPriority,
           }),
         },
       );
-      status.textContent = `Saved ${Object.values(saved.assessments).join('/')}`;
+      const av = Object.values(saved.assessments).join('/');
+      const pv = saved.priority ? `P${saved.priority}` : '';
+      status.textContent = `Saved ${[av, pv].filter(Boolean).join(' · ') || '(empty)'}`;
     } catch (err) {
       status.textContent = err instanceof Error ? err.message : 'Save failed';
     } finally {

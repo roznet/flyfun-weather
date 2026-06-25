@@ -260,6 +260,15 @@
             <button type="button" id="btn-reset-tour-offer" class="btn btn-secondary btn-sm">Replay briefing tour offer</button>
             <button type="button" id="btn-reset-first-time" class="btn btn-primary btn-sm">Replay both</button>
           </div>
+
+          <!-- Dev-only eval workbench link; shown by JS only when the workbench is mounted (never in prod). -->
+          <div id="eval-workbench-link" style="display:none; margin-top:1rem">
+            <h4 class="subsection-heading">Digest Eval</h4>
+            <p class="muted section-hint">
+              Golden-labelling workbench for the LLM digest eval — render real prod packs and record GREEN/AMBER/RED labels.
+            </p>
+            <a href="/eval.html" class="btn btn-secondary btn-sm">Open Eval Labelling Workbench</a>
+          </div>
         </div>
 
         <!-- Your Data -->

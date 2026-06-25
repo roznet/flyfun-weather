@@ -9,6 +9,8 @@ export interface CurrentUser {
   setup_completed: boolean;
   synoptic_forecast_map_enabled: boolean;
   units_region: string;
+  // Dev-only: the eval labelling workbench is mounted (admin + flag). Absent/false in prod.
+  eval_workbench_enabled?: boolean;
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {

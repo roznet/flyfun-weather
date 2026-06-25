@@ -661,6 +661,12 @@ async function init(): Promise<void> {
   if (user.is_admin) {
     const adminSection = document.getElementById('admin-tools-section');
     if (adminSection) adminSection.style.display = '';
+    // Dev-only: link to the eval labelling workbench, shown only when it's
+    // actually mounted (WEATHERBRIEF_EVAL_WORKBENCH set) — never in prod.
+    if (user.eval_workbench_enabled) {
+      const evalLink = document.getElementById('eval-workbench-link');
+      if (evalLink) evalLink.style.display = '';
+    }
     document.getElementById('btn-reset-onboarding')?.addEventListener('click', async () => {
       try {
         await resetMyOnboarding();
