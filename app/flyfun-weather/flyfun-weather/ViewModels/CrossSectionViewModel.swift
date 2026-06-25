@@ -16,6 +16,13 @@ final class CrossSectionViewModel {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
     }
 
+    /// Force-enable a known layer (e.g. a deep-link focus intent turning on the
+    /// advisory's layer). No-op for an unknown id.
+    func enableLayer(_ id: String) {
+        guard enabledLayers[id] != nil else { return }
+        enabledLayers[id] = true
+    }
+
     // MARK: - Presets (§4.5 — preset collapses every method/toggle; cloud STYLE
     // is preset-driven appearance. Touching any control flips to Custom.)
 
@@ -140,7 +147,7 @@ final class CrossSectionViewModel {
         )
 
         let cloudLayers = (sounding?.cloudLayers ?? []).map {
-            VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC)
+            VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC, meanCloudCoverPct: $0.meanCloudCoverPct)
         }
 
         // nwp_cloud_layers: nil = no NWP source for this model; [] = clear sky.
@@ -148,7 +155,7 @@ final class CrossSectionViewModel {
         // "no data" (disable) from "clear sky" (render nothing).
         let nwpCloudLayers: [VizCloudLayer]? = sounding?.nwpCloudLayers.map { layers in
             layers.map {
-                VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC)
+                VizCloudLayer(baseFt: $0.baseFt, topFt: $0.topFt, coverage: $0.coverage, meanDewpointDepressionC: $0.meanDewpointDepressionC, meanCloudCoverPct: $0.meanCloudCoverPct)
             }
         }
 

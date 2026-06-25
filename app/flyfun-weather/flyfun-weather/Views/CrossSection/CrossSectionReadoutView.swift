@@ -10,6 +10,10 @@ struct CrossSectionReadoutView: View {
     let scrubDistanceNm: Double?
     let scrubAltitudeFt: Double?
     let onSounding: () -> Void
+    /// Route-graph metric ids selected below the chart (§4.7 unified cursor):
+    /// their value at the cursor is shown here too, so the strip and the graph
+    /// share one cursor instead of two tooltips.
+    var routeGraphMetricIds: [String] = []
 
     var body: some View {
         HStack(spacing: Theme.spacingM) {
@@ -25,6 +29,18 @@ struct CrossSectionReadoutView: View {
                 Spacer()
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Theme.spacingS) {
+                        // Route-graph metric value(s) at the cursor — colour-dotted
+                        // to match the graph below (unified cursor, §4.7).
+                        ForEach(graphChips(pt), id: \.text) { chip in
+                            HStack(spacing: 3) {
+                                Circle().fill(chip.color).frame(width: 6, height: 6)
+                                Text(chip.text)
+                            }
+                            .font(.tabularData(.caption2))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Theme.bg, in: Capsule())
+                            .foregroundStyle(Theme.text)
+                        }
                         ForEach(chips(pt), id: \.self) { chip in
                             Text(chip)
                                 .font(.tabularData(.caption2))
@@ -62,6 +78,16 @@ struct CrossSectionReadoutView: View {
 
     private func nearestPoint(_ dist: Double) -> VizPoint? {
         vizData.points.min { abs($0.distanceNm - dist) < abs($1.distanceNm - dist) }
+    }
+
+    /// The selected route-graph metric value(s) at the cursor point, labelled and
+    /// colour-keyed to the graph below.
+    private func graphChips(_ pt: VizPoint) -> [(text: String, color: Color)] {
+        routeGraphMetricIds.compactMap { id in
+            guard id != "none", let m = RouteGraphMetrics.metric(byId: id),
+                  let v = m.getValue(pt) else { return nil }
+            return (text: "\(m.label): \(m.formatValue(v))", color: m.color)
+        }
     }
 
     private func headline(_ dist: Double) -> String {

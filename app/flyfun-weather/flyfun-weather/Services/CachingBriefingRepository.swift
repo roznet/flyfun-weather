@@ -43,9 +43,21 @@ final class CachingBriefingRepository: BriefingRepository {
         try await online.createFlight(request)
     }
 
-    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> FlightResponse {
+    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse {
         // Editing is online-only (mode-A default, §4.4).
         try await online.updateFlight(flightId: flightId, request: request)
+    }
+
+    func aircraft() async throws -> [AircraftResponse] {
+        try await online.aircraft()
+    }
+
+    func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
+        try await online.searchAircraftTypes(query)
+    }
+
+    func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse {
+        try await online.createAircraft(request)
     }
 
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
@@ -156,6 +168,14 @@ final class CachingBriefingRepository: BriefingRepository {
             endpoint: "advisory-detail-\(advisoryId)",
             pathSuffix: "advisories/\(advisoryId)/detail",
             writeThrough: true
+        )
+    }
+
+    func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws {
+        try await online.recalculateAdvisories(
+            flightId: flightId,
+            timestamp: timestamp,
+            cruiseAltitudeFt: cruiseAltitudeFt
         )
     }
 

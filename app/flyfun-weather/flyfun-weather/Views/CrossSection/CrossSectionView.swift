@@ -14,6 +14,10 @@ struct CrossSectionView: View {
     @State private var scrubAltitudeFt: Double?
     @State private var showingConfig = false
     @State private var chromeHidden = false
+    /// Route-graph metric selection, lifted here so the readout strip and the
+    /// graph share one cursor + one metric choice (§4.7 unified cursor).
+    @State private var graphLeftMetricId = "headwind"
+    @State private var graphRightMetricId = "cloud-cover"
     @Environment(\.verticalSizeClass) private var vSizeClass
 
     /// iPhone landscape → immersive full-bleed focus mode (§4.7): cross-section
@@ -31,7 +35,8 @@ struct CrossSectionView: View {
         .onChange(of: viewModel.selectedModel) { updateVizData() }
         .onChange(of: viewModel.routeAnalysesState.isLoaded) { updateVizData() }
         .onChange(of: viewModel.elevationState.isLoaded) { updateVizData() }
-        .task { updateVizData() }
+        .onChange(of: viewModel.focusIntent) { applyFocusIntent() }
+        .task { updateVizData(); applyFocusIntent() }
         .sheet(isPresented: $showingConfig) {
             CrossSectionConfigSheet(csVM: csVM)
         }
@@ -47,10 +52,12 @@ struct CrossSectionView: View {
                     vizData: csVM.vizData ?? emptyViz,
                     scrubDistanceNm: scrubDistanceNm,
                     scrubAltitudeFt: scrubAltitudeFt,
-                    onSounding: goToSounding
+                    onSounding: goToSounding,
+                    routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
                 )
                 crossSectionCanvas
-                RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm)
+                RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
+                               leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)
             }
         }
         .background(Theme.bg)
@@ -68,7 +75,8 @@ struct CrossSectionView: View {
                         vizData: csVM.vizData ?? emptyViz,
                         scrubDistanceNm: scrubDistanceNm,
                         scrubAltitudeFt: scrubAltitudeFt,
-                        onSounding: goToSounding
+                        onSounding: goToSounding,
+                        routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
                     )
                     Spacer()
                 }
@@ -170,6 +178,21 @@ struct CrossSectionView: View {
             }
             viewModel.activePointIndex = nearest?.pointIndex
         }
+    }
+
+    /// Consume a pending deep-link intent targeting the cross-section (§4.6
+    /// "Show on cross-section ›"): enable the advisory's layer and move the
+    /// scrub cursor to the focus point, then clear the intent.
+    private func applyFocusIntent() {
+        guard let intent = viewModel.focusIntent, intent.target == .crossSection else { return }
+        if let layerId = intent.layerId { csVM.enableLayer(layerId) }
+        if let dist = intent.distanceNm {
+            scrubDistanceNm = dist
+        } else if let alt = activePointDistanceNm {
+            scrubDistanceNm = alt
+        }
+        if let alt = intent.altitudeFt { scrubAltitudeFt = alt }
+        viewModel.clearFocusIntent()
     }
 
     private func goToSounding() {

@@ -80,6 +80,10 @@ struct VizCloudLayer {
     let topFt: Double
     let coverage: String
     let meanDewpointDepressionC: Double?
+    /// Granular model cloud fraction (NWP source); nil for DD layers. When
+    /// present the natural/square NWP colour uses it directly instead of the
+    /// 4-bucket coverage category — matches the web factory.
+    let meanCloudCoverPct: Double?
 }
 
 struct VizIcingZone {
