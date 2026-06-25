@@ -85,6 +85,18 @@ struct SkewTDetailView: View {
     let pointIndex: Int
 
     @State private var profileState: LoadingState<SoundingProfileResponse> = .idle
+    /// Shared crosshair pressure (§4.8 Tier 2): two-way with the Skew-T and read
+    /// by the side-panel so both views show one linked cursor + readout.
+    @State private var selectedPressureHPa: Double?
+    /// Selected side-panel variable(s) (§4.8 Tier 3): one on iPhone, up to two on iPad.
+    @State private var primaryVarId: String?
+    @State private var secondaryVarId: String?
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+
+    // Web app pressure range (1050–250 hPa); shared by the plot and the panel so
+    // their pressure rows line up (the panel requires an identical config).
+    private let config = SkewTConfiguration(pTop: 250)
+    private var isPad: Bool { hSizeClass == .regular }
 
     var body: some View {
         Group {
@@ -93,45 +105,114 @@ struct SkewTDetailView: View {
                 ProgressView("Loading sounding...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded(let response):
-                VStack(spacing: 0) {
-                    // Header
-                    HStack {
-                        if let icao = response.waypointIcao {
-                            Text(icao).font(.headline)
-                        }
-                        Text("\(Int(response.distanceFromOriginNm)) nm")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Text(response.model.uppercased())
-                            .font(.caption.bold())
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.blue.opacity(0.15), in: Capsule())
-                        Spacer()
-                        Text("\(response.levels.count) levels")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 4)
-
-                    // Skew-T plot — match web app's pressure range (1050–250 hPa)
-                    // Landscape aspect ~9:5 to match metpy figsize
-                    SkewTView(
-                        profile: response.toSoundingProfile(),
-                        config: SkewTConfiguration(pTop: 250)
-                    )
-                    .aspectRatio(9.0 / 5.0, contentMode: .fit)
-                }
+                plotSection(response)
             case .error(let error):
                 ContentUnavailableView("Sounding Unavailable",
                                        systemImage: "chart.xyaxis.line",
                                        description: Text(error.localizedDescription))
             }
         }
+        // New point → drop the stale cursor before its sounding loads.
+        .onChange(of: pointIndex) { selectedPressureHPa = nil }
         .task(id: pointIndex) {
             await loadProfile()
         }
+    }
+
+    @ViewBuilder
+    private func plotSection(_ response: SoundingProfileResponse) -> some View {
+        let profile = response.toSoundingProfile()
+        let available = SkewTVariableCatalog.variables(for: response, levels: profile.levels)
+        let shown = shownVariables(available)
+        VStack(spacing: Theme.spacingXS) {
+            header(response)
+            if !available.isEmpty {
+                variablePicker(available)
+            }
+            HStack(spacing: 0) {
+                SkewTView(profile: profile, config: config, selectedPressureHPa: $selectedPressureHPa)
+                if !shown.isEmpty {
+                    SkewTVariablePanel(profile: profile, variables: shown, config: config,
+                                       selectedPressureHPa: selectedPressureHPa)
+                        .frame(width: isPad ? 220 : 96)
+                }
+            }
+        }
+        .onAppear { ensureDefaults(available) }
+        .onChange(of: isPad) { ensureDefaults(available) }
+    }
+
+    private func header(_ response: SoundingProfileResponse) -> some View {
+        HStack {
+            if let icao = response.waypointIcao {
+                Text(icao).font(.headline)
+            }
+            Text("\(Int(response.distanceFromOriginNm)) nm")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text(response.model.uppercased())
+                .font(.caption.bold())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.blue.opacity(0.15), in: Capsule())
+            Spacer()
+            Text("\(response.levels.count) levels")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 4)
+    }
+
+    // MARK: Side-panel variable selection (§4.8 Tier 3)
+
+    private func shownVariables(_ available: [SkewTVariable]) -> [SkewTVariable] {
+        let ids = isPad ? [primaryVarId, secondaryVarId] : [primaryVarId]
+        // compactMap also de-dups nils; allow the same id twice to collapse to one.
+        var seen = Set<String>()
+        return ids.compactMap { id -> SkewTVariable? in
+            guard let id, seen.insert(id).inserted else { return nil }
+            return available.first { $0.id == id }
+        }
+    }
+
+    private func ensureDefaults(_ available: [SkewTVariable]) {
+        guard !available.isEmpty else { return }
+        if primaryVarId == nil || !available.contains(where: { $0.id == primaryVarId }) {
+            primaryVarId = available.first?.id
+        }
+        if isPad, secondaryVarId == nil || !available.contains(where: { $0.id == secondaryVarId }) {
+            secondaryVarId = available.dropFirst().first?.id ?? available.first?.id
+        }
+    }
+
+    @ViewBuilder
+    private func variablePicker(_ available: [SkewTVariable]) -> some View {
+        HStack(spacing: Theme.spacingS) {
+            varMenu(fallback: "Variable", selection: $primaryVarId, available: available)
+            if isPad {
+                varMenu(fallback: "2nd", selection: $secondaryVarId, available: available)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, Theme.cardPadding)
+    }
+
+    private func varMenu(fallback: String, selection: Binding<String?>, available: [SkewTVariable]) -> some View {
+        let current = available.first { $0.id == selection.wrappedValue }
+        return Menu {
+            ForEach(available) { v in
+                Button(v.unit.isEmpty ? v.label : "\(v.label) (\(v.unit))") { selection.wrappedValue = v.id }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Circle().fill(current?.color ?? .clear).frame(width: 8, height: 8)
+                Text(current?.label ?? fallback).font(.caption)
+                Image(systemName: "chevron.down").font(.caption2)
+            }
+            .foregroundStyle(Theme.text)
+        }
+        .buttonStyle(.plain)
     }
 
     private func loadProfile() async {
