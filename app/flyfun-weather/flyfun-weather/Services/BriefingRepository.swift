@@ -59,8 +59,7 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        return try await client.requestURL("/api/aircraft/types?q=\(encoded)")
+        return try await client.requestURL("/api/aircraft/types?q=\(Self.queryValueEncoded(query))")
     }
 
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse {
@@ -145,7 +144,16 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func fetchPireps(flightId: String) async throws -> PirepListResponse {
-        let encoded = flightId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? flightId
-        return try await client.requestURL("/api/pireps?flight_id=\(encoded)")
+        return try await client.requestURL("/api/pireps?flight_id=\(Self.queryValueEncoded(flightId))")
+    }
+
+    /// Percent-encode a query *value*. `.urlQueryAllowed` permits the `& = + ? #`
+    /// delimiters (legal in a query as a whole), so encoding a value with it
+    /// leaves those intact and allows parameter injection from free-text input.
+    /// Remove them from the allowed set so the value is a single opaque token.
+    private static func queryValueEncoded(_ value: String) -> String {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=+?#")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 }

@@ -2333,7 +2333,7 @@ def get_advisory_detail(
     advisory_id: str,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
-):
+) -> dict:
     """Per-advisory drill-down for the iOS "why it's RED" ladder (§4.6).
 
     The one backend touch of the iOS modernisation epic (#285): exposes the
