@@ -58,11 +58,48 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
 
     # --- convective ---
-    "convective.risk_over": {
-        "en": "{risk} convective risk over {extent}",
-        "fr": "Risque convectif {risk} sur {extent}",
-        "de": "{risk} Konvektionsrisiko über {extent}",
-        "es": "Riesgo convectivo {risk} sobre {extent}",
+    # Headline anchors on MODERATE+ extent (actual convective concern) and names
+    # the peak separately, so the severity word (peak) and the extent (MODERATE+
+    # coverage) are never conflated into one number (#300). "MODERATE+" is kept
+    # as a literal threshold label across locales — like the {peak}/{risk} enum
+    # values, which are intentionally not localized.
+    "convective.risk_over_mod": {
+        "en": "MODERATE+ over {extent} — peak {peak}",
+        "fr": "MODERATE+ sur {extent} — pic {peak}",
+        "de": "MODERATE+ über {extent} — Spitze {peak}",
+        "es": "MODERATE+ sobre {extent} — pico {peak}",
+    },
+    "convective.risk_over_mod_pct": {
+        "en": "MODERATE+ over {pct}% — peak {peak}",
+        "fr": "MODERATE+ sur {pct}% — pic {peak}",
+        "de": "MODERATE+ über {pct}% — Spitze {peak}",
+        "es": "MODERATE+ sobre {pct}% — pico {peak}",
+    },
+    "convective.risk_over_range": {
+        "en": "MODERATE+ over {min}–{max}% across models — peak {peak}",
+        "fr": "MODERATE+ sur {min}–{max}% selon les modèles — pic {peak}",
+        "de": "MODERATE+ über {min}–{max}% je nach Modell — Spitze {peak}",
+        "es": "MODERATE+ sobre {min}–{max}% entre modelos — pico {peak}",
+    },
+    # LOW-only case: CAPE is present (primed) but no MODERATE+ firing — worded so
+    # it can't masquerade as active convection (#300).
+    "convective.favorability": {
+        "en": "Low-end CAPE primed, not firing, over {extent}",
+        "fr": "CAPE de bas niveau amorcée, sans déclenchement, sur {extent}",
+        "de": "CAPE im unteren Bereich vorhanden, nicht ausgelöst, über {extent}",
+        "es": "CAPE de gama baja preparada, sin disparo, sobre {extent}",
+    },
+    "convective.favorability_pct": {
+        "en": "Low-end CAPE primed, not firing, over {pct}%",
+        "fr": "CAPE de bas niveau amorcée, sans déclenchement, sur {pct}%",
+        "de": "CAPE im unteren Bereich vorhanden, nicht ausgelöst, über {pct}%",
+        "es": "CAPE de gama baja preparada, sin disparo, sobre {pct}%",
+    },
+    "convective.favorability_range": {
+        "en": "Low-end CAPE primed, not firing, over {min}–{max}% across models",
+        "fr": "CAPE de bas niveau amorcée, sans déclenchement, sur {min}–{max}% selon les modèles",
+        "de": "CAPE im unteren Bereich vorhanden, nicht ausgelöst, über {min}–{max}% je nach Modell",
+        "es": "CAPE de gama baja preparada, sin disparo, sobre {min}–{max}% entre modelos",
     },
     "convective.none": {
         "en": "No significant convective activity",
