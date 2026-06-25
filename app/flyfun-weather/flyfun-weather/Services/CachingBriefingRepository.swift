@@ -51,6 +51,14 @@ final class CachingBriefingRepository: BriefingRepository {
         try await online.aircraft()
     }
 
+    func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
+        try await online.searchAircraftTypes(query)
+    }
+
+    func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse {
+        try await online.createAircraft(request)
+    }
+
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
         try await online.parseFpl(text)
     }

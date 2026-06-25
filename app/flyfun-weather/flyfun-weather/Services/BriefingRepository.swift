@@ -6,6 +6,8 @@ protocol BriefingRepository: Sendable {
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse
     func updateFlight(flightId: String, _ request: UpdateFlightRequest) async throws -> UpdateFlightResponse
     func aircraft() async throws -> [AircraftResponse]
+    func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse]
+    func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse
     func parseFpl(_ text: String) async throws -> ParseFplResponse
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
@@ -52,6 +54,16 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func aircraft() async throws -> [AircraftResponse] {
         try await client.request("/api/aircraft")
+    }
+
+    func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        return try await client.requestURL("/api/aircraft/types?q=\(encoded)")
+    }
+
+    func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/aircraft", method: "POST", body: body)
     }
 
     func parseFpl(_ text: String) async throws -> ParseFplResponse {

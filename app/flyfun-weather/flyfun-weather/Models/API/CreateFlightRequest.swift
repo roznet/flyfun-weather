@@ -50,6 +50,24 @@ struct UpdateFlightResponse: Decodable, Sendable {
     }
 }
 
+/// Aircraft type suggestion from GET /api/aircraft/types.
+struct AircraftTypeResponse: Codable, Identifiable, Hashable, Sendable {
+    var id: String { icao }
+
+    let icao: String
+    let manufacturer: String
+    let model: String
+    let category: String?
+
+    var displayName: String {
+        let title = [manufacturer, model]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return title.isEmpty ? icao : "\(icao) - \(title)"
+    }
+}
+
 /// Aircraft entry from GET /api/aircraft for create/edit pickers.
 struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
     let id: Int
@@ -76,6 +94,22 @@ struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
         if let ceilingFt { parts.append("FL\(ceilingFt / 100)") }
         return parts.joined(separator: " · ")
     }
+
+    var pickerTitle: String {
+        displayName == typeName ? displayName : "\(displayName) - \(typeName)"
+    }
+}
+
+/// Request body for POST /api/aircraft.
+struct CreateAircraftRequest: Encodable {
+    let icaoType: String
+    var tailNumber: String? = nil
+    var nickname: String? = nil
+    var isIfr: Bool = false
+    var isFiki: Bool = false
+    var cruiseSpeedKt: Int? = nil
+    var ceilingFt: Int? = nil
+    var isDefault: Bool = false
 }
 
 /// Request body for parsing an ICAO flight plan string.

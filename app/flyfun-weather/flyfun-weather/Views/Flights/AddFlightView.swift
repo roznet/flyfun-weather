@@ -5,6 +5,7 @@ struct AddFlightView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel: AddFlightViewModel
     @State private var showFplSheet = false
+    @State private var showAircraftSheet = false
     @State private var showRebriefConfirmation = false
 
     let onSaved: (FlightResponse) -> Void
@@ -60,6 +61,11 @@ struct AddFlightView: View {
             .task {
                 await viewModel.loadAircraft()
             }
+            .sheet(isPresented: $showAircraftSheet) {
+                AircraftFormSheet(viewModel: viewModel) {
+                    showAircraftSheet = false
+                }
+            }
         }
     }
 
@@ -84,19 +90,25 @@ struct AddFlightView: View {
 
     private var aircraftSection: some View {
         Section {
-            Picker("Aircraft", selection: Binding(
-                get: { viewModel.selectedAircraftId ?? 0 },
-                set: { viewModel.selectedAircraftId = $0 == 0 ? nil : $0 }
-            )) {
-                Text("No aircraft").tag(0)
-                ForEach(viewModel.aircraftOptions) { aircraft in
-                    VStack(alignment: .leading) {
-                        Text(aircraft.displayName)
-                        Text(aircraft.detailText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            if viewModel.aircraftOptions.isEmpty && !viewModel.isLoadingAircraft {
+                Label("No saved aircraft", systemImage: "airplane")
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker("Aircraft", selection: Binding(
+                    get: { viewModel.selectedAircraftId ?? 0 },
+                    set: { viewModel.selectedAircraftId = $0 == 0 ? nil : $0 }
+                )) {
+                    Text("No aircraft").tag(0)
+                    ForEach(viewModel.aircraftOptions) { aircraft in
+                        Text(aircraft.pickerTitle).tag(aircraft.id)
                     }
-                    .tag(aircraft.id)
+                }
+                .pickerStyle(.menu)
+
+                if let aircraft = viewModel.selectedAircraft {
+                    Text(aircraft.detailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -106,6 +118,13 @@ struct AddFlightView: View {
                     Text("Loading aircraft…")
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Button {
+                viewModel.prepareNewAircraftForm()
+                showAircraftSheet = true
+            } label: {
+                Label("Add Aircraft", systemImage: "plus")
             }
         } header: {
             Text("Aircraft")
@@ -271,6 +290,104 @@ private struct FplPasteSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onDone() }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Aircraft Sheet
+
+/// Compact aircraft create flow used by the flight form when no presets exist yet.
+private struct AircraftFormSheet: View {
+    @Bindable var viewModel: AddFlightViewModel
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("ICAO type, e.g. C172", text: $viewModel.newAircraftIcaoType)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+
+                    if viewModel.isSearchingAircraftTypes {
+                        HStack {
+                            ProgressView()
+                            Text("Searching aircraft types…")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Aircraft Type")
+                }
+
+                if !viewModel.aircraftTypeSuggestions.isEmpty {
+                    Section {
+                        ForEach(viewModel.aircraftTypeSuggestions) { type in
+                            Button {
+                                viewModel.selectAircraftType(type)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(type.displayName)
+                                    if let category = type.category, !category.isEmpty {
+                                        Text(category)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Matches")
+                    }
+                }
+
+                Section {
+                    TextField("Tail number", text: $viewModel.newAircraftTailNumber)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                    TextField("Nickname", text: $viewModel.newAircraftNickname)
+                    TextField("Cruise speed (kt)", text: $viewModel.newAircraftCruiseSpeedKt)
+                        .keyboardType(.numberPad)
+                    TextField("Ceiling (ft)", text: $viewModel.newAircraftCeilingFt)
+                        .keyboardType(.numberPad)
+                } header: {
+                    Text("Details")
+                }
+
+                Section {
+                    Toggle("IFR equipped", isOn: $viewModel.newAircraftIsIfr)
+                    Toggle("FIKI", isOn: $viewModel.newAircraftIsFiki)
+                    Toggle("Make default", isOn: $viewModel.newAircraftIsDefault)
+                }
+
+                if let error = viewModel.aircraftFormError {
+                    Section {
+                        Text(error)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Add Aircraft")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onDone() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task {
+                            if await viewModel.createAircraft() {
+                                onDone()
+                            }
+                        }
+                    }
+                    .disabled(!viewModel.canSaveAircraft)
+                }
+            }
+            .task(id: viewModel.newAircraftIcaoType) {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                await viewModel.searchAircraftTypes()
             }
         }
     }

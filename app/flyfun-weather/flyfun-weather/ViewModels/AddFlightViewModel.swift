@@ -20,6 +20,19 @@ final class AddFlightViewModel {
     // Aircraft
     private(set) var aircraftOptions: [AircraftResponse] = []
     private(set) var isLoadingAircraft: Bool = false
+    var newAircraftIcaoType: String = ""
+    var newAircraftTailNumber: String = ""
+    var newAircraftNickname: String = ""
+    var newAircraftCruiseSpeedKt: String = ""
+    var newAircraftCeilingFt: String = ""
+    var newAircraftIsIfr: Bool = false
+    var newAircraftIsFiki: Bool = false
+    var newAircraftIsDefault: Bool = false
+    private(set) var selectedAircraftType: AircraftTypeResponse?
+    private(set) var aircraftTypeSuggestions: [AircraftTypeResponse] = []
+    private(set) var isSearchingAircraftTypes: Bool = false
+    private(set) var isSavingAircraft: Bool = false
+    var aircraftFormError: String?
 
     // Submission
     var isSubmitting: Bool = false
@@ -68,6 +81,15 @@ final class AddFlightViewModel {
         waypoints.count >= 2 && !isSubmitting && (!isEditing || hasChanges)
     }
 
+    var selectedAircraft: AircraftResponse? {
+        guard let selectedAircraftId else { return nil }
+        return aircraftOptions.first { $0.id == selectedAircraftId }
+    }
+
+    var canSaveAircraft: Bool {
+        resolvedNewAircraftIcaoType != nil && !isSavingAircraft
+    }
+
     var requiresRebriefConfirmation: Bool {
         isEditing && hasChanges
     }
@@ -100,12 +122,107 @@ final class AddFlightViewModel {
 
         do {
             let aircraft = try await repository.aircraft()
-            aircraftOptions = aircraft
+            aircraftOptions = aircraft.sortedForPicker()
             if !isEditing, selectedAircraftId == nil {
                 selectedAircraftId = aircraft.first(where: \.isDefault)?.id
             }
         } catch {
+            if let apiError = error as? APIError {
+                errorMessage = apiError.localizedDescription
+            }
             Self.logger.debug("Aircraft list unavailable: \(error)")
+        }
+    }
+
+    func prepareNewAircraftForm() {
+        newAircraftIcaoType = ""
+        newAircraftTailNumber = ""
+        newAircraftNickname = ""
+        newAircraftCruiseSpeedKt = ""
+        newAircraftCeilingFt = ""
+        newAircraftIsIfr = false
+        newAircraftIsFiki = false
+        newAircraftIsDefault = aircraftOptions.isEmpty
+        selectedAircraftType = nil
+        aircraftTypeSuggestions = []
+        aircraftFormError = nil
+    }
+
+    func searchAircraftTypes() async {
+        let query = newAircraftIcaoType.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let selectedAircraftType, query.uppercased() != selectedAircraftType.icao {
+            self.selectedAircraftType = nil
+        }
+        if let selectedAircraftType, query.uppercased() == selectedAircraftType.icao {
+            aircraftTypeSuggestions = []
+            isSearchingAircraftTypes = false
+            return
+        }
+        guard !query.isEmpty else {
+            aircraftTypeSuggestions = []
+            isSearchingAircraftTypes = false
+            return
+        }
+        guard query.count <= 20 else { return }
+
+        isSearchingAircraftTypes = true
+        defer { isSearchingAircraftTypes = false }
+        do {
+            aircraftTypeSuggestions = try await repository.searchAircraftTypes(query)
+        } catch {
+            aircraftTypeSuggestions = []
+            Self.logger.debug("Aircraft type search unavailable: \(error)")
+        }
+    }
+
+    func selectAircraftType(_ type: AircraftTypeResponse) {
+        selectedAircraftType = type
+        newAircraftIcaoType = type.icao
+        aircraftTypeSuggestions = []
+        aircraftFormError = nil
+    }
+
+    func createAircraft() async -> Bool {
+        guard let icaoType = resolvedNewAircraftIcaoType else {
+            aircraftFormError = "Enter a valid ICAO aircraft type, for example C172."
+            return false
+        }
+        aircraftFormError = nil
+        let cruiseSpeed = optionalPositiveInt(newAircraftCruiseSpeedKt, fieldName: "Cruise speed")
+        guard aircraftFormError == nil else {
+            return false
+        }
+        let ceiling = optionalPositiveInt(newAircraftCeilingFt, fieldName: "Ceiling")
+        guard aircraftFormError == nil else {
+            return false
+        }
+
+        isSavingAircraft = true
+        defer { isSavingAircraft = false }
+
+        let request = CreateAircraftRequest(
+            icaoType: icaoType,
+            tailNumber: optionalText(newAircraftTailNumber)?.uppercased(),
+            nickname: optionalText(newAircraftNickname),
+            isIfr: newAircraftIsIfr,
+            isFiki: newAircraftIsFiki,
+            cruiseSpeedKt: cruiseSpeed,
+            ceilingFt: ceiling,
+            isDefault: newAircraftIsDefault
+        )
+
+        do {
+            let aircraft = try await repository.createAircraft(request)
+            aircraftOptions.removeAll { $0.id == aircraft.id }
+            aircraftOptions.append(aircraft)
+            aircraftOptions = aircraftOptions.sortedForPicker()
+            selectedAircraftId = aircraft.id
+            prepareNewAircraftForm()
+            return true
+        } catch {
+            aircraftFormError = error.localizedDescription
+            Self.logger.error("Create aircraft failed: \(error)")
+            return false
         }
     }
 
@@ -271,6 +388,45 @@ final class AddFlightViewModel {
         }
         if !completed {
             Self.logger.warning("Refresh stream ended before a complete event while editing \(flightId)")
+        }
+    }
+
+    private var resolvedNewAircraftIcaoType: String? {
+        let value = newAircraftIcaoType
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        if let selectedAircraftType, value == selectedAircraftType.icao {
+            return selectedAircraftType.icao
+        }
+        guard value.range(of: #"^[A-Z0-9]{1,4}$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        return value
+    }
+
+    private func optionalText(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func optionalPositiveInt(_ value: String, fieldName: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let intValue = Int(trimmed), intValue > 0 else {
+            aircraftFormError = "\(fieldName) must be a positive number."
+            return nil
+        }
+        return intValue
+    }
+}
+
+private extension [AircraftResponse] {
+    func sortedForPicker() -> [AircraftResponse] {
+        sorted { lhs, rhs in
+            if lhs.isDefault != rhs.isDefault {
+                return lhs.isDefault && !rhs.isDefault
+            }
+            return lhs.pickerTitle.localizedCaseInsensitiveCompare(rhs.pickerTitle) == .orderedAscending
         }
     }
 }

@@ -22,7 +22,12 @@ enum APIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unauthorized: "Session expired. Please sign in again."
-        case .forbidden(let msg): "Access denied: \(msg)"
+        case .forbidden(let msg):
+            if msg == "insufficient_scope" {
+                "This login is read-only. Sign out and use Dev Login or a full-access account."
+            } else {
+                "Access denied: \(msg)"
+            }
         case .notFound: "Resource not found."
         case .serverError(let code, let msg): "Server error \(code): \(msg ?? "Unknown")"
         case .networkError(let err): "Network error: \(err.localizedDescription)"
@@ -215,14 +220,52 @@ actor APIClient {
         case 200...299:
             return data
         case 403:
-            let msg = (try? JSONDecoder().decode([String: String].self, from: data))?["detail"]
+            let msg = Self.errorMessage(from: data)
             throw APIError.forbidden(msg ?? "Forbidden")
         case 404:
             throw APIError.notFound
         default:
-            let msg = String(data: data, encoding: .utf8)
+            let msg = Self.errorMessage(from: data)
             throw APIError.serverError(http.statusCode, msg)
         }
+    }
+
+    fileprivate nonisolated static func errorMessage(from data: Data) -> String? {
+        guard !data.isEmpty else { return nil }
+        if let object = try? JSONSerialization.jsonObject(with: data),
+           let dict = object as? [String: Any],
+           let detail = dict["detail"] {
+            return describeErrorDetail(detail)
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private nonisolated static func describeErrorDetail(_ detail: Any) -> String? {
+        if let message = detail as? String {
+            return message
+        }
+        if let issues = detail as? [[String: Any]] {
+            let messages = issues.compactMap { issue -> String? in
+                guard let message = issue["msg"] as? String else { return nil }
+                let location = (issue["loc"] as? [Any])?
+                    .map { String(describing: $0) }
+                    .dropFirst()
+                    .joined(separator: ".")
+                if let location, !location.isEmpty {
+                    return "\(location): \(message)"
+                }
+                return message
+            }
+            if !messages.isEmpty {
+                return messages.joined(separator: "\n")
+            }
+        }
+        if JSONSerialization.isValidJSONObject(detail),
+           let data = try? JSONSerialization.data(withJSONObject: detail),
+           let message = String(data: data, encoding: .utf8) {
+            return message
+        }
+        return nil
     }
 }
 
@@ -315,6 +358,8 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
     private var buffer = Data()
     private var eventCount = 0
     private var finished = false
+    private var responseStatusCode: Int?
+    private var responseIsSuccessful = false
 
     /// SSE frames are separated by a blank line, i.e. a double newline.
     private static let frameSeparator = Data([0x0a, 0x0a]) // "\n\n"
@@ -340,18 +385,20 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        responseStatusCode = code
         guard (200...299).contains(code) else {
             logger.error("SSE stream failed: HTTP \(code) for \(self.path, privacy: .public)")
-            finish(throwing: APIError.serverError(code, "SSE stream failed"))
-            completionHandler(.cancel)
+            completionHandler(.allow)
             return
         }
+        responseIsSuccessful = true
         logger.info("SSE connected (HTTP \(code)) for \(self.path, privacy: .public)")
         completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         buffer.append(data)
+        guard responseIsSuccessful else { return }
         while let range = buffer.range(of: Self.frameSeparator) {
             let frame = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
             buffer.removeSubrange(buffer.startIndex..<range.upperBound)
@@ -369,6 +416,9 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
         if let error {
             logger.error("SSE network error for \(self.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             finish(throwing: APIError.networkError(error))
+        } else if !responseIsSuccessful, let code = responseStatusCode {
+            logger.error("SSE stream failed: HTTP \(code) for \(self.path, privacy: .public)")
+            finish(throwing: httpError(statusCode: code, data: buffer))
         } else {
             logger.info("SSE stream ended after \(self.eventCount) event(s) for \(self.path, privacy: .public)")
             finish(throwing: nil)
@@ -408,6 +458,19 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
                     message: obj["message"] as? String))
                 finish(throwing: nil)
             }
+        }
+    }
+
+    private func httpError(statusCode: Int, data: Data) -> APIError {
+        switch statusCode {
+        case 401:
+            return .unauthorized
+        case 403:
+            return .forbidden(APIClient.errorMessage(from: data) ?? "Forbidden")
+        case 404:
+            return .notFound
+        default:
+            return .serverError(statusCode, APIClient.errorMessage(from: data))
         }
     }
 
