@@ -432,10 +432,15 @@ def run_advisories_from_pack(
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
     flight_duration_hours: float = 0.0,
+    persist: bool = True,
 ) -> AdvisoryResult:
     """Re-evaluate advisories from persisted pack_dir artifacts.
 
     Loads route_analyses, cross_sections, and elevation from disk.
+
+    ``persist=False`` computes the manifest without writing
+    ``route_advisories.json`` back to the pack — used by the eval rerun/diff
+    so a "what changed" comparison never clobbers the saved baseline.
 
     Either *route* or *flight_ceiling_ft* must be provided.  When called
     from the API recalculate endpoint (no resolved RouteConfig available),
@@ -525,9 +530,10 @@ def run_advisories_from_pack(
             airport_conditions=airport_conds,
         )
 
-        from weatherbrief.tasks.artifacts import save_advisory_artifacts
+        if persist:
+            from weatherbrief.tasks.artifacts import save_advisory_artifacts
 
-        save_advisory_artifacts(pack_dir, result_manifest)
+            save_advisory_artifacts(pack_dir, result_manifest)
 
         # Per-point wind overlay at the effective cruise altitude.
         # Only meaningful when the caller passed an override that differs

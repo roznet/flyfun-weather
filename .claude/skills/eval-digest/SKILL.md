@@ -1,11 +1,13 @@
 ---
-name: digest-eval
+name: eval-digest
 description: Run LLM digest eval — replay saved weather contexts through the LLM and compare assessments
 ---
 
 # Digest Eval
 
 Evaluate the LLM weather digest pipeline against saved fixtures. Each fixture contains a real context string (the exact user message sent to the LLM) and the original digest output for comparison.
+
+> Building or maintaining the eval **set** itself — pulling prod briefings, attaching pilot debriefs, re-running advisories vs saved baselines, promoting staging→corpus — is the **`eval-workbench`** skill. This one is only the LLM replay.
 
 ## Setup
 
@@ -81,7 +83,7 @@ the model's own output. Two ways to label:
   --unlabeled`. Writes `meta["golden"]["assessments"]` into a fixture.
 - **Visual workbench** (preferred) — render the real briefing view for a corpus
   of pulled prod packs and label in-view, blind-first. See
-  `designs/digest-eval-workbench.md`. Flow: `scripts/export_eval_candidates.py`
+  `designs/eval-digest-workbench.md`. Flow: `scripts/export_eval_candidates.py`
   → copy to dev → `scripts/pull_eval_corpus.py` → `WEATHERBRIEF_EVAL_WORKBENCH=1`
   + `/devserver` → open `/eval.html`. Golden lives in each corpus pack's
   `label.json`.

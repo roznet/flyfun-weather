@@ -1299,7 +1299,7 @@ is DD this is a no-op. The per-model thermo tier is untouched (DD stays pure).
 ### Caveats / calibration (v1, not final)
 
 - Thresholds reproduce every Reims case checked but are **a defensible v1** —
-  tune against a labelled set via the digest-eval corpus replay.
+  tune against a labelled set via the eval-digest corpus replay.
 - ICON-EU native fields vanish beyond 120 h (ECMWF 168 h, GFS 384 h); a model in
   fallback purely due to horizon has `nwp_diagnostics = None` → no NWP track,
   same as a non-native model.
@@ -1365,7 +1365,7 @@ spatial-interp `_lerp_diagnostics`.
 ### Caveat
 
 The firing-gate / corroboration thresholds and the cross-check bands are a
-**defensible v1**, not calibrated numbers — wire into the digest-eval corpus
+**defensible v1**, not calibrated numbers — wire into the eval-digest corpus
 replay. The convective-precip rate is resolution-dependent (per the issue's
 gotcha), which is exactly why tower top is the primary scale and precip is only
 a yes/no firing gate.

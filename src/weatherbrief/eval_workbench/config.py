@@ -21,6 +21,11 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 DEFAULT_CORPUS_DIR = Path("tests/eval_data/corpus")
 
+# The two areas of the eval set. ``staging`` is the scratch triage area where
+# freshly-pulled briefings land (gitignored); ``corpus`` is the curated,
+# committed set. Promotion moves a labelled pack from staging into corpus.
+AREAS = ("staging", "corpus")
+
 
 def eval_workbench_enabled() -> bool:
     """True when the workbench is enabled (dev only).
@@ -39,6 +44,28 @@ def eval_corpus_dir() -> Path:
     """
     raw = os.getenv("EVAL_CORPUS_DIR", "").strip()
     return Path(raw).expanduser() if raw else DEFAULT_CORPUS_DIR
+
+
+def eval_staging_dir() -> Path:
+    """Directory holding the scratch staging packs (gitignored).
+
+    Override with ``EVAL_STAGING_DIR``; otherwise derived as the ``staging``
+    sibling of the corpus dir (the eval-repo layout: ``<repo>/corpus`` +
+    ``<repo>/staging``).
+    """
+    raw = os.getenv("EVAL_STAGING_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return eval_corpus_dir().parent / "staging"
+
+
+def area_root(area: str) -> Path:
+    """Root directory for an eval area ("staging" | "corpus")."""
+    if area == "staging":
+        return eval_staging_dir()
+    if area == "corpus":
+        return eval_corpus_dir()
+    raise ValueError(f"unknown eval area: {area!r} (expected one of {AREAS})")
 
 
 def is_eval_flight_id(flight_id: str | None) -> bool:

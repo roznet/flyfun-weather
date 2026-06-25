@@ -202,18 +202,50 @@ def _copy_artifacts(src: Path, dest: Path) -> None:
             shutil.copy2(item, target)
 
 
-def ingest_pack(pack_dir: Path, *, notes: str = "", copy: bool = True) -> CorpusPack | None:
+# Heavy artifact gzipped in the committed corpus (~10× smaller). Read
+# transparently by ``load_cross_sections`` via the .json.gz fallback.
+def compact_corpus_pack(dest: Path) -> None:
+    """Gzip ``cross_section.json`` -> ``cross_section.json.gz`` to shrink the
+    committed master. No-op if already compacted or absent."""
+    import gzip
+
+    cs = dest / "cross_section.json"
+    if not cs.exists():
+        return
+    gz = Path(str(cs) + ".gz")
+    gz.write_bytes(gzip.compress(cs.read_bytes()))
+    cs.unlink()
+
+
+def ingest_pack(
+    pack_dir: Path, *, notes: str = "", copy: bool = True, area: str = "staging"
+) -> CorpusPack | None:
     """Build + persist a corpus entry from a pack dir. Preserves any label.
 
-    Returns the CorpusPack, or None if the pack isn't labelable.
+    New briefings land in ``staging`` by default — they are triaged/labelled
+    there, then promoted into ``corpus``. Returns the CorpusPack, or None if the
+    pack isn't labelable.
     """
     meta = build_corpus_meta(pack_dir, notes=notes)
     if meta is None:
         return None
-    dest = pack_path(meta.corpus_id)
+    dest = pack_path(meta.corpus_id, area)
     if copy:
         _copy_artifacts(pack_dir, dest)
-    save_corpus_meta(meta)  # written after copy so it isn't clobbered
+        compact_corpus_pack(dest)  # gzip the heavy cross_section master
+    save_corpus_meta(meta, area)  # written after copy so it isn't clobbered
+    # Gitignored provenance breadcrumb: where this pack came from, so a later
+    # sync can re-pull heavy artifacts (cross_section, ...) from prod if the
+    # local source was a partial copy. Not committed (carries the user path).
+    try:
+        (dest / "_source.json").write_text(
+            json.dumps({"source_pack_dir": str(pack_dir)}) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
     return CorpusPack(
-        corpus_id=meta.corpus_id, meta=meta, label=load_label(meta.corpus_id)
+        corpus_id=meta.corpus_id,
+        meta=meta,
+        label=load_label(meta.corpus_id, area),
+        area=area,
     )

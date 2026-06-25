@@ -234,12 +234,28 @@ def load_route_fronts(
 # Load helpers
 # ---------------------------------------------------------------------------
 
+def _read_json_or_gz(base: Path) -> dict | list | None:
+    """Read ``base`` (plain JSON) or its gzipped sibling ``base.gz``.
+
+    Lets a stored artifact be transparently gzipped to save space (used by the
+    eval corpus to commit ``cross_section.json.gz``) without changing readers.
+    Prefers the plain file when both exist. Returns None if neither does.
+    """
+    if base.exists():
+        return json.loads(base.read_text())
+    gz = Path(str(base) + ".gz")
+    if gz.exists():
+        import gzip
+
+        return json.loads(gzip.decompress(gz.read_bytes()))
+    return None
+
+
 def load_cross_sections(pack_dir: Path) -> list[RouteCrossSection]:
-    """Load cross-sections from ``cross_section.json``."""
-    cs_path = pack_dir / "cross_section.json"
-    if not cs_path.exists():
+    """Load cross-sections from ``cross_section.json`` (or ``.json.gz``)."""
+    data = _read_json_or_gz(pack_dir / "cross_section.json")
+    if not data:
         return []
-    data = json.loads(cs_path.read_text())
     return [
         RouteCrossSection.model_validate(item)
         for item in data.get("cross_sections", [])

@@ -20,7 +20,7 @@ Layout::
     corpus.py      on-disk corpus of pulled packs + golden ``label.json``
     resolver.py    synthesize a Flight + BriefingPackMeta from a corpus pack
 
-See ``designs/digest-eval-workbench.md`` for the full design and the
+See ``designs/eval-digest-workbench.md`` for the full design and the
 prod->dev pull workflow.
 """
 

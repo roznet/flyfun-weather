@@ -41,10 +41,33 @@ const PRIORITIES: Array<[number, string]> = [
 
 interface CorpusPackSummary {
   corpus_id: string;
+  area: 'staging' | 'corpus';
   route: string;
   assessment: string | null;
   faithful: boolean;
+  is_labeled: boolean;
+  full_fidelity: boolean;
+  debriefed: boolean;
+  debrief_decision: string | null;
   label: Label | null;
+}
+
+interface DebriefRecord {
+  decision: string;
+  reasons: string[] | null; // cancellation tags (cancelled flights)
+  outcomes: Record<string, string> | null; // per-category consistent|better|worse (flown)
+  note: string;
+}
+
+interface RecalcDiff {
+  had_baseline: boolean;
+  changed_count: number;
+  changes: Array<{
+    advisory_id: string;
+    saved: string | null;
+    candidate: string | null;
+    airport_conditions_flag: boolean;
+  }>;
 }
 
 function injectBlindStyle(): void {
@@ -296,6 +319,144 @@ export async function initLabelPanel(flightId: string): Promise<void> {
   controls.appendChild(btnGroup);
 
   body.appendChild(controls);
+
+  // Eval-area actions: re-run advisories (diff vs saved) + promote to corpus.
+  const actions = el('div');
+  actions.style.cssText =
+    'flex:0 0 auto;display:flex;align-items:center;gap:0.4rem;margin-top:0.3rem;flex-wrap:wrap';
+
+  const areaTag = el('span', {
+    textContent: `area: ${pack.area}${pack.full_fidelity ? '' : ' · label-only (no cross-section)'}`,
+  });
+  areaTag.style.cssText = 'color:#888;font-size:0.72rem;margin-right:auto';
+  if (!pack.full_fidelity) {
+    areaTag.title =
+      'No route_analyses.json — this pack was captured after T1 retention stripped ' +
+      'the derived tier. Label from advisories + digest; cross-section/skew-T and ' +
+      're-run advisories are unavailable.';
+  }
+  actions.appendChild(areaTag);
+
+  // The re-run button is meaningless without route_analyses.json.
+  // (declared below; disabled there when !full_fidelity)
+
+  const rerunBtn = el('button', { textContent: 'Re-run advisories' }) as HTMLButtonElement;
+  rerunBtn.type = 'button';
+  rerunBtn.title =
+    'Recompute advisories from saved data and diff vs the saved baseline (non-destructive)';
+  rerunBtn.style.cssText =
+    'background:transparent;color:inherit;border:1px solid var(--border,#ccc);' +
+    'border-radius:4px;padding:0.35rem 0.6rem;cursor:pointer';
+  rerunBtn.addEventListener('click', async () => {
+    rerunBtn.disabled = true;
+    status.textContent = 'Re-running advisories…';
+    try {
+      const d = await apiFetch<RecalcDiff>(
+        `/eval/packs/${encodeURIComponent(corpusId)}/recalc-diff`,
+        { method: 'POST' },
+      );
+      if (d.changed_count === 0) {
+        status.textContent = 'Advisories unchanged vs saved ✓';
+      } else {
+        const lines = d.changes
+          .map(
+            (c) =>
+              `${c.advisory_id}: ${c.saved ?? '—'}→${c.candidate ?? '—'}` +
+              (c.airport_conditions_flag ? '*' : ''),
+          )
+          .join('; ');
+        status.textContent = `${d.changed_count} changed — ${lines}`;
+      }
+    } catch (err) {
+      status.textContent = err instanceof Error ? err.message : 'Re-run failed';
+    } finally {
+      rerunBtn.disabled = false;
+    }
+  });
+  if (!pack.full_fidelity) {
+    rerunBtn.disabled = true;
+    rerunBtn.title = 'Needs route_analyses.json (full-fidelity pack)';
+  }
+  actions.appendChild(rerunBtn);
+
+  if (pack.area === 'staging') {
+    const promoteBtn = el('button', { textContent: 'Promote to corpus' }) as HTMLButtonElement;
+    promoteBtn.type = 'button';
+    promoteBtn.title = 'Move this labelled pack into the curated corpus (needs a golden label)';
+    promoteBtn.style.cssText =
+      'background:#1e824c;color:#fff;border:none;border-radius:4px;' +
+      'padding:0.35rem 0.6rem;cursor:pointer';
+    promoteBtn.addEventListener('click', async () => {
+      promoteBtn.disabled = true;
+      status.textContent = 'Promoting…';
+      try {
+        await apiFetch(`/eval/packs/${encodeURIComponent(corpusId)}/promote`, {
+          method: 'POST',
+        });
+        status.textContent = 'Promoted to corpus — returning to eval set…';
+        setTimeout(() => {
+          window.location.href = '/eval.html';
+        }, 700);
+      } catch (err) {
+        status.textContent = err instanceof Error ? err.message : 'Promote failed';
+        promoteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(promoteBtn);
+  }
+
+  // Pilot debrief (ground truth) — a toggle that lazily loads the full record.
+  const debDetail = el('div');
+  debDetail.style.cssText =
+    'flex:0 0 auto;display:none;margin-top:0.3rem;padding:0.4rem;font-size:0.78rem;' +
+    'border:1px solid var(--border,#ccc);border-radius:4px;white-space:pre-wrap;' +
+    'background:rgba(127,127,127,0.06)';
+  if (pack.debriefed) {
+    const debBtn = el('button', {
+      textContent: `✈ Debrief: ${pack.debrief_decision || '?'}`,
+    }) as HTMLButtonElement;
+    debBtn.type = 'button';
+    debBtn.title = 'Pilot post-flight judgement (ground truth)';
+    debBtn.style.cssText =
+      'background:transparent;color:inherit;border:1px solid var(--border,#ccc);' +
+      'border-radius:4px;padding:0.35rem 0.6rem;cursor:pointer';
+    let loaded = false;
+    debBtn.addEventListener('click', async () => {
+      if (debDetail.style.display !== 'none') {
+        debDetail.style.display = 'none';
+        return;
+      }
+      debDetail.style.display = 'block';
+      if (loaded) return;
+      debDetail.textContent = 'Loading…';
+      try {
+        const d = await apiFetch<DebriefRecord>(
+          `/eval/packs/${encodeURIComponent(corpusId)}/debrief`,
+        );
+        const parts = [`decision: ${d.decision}`];
+        if (d.reasons && d.reasons.length) {
+          parts.push(`cancel reasons: ${d.reasons.join(', ')}`);
+        }
+        if (d.outcomes && Object.keys(d.outcomes).length) {
+          // The pilot's per-category verdict on the forecast vs reality —
+          // the strongest ground truth for the eval (consistent|better|worse).
+          const o = Object.entries(d.outcomes)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(', ');
+          parts.push(`forecast vs reality: ${o}`);
+        }
+        if (d.note) parts.push(`note: ${d.note}`);
+        debDetail.textContent = parts.join('\n');
+        loaded = true;
+      } catch (err) {
+        debDetail.textContent = err instanceof Error ? err.message : 'Failed to load debrief';
+      }
+    });
+    actions.appendChild(debBtn);
+  }
+
+  body.appendChild(actions);
+  body.appendChild(debDetail);
   body.appendChild(status);
   document.body.appendChild(panel);
 

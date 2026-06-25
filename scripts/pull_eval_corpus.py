@@ -65,10 +65,15 @@ def main() -> None:
                     help="Packs dir to ingest from when no manifest/pack given")
     ap.add_argument("--no-copy", action="store_true",
                     help="Write corpus_meta only, don't copy artifacts (testing)")
+    ap.add_argument("--area", choices=("staging", "corpus"), default="staging",
+                    help="Target area (default: staging — new briefings triage there)")
     args = ap.parse_args()
 
+    from weatherbrief.eval_workbench.config import area_root
+
+    target = area_root(args.area)
     pack_dirs = _pack_dirs(args)
-    print(f"Ingesting {len(pack_dirs)} pack(s) into {eval_corpus_dir()} ...")
+    print(f"Ingesting {len(pack_dirs)} pack(s) into {target} [{args.area}] ...")
 
     ingested = 0
     skipped = 0
@@ -78,7 +83,7 @@ def main() -> None:
             skipped += 1
             continue
         try:
-            cp = ingest_pack(pd, copy=not args.no_copy)
+            cp = ingest_pack(pd, copy=not args.no_copy, area=args.area)
         except Exception as exc:  # noqa: BLE001
             print(f"  ! failed {pd.name}: {exc}")
             skipped += 1
@@ -91,13 +96,15 @@ def main() -> None:
         print(f"  + {cp.corpus_id}  [{tag}]  {', '.join(cp.meta.situations) or '-'}")
 
     print(f"\nIngested {ingested}, skipped {skipped}.")
-    print(f"Corpus: {eval_corpus_dir()}")
+    print(f"Area [{args.area}]: {target}")
     print("Label with the workbench: set WEATHERBRIEF_EVAL_WORKBENCH=1, start the "
           "dev server, open /eval.html")
-    # eval_data/ is globally gitignored; commit only the descriptors + labels.
-    corpus = eval_corpus_dir()
-    print("\nCommit the descriptors + any labels (payloads stay ignored):")
-    print(f"  git add -f {corpus}/*/corpus_meta.json {corpus}/*/label.json")
+    if args.area == "staging":
+        print("These land in STAGING — triage/label there, then Promote to the "
+              "corpus from the eval page.")
+    else:
+        print("\nWhen happy with the corpus shape, commit in the eval-set repo "
+              "(payloads via LFS):\n  git add corpus/ && git commit && git push")
 
 
 if __name__ == "__main__":

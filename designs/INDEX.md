@@ -157,10 +157,10 @@ Dual-track METAR/TAF verification: flight-based collection (10-min poll during a
 Key exports: `collect_and_store`, `run_standalone_cycle`, `score_completed_flights`, `backfill_scores`, `get_digest_data`, `send_verification_digest`, `run_monthly_rollup`, `rebuild_all`, `is_stale`, `VerificationDigestData`, `VerificationObservation`
 → Full doc: metar-taf-accuracy.md
 
-### digest-eval-workbench [project]
+### eval-digest-workbench [project]
 Dev-only golden-labelling workbench for the LLM digest eval (#254): renders the standard briefing view for a curated corpus of pulled prod packs, with an in-view panel to record golden GREEN/AMBER/RED labels per guidance. File-based corpus served through existing endpoints via a "virtual-flight" resolver (`eval-<corpus_id>` ids), runtime-gated by `WEATHERBRIEF_EVAL_WORKBENCH` + admin (never in prod). Labels committed (`label.json`), pack payloads gitignored/re-pullable. Backend+scripts+tests done; frontend written, runtime verification pending.
 Key exports: `eval_workbench_enabled`, `resolve_eval_flight`, `CorpusMeta`, `CorpusLabel`, `coverage_report`, `select_candidates`, `ingest_pack`
-→ Full doc: digest-eval-workbench.md
+→ Full doc: eval-digest-workbench.md
 
 ### debrief
 Pilot post-flight judgement (cancelled/flown) on past flights — Phase 1 of #92. Sidecar `flight_debriefs` table with shared 8-tag taxonomy, hybrid chips+text entry, per-user summary stats, three-section flight list (future/recent/past). Debriefed flights' packs are exempt from T2 retention so calibration can re-analyse against ERA5 later.

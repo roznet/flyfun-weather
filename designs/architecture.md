@@ -196,7 +196,7 @@ src/weatherbrief/
 │   ├── aircraft.py / pireps.py / debriefs.py # iOS companion: aircraft registry, PIREPs, post-flight debrief
 │   ├── maps.py / hewson_map.py / climatology.py / airport_profile.py # Forecast/front/climatology map + airport-profile endpoints
 │   ├── synoptic_charts.py / _chart_serving.py # DWD/Met Office surface-front chart serving
-│   ├── eval_workbench.py # Digest eval workbench (admin/dev, gated; see digest-eval-workbench.md)
+│   ├── eval_workbench.py # Digest eval workbench (admin/dev, gated; see eval-digest-workbench.md)
 │   ├── data_sources.py / models.py / messages.py / validation.py / user_migrations.py # Source registry, model metadata, in-app messages, input validation, per-user migrations
 ├── costs.py           # Pure cost computation (no DB/IO): CostConfig, CostBreakdown, compute_cost()
 ├── report/
@@ -222,7 +222,7 @@ src/weatherbrief/
 ├── verify/            # Standalone verification CLI entry
 ├── debriefs/          # Post-flight debrief stats + taxonomy
 ├── scenario/          # Scenario measurement helpers
-├── eval_workbench/    # Digest eval replay harness (see digest-eval-workbench.md)
+├── eval_workbench/    # Digest eval replay harness (see eval-digest-workbench.md)
 ├── atmo.py / units.py # Atmospheric constants + region-aware unit conversion
 ├── impact.py          # Shared route-impact summarization helpers
 ├── privacy.py         # PII-safe logging helpers (mask_email for ops logs)

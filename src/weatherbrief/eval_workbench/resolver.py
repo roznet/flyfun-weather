@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from weatherbrief.eval_workbench.config import corpus_id_from_flight_id, eval_flight_id
-from weatherbrief.eval_workbench.corpus import CorpusMeta, load_corpus_meta, pack_path
+from weatherbrief.eval_workbench.corpus import CorpusMeta, find_pack, pack_path
 from weatherbrief.models import BriefingPackMeta, Flight
 
 # Synthetic owner for corpus flights. Never a real user; ownership checks are
@@ -48,8 +48,8 @@ def synthesize_flight(meta: CorpusMeta) -> Flight:
     )
 
 
-def synthesize_pack_meta(meta: CorpusMeta) -> BriefingPackMeta:
-    """Build a BriefingPackMeta pointing at the on-disk corpus pack dir."""
+def synthesize_pack_meta(meta: CorpusMeta, area: str = "corpus") -> BriefingPackMeta:
+    """Build a BriefingPackMeta pointing at the on-disk pack dir for ``area``."""
     return BriefingPackMeta(
         flight_id=eval_flight_id(meta.corpus_id),
         fetch_timestamp=_parse_dt(meta.fetch_timestamp),
@@ -58,25 +58,34 @@ def synthesize_pack_meta(meta: CorpusMeta) -> BriefingPackMeta:
         llm_digest_requested=True,
         assessment=meta.assessment,
         assessment_reason=meta.assessment_reason,
-        artifact_path=str(pack_path(meta.corpus_id).resolve()),
+        artifact_path=str(pack_path(meta.corpus_id, area).resolve()),
     )
+
+
+def _find_or_404(flight_id: str):
+    """Locate the pack (in either area) for an ``eval-`` flight id."""
+    corpus_id = corpus_id_from_flight_id(flight_id)
+    pack = find_pack(corpus_id)
+    if pack is None:
+        raise FileNotFoundError(f"No corpus pack: {corpus_id}")
+    return pack
 
 
 def resolve_eval_flight(flight_id: str) -> Flight:
     """``_load_flight_or_404`` hook. Raises FileNotFoundError if unknown."""
-    meta = load_corpus_meta(corpus_id_from_flight_id(flight_id))
-    return synthesize_flight(meta)
+    return synthesize_flight(_find_or_404(flight_id).meta)
 
 
 def resolve_eval_pack_meta(flight_id: str, fetch_timestamp=None) -> BriefingPackMeta:
     """``load_pack_meta`` hook.
 
     There is exactly one pack per corpus id, so ``fetch_timestamp`` is accepted
-    for signature parity but not used to disambiguate. Raises FileNotFoundError
-    if the corpus id is unknown.
+    for signature parity but not used to disambiguate. The pack is resolved from
+    whichever area (staging | corpus) it currently lives in. Raises
+    FileNotFoundError if the corpus id is unknown.
     """
-    meta = load_corpus_meta(corpus_id_from_flight_id(flight_id))
-    return synthesize_pack_meta(meta)
+    pack = _find_or_404(flight_id)
+    return synthesize_pack_meta(pack.meta, pack.area)
 
 
 def resolve_eval_pack_list(flight_id: str) -> list[BriefingPackMeta]:

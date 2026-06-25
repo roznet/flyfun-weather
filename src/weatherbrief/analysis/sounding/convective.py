@@ -494,7 +494,7 @@ assess_convective = assess_convective_thermo
 # Note: these are *approximate* FLs — convective_top_ft is geometric AMSL height,
 # not pressure altitude, so in non-ISA conditions the true FL can differ by
 # ~100–200 ft. Acceptable for severity tiering at this calibration stage.
-# (#283; thresholds are a defensible v1 pending PIREP/digest-eval calibration.)
+# (#283; thresholds are a defensible v1 pending PIREP/eval-digest calibration.)
 _CONV_TOP_FL_THRESHOLDS = [
     (380, ConvectiveRisk.EXTREME),   # overshooting / severe
     (280, ConvectiveRisk.HIGH),      # mature Cb / thunderstorm

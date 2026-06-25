@@ -16,11 +16,17 @@ The heavy artifacts are reproducible via ``scripts/pull_eval_corpus.py``.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
-from weatherbrief.eval_workbench.config import eval_corpus_dir, eval_flight_id
+from weatherbrief.eval_workbench.config import (
+    AREAS,
+    area_root,
+    eval_corpus_dir,
+    eval_flight_id,
+)
 from weatherbrief.eval_workbench.situations import SITUATION_VOCAB
 
 CORPUS_META_FILE = "corpus_meta.json"
@@ -60,6 +66,13 @@ class CorpusMeta(BaseModel):
     faithful: bool = True  # persisted (byte-faithful) context vs reconstructed
     source: str = ""  # anonymized provenance breadcrumb
     notes: str = ""  # optional curator note (why this pack is interesting)
+    # Pilot post-flight debrief (ground truth). Set by scripts/pull_debrief_data.py
+    # from the prod flight_debriefs table; the full record is in debrief.json.
+    debriefed: bool = False
+    debrief_decision: str | None = None  # flown | cancelled | monitoring
+    # True when the debrief carries graded detail (cancel reasons or per-category
+    # consistent/better/worse outcomes) — the richest ground truth, worth labelling first.
+    debrief_graded: bool = False
 
 
 class CorpusLabel(BaseModel):
@@ -114,6 +127,7 @@ class CorpusPack(BaseModel):
     corpus_id: str
     meta: CorpusMeta
     label: CorpusLabel | None = None
+    area: str = "corpus"  # which area it currently lives in: "staging" | "corpus"
 
     @property
     def flight_id(self) -> str:
@@ -126,62 +140,74 @@ class CorpusPack(BaseModel):
 
 # --- path helpers -----------------------------------------------------------
 
-def corpus_root() -> Path:
-    return eval_corpus_dir()
+def corpus_root(area: str = "corpus") -> Path:
+    return area_root(area)
 
 
-def pack_path(corpus_id: str) -> Path:
-    return corpus_root() / corpus_id
+def pack_path(corpus_id: str, area: str = "corpus") -> Path:
+    return area_root(area) / corpus_id
 
 
-def _meta_path(corpus_id: str) -> Path:
-    return pack_path(corpus_id) / CORPUS_META_FILE
+def _meta_path(corpus_id: str, area: str = "corpus") -> Path:
+    return pack_path(corpus_id, area) / CORPUS_META_FILE
 
 
-def _label_path(corpus_id: str) -> Path:
-    return pack_path(corpus_id) / LABEL_FILE
+def _label_path(corpus_id: str, area: str = "corpus") -> Path:
+    return pack_path(corpus_id, area) / LABEL_FILE
 
 
 # --- read -------------------------------------------------------------------
 
-def corpus_exists(corpus_id: str) -> bool:
-    return _meta_path(corpus_id).exists()
+def corpus_exists(corpus_id: str, area: str = "corpus") -> bool:
+    return _meta_path(corpus_id, area).exists()
 
 
-def load_corpus_meta(corpus_id: str) -> CorpusMeta:
+def load_corpus_meta(corpus_id: str, area: str = "corpus") -> CorpusMeta:
     """Load a corpus pack descriptor. Raises FileNotFoundError if missing."""
-    path = _meta_path(corpus_id)
+    path = _meta_path(corpus_id, area)
     if not path.exists():
         raise FileNotFoundError(f"No corpus pack: {corpus_id}")
     return CorpusMeta.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def load_label(corpus_id: str) -> CorpusLabel | None:
+def load_label(corpus_id: str, area: str = "corpus") -> CorpusLabel | None:
     """Load the golden label, or None if the pack is unlabelled."""
-    path = _label_path(corpus_id)
+    path = _label_path(corpus_id, area)
     if not path.exists():
         return None
     return CorpusLabel.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def load_pack(corpus_id: str) -> CorpusPack:
+def load_pack(corpus_id: str, area: str = "corpus") -> CorpusPack:
     return CorpusPack(
         corpus_id=corpus_id,
-        meta=load_corpus_meta(corpus_id),
-        label=load_label(corpus_id),
+        meta=load_corpus_meta(corpus_id, area),
+        label=load_label(corpus_id, area),
+        area=area,
     )
 
 
-def list_corpus() -> list[CorpusPack]:
-    """All corpus packs, sorted by corpus_id. Skips dirs without a descriptor."""
-    root = corpus_root()
+def list_corpus(area: str = "corpus") -> list[CorpusPack]:
+    """All packs in an area, sorted by corpus_id. Skips dirs without a descriptor."""
+    root = corpus_root(area)
     if not root.exists():
         return []
     out: list[CorpusPack] = []
     for child in sorted(root.iterdir()):
         if child.is_dir() and (child / CORPUS_META_FILE).exists():
-            out.append(load_pack(child.name))
+            out.append(load_pack(child.name, area))
     return out
+
+
+def find_pack(corpus_id: str) -> CorpusPack | None:
+    """Locate a pack by id across areas (staging first). A pack lives in one
+    area at a time, so the first hit is authoritative. Used by the resolver,
+    the label endpoint, and promotion to find a pack without knowing its area.
+    """
+    for area in AREAS:
+        if corpus_exists(corpus_id, area):
+            return load_pack(corpus_id, area)
+    return None
 
 
 # --- write ------------------------------------------------------------------
@@ -193,17 +219,50 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
-def save_corpus_meta(meta: CorpusMeta) -> None:
-    _write_json(_meta_path(meta.corpus_id), meta.model_dump())
+def save_corpus_meta(meta: CorpusMeta, area: str = "corpus") -> None:
+    _write_json(_meta_path(meta.corpus_id, area), meta.model_dump())
 
 
-def save_label(corpus_id: str, label: CorpusLabel) -> Path:
+def save_label(corpus_id: str, label: CorpusLabel, area: str = "corpus") -> Path:
     """Persist the golden label for a corpus pack. Returns the file path."""
-    if not corpus_exists(corpus_id):
+    if not corpus_exists(corpus_id, area):
         raise FileNotFoundError(f"No corpus pack: {corpus_id}")
-    path = _label_path(corpus_id)
+    path = _label_path(corpus_id, area)
     _write_json(path, label.model_dump())
     return path
+
+
+def promote(corpus_id: str) -> CorpusPack:
+    """Move a labelled pack from staging into the curated corpus.
+
+    Promotion is a directory *move* (the heavy artifacts + ``label.json`` ride
+    along, no copy). Gated on the pack carrying a golden label so only curated
+    packs land in the committed corpus. Raises:
+
+    * ``FileNotFoundError`` — no such pack in staging;
+    * ``ValueError`` — the pack has no golden label yet;
+    * ``FileExistsError`` — a pack with that id already exists in the corpus.
+    """
+    if not corpus_exists(corpus_id, "staging"):
+        raise FileNotFoundError(f"No staging pack: {corpus_id}")
+    pack = load_pack(corpus_id, "staging")
+    if not pack.is_labeled:
+        raise ValueError("pack must have a golden label before promotion")
+    if corpus_exists(corpus_id, "corpus"):
+        raise FileExistsError(f"already in corpus: {corpus_id}")
+    src = pack_path(corpus_id, "staging")
+    # Compact before promoting so the committed corpus carries the gzipped
+    # master (cross_section.json.gz), never the gitignored plain .json.
+    plain_cs = src / "cross_section.json"
+    if plain_cs.exists():
+        import gzip
+
+        (src / "cross_section.json.gz").write_bytes(gzip.compress(plain_cs.read_bytes()))
+        plain_cs.unlink()
+    dest = pack_path(corpus_id, "corpus")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dest))
+    return load_pack(corpus_id, "corpus")
 
 
 # --- coverage ---------------------------------------------------------------
