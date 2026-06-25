@@ -260,6 +260,11 @@ class ConvectiveEvaluator:
                         extent=ext_mod, peak=worst_risk.value.upper(),
                     ) + cover_suffix
                 else:
+                    # Calibrated for the default LOW floor (min_risk=2): "primed,
+                    # not firing" fits a LOW peak. Under a non-default min_risk=1
+                    # a MARGINAL-only route also lands here and the wording is a
+                    # slight overstatement — accepted (rare, non-default; #302
+                    # review).
                     detail = adv_t("convective.favorability", loc, extent=ext) + cover_suffix
 
             cross_check: str | None = None
@@ -294,6 +299,10 @@ class ConvectiveEvaluator:
         # MODERATE+ range + peak, built here where the locale is available
         # (from_per_model is locale-agnostic). GREEN/UNAVAILABLE keep the
         # representative wording (none / below-cruise / no-data). (#300)
+        # The per-model cover_suffix is intentionally dropped from this aggregate
+        # line: a single representative model's cover is arbitrary across a
+        # cross-model range. Cover stays visible in the per-model breakdowns
+        # (#302 review).
         agg = result.aggregate_status
         if agg in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
             loc = ctx.locale

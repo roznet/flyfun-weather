@@ -125,7 +125,9 @@ class ModelAdvisoryResult(BaseModel):
         ``affected_mod`` is an optional higher-threshold count (e.g. convective
         MODERATE+); its pct/nm are derived the same way as the primary extent.
         """
-        mod = affected_mod or 0
+        # Explicit None check (not `or 0`) so a future caller can pass a genuine
+        # 0 meaning "tracked this threshold, zero points qualified" (#302 review).
+        mod = affected_mod if affected_mod is not None else 0
         return cls(
             model=model,
             status=status,
