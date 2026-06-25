@@ -155,17 +155,23 @@ private struct FlowChips: View {
     let onTap: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.spacingXS) {
-            ForEach(items, id: \.self) { item in
-                Button { onTap(item) } label: {
-                    HStack(spacing: Theme.spacingXS) {
-                        Label(item, systemImage: "exclamationmark.circle")
-                        Image(systemName: "chevron.right").font(.caption2)
+        // Horizontal, glanceable chip row (§4.1) — keeps the Brief scannable on
+        // one screen instead of pushing Advisories below the fold.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Theme.spacingS) {
+                ForEach(items, id: \.self) { item in
+                    Button { onTap(item) } label: {
+                        HStack(spacing: Theme.spacingXS) {
+                            Label(item, systemImage: "exclamationmark.circle")
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.amber)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Theme.amber.opacity(0.12), in: Capsule())
                     }
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.amber)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }

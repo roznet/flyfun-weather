@@ -85,8 +85,9 @@ struct NaturalCloudConfig: Sendable {
         switch coverage.uppercased() {
         case "FEW": return fillFew
         case "SCT": return fillSct
+        case "BKN": return fillBkn
         case "OVC": return fillOvc
-        default: return fillBkn   // BKN and anything unknown
+        default: return fillBkn   // unknown coverage → treat as BKN
         }
     }
 }

@@ -85,7 +85,9 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse {
-        try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/advisories/\(advisoryId)/detail")
+        // Encode the timestamp path segment for consistency with recalculateAdvisories.
+        let encodedTimestamp = timestamp.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? timestamp
+        return try await client.request("/api/flights/\(flightId)/packs/\(encodedTimestamp)/advisories/\(advisoryId)/detail")
     }
 
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws {

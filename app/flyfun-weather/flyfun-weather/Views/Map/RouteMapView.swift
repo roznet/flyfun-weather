@@ -18,6 +18,9 @@ struct RouteMapView: View {
     /// 0 as "uninitialised" — FL000 is a legitimate slider value.
     @State private var altitudeFt: Double?
     @State private var selectedWaypoint: WaypointConditions?
+    /// Cached extraction (refreshed on model/analyses/elevation change) so slider
+    /// drags don't re-run the full route-analysis mapping on every render.
+    @State private var vizData: VizRouteData?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     /// iPad (regular width) drives colour and width from independent metrics.
@@ -51,11 +54,11 @@ struct RouteMapView: View {
     /// Viz points (with lat/lon + metric fields) for the selected model — reuses
     /// the cross-section's extraction so the map shares the same data contract
     /// (single cloud-cover source/formula, no map-only re-derivation).
-    private var vizData: VizRouteData? {
-        guard case .loaded(let analyses) = viewModel.routeAnalysesState else { return nil }
+    private func refreshVizData() {
+        guard case .loaded(let analyses) = viewModel.routeAnalysesState else { vizData = nil; return }
         var elevation: ElevationResponse?
         if case .loaded(let e) = viewModel.elevationState { elevation = e }
-        return CrossSectionViewModel.extractVizData(from: analyses, model: viewModel.selectedModel, elevation: elevation)
+        vizData = CrossSectionViewModel.extractVizData(from: analyses, model: viewModel.selectedModel, elevation: elevation)
     }
 
     var body: some View {
@@ -72,11 +75,15 @@ struct RouteMapView: View {
         }
         .onChange(of: viewModel.routeAnalysesState.isLoaded) {
             if case .loaded(let analyses) = viewModel.routeAnalysesState { mapVM.update(from: analyses) }
+            refreshVizData()
         }
+        .onChange(of: viewModel.selectedModel) { refreshVizData() }
+        .onChange(of: viewModel.elevationState.isLoaded) { refreshVizData() }
         .onChange(of: viewModel.focusIntent) { applyFocusIntent() }
         .task {
             if case .loaded(let analyses) = viewModel.routeAnalysesState { mapVM.update(from: analyses) }
             else if case .loaded(let snapshot) = viewModel.snapshotState { mapVM.update(from: snapshot) }
+            refreshVizData()
             applyFocusIntent()
         }
         .sheet(item: $selectedWaypoint) { waypointSheet($0) }

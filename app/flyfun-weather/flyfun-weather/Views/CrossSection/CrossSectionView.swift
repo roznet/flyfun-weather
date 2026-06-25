@@ -188,8 +188,8 @@ struct CrossSectionView: View {
         if let layerId = intent.layerId { csVM.enableLayer(layerId) }
         if let dist = intent.distanceNm {
             scrubDistanceNm = dist
-        } else if let alt = activePointDistanceNm {
-            scrubDistanceNm = alt
+        } else if let pointDist = activePointDistanceNm {
+            scrubDistanceNm = pointDist
         }
         if let alt = intent.altitudeFt { scrubAltitudeFt = alt }
         viewModel.clearFocusIntent()
