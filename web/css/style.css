@@ -4293,7 +4293,7 @@ label {
 /* #tab-guide gets .with-toc from help-main.ts once the nav is injected.
    The nav lives in column 1 and spans the full height so it stays sticky;
    sections are pinned to column 2 without needing a wrapper element. */
-#tab-guide.with-toc {
+#tab-guide.with-toc.active {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
   gap: 1.75rem;
@@ -4339,7 +4339,7 @@ label {
 .help-section { scroll-margin-top: 0.75rem; }
 
 @media (max-width: 760px) {
-  #tab-guide.with-toc { display: block; }
+  #tab-guide.with-toc.active { display: block; }
   .help-toc { display: none; }
 }
 
