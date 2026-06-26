@@ -620,7 +620,7 @@ _CORROB_PRECIP_MM_H = 0.5
 _CONV_PRECIP_MM_H_THRESHOLDS = [
     (2.0, ConvectiveRisk.MODERATE),               # active shower / storm core
     (0.5, ConvectiveRisk.LOW),                    # light convective showers
-    (_FIRING_PRECIP_MM_H, ConvectiveRisk.MARGINAL),  # isolated / weak (firing floor)
+    (_FIRING_PRECIP_MM_H, ConvectiveRisk.MARGINAL),  # MARGINAL lower bound (entry gate requires precip > 0.1)
 ]
 
 
@@ -849,10 +849,17 @@ def assess_convective_nwp(
     # physical suppressors (no realized convection AND a strong inhibition) — and
     # is bounded at NONE. Tune either threshold with the combined effect in mind.
     # See tests/test_convective.py::test_nwp_firing_gate_and_cin_double_suppression.
-    eff_cin = nwp_diagnostics.ml_cin_jkg if nwp_diagnostics.ml_cin_jkg is not None else cin
-    if eff_cin is not None and eff_cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
-        risk = _down_one(risk)
-        suppressors.append(f"Strong cap (CIN {eff_cin:.0f} J/kg) holds the tower down")
+    #
+    # NOT applied on the "nwp_precip" path (§14 Phase 3): `cp` proves the scheme
+    # already fired, so penalising it on surface/ML CIN is circular — the
+    # parameterisation overcame whatever inhibition existed at the (typically
+    # elevated) triggering level, which a negative surface/ML CIN does not
+    # describe. CIN suppression is for the deep-but-dry tower, not a firing cell.
+    if method != "nwp_precip":
+        eff_cin = nwp_diagnostics.ml_cin_jkg if nwp_diagnostics.ml_cin_jkg is not None else cin
+        if eff_cin is not None and eff_cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
+            risk = _down_one(risk)
+            suppressors.append(f"Strong cap (CIN {eff_cin:.0f} J/kg) holds the tower down")
 
     return ConvectiveAssessment(
         drivers=drivers,

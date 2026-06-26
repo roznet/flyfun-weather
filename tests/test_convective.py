@@ -717,6 +717,32 @@ def test_nwp_ecmwf_channel_precip_fires_when_hcct_absent():
     assert result.convective_precip_mm_h == 4.26
 
 
+def test_nwp_precip_not_suppressed_by_strong_cin():
+    """§14 Phase 3: CIN suppression must NOT downgrade a firing nwp_precip cell.
+
+    `cp` proves the scheme fired; penalising it on surface/ML CIN is circular (the
+    parameterisation already overcame the inhibition at the elevated triggering
+    level). Both a strong negative ML-CIN and a strong negative surface CIN must
+    leave the precip-derived tier intact.
+    """
+    # Strong negative ML-CIN — preferred over surface CIN — must not suppress.
+    indices = ThermodynamicIndices(cape_surface_jkg=0.0, cin_surface_jkg=0.0)
+    diag = NWPCloudDiagnostics(
+        total_cover_pct=70.0, convective_precip_mm_h=4.26, ml_cin_jkg=-300.0
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_precip"
+    assert result.risk_level == ConvectiveRisk.MODERATE  # not knocked to LOW
+
+    # Strong negative surface CIN (no ML-CIN) — also must not suppress.
+    indices2 = ThermodynamicIndices(cape_surface_jkg=0.0, cin_surface_jkg=-300.0)
+    diag2 = NWPCloudDiagnostics(total_cover_pct=70.0, convective_precip_mm_h=4.26)
+    result2 = assess_convective_nwp(indices2, diag2)
+    assert result2 is not None
+    assert result2.risk_level == ConvectiveRisk.MODERATE
+
+
 def test_nwp_precip_not_used_when_tower_top_present():
     """Tower top stays primary: a precip rate never overrides a diagnosed top."""
     indices = ThermodynamicIndices(cape_surface_jkg=40.0, lcl_altitude_ft=3000.0)
