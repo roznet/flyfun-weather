@@ -690,7 +690,7 @@ class ConvectiveAssessment(BaseModel):
     top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft
     cover_pct: Optional[float] = None  # NWP only; thermo: None
     convective_precip_mm_h: Optional[float] = None  # NWP native firing signal (#283); thermo: None
-    method: str = "thermo"  # "thermo", "nwp", "nwp_hybrid", "nwp_lcl_top", "nwp_cape_fallback"
+    method: str = "thermo"  # "thermo", "nwp", "nwp_hybrid", "nwp_lcl_top", "nwp_precip", "nwp_cape_fallback"
 
 
 class CATRiskLayer(BaseModel):

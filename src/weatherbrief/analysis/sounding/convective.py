@@ -603,6 +603,40 @@ _CORROB_K_INDEX = 35.0
 _CORROB_TOTAL_TOTALS = 50.0
 _CORROB_PRECIP_MM_H = 0.5
 
+# Convective-precip-rate → tier (§14 Phase 3, #283 follow-up). Used ONLY when a
+# native model is precipitating convectively but emitted neither a tower top nor
+# a cover fraction — the ECMWF marine / elevated-convection case, where `cp`
+# lands but `hcct` is sentinel/absent. The Phase-1 design collapsed "no geometry"
+# to NONE, which hid a plainly-firing scheme (e.g. 4 mm/h convective rain over
+# the Channel read NONE). Tower top stays the primary, resolution-robust scale
+# whenever it IS present; this ladder is the geometry-absent fallback only.
+#
+# Depth is unknown from rate alone, so the ladder is capped at MODERATE (same
+# rationale as the cover-only scale). Precip *rate* is resolution-dependent (§14
+# reasoning 1: 0.8 mm/h at ECMWF ~9–25 km ≈ 3–5 mm/h at convection-permitting
+# scale), so these thresholds are calibrated for synoptic-scale GRIB; a finer
+# model whose convective precip gets wired later needs its own ladder. Defensible
+# v1 — tune against the eval-digest corpus.
+_CONV_PRECIP_MM_H_THRESHOLDS = [
+    (2.0, ConvectiveRisk.MODERATE),               # active shower / storm core
+    (0.5, ConvectiveRisk.LOW),                    # light convective showers
+    (_FIRING_PRECIP_MM_H, ConvectiveRisk.MARGINAL),  # isolated / weak (firing floor)
+]
+
+
+def _risk_from_conv_precip(precip_mm_h: float) -> ConvectiveRisk:
+    """Depth-unknown native risk tier from convective precip rate (§14 Phase 3).
+
+    Fallback for a native model firing convective precip with no tower top and no
+    cover fraction (ECMWF marine / elevated convection). NOT used when geometry is
+    present — tower top remains the primary, resolution-robust scale. Capped at
+    MODERATE by ``_CONV_PRECIP_MM_H_THRESHOLDS`` (depth unknown).
+    """
+    for min_mm_h, level in _CONV_PRECIP_MM_H_THRESHOLDS:
+        if precip_mm_h >= min_mm_h:
+            return level
+    return ConvectiveRisk.NONE
+
 
 def _convection_realized_nwp(diag: NWPCloudDiagnostics) -> bool:
     """True when the model's convective scheme actually fired here (#283).
@@ -756,7 +790,11 @@ def assess_convective_nwp(
             method="nwp_cape_fallback",
         )
 
-    # Native path. Determine which convective geometry this model exposes
+    precip = nwp_diagnostics.convective_precip_mm_h
+    drivers: list[str] = []
+    suppressors: list[str] = []
+
+    # Native path. Determine which convective signal this model exposes
     # (preserving the method strings consumed by dd_nwp_agreement / front
     # co-location) and the base/top envelope to attach.
     if cover is not None:
@@ -772,22 +810,34 @@ def assess_convective_nwp(
         # still keep the tower rather than silently discard a real cell (#283
         # review) — the base is then unknown (None), but the tower drives risk.
         method, base_ft, top_ft = "nwp_lcl_top", lcl, top
+    elif precip is not None and precip > _FIRING_PRECIP_MM_H:
+        # §14 Phase 3: no tower top and no cover fraction, but the scheme is
+        # precipitating convectively (ECMWF marine / elevated convection — `cp`
+        # present, `hcct` sentinel). Tier from the precip rate rather than the
+        # old false NONE. Realized by construction, so it skips the firing-gate
+        # hold-down and the precip corroboration (which would double-count `cp`).
+        method, base_ft, top_ft = "nwp_precip", None, None
     else:
         # Native model, quiet convective scheme at this point (no cover, no
-        # usable geometry, or a sub-LCL hcct artefact). Keep a real NONE
-        # assessment — not None — so the DD-vs-NWP comparison can still fire.
+        # usable geometry, no convective precip). Keep a real NONE assessment —
+        # not None — so the DD-vs-NWP comparison can still fire.
         method, base_ft, top_ft = "nwp", None, None
 
-    # Risk from the validated native fields (NOT CAPE).
-    risk = _native_convective_risk(top_ft, cover)
+    if method == "nwp_precip":
+        risk = _risk_from_conv_precip(precip)
+        drivers.append(
+            f"Model convective scheme precipitating ({precip:.1f} mm/h) with no "
+            "diagnosed tower top — tier from precip rate (depth unknown, capped MODERATE)"
+        )
+    else:
+        # Risk from the validated native geometry (NOT CAPE).
+        risk = _native_convective_risk(top_ft, cover)
 
-    # Firing gate + native corroboration (#283 Phase 2): hold a deep-but-dry
-    # tower down one level, or bump a realized cell up on strong native indices.
-    drivers: list[str] = []
-    suppressors: list[str] = []
-    risk, gate_note, gate_is_driver = _apply_firing_gate(risk, nwp_diagnostics)
-    if gate_note is not None:
-        (drivers if gate_is_driver else suppressors).append(gate_note)
+        # Firing gate + native corroboration (#283 Phase 2): hold a deep-but-dry
+        # tower down one level, or bump a realized cell up on strong native indices.
+        risk, gate_note, gate_is_driver = _apply_firing_gate(risk, nwp_diagnostics)
+        if gate_note is not None:
+            (drivers if gate_is_driver else suppressors).append(gate_note)
 
     # Keep the strong-CIN suppression (#283: partially handles a capped tower the
     # scheme reports but won't realize; CIN < -200 → one level down). Prefer the

@@ -668,6 +668,66 @@ def test_nwp_cover_only_scale_when_no_top():
         assert result.risk_level == expected, f"cover={cover}: want {expected}, got {result.risk_level}"
 
 
+def test_nwp_precip_fired_tiering_when_no_geometry():
+    """§14 Phase 3: convective precip with no tower top / cover → rate-based tier.
+
+    Depth unknown from rate alone, so the ladder is capped at MODERATE.
+    """
+    for precip, expected in [
+        (4.26, ConvectiveRisk.MODERATE),   # active shower core (>=2.0)
+        (2.0, ConvectiveRisk.MODERATE),
+        (1.24, ConvectiveRisk.LOW),        # light showers (>=0.5)
+        (0.5, ConvectiveRisk.LOW),
+        (0.45, ConvectiveRisk.MARGINAL),   # isolated/weak (>=0.1)
+        (0.1, ConvectiveRisk.NONE),        # at/below the firing gate (> 0.1 required)
+        (0.0, ConvectiveRisk.NONE),
+    ]:
+        indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+        # total_cover marks it native; no convective top, no convective cover.
+        diag = NWPCloudDiagnostics(
+            total_cover_pct=70.0, convective_precip_mm_h=precip
+        )
+        result = assess_convective_nwp(indices, diag)
+        assert result is not None
+        assert result.risk_level == expected, (
+            f"precip={precip}: want {expected}, got {result.risk_level}"
+        )
+        if precip > 0.1:
+            assert result.method == "nwp_precip"
+
+
+def test_nwp_ecmwf_channel_precip_fires_when_hcct_absent():
+    """Regression: ECMWF over the Channel — cp 4.26 mm/h, hcct sentinel (no top),
+    no convective-cover field → MODERATE via the precip rate, not a false NONE.
+
+    EGTF→LFAT 2026-06-27 @ ~52 nm: elevated marine convection. Surface parcel has
+    no CAPE (instability is elevated), so DD is quiet, but the model's own scheme
+    is precipitating convectively — Windy shows it; we used to read NONE.
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=0.0, cin_surface_jkg=0.0)
+    diag = NWPCloudDiagnostics(
+        total_cover_pct=81.0,          # native cloud content (not the CAPE fallback)
+        convective_precip_mm_h=4.26,   # ECMWF `cp`, de-accumulated
+        # convective_top_ft / convective_cover_pct absent (hcct sentinel, no cc field)
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_precip"
+    assert result.risk_level == ConvectiveRisk.MODERATE
+    assert result.convective_precip_mm_h == 4.26
+
+
+def test_nwp_precip_not_used_when_tower_top_present():
+    """Tower top stays primary: a precip rate never overrides a diagnosed top."""
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0, lcl_altitude_ft=3000.0)
+    # ECMWF hcct present (FL150 → LOW) with light precip; top wins, method nwp_lcl_top.
+    diag = NWPCloudDiagnostics(convective_top_ft=15000.0, convective_precip_mm_h=4.0)
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_lcl_top"
+    assert result.risk_level == ConvectiveRisk.LOW
+
+
 def test_nwp_gfs_sun_reims_high():
     """Regression (#283): GFS Sun LFQA — cover 46.8%, top FL332 → HIGH.
 

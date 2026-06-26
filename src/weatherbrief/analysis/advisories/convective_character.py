@@ -221,9 +221,24 @@ class ConvectiveCharacterEvaluator:
                 realized = False
                 embedded = False
                 if is_conv:
-                    showers = showers_at_point(
-                        ctx.cross_sections, model, rpa.point_index, rpa.forecast_hour
+                    # Prefer the model's own GRIB-native convective precip (`cp`)
+                    # over Open-Meteo `showers`: Open-Meteo does not populate
+                    # `showers` for ECMWF IFS (it is structurally 0.0), so the
+                    # native field is the only realized-firing precip signal for
+                    # ECMWF over marine / elevated convection. A native value of
+                    # 0.0 is a real "not firing" reading and is used as-is; only
+                    # absent native diagnostics (non-GRIB models — AROME/UKMO/MF)
+                    # fall back to the Open-Meteo `showers` cross-section field.
+                    diag = sounding.nwp_cloud_diagnostics
+                    native_cp = (
+                        diag.convective_precip_mm_h if diag is not None else None
                     )
+                    if native_cp is not None:
+                        showers = native_cp
+                    else:
+                        showers = showers_at_point(
+                            ctx.cross_sections, model, rpa.point_index, rpa.forecast_hour
+                        )
                     nwp = sounding.convective_nwp
                     cover = nwp.cover_pct if nwp is not None else None
                     has_geom = (
