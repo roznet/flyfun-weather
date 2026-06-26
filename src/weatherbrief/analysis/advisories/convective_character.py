@@ -235,10 +235,13 @@ class ConvectiveCharacterEvaluator:
                     )
                     if native_cp is not None:
                         # `native_cp` is mm/h; `showers_mm` (the threshold) and
-                        # showers_at_point() are mm-over-step. For the hourly
-                        # cross-section step these are numerically equal, so the
-                        # >= showers_mm test holds. If showers_mm is ever
-                        # recalibrated, revisit this mm/h-vs-mm equivalence.
+                        # showers_at_point() are mm-over-step. These are equal
+                        # only because the cross-section is interpolated to
+                        # 1-hour steps (see showers_at_point()'s `at_time()`
+                        # lookup against hourly point_forecasts), so a 1 mm/h
+                        # rate == 1 mm over the step. If that step ever stops
+                        # being 1 hour, or `showers_mm` is recalibrated, revisit
+                        # this mm/h-vs-mm equivalence.
                         showers = native_cp
                     else:
                         showers = showers_at_point(

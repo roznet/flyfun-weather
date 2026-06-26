@@ -3,6 +3,7 @@
 from weatherbrief.analysis.sounding.convective import (
     ConvectiveCrossCheck,
     _effective_cape,
+    _risk_from_conv_precip,
     assess_convective_nwp,
     assess_convective_thermo,
     classify_regime,
@@ -666,6 +667,22 @@ def test_nwp_cover_only_scale_when_no_top():
         result = assess_convective_nwp(indices, diag)
         assert result is not None
         assert result.risk_level == expected, f"cover={cover}: want {expected}, got {result.risk_level}"
+
+
+def test_risk_from_conv_precip_self_consistent_with_gate():
+    """`_risk_from_conv_precip` in isolation mirrors the strict firing gate (> 0.1).
+
+    At/below the firing floor → NONE (even though 0.1 is a ladder row); above it
+    the ladder applies with inclusive 0.5 / 2.0 boundaries.
+    """
+    assert _risk_from_conv_precip(0.0) == ConvectiveRisk.NONE
+    assert _risk_from_conv_precip(0.1) == ConvectiveRisk.NONE      # gate is strict >
+    assert _risk_from_conv_precip(0.11) == ConvectiveRisk.MARGINAL
+    assert _risk_from_conv_precip(0.49) == ConvectiveRisk.MARGINAL
+    assert _risk_from_conv_precip(0.5) == ConvectiveRisk.LOW       # inclusive
+    assert _risk_from_conv_precip(1.99) == ConvectiveRisk.LOW
+    assert _risk_from_conv_precip(2.0) == ConvectiveRisk.MODERATE  # inclusive
+    assert _risk_from_conv_precip(10.0) == ConvectiveRisk.MODERATE  # capped MODERATE
 
 
 def test_nwp_precip_fired_tiering_when_no_geometry():

@@ -169,7 +169,7 @@ def convection_realized(
     ``REGIME_CAPE_LOW`` (300) or a lifted index ≤ ``LI_REALIZED`` (−2)).
 
     Native NWP convective cloud (a model-native ``method`` — "nwp" / "nwp_hybrid"
-    / "nwp_lcl_top") is realized by construction. The CAPE-derived fallback
+    / "nwp_lcl_top" / "nwp_precip") is realized by construction. The CAPE-derived fallback
     (``"nwp_cape_fallback"``, #283) is treated like ``"thermo"`` — it is parcel
     CAPE under another name, so it goes through the same realized-vs-potential
     gate rather than being trusted as a native firing signal.
@@ -631,7 +631,15 @@ def _risk_from_conv_precip(precip_mm_h: float) -> ConvectiveRisk:
     cover fraction (ECMWF marine / elevated convection). NOT used when geometry is
     present — tower top remains the primary, resolution-robust scale. Capped at
     MODERATE by ``_CONV_PRECIP_MM_H_THRESHOLDS`` (depth unknown).
+
+    Mirrors the caller's firing gate (``precip > _FIRING_PRECIP_MM_H``) so the
+    function is self-consistent when called in isolation: at/below the firing
+    floor → NONE, above it → the ladder (MARGINAL/LOW/MODERATE, boundaries
+    inclusive). The explicit floor guard means the 0.1 ladder row reads as the
+    MARGINAL *upper-open* lower bound without making exactly-0.1 return MARGINAL.
     """
+    if precip_mm_h <= _FIRING_PRECIP_MM_H:
+        return ConvectiveRisk.NONE
     for min_mm_h, level in _CONV_PRECIP_MM_H_THRESHOLDS:
         if precip_mm_h >= min_mm_h:
             return level

@@ -141,15 +141,17 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 - **Risk is model-native, NOT CAPE (#283).** The tier comes from the model's own convective-scheme output, making the NWP track genuinely independent of the DD (parcel-CAPE) track:
   - **Primary scale — convective tower top** (`convective_top_ft`, the one native field common to GFS/ECMWF/ICON): `_CONV_TOP_FL_THRESHOLDS` (FL380 EXTREME / FL280 HIGH / FL200 MODERATE / FL120 LOW / present-but-shallow MARGINAL).
   - **Cover modifier** (GFS, where `convective_cover_pct` is present): numerous cover (≥35%) bumps the top-derived tier up one level, capped at HIGH. Cover-only (no top) sets a depth-unknown tier capped at MODERATE. The MODERATE cap is on the *base* tier only — Phase-2 corroboration (below) can still raise a strongly-realized cover-only MODERATE to HIGH when native precip/indices are strong. This can't fire today (GFS exposes no native `k_index`/`total_totals` and ECMWF takes the tower-top path), but the cap is intentionally not a hard ceiling against corroboration.
+  - **Precip-rate fallback (Phase 3, method `"nwp_precip"`):** when the model emits *no* tower top and *no* cover fraction but `convective_precip_mm_h > 0.1` — the ECMWF marine / elevated-convection case, where `cp` lands but `hcct` is sentinel/absent — the tier comes from a convective-precip-rate ladder (`_CONV_PRECIP_MM_H_THRESHOLDS`: ≥2.0 → MODERATE, ≥0.5 → LOW, ≥0.1 → MARGINAL) instead of the old false NONE. Tower top stays primary whenever present; this is the geometry-absent fallback only. Depth is unknown from rate alone, so the ladder is capped at MODERATE. Realized by construction, so it skips the firing gate hold-down and the precip corroboration (which would double-count `cp`), and the strong-CIN suppression below (penalising a demonstrably-firing scheme on surface/ML CIN is circular). Rate is resolution-dependent → synoptic-scale v1.
   - **Firing gate (Phase 2):** a MODERATE+ tower is only kept there when the scheme *realized* convection (`convective_precip_mm_h > 0.1` OR `convective_cover_pct > 15`); a deep-but-dry tower is held down one level. Missing-data-safe — held down only on positive dry evidence. **Known gap (ICON-EU):** ICON exposes neither `convective_cover_pct` nor (yet) `convective_precip_mm_h`, so realization can't be evaluated and every ICON tower is kept at full native tier — no dry-tower suppression until `rain_con` is decoded. Tracked as a calibration gap.
   - **Native corroboration (Phase 2):** a realized MODERATE+ cell with strong native `k_index`/`total_totals`/conv-precip bumps up one level (capped HIGH). Thresholds (`_CORROB_K_INDEX=35`, `_CORROB_TOTAL_TOTALS=50`) are North-American severe-convection defaults; European environments (lower lapse rates, more modest moisture) often need TT ≥55, so this may fire readily over Europe — flagged for eval-digest calibration.
-  - **Strong-CIN suppression** kept (prefers the model's own `ml_cin_jkg`, else DD `cin_surface_jkg`).
+  - **Strong-CIN suppression** kept (prefers the model's own `ml_cin_jkg`, else DD `cin_surface_jkg`) — but *not* applied on the `"nwp_precip"` path (see Phase 3 above).
 
 **Method strings** (preserved; consumed by `dd_nwp_agreement` history and front co-location's `method != "thermo"`), set by which geometry the model exposes:
 
 - **`"nwp"`** (GFS — has `convective_cover_pct`): cover present; `base_ft`/`top_ft` from GRIB. Quiet native points (no top/cover geometry) also use this method with `risk=NONE`.
 - **`"nwp_hybrid"`** (ICON-EU — has base+top, no cover): tower bounds from GRIB2 `convective_base_ft`/`convective_top_ft`.
 - **`"nwp_lcl_top"`** (ECMWF — has `hcct` top only): tower base = `indices.lcl_altitude_ft` (LCL proxy), top = `convective_top_ft`; the `top > LCL` guard rejects a sub-LCL hcct artefact (→ quiet NONE).
+- **`"nwp_precip"`** (Phase 3 — any native model firing `cp` with no tower top and no cover, in practice ECMWF over marine / elevated convection): risk from the precip-rate ladder, `base_ft`/`top_ft` both None. See the precip-rate fallback above.
 - **`"nwp_cape_fallback"`**: only when the diagnostics carry *no* native cloud content at all (defensive — production builders return `None`, not an empty diag). CAPE-scored like DD, marked distinctly so the cross-check skips the circular comparison.
 
 - **Severity modifiers:** same as thermo (computed from the same indices, descriptive text only — separate from the native risk tier).
@@ -158,7 +160,7 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 |-------|----------------------|-------|
 | **GFS** | `method="nwp"` — risk from tower top + cover modifier; cover/base/top from GRIB | Only model with convective cover % |
 | **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` native | — |
-| **ECMWF** | `method="nwp_lcl_top"` — risk from tower top (`hcct`); LCL base; `cp`/`kx`/`totalx`/`mlcape`/`mlcin` native | — |
+| **ECMWF** | `method="nwp_lcl_top"` when `hcct` present; `method="nwp_precip"` (Phase 3) when `hcct` sentinel but `cp` fires — risk from the precip-rate ladder; `cp`/`kx`/`totalx`/`mlcape`/`mlcin` native | `hcct` is sparsely delivered (sentinel over marine/elevated convection), so `cp` is often the only firing signal |
 | **Others** | None | No diagnostics at all |
 
 ### Stage 5: Resolution
@@ -379,8 +381,10 @@ GRIB2 (a1) → NWPCloudDiagnostics.convective_top_ft (hcct), cp→convective_pre
 MetPy      → SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT
 Analysis:
   Thermo assessment  → risk from max(SB,MU,ML) CAPE, CIN suppression
-  NWP assessment     → LCL-anchored: tower-top risk (hcct) + LCL base + firing gate/
-                       corroboration from cp/kx/totalx/mlcin (method="nwp_lcl_top", #283)
+  NWP assessment     → hcct present: LCL-anchored tower-top risk + LCL base + firing
+                       gate/corroboration from cp/kx/totalx/mlcin (method="nwp_lcl_top", #283);
+                       hcct sentinel but cp>0.1: precip-rate ladder (method="nwp_precip",
+                       Phase 3) — the marine/elevated-convection case Open-Meteo & hcct both miss
 Visualization:
   Thermo towers      → LFC→EL, always available
   NWP towers         → LCL→hcct, available when GRIB enriched
