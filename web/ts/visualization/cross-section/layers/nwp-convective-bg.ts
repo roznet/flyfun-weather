@@ -6,10 +6,72 @@
  */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
+import { getActiveTheme } from '../theme';
 import {
   getBgWash, getTowerFill, getHatchColor, getStripColor, getEdgeColor, STRIP_HEIGHT,
   drawHatching, drawCBLabel,
 } from './thermo-convective-bg';
+
+/** Draw a full-height "ghost" column for a convective point whose depth the
+ *  model did not resolve (risk ≥ LOW but no base/top — ECMWF `nwp_precip` firing
+ *  on `cp`, or a GFS cover-only point with no tower top). Deliberately distinct
+ *  from a resolved tower: a risk-tinted wash spanning the whole column with
+ *  dashed sides and a "?" marker, so it never reads as a known full-height CB.
+ *  The honest tooltip ("depth unresolved") carries the detail. */
+function drawUnresolvedColumn(
+  ctx: CanvasRenderingContext2D,
+  xLeft: number,
+  xRight: number,
+  plotTop: number,
+  plotHeight: number,
+  risk: string,
+): void {
+  const colWidth = xRight - xLeft;
+
+  // Risk-tinted full-height wash (terrain layer masks the below-surface part).
+  const bgWash = getBgWash()[risk];
+  if (bgWash) {
+    ctx.fillStyle = bgWash;
+    ctx.fillRect(xLeft, plotTop, colWidth, plotHeight);
+  }
+
+  // Dashed vertical sides — signals "column, depth unknown" vs a solid tower box.
+  const edgeColor = getEdgeColor()[risk];
+  if (edgeColor) {
+    ctx.save();
+    ctx.strokeStyle = edgeColor;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(xLeft + 0.5, plotTop);
+    ctx.lineTo(xLeft + 0.5, plotTop + plotHeight);
+    ctx.moveTo(xRight - 0.5, plotTop);
+    ctx.lineTo(xRight - 0.5, plotTop + plotHeight);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // "?" marker near the top — depth-unresolved cue.
+  if (colWidth > 14) {
+    const cx = (xLeft + xRight) / 2;
+    const cy = plotTop + 12;
+    const colors = getActiveTheme().convective.cbLabelColor;
+    const theme = getActiveTheme();
+    ctx.save();
+    ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const pw = ctx.measureText('?').width + 8;
+    const ph = 15;
+    ctx.fillStyle = theme.sky.background + 'e6';
+    ctx.beginPath();
+    ctx.roundRect(cx - pw / 2, cy - ph / 2, pw, ph, 3);
+    ctx.fill();
+    ctx.fillStyle = colors[risk] ?? 'rgba(200, 100, 0, 0.8)';
+    ctx.fillText('?', cx, cy);
+    ctx.restore();
+  }
+}
 
 export const nwpConvectiveBgLayer: CrossSectionLayer = {
   id: 'nwp-convective-bg',
@@ -36,8 +98,14 @@ export const nwpConvectiveBgLayer: CrossSectionLayer = {
         : (x + transform.distanceToX(data.points[i + 1].distanceNm)) / 2;
       const colWidth = xRight - xLeft;
 
-      // NWP bounds are model-computed — skip if absent (no full-height fallback)
-      if (p.nwpConvectiveBaseFt == null || p.nwpConvectiveTopFt == null) continue;
+      // Depth unresolved: risk ≥ LOW but the model gave no tower base/top
+      // (ECMWF `nwp_precip` on `cp`, or GFS cover-only). Draw a distinct
+      // ghost column rather than skipping — the risk is real, only the
+      // geometry is unknown.
+      if (p.nwpConvectiveBaseFt == null || p.nwpConvectiveTopFt == null) {
+        drawUnresolvedColumn(ctx, xLeft, xRight, plotArea.top, plotArea.height, risk);
+        continue;
+      }
 
       {
         const baseFt = p.nwpConvectiveBaseFt;

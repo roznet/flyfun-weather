@@ -337,6 +337,7 @@ export interface ConvectiveAssessment {
   base_ft: number | null;
   top_ft: number | null;
   cover_pct: number | null;
+  convective_precip_mm_h: number | null;
   method: string;
 }
 

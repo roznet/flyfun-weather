@@ -419,6 +419,7 @@ function extractPoint(
     nwpConvectiveBaseFt: sounding?.convective_nwp?.base_ft ?? null,
     nwpConvectiveTopFt: sounding?.convective_nwp?.top_ft ?? null,
     nwpConvectiveCoverPct: sounding?.convective_nwp?.cover_pct ?? null,
+    nwpConvectivePrecipMmH: sounding?.convective_nwp?.convective_precip_mm_h ?? null,
     nwpConvectiveMethod: sounding?.convective_nwp?.method ?? null,
     hasNwpConvective: sounding?.convective_nwp != null,
     cloudCoverTotalPct,

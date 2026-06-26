@@ -65,7 +65,7 @@ Rendering order: **night shading → obscuration → clouds → convection → i
 | Natural DD clouds | DD Natural | clouds | `cloud-bands-factory.ts` | off | Same puff rendering using DD-derived cloud layers |
 | Square NWP clouds | Square NWP | clouds | `cloud-bands-factory.ts` | off | Solid filled cells per zone, opacity from cover% (ForeFlight-like) |
 | Square DD clouds | Square DD | clouds | `cloud-bands-factory.ts` | off | Same square cells using DD-derived cloud layers |
-| NWP Convective | NWP Convective | convection | `nwp-convective-bg.ts` | **on** | Model convective scheme output (base/top/coverage) |
+| NWP Convective | NWP Convective | convection | `nwp-convective-bg.ts` | **on** | Model convective scheme output (base/top/coverage); full-height **depth-unresolved ghost column** when risk ≥ LOW but no base/top (ECMWF `nwp_precip` / GFS cover-only) |
 | Thermo Convective | Thermo Convective | convection | `thermo-convective-bg.ts` | off | CAPE/CIN tower columns LFC→EL (LCL fallback), hatching, TCU/CB/+TS labels |
 | Icing bands | Ogimet-DD | icing | `icing-bands.ts` | off | DD-attenuated Ogimet index |
 | Ogimet-NWP bands | Ogimet-NWP | icing | `icing-ogimet-nwp-bands.ts` | **on** | NWP cloud-fraction-scaled Ogimet index with glaciation |
@@ -199,7 +199,11 @@ Three-way page theme support via `web/ts/theme.ts` (separate from cross-section 
 
 ## Convective Tower Rendering
 
-Convective towers are rendered by two layers — `thermo-convective-bg.ts` (CAPE/CIN thermodynamic scheme) and `nwp-convective-bg.ts` (model convective scheme base/top). The thermo layer is the more complex:
+Convective towers are rendered by two layers — `thermo-convective-bg.ts` (CAPE/CIN thermodynamic scheme) and `nwp-convective-bg.ts` (model convective scheme base/top).
+
+**NWP depth-unresolved ghost column.** The NWP layer needs a model base/top to draw a tower. The `nwp_precip` path (ECMWF firing on `cp` with `hcct` sentinel) and a GFS cover-only point both carry a real risk (≥ LOW) but *no* drawable base/top. Rather than skip them (which silently dropped real convection from the section while the route map + advisory still flagged it), `drawUnresolvedColumn()` renders a full-height **ghost column**: the risk-tinted `bgWash` spanning terrain→section-top, **dashed vertical sides**, and a **"?" marker** near the top — deliberately distinct from a resolved tower (no solid body / anvil / edge box) so it never reads as a known full-height CB. The tooltip row shows `Tower: depth unresolved (cp X mm/h)` with the firing evidence. `convective_precip_mm_h` is plumbed through `VizPoint.nwpConvectivePrecipMmH` for that evidence string.
+
+The thermo layer is the more complex:
 - **Marginal risk skipped**: points with `convectiveRisk === 'none' | 'marginal'` skip tower rendering entirely (marginal CAPE <100 J/kg produces misleading visual towers for noise-level instability)
 - **Tower columns**: drawn from base (LFC, falling back to LCL) → estimated tower top for each route point with risk ≥ LOW
 - **Tower top estimation**: uses thermodynamic EL if available and reliable (>3000ft above LCL), else estimates from `max(freezingLevel, −10°C, −20°C)` altitude lines as fallbacks
@@ -251,7 +255,7 @@ The registry includes 14 entries: cloud DD, cloud NWP, Ogimet-DD, Ogimet-NWP, SF
 - SFIP: `SFIP nn/100 type (T n°C)` plus trailing `[proxy]` for any non-`full` variant.
 - CAT / E-Shear: `(Ri n.nn)` when populated.
 - Thermo Conv: `(CAPE x, CIN -y)` plus `LCL→EL: FLxxx–FLyyy` (or `Tower:` fallback).
-- NWP Conv: `(nn% cover)` plus `Tower: FLxxx–FLyyy [method-tag]` where method-tag is `nwp` / `nwp_lcl_top` / `nwp_hybrid`.
+- NWP Conv: `(nn% cover)` plus `Tower: FLxxx–FLyyy [method-tag]` where method-tag is `nwp` / `nwp_lcl_top` / `nwp_hybrid` / `nwp_precip`. When depth is unresolved (no base/top) the row reads `Tower: depth unresolved (cp X mm/h)` and matches the full ghost column at any cursor altitude.
 - Inversions: ` (sfc)` suffix for surface-based.
 
 Header/terrain/temperature/stability rows stay inline in `interaction.ts` (different shape — proximity-based not band-based).
