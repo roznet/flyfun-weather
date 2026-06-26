@@ -255,7 +255,12 @@ const nwpConv: LayerTooltipDef = {
     line += `<br>Tower: ${fmtFL(z.baseFt)}–${fmtFL(z.topFt)}${tag}`;
     return line;
   },
-  swatch: (z: NwpConvZone) => getActiveTheme().convective.towerFill[z.risk] ?? null,
+  swatch: (z: NwpConvZone) => {
+    // Unresolved ghost columns paint only bgWash on canvas (no solid body), so
+    // match that here rather than the saturated towerFill a resolved tower uses.
+    const fills = getActiveTheme().convective;
+    return (z.unresolved ? fills.bgWash[z.risk] : fills.towerFill[z.risk]) ?? null;
+  },
 };
 
 const inversion: LayerTooltipDef = {

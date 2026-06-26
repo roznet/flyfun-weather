@@ -1,8 +1,12 @@
-/** NWP convective risk visualization: tower columns from GFS convective base/top.
+/** NWP convective risk visualization.
  *
- * Uses NWP model-computed convective cloud bounds directly — no estimateTowerTop
- * needed since these are model parameterization outputs, not thermodynamic estimates.
- * Same color palette as thermo layer for visual consistency.
+ * Renders resolved tower columns from model convective base/top (GFS), plus a
+ * depth-unresolved "ghost" column for convective points that fire without a
+ * drawable tower — ECMWF `nwp_precip` on `cp`, or a GFS cover-only point with
+ * no top. Uses NWP model-computed convective cloud bounds directly — no
+ * estimateTowerTop needed since these are model parameterization outputs, not
+ * thermodynamic estimates. Same color palette as thermo layer for visual
+ * consistency.
  */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
@@ -55,8 +59,8 @@ function drawUnresolvedColumn(
   if (colWidth > 14) {
     const cx = (xLeft + xRight) / 2;
     const cy = plotTop + 12;
-    const colors = getActiveTheme().convective.cbLabelColor;
     const theme = getActiveTheme();
+    const colors = theme.convective.cbLabelColor;
     ctx.save();
     ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
