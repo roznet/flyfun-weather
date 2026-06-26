@@ -234,6 +234,11 @@ class ConvectiveCharacterEvaluator:
                         diag.convective_precip_mm_h if diag is not None else None
                     )
                     if native_cp is not None:
+                        # `native_cp` is mm/h; `showers_mm` (the threshold) and
+                        # showers_at_point() are mm-over-step. For the hourly
+                        # cross-section step these are numerically equal, so the
+                        # >= showers_mm test holds. If showers_mm is ever
+                        # recalibrated, revisit this mm/h-vs-mm equivalence.
                         showers = native_cp
                     else:
                         showers = showers_at_point(
