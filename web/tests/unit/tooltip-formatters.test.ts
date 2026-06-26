@@ -259,6 +259,38 @@ describe('convective layers', () => {
     expect(out).toContain('Tower: 3,000 ft–FL250');
     expect(out).toContain('[nwp_lcl_top]');
   });
+
+  it('nwp-convective shows "depth unresolved" + cp when base/top absent (nwp_precip)', () => {
+    const point = makeVizPoint({
+      nwpConvectiveRisk: 'moderate',
+      nwpConvectiveBaseFt: null,
+      nwpConvectiveTopFt: null,
+      nwpConvectiveCoverPct: null,
+      nwpConvectivePrecipMmH: 4.26,
+      nwpConvectiveMethod: 'nwp_precip',
+    });
+    // Full-height ghost column → row shows at any cursor altitude.
+    const out = format('nwp-convective-bg', point, 35000)!;
+    expect(out).toContain('NWP Conv: moderate');
+    expect(out).toContain('depth unresolved');
+    expect(out).toContain('cp 4.3 mm/h');
+    expect(out).toContain('[nwp_precip]');
+    expect(out).not.toContain('FL'); // no fabricated tower range
+  });
+
+  it('nwp-convective falls back to cover% evidence when no cp (cover-only)', () => {
+    const point = makeVizPoint({
+      nwpConvectiveRisk: 'moderate',
+      nwpConvectiveBaseFt: null,
+      nwpConvectiveTopFt: null,
+      nwpConvectiveCoverPct: 70,
+      nwpConvectivePrecipMmH: null,
+      nwpConvectiveMethod: 'nwp',
+    });
+    const out = format('nwp-convective-bg', point, 12000)!;
+    expect(out).toContain('depth unresolved');
+    expect(out).toContain('70% cover');
+  });
 });
 
 describe('inversion-bands', () => {

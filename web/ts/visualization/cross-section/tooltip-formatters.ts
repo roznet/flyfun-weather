@@ -215,26 +215,42 @@ interface NwpConvZone {
   topFt: number;
   risk: string;
   coverPct: number | null;
+  precipMmH: number | null;
   method: string | null;
+  unresolved: boolean;
 }
 
 const nwpConv: LayerTooltipDef = {
   id: 'nwp-convective-bg',
   getZones: (p): NwpConvZone[] => {
-    if (p.nwpConvectiveRisk === 'none') return [];
+    if (p.nwpConvectiveRisk === 'none' || p.nwpConvectiveRisk === 'marginal') return [];
     const baseFt = p.nwpConvectiveBaseFt;
     const topFt = p.nwpConvectiveTopFt;
-    if (baseFt === null || topFt === null) return [];
-    return [{
-      baseFt, topFt,
+    const common = {
       risk: p.nwpConvectiveRisk,
       coverPct: p.nwpConvectiveCoverPct,
+      precipMmH: p.nwpConvectivePrecipMmH,
       method: p.nwpConvectiveMethod,
-    }];
+    };
+    // Depth unresolved (no model base/top): match the full column so the row
+    // shows wherever the cursor is in the ghost column.
+    if (baseFt === null || topFt === null) {
+      return [{ ...common, baseFt: 0, topFt: Number.MAX_SAFE_INTEGER, unresolved: true }];
+    }
+    return [{ ...common, baseFt, topFt, unresolved: false }];
   },
   formatLine: (z: NwpConvZone) => {
-    const cover = z.coverPct !== null ? `${Math.round(z.coverPct)}% cover` : '';
     const tag = z.method ? ` [${z.method}]` : '';
+    if (z.unresolved) {
+      // Evidence the scheme fired even though it gave no tower geometry.
+      const ev = z.precipMmH !== null
+        ? `cp ${z.precipMmH.toFixed(1)} mm/h`
+        : (z.coverPct !== null ? `${Math.round(z.coverPct)}% cover` : '');
+      let line = `NWP Conv: ${z.risk}`;
+      line += `<br>Tower: depth unresolved${ev ? ` (${ev})` : ''}${tag}`;
+      return line;
+    }
+    const cover = z.coverPct !== null ? `${Math.round(z.coverPct)}% cover` : '';
     let line = `NWP Conv: ${z.risk}` + extras([cover]);
     line += `<br>Tower: ${fmtFL(z.baseFt)}–${fmtFL(z.topFt)}${tag}`;
     return line;

@@ -45,6 +45,7 @@ export function makeVizPoint(overrides: Partial<VizPoint> = {}): VizPoint {
     nwpConvectiveBaseFt: null,
     nwpConvectiveTopFt: null,
     nwpConvectiveCoverPct: null,
+    nwpConvectivePrecipMmH: null,
     nwpConvectiveMethod: null,
     hasNwpConvective: false,
     cloudCoverTotalPct: 0,

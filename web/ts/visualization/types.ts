@@ -259,7 +259,10 @@ export interface VizPoint {
   nwpConvectiveBaseFt: number | null;
   nwpConvectiveTopFt: number | null;
   nwpConvectiveCoverPct: number | null;
-  /** Method tag: "nwp", "nwp_lcl_top", "nwp_hybrid", etc. */
+  /** Native convective precip rate (mm/h) — the firing evidence on the
+   *  "nwp_precip" path, where base/top are unresolved. Null otherwise. */
+  nwpConvectivePrecipMmH: number | null;
+  /** Method tag: "nwp", "nwp_lcl_top", "nwp_hybrid", "nwp_precip", etc. */
   nwpConvectiveMethod: string | null;
   /**
    * True when the model produced a convective_nwp assessment (regardless

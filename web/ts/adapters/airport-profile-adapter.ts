@@ -87,7 +87,7 @@ export interface SoundingPayload {
   inversion_layers?: any[];
   vertical_motion?: { cat_risk_layers?: any[]; e_shear_layers?: any[] } | null;
   convective?: { risk_level?: string; base_ft?: number | null; top_ft?: number | null; cin_jkg?: number } | null;
-  convective_nwp?: { risk_level?: string; base_ft?: number | null; top_ft?: number | null; cover_pct?: number | null; method?: string | null } | null;
+  convective_nwp?: { risk_level?: string; base_ft?: number | null; top_ft?: number | null; cover_pct?: number | null; convective_precip_mm_h?: number | null; method?: string | null } | null;
   cloud_cover_low_pct?: number | null;
   cloud_cover_mid_pct?: number | null;
   cloud_cover_high_pct?: number | null;
@@ -386,6 +386,7 @@ function synthesizeVizPoint(
     nwpConvectiveBaseFt: sounding?.convective_nwp?.base_ft ?? null,
     nwpConvectiveTopFt: sounding?.convective_nwp?.top_ft ?? null,
     nwpConvectiveCoverPct: sounding?.convective_nwp?.cover_pct ?? null,
+    nwpConvectivePrecipMmH: sounding?.convective_nwp?.convective_precip_mm_h ?? null,
     nwpConvectiveMethod: sounding?.convective_nwp?.method ?? null,
     hasNwpConvective: sounding?.convective_nwp != null,
     cloudCoverTotalPct: randomOverlapPct(low, mid, high),
