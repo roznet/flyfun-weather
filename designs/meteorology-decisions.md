@@ -1482,3 +1482,84 @@ reasons.
 `__init__.py` + `fill.py` (ECMWF kx/totalx decode + plumb). Tests:
 `tests/test_convective.py`, `tests/test_digest_assertions.py`,
 `tests/test_ecmwf_sample.py`.
+
+---
+
+## 16. Digest colour may step down for ISOLATED/SCATTERED convection
+
+**Date:** 2026-06-26
+**Status:** Implemented (digest prompt `briefer_v2.md`). LLM-briefer behaviour
+change only — the deterministic `convective` and `convective_character`
+advisories are unchanged. This is the *consumption* decision §15 deferred.
+**Context:** §15 added the avoidability axis but deliberately left **severity
+owning the overall colour** — `briefer_v1.md` said the character advisory "never
+changes the overall GREEN/AMBER/RED". Pilot debriefs kept reporting the residual
+over-warn on isolated-cell days, e.g. `edds_norfe…edkl` 2026-06-21: *"The
+redflagging for VFR flights is strange. There have been some thunderstorms, also
+heavy ones, but isolated and easily to circumnavigate. Nice VFR flight."* Two
+compounding causes: (a) packs generated before §15 carried no character advisory
+at all; (b) even with it present, the prompt forbade it from moving the colour,
+and the `conservative` guidance preset independently reads "a single RED aggregate
+advisory is a strong signal toward RED".
+
+### The decision
+
+In the digest prompt the two convective axes are **weighed together for the
+overall colour**:
+
+- Activity RED + Character **ISOLATED / SCATTERED** → overall **AMBER** on
+  convection alone (a highly-localised, avoidable hazard), **unless another
+  advisory is independently RED** (VFR Feasibility, Cloud Tops, Icing) — then the
+  RED is attributed to that actual cause, not to convection.
+- Character **WIDESPREAD / ORGANIZED / EMBEDDED** → overall **RED** on convection
+  stands.
+- **Fallback when no character advisory is present** (older packs, or a model
+  without one): if CAPE-derived risk is RED/HIGH but the models' own convective
+  cover is ~0% / flagged "not corroborated" in the per-model cross-check, treat
+  as isolated and uncertain-to-trigger → AMBER.
+
+The deterministic advisories are untouched; only the LLM's colour synthesis
+changes.
+
+### Validation (A/B on real prod packs, sonnet-4-6 @ T=0)
+
+Regenerated each pack's context with current code (so the character advisory is
+present), held it constant, and replayed through v1 vs v2:
+
+- **16-pack "TS=better" debrief cohort** (pilots reported convection milder than
+  forecast): v1→v2 flipped **7 RED→AMBER with zero spurious moves** (no upgrades,
+  no non-convective downgrades). A further ~6 were already corrected by the mere
+  presence of the character advisory (they pre-dated §15).
+- **Safety — big systems held RED:** every sampled EMBEDDED pack (`klit_klnk`
+  2026-04-24 d3/d4, `lfqa_djl_lsgl_lipv` 2026-06-02 d1) stayed **RED** under v2;
+  the one WIDESPREAD pack was already AMBER and stayed AMBER. The
+  WIDESPREAD/ORGANIZED/EMBEDDED→RED branch is intact.
+- Sample skew: of 16 sampled convective-RED packs, ~11 grade isolated/scattered,
+  ~4 widespread/embedded — the change only relaxes the isolated/scattered
+  majority.
+
+### Known weakness / follow-up
+
+A `ifr_feasibility` (or other feasibility advisory) that is *itself*
+convection-derived can still anchor the colour at RED — observed once
+(`edds_norfe…edkl` d2 held RED while its five sibling leads flipped). The guard
+should clarify that a feasibility advisory whose own driver is the convection
+does not count as the "independent" RED. Deferred (needs its own re-validation).
+
+### Rejected options
+
+- **Make character lower the deterministic `convective` colour** (in the advisory
+  layer): rejected — the advisory chip RED ("dangerous convection on route") is
+  correct as a hazard signal; the over-conservatism is in the *narrative
+  synthesis*, so the fix belongs in the digest, preserving §15's
+  severity/character separation.
+- **Relax the `conservative` guidance preset instead:** rejected — would broaden
+  far beyond convection; the convective exception is specific and lives better as
+  a base-prompt rule.
+
+### Files
+
+`configs/weather_digest/prompts/briefer_v2.md` (new active prompt; `briefer_v1.md`
+kept for rollback/diff), `configs/weather_digest/{default,openai}.json` (repointed
+`briefer` → v2). Builds on §15 (`analysis/sounding/convective.py`
+`classify_convective_character`).

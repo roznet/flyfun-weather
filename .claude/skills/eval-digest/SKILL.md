@@ -70,7 +70,7 @@ After a run, load the results JSON and compare old vs new assessments. Key metri
 | `scripts/extract_digest_eval.py` | Extracts fixtures from `data/packs/` |
 | `scripts/run_digest_eval.py` | Replays fixtures through LLM |
 | `tests/eval_data/digests/` | Fixture directory (context.txt + digest.json + meta.json per fixture) |
-| `configs/weather_digest/prompts/briefer_v1.md` | Current system prompt |
+| `configs/weather_digest/prompts/briefer_v2.md` | Current system prompt (v1 kept for rollback/diff) |
 | `src/weatherbrief/digest/prompt_builder.py` | Context string assembly |
 | `src/weatherbrief/digest/llm_digest.py` | WeatherDigest model + LangGraph pipeline |
 
@@ -97,4 +97,4 @@ original assessment).
 Known issue: ~70% of digests are AMBER. Suspects to check:
 - Fixtures with **all-green advisories but AMBER assessment** — LLM is being overcautious
 - Check if `assessment_reason` cites model uncertainty or minor concerns that shouldn't override green advisories
-- The prompt calibration section in `briefer_v1.md` controls GREEN/AMBER/RED thresholds
+- The prompt calibration section in `briefer_v2.md` controls GREEN/AMBER/RED thresholds
