@@ -1384,6 +1384,79 @@ a yes/no firing gate.
 - `tests/test_convective.py` — native-top tiering, cover modifier + cap,
   cover-only scale, CIN suppression, quiet-native NONE, CAPE-fallback path, and
   the Reims regression anchors.
+
+### Phase 3 — `cp` fires the NWP track without a tower; character prefers native `cp`
+
+**Date:** 2026-06-26
+**Status:** Implemented.
+**Context:** EGTF→BIG→LFAT→LFQA 2026-06-27 (D-1). Over the Channel, ECMWF's own
+scheme is precipitating convectively — `cp` peaks **4.26 mm/h at ~52 nm**, with
+0.4–1.2 mm/h either side — matching what Windy shows. But the NWP track read
+**NONE** the whole way across, and the convective-character advisory read ECMWF
+**GREEN**. Two Phase-1/2 assumptions broke here:
+
+1. **"No tower top ⇒ quiet scheme ⇒ NONE."** Phase 1 made `convective_top_ft`
+   (`hcct`) the primary native scale on the premise that a firing scheme emits a
+   tower top. ECMWF violates it: `hcct` is sentinel/absent across the entire
+   Channel *even where `cp` = 4 mm/h*, and ECMWF has no convective-cover field.
+   So `assess_convective_nwp` fell through to the quiet branch → NONE, with the
+   `cp` we already decode sitting unused on the same diagnostics object. The
+   Phase-2 firing gate only ever *holds a tower down*; there was no symmetric
+   path to *lift NONE up* when `cp` fires without geometry. This is the marine /
+   **elevated** convection case — the surface parcel has zero CAPE (DD quiet),
+   so neither track saw it.
+2. **Character "realized" read Open-Meteo `showers`, which is structurally 0.0
+   for ECMWF IFS.** `showers_at_point()` returns Open-Meteo's convective-only
+   precip, which Open-Meteo does not populate for ECMWF (verified: 0.00 at every
+   point while total precip was 4.38 mm/h). So no ECMWF point could ever be
+   "realized" by precip → GREEN.
+
+**The decisions:**
+
+- **`cp` is a first-class native firing signal, not just a binary gate.** When a
+  native model has no tower top and no cover fraction but `convective_precip_mm_h
+  > 0.1`, derive the NWP risk from a **convective-precip-rate ladder**
+  (`_CONV_PRECIP_MM_H_THRESHOLDS`: ≥2.0 → MODERATE, ≥0.5 → LOW, ≥0.1 →
+  MARGINAL), method `"nwp_precip"`. **Tower top stays primary whenever present** —
+  this is the geometry-absent fallback only. Depth is unknown from rate alone, so
+  the ladder is **capped at MODERATE** (same rationale as the cover-only scale),
+  and a precip-derived tier skips the firing-gate hold-down and the precip
+  corroboration (which would double-count `cp`).
+  - *Why a ladder and not a binary floor:* the user explicitly chose to revisit
+    the Phase-1 "precip is yes/no only" stance. Rate still carries real intensity
+    information; the MODERATE cap and the resolution caveat below keep it honest.
+  - *Resolution caveat (unchanged from Phase-1 reasoning 1):* convective-precip
+    rate is resolution-dependent. These thresholds are calibrated for
+    synoptic-scale GRIB (ECMWF ~9–25 km); a convection-permitting model whose
+    `cp` gets wired later needs its own ladder. Defensible v1 — tune against the
+    eval-digest corpus.
+- **Convective-character "realized" prefers GRIB-native `cp` over Open-Meteo
+  `showers`** for any model carrying `nwp_cloud_diagnostics`. A native value of
+  `0.0` is a real "not firing" reading and is used as-is; only absent native
+  diagnostics (non-GRIB models — AROME/UKMO/MF) fall back to the Open-Meteo
+  `showers` cross-section field. This is the "ECMWF should use the GRIB variable,
+  not Open-Meteo" principle (the documented intended direction for ECMWF surface
+  fields, weather-engine-specs §Future-1).
+
+**Effect on the EGTF→LFQA case:** ECMWF convective character GREEN → **AMBER
+"Scattered cells" (20% of route)** under the shipped default; the NWP track now
+reads MODERATE over the Channel `cp` cores, so the inline cross-check and the
+per-model NWP cross-section reflect the firing the model actually forecasts. The
+**graded severity colour is unchanged** over the Channel — §14's DD-floor
+(`max(native, thermo)`) already graded it MODERATE off the elevated MU-CAPE — so
+this is a narrative / character / track-independence fix, not a colour change
+there. Safety asymmetry preserved: `cp` can only *add* a firing signal, never
+downgrade a DD red.
+
+**Files changed (Phase 3):**
+- `src/weatherbrief/analysis/sounding/convective.py` —
+  `_CONV_PRECIP_MM_H_THRESHOLDS`, `_risk_from_conv_precip`, `"nwp_precip"` branch
+  in `assess_convective_nwp`.
+- `src/weatherbrief/analysis/advisories/convective_character.py` — realized
+  signal prefers native `convective_precip_mm_h` over Open-Meteo `showers`.
+- `tests/test_convective.py` — precip-rate tiering, the ECMWF Channel regression
+  (`cp` fires when `hcct` absent), and tower-top-stays-primary guard.
+
 ## 15. Convective character: a VFR-avoidability axis separate from severity
 
 **Date:** 2026-06-24
