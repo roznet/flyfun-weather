@@ -21,6 +21,7 @@ import logging
 import os
 import time
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 import httpx
 from fastmcp import Context, FastMCP
@@ -190,6 +191,43 @@ def _get_client() -> WeatherbriefClient:
 
 def _flight_web_url(flight_id: str) -> str:
     return f"{WEATHER_BASE_URL}/briefing.html?flight={flight_id}"
+
+
+# Advisory id -> preset id, mirroring ADVISORY_TO_PRESET in the web app
+# (web/ts/visualization/cross-section/advisory-presets.ts). Only advisories with
+# a Skew-T lens are listed; anything absent falls back to a flight-level link.
+_ADVISORY_TO_PRESET: dict[str, str] = {
+    "icing_escape": "icing",
+    "fiki_icing": "icing",
+    "cloud_top": "clouds",
+    "vmc_cruise": "clouds",
+    "convective": "convective",
+    "turbulence": "turbulence",
+    "mountain_wind": "turbulence",
+    "vfr_feasibility": "vfr",
+    "ifr_feasibility": "ifr",
+}
+
+
+def _advisory_web_url(
+    flight_id: str,
+    advisory_id: str,
+    *,
+    point_index: int | None = None,
+    model: str | None = None,
+) -> str:
+    """Build a deep link that opens the briefing's Skew-T focused on this
+    advisory's lens (#308). The web app resolves ``advisory`` → preset via the
+    shared mapping, so the link stays correct even if a preset is retuned. Adds
+    ``point``/``model`` when a specific peak point is known (e.g. convective)."""
+    params: list[tuple[str, str]] = [("flight", flight_id), ("view", "skewt")]
+    if advisory_id in _ADVISORY_TO_PRESET:
+        params.append(("advisory", advisory_id))
+    if point_index is not None:
+        params.append(("point", str(point_index)))
+    if model:
+        params.append(("model", model))
+    return f"{WEATHER_BASE_URL}/briefing.html?{urlencode(params)}"
 
 
 def _resolve_pack(client: WeatherbriefClient, flight_id: str) -> tuple[str | None, dict | None]:
@@ -669,6 +707,12 @@ def get_advisory_detail(
         except httpx.HTTPStatusError:
             pass
 
+        # Deep link straight to this advisory's Skew-T lens (#308). For
+        # convective we also point at the worst (highest-CAPE) route point and
+        # its model so the pilot/assistant lands on the relevant sounding.
+        peak_point: int | None = None
+        peak_model: str | None = None
+
         if advisory_id == "convective":
             try:
                 route_analyses = client.get_route_analyses(flight_id, timestamp)
@@ -676,11 +720,24 @@ def get_advisory_detail(
                 route_analyses = None
             if route_analyses:
                 models = [m.get("model") for m in adv.get("per_model", [])]
-                result["convective"] = _convective_detail(route_analyses, models)
+                convective = _convective_detail(route_analyses, models)
+                result["convective"] = convective
                 result["convective_note"] = _CONVECTIVE_NOTE
+                # Pick the model+point with the highest CAPE peak for the link.
+                best_cape = -1.0
+                for model_name, block in convective.items():
+                    peak = (block.get("thermo") or {}).get("peak") or {}
+                    cape = peak.get("cape_jkg")
+                    idx = peak.get("point_index")
+                    if cape is not None and idx is not None and cape > best_cape:
+                        best_cape = cape
+                        peak_point = idx
+                        peak_model = model_name
 
         result["flight_id"] = flight_id
-        result["web_url"] = _flight_web_url(flight_id)
+        result["web_url"] = _advisory_web_url(
+            flight_id, advisory_id, point_index=peak_point, model=peak_model
+        )
 
     return result
 

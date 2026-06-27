@@ -182,6 +182,9 @@ export interface BriefingState {
    *  resolves the preset → concrete layer IDs where preferredMethods is in
    *  scope, and hands this a {@link ResolvedView}. Does not touch the theme. */
   applyAdvisoryPreset: (presetId: string, view: ResolvedView) => void;
+  /** Drop the active-preset label to "Custom" after a user-initiated Skew-T
+   *  edit (overlay toggle / side-panel change). No-op when already Custom. */
+  markVizCustom: () => void;
 }
 
 /** Build the SSE event handler shared by `refresh` and `forceRefresh`.
@@ -575,6 +578,18 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     saveVizSettings(updated);
   },
 
+  markVizCustom: () => {
+    // A user-initiated Skew-T edit (overlay toggle / side-panel change) means the
+    // view no longer matches the applied preset → dropdown reflects "Custom".
+    // The Skew-T renderer owns its own overlay/var localStorage, so we only need
+    // to drop the preset label here (no enabledLayers change).
+    const current = get().vizSettings;
+    if (current.activePreset == null) return;
+    const updated = { ...current, activePreset: null };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
   setCloudStyle: (style: 'natural' | 'soft' | 'square') => {
     const current = get().vizSettings;
     if (current.cloudStyle === style) return;
@@ -947,6 +962,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     if (view.routeGraph?.right) next.routeGraphRightMetric = view.routeGraph.right;
     if (view.map?.metric) next.mapColorMetric = view.map.metric;
     if (view.map && 'altitudeFt' in view.map) next.mapAltitudeFt = view.map.altitudeFt ?? null;
+    // Skew-T directives (#308): the resolver hands a full clean-slate overlay
+    // map + the primary side-panel variable. briefing-main pushes these into the
+    // live SkewTRenderer when activePreset changes; storing them here is what
+    // makes the lens survive reload and lets a deep-link drive the Skew-T.
+    if (view.skewtOverlays) next.skewtOverlays = view.skewtOverlays;
+    if (view.skewtSidePanel) next.skewtPrimaryVar = view.skewtSidePanel;
     // future directives: add a branch here, nothing else changes
     set({ vizSettings: next });
     saveVizSettings(next);

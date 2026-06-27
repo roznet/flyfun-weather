@@ -20,12 +20,18 @@
 
 import type { LayerGroup } from '../types';
 import { getAllLayers, getPreferredLayerForGroup } from './layer-registry';
+import { SKEWT_OVERLAYS } from '../skewt/overlay-bands';
 import { t } from '../../i18n/i18n';
 
 export interface AdvisoryPreset {
-  id: string;                 // 'icing','clouds','convective','turbulence','vfr','ifr'
+  id: string;                 // 'icing','clouds','convective','turbulence','vfr','ifr','basic'
   label: string;              // dropdown + chip label
   caption: string;            // one-liner shown above the chart explaining the view
+  /** Short "how to read it" interpretation blurb (#308 Phase B). Surfaced
+   *  behind the chart's (i) / "Help me read this graph" button and reused
+   *  verbatim as MCP explanation context — write once, human + assistant read
+   *  the same words. Falls back to `caption` when absent. */
+  interpretation?: string;
 
   // ---- view directives (all optional; applier dispatches over those present) ----
   groups?: LayerGroup[];      // method-resolved: enable the preferred layer of each
@@ -33,10 +39,21 @@ export interface AdvisoryPreset {
   routeGraph?: { left?: string; right?: string };  // metric ids ('none' clears right)
   map?: { metric?: string; altitude?: 'cruise' };  // route-map color metric + slider target
 
+  // ---- Skew-T directives (#308 Phase A; same dispatch-over-present pattern) ----
+  /** Overlay bands to pre-enable on the Skew-T (ids from {@link SKEWT_OVERLAYS}:
+   *  clouds-nwp/clouds-dd/icing-nwp/icing-dd/icing-sfip/inversions/convective).
+   *  Clean-slate like cross-section `groups`: listed bands ON, all others OFF —
+   *  so the lens shows only what the hazard needs. An empty array means "all
+   *  overlay bands off" (the Basic/Learn view). */
+  skewtOverlays?: string[];
+  /** Which dual-axis side-panel variable to pre-select as the PRIMARY axis
+   *  (a `VariableDef.id` from the skewt variable registry, e.g.
+   *  'vertical_velocity', 'relative_humidity', 'richardson'). */
+  skewtSidePanel?: string;
+
   // ---- reserved for later phases (documented now so the shape doesn't churn) ----
-  // highlights?: HighlightDirective[]; // shade in-cloud band / affected segments (Phase 2)
+  // highlights?: HighlightDirective[]; // shade in-cloud band / affected segments
   // emphasize?: string[];              // dim layers NOT in this list
-  // skewtOverlays?: string[];          // pre-enable matching Skew-T overlay bands
 }
 
 /**
@@ -64,61 +81,124 @@ export const ADVISORY_OVERRIDES: Record<string, Partial<AdvisoryPreset>> = {
 };
 
 export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
+  basic: {
+    id: 'basic',
+    label: 'Basic / Learn',
+    caption: 'Temperature, dewpoint, and the parcel path with LCL/LFC/EL — no hazard bands.',
+    interpretation:
+      'The two solid lines are temperature (right) and dewpoint (left); where they '
+      + 'pinch together the air is near saturation (cloud). The black dashed line is the '
+      + 'parcel — air lifted from the surface. LCL is where it first saturates (cloud base), '
+      + 'LFC where it becomes buoyant, EL where it stops rising. The wider the gap between '
+      + 'temperature and dewpoint, the drier and clearer that layer. Start here, then switch '
+      + 'to a hazard lens (Icing / Clouds / Convective / Turbulence) to shade what matters.',
+    // Cross-section: a clean slate — just terrain + cruise + the 0 °C line for orientation.
+    lines: ['freezing-level'],
+    // Skew-T: no hazard bands; the always-drawn T/Td/parcel + LCL/LFC/EL markers carry it.
+    skewtOverlays: [],
+  },
   icing: {
     id: 'icing',
     label: 'Icing',
     caption: 'Icing bands vs the 0 °C line and terrain — is there an ice-free descent?',
+    interpretation:
+      'Ice forms where the air is in cloud AND between 0 °C and about −20 °C. The shaded '
+      + 'icing bands mark those layers; the 0 °C (freezing-level) marker is the top of any '
+      + 'ice-free air below. Look for a gap — a level that is either above freezing or out of '
+      + 'cloud — that gives an ice-free climb or descent. RH on the side panel confirms whether '
+      + 'a band is genuinely saturated (real ice) or just cold dry air (no ice).',
     groups: ['icing', 'clouds'],
     lines: ['freezing-level'],
     routeGraph: { left: 'freezing-level', right: 'ceiling-nwp' },
     map: { metric: 'icing-risk-at-level', altitude: 'cruise' },
+    skewtOverlays: ['icing-nwp', 'clouds-nwp'],
+    skewtSidePanel: 'relative_humidity',
   },
   clouds: {
     id: 'clouds',
     label: 'Clouds',
     caption: 'Cloud tops & coverage vs your cruise level.',
+    interpretation:
+      'The shaded cloud bands are layers the model (or the dewpoint-depression method) '
+      + 'reports as cloudy; their top and base are the tops and bases you would fly through. '
+      + 'On the Skew-T, cloud sits where temperature and dewpoint nearly touch. RH on the side '
+      + 'panel shows how solidly each layer is saturated — a thin near-saturated layer is haze '
+      + 'or thin stratus; a deep saturated column is solid overcast.',
     groups: ['clouds'],
     lines: ['freezing-level'],
     routeGraph: { left: 'cloud-cover', right: 'ceiling-nwp' },
     map: { metric: 'cloud-at-level', altitude: 'cruise' },
+    skewtOverlays: ['clouds-nwp'],
+    skewtSidePanel: 'relative_humidity',
   },
   convective: {
     id: 'convective',
     label: 'Convective',
     caption: 'Towers framed by LCL→LFC→EL and instability along route.',
+    interpretation:
+      'The black dashed line is the parcel; where it sits to the right of the temperature '
+      + 'line, that shaded area is CAPE — the energy available for towers, framed by LCL (base), '
+      + 'LFC (where it runs away) and EL (the top it can reach). Omega on the right shows whether '
+      + 'the air is being lifted (positive w, up) or held down (subsiding): high CAPE with lift = '
+      + 'going off; high CAPE while subsiding/capped = energy that may never release.',
     groups: ['convection', 'clouds'],
     // NB: stability-line layer ids are 'lcl'/'lfc'/'el' (not '*-line' — that
     // suffix is only used by the compare-mode display registry).
     lines: ['lcl', 'lfc', 'el', 'freezing-level', 'minus-10c', 'minus-20c'],
     routeGraph: { left: 'cape', right: 'precipitation' },
     map: { metric: 'convective-risk', altitude: 'cruise' },
+    skewtOverlays: ['convective', 'clouds-nwp'],
+    // omega belongs on Convective specifically — w_fpm, positive = up (#308).
+    skewtSidePanel: 'vertical_velocity',
   },
   turbulence: {
     id: 'turbulence',
     label: 'Turbulence',
     caption: 'CAT/shear layers near cruise; terrain + wind for orographic risk.',
+    interpretation:
+      'Bumps come from shear (wind changing fast with height) and from inversions (a warm cap '
+      + 'where the temperature line kinks back to the right). The shaded inversion bands mark those '
+      + 'caps; the Richardson number on the side panel is low where shear wins over stability — that '
+      + 'is the turbulent layer. A strong inversion with wind shear just above it is the classic '
+      + 'mountain-wave / clear-air-turbulence setup.',
     groups: ['turbulence'],
     lines: ['inversion-bands'],
     routeGraph: { left: 'headwind', right: 'crosswind' },
     map: { metric: 'cat-risk-at-level', altitude: 'cruise' },
+    skewtOverlays: ['inversions'],
+    skewtSidePanel: 'richardson',
   },
   vfr: {
     id: 'vfr',
     label: 'VFR feasibility',
     caption: 'VMC picture: clouds & obscuration vs cruise and airports.',
+    interpretation:
+      'For VFR the question is staying clear of cloud with the surface in sight. The cloud bands '
+      + 'show where you would lose VMC; watch for a continuous deck (no VFR-on-top gap) and for '
+      + 'cloud sitting near the surface (low ceilings / obscuration). RH near the surface rising '
+      + 'toward 100 % is the sign of forming or lowering cloud.',
     groups: ['clouds'],
     lines: ['surface-obscuration-bands', 'freezing-level'],
     routeGraph: { left: 'cloud-cover', right: 'ceiling-nwp' },
     map: { metric: 'nwp-ceiling' },
+    skewtOverlays: ['clouds-nwp'],
+    skewtSidePanel: 'relative_humidity',
   },
   ifr: {
     id: 'ifr',
     label: 'IFR feasibility',
     caption: 'IFR hazards: icing + convection + cloud along route.',
+    interpretation:
+      'In IMC the two things that bite are ice (cloud between 0 °C and −20 °C) and embedded '
+      + 'convection (CAPE you cannot see and avoid). The icing and convective bands shade both; '
+      + 'the parcel path and CAPE shading show whether the cloud is benign stratiform or has '
+      + 'buoyant energy behind it. Look for an icing-free altitude you could hold or divert to.',
     groups: ['icing', 'convection', 'clouds'],
     lines: ['freezing-level', 'minus-10c'],
     routeGraph: { left: 'cape', right: 'freezing-level' },
     map: { metric: 'icing-risk-at-level', altitude: 'cruise' },
+    skewtOverlays: ['icing-nwp', 'convective', 'clouds-nwp'],
+    skewtSidePanel: 'relative_humidity',
   },
 };
 
@@ -168,6 +248,20 @@ export function advisoryPresetCaption(p: AdvisoryPreset): string {
 }
 
 /**
+ * Localized "how to read it" interpretation blurb for a preset (#308 Phase B).
+ * Same key/fallback scheme as the label/caption; falls back to the preset's
+ * `interpretation` literal, then to its `caption` when no longer blurb exists.
+ * This is the single source of text shared by the human (via the (i) /
+ * "Help me read this graph" button) and the MCP explanation.
+ */
+export function advisoryPresetInterpretation(p: AdvisoryPreset): string {
+  const key = `viz.advisoryPreset.${p.id}.interpretation`;
+  const s = t(key);
+  if (s !== key) return s;
+  return p.interpretation ?? advisoryPresetCaption(p);
+}
+
+/**
  * Resolve the preset the card chip should apply for a given advisory_id:
  * the base preset from {@link ADVISORY_TO_PRESET}, with any per-advisory
  * {@link ADVISORY_OVERRIDES} merged in (groups/lines unioned, scalar directives
@@ -203,7 +297,12 @@ export interface ResolvedView {
   enabledLayers?: Record<string, boolean>;
   routeGraph?: { left?: string; right?: string };
   map?: { metric?: string; altitudeFt?: number | null };
-  // future: highlights?, emphasize?, skewtOverlays? — added alongside, dispatched independently
+  /** Full clean-slate overlay state for the Skew-T (every known overlay id set
+   *  to on/off), or undefined when the preset has no Skew-T directive. */
+  skewtOverlays?: Record<string, boolean>;
+  /** Primary side-panel variable id to select on the Skew-T. */
+  skewtSidePanel?: string;
+  // future: highlights?, emphasize? — added alongside, dispatched independently
 }
 
 /**
@@ -244,6 +343,19 @@ export function resolveAdvisoryPreset(
     enabled['cruise-altitude'] = true;
     view.enabledLayers = enabled;
   }
+
+  // Skew-T overlay bands: clean-slate like the cross-section `groups` — every
+  // known overlay id reset OFF, then the preset's listed bands turned ON, so the
+  // lens shades only what the hazard needs. An empty `skewtOverlays` array
+  // (Basic/Learn) therefore resolves to "all bands off". The always-drawn
+  // T/Td/parcel curves and LCL/LFC/EL markers are not overlays, so they survive.
+  if (preset.skewtOverlays) {
+    const overlays: Record<string, boolean> = {};
+    for (const o of SKEWT_OVERLAYS) overlays[o.id] = false;
+    for (const id of preset.skewtOverlays) overlays[id] = true;
+    view.skewtOverlays = overlays;
+  }
+  if (preset.skewtSidePanel) view.skewtSidePanel = preset.skewtSidePanel;
 
   if (preset.routeGraph) view.routeGraph = preset.routeGraph;
   if (preset.map) {

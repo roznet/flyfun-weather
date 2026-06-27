@@ -236,8 +236,27 @@ def test_get_advisory_detail_convective(patch_client):
     assert "not a downgrade" in res["cross_check_note"]
     # convective specialization attached, with provenance note
     assert res["convective"]["ecmwf"]["thermo"]["peak"]["cape_jkg"] == 2970
+    assert res["convective"]["ecmwf"]["thermo"]["peak"]["point_index"] == 1
     assert "blue sky" in res["convective_note"]
     assert res["flight_id"] == "flight-1"
+    # Deep link (#308): Skew-T view, convective lens, at the highest-CAPE
+    # peak point (ECMWF @ point 1).
+    assert "view=skewt" in res["web_url"]
+    assert "advisory=convective" in res["web_url"]
+    assert "point=1" in res["web_url"]
+    assert "model=ecmwf" in res["web_url"]
+
+
+def test_advisory_web_url_deep_links():
+    # mapped advisory → carries the advisory param + optional point/model
+    url = server._advisory_web_url("f1", "fiki_icing")
+    assert "flight=f1" in url and "view=skewt" in url and "advisory=fiki_icing" in url
+    assert "point=" not in url
+    url2 = server._advisory_web_url("f1", "convective", point_index=3, model="icon_eu")
+    assert "advisory=convective" in url2 and "point=3" in url2 and "model=icon_eu" in url2
+    # unmapped advisory → no advisory param (frontend falls back to flight view)
+    url3 = server._advisory_web_url("f1", "model_quality")
+    assert "advisory=" not in url3 and "view=skewt" in url3
 
 
 def test_get_advisory_detail_unknown_id_lists_available(patch_client):

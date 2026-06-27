@@ -6,20 +6,24 @@ import { describe, it, expect } from 'vitest';
 import {
   ADVISORY_PRESETS, ADVISORY_TO_PRESET, ADVISORY_OVERRIDES,
   getAdvisoryPreset, getAdvisoryPresets, isAdvisoryPreset,
-  getPresetForAdvisory, resolveAdvisoryPreset,
+  getPresetForAdvisory, resolveAdvisoryPreset, advisoryPresetInterpretation,
 } from '../../ts/visualization/cross-section/advisory-presets';
 import { getAllLayers } from '../../ts/visualization/cross-section/layer-registry';
 import { ROUTE_GRAPH_METRICS, METRIC_NONE } from '../../ts/visualization/route-graph/metrics';
 import { MAP_METRICS, MAP_METRIC_NONE } from '../../ts/visualization/route-map/metrics';
+import { SKEWT_OVERLAYS } from '../../ts/visualization/skewt/overlay-bands';
+import { VARIABLE_REGISTRY } from '../../ts/visualization/skewt/variable-panel';
 
 const ALL_IDS = new Set(getAllLayers().map((l) => l.id));
+const SKEWT_OVERLAY_IDS = new Set(SKEWT_OVERLAYS.map((o) => o.id));
+const SKEWT_VAR_IDS = new Set(VARIABLE_REGISTRY.map((v) => v.id));
 const ROUTE_GRAPH_IDS = new Set<string>([METRIC_NONE, ...ROUTE_GRAPH_METRICS.map((m) => m.id)]);
 const MAP_METRIC_IDS = new Set<string>([MAP_METRIC_NONE, ...MAP_METRICS.map((m) => m.id)]);
 
 describe('config integrity', () => {
-  it('has the six Phase-1 presets', () => {
+  it('has the Phase-1 presets plus the Basic/Learn view (#308)', () => {
     expect(Object.keys(ADVISORY_PRESETS).sort())
-      .toEqual(['clouds', 'convective', 'icing', 'ifr', 'turbulence', 'vfr']);
+      .toEqual(['basic', 'clouds', 'convective', 'icing', 'ifr', 'turbulence', 'vfr']);
   });
 
   it('each preset id matches its key, and has label + caption', () => {
@@ -179,5 +183,58 @@ describe('getPresetForAdvisory — chip resolution + FIKI override', () => {
   it('returns undefined for an advisory with no chip mapping', () => {
     expect(getPresetForAdvisory('flight_category')).toBeUndefined();
     expect(getPresetForAdvisory('airport_wind')).toBeUndefined();
+  });
+});
+
+describe('Skew-T directives (#308)', () => {
+  it('every preset.skewtOverlays id is a real overlay band', () => {
+    for (const p of getAdvisoryPresets()) {
+      for (const id of p.skewtOverlays ?? []) {
+        expect(SKEWT_OVERLAY_IDS.has(id), `preset ${p.id} references unknown overlay ${id}`).toBe(true);
+      }
+    }
+  });
+
+  it('every preset.skewtSidePanel id is a real side-panel variable', () => {
+    for (const p of getAdvisoryPresets()) {
+      if (p.skewtSidePanel === undefined) continue;
+      expect(SKEWT_VAR_IDS.has(p.skewtSidePanel), `preset ${p.id} references unknown variable ${p.skewtSidePanel}`).toBe(true);
+    }
+  });
+
+  it('resolves a full clean-slate overlay map (lens bands on, all others off)', () => {
+    const view = resolveAdvisoryPreset(getAdvisoryPreset('icing')!, {});
+    const ov = view.skewtOverlays!;
+    // every known overlay id is present in the resolved map
+    for (const id of SKEWT_OVERLAY_IDS) expect(id in ov).toBe(true);
+    // icing lens turns on its bands, leaves the unrelated ones off
+    expect(ov['icing-nwp']).toBe(true);
+    expect(ov['clouds-nwp']).toBe(true);
+    expect(ov['inversions']).toBe(false);
+    expect(ov['convective']).toBe(false);
+  });
+
+  it('convective puts omega (w_fpm) on the side panel and shades the convective band', () => {
+    const view = resolveAdvisoryPreset(getAdvisoryPreset('convective')!, {});
+    expect(view.skewtSidePanel).toBe('vertical_velocity');
+    expect(view.skewtOverlays!['convective']).toBe(true);
+  });
+
+  it('Basic/Learn resolves to all overlay bands OFF (no hazard shading)', () => {
+    const view = resolveAdvisoryPreset(getAdvisoryPreset('basic')!, {});
+    // skewtOverlays is present (empty array → clean slate), every band off
+    expect(view.skewtOverlays).toBeDefined();
+    for (const id of SKEWT_OVERLAY_IDS) expect(view.skewtOverlays![id]).toBe(false);
+    // no side-panel directive — basic leaves the user's choice
+    expect(view.skewtSidePanel).toBeUndefined();
+  });
+
+  it('interpretation text is non-empty and falls back to caption when absent', () => {
+    for (const p of getAdvisoryPresets()) {
+      expect(advisoryPresetInterpretation(p).length).toBeGreaterThan(0);
+    }
+    // a preset with no interpretation literal falls back to its caption
+    const stub = { id: 'x', label: 'X', caption: 'fallback caption' };
+    expect(advisoryPresetInterpretation(stub)).toBe('fallback caption');
   });
 });

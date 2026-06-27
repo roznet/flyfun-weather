@@ -34,6 +34,15 @@ export interface VizSettings {
   /** Show the experimental Hewson front overlay on the route map (#196).
    *  Default off; only has effect when front data is present. */
   mapFrontsVisible?: boolean;
+  /** Skew-T overlay band state most recently applied by a preset / deep-link
+   *  (#308). Full clean-slate map (every overlay id → on/off). The SkewT
+   *  renderer keeps its own localStorage for ad-hoc user toggles; this field is
+   *  the preset-driven view the store owns so it survives reload and seeds the
+   *  renderer when an advisory preset is active. Undefined when no preset has
+   *  touched the Skew-T. */
+  skewtOverlays?: Record<string, boolean>;
+  /** Primary side-panel variable id selected by a preset / deep-link (#308). */
+  skewtPrimaryVar?: string;
 }
 
 // --- Coordinate Transform ---

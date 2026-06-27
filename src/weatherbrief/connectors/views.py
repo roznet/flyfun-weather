@@ -238,6 +238,7 @@ def convective_detail(route_analyses: dict, models: list[str]) -> dict[str, Any]
                             "cape_jkg": round(cape),
                             "el_top_ft": round(top) if top is not None else None,
                             "risk_level": thermo.get("risk_level"),
+                            "point_index": p.get("point_index"),
                             "distance_nm": p.get("distance_from_origin_nm"),
                             "waypoint_icao": p.get("waypoint_icao"),
                             "valid_time": p.get("forecast_hour"),
