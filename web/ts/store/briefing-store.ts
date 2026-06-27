@@ -966,8 +966,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // map + the primary side-panel variable. briefing-main pushes these into the
     // live SkewTRenderer when activePreset changes; storing them here is what
     // makes the lens survive reload and lets a deep-link drive the Skew-T.
-    if (view.skewtOverlays) next.skewtOverlays = view.skewtOverlays;
-    if (view.skewtSidePanel) next.skewtPrimaryVar = view.skewtSidePanel;
+    if (view.skewtOverlays !== undefined) next.skewtOverlays = view.skewtOverlays;
+    if (view.skewtSidePanel !== undefined) next.skewtPrimaryVar = view.skewtSidePanel;
     // future directives: add a branch here, nothing else changes
     set({ vizSettings: next });
     saveVizSettings(next);

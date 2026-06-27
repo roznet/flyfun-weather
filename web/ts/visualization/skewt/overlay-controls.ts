@@ -8,6 +8,7 @@ import { VARIABLE_REGISTRY, VARIABLE_GROUPS } from './variable-panel';
 import type { VariableDef } from './variable-panel';
 import { renderInfoButton } from '../../helpers/metrics-helper';
 import { modelLabel } from '../../utils';
+import { t } from '../../i18n/i18n';
 import type { SkewTRenderer } from './renderer';
 import type { SkewTCompareRenderer } from './compare-renderer';
 
@@ -159,8 +160,9 @@ export function renderSkewtOverlayControls(
 
   // "Help me read this graph" button (#308 Phase B) — explains the current view.
   if (callbacks.onHelp) {
+    const helpLabel = t('viz.helpReadGraph');
     html += '<div class="skewt-help-row">';
-    html += `<button class="btn-chip skewt-help-btn" data-skewt-help="1" title="Explain this Skew-T in plain language">ⓘ Help me read this graph</button>`;
+    html += `<button class="btn-chip skewt-help-btn" data-skewt-help="1" title="${helpLabel}">ⓘ ${helpLabel}</button>`;
     html += '</div>';
   }
 

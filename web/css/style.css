@@ -3232,6 +3232,9 @@ label {
   line-height: 1.45;
   font-size: 0.85rem;
 }
+.skewt-help-bands {
+  color: var(--text-muted, #667085);
+}
 .skewt-help-facts-label {
   margin-bottom: 0.25rem !important;
 }

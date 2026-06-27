@@ -266,9 +266,11 @@ async function init(): Promise<void> {
   let deepLinkApplied = false;
   function applyDeepLink(): void {
     if (deepLinkApplied) return;
-    deepLinkApplied = true;
     const s = store.getState();
+    // Guard BEFORE consuming the once-flag: if routeAnalyses failed to load
+    // (old pack / network error) the link can still be honored on a later call.
     if (!s.routeAnalyses) return;
+    deepLinkApplied = true;
 
     // Model — must be one this briefing actually has.
     const model = params.get('model');

@@ -248,15 +248,17 @@ def test_get_advisory_detail_convective(patch_client):
 
 
 def test_advisory_web_url_deep_links():
-    # mapped advisory → carries the advisory param + optional point/model
+    # carries the advisory param + optional point/model
     url = server._advisory_web_url("f1", "fiki_icing")
     assert "flight=f1" in url and "view=skewt" in url and "advisory=fiki_icing" in url
     assert "point=" not in url
     url2 = server._advisory_web_url("f1", "convective", point_index=3, model="icon_eu")
     assert "advisory=convective" in url2 and "point=3" in url2 and "model=icon_eu" in url2
-    # unmapped advisory → no advisory param (frontend falls back to flight view)
+    # The builder always carries the raw advisory id and still opens the Skew-T;
+    # the frontend decides whether a lens exists for it (single source of truth,
+    # no server-side mapping). An id with no lens just opens the bare Skew-T.
     url3 = server._advisory_web_url("f1", "model_quality")
-    assert "advisory=" not in url3 and "view=skewt" in url3
+    assert "advisory=model_quality" in url3 and "view=skewt" in url3
 
 
 def test_get_advisory_detail_unknown_id_lists_available(patch_client):
