@@ -3206,6 +3206,58 @@ label {
   line-height: 1.3;
 }
 
+/* "Help me read this" (i) button next to the preset caption (#308). */
+.viz-preset-help-btn {
+  margin-left: 0.3rem;
+  vertical-align: middle;
+}
+
+/* "Help me read this graph" button row under the Skew-T controls (#308). */
+.skewt-help-row {
+  display: inline-flex;
+  align-items: center;
+}
+.skewt-help-btn {
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+/* "Help me read this graph" popup body (#308). */
+.skewt-help-popup h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+.skewt-help-popup p {
+  margin: 0 0 0.5rem;
+  line-height: 1.45;
+  font-size: 0.85rem;
+}
+.skewt-help-facts-label {
+  margin-bottom: 0.25rem !important;
+}
+.skewt-help-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.2rem 0.75rem;
+  margin: 0;
+  font-size: 0.82rem;
+}
+.skewt-help-facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  padding-bottom: 0.1rem;
+}
+.skewt-help-facts dt {
+  color: var(--text-muted, #667085);
+  margin: 0;
+}
+.skewt-help-facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
 .viz-toolbar-top {
   display: flex;
   align-items: center;

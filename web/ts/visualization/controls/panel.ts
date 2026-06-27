@@ -3,7 +3,7 @@
 import type { VizLayout, VizSettings, CompareBandMode, LayerGroup } from '../types';
 import type { DisplayMode } from '../../types/metrics';
 import { getLayerGroups, getPreferredLayerForGroup, getPresets, getPreset } from '../cross-section/layer-registry';
-import { getAdvisoryPresets, getAdvisoryPreset, isAdvisoryPreset, advisoryPresetLabel, advisoryPresetCaption } from '../cross-section/advisory-presets';
+import { getAdvisoryPresets, getAdvisoryPreset, isAdvisoryPreset, advisoryPresetLabel, advisoryPresetCaption, advisoryPresetInterpretation } from '../cross-section/advisory-presets';
 import {
   CLOUD_LAYER_BY_AXES,
   ALL_CLOUD_LAYER_IDS,
@@ -440,7 +440,14 @@ export function renderVizControls(
   // i18n/API-sourced caption can't inject markup.
   if (settings.layout !== 'map' && isAdvisoryPreset(settings.activePreset)) {
     const ap = getAdvisoryPreset(settings.activePreset!);
-    if (ap) html += `<div class="viz-preset-caption">${escapeHtml(advisoryPresetCaption(ap))}</div>`;
+    if (ap) {
+      // Caption + a "Help me read this" (i) button surfacing the longer
+      // interpretation blurb (#308 Phase B) — same text the Skew-T and the MCP
+      // explanation use.
+      html += `<div class="viz-preset-caption">${escapeHtml(advisoryPresetCaption(ap))}`
+        + `<button class="viz-layer-info-btn viz-preset-help-btn" data-preset-help="${ap.id}" `
+        + `title="${t('viz.helpReadGraph')}" aria-label="${t('viz.helpReadGraph')}">ⓘ</button></div>`;
+    }
   }
 
   container.innerHTML = html;
@@ -449,6 +456,20 @@ export function renderVizControls(
   container.querySelectorAll('[data-layout]').forEach((btn) => {
     btn.addEventListener('click', () => {
       callbacks.onLayoutChange((btn as HTMLElement).dataset.layout as VizLayout);
+    });
+  });
+
+  // Wire the preset "Help me read this" (i) button → interpretation popup (#308).
+  container.querySelectorAll('[data-preset-help]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = (btn as HTMLElement).dataset.presetHelp!;
+      const ap = getAdvisoryPreset(id);
+      if (!ap) return;
+      showPopupContent(
+        `<div class="skewt-help-popup"><h3>${escapeHtml(advisoryPresetLabel(ap))}</h3>`
+        + `<p>${escapeHtml(advisoryPresetInterpretation(ap))}</p></div>`,
+      );
     });
   });
 

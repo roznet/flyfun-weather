@@ -224,6 +224,31 @@ export class SkewTRenderer {
     return { ...this.overlayState };
   }
 
+  /**
+   * Apply an advisory-preset "lens" to the Skew-T in one shot (#308): a
+   * clean-slate overlay map (every id → on/off) and the primary side-panel
+   * variable. Persists to the renderer's own localStorage (so a later reload or
+   * a manual toggle starts from the lens) and re-renders once. Returns whether
+   * anything actually changed, so callers can skip a redundant controls re-render.
+   */
+  applyPreset(opts: { overlays?: Record<string, boolean>; primaryVar?: string }): boolean {
+    let changed = false;
+    if (opts.overlays) {
+      for (const [id, on] of Object.entries(opts.overlays)) {
+        if (this.overlayState[id] !== on) { this.overlayState[id] = on; changed = true; }
+      }
+      if (changed) saveOverlayState(this.overlayState);
+    }
+    if (opts.primaryVar && opts.primaryVar !== this.primaryVarId) {
+      this.primaryVarId = opts.primaryVar;
+      saveSidePanels({ primary: this.primaryVarId, secondary: this.secondaryVarId });
+      this.backgroundLines.invalidate();
+      changed = true;
+    }
+    if (changed) this.render();
+    return changed;
+  }
+
   /** Get the primary side panel variable ID. */
   getPrimaryVar(): string { return this.primaryVarId; }
 

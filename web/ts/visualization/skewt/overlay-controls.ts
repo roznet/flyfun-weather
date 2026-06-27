@@ -77,7 +77,7 @@ function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | nu
 }
 
 /** Wire change listeners on side panel dropdowns, updating renderer and info buttons. */
-function wireSidePanelDropdowns(container: HTMLElement, renderer: SidePanelVarHost): void {
+function wireSidePanelDropdowns(container: HTMLElement, renderer: SidePanelVarHost, onUserEdit?: () => void): void {
   container.querySelectorAll<HTMLSelectElement>('.skewt-panel-dropdown').forEach(select => {
     select.addEventListener('change', () => {
       const axis = select.dataset.axis;
@@ -86,6 +86,7 @@ function wireSidePanelDropdowns(container: HTMLElement, renderer: SidePanelVarHo
       } else {
         renderer.setSecondaryVar(select.value || null);
       }
+      onUserEdit?.();
       const infoBtn = container.querySelector(`.skewt-panel-info[data-axis="${axis}"]`) as HTMLElement | null;
       if (infoBtn) {
         const newMetricId = getVarMetricId(select.value);
@@ -96,10 +97,21 @@ function wireSidePanelDropdowns(container: HTMLElement, renderer: SidePanelVarHo
   });
 }
 
+/** Hooks for the single-model Skew-T controls (#308). */
+export interface SkewtOverlayCallbacks {
+  /** Fired after any user-initiated overlay/side-panel change so the caller can
+   *  drop the active-preset label to "Custom" (mirrors the cross-section). */
+  onUserEdit?: () => void;
+  /** Fired when the "Help me read this graph" button is clicked. When omitted
+   *  the button is not rendered. */
+  onHelp?: () => void;
+}
+
 /** Render the overlay toggle controls and side panel selector. */
 export function renderSkewtOverlayControls(
   container: HTMLElement,
   renderer: SkewTRenderer,
+  callbacks: SkewtOverlayCallbacks = {},
 ): void {
   const overlayState = renderer.getOverlayState();
   const primaryId = renderer.getPrimaryVar();
@@ -145,6 +157,13 @@ export function renderSkewtOverlayControls(
   }
   html += '</div>';
 
+  // "Help me read this graph" button (#308 Phase B) — explains the current view.
+  if (callbacks.onHelp) {
+    html += '<div class="skewt-help-row">';
+    html += `<button class="btn-chip skewt-help-btn" data-skewt-help="1" title="Explain this Skew-T in plain language">ⓘ Help me read this graph</button>`;
+    html += '</div>';
+  }
+
   html += '</div>';
 
   container.innerHTML = html;
@@ -153,11 +172,16 @@ export function renderSkewtOverlayControls(
   container.querySelectorAll<HTMLInputElement>('input[data-overlay]').forEach(input => {
     input.addEventListener('change', () => {
       renderer.toggleOverlay(input.dataset.overlay!);
+      callbacks.onUserEdit?.();
     });
   });
 
   // Attach dropdown listeners — update adjacent info button on change
-  wireSidePanelDropdowns(container, renderer);
+  wireSidePanelDropdowns(container, renderer, callbacks.onUserEdit);
+
+  // Wire the help button
+  const helpBtn = container.querySelector<HTMLElement>('[data-skewt-help]');
+  if (helpBtn && callbacks.onHelp) helpBtn.addEventListener('click', () => callbacks.onHelp!());
 }
 
 /** Callbacks for Skew-T compare controls. */

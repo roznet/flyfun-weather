@@ -11,7 +11,9 @@ import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
-import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime } from './utils';
+import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime, escapeHtml } from './utils';
+import { pressureToAltitudeFt } from './utils/atmo';
+import { SKEWT_OVERLAYS } from './visualization/skewt/overlay-bands';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
@@ -21,6 +23,7 @@ import {
   getAdvisoryPreset,
   getPresetForAdvisory,
   resolveAdvisoryPreset,
+  advisoryPresetInterpretation,
 } from './visualization/cross-section/advisory-presets';
 import { applyNwpFallback, getSubstitutedLayers } from './visualization/cross-section/nwp-fallback';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
@@ -254,6 +257,56 @@ async function init(): Promise<void> {
     store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
     if (store.getState().vizSettings.layout === 'map') store.getState().setLayout('split');
     document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Deep-link (#308 Phase C): apply ?point=&model=&view=&preset=|advisory= once
+  // the briefing is loaded, so an MCP/shared link opens a specific route point
+  // with a given model + lens selected on a given surface. Best-effort: each
+  // param is validated and silently skipped if it doesn't match this briefing.
+  let deepLinkApplied = false;
+  function applyDeepLink(): void {
+    if (deepLinkApplied) return;
+    deepLinkApplied = true;
+    const s = store.getState();
+    if (!s.routeAnalyses) return;
+
+    // Model — must be one this briefing actually has.
+    const model = params.get('model');
+    if (model && s.routeAnalyses.models.includes(model)) {
+      store.getState().setSelectedModel(model);
+    }
+
+    // Route point — by point_index, clamped to a real analysis entry.
+    const pointRaw = params.get('point');
+    if (pointRaw != null) {
+      const idx = Number.parseInt(pointRaw, 10);
+      if (Number.isFinite(idx) && s.routeAnalyses.analyses.some(a => a.point_index === idx)) {
+        // analyses are addressed by array position elsewhere; map point_index → position.
+        const pos = s.routeAnalyses.analyses.findIndex(a => a.point_index === idx);
+        if (pos >= 0) store.getState().setSelectedPoint(pos);
+      }
+    }
+
+    // Lens — explicit ?preset= wins; otherwise resolve ?advisory= via the
+    // shared advisory→preset mapping (single source of truth, no Python copy).
+    const presetId = params.get('preset');
+    const advisoryId = params.get('advisory');
+    const preset = presetId && isAdvisoryPreset(presetId)
+      ? getAdvisoryPreset(presetId)
+      : (advisoryId ? getPresetForAdvisory(advisoryId) : undefined);
+    if (preset) {
+      store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
+    }
+
+    // Surface — focus the Skew-T (or the compare/static variant) and scroll to it.
+    const view = params.get('view');
+    if (view === 'skewt' || view === 'skewt-compare' || view === 'skewt-static') {
+      setSkewtViewMode(view === 'skewt-compare' ? 'compare' : view === 'skewt-static' ? 'static' : 'dynamic');
+      document.querySelector('[data-section="skewt"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (view === 'cross-section' || presetId || advisoryId) {
+      if (store.getState().vizSettings.layout === 'map') store.getState().setLayout('split');
+      document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   // Get flight ID and optional pack timestamp from URL
@@ -555,14 +608,97 @@ async function init(): Promise<void> {
     }
   }
 
+  /** (Re)render the single-model Skew-T overlay/side-panel controls, wired so a
+   *  manual edit drops the preset to "Custom" and the help button explains the
+   *  current view (#308). */
+  function renderSkewtControls(): void {
+    if (!skewtRenderer) return;
+    const controlsEl = document.getElementById('skewt-overlay-controls');
+    if (controlsEl) {
+      renderSkewtOverlayControls(controlsEl, skewtRenderer, {
+        onUserEdit: () => store.getState().markVizCustom(),
+        onHelp: () => showSkewtHelp(),
+      });
+    }
+  }
+
+  /** Push the store's preset-driven Skew-T lens (overlay bands + primary
+   *  side-panel variable) into the live renderer. Only acts when an advisory
+   *  preset is active; re-renders the controls when the lens actually changed
+   *  so the checkboxes/dropdowns reflect it (#308 Phase A). */
+  function applySkewtPresetState(): void {
+    if (!skewtRenderer) return;
+    const vs = store.getState().vizSettings;
+    if (!isAdvisoryPreset(vs.activePreset)) return;
+    const changed = skewtRenderer.applyPreset({
+      overlays: vs.skewtOverlays,
+      primaryVar: vs.skewtPrimaryVar,
+    });
+    if (changed) renderSkewtControls();
+  }
+
+  /** "Help me read this graph" (#308 Phase B): explain the CURRENT Skew-T view
+   *  in plain language — the active lens's interpretation text plus this
+   *  sounding's key computed values and which overlay bands are shaded. */
+  function showSkewtHelp(): void {
+    const data = skewtRenderer?.getData() ?? null;
+    const vs = store.getState().vizSettings;
+    // Prefer the active advisory preset's interpretation; fall back to Basic's
+    // (the neutral "how to read a Skew-T" text) when the view is Custom/null.
+    const preset = isAdvisoryPreset(vs.activePreset)
+      ? getAdvisoryPreset(vs.activePreset!)
+      : getAdvisoryPreset('basic');
+    const interpretation = preset ? advisoryPresetInterpretation(preset) : '';
+
+    const fl = (p: number | null | undefined): string =>
+      p == null ? '—' : `FL${Math.round(pressureToAltitudeFt(p) / 100)}`;
+    const num = (v: unknown, unit: string): string =>
+      typeof v === 'number' && isFinite(v) ? `${Math.round(v)}${unit}` : '—';
+    const ftStr = (v: unknown): string =>
+      typeof v === 'number' && isFinite(v) ? `${Math.round(v).toLocaleString()} ft` : '—';
+
+    let factsHtml = '';
+    const ind = data?.indices ?? null;
+    if (ind) {
+      const facts: Array<[string, string]> = [
+        ['CAPE', num(ind.cape_surface_jkg, ' J/kg')],
+        ['CIN', num(ind.cin_surface_jkg, ' J/kg')],
+        ['0 °C level', ftStr(ind.freezing_level_ft)],
+        ['LCL', fl(ind.lcl_pressure_hpa as number | null)],
+        ['LFC', fl(ind.lfc_pressure_hpa as number | null)],
+        ['EL', fl(ind.el_pressure_hpa as number | null)],
+      ];
+      factsHtml = '<dl class="skewt-help-facts">'
+        + facts.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')
+        + '</dl>';
+    }
+
+    // Which overlay bands are currently shaded.
+    const onIds = skewtRenderer ? skewtRenderer.getOverlayState() : {};
+    const activeBands = SKEWT_OVERLAYS.filter(o => onIds[o.id]).map(o => o.label);
+    const bandsHtml = activeBands.length
+      ? `<p class="skewt-help-bands"><strong>Shaded now:</strong> ${escapeHtml(activeBands.join(', '))}.</p>`
+      : '<p class="skewt-help-bands">No hazard bands shaded — this is the basic temperature / dewpoint / parcel view.</p>';
+
+    const title = preset ? escapeHtml(preset.label) : 'Skew-T';
+    const html = `<div class="skewt-help-popup">`
+      + `<h3>Reading this Skew-T — ${title}</h3>`
+      + `<p>${escapeHtml(interpretation)}</p>`
+      + bandsHtml
+      + (factsHtml ? `<p class="skewt-help-facts-label"><strong>This sounding:</strong></p>${factsHtml}` : '')
+      + `</div>`;
+    showPopupContent(html);
+  }
+
   function ensureSkewtRenderer(): SkewTRenderer {
     if (!skewtRenderer) {
       const container = document.getElementById('skewt-canvas-container');
       if (!container) throw new Error('skewt-canvas-container not found');
       skewtRenderer = new SkewTRenderer(container);
       // Render overlay toggle controls
-      const controlsEl = document.getElementById('skewt-overlay-controls');
-      if (controlsEl) renderSkewtOverlayControls(controlsEl, skewtRenderer);
+      renderSkewtControls();
+      // Seed from the active preset/deep-link lens, if any.
+      applySkewtPresetState();
       // Attach hover interaction with linked cursor
       skewtInteraction = attachSkewTInteraction(
         skewtRenderer.getOverlayCanvas(),
@@ -1300,6 +1436,15 @@ async function init(): Promise<void> {
     }
     if (state.vizSettings !== prev.vizSettings) {
       renderVisualization(state);
+      // Apply a newly-selected lens (or deep-link) to the Skew-T too, so the
+      // preset is coherent across cross-section + Skew-T (#308).
+      if (
+        state.vizSettings.activePreset !== prev.vizSettings.activePreset ||
+        state.vizSettings.skewtOverlays !== prev.vizSettings.skewtOverlays ||
+        state.vizSettings.skewtPrimaryVar !== prev.vizSettings.skewtPrimaryVar
+      ) {
+        applySkewtPresetState();
+      }
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
       renderPointSections(state);
       // Analytics: emit at most once per briefing on transition into
@@ -1740,6 +1885,10 @@ async function init(): Promise<void> {
     renderPointSections(s);
     renderVisualization(s);
     ui.renderLoading(s.loading);
+
+    // Deep-link (#308): now that routeAnalyses is loaded, honor any
+    // ?point/model/view/preset/advisory params from an MCP or shared link.
+    applyDeepLink();
 
     // Load PIREPs for this flight (fire-and-forget, non-blocking)
     if (s.flight) {

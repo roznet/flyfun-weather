@@ -118,6 +118,39 @@ Layer presets provide one-click configurations. Three presets (`PRESETS` in `lay
 
 (SLD is excluded from all presets — experimental.) Presets defined as `LayerPreset` objects: `{ id, label, themeId, enabledLayers }`. Preset dropdown in controls panel next to theme selector. Store action `setVizPreset()` applies theme + layer overrides.
 
+### Advisory presets / lenses (#219, #308)
+
+A second, hazard-oriented preset family lives in `cross-section/advisory-presets.ts`
+(`ADVISORY_PRESETS`): **Basic/Learn, Icing, Clouds, Convective, Turbulence, VFR, IFR**.
+Each is a *bag of optional view directives* — the resolver/applier dispatches over
+whichever are present, so adding a new effect kind is one field + one store branch:
+
+- `groups` / `lines` — method-resolved cross-section layers (clean-slate: reset groups OFF, enable the preferred layer of each named group).
+- `routeGraph` / `map` — companion route-graph metrics + route-map color metric/altitude.
+- `skewtOverlays` (#308) — overlay bands to pre-enable on the Skew-T; **clean-slate** like `groups` (listed bands ON, all others OFF). An empty array = "all bands off" (the Basic/Learn view).
+- `skewtSidePanel` (#308) — primary dual-axis side-panel variable. Convective gets omega (`vertical_velocity` = `w_fpm`, positive = up) — it distinguishes "high CAPE but capped/subsiding" from "CAPE + synoptic lift = going off".
+- `interpretation` (#308) — a short "how to read it" blurb behind the caption's (i) / "Help me read this graph" button; the **same text seeds the MCP explanation**. Getter `advisoryPresetInterpretation()`; falls back to `caption`.
+
+`resolveAdvisoryPreset(preset, preferredMethods)` → `ResolvedView` (concrete layer
+map + skewt overlay map + side-panel id). The store's `applyAdvisoryPreset()` writes
+the resolved view into `vizSettings` (incl. `skewtOverlays` / `skewtPrimaryVar` +
+`activePreset`); `briefing-main` then pushes the Skew-T lens into the live
+`SkewTRenderer` via `renderer.applyPreset()` whenever `activePreset` changes, so one
+lens configures map + cross-section + Skew-T coherently. A manual Skew-T overlay/var
+edit calls `markVizCustom()` → the dropdown reflects "Custom" (mirrors the cross-section).
+
+`ADVISORY_TO_PRESET` maps advisory ids → preset ids for card chips; `ADVISORY_OVERRIDES`
+layers per-advisory extras (e.g. FIKI warm-nose lines) onto a shared preset.
+
+### Deep-link (#308 Phase C)
+
+`briefing-main.applyDeepLink()` honors `?point=&model=&view=&preset=|advisory=` on load
+(after `routeAnalyses` is ready): selects the model + route point, applies the lens
+(explicit `preset` wins; otherwise `advisory` resolves via `getPresetForAdvisory` — single
+source of truth, no server-side copy of the mapping), and focuses the requested surface
+(`view=skewt` scrolls to the Skew-T). The MCP `get_advisory_detail` builds this link in
+its `web_url` (`_advisory_web_url`), pointing convective at the highest-CAPE peak point.
+
 ## Data Flow
 
 1. `extractVizData(manifest, elevationProfile, model)` transforms server data into `VizRouteData`

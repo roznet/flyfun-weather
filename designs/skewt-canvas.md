@@ -113,6 +113,25 @@ Two dropdowns in the controls. Selection persisted to `localStorage('wb_skewtSid
 
 Each variable and overlay carries a `metricId` into the shared metric catalog; `overlay-controls.ts` renders info (ⓘ) buttons next to the dropdowns, overlay toggles, and a fixed indices row (CAPE/CIN/LI/PW/0°C). The primary/secondary info button's `data-metric` updates live on dropdown change.
 
+## Advisory-preset lenses (#308)
+
+The hazard-oriented advisory presets (Icing / Clouds / Convective / Turbulence / VFR /
+IFR, plus a neutral **Basic/Learn**) extend across the Skew-T too, so one lens configures
+map + cross-section + Skew-T coherently (see [visualization.md](./visualization.md)).
+`SkewTRenderer.applyPreset({ overlays, primaryVar })` applies a clean-slate overlay map
+(only the lens's bands shaded; Basic = all off) + the primary side-panel variable in one
+shot, persisting to the renderer's own localStorage so a later manual toggle starts from
+the lens. `briefing-main.applySkewtPresetState()` pushes the store's `vizSettings.skewtOverlays`
+/ `skewtPrimaryVar` into the renderer whenever an advisory preset becomes active (incl. on
+first render / deep-link). A manual overlay/var edit fires `onUserEdit` → `markVizCustom()`,
+dropping the preset label to "Custom".
+
+**"Help me read this graph"** button (`overlay-controls.ts` `onHelp`) opens a popup with
+the active lens's `interpretation` blurb + this sounding's key computed values (CAPE/CIN,
+0 °C level, LCL/LFC/EL) + which bands are currently shaded. The same interpretation text
+is reused verbatim as MCP explanation context — write once, human and assistant read the
+same words. Omega belongs on **Convective's** side panel (`w_fpm`, positive = up).
+
 ## Interaction
 
 - **Hover tooltip**: horizontal crosshair + tooltip with all values at nearest pressure level (T, Td, DD, RH, **CC**, wind, HW/XW, θe, lapse rate, icing, SFIP, w, altitude/FL)
