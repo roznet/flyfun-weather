@@ -193,22 +193,6 @@ def _flight_web_url(flight_id: str) -> str:
     return f"{WEATHER_BASE_URL}/briefing.html?flight={flight_id}"
 
 
-# Advisory id -> preset id, mirroring ADVISORY_TO_PRESET in the web app
-# (web/ts/visualization/cross-section/advisory-presets.ts). Only advisories with
-# a Skew-T lens are listed; anything absent falls back to a flight-level link.
-_ADVISORY_TO_PRESET: dict[str, str] = {
-    "icing_escape": "icing",
-    "fiki_icing": "icing",
-    "cloud_top": "clouds",
-    "vmc_cruise": "clouds",
-    "convective": "convective",
-    "turbulence": "turbulence",
-    "mountain_wind": "turbulence",
-    "vfr_feasibility": "vfr",
-    "ifr_feasibility": "ifr",
-}
-
-
 def _advisory_web_url(
     flight_id: str,
     advisory_id: str,
@@ -217,12 +201,16 @@ def _advisory_web_url(
     model: str | None = None,
 ) -> str:
     """Build a deep link that opens the briefing's Skew-T focused on this
-    advisory's lens (#308). The web app resolves ``advisory`` → preset via the
-    shared mapping, so the link stays correct even if a preset is retuned. Adds
-    ``point``/``model`` when a specific peak point is known (e.g. convective)."""
-    params: list[tuple[str, str]] = [("flight", flight_id), ("view", "skewt")]
-    if advisory_id in _ADVISORY_TO_PRESET:
-        params.append(("advisory", advisory_id))
+    advisory's lens (#308). We always carry the raw ``advisory`` id and let the
+    web app resolve it → preset via its own ``getPresetForAdvisory`` mapping
+    (the single source of truth — no server-side copy to drift): unknown ids
+    just open the Skew-T with no lens. Adds ``point``/``model`` when a specific
+    peak point is known (e.g. convective)."""
+    params: list[tuple[str, str]] = [
+        ("flight", flight_id),
+        ("view", "skewt"),
+        ("advisory", advisory_id),
+    ]
     if point_index is not None:
         params.append(("point", str(point_index)))
     if model:

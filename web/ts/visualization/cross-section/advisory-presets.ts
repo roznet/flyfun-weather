@@ -277,16 +277,21 @@ export function getPresetForAdvisory(advisoryId: string): AdvisoryPreset | undef
   return {
     ...base,
     ...override,
-    // arrays union (so FIKI adds to icing's lines rather than replacing them)
+    // arrays union (so FIKI adds to icing's lines/bands rather than replacing them)
     groups: [...(base.groups ?? []), ...(override.groups ?? [])],
     lines: [...(base.lines ?? []), ...(override.lines ?? [])],
+    skewtOverlays: override.skewtOverlays
+      ? [...new Set([...(base.skewtOverlays ?? []), ...override.skewtOverlays])]
+      : base.skewtOverlays,
     routeGraph: override.routeGraph ?? base.routeGraph,
     map: override.map ?? base.map,
+    skewtSidePanel: override.skewtSidePanel ?? base.skewtSidePanel,
     // identity stays the base preset's so the dropdown reflects 'icing', not a
-    // per-advisory pseudo-id, and the caption is the shared one.
+    // per-advisory pseudo-id, and the caption/interpretation are the shared ones.
     id: base.id,
     label: base.label,
     caption: base.caption,
+    interpretation: base.interpretation,
   };
 }
 
