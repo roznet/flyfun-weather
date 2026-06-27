@@ -19,6 +19,18 @@ Structure your response as JSON with these exact fields:
    fronts, air mass) and how it's expected to evolve. Include the key
    hazards: winds, cloud/visibility, precipitation, icing — but only what
    matters for this flight. Don't repeat what the advisories already say.
+   **Lead from our own route analysis** (the quantitative advisories and
+   sounding-derived data above); use any text-forecast / synoptic-overview
+   prose only to CONFIRM and ENRICH that picture, not to drive it. Before
+   adopting a synoptic characterization for the route — an air-mass label, a
+   named system, a regime word like "loaded gun", "MCS", "primed for
+   convection" — verify it applies to THIS flight in BOTH location AND timing
+   (see the relevance rule below) AND that our route analysis corroborates it.
+   If the synoptic text describes a regime our route soundings/advisories do
+   NOT show (e.g. text says high-instability / loaded-gun but our route
+   analysis is thermal / low-CAPE), attribute it to its own region and time
+   ("a loaded-gun air mass over the Benelux, well east of route") and do NOT
+   project that label onto the route's own conditions.
 
 4. **specific_concerns**: Route-specific hazards — Alpine weather for Swiss
    destinations, foehn, valley fog, orographic effects, Channel weather
@@ -72,10 +84,18 @@ Structure your response as JSON with these exact fields:
   DWD (pre-translated from German). The DWD text covers Germany/Central
   Europe. For routes outside Germany, the DWD text is pre-filtered to
   large-scale synoptic features with geographic coordinates and timing.
-  Compare frontal positions (lat/lon) against your route waypoint coordinates
-  to judge whether a feature is relevant — if a front is at ~50°N/8°E and
-  your route is at ~50°N/0°W, the front is ~600 km east and not affecting
-  your route. Do NOT move or extrapolate features to your route area.
+  Judge relevance on BOTH location and timing — a feature must pass both gates
+  to bear on this flight:
+    - LOCATION: compare frontal/system positions (lat/lon) against your route
+      waypoint coordinates — if a front is at ~50°N/8°E and your route is at
+      ~50°N/0°W, the front is ~600 km east and not affecting your route.
+    - TIMING: compare the feature's valid / development window against the
+      flight window. A system the text says is "developing through the
+      afternoon" or "intensifying this evening" does NOT describe a
+      morning flight — note it as a later trend / watch item, not a
+      condition the flight will meet. Use the DATE header and any times in
+      the text; do not assume a feature is present at flight time.
+  Do NOT move or extrapolate features to your route area or flight time.
   The DWD text carries explicit lat/lon coordinates; per the coordinate rule
   above, convert every one of them to a plain geographic reference in your
   output — the pilot does not think in coordinates.
