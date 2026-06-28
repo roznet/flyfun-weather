@@ -13,8 +13,14 @@ import FMDB
 ///
 /// Wraps RZFlight's `KnownAirports` (`rankedSearch` is an in-memory tiered
 /// ICAO/name search), so lookups never touch the network or block typing.
+///
+/// `@MainActor`-isolated: all access to the stored DB handles happens on the main
+/// actor (the only off-main work — file IO + opening the SQLite — runs inside
+/// `Task.detached` blocks that hop back via `MainActor.run` before assigning), so
+/// there's no data race on `knownAirports`/`isLoaded`.
 @Observable
-final class AirportDatabase: @unchecked Sendable {
+@MainActor
+final class AirportDatabase {
     static let shared = AirportDatabase()
 
     /// True once a usable database is open. Drives whether autocomplete can offer
@@ -30,8 +36,9 @@ final class AirportDatabase: @unchecked Sendable {
 
     private init() {}
 
-    /// On-disk cache location (persisted, not purgeable like Caches).
-    private static var cacheURL: URL {
+    /// On-disk cache location (persisted, not purgeable like Caches). `nonisolated`
+    /// so the off-main `Task.detached` blocks can read it (it only uses FileManager).
+    nonisolated private static var cacheURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("airports.db")
     }
@@ -60,7 +67,6 @@ final class AirportDatabase: @unchecked Sendable {
                 self.isLoaded = true
             }
         }
-        Task { await loadTask?.value }
     }
 
     /// Conditionally download the latest airports DB and swap it in. Uses
