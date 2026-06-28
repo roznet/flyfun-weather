@@ -176,6 +176,23 @@ export function renderThresholdScale(metricId: string, value?: number): string {
   return `<div class="threshold-bar">${segments.join('')}</div>${marker}`;
 }
 
+/** Compact one-line threshold band-strip for inline use (e.g. the Skew-T "help
+ *  me read this graph" cards): each band shown as a small range + label chip,
+ *  coloured by risk, with the plain-language meaning as a hover tooltip.
+ *  Returns '' when the metric has no thresholds. */
+export function renderCompactThresholdStrip(metricId: string): string {
+  const entry = CATALOG[metricId];
+  if (!entry || entry.thresholds.length === 0) return '';
+  const chips = entry.thresholds.map((thr) => {
+    const riskClass = riskCssClass(thr.risk);
+    const range = formatThresholdRange(thr.min, thr.max, entry.unit);
+    const rangeHtml = range ? `<span class="thr-chip-range">${range}</span> ` : '';
+    const title = thr.meaning ? ` title="${thr.meaning.replace(/"/g, '&quot;')}"` : '';
+    return `<span class="thr-chip ${riskClass}"${title}>${rangeHtml}${thr.label}</span>`;
+  }).join('');
+  return `<div class="thr-strip">${chips}</div>`;
+}
+
 /** Render the full info popup content for a metric. */
 export function renderInfoPopupContent(metricId: string, value?: number): string {
   const entry = CATALOG[metricId];

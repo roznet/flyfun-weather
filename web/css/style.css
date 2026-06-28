@@ -3256,9 +3256,122 @@ label {
   color: var(--text-muted, #667085);
   margin: 0;
 }
+.skewt-help-fact-info {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 0.15rem;
+  font-size: 0.78rem;
+  line-height: 1;
+  color: var(--accent, #2563eb);
+  opacity: 0.7;
+  vertical-align: baseline;
+}
+.skewt-help-fact-info:hover {
+  opacity: 1;
+}
 .skewt-help-facts dd {
   margin: 0;
   font-weight: 600;
+}
+
+/* Per-value interpretation cards: explain the active side-panel variable and
+   each shaded band using the metrics-catalog vibe + interpretation. */
+.skewt-help-vars {
+  margin: 0.6rem 0 0.5rem;
+}
+.skewt-help-vars-label {
+  margin-bottom: 0.35rem !important;
+}
+.skewt-help-var {
+  border-left: 3px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  padding: 0 0 0 0.55rem;
+  margin-bottom: 0.55rem;
+}
+.skewt-help-var:last-child {
+  margin-bottom: 0;
+}
+.skewt-help-var-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.15rem;
+}
+.skewt-help-info-btn {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0 0.1rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--accent, #2563eb);
+  opacity: 0.75;
+}
+.skewt-help-info-btn:hover {
+  opacity: 1;
+}
+.skewt-help-var-kind {
+  display: inline-block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted, #667085);
+  background: var(--border-subtle, rgba(0, 0, 0, 0.06));
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+}
+.skewt-help-var-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.skewt-help-var-vibe {
+  margin: 0 0 0.15rem !important;
+  font-style: italic;
+  color: var(--text-muted, #667085);
+}
+.skewt-help-var-interp {
+  margin: 0 !important;
+}
+/* Compact threshold band-strip inside a help card (#308 follow-up). */
+.thr-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.4rem;
+  margin-top: 0.35rem;
+}
+.thr-chip {
+  font-size: 0.72rem;
+  line-height: 1.3;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  background: var(--border-subtle, rgba(0, 0, 0, 0.05));
+  white-space: nowrap;
+}
+.thr-chip.risk-light { background: var(--green-bg); color: var(--green); }
+.thr-chip.risk-moderate { background: var(--amber-bg); color: var(--amber); }
+.thr-chip.risk-high { background: var(--red-bg); color: var(--red); }
+.thr-chip.risk-severe { background: var(--red-bg); color: var(--red); font-weight: 600; }
+.thr-chip-range {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+/* Back button on a drilled-in metric card (nested popup navigation). Normal
+   flow at the top-left, above the metric header; the close × stays top-right. */
+.popup-back {
+  display: inline-block;
+  margin: 0 0 0.6rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--accent, #2563eb);
+  padding: 0.1rem 0.2rem 0.1rem 0;
+}
+.popup-back:hover {
+  text-decoration: underline;
 }
 
 .viz-toolbar-top {

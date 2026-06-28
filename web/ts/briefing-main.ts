@@ -14,6 +14,8 @@ import type { DisplayMode } from './types/metrics';
 import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime, escapeHtml } from './utils';
 import { pressureToAltitudeFt } from './utils/atmo';
 import { SKEWT_OVERLAYS } from './visualization/skewt/overlay-bands';
+import { getVariableById } from './visualization/skewt/variable-panel';
+import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
@@ -671,16 +673,23 @@ async function init(): Promise<void> {
     let factsHtml = '';
     const ind = data?.indices ?? null;
     if (ind) {
-      const facts: Array<[string, string]> = [
-        ['CAPE', num(ind.cape_surface_jkg, ' J/kg')],
-        ['CIN', num(ind.cin_surface_jkg, ' J/kg')],
+      // Optional 3rd element = metrics-catalog id → renders a drill-down (i) next
+      // to the value (CAPE/CIN/LCL/LFC/EL have entries; 0 °C level is skipped).
+      const facts: Array<[string, string, string?]> = [
+        ['CAPE', num(ind.cape_surface_jkg, ' J/kg'), 'cape_surface_jkg'],
+        ['CIN', num(ind.cin_surface_jkg, ' J/kg'), 'cin_surface_jkg'],
         ['0 °C level', ftStr(ind.freezing_level_ft)],
-        ['LCL', fl(ind.lcl_pressure_hpa as number | null)],
-        ['LFC', fl(ind.lfc_pressure_hpa as number | null)],
-        ['EL', fl(ind.el_pressure_hpa as number | null)],
+        ['LCL', fl(ind.lcl_pressure_hpa as number | null), 'lcl_altitude_ft'],
+        ['LFC', fl(ind.lfc_pressure_hpa as number | null), 'lfc_altitude_ft'],
+        ['EL', fl(ind.el_pressure_hpa as number | null), 'el_altitude_ft'],
       ];
+      const factInfo = (metricId?: string): string =>
+        metricId && getMetric(metricId)
+          ? ` <button class="popup-drill-metric skewt-help-fact-info" data-metric="${metricId}"`
+            + ` title="${escapeHtml(t('viz.skewtHelp.fullCard'))}" aria-label="${escapeHtml(t('viz.skewtHelp.fullCard'))}">ⓘ</button>`
+          : '';
       factsHtml = '<dl class="skewt-help-facts">'
-        + facts.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')
+        + facts.map(([k, v, mid]) => `<div><dt>${escapeHtml(k)}${factInfo(mid)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')
         + '</dl>';
     }
 
@@ -691,6 +700,36 @@ async function init(): Promise<void> {
       ? `<p class="skewt-help-bands"><strong>${escapeHtml(t('viz.skewtHelp.shadedNow'))}</strong> ${escapeHtml(activeBands.join(', '))}.</p>`
       : `<p class="skewt-help-bands">${escapeHtml(t('viz.skewtHelp.noBands'))}</p>`;
 
+    // Per-value "what does this mean" cards: for the active side-panel variable
+    // and each shaded overlay band, pull the metrics-catalog vibe + interpretation
+    // so the help explains the values actually on screen, not just names them.
+    const renderVarCard = (kind: string, label: string, metricId?: string): string => {
+      const entry = metricId ? getMetric(metricId) : undefined;
+      // (i) drills into the full metric card (all fields) inside this same popup,
+      // with a Back button — wired generically in info-popup (.popup-drill-metric).
+      const info = entry
+        ? `<button class="popup-drill-metric skewt-help-info-btn" data-metric="${metricId}"`
+          + ` title="${escapeHtml(t('viz.skewtHelp.fullCard'))}" aria-label="${escapeHtml(t('viz.skewtHelp.fullCard'))}">ⓘ</button>`
+        : '';
+      const head = `<div class="skewt-help-var-head">`
+        + `<span class="skewt-help-var-kind">${escapeHtml(kind)}</span> `
+        + `<span class="skewt-help-var-name">${escapeHtml(label)}</span>${info}</div>`;
+      if (!entry) return `<div class="skewt-help-var">${head}</div>`;
+      const vibe = entry.vibe ? `<p class="skewt-help-var-vibe">${escapeHtml(entry.vibe)}</p>` : '';
+      const interp = entry.best_used_for ? `<p class="skewt-help-var-interp">${escapeHtml(entry.best_used_for)}</p>` : '';
+      const strip = metricId ? renderCompactThresholdStrip(metricId) : '';
+      return `<div class="skewt-help-var">${head}${vibe}${interp}${strip}</div>`;
+    };
+    const cards: string[] = [];
+    const primaryVar = skewtRenderer ? getVariableById(skewtRenderer.getPrimaryVar()) : undefined;
+    if (primaryVar) cards.push(renderVarCard(t('viz.skewtHelp.sidePanelKind'), primaryVar.label, primaryVar.metricId));
+    for (const o of SKEWT_OVERLAYS) {
+      if (onIds[o.id]) cards.push(renderVarCard(t('viz.skewtHelp.bandKind'), o.label, o.metricId));
+    }
+    const onGraphHtml = cards.length
+      ? `<div class="skewt-help-vars"><p class="skewt-help-vars-label"><strong>${escapeHtml(t('viz.skewtHelp.onGraphNow'))}</strong></p>${cards.join('')}</div>`
+      : '';
+
     const title = preset
       ? t('viz.skewtHelp.title', { preset: preset.label })
       : t('viz.skewtHelp.title', { preset: t('viz.skewtHelp.titleFallback') });
@@ -698,6 +737,7 @@ async function init(): Promise<void> {
       + `<h3>${escapeHtml(title)}</h3>`
       + `<p>${escapeHtml(interpretation)}</p>`
       + bandsHtml
+      + onGraphHtml
       + (factsHtml ? `<p class="skewt-help-facts-label"><strong>${escapeHtml(t('viz.skewtHelp.thisSounding'))}</strong></p>${factsHtml}` : '')
       + `</div>`;
     showPopupContent(html);

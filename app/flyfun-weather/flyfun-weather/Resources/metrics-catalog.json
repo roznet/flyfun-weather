@@ -330,7 +330,7 @@
     "unit": "°C/km",
     "vibe": "How fast the air cools as you climb",
     "primary_goal": "Measure the rate of temperature decrease with altitude.",
-    "best_used_for": "Assessing atmospheric stability — steep lapse rates mean turbulent, unstable air.",
+    "best_used_for": "Tells you how stable each layer is. Large values — temperature dropping fast as you climb — mean buoyant, convection-prone, bumpy air; small values mean smooth, stratified air. A negative value is an inversion: a warm stable lid that traps haze and often gives a jolt as you climb through it.",
     "limitations": "Calculated between model pressure levels, so it's an average over thick layers. Sharp changes within a layer may be missed.",
     "theory": "The temperature drop per kilometre of altitude: LR = −ΔT/Δz. Dry air cools at 9.8°C/km as it rises (the Dry Adiabatic Lapse Rate). Moist air cools more slowly at about 5–7°C/km because condensation releases heat (the Saturated Adiabatic Lapse Rate). If the actual lapse rate is steeper than the DALR, the atmosphere is absolutely unstable and convects freely. A negative lapse rate means an inversion — temperature increasing with height.",
     "wikipedia": "https://en.wikipedia.org/wiki/Lapse_rate",
@@ -346,7 +346,7 @@
     "unit": "K",
     "vibe": "The air's fingerprint — tracks where it came from",
     "primary_goal": "Identify air masses and detect potential instability.",
-    "best_used_for": "Spotting boundaries between different air masses and layers where the atmosphere could overturn.",
+    "best_used_for": "Read the trend with height, not the absolute number. θe rising as you climb means stable air; θe falling with height flags potential instability — warm, moist air sitting under colder, drier air that can overturn into storms if a front or terrain lifts it. A sharp jump with height marks a boundary between two air masses, such as a front.",
     "limitations": "Most useful for relative comparisons between levels, not as an absolute number. The value itself matters less than how it changes with height.",
     "theory": "The temperature a parcel of air would reach if lifted dry-adiabatically to its LCL, then moist-adiabatically to very low pressure so that all its moisture condenses out and releases latent heat, then brought dry-adiabatically back down to a reference pressure of 1000 hPa. This combines temperature, moisture, and pressure into one number that is conserved under both dry and moist adiabatic processes — a 'fingerprint' of the air mass that stays constant as it rises or sinks. θe increasing with height = stable; θe decreasing with height = potentially unstable (convective instability). When θe decreases with height, warm moist air sits below cold dry air — if that layer is lifted as a whole (by a front or orography), it can overturn and release energy rapidly.",
     "wikipedia": "https://en.wikipedia.org/wiki/Equivalent_potential_temperature",
@@ -646,7 +646,7 @@
     "unit": "",
     "vibe": "The balance between smooth and chaotic air",
     "primary_goal": "Predict Clear Air Turbulence.",
-    "best_used_for": "Choosing a smooth flight level — or knowing which ones to avoid.",
+    "best_used_for": "Read it as a smoothness gauge: low values mean wind shear is overpowering the air's stability, so smooth flow breaks down into turbulence — the high-value levels are your smooth ones. Below about 0.25 expect clear-air turbulence; above 1 it's usually a comfortable ride.",
     "limitations": "Only detects shear-driven turbulence. Blind to mountain waves, convective turbulence, and wake turbulence.",
     "theory": "The ratio of atmospheric stability to wind shear: Ri = N²/S². N² (Brunt-Väisälä frequency) measures how strongly stable air resists being displaced vertically. S² measures how much the wind changes with altitude. When shear overpowers stability (Ri drops below 0.25), smooth flow breaks down into turbulence — a process called Kelvin-Helmholtz instability, visible as wave-like cloud patterns. Note: the Miles-Howard theorem gives Ri = 0.25 as a sufficient condition for stability, not a sharp turbulence on/off switch — real flows can be turbulent somewhat above 0.25 and laminar below it, depending on finite-amplitude perturbations.",
     "wikipedia": "https://en.wikipedia.org/wiki/Richardson_number",
@@ -895,6 +895,23 @@
       { "min": 90, "max": 100, "label": "Near saturation", "risk": "high", "meaning": "Cloud very likely." }
     ]
   },
+  "skewt_cloud_area_fraction": {
+    "name": "Cloud Cover",
+    "unit": "%",
+    "vibe": "How much sky each layer fills",
+    "primary_goal": "Show the model's predicted cloud fraction at each altitude.",
+    "best_used_for": "Seeing where the deck actually is and how solid it is. On the side panel, peaks mark the cloud layers — narrow tall peaks are thin distinct decks, a broad block is a deep overcast. Cross-check the altitude against your cruise level to judge whether you are above, in, or below cloud.",
+    "limitations": "Fraction is a grid-cell average, so a 50% value can mean a uniform thin veil or broken cumulus with clear gaps — it does not distinguish the two. Sub-grid convective towers are smeared out. Read it alongside RH and the T/Td gap rather than alone.",
+    "theory": "Cloud area fraction is the proportion of a model grid cell covered by cloud at a given level, from 0 (clear) to 100% (overcast). Models diagnose it from relative humidity, vertical motion, and a sub-grid cloud scheme. It is the vertical analogue of the cloud-cover layers shaded on the Skew-T and cross-section.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "llm_prompt": "explain how to read a vertical cloud-fraction profile on a Skew-T side panel, how it relates to the cloud bands and the T/Td curves, and how a VFR or IFR pilot should use the cloud layer altitudes relative to cruise level",
+    "thresholds": [
+      { "min": 0, "max": 13, "label": "Clear", "risk": "none", "meaning": "Effectively clear at this level (SKC/FEW)." },
+      { "min": 13, "max": 50, "label": "Few/Scattered", "risk": "low", "meaning": "Broken gaps — VMC likely through this layer." },
+      { "min": 50, "max": 88, "label": "Broken", "risk": "moderate", "meaning": "Mostly covered — expect IMC in and just below." },
+      { "min": 88, "max": 100, "label": "Overcast", "risk": "high", "meaning": "Solid deck — continuous cloud at this altitude." }
+    ]
+  },
   "skewt_cloud_liquid_water": {
     "name": "Cloud Liquid Water",
     "unit": "g/m\u00b3",
@@ -917,7 +934,7 @@
     "unit": "g/kg",
     "vibe": "How much ice is in the cloud",
     "primary_goal": "Show the NWP model's predicted ice crystal content at each altitude.",
-    "best_used_for": "Identifying glaciated cloud zones. Where ice dominates over liquid water, icing risk drops (ice crystals don't accrete the same way supercooled liquid does). Comparing the ICE and CLW profiles shows the glaciation transition.",
+    "best_used_for": "Shows where a cloud is glaciated (ice) rather than supercooled water. Where ice dominates, icing risk actually drops — ice crystals don't stick to the airframe the way supercooled droplets do. Compare it with the cloud-liquid-water line: the level where ice takes over is the glaciation point, and the worse icing usually sits below it in the liquid layer.",
     "limitations": "The liquid/ice partition in mixed-phase clouds is one of the hardest things for NWP models to get right. Treat as indicative, not precise.",
     "theory": "Ice mixing ratio is the mass of ice crystals per unit mass of air. In clouds colder than about -15°C, ice crystals tend to dominate via the Bergeron process (ice grows at the expense of liquid). Fully glaciated clouds (all ice, no liquid) pose less icing risk than mixed-phase clouds.",
     "wikipedia": "https://en.wikipedia.org/wiki/Bergeron_process",

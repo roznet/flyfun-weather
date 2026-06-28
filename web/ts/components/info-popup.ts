@@ -90,6 +90,33 @@ function wirePopupButtons(): void {
     closeBtn.addEventListener('click', hideMetricInfo);
   }
 
+  // Generic in-popup drill-down: a `.popup-drill-metric[data-metric]` button in
+  // the current content swaps the popup to that metric's full card, with a Back
+  // button that restores what was showing. Listeners are attached directly to the
+  // elements (clicks inside the popup are stopped from bubbling to document), so
+  // any showPopupContent() consumer gets nested metric details for free.
+  const drillBtns = popupEl.querySelectorAll('.popup-drill-metric');
+  for (const b of drillBtns) {
+    b.addEventListener('click', () => {
+      if (!popupEl) return;
+      const metricId = (b as HTMLElement).dataset.metric;
+      if (!metricId) return;
+      const prev = popupEl.innerHTML;
+      popupEl.innerHTML = `
+        <button class="metric-popup-close" aria-label="${t('popup.close')}">×</button>
+        <button class="popup-back" type="button">← ${t('popup.back')}</button>
+        ${renderInfoPopupContent(metricId)}
+      `;
+      wirePopupButtons();
+      const back = popupEl.querySelector('.popup-back');
+      back?.addEventListener('click', () => {
+        if (!popupEl) return;
+        popupEl.innerHTML = prev;
+        wirePopupButtons();
+      });
+    });
+  }
+
   const discussSection = popupEl.querySelector('.popup-discuss-ai') as HTMLElement | null;
   if (!discussSection) return;
 

@@ -349,6 +349,10 @@
   "viz.skewtHelp.shadedNow": "Shaded now:",
   "viz.skewtHelp.noBands": "No hazard bands shaded — this is the basic temperature / dewpoint / parcel view.",
   "viz.skewtHelp.thisSounding": "This sounding:",
+  "viz.skewtHelp.onGraphNow": "What's on the graph right now:",
+  "viz.skewtHelp.sidePanelKind": "Side panel",
+  "viz.skewtHelp.bandKind": "Band",
+  "viz.skewtHelp.fullCard": "Full details",
   "viz.advisoryPreset.icing.label": "Icing",
   "viz.advisoryPreset.icing.caption": "Icing bands vs the 0 °C line and terrain — is there an ice-free descent?",
   "viz.advisoryPreset.clouds.label": "Clouds",
@@ -547,6 +551,7 @@
   "stalePack.updateBtn": "Update advisories",
 
   "popup.close": "Close",
+  "popup.back": "Back",
   "popup.discussAi": "Tell me more about {metric} in the context of aviation weather. How should a VFR or IFR pilot interpret it, what are the key thresholds, and how does it interact with other weather parameters for flight safety?",
 
   "viz.layer.terrain": "Terrain",
