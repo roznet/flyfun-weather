@@ -61,6 +61,7 @@ struct FlightCardView: View {
         }
         .padding(.vertical, 4)
         .opacity(isOffline && !hasCachedData ? 0.4 : 1.0)
+        .accessibilityIdentifier("flightCard-\(flight.id)")
     }
 }
 

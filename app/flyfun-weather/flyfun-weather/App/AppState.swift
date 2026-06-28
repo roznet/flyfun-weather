@@ -76,6 +76,16 @@ final class AppState {
 
     var isAuthenticated: Bool { jwt != nil }
 
+    #if DEBUG
+    /// Launched by a UI test (`FLYFUN_UITEST=1`) — skip the auth gate so the app
+    /// renders past `LoginView` without a real sign-in.
+    static var isUITesting: Bool { ProcessInfo.processInfo.environment["FLYFUN_UITEST"] == "1" }
+    /// Serve bundled fixtures instead of the network (`FLYFUN_MOCK=1`) so UI tests
+    /// are deterministic and offline. Stub at the app boundary — XCUITest can't
+    /// intercept network the way Playwright can.
+    static var isUITestMockMode: Bool { ProcessInfo.processInfo.environment["FLYFUN_MOCK"] == "1" }
+    #endif
+
     // MARK: - Lifecycle
 
     init() {
@@ -90,10 +100,33 @@ final class AppState {
             }
         )
 
+        #if DEBUG
+        if Self.isUITesting {
+            setupUITestSession()
+            return
+        }
+        #endif
+
         if store.token?.isEmpty == false {
             setupClient()
         }
     }
+
+    #if DEBUG
+    /// Wire up a fake authenticated session for UI tests. In mock mode the
+    /// repository serves fixtures; otherwise it points at the selected server so
+    /// tests can also run against a live dev backend. The fake JWT is set on the
+    /// observable mirror only — it is never written to the keychain.
+    private func setupUITestSession() {
+        jwt = "uitest-token"
+        if Self.isUITestMockMode {
+            repository = FixtureBriefingRepository()
+        } else {
+            applyToken("uitest-token")
+            setupClient()
+        }
+    }
+    #endif
 
     // MARK: - Auth
 

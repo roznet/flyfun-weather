@@ -2,7 +2,10 @@
 //  flyfun_weatherUITests.swift
 //  flyfun-weatherUITests
 //
-//  Created by Brice Rosenzweig on 01/03/2026.
+//  XCUITest journeys (#314). Launched in mock mode (FLYFUN_UITEST + FLYFUN_MOCK)
+//  so they skip the auth gate and serve fixtures — deterministic, offline, no
+//  backend or OAuth. Selectors key off accessibilityIdentifiers, not visible
+//  text, so they survive copy/localization changes.
 //
 
 import XCTest
@@ -10,30 +13,54 @@ import XCTest
 final class flyfun_weatherUITests: XCTestCase {
 
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
     }
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
-    }
-
+    /// Launch the app as a UI test would: fake-authenticated + fixture-backed.
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    private func launchMockApp() -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchEnvironment["FLYFUN_UITEST"] = "1"
+        app.launchEnvironment["FLYFUN_MOCK"] = "1"
         app.launch()
+        return app
+    }
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+    /// iPhone collapses the split view to show the flight list directly; iPad in
+    /// portrait collapses to the detail pane with the list behind a "Show Sidebar"
+    /// toggle. Reveal it so the list is reachable on both idioms.
+    @MainActor
+    private func revealFlightList(_ app: XCUIApplication) {
+        if app.staticTexts["LFMD → LFML"].waitForExistence(timeout: 5) { return }
+        let showSidebar = app.buttons["Show Sidebar"]
+        if showSidebar.exists { showSidebar.tap() }
+    }
+
+    /// Journey 1 — launch in mock mode lands past the login gate on the flight
+    /// list, and the seeded fixtures render (iPhone + iPad).
+    @MainActor
+    func testFlightListRendersSeededFlights() throws {
+        let app = launchMockApp()
+        revealFlightList(app)
+
+        // Both fixture flights' route titles appear (proves the list rendered
+        // from the fixture repository, not the login screen).
+        XCTAssertTrue(app.staticTexts["LFMD → LFML"].waitForExistence(timeout: 10),
+                      "first fixture flight should be listed")
+        XCTAssertTrue(app.staticTexts["EGTF → LFAT"].waitForExistence(timeout: 5),
+                      "second fixture flight should be listed")
+
+        // The primary action is reachable.
+        XCTAssertTrue(app.buttons["addFlightButton"].exists, "Add Flight button should be present")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "FlightList-Mock"
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 
     @MainActor
     func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
         }

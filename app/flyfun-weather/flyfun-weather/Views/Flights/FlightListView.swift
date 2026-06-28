@@ -60,6 +60,7 @@ struct FlightListView: View {
                             .refreshable {
                                 await viewModel.loadFlights()
                             }
+                            .accessibilityIdentifier("flightList")
                         }
                     }
                 } else {
@@ -94,6 +95,7 @@ struct FlightListView: View {
                         } label: {
                             Label("Add Flight", systemImage: "plus")
                         }
+                        .accessibilityIdentifier("addFlightButton")
                         Menu {
                             Button {
                                 showSettings = true
