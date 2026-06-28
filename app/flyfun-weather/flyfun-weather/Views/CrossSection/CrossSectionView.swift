@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// SwiftUI Canvas wrapper for the cross-section visualization (§4.7 interaction).
 /// Touch model (a): tap/drag = scrub → moves a continuous cursor that drives the
@@ -24,6 +25,10 @@ struct CrossSectionView: View {
     @State private var scrollTarget: String?
     @Environment(\.verticalSizeClass) private var vSizeClass
 
+    // Contextual tips (#312), gated on this tab being visible.
+    private let layersTip = CrossSectionLayersTip()
+    private let scrubTip = CrossSectionScrubTip()
+
     /// iPhone landscape → immersive full-bleed focus mode (§4.7): cross-section
     /// is a wide artifact, so landscape gives it the right aspect ratio.
     private var isLandscapeFocus: Bool { vSizeClass == .compact }
@@ -44,6 +49,16 @@ struct CrossSectionView: View {
         .sheet(isPresented: $showingConfig) {
             CrossSectionConfigSheet(csVM: csVM)
         }
+        // Gate the cross-section tips on this tab being on screen so they never
+        // fire from the Advisory/Map tabs (#312).
+        .onAppear {
+            CrossSectionLayersTip.crossSectionVisible = true
+            CrossSectionScrubTip.crossSectionVisible = true
+        }
+        .onDisappear {
+            CrossSectionLayersTip.crossSectionVisible = false
+            CrossSectionScrubTip.crossSectionVisible = false
+        }
     }
 
     // MARK: Portrait layout
@@ -60,6 +75,10 @@ struct CrossSectionView: View {
                         onSounding: goToSounding,
                         routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
                     )
+                    // "Tap any point" coachmark above the canvas (#312); cleared
+                    // on the first scrub via `updateScrub`.
+                    TipView(scrubTip)
+                        .padding(.horizontal, Theme.cardPadding)
                     crossSectionCanvas
                     RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
                                    leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)
@@ -139,6 +158,7 @@ struct CrossSectionView: View {
     private var layersPill: some View {
         Button {
             showingConfig = true
+            layersTip.invalidate(reason: .actionPerformed)
         } label: {
             Label("Layers", systemImage: "slider.horizontal.3")
                 .font(.caption.weight(.medium))
@@ -147,6 +167,7 @@ struct CrossSectionView: View {
                 .foregroundStyle(Theme.primary)
         }
         .buttonStyle(.plain)
+        .popoverTip(layersTip)
     }
 
     // MARK: Canvas
@@ -195,6 +216,9 @@ struct CrossSectionView: View {
 
     private func updateScrub(at location: CGPoint) {
         guard let vizData = csVM.vizData, canvasSize.width > 0, !vizData.points.isEmpty else { return }
+        // First real scrub retires the "tap any point" tip (idempotent — the
+        // drag fires this many times).
+        scrubTip.invalidate(reason: .actionPerformed)
         let transform = CoordTransform(size: canvasSize,
                                        maxDistanceNm: vizData.totalDistanceNm,
                                        maxAltitudeFt: vizData.flightCeilingFt)

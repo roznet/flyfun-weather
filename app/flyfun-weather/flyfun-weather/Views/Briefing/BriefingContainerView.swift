@@ -1,5 +1,6 @@
 import CoreLocation
 import SwiftUI
+import TipKit
 
 /// Tab-based briefing viewer for a single flight.
 struct BriefingContainerView: View {
@@ -122,6 +123,11 @@ private struct BriefingToolbarView: View {
     var isInFlightWindow: Bool
     var startTracking: () -> Void
 
+    // Contextual tips (#312): the download/refresh pair reads side by side, so
+    // the refresh tip is sequenced after the download tip donates its event.
+    private let downloadTip = DownloadBriefingTip()
+    private let refreshTip = RefreshBriefingTip()
+
     var body: some View {
         HStack(spacing: 12) {
             // Start / Stop Flight button
@@ -146,10 +152,20 @@ private struct BriefingToolbarView: View {
             switch viewModel.downloadState {
             case .notDownloaded:
                 Button {
-                    Task { await viewModel.downloadCurrentPack() }
+                    Task {
+                        await viewModel.downloadCurrentPack()
+                        // Retire the tip on a successful download. The refresh
+                        // tip's sequencing is driven by the dismissal watcher
+                        // below, so it fires whether the user downloads or just
+                        // closes the tip.
+                        if case .downloaded = viewModel.downloadState {
+                            downloadTip.invalidate(reason: .actionPerformed)
+                        }
+                    }
                 } label: {
                     Image(systemName: "arrow.down.circle")
                 }
+                .popoverTip(downloadTip)
             case .downloading(let progress, _, _):
                 ProgressView(value: progress)
                     .progressViewStyle(.circular)
@@ -177,7 +193,10 @@ private struct BriefingToolbarView: View {
 
             // Refresh button
             Button {
-                Task { await viewModel.refresh() }
+                Task {
+                    await viewModel.refresh()
+                    refreshTip.invalidate(reason: .actionPerformed)
+                }
             } label: {
                 if viewModel.refreshState.isRefreshing {
                     ProgressView()
@@ -187,6 +206,19 @@ private struct BriefingToolbarView: View {
                 }
             }
             .disabled(viewModel.refreshState.isRefreshing)
+            .popoverTip(refreshTip)
+        }
+        // Sequence the refresh tip after the download tip: when the download tip
+        // is dismissed — closed via its × OR acted on by downloading — donate the
+        // event that makes the refresh tip eligible, so the offline-save /
+        // fetch-new pair reads in order (#312).
+        .task {
+            for await status in downloadTip.statusUpdates {
+                if case .invalidated = status {
+                    await BriefingTipEvents.downloadTipSeen.donate()
+                    break
+                }
+            }
         }
     }
 }
