@@ -10,6 +10,7 @@ import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
+from flyfun_common.db import DEV_USER_ID, current_user_id
 
 from weatherbrief.api.app import create_app
 
@@ -56,6 +57,7 @@ def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("JWT_SECRET", "test-jwt-secret")
     monkeypatch.setenv("AIRPORTS_DB", str(nav_db))
     app = create_app()
+    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
     return TestClient(app, raise_server_exceptions=False)
 
 

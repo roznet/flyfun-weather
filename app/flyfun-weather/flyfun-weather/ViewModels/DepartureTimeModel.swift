@@ -98,7 +98,12 @@ final class DepartureTimeModel {
     /// instant.
     func setRouteTimeZones(_ identifiers: [String], preferred: String?) {
         routeTimeZoneIds = identifiers
-        if timeZoneId == "UTC", let preferred, identifiers.contains(preferred) {
+        let available = Set(["UTC"] + identifiers)
+        if !available.contains(timeZoneId) {
+            // The route changed and the selected zone is no longer offered —
+            // reset so the picker never shows a blank selected row.
+            timeZoneId = preferred ?? "UTC"
+        } else if timeZoneId == "UTC", let preferred, identifiers.contains(preferred) {
             timeZoneId = preferred
         }
     }

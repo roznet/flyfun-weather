@@ -87,6 +87,16 @@ private func deviceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
         // Preferred departure zone becomes the selection (was the UTC default).
         #expect(model.timeZoneId == "Europe/Paris")
     }
+
+    @Test func resetsSelectionWhenRouteDropsTheCurrentZone() {
+        let model = DepartureTimeModel(instant: iso("2026-07-15T12:00:00Z"))
+        model.setRouteTimeZones(["Europe/Paris"], preferred: "Europe/Paris")
+        #expect(model.timeZoneId == "Europe/Paris")
+        // Route changes to a zone set that no longer offers Paris — the picker
+        // must not end up on a value absent from its options.
+        model.setRouteTimeZones(["America/New_York"], preferred: "America/New_York")
+        #expect(model.timeZoneId == "America/New_York")
+    }
 }
 
 @MainActor

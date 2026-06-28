@@ -11,9 +11,10 @@ The slim DB keeps only the ``airports`` + ``runways`` tables (what
 ``KnownAirports`` reads), dropping procedures / AIP / waypoints / change-log
 tables — ~3.5 MB instead of the full ~33 MB nav DB.
 
-No auth: airport data is public, descriptive reference data (same stance as the
-data-sources catalogue). The build is cached on disk next to the nav DB and
-rebuilt only when the nav DB's mtime advances.
+Requires a bearer token (the iOS client is always authenticated when it fetches
+this), to keep the API's security posture consistent and avoid an unauthenticated
+scraping vector. The build is cached on disk next to the nav DB and rebuilt only
+when the nav DB's mtime advances.
 """
 
 from __future__ import annotations
@@ -24,8 +25,9 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from flyfun_common.db import current_user_id
 
 router = APIRouter(prefix="/nav", tags=["nav"])
 
@@ -96,7 +98,10 @@ def ensure_slim_db(nav_db_path: str) -> tuple[Path, str]:
 
 
 @router.get("/airports-db")
-def download_airports_db(request: Request):
+def download_airports_db(
+    request: Request,
+    user_id: str = Depends(current_user_id),  # gate only; not used in the body
+):
     """Stream the slim airports SQLite, honoring ``If-None-Match`` (ETag)."""
     nav_db_path = getattr(request.app.state, "db_path", "") or ""
     if not nav_db_path or not os.path.exists(nav_db_path):

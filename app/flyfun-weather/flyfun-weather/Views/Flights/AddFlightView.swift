@@ -185,12 +185,12 @@ struct AddFlightView: View {
     private var profileSection: some View {
         if !viewModel.profileOptions.isEmpty {
             Section {
-                Picker("Profile", selection: Binding(
-                    get: { viewModel.selectedProfileId ?? 0 },
-                    set: { viewModel.applyProfile($0 == 0 ? nil : $0) }
+                Picker("Profile", selection: Binding<Int?>(
+                    get: { viewModel.selectedProfileId },
+                    set: { viewModel.applyProfile($0) }
                 )) {
                     ForEach(viewModel.profileOptions) { profile in
-                        Text(profile.name).tag(profile.id)
+                        Text(profile.name).tag(Optional(profile.id))
                     }
                 }
                 .pickerStyle(.menu)
