@@ -18,9 +18,10 @@ import Foundation
 // the web side (both files carry the reciprocal SYNC comment).
 // =============================================================================
 
-/// One-click layer configuration. Port of web `LayerPreset`. `themeId` is kept
-/// for parity (the web preset also picks a color theme); iOS has no cross-section
-/// color-theme system yet (tracked in #320), so it's informational for now.
+/// One-click layer configuration. Port of web `LayerPreset`. `themeId` mirrors
+/// the web preset's colour theme; the live wiring (selecting a preset also sets
+/// its theme, #320) lives on `CrossSectionViewModel.Preset.themeId`. This struct
+/// stays as a parity mirror of the web `PRESETS` table.
 struct LayerPreset: Identifiable, Equatable {
     let id: String
     let label: String

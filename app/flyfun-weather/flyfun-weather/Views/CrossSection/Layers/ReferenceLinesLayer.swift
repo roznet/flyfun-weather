@@ -20,7 +20,7 @@ struct ReferenceLinesLayer: CrossSectionLayerProtocol {
             let ceilingY = transform.altitudeToY(data.ceilingAltitudeFt)
             drawRefLine(&context, y: ceilingY, left: plot.left, right: plot.right,
                         label: "Ceiling \(Int(data.ceilingAltitudeFt))'",
-                        color: .gray.opacity(0.5))
+                        color: ColorScales.ceilingColor)
         }
     }
 

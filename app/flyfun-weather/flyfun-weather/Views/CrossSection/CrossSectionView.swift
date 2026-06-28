@@ -192,17 +192,22 @@ struct CrossSectionView: View {
             let aircraft = aircraftPosition
             let cursor = scrubDistanceNm ?? activePointDistanceNm
             let layers = csVM.enabledLayers
+            // Read themeId here so the Canvas re-renders when the theme changes
+            // (it's an @Observable dependency, like `layers`). (#320)
+            let themeId = csVM.themeId
 
             // Static scene (sky + cloud bands + axes) is the expensive pass and is
             // gated behind an `Equatable` key so a scrub tick — which only changes
             // `cursor`/`aircraft` — does NOT re-run its ~400 gradient fills. The
             // thin cursor rule + aircraft marker live in a cheap overlay Canvas
-            // that redraws every tick instead (#303).
+            // that redraws every tick instead (#303). `themeId` is part of the gate
+            // so a theme switch repaints the static layers, not just the overlay (#320).
             StaticCrossSectionScene(data: vizData, enabledLayers: layers,
-                                    dataVersion: csVM.dataVersion, renderSize: canvasSize)
+                                    dataVersion: csVM.dataVersion, themeId: themeId,
+                                    renderSize: canvasSize)
                 // `.equatable()` is load-bearing: it forces SwiftUI to gate the
-                // redraw on the custom `==` (dataVersion + layers + size). Without it the
-                // reconciler falls back to reflecting the stored properties, can't
+                // redraw on the custom `==` (dataVersion + layers + themeId + size). Without
+                // it the reconciler falls back to reflecting the stored properties, can't
                 // compare the non-Equatable `VizRouteData`, and redraws every scrub
                 // tick — defeating the split (#303). Do not remove.
                 .equatable()

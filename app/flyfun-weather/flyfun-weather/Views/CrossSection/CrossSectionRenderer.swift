@@ -6,6 +6,10 @@ struct CrossSectionRenderer {
     let enabledLayers: [String: Bool]
     var selectedDistanceNm: Double?
     var aircraftPosition: AircraftPosition?
+    /// Active colour theme (#320). The renderer pins the module-level active
+    /// theme to this before drawing so every `ColorScales` lookup in the layer
+    /// stack resolves against the same theme for the whole frame.
+    var themeId: CrossSectionThemeID = .gramet
 
     /// Lightweight position data for rendering the aircraft icon on the cross-section.
     struct AircraftPosition {
@@ -28,6 +32,13 @@ struct CrossSectionRenderer {
     /// cloud style) and must only re-run on data/model/layer/size change — never
     /// on a scrub tick (#303). Does NOT draw the cursor or aircraft.
     func renderStatic(context: inout GraphicsContext, size: CGSize) {
+        // Writing the shared active theme is only safe on the main actor (see the
+        // `_active` note in CrossSectionTheme). The Canvas closure always runs on
+        // the main actor; this asserts that invariant in debug so a future
+        // off-main caller (e.g. a background snapshot render) trips immediately
+        // rather than racing silently. (#320)
+        MainActor.assertIsolated("CrossSectionRenderer.renderStatic must run on the main actor")
+        CrossSectionTheme.setActive(themeId)
         let transform = CoordTransform(
             size: size,
             maxDistanceNm: data.totalDistanceNm,
@@ -97,7 +108,11 @@ struct CrossSectionRenderer {
 
     private func drawAxes(context: inout GraphicsContext, transform: CoordTransform, data: VizRouteData) {
         let plot = transform.plotArea
-        let gridColor = Color.gray.opacity(0.2)
+        // Grid lines cross the (themed) sky, so the grid colour is theme-driven
+        // — white-ish on the coloured skies, dark on the Light theme. Tick
+        // labels sit outside the plot on the app background, so they stay
+        // `.primary`.
+        let gridColor = ColorScales.gridColor
         let textColor = Color.primary
 
         // Plot border
@@ -152,7 +167,7 @@ struct CrossSectionRenderer {
             var wpPath = Path()
             wpPath.move(to: CGPoint(x: x, y: plot.top))
             wpPath.addLine(to: CGPoint(x: x, y: plot.bottom))
-            context.stroke(wpPath, with: .color(Color.gray.opacity(0.4)), style: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
+            context.stroke(wpPath, with: .color(ColorScales.waypointLineColor), style: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
 
             let text = context.resolve(Text(wp.icao).font(.system(size: 8, weight: .bold)).foregroundColor(textColor))
             context.draw(text, at: CGPoint(x: x, y: plot.top - 4), anchor: .bottom)

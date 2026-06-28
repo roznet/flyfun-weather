@@ -14,46 +14,47 @@ struct RGBA: Sendable {
     func withAlpha(_ alpha: Double) -> Color { Color(.sRGB, red: r, green: g, blue: b, opacity: alpha) }
 }
 
-/// Color functions for cross-section layers. Port of web's scales.ts.
+/// Colour functions for cross-section layers. Port of web's scales.ts.
+///
+/// Every colour reads through `CrossSectionTheme.active` so a single theme
+/// switch recolours the whole chart (mirrors web's `getActiveTheme()`). The
+/// function/property names and signatures are unchanged from the pre-theme
+/// version so all call sites stay put — only the bodies now defer to the theme.
 nonisolated enum ColorScales {
+    private static var theme: CrossSectionTheme { CrossSectionTheme.active }
+
     // MARK: - Icing risk
 
     static func icingRiskColor(_ risk: String) -> Color {
-        switch risk {
-        case "light": Color(.sRGB, red: 0.4, green: 0.6, blue: 1.0, opacity: 0.35)
-        case "moderate": Color(.sRGB, red: 1.0, green: 0.6, blue: 0.2, opacity: 0.45)
-        case "severe": Color(.sRGB, red: 1.0, green: 0.2, blue: 0.2, opacity: 0.55)
-        default: .clear
-        }
+        theme.icing[risk] ?? .clear
     }
 
     // MARK: - CAT risk
 
     static func catRiskColor(_ risk: String) -> Color {
-        switch risk {
-        case "light": Color(.sRGB, red: 1.0, green: 0.75, blue: 0.0, opacity: 0.20)
-        case "moderate": Color(.sRGB, red: 1.0, green: 0.65, blue: 0.0, opacity: 0.40)
-        case "severe": Color(.sRGB, red: 1.0, green: 0.2, blue: 0.2, opacity: 0.55)
-        default: .clear
-        }
+        theme.cat[risk] ?? .clear
     }
 
     // MARK: - Cloud fill from dewpoint depression
 
     /// RGBA components (0–1) for a DD-sourced cloud fill. Faithful port of the
-    /// web Standard theme `cloudFillFromDD`: dense gray (saturated, low DD) →
-    /// near-white (dry, high DD), interpolated by DD; alpha per coverage class.
+    /// web `cloudFillFromDD`: dense (saturated, low DD) → thin (dry, high DD),
+    /// interpolated by DD; alpha per coverage class.
     static func cloudRGBA(dewpointDepressionC: Double?, coverage: String) -> RGBA {
+        let t = theme
+        let (lo, hi) = t.cloudCoverageAlpha[coverage.lowercased()] ?? (0.30, 0.65)
         guard let dd = dewpointDepressionC else {
             // fallbackGray + the class's upper alpha (web behaviour for nil DD).
-            return RGBA(r: 180 / 255.0, g: 180 / 255.0, b: 185 / 255.0, a: coverageAlphaRange(coverage).hi)
+            let g = t.cloudFallbackGray
+            return RGBA(r: g.r / 255.0, g: g.g / 255.0, b: g.b / 255.0, a: hi)
         }
-        let t = min(max(dd / 3.0, 0), 1.0)
+        let f = min(max(dd / 3.0, 0), 1.0)
+        let d = t.cloudDense, th = t.cloudThin
         return RGBA(
-            r: (140 + 110 * t) / 255.0,   // denseRgb[140,140,150] → thinRgb[250,250,255]
-            g: (140 + 110 * t) / 255.0,
-            b: (150 + 105 * t) / 255.0,
-            a: coverageAlpha(coverage, t: t)
+            r: (d.r + (th.r - d.r) * f) / 255.0,
+            g: (d.g + (th.g - d.g) * f) / 255.0,
+            b: (d.b + (th.b - d.b) * f) / 255.0,
+            a: hi - (hi - lo) * f   // denser (hi) when saturated, lighter (lo) when dry
         )
     }
 
@@ -61,58 +62,45 @@ nonisolated enum ColorScales {
         cloudRGBA(dewpointDepressionC: dewpointDepressionC, coverage: coverage).color
     }
 
-    /// Per-coverage [lo, hi] alpha bounds (web Standard theme `clouds.coverageAlpha`).
-    private static func coverageAlphaRange(_ coverage: String) -> (lo: Double, hi: Double) {
-        switch coverage.lowercased() {
-        case "few": return (0.20, 0.35)
-        case "sct": return (0.50, 0.65)
-        case "bkn": return (0.60, 0.88)
-        case "ovc": return (0.70, 0.95)
-        default: return (0.30, 0.65)
-        }
-    }
-
-    /// Alpha from coverage class, denser (hi) when saturated, lighter (lo) when
-    /// dry. Mirrors web `coverageAlpha`: `hi - (hi - lo) * t`.
-    private static func coverageAlpha(_ coverage: String, t: Double) -> Double {
-        let r = coverageAlphaRange(coverage)
-        return r.hi - (r.hi - r.lo) * t
-    }
-
     // MARK: - Inversion
 
     static func inversionOpacity(_ strengthC: Double) -> Double {
-        let clamped = min(max(strengthC / 3.0, 0), 1.0)
-        return 0.15 + 0.50 * clamped
+        let t = theme
+        let clamped = min(max(strengthC / t.inversionMaxStrengthC, 0), 1.0)
+        return min(t.inversionFloor + t.inversionScale * clamped, t.inversionCap)
     }
 
-    static let inversionColor = Color(.sRGB, red: 233 / 255.0, green: 30 / 255.0, blue: 99 / 255.0)
+    static var inversionColor: Color { theme.inversionBase.color() }
 
     // MARK: - Terrain
 
-    static let terrainFill = Color(.sRGB, red: 139 / 255.0, green: 115 / 255.0, blue: 85 / 255.0)
-    static let terrainStroke = Color(.sRGB, red: 107 / 255.0, green: 91 / 255.0, blue: 69 / 255.0)
+    static var terrainFill: Color { theme.terrainFill.color() }
+    static var terrainStroke: Color { theme.terrainStroke.color() }
 
     // MARK: - Temperature lines
 
-    static let freezingLevelColor = Color(.sRGB, red: 0, green: 188 / 255.0, blue: 212 / 255.0)
-    static let minus10cColor = Color(.sRGB, red: 33 / 255.0, green: 150 / 255.0, blue: 243 / 255.0)
-    static let minus20cColor = Color(.sRGB, red: 26 / 255.0, green: 35 / 255.0, blue: 126 / 255.0)
+    static var freezingLevelColor: Color { theme.freezingLevel }
+    static var minus10cColor: Color { theme.minus10c }
+    static var minus20cColor: Color { theme.minus20c }
 
     // MARK: - Reference
 
-    static let cruiseAltitudeColor = Color(.sRGB, red: 0.2, green: 0.2, blue: 0.2, opacity: 0.7)
+    static var cruiseAltitudeColor: Color { theme.cruise }
+    static var ceilingColor: Color { theme.ceiling }
+
+    // MARK: - Axes (grid + waypoint lines drawn over the sky)
+
+    static var gridColor: Color { theme.axisGrid }
+    static var waypointLineColor: Color { theme.axisWaypoint }
 
     // MARK: - Sky background
 
-    /// Web Standard theme sky (#7395DB). The previous light-cyan (#87CEEB) sky
-    /// washed out the whitish clouds — the Standard palette's cloud colours are
-    /// tuned for this periwinkle blue.
-    static let skyBlue = Color(.sRGB, red: 115 / 255.0, green: 149 / 255.0, blue: 219 / 255.0)
+    static var skyBlue: Color { theme.skyBackground }
 
-    // MARK: - NWP cloud (model-percentage-derived, blue-tinted)
+    // MARK: - NWP cloud (model-percentage-derived)
 
-    /// Map METAR coverage class to a representative percentage.
+    /// Map METAR coverage class to a representative percentage. (Not themed —
+    /// this is a data mapping, not a colour.)
     static func coverageToPct(_ coverage: String) -> Double {
         switch coverage.uppercased() {
         case "OVC": return 90
@@ -124,128 +112,80 @@ nonisolated enum ColorScales {
     }
 
     /// RGBA components (0–1) for an NWP cover%-derived cloud fill. Mirrors web
-    /// `nwpCloudFill`.
+    /// `nwpCloudFill`: bright (low cover) → bright−delta (high cover).
     static func nwpCloudRGBA(pct: Double) -> RGBA {
-        // Web Standard theme `nwpCloudFill`: near-white (low cover) → gray (high
-        // cover); alpha 0.30→0.85. brightRgb[245,245,255] − deltaRgb[105,105,100]·t.
-        let t = min(1.0, max(0.0, pct / 100.0))
+        let t = theme
+        let f = min(1.0, max(0.0, pct / 100.0))
         return RGBA(
-            r: (245 - 105 * t) / 255.0,
-            g: (245 - 105 * t) / 255.0,
-            b: (255 - 100 * t) / 255.0,
-            a: 0.30 + 0.55 * t
+            r: (t.nwpBright.r - t.nwpDelta.r * f) / 255.0,
+            g: (t.nwpBright.g - t.nwpDelta.g * f) / 255.0,
+            b: (t.nwpBright.b - t.nwpDelta.b * f) / 255.0,
+            a: t.nwpOpacityFloor + t.nwpOpacityScale * f
         )
     }
 
-    /// Blue-tinted fill from coverage percentage. Distinct hue from DD cloud layers
-    /// so users can tell NWP and DD methods apart at a glance.
+    /// Distinct hue from DD cloud layers so users can tell NWP and DD methods apart.
     static func nwpCloudFill(pct: Double) -> Color {
         nwpCloudRGBA(pct: pct).color
     }
 
     // MARK: - Stability lines (LCL / LFC / EL)
-    // Colours mirror the web cross-section theme `stability` block so parcel
-    // levels read identically across clients.
 
-    static let lclColor = Color(.sRGB, red: 76 / 255.0, green: 175 / 255.0, blue: 80 / 255.0)   // #4caf50
-    static let lfcColor = Color(.sRGB, red: 255 / 255.0, green: 152 / 255.0, blue: 0 / 255.0)   // #ff9800
-    static let elColor = Color(.sRGB, red: 244 / 255.0, green: 67 / 255.0, blue: 54 / 255.0)    // #f44336
+    static var lclColor: Color { theme.lcl }
+    static var lfcColor: Color { theme.lfc }
+    static var elColor: Color { theme.el }
 
     // MARK: - Soft cloud (GRAMET-style feathered fill)
 
     /// Coverage → fill alpha at the band's solid centre.
     static func softCloudCenterAlpha(_ coverage: String) -> Double {
-        switch coverage.uppercased() {
-        case "OVC": return 0.85
-        case "BKN": return 0.65
-        case "SCT": return 0.45
-        case "FEW": return 0.15
-        default: return 0.50
-        }
+        theme.softCloudCoverageAlpha[coverage.uppercased()] ?? 0.50
     }
 
     /// Fade fraction at top and bottom edges for soft-cloud bands.
-    static let softCloudFeatherFraction: Double = 0.15
+    static var softCloudFeatherFraction: Double { theme.softCloudFeather }
 
-    /// Base RGB for soft cloud fills (white-ish).
-    static let softCloudFillRGB: (Double, Double, Double) = (255 / 255.0, 255 / 255.0, 255 / 255.0)
+    /// Base RGB (0–1) for soft cloud fills.
+    static var softCloudFillRGB: (Double, Double, Double) {
+        let f = theme.softCloudFill
+        return (f.r / 255.0, f.g / 255.0, f.b / 255.0)
+    }
 
     // MARK: - SFIP icing
 
     static func sfipRiskColor(_ risk: String) -> Color {
-        switch risk {
-        case "light": Color(.sRGB, red: 0.45, green: 0.7, blue: 1.0, opacity: 0.40)
-        case "moderate": Color(.sRGB, red: 1.0, green: 0.55, blue: 0.0, opacity: 0.50)
-        case "severe": Color(.sRGB, red: 0.85, green: 0.1, blue: 0.55, opacity: 0.55)
-        default: .clear
-        }
+        theme.sfipIcing[risk] ?? .clear
     }
 
     // MARK: - Convective tower palette
 
     /// Subtle full-height column wash behind the tower for situational awareness.
     static func convectiveBgWash(_ risk: String) -> Color {
-        switch risk {
-        case "low": Color(.sRGB, red: 1.0, green: 0.95, blue: 0.6, opacity: 0.08)
-        case "moderate": Color(.sRGB, red: 1.0, green: 0.7, blue: 0.0, opacity: 0.10)
-        case "high": Color(.sRGB, red: 1.0, green: 0.2, blue: 0.2, opacity: 0.12)
-        case "extreme": Color(.sRGB, red: 0.6, green: 0.0, blue: 0.5, opacity: 0.15)
-        default: .clear
-        }
+        theme.convBgWash[risk] ?? .clear
     }
 
     /// Tower body fill colour (LCL/base → EL/top).
     static func convectiveTowerFill(_ risk: String) -> Color {
-        switch risk {
-        case "low": Color(.sRGB, red: 1.0, green: 0.9, blue: 0.4, opacity: 0.30)
-        case "moderate": Color(.sRGB, red: 1.0, green: 0.6, blue: 0.0, opacity: 0.40)
-        case "high": Color(.sRGB, red: 1.0, green: 0.2, blue: 0.2, opacity: 0.50)
-        case "extreme": Color(.sRGB, red: 0.55, green: 0.0, blue: 0.45, opacity: 0.55)
-        default: .clear
-        }
+        theme.convTowerFill[risk] ?? .clear
     }
 
     /// Diagonal hatching colour, drawn inside the tower.
     static func convectiveHatchColor(_ risk: String) -> Color {
-        switch risk {
-        case "low": Color(.sRGB, red: 0.85, green: 0.65, blue: 0.0, opacity: 0.35)
-        case "moderate": Color(.sRGB, red: 0.85, green: 0.40, blue: 0.0, opacity: 0.50)
-        case "high": Color(.sRGB, red: 0.7, green: 0.05, blue: 0.05, opacity: 0.60)
-        case "extreme": Color(.sRGB, red: 0.35, green: 0.0, blue: 0.35, opacity: 0.65)
-        default: .clear
-        }
+        theme.convHatch[risk] ?? .clear
     }
 
     /// Rectangle outline around the tower body.
     static func convectiveEdgeColor(_ risk: String) -> Color {
-        switch risk {
-        case "low": Color(.sRGB, red: 0.7, green: 0.55, blue: 0.0, opacity: 0.6)
-        case "moderate": Color(.sRGB, red: 0.85, green: 0.4, blue: 0.0, opacity: 0.7)
-        case "high": Color(.sRGB, red: 0.7, green: 0.1, blue: 0.1, opacity: 0.8)
-        case "extreme": Color(.sRGB, red: 0.4, green: 0.0, blue: 0.4, opacity: 0.85)
-        default: .clear
-        }
+        theme.convEdge[risk] ?? .clear
     }
 
     /// Anvil strip colour at tower top.
     static func convectiveStripColor(_ risk: String) -> Color {
-        switch risk {
-        case "low": Color(.sRGB, red: 0.85, green: 0.7, blue: 0.0, opacity: 0.6)
-        case "moderate": Color(.sRGB, red: 0.85, green: 0.45, blue: 0.0, opacity: 0.75)
-        case "high": Color(.sRGB, red: 0.7, green: 0.1, blue: 0.1, opacity: 0.8)
-        case "extreme": Color(.sRGB, red: 0.4, green: 0.0, blue: 0.4, opacity: 0.85)
-        default: .clear
-        }
+        theme.convStrip[risk] ?? .clear
     }
 
     /// Pill-label text colour (TCU/CB/+TS).
     static func convectiveCBLabelColor(_ risk: String) -> Color {
-        switch risk {
-        case "low": Color(.sRGB, red: 0.6, green: 0.45, blue: 0.0, opacity: 0.9)
-        case "moderate": Color(.sRGB, red: 0.7, green: 0.35, blue: 0.0, opacity: 0.95)
-        case "high": Color(.sRGB, red: 0.65, green: 0.1, blue: 0.1, opacity: 1.0)
-        case "extreme": Color(.sRGB, red: 0.4, green: 0.0, blue: 0.4, opacity: 1.0)
-        default: .gray
-        }
+        theme.convCBLabel[risk] ?? .gray
     }
 }

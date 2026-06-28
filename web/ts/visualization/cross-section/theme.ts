@@ -7,6 +7,12 @@
  * Usage: import { getActiveTheme } from './theme';
  *        const t = getActiveTheme();
  *        ctx.fillStyle = t.terrain.fillColor;
+ *
+ * SYNC: the iOS app mirrors these themes (color values + IDs) in
+ * app/flyfun-weather/flyfun-weather/Views/CrossSection/CrossSectionTheme.swift.
+ * iOS ports only the fields its layers render (no nightShading / obscuration /
+ * compareModelColors / sld yet) and themes colors but not line widths/dashes.
+ * Keep the two in lockstep when editing palettes (#320).
  */
 
 // --- Theme interface ---
