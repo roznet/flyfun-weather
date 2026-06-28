@@ -354,12 +354,9 @@ struct SquareCloudBandsLayer: CrossSectionLayerProtocol {
     }
 }
 
-/// One flat (horizontal top/base) rectangular cloud cell. Skips tapered
-/// zero-height ends produced for unmatched zones.
-///
-/// Square has no blobs/feathering to add structure, so a faint cover-based fill
-/// dissolves into the (light) sky. Bump the fill to a visible floor and stroke a
-/// darker border so cells read as crisp ForeFlight-style blocks on any sky. (#7)
+/// One flat (horizontal top/base) rectangular cloud cell, solid fill (no border
+/// — ForeFlight-like). Skips tapered zero-height ends produced for unmatched
+/// zones. Visibility comes from the Standard-theme cloud colour + sky contrast.
 private func fillFlatCell(
     _ context: inout GraphicsContext,
     x0: CGFloat, x1: CGFloat, baseFt: Double, topFt: Double,
@@ -369,10 +366,7 @@ private func fillFlatCell(
     let yTop = transform.altitudeToY(topFt)
     let yBase = transform.altitudeToY(baseFt)
     guard yBase > yTop else { return }
-    let rect = CGRect(x: x0, y: yTop, width: x1 - x0, height: yBase - yTop)
-    context.fill(Path(rect), with: .color(rgba.withAlpha(max(rgba.a, 0.55))))
-    let border = RGBA(r: rgba.r * 0.55, g: rgba.g * 0.55, b: rgba.b * 0.65, a: 0.9)
-    context.stroke(Path(rect), with: .color(border.color), lineWidth: 0.75)
+    context.fill(Path(CGRect(x: x0, y: yTop, width: x1 - x0, height: yBase - yTop)), with: .color(rgba.color))
 }
 
 // MARK: - Shared single-point column fallback

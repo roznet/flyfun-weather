@@ -40,16 +40,19 @@ nonisolated enum ColorScales {
 
     // MARK: - Cloud fill from dewpoint depression
 
-    /// RGBA components (0–1) for a DD-sourced cloud fill. Mirrors web
-    /// `cloudFillFromDD`. Returned as a tuple so the natural style can build
-    /// both a solid and a fully-transparent gradient stop from the same colour.
+    /// RGBA components (0–1) for a DD-sourced cloud fill. Faithful port of the
+    /// web Standard theme `cloudFillFromDD`: dense gray (saturated, low DD) →
+    /// near-white (dry, high DD), interpolated by DD; alpha per coverage class.
     static func cloudRGBA(dewpointDepressionC: Double?, coverage: String) -> RGBA {
-        let dd = dewpointDepressionC ?? 1.5
+        guard let dd = dewpointDepressionC else {
+            // fallbackGray + the class's upper alpha (web behaviour for nil DD).
+            return RGBA(r: 180 / 255.0, g: 180 / 255.0, b: 185 / 255.0, a: coverageAlphaRange(coverage).hi)
+        }
         let t = min(max(dd / 3.0, 0), 1.0)
         return RGBA(
-            r: (170 + 75 * t) / 255.0,
-            g: (170 + 75 * t) / 255.0,
-            b: (175 + 73 * t) / 255.0,
+            r: (140 + 110 * t) / 255.0,   // denseRgb[140,140,150] → thinRgb[250,250,255]
+            g: (140 + 110 * t) / 255.0,
+            b: (150 + 105 * t) / 255.0,
             a: coverageAlpha(coverage, t: t)
         )
     }
@@ -58,13 +61,22 @@ nonisolated enum ColorScales {
         cloudRGBA(dewpointDepressionC: dewpointDepressionC, coverage: coverage).color
     }
 
-    private static func coverageAlpha(_ coverage: String, t: Double) -> Double {
-        switch coverage {
-        case "sct": 0.40 + 0.15 * (1 - t)
-        case "bkn": 0.50 + 0.30 * (1 - t)
-        case "ovc": 0.60 + 0.32 * (1 - t)
-        default: 0.30
+    /// Per-coverage [lo, hi] alpha bounds (web Standard theme `clouds.coverageAlpha`).
+    private static func coverageAlphaRange(_ coverage: String) -> (lo: Double, hi: Double) {
+        switch coverage.lowercased() {
+        case "few": return (0.20, 0.35)
+        case "sct": return (0.50, 0.65)
+        case "bkn": return (0.60, 0.88)
+        case "ovc": return (0.70, 0.95)
+        default: return (0.30, 0.65)
         }
+    }
+
+    /// Alpha from coverage class, denser (hi) when saturated, lighter (lo) when
+    /// dry. Mirrors web `coverageAlpha`: `hi - (hi - lo) * t`.
+    private static func coverageAlpha(_ coverage: String, t: Double) -> Double {
+        let r = coverageAlphaRange(coverage)
+        return r.hi - (r.hi - r.lo) * t
     }
 
     // MARK: - Inversion
@@ -93,7 +105,10 @@ nonisolated enum ColorScales {
 
     // MARK: - Sky background
 
-    static let skyBlue = Color(.sRGB, red: 135 / 255.0, green: 206 / 255.0, blue: 235 / 255.0)
+    /// Web Standard theme sky (#7395DB). The previous light-cyan (#87CEEB) sky
+    /// washed out the whitish clouds — the Standard palette's cloud colours are
+    /// tuned for this periwinkle blue.
+    static let skyBlue = Color(.sRGB, red: 115 / 255.0, green: 149 / 255.0, blue: 219 / 255.0)
 
     // MARK: - NWP cloud (model-percentage-derived, blue-tinted)
 
@@ -111,13 +126,14 @@ nonisolated enum ColorScales {
     /// RGBA components (0–1) for an NWP cover%-derived cloud fill. Mirrors web
     /// `nwpCloudFill`.
     static func nwpCloudRGBA(pct: Double) -> RGBA {
+        // Web Standard theme `nwpCloudFill`: near-white (low cover) → gray (high
+        // cover); alpha 0.30→0.85. brightRgb[245,245,255] − deltaRgb[105,105,100]·t.
         let t = min(1.0, max(0.0, pct / 100.0))
-        // Brighter blue at low cover, darker at high cover.
         return RGBA(
-            r: (210 - 60 * t) / 255.0,
-            g: (220 - 50 * t) / 255.0,
-            b: (235 - 20 * t) / 255.0,
-            a: 0.30 + 0.50 * t
+            r: (245 - 105 * t) / 255.0,
+            g: (245 - 105 * t) / 255.0,
+            b: (255 - 100 * t) / 255.0,
+            a: 0.30 + 0.55 * t
         )
     }
 
