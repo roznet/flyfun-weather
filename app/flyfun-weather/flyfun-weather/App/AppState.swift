@@ -237,5 +237,9 @@ final class AppState {
         repository = CachingBriefingRepository(client: client, online: online, cache: cache)
         Task { await userPreferences.refresh(using: client) }
         Task { await helpCatalog.refresh(using: client) }
+        // Open any cached airports DB immediately (offline-safe), then refresh it
+        // from the server if the AIRAC copy changed (ETag → usually a 304 no-op).
+        AirportDatabase.shared.loadCached()
+        Task { await AirportDatabase.shared.refresh(using: client) }
     }
 }

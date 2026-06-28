@@ -113,6 +113,46 @@ actor APIClient {
         return .updated(data: data, etag: http.value(forHTTPHeaderField: "ETag"))
     }
 
+    // MARK: - Airports DB (ETag-cached)
+
+    /// Outcome of a conditional airports-DB fetch (mirrors the help-catalog flow).
+    enum AirportsDBFetchResult: Sendable {
+        case notModified
+        case updated(data: Data, etag: String?)
+    }
+
+    /// Conditionally download the slim airports SQLite used for local ICAO
+    /// autocomplete. Pass the cached `ETag`; a `304` returns `.notModified` and
+    /// the caller keeps its on-disk copy. The DB is a few MB and changes only on
+    /// an AIRAC cycle, so this is a rare full download.
+    func fetchAirportsDB(ifNoneMatch etag: String? = nil) async throws -> AirportsDBFetchResult {
+        let url = baseURL.appendingPathComponent("/api/nav/airports-db")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 120   // multi-MB body on a slow link
+        if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            (data, http) = try await rollingSession.data(for: request)
+        } catch FlyFunAPIError.unauthorized {
+            throw APIError.unauthorized
+        } catch let FlyFunAPIError.networkError(inner) {
+            throw APIError.networkError(inner)
+        } catch {
+            throw APIError.networkError(error)
+        }
+
+        if http.statusCode == 304 {
+            return .notModified
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw APIError.serverError(http.statusCode, String(data: data, encoding: .utf8))
+        }
+        return .updated(data: data, etag: http.value(forHTTPHeaderField: "ETag"))
+    }
+
     // MARK: - Generic request methods
 
     /// Fetch and decode a JSON response.

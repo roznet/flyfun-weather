@@ -1,0 +1,4 @@
+
+# Slim airports DB is downloaded from the server at runtime, never committed (churns per AIRAC cycle)
+airports.db
+*.airportsdb

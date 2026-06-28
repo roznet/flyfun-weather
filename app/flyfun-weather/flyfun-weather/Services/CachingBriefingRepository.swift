@@ -52,6 +52,22 @@ final class CachingBriefingRepository: BriefingRepository {
         try await online.aircraft()
     }
 
+    func profiles() async throws -> [ProfileResponse] {
+        try await online.profiles()
+    }
+
+    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse {
+        try await online.interpretRoute(rawRoute: rawRoute)
+    }
+
+    func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse {
+        try await online.routeDistance(waypoints: waypoints)
+    }
+
+    func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] {
+        try await online.autorouterRoutes(limit: limit)
+    }
+
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
         try await online.searchAircraftTypes(query)
     }
