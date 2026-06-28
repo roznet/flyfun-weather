@@ -73,6 +73,7 @@ actor FixtureBriefingRepository: BriefingRepository {
         return flight
     }
     func aircraft() async throws -> [AircraftResponse] { [] }
+    func profiles() async throws -> [ProfileResponse] { [] }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
     func packs(flightId: String) async throws -> [PackMetaResponse] { [] }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { PirepListResponse(items: [], count: 0) }
@@ -85,6 +86,9 @@ actor FixtureBriefingRepository: BriefingRepository {
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw FixtureError.notProvided("updateFlight") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw FixtureError.notProvided("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw FixtureError.notProvided("parseFpl") }
+    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse { throw FixtureError.notProvided("interpretRoute") }
+    func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw FixtureError.notProvided("routeDistance") }
+    func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
     func latestPack(flightId: String) async throws -> PackMetaResponse { throw FixtureError.notProvided("latestPack") }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse { throw FixtureError.notProvided("advisories") }
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse { throw FixtureError.notProvided("advisoryDetail") }

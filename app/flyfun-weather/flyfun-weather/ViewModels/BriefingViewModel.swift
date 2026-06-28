@@ -184,11 +184,31 @@ final class BriefingViewModel {
             async let dataTask: () = loadPackData(timestamp: pack.fetchTimestamp)
             _ = await (historyTask, dataTask)
             await checkCacheStatus()
+        } catch APIError.notFound {
+            // No briefing pack exists yet — this is the normal state right after a
+            // flight is created (POST /api/flights only saves the flight; it does
+            // not generate a briefing). Rather than dead-ending on a "not found"
+            // error, kick off the first briefing and stream its progress through
+            // the existing refresh banner (stage/detail/percent).
+            await generateFirstBriefing()
         } catch {
             Self.logger.error("Failed to load pack meta: \(error)")
             advisoriesState = .error(error)
             digestState = .error(error)
             snapshotState = .error(error)
+        }
+    }
+
+    /// Generate the briefing for a flight that has no pack yet (e.g. just created).
+    /// If the server already has a refresh in flight (started from the web or
+    /// another device), adopt and poll it; otherwise start a fresh streamed run.
+    /// Either way the refresh UI reports progress and the data loads on completion.
+    private func generateFirstBriefing() async {
+        let active = (try? await repository.refreshStatus(flightId: flight.id))?.active ?? false
+        if active {
+            await checkActiveRefresh()
+        } else {
+            await refresh()
         }
     }
 

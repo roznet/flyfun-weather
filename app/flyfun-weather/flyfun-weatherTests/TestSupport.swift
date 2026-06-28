@@ -51,6 +51,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse { try createFlightResult.get() }
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw MockError.notStubbed("updateFlight") }
     func aircraft() async throws -> [AircraftResponse] { try aircraftResult.get() }
+    func profiles() async throws -> [ProfileResponse] { [] }
+    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse { throw MockError.notStubbed("interpretRoute") }
+    func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw MockError.notStubbed("routeDistance") }
+    func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }

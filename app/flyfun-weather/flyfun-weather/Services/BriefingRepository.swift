@@ -6,9 +6,13 @@ protocol BriefingRepository: Sendable {
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse
     func aircraft() async throws -> [AircraftResponse]
+    func profiles() async throws -> [ProfileResponse]
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse]
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse
     func parseFpl(_ text: String) async throws -> ParseFplResponse
+    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse
+    func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse
+    func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute]
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
@@ -58,6 +62,10 @@ final class OnlineBriefingRepository: BriefingRepository {
         try await client.request("/api/aircraft")
     }
 
+    func profiles() async throws -> [ProfileResponse] {
+        try await client.request("/api/user/profiles")
+    }
+
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
         return try await client.requestURL("/api/aircraft/types?q=\(Self.queryValueEncoded(query))")
     }
@@ -70,6 +78,23 @@ final class OnlineBriefingRepository: BriefingRepository {
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
         let body = try JSONEncoder.weatherBrief.encode(ParseFplRequest(fplText: text))
         return try await client.request("/api/flights/parse-fpl", method: "POST", body: body)
+    }
+
+    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse {
+        let body = try JSONEncoder.weatherBrief.encode(InterpretRouteRequest(rawRoute: rawRoute))
+        return try await client.request("/api/flights/interpret-route", method: "POST", body: body)
+    }
+
+    func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse {
+        let body = try JSONEncoder.weatherBrief.encode(RouteDistanceRequest(waypoints: waypoints))
+        return try await client.request("/api/flights/route-distance", method: "POST", body: body)
+    }
+
+    func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] {
+        let response: AutorouterRoutesResponse = try await client.requestURL(
+            "/api/flights/autorouter-routes?limit=\(limit)"
+        )
+        return response.routes
     }
 
     func packs(flightId: String) async throws -> [PackMetaResponse] {

@@ -9,6 +9,9 @@ struct CreateFlightRequest: Encodable {
     var flightCeilingFt: Int?
     var flightDurationHours: Double?
     var aircraftId: Int? = nil
+    /// Flight profile to associate; the server fills any unspecified flight
+    /// fields (ceiling, speed, model choices) from this profile's settings.
+    var profileId: Int? = nil
 }
 
 /// Request body for editing an existing flight via PATCH /api/flights/{id}.
@@ -22,6 +25,7 @@ struct UpdateFlightRequest: Encodable {
     var cruiseAltitudeFt: Int? = nil
     var flightCeilingFt: Int? = nil
     var flightDurationHours: Double? = nil
+    var profileId: Int? = nil
 }
 
 /// How much of the briefing an edit invalidated, returned alongside the updated

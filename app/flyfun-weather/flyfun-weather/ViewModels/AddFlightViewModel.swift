@@ -7,10 +7,28 @@ import OSLog
 final class AddFlightViewModel {
     // Form fields
     var waypointsText: String = ""
-    var departureDate: Date = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
+    /// TZ-aware departure time. `departureDate` below bridges to its instant so
+    /// the rest of the VM keeps working with a plain `Date`.
+    let departureTime: DepartureTimeModel
     var cruiseAltitudeFt: Int = 5500
     var flightDurationHours: Double = 2.0
     var selectedAircraftId: Int?
+
+    /// Absolute departure instant — the single source of truth lives in
+    /// `departureTime`; this is the bridge the existing create/edit code uses.
+    var departureDate: Date {
+        get { departureTime.instant }
+        set { departureTime.instant = newValue }
+    }
+
+    // Route interpretation (#5) — also feeds the timezone dropdown (#4).
+    private(set) var routeInterpretation: InterpretRouteResponse?
+    private(set) var isInterpreting: Bool = false
+
+    // Flight profile picker
+    private(set) var profileOptions: [ProfileResponse] = []
+    private(set) var isLoadingProfiles: Bool = false
+    var selectedProfileId: Int?
 
     // FPL paste
     var fplText: String = ""
@@ -47,12 +65,14 @@ final class AddFlightViewModel {
     init(repository: any BriefingRepository, flight: FlightResponse? = nil) {
         self.repository = repository
         self.editingFlight = flight
+        let defaultInstant = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
+        self.departureTime = DepartureTimeModel(instant: flight?.departureDate ?? defaultInstant)
         if let flight {
             waypointsText = flight.waypoints.joined(separator: " ")
-            if let date = flight.departureDate { departureDate = date }
             cruiseAltitudeFt = flight.cruiseAltitudeFt
             flightDurationHours = flight.flightDurationHours
             selectedAircraftId = flight.aircraftId
+            selectedProfileId = flight.profileId
         }
     }
 
@@ -61,6 +81,19 @@ final class AddFlightViewModel {
     var navigationTitle: String { isEditing ? "Edit Flight" : "New Flight" }
 
     var submitTitle: String { isEditing ? "Save" : "Create" }
+
+    /// Replace the trailing (still-being-typed) token with a chosen ICAO and add
+    /// a trailing space so the user can keep typing the next waypoint. Preserves
+    /// whatever separator the user was using before the last token.
+    func completeLastToken(with icao: String) {
+        let separators: Set<Character> = [" ", "-", ","]
+        if let lastSep = waypointsText.lastIndex(where: { separators.contains($0) }) {
+            let prefix = waypointsText[...lastSep]
+            waypointsText = String(prefix) + icao + " "
+        } else {
+            waypointsText = icao + " "
+        }
+    }
 
     /// Parsed waypoints from the text field.
     var waypoints: [String] {
@@ -82,6 +115,7 @@ final class AddFlightViewModel {
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         if selectedAircraftId != original.aircraftId { return true }
+        if selectedProfileId != original.profileId { return true }
         guard let originalDate = original.departureDate else { return true }
         return abs(departureDate.timeIntervalSince(originalDate)) > 1
     }
@@ -94,8 +128,115 @@ final class AddFlightViewModel {
         if waypoints != original.waypoints.map({ $0.uppercased() }) { return true }
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
+        // A profile carries model/method choices, so changing it can change the
+        // forecast — treat it like a forecast-affecting field (rebrief confirm).
+        if selectedProfileId != original.profileId { return true }
         guard let originalDate = original.departureDate else { return true }
         return abs(departureDate.timeIntervalSince(originalDate)) > 1
+    }
+
+    // MARK: - Route interpretation + timezone resolution
+
+    /// Whether the latest interpretation dropped any tokens (skipped / off-route),
+    /// so the save flow should confirm before committing (mirrors the web).
+    var routeHasDroppedTokens: Bool {
+        guard let interpretation = routeInterpretation else { return false }
+        return !interpretation.isClean
+    }
+
+    /// Resolve the typed route on the server: validates/normalises waypoints,
+    /// returns what was understood / skipped / off-route, and per-waypoint
+    /// timezones. Feeds both the interpret popup (#5) and the TZ dropdown (#4).
+    /// Debounced by the caller; non-fatal on failure (e.g. a half-typed route).
+    func resolveRoute() async {
+        let route = waypointsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard waypoints.count >= 2 else {
+            routeInterpretation = nil
+            return
+        }
+        isInterpreting = true
+        defer { isInterpreting = false }
+        do {
+            let result = try await repository.interpretRoute(rawRoute: route)
+            routeInterpretation = result
+            applyRouteTimeZones(from: result.waypoints)
+        } catch {
+            // Half-typed or out-of-coverage route — keep the field usable, just
+            // don't offer interpretation/timezones yet.
+            Self.logger.debug("Route interpret unavailable: \(error)")
+        }
+    }
+
+    /// Populate the timezone dropdown from resolved waypoints and default the
+    /// display zone to the departure airport's timezone (first waypoint).
+    private func applyRouteTimeZones(from waypoints: [RouteWaypointInfo]) {
+        let zones = waypoints.compactMap(\.timezone)
+        departureTime.setRouteTimeZones(zones, preferred: waypoints.first?.timezone)
+    }
+
+    // MARK: - Autorouter import + recent routes
+
+    private(set) var autorouterRoutes: [AutorouterRoute] = []
+    private(set) var isLoadingAutorouter: Bool = false
+    /// User-facing message when Autorouter import can't proceed (not linked, empty,
+    /// or unreachable). Nil when routes loaded successfully.
+    var autorouterError: String?
+
+    /// Recently-flown routes, derived client-side from the flight list (most recent
+    /// distinct waypoint sequences) — same source as the web's recent-route dropdown.
+    private(set) var recentRoutes: [[String]] = []
+
+    func loadAutorouterRoutes() async {
+        isLoadingAutorouter = true
+        autorouterError = nil
+        defer { isLoadingAutorouter = false }
+        do {
+            autorouterRoutes = try await repository.autorouterRoutes(limit: 25)
+            if autorouterRoutes.isEmpty {
+                autorouterError = "No recent routes found in your Autorouter account."
+            }
+        } catch let APIError.serverError(code, message)
+            where code == 409 || (message?.contains("autorouter_not_linked") ?? false) {
+            autorouterRoutes = []
+            autorouterError = "Link your Autorouter account on the web app to import routes here."
+        } catch {
+            autorouterRoutes = []
+            autorouterError = "Could not load Autorouter routes: \(error.localizedDescription)"
+            Self.logger.debug("Autorouter routes unavailable: \(error)")
+        }
+    }
+
+    /// Import a selected Autorouter route by running its ICAO flight plan through
+    /// the same parse→fill path as "Paste Flight Plan".
+    func importAutorouterRoute(_ route: AutorouterRoute) async {
+        fplText = route.fplan
+        await parseFpl()
+    }
+
+    func loadRecentRoutes() async {
+        do {
+            let flights = try await repository.flights()
+            // `createdAt` is an ISO-8601 string, so a lexicographic sort orders by
+            // recency. Keep up to 8 distinct waypoint sequences.
+            let sorted = flights.sorted { $0.createdAt > $1.createdAt }
+            var seen = Set<String>()
+            var result: [[String]] = []
+            for flight in sorted {
+                let wps = flight.waypoints.map { $0.uppercased() }
+                guard wps.count >= 2 else { continue }
+                if seen.insert(wps.joined(separator: " ")).inserted {
+                    result.append(wps)
+                    if result.count >= 8 { break }
+                }
+            }
+            recentRoutes = result
+        } catch {
+            Self.logger.debug("Recent routes unavailable: \(error)")
+        }
+    }
+
+    func applyRecentRoute(_ waypoints: [String]) {
+        waypointsText = waypoints.joined(separator: " ")
     }
 
     // MARK: - Aircraft picker
@@ -125,6 +266,45 @@ final class AddFlightViewModel {
             // Non-fatal: the form still works without saved aircraft.
             Self.logger.debug("Aircraft list unavailable: \(error)")
         }
+    }
+
+    // MARK: - Profile picker
+
+    var selectedProfile: ProfileResponse? {
+        guard let selectedProfileId else { return nil }
+        return profileOptions.first { $0.id == selectedProfileId }
+    }
+
+    func loadProfiles() async {
+        guard !isLoadingProfiles else { return }
+        isLoadingProfiles = true
+        defer { isLoadingProfiles = false }
+        do {
+            let profiles = try await repository.profiles()
+            profileOptions = profiles.sortedForPicker()
+            // Ensure the picker always reflects a valid selection. If none is set
+            // (new flight, or an older flight saved before profiles existed), fall
+            // back to the account default. Apply the preset's altitude only when
+            // creating — on edit we must not silently rewrite the flight's values.
+            let known = selectedProfileId.flatMap { id in profiles.contains { $0.id == id } } ?? false
+            if !known {
+                selectedProfileId = profiles.first(where: \.isDefault)?.id ?? profiles.first?.id
+                if !isEditing, let id = selectedProfileId { applyProfile(id) }
+            }
+        } catch {
+            // Non-fatal: the form still works without a profile (server uses the
+            // account default).
+            Self.logger.debug("Profile list unavailable: \(error)")
+        }
+    }
+
+    /// Apply a selected profile's preset flight parameters to the form. Mirrors
+    /// the web: choosing a profile fills cruise altitude (and the server fills
+    /// ceiling/speed from the same profile on save).
+    func applyProfile(_ id: Int?) {
+        selectedProfileId = id
+        guard let profile = profileOptions.first(where: { $0.id == id }) else { return }
+        if let alt = profile.settings.cruiseAltitudeFt { cruiseAltitudeFt = alt }
     }
 
     func prepareNewAircraftForm() {
@@ -299,7 +479,8 @@ final class AddFlightViewModel {
             departureTime: formatter.string(from: departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightDurationHours: flightDurationHours,
-            aircraftId: selectedAircraftId
+            aircraftId: selectedAircraftId,
+            profileId: selectedProfileId
         )
 
         do {
@@ -337,7 +518,8 @@ final class AddFlightViewModel {
             waypoints: waypoints,
             departureTime: formatter.string(from: departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
-            flightDurationHours: flightDurationHours
+            flightDurationHours: flightDurationHours,
+            profileId: selectedProfileId
         )
 
         do {

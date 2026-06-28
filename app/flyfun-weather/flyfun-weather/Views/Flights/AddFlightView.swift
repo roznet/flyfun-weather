@@ -5,9 +5,16 @@ import SwiftUI
 struct AddFlightView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel: AddFlightViewModel
+    @State private var autocomplete = RouteAutocompleteController()
+    @FocusState private var routeFieldFocused: Bool
     @State private var showFplSheet = false
     @State private var showAircraftSheet = false
     @State private var showRebriefConfirm = false
+    @State private var showInterpretSheet = false
+    @State private var showAutorouterSheet = false
+    /// True when the interpret sheet is shown as a pre-create confirmation
+    /// (because the route dropped tokens), so "Accept" proceeds to create.
+    @State private var confirmingInterpretBeforeCreate = false
 
     /// Called with the created OR updated flight.
     let onCreated: (FlightResponse) -> Void
@@ -21,7 +28,8 @@ struct AddFlightView: View {
     var body: some View {
         NavigationStack {
             Form {
-                fplSection
+                importSection
+                profileSection
                 aircraftSection
                 waypointsSection
                 departureSection
@@ -63,10 +71,37 @@ struct AddFlightView: View {
             .task {
                 await viewModel.loadAircraft()
             }
+            .task {
+                await viewModel.loadProfiles()
+            }
+            .task {
+                await viewModel.loadRecentRoutes()
+            }
             .sheet(isPresented: $showAircraftSheet) {
                 AircraftFormSheet(viewModel: viewModel) {
                     showAircraftSheet = false
                 }
+            }
+            .sheet(isPresented: $showAutorouterSheet) {
+                AutorouterPickerSheet(viewModel: viewModel) { route in
+                    showAutorouterSheet = false
+                    Task { await viewModel.importAutorouterRoute(route) }
+                } onCancel: {
+                    showAutorouterSheet = false
+                }
+            }
+            .sheet(isPresented: $showInterpretSheet) {
+                RouteInterpretSheet(
+                    interpretation: viewModel.routeInterpretation,
+                    rawRoute: viewModel.waypointsText,
+                    isResolving: viewModel.isInterpreting,
+                    acceptTitle: confirmingInterpretBeforeCreate ? "Accept & Create" : nil,
+                    onAccept: {
+                        showInterpretSheet = false
+                        Task { await performCreate() }
+                    },
+                    onResolve: { await viewModel.resolveRoute() }
+                )
             }
         }
     }
@@ -82,13 +117,20 @@ struct AddFlightView: View {
             } else {
                 Task { await submitEdit(regenerate: false) }
             }
+        } else if viewModel.routeHasDroppedTokens {
+            // The route dropped tokens — show the interpretation so the pilot can
+            // confirm what we understood before creating (mirrors the web).
+            confirmingInterpretBeforeCreate = true
+            showInterpretSheet = true
         } else {
-            Task {
-                if let flight = await viewModel.createFlight() {
-                    onCreated(flight)
-                    dismiss()
-                }
-            }
+            Task { await performCreate() }
+        }
+    }
+
+    private func performCreate() async {
+        if let flight = await viewModel.createFlight() {
+            onCreated(flight)
+            dismiss()
         }
     }
 
@@ -101,20 +143,69 @@ struct AddFlightView: View {
 
     // MARK: - Sections
 
-    private var fplSection: some View {
+    private var importSection: some View {
         Section {
+            if !viewModel.recentRoutes.isEmpty {
+                Menu {
+                    ForEach(Array(viewModel.recentRoutes.enumerated()), id: \.offset) { _, route in
+                        Button(route.joined(separator: " ")) {
+                            viewModel.applyRecentRoute(route)
+                        }
+                    }
+                } label: {
+                    Label("Recent routes", systemImage: "clock.arrow.circlepath")
+                }
+            }
+
             Button {
                 showFplSheet = true
             } label: {
                 Label("Paste Flight Plan", systemImage: "doc.on.clipboard")
             }
-            .sheet(isPresented: $showFplSheet) {
-                FplPasteSheet(viewModel: viewModel) {
-                    showFplSheet = false
+
+            Button {
+                showAutorouterSheet = true
+                Task { await viewModel.loadAutorouterRoutes() }
+            } label: {
+                Label("Import from Autorouter", systemImage: "arrow.down.doc")
+            }
+        } header: {
+            Text("Import")
+        } footer: {
+            Text("Start from a recent route, an ICAO flight plan, or your Autorouter history.")
+        }
+        .sheet(isPresented: $showFplSheet) {
+            FplPasteSheet(viewModel: viewModel) {
+                showFplSheet = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var profileSection: some View {
+        if !viewModel.profileOptions.isEmpty {
+            Section {
+                Picker("Profile", selection: Binding(
+                    get: { viewModel.selectedProfileId ?? 0 },
+                    set: { viewModel.applyProfile($0 == 0 ? nil : $0) }
+                )) {
+                    ForEach(viewModel.profileOptions) { profile in
+                        Text(profile.name).tag(profile.id)
+                    }
+                }
+                .pickerStyle(.menu)
+            } header: {
+                Text("Profile")
+            } footer: {
+                Text("Presets cruise altitude and the weather models used for the briefing.")
+            }
+        } else if viewModel.isLoadingProfiles {
+            Section {
+                HStack {
+                    ProgressView()
+                    Text("Loading profiles\u{2026}").foregroundStyle(.secondary)
                 }
             }
-        } footer: {
-            Text("Paste an ICAO flight plan to auto-fill all fields.")
         }
     }
 
@@ -166,25 +257,134 @@ struct AddFlightView: View {
             TextField("LFBO TOU LFMT", text: $viewModel.waypointsText)
                 .textInputAutocapitalization(.characters)
                 .autocorrectionDisabled()
+                .focused($routeFieldFocused)
                 .accessibilityIdentifier("waypointsField")
+                // Debounced autocomplete: the keystroke only cancels the prior
+                // pending search, so typing is never blocked. After a short pause
+                // we look up completions for the *last* token.
+                .task(id: viewModel.waypointsText) {
+                    try? await Task.sleep(for: .milliseconds(140))
+                    guard !Task.isCancelled else { return }
+                    autocomplete.update(for: viewModel.waypointsText)
+                }
+
+            if routeFieldFocused, !autocomplete.suggestions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(autocomplete.suggestions) { suggestion in
+                            Button {
+                                viewModel.completeLastToken(with: suggestion.icao)
+                                autocomplete.clear()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(suggestion.icao)
+                                        .font(.caption.bold().monospaced())
+                                    Text(suggestion.name)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+            }
 
             if !viewModel.waypoints.isEmpty {
                 Text(viewModel.waypoints.joined(separator: " \u{2192} "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            if viewModel.waypoints.count >= 2 {
+                Button {
+                    confirmingInterpretBeforeCreate = false
+                    showInterpretSheet = true
+                } label: {
+                    HStack {
+                        Label("Interpret route", systemImage: "map")
+                        if viewModel.isInterpreting {
+                            Spacer()
+                            ProgressView()
+                        } else if viewModel.routeHasDroppedTokens {
+                            Spacer()
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
         } header: {
             Text("Route")
         } footer: {
-            Text("Enter waypoints separated by spaces (ICAO codes, navaids, or fixes).")
+            Text("Enter waypoints separated by spaces (ICAO codes, navaids, or fixes). Tap Interpret to see what was understood and view it on the map.")
+        }
+        // Resolve the route (interpretation + timezones) a bit after typing
+        // settles. Longer debounce than autocomplete since it's a network call.
+        .task(id: viewModel.waypointsText) {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            await viewModel.resolveRoute()
         }
     }
 
     private var departureSection: some View {
         Section {
-            DatePicker("Date & Time", selection: $viewModel.departureDate)
+            DatePicker(
+                "Date",
+                selection: Binding(
+                    get: { viewModel.departureTime.dateProxy },
+                    set: { viewModel.departureTime.dateProxy = $0 }
+                ),
+                displayedComponents: .date
+            )
+
+            HStack {
+                Text("Time")
+                Spacer()
+                Picker("Hour", selection: Binding(
+                    get: { viewModel.departureTime.hour },
+                    set: { viewModel.departureTime.setHour($0) }
+                )) {
+                    ForEach(0..<24, id: \.self) { h in
+                        Text(String(format: "%02d", h)).tag(h)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                Text(":").foregroundStyle(.secondary)
+                Picker("Minute", selection: Binding(
+                    get: { viewModel.departureTime.minuteOption },
+                    set: { viewModel.departureTime.setMinute($0) }
+                )) {
+                    ForEach(DepartureTimeModel.minuteOptions, id: \.self) { m in
+                        Text(String(format: "%02d", m)).tag(m)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+
+            Picker("Timezone", selection: Binding(
+                get: { viewModel.departureTime.timeZoneId },
+                set: { viewModel.departureTime.timeZoneId = $0 }
+            )) {
+                ForEach(viewModel.departureTime.options) { option in
+                    Text(option.label).tag(option.identifier)
+                }
+            }
+            .pickerStyle(.menu)
         } header: {
             Text("Departure")
+        } footer: {
+            Text("The time is interpreted in the selected timezone. Enter a route to offer each airport's local time.")
         }
     }
 
@@ -397,6 +597,56 @@ private struct AircraftFormSheet: View {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 guard !Task.isCancelled else { return }
                 await viewModel.searchAircraftTypes()
+            }
+        }
+    }
+}
+
+// MARK: - Autorouter Picker Sheet
+
+/// Lists the user's recent Autorouter routes; selecting one imports its flight
+/// plan. Shows a helpful message when the account isn't linked or has no routes.
+private struct AutorouterPickerSheet: View {
+    @Bindable var viewModel: AddFlightViewModel
+    let onSelect: (AutorouterRoute) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if viewModel.isLoadingAutorouter {
+                    ProgressView("Loading routes\u{2026}")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let error = viewModel.autorouterError {
+                    ContentUnavailableView {
+                        Label("Autorouter", systemImage: "arrow.down.doc")
+                    } description: {
+                        Text(error)
+                    }
+                } else {
+                    List(viewModel.autorouterRoutes) { route in
+                        Button {
+                            onSelect(route)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(route.title)
+                                    .font(.headline)
+                                if !route.subtitle.isEmpty {
+                                    Text(route.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Import from Autorouter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel() }
+                }
             }
         }
     }
