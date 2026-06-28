@@ -56,14 +56,17 @@ struct CrossSectionView: View {
         }
         // Gate the cross-section tips on this tab being on screen so they never
         // fire from the Advisory/Map tabs (#312).
-        .onAppear {
-            CrossSectionLayersTip.crossSectionVisible = true
-            CrossSectionScrubTip.crossSectionVisible = true
-        }
-        .onDisappear {
-            CrossSectionLayersTip.crossSectionVisible = false
-            CrossSectionScrubTip.crossSectionVisible = false
-        }
+        .onAppear { setCrossSectionTipsVisible(true) }
+        .onDisappear { setCrossSectionTipsVisible(false) }
+    }
+
+    /// Single place that flips the cross-section tips' visibility gate. TipKit
+    /// requires each Tip type to own its `@Parameter`, so every cross-section
+    /// tip must be listed here — add new ones in one spot instead of scattering
+    /// `onAppear`/`onDisappear` writes.
+    private func setCrossSectionTipsVisible(_ visible: Bool) {
+        CrossSectionLayersTip.crossSectionVisible = visible
+        CrossSectionScrubTip.crossSectionVisible = visible
     }
 
     // MARK: Portrait layout

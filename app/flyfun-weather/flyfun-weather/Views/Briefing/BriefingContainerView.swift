@@ -199,9 +199,8 @@ private struct BriefingToolbarView: View {
                     // visible so the user can retry with the coaching present
                     // (mirrors the download-tip guard). `.completed`/`.noRefresh`
                     // are the successful terminal states; `.error` is failure.
-                    if case .error = viewModel.refreshState {} else {
-                        refreshTip.invalidate(reason: .actionPerformed)
-                    }
+                    if case .error = viewModel.refreshState { return }
+                    refreshTip.invalidate(reason: .actionPerformed)
                 }
             } label: {
                 if viewModel.refreshState.isRefreshing {
@@ -224,6 +223,18 @@ private struct BriefingToolbarView: View {
                     await BriefingTipEvents.downloadTipSeen.donate()
                     break
                 }
+            }
+        }
+        .onAppear {
+            // Recovery for the narrow window where the app is killed between the
+            // download tip invalidating and the donate() above completing:
+            // `statusUpdates` is a change stream, so it won't replay
+            // `.invalidated` next launch. If the download tip is already
+            // dismissed but the event never landed, donate proactively so the
+            // refresh tip can't get stuck permanently ineligible.
+            if case .invalidated = downloadTip.status,
+               BriefingTipEvents.downloadTipSeen.donations.isEmpty {
+                Task { await BriefingTipEvents.downloadTipSeen.donate() }
             }
         }
     }
