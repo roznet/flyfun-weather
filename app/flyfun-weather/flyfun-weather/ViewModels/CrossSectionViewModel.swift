@@ -83,6 +83,12 @@ final class CrossSectionViewModel {
         activeAdvisoryPreset = preset.id
     }
 
+    /// Clear the active lens (the picker's "None") without otherwise touching the
+    /// layer config.
+    func clearAdvisoryPreset() {
+        activeAdvisoryPreset = nil
+    }
+
     // MARK: - Methods (clouds/icing/turbulence/convection — one method per group)
 
     /// Currently-active method layer ID for a method group (clouds/icing/etc),

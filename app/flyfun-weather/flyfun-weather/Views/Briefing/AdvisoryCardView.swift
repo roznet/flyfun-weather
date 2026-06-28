@@ -49,6 +49,50 @@ struct AdvisoryCardView: View {
         catalog.first { $0.id == advisory.advisoryId }
     }
 
+    /// CTA row: "Why it's RED ›" (AMBER/RED only) + "On cross-section" lens chip
+    /// (advisories that map to a cross-section lens, #6). Rendered only when at
+    /// least one button is present, so GREEN/no-lens cards add no empty node.
+    @ViewBuilder
+    private var ctaRow: some View {
+        let showWhy = viewModel != nil && (advisory.aggregateStatus == "amber" || advisory.aggregateStatus == "red")
+        let lensPreset = viewModel != nil ? CrossSectionPresets.preset(forAdvisory: advisory.advisoryId) : nil
+        if showWhy || lensPreset != nil {
+            HStack(spacing: 14) {
+                if showWhy {
+                    Button {
+                        showingDetail = true
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text("Why it's \(advisory.aggregateStatus.uppercased())")
+                            Image(systemName: "chevron.right")
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+                if let viewModel, let preset = lensPreset {
+                    Button {
+                        viewModel.setFocusIntent(FocusIntent(
+                            target: .crossSection,
+                            model: viewModel.selectedModel,
+                            advisoryPresetId: preset.id,
+                            pointIndex: viewModel.activePointIndex
+                        ))
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "chart.xyaxis.line")
+                            Text("On cross-section")
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header
@@ -95,41 +139,7 @@ struct AdvisoryCardView: View {
                 }
             }
 
-            // CTA row: "Why it's RED ›" (AMBER/RED only) + "On cross-section" lens
-            // chip for advisories that map to a cross-section lens (#6).
-            HStack(spacing: 14) {
-                if viewModel != nil, advisory.aggregateStatus == "amber" || advisory.aggregateStatus == "red" {
-                    Button {
-                        showingDetail = true
-                    } label: {
-                        HStack(spacing: 2) {
-                            Text("Why it's \(advisory.aggregateStatus.uppercased())")
-                            Image(systemName: "chevron.right")
-                        }
-                        .font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.accentColor)
-                }
-                if let viewModel, let preset = CrossSectionPresets.preset(forAdvisory: advisory.advisoryId) {
-                    Button {
-                        viewModel.setFocusIntent(FocusIntent(
-                            target: .crossSection,
-                            model: viewModel.selectedModel,
-                            advisoryPresetId: preset.id,
-                            pointIndex: viewModel.activePointIndex
-                        ))
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "chart.xyaxis.line")
-                            Text("On cross-section")
-                        }
-                        .font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.accentColor)
-                }
-            }
+            ctaRow
 
             // Expanded detail
             if isExpanded {
