@@ -200,7 +200,10 @@ struct CrossSectionView: View {
                     .render(context: &context, size: size)
             }
             .frame(minHeight: 300)
-            .aspectRatio(isLandscapeFocus ? nil : 2.0, contentMode: .fit)
+            // Portrait constrains to a 2:1 artifact; landscape fills the screen.
+            // (Passing `nil` to aspectRatio means "use intrinsic ratio" — a
+            // Canvas has none, which collapsed the chart to a sliver. #9)
+            .modifier(CanvasAspectModifier(landscape: isLandscapeFocus))
             .background(GeometryReader { geo in
                 Color.clear.onAppear { canvasSize = geo.size }
                     .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
@@ -260,6 +263,12 @@ struct CrossSectionView: View {
     private func applyFocusIntent() {
         guard let intent = viewModel.focusIntent,
               intent.target == .crossSection || intent.target == .skewT else { return }
+        // An advisory lens configures the whole view; a single layerId just
+        // force-enables one layer. Apply the lens first so a layerId can refine it.
+        if let presetId = intent.advisoryPresetId,
+           let preset = CrossSectionPresets.advisory[presetId] {
+            csVM.applyAdvisoryPreset(preset)
+        }
         if let layerId = intent.layerId { csVM.enableLayer(layerId) }
         if let dist = intent.distanceNm {
             scrubDistanceNm = dist
@@ -311,6 +320,22 @@ struct CrossSectionView: View {
             var elevation: ElevationResponse? = nil
             if case .loaded(let elev) = viewModel.elevationState { elevation = elev }
             csVM.update(routeAnalyses: analyses, elevation: elevation, model: viewModel.selectedModel)
+        }
+    }
+}
+
+/// Sizes the cross-section canvas per orientation: portrait keeps a 2:1
+/// artifact (`.fit`), landscape fills the screen. Kept as a modifier (not an
+/// inline `.aspectRatio(landscape ? nil : 2.0, ...)`) because passing `nil`
+/// makes SwiftUI use the view's *intrinsic* ratio — a Canvas has none, which
+/// collapsed the chart to a vertical sliver in iPhone landscape. (#9)
+private struct CanvasAspectModifier: ViewModifier {
+    let landscape: Bool
+    func body(content: Content) -> some View {
+        if landscape {
+            content.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            content.aspectRatio(2.0, contentMode: .fit)
         }
     }
 }

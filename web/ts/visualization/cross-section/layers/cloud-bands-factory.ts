@@ -566,6 +566,8 @@ export const squareNwpCloudBandsLayer = cloudLayer({
   defaultEnabled: true,
 });
 
+// SYNC: the iOS app mirrors this source×style → layer-id mapping (and
+// parseCloudLayerId) in CrossSectionPresets.swift (cloudLayerId/parseCloudLayerId).
 /** Lookup table: which layer id corresponds to a given (source, style) combo. */
 export const CLOUD_LAYER_BY_AXES: Record<CloudSource, Record<CloudStyle, string>> = {
   dd: {

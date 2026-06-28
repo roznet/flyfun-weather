@@ -50,6 +50,9 @@ struct FocusIntent: Equatable {
     var layerId: String?
     /// Map metric id to select.
     var mapMetricId: String?
+    /// Advisory lens id to apply on the cross-section (e.g. "icing"); see
+    /// `CrossSectionPresets`.
+    var advisoryPresetId: String?
     var pointIndex: Int?
     var distanceNm: Double?
     var altitudeFt: Double?
@@ -210,13 +213,43 @@ final class BriefingViewModel {
     func packLabel(for pack: PackMetaResponse) -> String {
         let prefix = packDayLabel(for: pack)
         // Extract date/time from fetchTimestamp
-        if let date = ISO8601DateFormatter().date(from: pack.fetchTimestamp) {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "MMM d HH:mm"
-            fmt.timeZone = TimeZone(identifier: "UTC")
-            return "\(prefix) · \(fmt.string(from: date)) UTC"
+        if let date = Self.isoParser.date(from: pack.fetchTimestamp) {
+            return "\(prefix) · \(Self.dayTimeUTC.string(from: date)) UTC"
         }
         return prefix
+    }
+
+    /// Compact toolbar-chip label. Normally just the day code ("D-0"), but when
+    /// another pack in history shares the same UTC day it appends the time
+    /// ("D-0 · 14:05") so same-day runs are distinguishable at a glance — like
+    /// the web history dropdown.
+    func packChipLabel(for pack: PackMetaResponse) -> String {
+        let day = packDayLabel(for: pack)
+        guard hasSameDaySibling(pack),
+              let date = Self.isoParser.date(from: pack.fetchTimestamp) else { return day }
+        return "\(day) · \(Self.timeUTC.string(from: date))"
+    }
+
+    /// Whether another pack in history was fetched on the same UTC calendar day.
+    private func hasSameDaySibling(_ pack: PackMetaResponse) -> Bool {
+        guard let day = Self.utcDayKey(pack.fetchTimestamp) else { return false }
+        return packHistory.filter { Self.utcDayKey($0.fetchTimestamp) == day }.count > 1
+    }
+
+    private static func utcDayKey(_ timestamp: String) -> String? {
+        guard let date = isoParser.date(from: timestamp) else { return nil }
+        return dayKeyUTC.string(from: date)
+    }
+
+    private static let isoParser = ISO8601DateFormatter()
+    private static let dayTimeUTC: DateFormatter = utcFormatter("MMM d HH:mm")
+    private static let timeUTC: DateFormatter = utcFormatter("HH:mm")
+    private static let dayKeyUTC: DateFormatter = utcFormatter("yyyy-MM-dd")
+    private static func utcFormatter(_ format: String) -> DateFormatter {
+        let fmt = DateFormatter()
+        fmt.dateFormat = format
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        return fmt
     }
 
     // MARK: - Advisory detail

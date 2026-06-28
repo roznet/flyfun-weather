@@ -16,6 +16,12 @@
  * effect later (highlight a band, emphasize layers, pre-enable a Skew-T
  * overlay) is: add one optional field here + one field on {@link ResolvedView}
  * + one branch in the store applier — existing presets and call sites untouched.
+ *
+ * SYNC: the iOS app mirrors ADVISORY_PRESETS + ADVISORY_TO_PRESET (cross-section
+ * directives only) in
+ * app/flyfun-weather/flyfun-weather/Views/CrossSection/Layers/CrossSectionPresets.swift.
+ * Keep the lens set, labels/captions, groups/lines, and advisory→lens mapping in
+ * lockstep when editing here.
  */
 
 import type { LayerGroup } from '../types';

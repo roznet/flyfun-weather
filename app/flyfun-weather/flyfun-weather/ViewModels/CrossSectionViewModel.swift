@@ -6,7 +6,9 @@ import Foundation
 @MainActor
 final class CrossSectionViewModel {
     private(set) var vizData: VizRouteData?
-    private(set) var enabledLayers: [String: Bool] = CrossSectionLayer.defaultEnabled
+    private(set) var enabledLayers: [String: Bool] = CrossSectionPresets.gramet
+    /// Currently-applied advisory lens id (e.g. "icing"), or nil when none/Custom.
+    private(set) var activeAdvisoryPreset: String?
 
     func update(routeAnalyses: RouteAnalysesResponse, elevation: ElevationResponse?, model: String) {
         vizData = Self.extractVizData(from: routeAnalyses, model: model, elevation: elevation)
@@ -14,6 +16,7 @@ final class CrossSectionViewModel {
 
     func toggleLayer(_ id: String) {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
+        activeAdvisoryPreset = nil  // a manual edit is no longer a named lens
     }
 
     /// Force-enable a known layer (e.g. a deep-link focus intent turning on the
@@ -23,8 +26,8 @@ final class CrossSectionViewModel {
         enabledLayers[id] = true
     }
 
-    // MARK: - Presets (§4.5 — preset collapses every method/toggle; cloud STYLE
-    // is preset-driven appearance. Touching any control flips to Custom.)
+    // MARK: - Layer presets (§4.5; ported from web — see CrossSectionPresets).
+    // A preset sets every layer; touching any control flips to Custom.
 
     enum Preset: String, CaseIterable, Identifiable {
         case gramet = "GRAMET"
@@ -35,12 +38,9 @@ final class CrossSectionViewModel {
     }
 
     func applyPreset(_ preset: Preset) {
-        switch preset {
-        case .gramet: enabledLayers = CrossSectionLayer.defaultEnabled
-        case .windy: enabledLayers = Self.preset(cloudMethod: "nwp-cloud-bands")       // natural
-        case .foreFlight: enabledLayers = Self.preset(cloudMethod: "square-nwp-cloud-bands") // square
-        case .custom: break
-        }
+        let map = presetMap(preset)
+        if !map.isEmpty { enabledLayers = map }
+        activeAdvisoryPreset = nil
     }
 
     /// The preset matching the current layer set, or `.custom` if it's been
@@ -54,21 +54,36 @@ final class CrossSectionViewModel {
 
     private func presetMap(_ p: Preset) -> [String: Bool] {
         switch p {
-        case .gramet: return CrossSectionLayer.defaultEnabled
-        case .windy: return Self.preset(cloudMethod: "nwp-cloud-bands")
-        case .foreFlight: return Self.preset(cloudMethod: "square-nwp-cloud-bands")
+        case .gramet: return CrossSectionPresets.gramet
+        case .windy: return CrossSectionPresets.windy
+        case .foreFlight: return CrossSectionPresets.foreflight
         case .custom: return [:]
         }
     }
 
-    /// GRAMET defaults with the clouds method group swapped to `cloudMethod`.
-    private static func preset(cloudMethod: String) -> [String: Bool] {
-        var m = CrossSectionLayer.defaultEnabled
-        for id in CrossSectionLayer.methodGroupOrder[.clouds] ?? [] {
-            m[id] = (id == cloudMethod)
+    // MARK: - Advisory lenses (ported from web ADVISORY_PRESETS)
+
+    /// Apply a hazard lens: clean-slate the managed groups, enable the preferred
+    /// layer of each named method group, then force the lens's explicit lines on.
+    /// Terrain + cruise reference stay (always-on / not in resetGroups).
+    func applyAdvisoryPreset(_ preset: AdvisoryPreset) {
+        var m = enabledLayers
+        for layer in CrossSectionLayer.allLayers where CrossSectionPresets.resetGroups.contains(layer.group) {
+            m[layer.id] = false
         }
-        return m
+        for group in preset.groups {
+            if let preferred = CrossSectionLayer.methodGroupOrder[group]?.first {
+                m[preferred] = true
+            }
+        }
+        for id in preset.lines where m[id] != nil {  // drop ids iOS doesn't have
+            m[id] = true
+        }
+        enabledLayers = m
+        activeAdvisoryPreset = preset.id
     }
+
+    // MARK: - Methods (clouds/icing/turbulence/convection — one method per group)
 
     /// Currently-active method layer ID for a method group (clouds/icing/etc),
     /// or nil if all methods in the group are off.
@@ -84,6 +99,33 @@ final class CrossSectionViewModel {
         for id in order {
             enabledLayers[id] = (id == layerId)
         }
+        activeAdvisoryPreset = nil
+    }
+
+    // MARK: - Cloud axes (source × style — two independent controls, #7)
+
+    /// Active cloud source/style, or nil when clouds are off.
+    var cloudAxes: (source: CloudSource, style: CloudStyle)? {
+        activeMethod(for: .clouds).flatMap { CrossSectionPresets.parseCloudLayerId($0) }
+    }
+
+    /// Turn the cloud layer on (defaulting to Soft NWP) or off.
+    func setCloudEnabled(_ on: Bool) {
+        if on {
+            let axes = cloudAxes ?? (.nwp, .soft)
+            setMethod(CrossSectionPresets.cloudLayerId(source: axes.source, style: axes.style), for: .clouds)
+        } else {
+            setMethod(nil, for: .clouds)
+        }
+    }
+
+    /// Change one cloud axis, keeping the other (and keeping clouds on).
+    func setCloud(source: CloudSource? = nil, style: CloudStyle? = nil) {
+        let current = cloudAxes ?? (.nwp, .soft)
+        let newId = CrossSectionPresets.cloudLayerId(
+            source: source ?? current.source,
+            style: style ?? current.style)
+        setMethod(newId, for: .clouds)
     }
 
     // MARK: - Data extraction (port of data-extract.ts)
