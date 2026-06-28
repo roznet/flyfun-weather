@@ -36,6 +36,16 @@ final class AirportDatabase {
 
     private init() {}
 
+    /// Boxes the non-`Sendable` SQLite handle + index so the off-main builder can
+    /// hand them to the main actor as a single `Sendable` value. Safe because the
+    /// objects are fully constructed off-main and then *exclusively* owned by the
+    /// main actor — a one-way ownership hand-off with no concurrent access. The
+    /// explicit box keeps this correct under Swift 6 strict concurrency too.
+    private struct OpenedAirportDB: @unchecked Sendable {
+        let db: FMDatabase
+        let known: KnownAirports
+    }
+
     /// On-disk cache location (persisted, not purgeable like Caches). `nonisolated`
     /// so the off-main `Task.detached` blocks can read it (it only uses FileManager).
     nonisolated private static var cacheURL: URL {
@@ -60,10 +70,10 @@ final class AirportDatabase {
                 Self.logger.error("Failed to open cached airports DB")
                 return
             }
-            let known = KnownAirports(db: database)
+            let opened = OpenedAirportDB(db: database, known: KnownAirports(db: database))
             await MainActor.run {
-                self.db = database
-                self.knownAirports = known
+                self.db = opened.db
+                self.knownAirports = opened.known
                 self.isLoaded = true
             }
         }
@@ -73,8 +83,12 @@ final class AirportDatabase {
     /// ETag/`If-None-Match`, so an unchanged DB costs only a 304. Failures
     /// (offline, server down) are non-fatal — whatever is already loaded stays.
     func refresh(using client: APIClient) async {
-        let hasCache = FileManager.default.fileExists(atPath: Self.cacheURL.path)
-        let etagToSend = hasCache ? UserDefaults.standard.string(forKey: Self.etagKey) : nil
+        // Read the cache state off the main actor (sync FileManager/UserDefaults
+        // calls); only the resulting String? (Sendable) crosses back.
+        let etagToSend = await Task.detached(priority: .userInitiated) { () -> String? in
+            let hasCache = FileManager.default.fileExists(atPath: Self.cacheURL.path)
+            return hasCache ? UserDefaults.standard.string(forKey: Self.etagKey) : nil
+        }.value
         do {
             let result = try await client.fetchAirportsDB(ifNoneMatch: etagToSend)
             switch result {
@@ -129,11 +143,11 @@ final class AirportDatabase {
                 Self.logger.error("Failed to open downloaded airports DB")
                 return
             }
-            let known = KnownAirports(db: database)
+            let opened = OpenedAirportDB(db: database, known: KnownAirports(db: database))
             await MainActor.run {
                 self.db?.close()
-                self.db = database
-                self.knownAirports = known
+                self.db = opened.db
+                self.knownAirports = opened.known
                 self.isLoaded = true
                 if let etag { UserDefaults.standard.set(etag, forKey: Self.etagKey) }
             }

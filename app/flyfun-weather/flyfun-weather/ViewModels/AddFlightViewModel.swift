@@ -196,7 +196,9 @@ final class AddFlightViewModel {
                 autorouterError = "No recent routes found in your Autorouter account."
             }
         } catch let APIError.serverError(code, message)
-            where code == 409 || (message?.contains("autorouter_not_linked") ?? false) {
+            where code == 409 && (message?.contains("autorouter_not_linked") ?? false) {
+            // Specifically the "not linked" 409 — other 409s fall through to the
+            // generic handler so we don't mislabel an unrelated conflict.
             autorouterRoutes = []
             autorouterError = "Link your Autorouter account on the web app to import routes here."
         } catch {

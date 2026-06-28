@@ -58,7 +58,9 @@ def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("AIRPORTS_DB", str(nav_db))
     app = create_app()
     app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
-    return TestClient(app, raise_server_exceptions=False)
+    # Default raise_server_exceptions=True so a bug in nav.py surfaces as a
+    # traceback rather than a swallowed 500 the status assertions would miss.
+    return TestClient(app)
 
 
 def test_download_returns_slim_sqlite(client, tmp_path):
