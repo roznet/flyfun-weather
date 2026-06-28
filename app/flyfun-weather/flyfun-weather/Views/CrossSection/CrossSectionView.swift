@@ -18,6 +18,10 @@ struct CrossSectionView: View {
     /// graph share one cursor + one metric choice (§4.7 unified cursor).
     @State private var graphLeftMetricId = "headwind"
     @State private var graphRightMetricId = "cloud-cover"
+    /// Scroll-to target inside the tab (#310): the "Sounding ›" deep-link and a
+    /// `FocusIntent.target == .skewT` set this to "skewt"; the ScrollViewReader
+    /// scrolls to the embedded Skew-T and resets it to nil.
+    @State private var scrollTarget: String?
     @Environment(\.verticalSizeClass) private var vSizeClass
 
     /// iPhone landscape → immersive full-bleed focus mode (§4.7): cross-section
@@ -45,22 +49,41 @@ struct CrossSectionView: View {
     // MARK: Portrait layout
 
     private var portrait: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                chromeBar
-                CrossSectionReadoutView(
-                    vizData: csVM.vizData ?? Self.emptyViz,
-                    scrubDistanceNm: scrubDistanceNm,
-                    scrubAltitudeFt: scrubAltitudeFt,
-                    onSounding: goToSounding,
-                    routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
-                )
-                crossSectionCanvas
-                RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
-                               leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    chromeBar
+                    CrossSectionReadoutView(
+                        vizData: csVM.vizData ?? Self.emptyViz,
+                        scrubDistanceNm: scrubDistanceNm,
+                        scrubAltitudeFt: scrubAltitudeFt,
+                        onSounding: goToSounding,
+                        routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
+                    )
+                    crossSectionCanvas
+                    RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
+                                   leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)
+                    skewTSection
+                }
+            }
+            .background(Theme.bg)
+            .onChange(of: scrollTarget) { _, target in
+                guard let target else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .top) }
+                scrollTarget = nil
             }
         }
-        .background(Theme.bg)
+    }
+
+    /// Skew-T folded under the cross-section (#310): one scroll, bounded height
+    /// so the page stays usable on iPhone. The "Sounding ›" deep-link scrolls
+    /// here instead of switching tabs.
+    private var skewTSection: some View {
+        VStack(spacing: 0) {
+            Divider()
+            SkewTTabView(viewModel: viewModel, embeddedHeight: 480)
+        }
+        .id("skewt")
     }
 
     // MARK: Landscape immersive focus
@@ -184,7 +207,8 @@ struct CrossSectionView: View {
     /// "Show on cross-section ›"): enable the advisory's layer and move the
     /// scrub cursor to the focus point, then clear the intent.
     private func applyFocusIntent() {
-        guard let intent = viewModel.focusIntent, intent.target == .crossSection else { return }
+        guard let intent = viewModel.focusIntent,
+              intent.target == .crossSection || intent.target == .skewT else { return }
         if let layerId = intent.layerId { csVM.enableLayer(layerId) }
         if let dist = intent.distanceNm {
             scrubDistanceNm = dist
@@ -192,15 +216,18 @@ struct CrossSectionView: View {
             scrubDistanceNm = pointDist
         }
         if let alt = intent.altitudeFt { scrubAltitudeFt = alt }
+        // A skewT-targeted intent (#310) means "scroll to the embedded Skew-T".
+        if intent.target == .skewT { scrollTarget = "skewt" }
         viewModel.clearFocusIntent()
     }
 
     private func goToSounding() {
-        // Ensure an active point, then switch to the Skew-T tab (§4.7 deep-link).
+        // Ensure an active point, then scroll to the embedded Skew-T (#310 —
+        // Skew-T is folded into this tab, no longer a separate tab).
         if viewModel.activePointIndex == nil, case .loaded(let analyses) = viewModel.routeAnalysesState {
             viewModel.activePointIndex = analyses.analyses.first?.pointIndex
         }
-        viewModel.selectedTab = .skewT
+        scrollTarget = "skewt"
     }
 
     // MARK: Helpers

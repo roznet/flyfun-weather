@@ -9,6 +9,10 @@ struct SnapshotResponse: Codable, Sendable {
     let departureTime: String?
     let analyses: [WaypointAnalysis]?
     let routeObservations: RouteObservations?
+    /// Weather-based divert candidates (D-2 inward, `compute_alternates` pref).
+    /// Present only on marginal D-0/D-1/D-2 packs; nil otherwise. Mirrors
+    /// `models/alternates.py` / `designs/future/alternates.md`.
+    let alternates: RouteAlternates?
 }
 
 struct RouteConfig: Codable, Sendable {

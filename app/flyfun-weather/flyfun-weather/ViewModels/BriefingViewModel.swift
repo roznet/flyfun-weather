@@ -1,16 +1,42 @@
 import Foundation
 import OSLog
 
-/// Briefing-internal tabs (§4.1). iPhone = 4 tabs: Brief · Cross-section ·
-/// Skew-T · Map. PIREPs stays as a gated extra tab (deferred from the core
-/// set, but kept reachable so offline reporting doesn't regress). The Brief
-/// tab folds the old Advisories + Digest into one narrative scroll.
-enum BriefingTab: String, Hashable {
-    case brief
+/// Briefing-internal tabs (#310). Four tabs: Advisory · Discussion ·
+/// Cross-Section · Map, plus a gated PIREPs extra (kept reachable so offline
+/// reporting doesn't regress). On iPad they render as a top pill band; on
+/// iPhone they collapse to a native bottom tab bar. The old single "Brief"
+/// mega-scroll is split into Advisory (hero + grid + conditions + alternates)
+/// and Discussion (synopsis); the standalone Skew-T tab folds under
+/// Cross-Section (scrolled to, not a separate tab).
+enum BriefingTab: String, Hashable, CaseIterable {
+    case advisory
+    case discussion
     case crossSection
-    case skewT
     case map
     case pireps
+
+    /// Tabs shown in the main band (PIREPs is appended only when permitted).
+    static let core: [BriefingTab] = [.advisory, .discussion, .crossSection, .map]
+
+    var title: String {
+        switch self {
+        case .advisory: "Advisory"
+        case .discussion: "Discussion"
+        case .crossSection: "Cross-Section"
+        case .map: "Map"
+        case .pireps: "PIREPs"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .advisory: "exclamationmark.triangle"
+        case .discussion: "text.alignleft"
+        case .crossSection: "chart.xyaxis.line"
+        case .map: "map"
+        case .pireps: "cloud.sun"
+        }
+    }
 }
 
 /// Shared deep-link payload (§4.6/§4.7/§4.9): one `focusIntent` consumed by the
@@ -75,7 +101,7 @@ final class BriefingViewModel {
     private(set) var packCacheStatus: [String: Bool] = [:] // timestamp -> isCached
 
     // UI state
-    var selectedTab: BriefingTab = .brief
+    var selectedTab: BriefingTab = .advisory
     var selectedModel: String = "gfs"
     var availableModels: [String] = []
 
@@ -130,8 +156,10 @@ final class BriefingViewModel {
         }
 
         switch intent.target {
-        case .crossSection: selectedTab = .crossSection
-        case .skewT: selectedTab = .skewT
+        // Skew-T is no longer a top-level tab (#310) — it scrolls within the
+        // Cross-Section tab. The cross-section view reads `target == .skewT`
+        // from the still-pending intent and scrolls to the sounding anchor.
+        case .crossSection, .skewT: selectedTab = .crossSection
         case .map: selectedTab = .map
         }
     }

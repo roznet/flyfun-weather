@@ -1,66 +1,5 @@
 import SwiftUI
 
-/// Dashboard showing advisory cards sorted by severity.
-struct AdvisoryDashboardView: View {
-    let viewModel: BriefingViewModel
-    @Environment(\.horizontalSizeClass) private var sizeClass
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Assessment banner
-                if let pack = viewModel.pack, let assessment = pack.assessment {
-                    HStack {
-                        AssessmentStringBadge(status: assessment)
-                        if let reason = pack.assessmentReason {
-                            Text(reason)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                }
-
-                // Airport conditions
-                AirportConditionsView(viewModel: viewModel)
-
-                // Advisories
-                advisoryContent
-            }
-            .padding(.vertical)
-        }
-    }
-
-    private var gridColumns: [GridItem] {
-        if sizeClass == .regular {
-            Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
-        } else {
-            [GridItem(.flexible())]
-        }
-    }
-
-    @ViewBuilder
-    private var advisoryContent: some View {
-        switch viewModel.advisoriesState {
-        case .idle, .loading:
-            ProgressView("Loading advisories...")
-                .padding()
-        case .loaded(let response):
-            let sorted = response.advisories.sorted { severityRank($0.aggregateStatus) > severityRank($1.aggregateStatus) }
-            LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 12) {
-                ForEach(sorted) { advisory in
-                    AdvisoryCardView(advisory: advisory, catalog: response.catalog, viewModel: viewModel)
-                }
-            }
-            .padding(.horizontal)
-        case .error(let error):
-            ContentUnavailableView("Advisories Unavailable", systemImage: "exclamationmark.triangle", description: Text(error.localizedDescription))
-        }
-    }
-
-}
-
 /// Model name inside a colored status bubble.
 private struct ModelStatusBadge: View {
     let model: String
@@ -80,13 +19,19 @@ private struct ModelStatusBadge: View {
     }
 }
 
-/// Single advisory card. Internal so the Brief tab (§4.1) can reuse it; Phase 5
-/// replaces this with the full advisory-detail ladder.
+/// Single advisory card. AMBER/RED render as full cards in the responsive grid;
+/// GREEN advisories collapse into the compact `GreenAdvisoryStrip` (#310). The
+/// matching per-hazard digest narrative (when one maps to this advisory) is
+/// shown in the expanded body so Discussion stays big-picture.
 struct AdvisoryCardView: View {
     let advisory: RouteAdvisoryResult
     let catalog: [AdvisoryCatalogEntry]
+    /// Per-hazard digest narrative attached to this advisory (#310). nil = none.
+    var hazardNarrative: String? = nil
     /// Needed for the Rung-3 "why it's RED" detail sheet (§4.6).
     var viewModel: BriefingViewModel? = nil
+    /// Green pills start expanded when surfaced from the all-clear strip.
+    var startExpanded: Bool = false
     @State private var isExpanded = false
     @State private var showingDetail = false
 
@@ -114,6 +59,7 @@ struct AdvisoryCardView: View {
             Text(advisory.aggregateDetail)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             // Per-model badges
             if !advisory.perModel.isEmpty {
@@ -143,6 +89,15 @@ struct AdvisoryCardView: View {
             // Expanded detail
             if isExpanded {
                 Divider()
+                // Per-hazard digest narrative (#310): the LLM's plain-language read
+                // on this hazard, attached to the card it explains.
+                if let hazardNarrative, !hazardNarrative.isEmpty {
+                    Text(hazardNarrative)
+                        .font(.callout)
+                        .foregroundStyle(Theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 2)
+                }
                 ForEach(advisory.perModel) { modelResult in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -167,12 +122,72 @@ struct AdvisoryCardView: View {
             }
         }
         .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .onAppear { if startExpanded { isExpanded = true } }
         .sheet(isPresented: $showingDetail) {
             if let viewModel {
                 AdvisoryDetailView(viewModel: viewModel, advisoryId: advisory.advisoryId,
                                    fallbackName: catalogEntry?.name ?? advisory.advisoryId)
             }
         }
+    }
+}
+
+/// Compact "all clear" strip collapsing every GREEN advisory into a row of
+/// pills (mirrors the web app, #310 item 2). Tapping a pill expands that
+/// advisory's full card inline below the strip.
+struct GreenAdvisoryStrip: View {
+    let advisories: [RouteAdvisoryResult]
+    let catalog: [AdvisoryCatalogEntry]
+    var viewModel: BriefingViewModel? = nil
+
+    @State private var expandedId: String?
+
+    private func name(for advisory: RouteAdvisoryResult) -> String {
+        catalog.first { $0.id == advisory.advisoryId }?.name ?? advisory.advisoryId
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.spacingS) {
+            HStack(spacing: Theme.spacingXS) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(Theme.green)
+                Text("All clear")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.text)
+                Text("\(advisories.count)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.textMuted)
+            }
+
+            FlowLayout(spacing: Theme.spacingS) {
+                ForEach(advisories) { advisory in
+                    let isOpen = expandedId == advisory.advisoryId
+                    Button {
+                        withAnimation { expandedId = isOpen ? nil : advisory.advisoryId }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Circle().fill(Theme.green).frame(width: 6, height: 6)
+                            Text(name(for: advisory))
+                                .font(.caption.weight(.medium))
+                        }
+                        .foregroundStyle(Theme.text)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Theme.green.opacity(isOpen ? 0.18 : 0.10), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let expandedId, let advisory = advisories.first(where: { $0.advisoryId == expandedId }) {
+                AdvisoryCardView(advisory: advisory, catalog: catalog, viewModel: viewModel,
+                                 startExpanded: true)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.green.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
     }
 }
