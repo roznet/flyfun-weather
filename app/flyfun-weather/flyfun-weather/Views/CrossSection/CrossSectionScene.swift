@@ -24,6 +24,10 @@ struct StaticCrossSectionScene: View, Equatable {
     /// Identity for `data` (bumped by `CrossSectionViewModel.update`). Comparing
     /// this int + the small layer dict is cheap; diffing `VizRouteData` is not.
     let dataVersion: Int
+    /// Active colour theme (#320). Part of `==` so switching themes repaints the
+    /// static layers/sky/axes — otherwise the gate would skip the redraw and only
+    /// the cursor overlay (which doesn't read the theme) would update.
+    let themeId: CrossSectionThemeID
     /// Rendered canvas size, fed from the call site's `GeometryReader`. Included
     /// in `==` so a rotation/resize is a real change and forces a redraw, rather
     /// than relying on the undocumented behaviour of `Canvas` re-running its
@@ -32,13 +36,14 @@ struct StaticCrossSectionScene: View, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.dataVersion == rhs.dataVersion
+            && lhs.themeId == rhs.themeId
             && lhs.renderSize == rhs.renderSize
             && lhs.enabledLayers == rhs.enabledLayers
     }
 
     var body: some View {
         Canvas { context, size in
-            CrossSectionRenderer(data: data, enabledLayers: enabledLayers)
+            CrossSectionRenderer(data: data, enabledLayers: enabledLayers, themeId: themeId)
                 .renderStatic(context: &context, size: size)
         }
     }

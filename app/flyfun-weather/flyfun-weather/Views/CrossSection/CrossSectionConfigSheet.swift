@@ -15,6 +15,7 @@ struct CrossSectionConfigSheet: View {
         NavigationStack {
             List {
                 presetSection
+                themeSection
                 advisoryLensSection
                 methodSection
                 referenceSection
@@ -53,6 +54,30 @@ struct CrossSectionConfigSheet: View {
             Text("Preset")
         } footer: {
             Text("A preset sets every layer. Changing any control below switches to Custom.")
+        }
+    }
+
+    // MARK: Theme — colours only (orthogonal to the layer Preset, #320)
+
+    private var themeSection: some View {
+        Section {
+            Picker("Theme", selection: Binding(
+                get: { csVM.themeId },
+                set: { csVM.setTheme($0) }
+            )) {
+                ForEach(CrossSectionThemeID.allCases) { id in
+                    HStack {
+                        swatch(id.theme.skyBackground)
+                        Text(id.theme.label)
+                    }
+                    .tag(id)
+                }
+            }
+            .pickerStyle(.menu)
+        } header: {
+            Text("Theme")
+        } footer: {
+            Text("Colours only — independent of the Preset. Selecting a Preset also sets its matching theme.")
         }
     }
 

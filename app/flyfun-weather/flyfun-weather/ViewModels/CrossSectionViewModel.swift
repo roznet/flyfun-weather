@@ -15,6 +15,24 @@ final class CrossSectionViewModel {
     /// `Equatable` redraw gate on this counter instead of diffing the whole struct
     /// each scrub tick (#303).
     private(set) var dataVersion: Int = 0
+    /// Active cross-section colour theme (#320). Defaults to GRAMET to match the
+    /// booted GRAMET layer preset above, so the chart and the preset agree on
+    /// boot. Theme is orthogonal to the layer preset (changing one doesn't reset
+    /// the other) — mirrors the web, where `setVizTheme` leaves the preset alone.
+    private(set) var themeId: CrossSectionThemeID = .gramet
+
+    init() {
+        // Sync the module-level active theme to our boot default so the very
+        // first frame (and the config sheet's legend swatches) render in the
+        // right palette even before the renderer runs.
+        CrossSectionTheme.setActive(themeId)
+    }
+
+    /// Switch the colour theme. Independent of the layer preset.
+    func setTheme(_ id: CrossSectionThemeID) {
+        themeId = id
+        CrossSectionTheme.setActive(id)
+    }
 
     func update(routeAnalyses: RouteAnalysesResponse, elevation: ElevationResponse?, model: String) {
         vizData = Self.extractVizData(from: routeAnalyses, model: model, elevation: elevation)
@@ -42,11 +60,24 @@ final class CrossSectionViewModel {
         case foreFlight = "ForeFlight"
         case custom = "Custom"
         var id: String { rawValue }
+
+        /// The colour theme each preset carries (#320). Mirrors the web preset
+        /// `themeId` mapping (gramet→gramet, windy→light, foreflight→high-contrast);
+        /// Custom carries none (leave the current theme as-is).
+        var themeId: CrossSectionThemeID? {
+            switch self {
+            case .gramet: .gramet
+            case .windy: .light
+            case .foreFlight: .highContrast
+            case .custom: nil
+            }
+        }
     }
 
     func applyPreset(_ preset: Preset) {
         let map = presetMap(preset)
         if !map.isEmpty { enabledLayers = map }
+        if let tid = preset.themeId { setTheme(tid) }
         activeAdvisoryPreset = nil
     }
 
