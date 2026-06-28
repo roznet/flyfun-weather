@@ -109,23 +109,34 @@ struct ScrollSpyScroll<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     @State private var active: String = ""
+    @State private var scrollTarget: String?
 
     var body: some View {
-        ScrollViewReader { proxy in
-            VStack(spacing: 0) {
-                if sections.count > 1 {
-                    SectionSpyBar(sections: sections, active: active.isEmpty ? (sections.first?.id ?? "") : active) { id in
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            proxy.scrollTo(id, anchor: .top)
-                        }
-                    }
+        // The pill bar sits OUTSIDE the ScrollViewReader; the reader wraps only
+        // the ScrollView and consumes a `scrollTarget` trigger via `.onChange`.
+        // (Driving `proxy.scrollTo` directly from a tap handler on a sibling of
+        // the ScrollView inside the same reader silently did nothing — this is
+        // the same reader+trigger shape CrossSectionView uses successfully.) (#3)
+        VStack(spacing: 0) {
+            if sections.count > 1 {
+                SectionSpyBar(sections: sections, active: active.isEmpty ? (sections.first?.id ?? "") : active) { id in
+                    scrollTarget = id
                 }
+            }
+            ScrollViewReader { proxy in
                 ScrollView {
                     content()
                 }
                 .coordinateSpace(name: Self.coordSpace)
                 .onPreferenceChange(SpyOffsetKey.self) { offsets in
                     active = Self.activeSection(sections: sections, offsets: offsets)
+                }
+                .onChange(of: scrollTarget) { _, target in
+                    guard let target else { return }
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
+                    scrollTarget = nil
                 }
             }
         }

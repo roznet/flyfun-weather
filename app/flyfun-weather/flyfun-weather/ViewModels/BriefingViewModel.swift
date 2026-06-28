@@ -213,7 +213,7 @@ final class BriefingViewModel {
     func packLabel(for pack: PackMetaResponse) -> String {
         let prefix = packDayLabel(for: pack)
         // Extract date/time from fetchTimestamp
-        if let date = Self.isoParser.date(from: pack.fetchTimestamp) {
+        if let date = Self.parseISO(pack.fetchTimestamp) {
             return "\(prefix) · \(Self.dayTimeUTC.string(from: date)) UTC"
         }
         return prefix
@@ -226,7 +226,7 @@ final class BriefingViewModel {
     func packChipLabel(for pack: PackMetaResponse) -> String {
         let day = packDayLabel(for: pack)
         guard hasSameDaySibling(pack),
-              let date = Self.isoParser.date(from: pack.fetchTimestamp) else { return day }
+              let date = Self.parseISO(pack.fetchTimestamp) else { return day }
         return "\(day) · \(Self.timeUTC.string(from: date))"
     }
 
@@ -237,11 +237,25 @@ final class BriefingViewModel {
     }
 
     private static func utcDayKey(_ timestamp: String) -> String? {
-        guard let date = isoParser.date(from: timestamp) else { return nil }
+        guard let date = parseISO(timestamp) else { return nil }
         return dayKeyUTC.string(from: date)
     }
 
-    private static let isoParser = ISO8601DateFormatter()
+    /// Parse an ISO-8601 timestamp. The server sends `datetime.isoformat()`,
+    /// which includes microseconds (e.g. `2026-06-28T08:46:00.123456+00:00`),
+    /// so try the fractional-seconds parser first, then plain. (Default
+    /// `ISO8601DateFormatter` rejects fractional seconds — that was why the time
+    /// never appeared.)
+    private static func parseISO(_ s: String) -> Date? {
+        isoParserFrac.date(from: s) ?? isoParserPlain.date(from: s)
+    }
+
+    private static let isoParserFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoParserPlain = ISO8601DateFormatter()
     private static let dayTimeUTC: DateFormatter = utcFormatter("MMM d HH:mm")
     private static let timeUTC: DateFormatter = utcFormatter("HH:mm")
     private static let dayKeyUTC: DateFormatter = utcFormatter("yyyy-MM-dd")
