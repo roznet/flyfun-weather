@@ -9,6 +9,7 @@
 
 import Testing
 import Foundation
+import MapKit
 @testable import flyfun_weather
 
 // MARK: - AddFlightViewModel (form validation + change detection)
@@ -139,5 +140,90 @@ import Foundation
             Issue.record("expected .error, got \(vm.state)")
             return
         }
+    }
+}
+
+// MARK: - RouteMapViewModel (waypoint extraction + fit-region math)
+
+@MainActor
+@Suite struct RouteMapViewModelTests {
+
+    /// Minimal snapshot with three waypoints at clean lat/lon for exact math.
+    private func snapshot() throws -> SnapshotResponse {
+        let json = """
+        {
+          "route": {
+            "name": "TEST",
+            "waypoints": [
+              {"icao": "AAAA", "name": "Alpha", "lat": 40.0, "lon": 2.0},
+              {"icao": "BBBB", "name": "Bravo", "lat": 42.0, "lon": 4.0},
+              {"icao": "CCCC", "name": "Charlie", "lat": 44.0, "lon": 6.0}
+            ],
+            "cruise_altitude_ft": 8000,
+            "flight_ceiling_ft": 13000,
+            "flight_duration_hours": 2.0
+          },
+          "target_date": "2026-06-24",
+          "days_out": 1
+        }
+        """
+        return try JSONDecoder.weatherBrief.decode(SnapshotResponse.self, from: Data(json.utf8))
+    }
+
+    @Test func extractsWaypointsAndRouteLine() throws {
+        let vm = RouteMapViewModel()
+        vm.update(from: try snapshot())
+        #expect(vm.waypoints.count == 3)
+        #expect(vm.routeCoordinates.count == 3)
+        #expect(vm.waypoints.first?.id == "AAAA")
+        #expect(vm.waypoints.first?.name == "Alpha")
+    }
+
+    @Test func fitRegionCentersAndPadsBy1_4Plus0_5() throws {
+        let vm = RouteMapViewModel()
+        vm.update(from: try snapshot())
+        // center = midpoint of the bounding box
+        #expect(abs(vm.mapRegion.center.latitude - 42.0) < 1e-6)
+        #expect(abs(vm.mapRegion.center.longitude - 4.0) < 1e-6)
+        // span = range * 1.4 + 0.5 padding
+        #expect(abs(vm.mapRegion.span.latitudeDelta - ((44.0 - 40.0) * 1.4 + 0.5)) < 1e-6)
+        #expect(abs(vm.mapRegion.span.longitudeDelta - ((6.0 - 2.0) * 1.4 + 0.5)) < 1e-6)
+    }
+}
+
+// MARK: - BriefingViewModel (pack history labels)
+
+@MainActor
+@Suite struct BriefingViewModelTests {
+
+    private func vm() -> BriefingViewModel {
+        BriefingViewModel(flight: makeFlight(), repository: MockBriefingRepository())
+    }
+
+    private func pack(daysOut: Int, timestamp: String = "2026-06-24T09:00:00Z") throws -> PackMetaResponse {
+        let json = """
+        {
+          "flight_id": "flt-1",
+          "fetch_timestamp": "\(timestamp)",
+          "days_out": \(daysOut),
+          "is_historical": false,
+          "has_gramet": true, "has_skewt": true, "has_digest": true, "has_advisories": true,
+          "model_init_times": {}, "grib_init_times": {}, "models_skipped_region": []
+        }
+        """
+        return try JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: Data(json.utf8))
+    }
+
+    @Test func dayLabelSignsForecastVsHistorical() throws {
+        let m = vm()
+        #expect(m.packDayLabel(for: try pack(daysOut: 3)) == "D-3")
+        #expect(m.packDayLabel(for: try pack(daysOut: 0)) == "D-0")
+        #expect(m.packDayLabel(for: try pack(daysOut: -2)) == "D+2")
+    }
+
+    @Test func packLabelFormatsUtcDateTime() throws {
+        let m = vm()
+        let label = m.packLabel(for: try pack(daysOut: 1, timestamp: "2026-06-24T09:00:00Z"))
+        #expect(label == "D-1 · Jun 24 09:00 UTC")
     }
 }
