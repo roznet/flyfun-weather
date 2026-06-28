@@ -9,13 +9,16 @@ import SwiftUI
 /// (~60 fps), which used to re-run the whole stack and jank older A-series chips
 /// (#303).
 ///
-/// The redraw gate is `Equatable`: SwiftUI skips re-evaluating this view (and so
-/// re-running the inner `Canvas` closure) when `==` reports no change. We key on
-/// the view model's monotonic `dataVersion` rather than diffing the deep
-/// `VizRouteData` value each tick. A frame/size change still re-runs the closure
-/// — the `Canvas`'s own `size` input changes — which is exactly the "rebuild on
-/// size change" behaviour we want. The cursor and aircraft are deliberately NOT
-/// drawn here; they live in `CrossSectionCursorOverlay`.
+/// The redraw gate is `Equatable` + `.equatable()` at the call site: that pairing
+/// forces SwiftUI to skip re-evaluating this view (and so re-running the inner
+/// `Canvas` closure) when `==` reports no change. Conformance alone is not enough
+/// — without `.equatable()` the reconciler reflects the stored properties, can't
+/// compare the non-`Equatable` `VizRouteData`, and treats the view as changed
+/// every tick. We key `==` on the view model's monotonic `dataVersion` rather than
+/// diffing the deep `VizRouteData` value each tick. A frame/size change still
+/// re-runs the closure — the `Canvas`'s own `size` input changes — which is
+/// exactly the "rebuild on size change" behaviour we want. The cursor and aircraft
+/// are deliberately NOT drawn here; they live in `CrossSectionCursorOverlay`.
 struct StaticCrossSectionScene: View, Equatable {
     let data: VizRouteData
     let enabledLayers: [String: Bool]

@@ -199,6 +199,12 @@ struct CrossSectionView: View {
             // thin cursor rule + aircraft marker live in a cheap overlay Canvas
             // that redraws every tick instead (#303).
             StaticCrossSectionScene(data: vizData, enabledLayers: layers, dataVersion: csVM.dataVersion)
+                // `.equatable()` is load-bearing: it forces SwiftUI to gate the
+                // redraw on the custom `==` (dataVersion + layers). Without it the
+                // reconciler falls back to reflecting the stored properties, can't
+                // compare the non-Equatable `VizRouteData`, and redraws every scrub
+                // tick — defeating the split (#303). Do not remove.
+                .equatable()
                 .frame(minHeight: 300)
                 // Portrait constrains to a 2:1 artifact; landscape fills the screen.
                 // (Passing `nil` to aspectRatio means "use intrinsic ratio" — a
