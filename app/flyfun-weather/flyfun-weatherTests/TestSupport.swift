@@ -1,0 +1,101 @@
+//
+//  TestSupport.swift
+//  flyfun-weatherTests
+//
+//  Shared test doubles + fixture factories (#314).
+//
+//  `MockBriefingRepository` conforms to the full `BriefingRepository` protocol
+//  but only the handful of calls a given ViewModel actually makes are stubbable;
+//  everything else throws `notStubbed` so an unexpected call fails loudly rather
+//  than returning silent garbage. ViewModels inject `any BriefingRepository`, so
+//  this is the seam that lets the whole logic layer be tested with no network.
+//
+
+import Foundation
+@testable import flyfun_weather
+
+enum MockError: Error, CustomStringConvertible {
+    case notStubbed(String)
+    case injected(String)
+    var description: String {
+        switch self {
+        case .notStubbed(let m): "MockBriefingRepository.\(m) was called but not stubbed"
+        case .injected(let m): "injected failure: \(m)"
+        }
+    }
+}
+
+/// In-memory `BriefingRepository`. Configure the few results a test needs; the
+/// rest throw `notStubbed`.
+final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
+    // Configurable results (set per-test).
+    var flightsResult: Result<[FlightResponse], Error> = .success([])
+    var aircraftResult: Result<[AircraftResponse], Error> = .success([])
+    var createFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("createFlight"))
+
+    // Call counters for behaviour assertions.
+    private(set) var flightsCallCount = 0
+
+    func flights() async throws -> [FlightResponse] {
+        flightsCallCount += 1
+        return try flightsResult.get()
+    }
+    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse { try createFlightResult.get() }
+    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw MockError.notStubbed("updateFlight") }
+    func aircraft() async throws -> [AircraftResponse] { try aircraftResult.get() }
+    func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
+    func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
+    func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
+    func packs(flightId: String) async throws -> [PackMetaResponse] { throw MockError.notStubbed("packs") }
+    func latestPack(flightId: String) async throws -> PackMetaResponse { throw MockError.notStubbed("latestPack") }
+    func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse { throw MockError.notStubbed("advisories") }
+    func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse { throw MockError.notStubbed("advisoryDetail") }
+    func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw MockError.notStubbed("recalculateAdvisories") }
+    func digest(flightId: String, timestamp: String) async throws -> DigestResponse { throw MockError.notStubbed("digest") }
+    func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse { throw MockError.notStubbed("snapshot") }
+    func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse { throw MockError.notStubbed("routeAnalyses") }
+    func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse { throw MockError.notStubbed("elevation") }
+    func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data { throw MockError.notStubbed("skewtImage") }
+    func grametImage(flightId: String, timestamp: String) async throws -> Data { throw MockError.notStubbed("grametImage") }
+    func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse { throw MockError.notStubbed("soundingProfile") }
+    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+    func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw MockError.notStubbed("refreshStatus") }
+    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw MockError.notStubbed("submitPirep") }
+    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] { throw MockError.notStubbed("submitPirepsBatch") }
+    func fetchPireps(flightId: String) async throws -> PirepListResponse { throw MockError.notStubbed("fetchPireps") }
+}
+
+// MARK: - Fixture factories
+
+func makeFlight(
+    id: String = "flt-1",
+    aircraftId: Int? = nil,
+    waypoints: [String] = ["LFMD", "LFML"],
+    departureTime: String = "2026-06-24T12:00:00Z",
+    cruiseAltitudeFt: Int = 8000,
+    flightDurationHours: Double = 2.0,
+    role: FlightRole? = nil
+) -> FlightResponse {
+    FlightResponse(
+        id: id,
+        userId: "user-1",
+        profileId: nil,
+        aircraftId: aircraftId,
+        aircraft: nil,
+        routeName: waypoints.joined(separator: " "),
+        waypoints: waypoints,
+        departureTime: departureTime,
+        targetDate: "2026-06-24",
+        targetTimeUtc: 1200,
+        cruiseAltitudeFt: cruiseAltitudeFt,
+        flightCeilingFt: 13000,
+        flightDurationHours: flightDurationHours,
+        private: false,
+        autoRefresh: false,
+        autoRefreshHour: nil,
+        createdAt: "2026-06-20T09:00:00Z",
+        role: role
+    )
+}

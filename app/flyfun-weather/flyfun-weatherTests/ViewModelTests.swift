@@ -1,0 +1,143 @@
+//
+//  ViewModelTests.swift
+//  flyfun-weatherTests
+//
+//  Tier B (#314) — ViewModel logic via the injected `MockBriefingRepository`.
+//  These cover the highest-risk-of-user-facing-bug logic: form validation,
+//  change detection, and the list state machine — all without a network.
+//
+
+import Testing
+import Foundation
+@testable import flyfun_weather
+
+// MARK: - AddFlightViewModel (form validation + change detection)
+
+@MainActor
+@Suite struct AddFlightViewModelTests {
+
+    private func makeVM(flight: FlightResponse? = nil) -> AddFlightViewModel {
+        AddFlightViewModel(repository: MockBriefingRepository(), flight: flight)
+    }
+
+    @Test func waypointsParseUppercaseSplitOnSpaceDashComma() {
+        let vm = makeVM()
+        vm.waypointsText = "lfmd-lfml, lfat  egtf"
+        #expect(vm.waypoints == ["LFMD", "LFML", "LFAT", "EGTF"])
+    }
+
+    @Test func waypointsDropsEmptyTokens() {
+        let vm = makeVM()
+        vm.waypointsText = "  ,, lfmd  -  lfml , "
+        #expect(vm.waypoints == ["LFMD", "LFML"])
+    }
+
+    @Test func canSubmitNeedsAtLeastTwoWaypointsWhenCreating() {
+        let vm = makeVM()
+        vm.waypointsText = "LFMD"
+        #expect(vm.canSubmit == false)
+        vm.waypointsText = "LFMD LFML"
+        #expect(vm.canSubmit == true)
+        vm.isSubmitting = true            // in-flight submit blocks re-submit
+        #expect(vm.canSubmit == false)
+    }
+
+    @Test func canSubmitWhenEditingRequiresAChange() {
+        let vm = makeVM(flight: makeFlight())
+        // Loaded from the flight verbatim → no changes → cannot save.
+        #expect(vm.isEditing)
+        #expect(vm.canSubmit == false)
+        vm.cruiseAltitudeFt += 1000
+        #expect(vm.canSubmit == true)
+    }
+
+    @Test func hasChangesDetectsEachEditedField() {
+        // Route
+        var vm = makeVM(flight: makeFlight(waypoints: ["LFMD", "LFML"]))
+        vm.waypointsText = "LFMD LFAT"
+        #expect(vm.hasChanges)
+        // Altitude
+        vm = makeVM(flight: makeFlight(cruiseAltitudeFt: 8000))
+        vm.cruiseAltitudeFt = 6000
+        #expect(vm.hasChanges)
+        // Duration
+        vm = makeVM(flight: makeFlight(flightDurationHours: 2.0))
+        vm.flightDurationHours = 3.0
+        #expect(vm.hasChanges)
+        // Aircraft
+        vm = makeVM(flight: makeFlight(aircraftId: nil))
+        vm.selectedAircraftId = 5
+        #expect(vm.hasChanges)
+        // Unchanged
+        vm = makeVM(flight: makeFlight())
+        #expect(vm.hasChanges == false)
+    }
+
+    @Test func aircraftOnlyEditIsNotForecastAffecting() {
+        let vm = makeVM(flight: makeFlight(aircraftId: nil))
+        vm.selectedAircraftId = 7
+        #expect(vm.hasChanges)                       // it IS a change…
+        #expect(vm.hasForecastAffectingChange == false)  // …but doesn't re-brief
+        // A route change, by contrast, is forecast-affecting.
+        vm.waypointsText = "LFMD LFAT"
+        #expect(vm.hasForecastAffectingChange)
+    }
+
+    @Test func canSaveAircraftReflectsIcaoTypeRegex() {
+        let vm = makeVM()
+        vm.newAircraftIcaoType = "C172"
+        #expect(vm.canSaveAircraft)            // 1–4 alphanumerics
+        vm.newAircraftIcaoType = "a1"          // lowercased → uppercased, valid
+        #expect(vm.canSaveAircraft)
+        vm.newAircraftIcaoType = "TOOLONG"     // > 4 chars
+        #expect(vm.canSaveAircraft == false)
+        vm.newAircraftIcaoType = "C-72"        // illegal character
+        #expect(vm.canSaveAircraft == false)
+        vm.newAircraftIcaoType = ""            // empty
+        #expect(vm.canSaveAircraft == false)
+    }
+}
+
+// MARK: - FlightListViewModel (async load state machine)
+
+@MainActor
+@Suite struct FlightListViewModelTests {
+
+    @Test func startsIdle() {
+        let vm = FlightListViewModel(repository: MockBriefingRepository())
+        guard case .idle = vm.state else {
+            Issue.record("expected .idle, got \(vm.state)")
+            return
+        }
+    }
+
+    @Test func loadSuccessTransitionsToLoaded() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([makeFlight(id: "a"), makeFlight(id: "b")])
+        let vm = FlightListViewModel(repository: repo)
+
+        await vm.loadFlights()
+
+        guard case .loaded(let flights) = vm.state else {
+            Issue.record("expected .loaded, got \(vm.state)")
+            return
+        }
+        #expect(flights.count == 2)
+        #expect(vm.isOffline == false)            // plain mock isn't a caching repo
+        #expect(vm.cachedFlightIds.isEmpty)
+        #expect(repo.flightsCallCount == 1)
+    }
+
+    @Test func loadFailureTransitionsToError() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .failure(MockError.injected("server down"))
+        let vm = FlightListViewModel(repository: repo)
+
+        await vm.loadFlights()
+
+        guard case .error = vm.state else {
+            Issue.record("expected .error, got \(vm.state)")
+            return
+        }
+    }
+}
