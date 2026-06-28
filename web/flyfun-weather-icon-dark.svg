@@ -1,0 +1,28 @@
+<svg width="1024" height="1024" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FlyFun Weather">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3A6CB8"/>
+      <stop offset="1" stop-color="#2B5DA8"/>
+    </linearGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7"/></filter>
+    <pattern id="hatch" width="24" height="24" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="24" stroke="rgba(200,40,40,0.45)" stroke-width="2.6"/>
+    </pattern>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" fill="url(#sky)"/>
+  <g filter="url(#soft)" fill="#ffffff">
+    <ellipse cx="150" cy="196" rx="96" ry="30" opacity="0.62"/>
+    <ellipse cx="246" cy="180" rx="60" ry="20" opacity="0.42"/>
+    <ellipse cx="86"  cy="210" rx="54" ry="18" opacity="0.40"/>
+  </g>
+  <line x1="0" y1="220" x2="512" y2="220" stroke="#e0e0e0" stroke-width="6" stroke-dasharray="22 13" opacity="0.92"/>
+  <line x1="0" y1="300" x2="512" y2="300" stroke="#FF4444" stroke-width="4" stroke-dasharray="13 10" opacity="0.7"/>
+  <g>
+    <rect x="318" y="0" width="118" height="512" fill="rgba(220,53,69,0.10)"/>
+    <rect x="332" y="168" width="96" height="226" fill="rgba(220,53,69,0.32)"/>
+    <rect x="332" y="168" width="96" height="226" fill="url(#hatch)"/>
+    <rect x="333" y="169" width="94" height="224" fill="none" stroke="rgba(200,40,40,0.65)" stroke-width="3"/>
+    <rect x="296" y="160" width="168" height="16" rx="5" fill="rgba(220,53,69,0.9)"/>
+  </g>
+  <path d="M0,402 L64,386 L128,396 L192,366 L256,382 L320,360 L384,388 L448,358 L512,374 L512,512 L0,512 Z" fill="#8B6914" stroke="#6B5010" stroke-width="4"/>
+</svg>
