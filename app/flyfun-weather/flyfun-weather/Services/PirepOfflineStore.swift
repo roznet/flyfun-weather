@@ -66,7 +66,10 @@ actor PirepOfflineStore {
     private func save() {
         do {
             let data = try JSONEncoder.weatherBrief.encode(pending)
-            try data.write(to: fileURL, options: .atomic)
+            // At-rest encrypt the queue (pilot-authored report content + positions)
+            // so it isn't readable on a locked device. Not backup-excluded: these
+            // are unsynced user submissions, not regenerable cache.
+            try data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         } catch {
             Self.logger.error("Failed to save pending PIREPs: \(error)")
         }

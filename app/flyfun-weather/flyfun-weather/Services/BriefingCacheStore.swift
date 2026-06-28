@@ -29,6 +29,27 @@ actor BriefingCacheStore {
     private let cacheDir: URL
     private var index: [String: CachedPackEntry] = [:] // keyed by "flightId/timestamp"
     private var loaded = false
+    private var cacheRootEnsured = false
+
+    /// All cache writes are at-rest encrypted (readable only after first unlock)
+    /// so briefing routes, positions, and digest content aren't exposed on a
+    /// locked or lost device. `.atomic` also guards against torn writes.
+    private static let writeOptions: Data.WritingOptions =
+        [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+
+    /// Create the cache root (once) and exclude it from iCloud/iTunes backup —
+    /// the contents are regenerable from the server and shouldn't inflate
+    /// backups or migrate to other devices.
+    private func ensureCacheRoot() throws {
+        if !cacheRootEnsured {
+            try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            var url = cacheDir
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? url.setResourceValues(values)
+            cacheRootEnsured = true
+        }
+    }
 
     /// Designated initializer — the cache root is injectable so tests can point
     /// it at a temp directory instead of the shared Application Support container.
@@ -50,18 +71,19 @@ actor BriefingCacheStore {
     }
 
     func writeData(_ data: Data, flightId: String, timestamp: String, endpoint: String) throws {
+        try ensureCacheRoot()
         let dir = packDir(flightId: flightId, timestamp: timestamp)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("\(endpoint).json")
-        try data.write(to: file)
+        try data.write(to: file, options: Self.writeOptions)
     }
 
     // MARK: - Metadata cache (for offline fallback)
 
     /// Write a metadata file at the cache root level (e.g. "flights.json").
     func writeMetadata(_ data: Data, name: String) throws {
-        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        try data.write(to: cacheDir.appendingPathComponent("\(name).json"))
+        try ensureCacheRoot()
+        try data.write(to: cacheDir.appendingPathComponent("\(name).json"), options: Self.writeOptions)
     }
 
     /// Read a metadata file from the cache root level.
@@ -71,9 +93,10 @@ actor BriefingCacheStore {
 
     /// Write per-flight metadata (e.g. "latest-pack" for a given flight).
     func writeFlightMetadata(_ data: Data, flightId: String, name: String) throws {
+        try ensureCacheRoot()
         let dir = cacheDir.appendingPathComponent(flightId, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try data.write(to: dir.appendingPathComponent("\(name).json"))
+        try data.write(to: dir.appendingPathComponent("\(name).json"), options: Self.writeOptions)
     }
 
     /// Read per-flight metadata.
@@ -167,9 +190,9 @@ actor BriefingCacheStore {
 
     private func saveIndex() {
         do {
-            try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            try ensureCacheRoot()
             let data = try JSONEncoder().encode(index)
-            try data.write(to: cacheDir.appendingPathComponent("index.json"))
+            try data.write(to: cacheDir.appendingPathComponent("index.json"), options: Self.writeOptions)
         } catch {
             Self.logger.error("Failed to save cache index: \(error)")
         }
