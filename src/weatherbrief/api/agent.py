@@ -318,6 +318,13 @@ def get_briefing(
     if alt_table:
         result["altitude_table"] = views.summarize_altitude_table(alt_table)
 
+    # Weather-based divert alternates: a compact hook only (required-flag +
+    # candidate count). Full detail via getAlternates — keep the briefing lean.
+    snapshot = _read_json(pack_dir, "briefing.json") or _read_json(pack_dir, "snapshot.json")
+    alternates = (snapshot or {}).get("alternates")
+    if alternates:
+        result["alternates"] = views.alternates_hook(alternates)
+
     return result
 
 
@@ -477,6 +484,48 @@ def get_digest_context(
         "digest_context": context,
         "web_url": _flight_web_url(flight_id),
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /agent/v1/flights/{flight_id}/alternates  — get_alternates
+# ---------------------------------------------------------------------------
+
+@router.get("/flights/{flight_id}/alternates", operation_id="getAlternates")
+def get_alternates(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Weather-based divert alternates for a destination. Use for diversion
+    questions or 'is a filed alternate required'. Returns the FAA/EASA trigger,
+    the nearest improving airport per axis, and ranked candidates.
+    WEATHER-improvement only, NOT operational — verify with airport/AIP data.
+    """
+    pack, timestamp, status = _resolve_latest_pack(db, user_id, flight_id)
+    if status is not None:
+        return status
+
+    pack_dir = packs_api._get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    snapshot = _read_json(pack_dir, "briefing.json") or _read_json(pack_dir, "snapshot.json")
+    alternates = (snapshot or {}).get("alternates")
+    if not alternates:
+        return {
+            "status": "none",
+            "flight_id": flight_id,
+            "message": (
+                "No weather alternates were computed for this briefing. Either "
+                "compute_alternates is disabled in the user's profile, or the "
+                "destination forecast was not marginal enough to surface diverts."
+            ),
+            "web_url": _flight_web_url(flight_id),
+        }
+
+    result = views.summarize_alternates(alternates)
+    result["status"] = "ready"
+    result["flight_id"] = flight_id
+    result["briefing_timestamp"] = timestamp
+    result["web_url"] = _flight_web_url(flight_id)
+    return result
 
 
 # ---------------------------------------------------------------------------

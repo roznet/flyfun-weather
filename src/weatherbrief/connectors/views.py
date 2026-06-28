@@ -29,6 +29,19 @@ CONVECTIVE_NOTE = (
     "contradiction. assessment_method is which derivation graded the route."
 )
 
+ALTERNATES_NOTE = (
+    "These are WEATHER-improvement divert candidates — airports near the "
+    "destination whose forecast fixes a specific destination deficiency "
+    "(flight category, wind, or crosswind) — NOT legally filed operational "
+    "alternates. The FAA/EASA 'alternate required?' trigger is advisory, "
+    "computed from forecast ceiling/visibility against estimated approach "
+    "minima (EASA is a Likely/Marginal/Unlikely band, not a published-plate "
+    "lookup; FAA uses fixed regulatory values). Operational suitability — "
+    "opening hours, customs/PPR, fuel, NOTAMs, approach availability and "
+    "currency — is NOT evaluated here. Combine these with airport/AIP data "
+    "before advising a pilot on a divert."
+)
+
 
 def briefing_freshness_status(freshness: dict) -> dict[str, Any]:
     """Map a ``/packs/freshness`` payload to the connector's status + stale note.
@@ -155,6 +168,159 @@ def summarize_altitude_table(table: dict) -> dict:
             for row in table.get("rows", [])
         ],
     }
+
+
+def _alt_criterion(c: dict | None) -> dict[str, Any] | None:
+    """Compact one ceiling/visibility criterion assessment (forecast vs band)."""
+    if not c:
+        return None
+    return {
+        "forecast": c.get("forecast"),
+        "required_min": c.get("required_min"),
+        "required_max": c.get("required_max"),
+        "unit": c.get("unit"),
+        "verdict": c.get("verdict"),
+    }
+
+
+def _alt_trigger(t: dict | None) -> dict[str, Any] | None:
+    """Compact one regulatory destination trigger (FAA or EASA)."""
+    if not t:
+        return None
+    return {
+        "status": t.get("status"),
+        "reason": t.get("reason"),
+        "source": t.get("source"),
+        "triggered_by_tempo": t.get("triggered_by_tempo", False),
+        "ceiling": _alt_criterion(t.get("ceiling")),
+        "visibility": _alt_criterion(t.get("visibility")),
+    }
+
+
+def _alt_candidate(a: dict) -> dict[str, Any]:
+    """Compact one divert-candidate airport: weather + suitability + vs-dest flags."""
+    out: dict[str, Any] = {
+        "icao": a.get("icao"),
+        "name": a.get("name"),
+        "distance_from_dest_nm": a.get("distance_from_dest_nm"),
+        "position": a.get("position"),
+        # consensus weather at ETA
+        "flight_category": a.get("flight_category"),
+        "wind_speed_kt": a.get("wind_speed_kt"),
+        "crosswind_kt": a.get("crosswind_kt"),
+        "ceiling_ft": a.get("ceiling_ft"),
+        "visibility_m": a.get("visibility_m"),
+        "best_runway_id": a.get("best_runway_id"),
+        # suitability — the hooks for an operational (AIP/airport-data) cross-check
+        "has_instrument_approach": a.get("has_instrument_approach"),
+        "best_approach_type": a.get("best_approach_type"),
+        "longest_runway_ft": a.get("longest_runway_ft"),
+        "has_hard_runway": a.get("has_hard_runway"),
+        "point_of_entry": a.get("point_of_entry"),
+        "is_major": a.get("is_major"),
+        # vs-destination
+        "better_category": a.get("better_category"),
+        "better_wind": a.get("better_wind"),
+        "better_crosswind": a.get("better_crosswind"),
+        "dominates_destination": a.get("dominates_destination"),
+    }
+    # Regulatory alternate-minima qualification (compact: verdict + provenance).
+    for regime in ("faa", "easa"):
+        q = a.get(regime)
+        if q:
+            out[regime] = {"verdict": q.get("verdict"), "source": q.get("source")}
+    return out
+
+
+def summarize_alternates(alt: dict, *, max_candidates: int = 30) -> dict[str, Any]:
+    """Shape a snapshot ``RouteAlternates`` block into the compact connector view.
+
+    Weather-improvement divert candidates plus the advisory FAA/EASA
+    "alternate required?" trigger and the nearest-improving pick per deficient
+    axis. See ``ALTERNATES_NOTE`` for the weather-vs-operational caveat the
+    connectors surface alongside this — operational suitability is intentionally
+    out of scope here and must be cross-checked against airport/AIP data.
+
+    ``max_candidates`` bounds the (already backend-ranked, closest-first) list so
+    a large catchment can't blow the context window; the overflow count is
+    reported as ``candidates_truncated``.
+    """
+    out: dict[str, Any] = {
+        "destination": {
+            "icao": alt.get("destination_icao"),
+            "flight_category": alt.get("destination_category"),
+            "crosswind_kt": alt.get("destination_crosswind_kt"),
+            "ceiling_ft": alt.get("destination_ceiling_ft"),
+            "visibility_m": alt.get("destination_visibility_m"),
+        },
+        "eta": alt.get("eta"),
+        "corridor_nm": alt.get("corridor_nm"),
+        "radius_nm": alt.get("radius_nm"),
+        "candidates_evaluated": alt.get("candidates_evaluated"),
+        "approach_filter_relaxed": alt.get("approach_filter_relaxed", False),
+        "note": ALTERNATES_NOTE,
+    }
+
+    req = alt.get("alternate_requirement")
+    if req:
+        out["requirement"] = {
+            "faa": _alt_trigger(req.get("faa")),
+            "easa": _alt_trigger(req.get("easa")),
+            "caveats": req.get("caveats", []),
+        }
+
+    nearest = [
+        {
+            "axis": p.get("axis"),
+            "icao": p.get("icao"),
+            "distance_from_dest_nm": p.get("distance_from_dest_nm"),
+            "position": p.get("position"),
+        }
+        for p in alt.get("nearest_improving", [])
+        if p.get("icao")
+    ]
+    if nearest:
+        out["nearest_improving"] = nearest
+
+    candidates = alt.get("alternates", []) or []
+    out["candidates"] = [_alt_candidate(a) for a in candidates[:max_candidates]]
+    if len(candidates) > max_candidates:
+        out["candidates_truncated"] = len(candidates) - max_candidates
+
+    return out
+
+
+def alternates_hook(alt: dict) -> dict[str, Any]:
+    """Lightweight get_briefing signal that points the agent at get_alternates.
+
+    Mirrors the advisory ``cross_check_present`` / ``detail_tool`` pattern
+    (Layer A discoverability): just the required-flag, the candidate count, and
+    the nearest-improving picks — enough to know a divert question is worth a
+    drill-in, without paying the full candidate list on the briefing hot path.
+    """
+    req = alt.get("alternate_requirement") or {}
+    faa = (req.get("faa") or {}).get("status")
+    easa = (req.get("easa") or {}).get("status")
+    candidates = alt.get("alternates", []) or []
+    nearest = [
+        {
+            "axis": p.get("axis"),
+            "icao": p.get("icao"),
+            "distance_from_dest_nm": p.get("distance_from_dest_nm"),
+        }
+        for p in alt.get("nearest_improving", [])
+        if p.get("icao")
+    ]
+    out: dict[str, Any] = {
+        "destination": alt.get("destination_icao"),
+        "candidate_count": len(candidates),
+        "detail_tool": "get_alternates",
+    }
+    if faa is not None or easa is not None:
+        out["alternate_required"] = {"faa": faa, "easa": easa}
+    if nearest:
+        out["nearest_improving"] = nearest
+    return out
 
 
 def advisory_detail(adv: dict, catalog_entry: dict | None) -> dict[str, Any]:
