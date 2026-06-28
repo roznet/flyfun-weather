@@ -67,9 +67,41 @@ Planning/viewer mode — default when not in an active flight session. What the 
 └──────────────────────────────────────────────────────────┘
 ```
 
-Actual shipped tabs: **Advisories · Cross-Section · Map · Digest**, plus a **PIREPs** tab shown only when `userPreferences.pirepCanView`. Settings is reached from the flight-list ellipsis menu, not a tab. The PIREP reporting sheet is opened from a toolbar button (visible during the flight window when `pirepCanPublish`), not a tab.
+> **Tab reorganization (#310, current).** The mega-scroll "Brief" tab was split
+> and the standalone Skew-T tab folded away. Tabs are now
+> **Advisory · Discussion · Cross-Section · Map** (+ a gated **PIREPs** tab when
+> `userPreferences.pirepCanView`). This is a partial, intentional reversal of the
+> §4.1 "one narrative scroll" decision — the single scroll stays the iPhone
+> *fallback shape*, but content is regrouped into purpose-built tabs. Settings is
+> still reached from the flight-list ellipsis menu; the PIREP reporting sheet is
+> still a toolbar button (during the flight window when `pirepCanPublish`), not a
+> tab.
 
-On **iPhone**, the same `TabView` collapses to bottom tabs; iPad keeps the split-view sidebar.
+| Tab | Contents (code) |
+|---|---|
+| **Advisory** | `AdvisoryTabView` — accented hero (traffic-light + reason) → watch chips → responsive advisory grid (`LazyVGrid` adaptive ≥280pt; AMBER/RED as `AdvisoryCardView`s, all GREEN collapsed into `GreenAdvisoryStrip` pills) → `AirportConditionsView` → `AlternatesView` (D-2 inward only). Per-hazard digest narrative is attached to the matching advisory card, not Discussion. |
+| **Discussion** | `DiscussionTabView` — synoptic overview text (`DigestResponse.synopsis`). v1 is synopsis-only; surface-pressure & front charts are a deferred fast-follow. |
+| **Cross-Section** | `CrossSectionView` with the Skew-T (`SkewTTabView`, bounded height) folded **below it in one scroll**. The "Sounding ›" deep-link and `FocusIntent.target == .skewT` scroll to the embedded Skew-T instead of switching tabs. |
+| **Map** | `RouteMapView` — unchanged. |
+
+**Chrome / space reclaim (#310 item 1).** The old standalone `BriefingHeaderView`
+band is gone: route identity moved to `navigationTitle` + `.navigationSubtitle`
+(iOS 26), and the freshness chip + pack-history (D-N) picker merged into one
+`BriefingPackToolbar` menu in the nav-bar toolbar.
+
+**Tab presentation is size-class adaptive** (`BriefingContentView`): on **regular
+width (iPad)** the tabs render as a custom top pill band (`BriefingTabBand`) with
+switched content below; on **compact width (iPhone)** they collapse to a native
+bottom `TabView`. Both drive `viewModel.selectedTab`, so all deep-links
+(watch chips, advisory detail → cross-section) behave identically. iPad keeps the
+`NavigationSplitView` sidebar.
+
+**Intra-tab scroll-spy (#310 item 5).** Multi-section tabs (Advisory; reusable on
+Discussion/Cross-Section) wrap their scroll in `ScrollSpyScroll`, which pins a
+sticky horizontally-scrollable `SectionSpyBar` of section pills, highlights the
+section nearest the top, and jumps on tap. Sections register via the `.spyAnchor(id)`
+modifier (a `GeometryReader` + `PreferenceKey` reporting each section's top
+offset); the bar suppresses itself when there is only one section.
 
 ## In-Flight Mode (Phase 3 vision — NOT built as drawn)
 

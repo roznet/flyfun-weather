@@ -9,6 +9,24 @@ struct BriefingContainerView: View {
     @State private var trackingService = FlightTrackingService()
     @State private var showingPirepSheet = false
 
+    private static let dayTimeUTC: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "d MMM HH:mm"
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        return fmt
+    }()
+
+    /// Nav-bar subtitle: "15 Mar 06:00 UTC · FL090" (#310 — was the header band's
+    /// identity line).
+    private var identitySubtitle: String {
+        var parts: [String] = []
+        if let date = flight.departureDate {
+            parts.append("\(Self.dayTimeUTC.string(from: date)) UTC")
+        }
+        parts.append("FL\(flight.cruiseAltitudeFt / 100)")
+        return parts.joined(separator: " · ")
+    }
+
     /// Whether the current time is within the flight tracking window (departure - 2h to departure + duration + 2h).
     private var isInFlightWindow: Bool {
         guard let departure = flight.departureDate else { return false }
@@ -21,9 +39,10 @@ struct BriefingContainerView: View {
     var body: some View {
         Group {
             if let viewModel {
+                // #310: the standalone header band is gone — identity moved into
+                // the nav bar (title + subtitle), freshness + pack picker into
+                // the toolbar. Tabs render at the top (iPad) / bottom (iPhone).
                 VStack(spacing: 0) {
-                    // Connective header (§4.10) — persists above all 4 tabs.
-                    BriefingHeaderView(viewModel: viewModel, flight: flight)
                     RefreshBannerView(state: viewModel.refreshState)
                     DownloadBannerView(state: viewModel.downloadState)
                     BriefingContentView(viewModel: viewModel, trackingService: trackingService)
@@ -33,9 +52,13 @@ struct BriefingContainerView: View {
             }
         }
         .navigationTitle(flight.shortTitle)
+        .navigationSubtitle(identitySubtitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let viewModel {
+                ToolbarItem(placement: .topBarLeading) {
+                    BriefingPackToolbar(viewModel: viewModel)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
                         if isInFlightWindow && appState.userPreferences.preferences.pirepCanPublish {
@@ -303,39 +326,164 @@ private struct DownloadBannerView: View {
     }
 }
 
-/// Inner content once the view model is ready.
+/// Inner content once the view model is ready (#310). Tabs: Advisory ·
+/// Discussion · Cross-Section · Map (+ gated PIREPs). On regular width (iPad)
+/// they render as a custom top pill band with switched content; on compact
+/// width (iPhone) they collapse to a native bottom tab bar. Both drive
+/// `viewModel.selectedTab`, so deep-links behave identically.
 private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
     @Environment(AppState.self) private var appState
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    private var tabs: [BriefingTab] {
+        var tabs = BriefingTab.core
+        if appState.userPreferences.preferences.pirepCanView { tabs.append(.pireps) }
+        return tabs
+    }
 
     var body: some View {
-        // iPhone = 4 tabs: Brief · Cross-section · Skew-T · Map (§4.1).
-        // PIREPs stays as a gated extra tab so offline reporting doesn't regress.
-        TabView(selection: $viewModel.selectedTab) {
-            Tab("Brief", systemImage: "doc.text.image", value: BriefingTab.brief) {
-                BriefView(viewModel: viewModel)
+        if sizeClass == .regular {
+            VStack(spacing: 0) {
+                BriefingTabBand(tabs: tabs, selection: $viewModel.selectedTab)
+                tabContent(viewModel.selectedTab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            Tab("Cross-Section", systemImage: "chart.xyaxis.line", value: BriefingTab.crossSection) {
-                CrossSectionView(viewModel: viewModel, trackingService: trackingService)
-            }
-
-            Tab("Skew-T", systemImage: "chart.dots.scatter", value: BriefingTab.skewT) {
-                SkewTTabView(viewModel: viewModel)
-            }
-
-            Tab("Map", systemImage: "map", value: BriefingTab.map) {
-                RouteMapView(viewModel: viewModel, trackingService: trackingService)
-            }
-
-            if appState.userPreferences.preferences.pirepCanView {
-                Tab("PIREPs", systemImage: "cloud.sun", value: BriefingTab.pireps) {
-                    PirepListView(pirepsState: viewModel.pirepsState) {
-                        await viewModel.loadPireps()
+        } else {
+            TabView(selection: $viewModel.selectedTab) {
+                ForEach(tabs, id: \.self) { tab in
+                    Tab(tab.title, systemImage: tab.systemImage, value: tab) {
+                        tabContent(tab)
                     }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func tabContent(_ tab: BriefingTab) -> some View {
+        switch tab {
+        case .advisory:
+            AdvisoryTabView(viewModel: viewModel)
+        case .discussion:
+            DiscussionTabView(viewModel: viewModel)
+        case .crossSection:
+            CrossSectionView(viewModel: viewModel, trackingService: trackingService)
+        case .map:
+            RouteMapView(viewModel: viewModel, trackingService: trackingService)
+        case .pireps:
+            PirepListView(pirepsState: viewModel.pirepsState) {
+                await viewModel.loadPireps()
+            }
+        }
+    }
+}
+
+/// Custom top tab band (iPad / regular width, #310): pill-styled tabs driving
+/// the selection, behaving identically nested in the split-view detail.
+private struct BriefingTabBand: View {
+    let tabs: [BriefingTab]
+    @Binding var selection: BriefingTab
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Theme.spacingS) {
+                ForEach(tabs, id: \.self) { tab in
+                    let active = tab == selection
+                    Button { selection = tab } label: {
+                        Label(tab.title, systemImage: tab.systemImage)
+                            .font(.subheadline.weight(active ? .semibold : .regular))
+                            .foregroundStyle(active ? Theme.primary : Theme.textMuted)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(active ? Theme.primary.opacity(0.12) : Color.clear, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.cardPadding)
+            .padding(.vertical, Theme.spacingS)
+        }
+        .background(Theme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.border).frame(height: 0.5)
+        }
+    }
+}
+
+/// Toolbar control merging freshness + pack (D-N) history into one menu (#310):
+/// a freshness dot + current pack label opens the pack-history picker, with the
+/// detailed freshness line as a non-interactive header.
+private struct BriefingPackToolbar: View {
+    @Bindable var viewModel: BriefingViewModel
+
+    var body: some View {
+        if viewModel.packHistory.count > 1 {
+            Menu {
+                Section(freshnessText) {
+                    ForEach(viewModel.packHistory, id: \.fetchTimestamp) { pack in
+                        Button {
+                            viewModel.selectedPackTimestamp = pack.fetchTimestamp
+                        } label: {
+                            HStack {
+                                Text(viewModel.packLabel(for: pack))
+                                if viewModel.packCacheStatus[pack.fetchTimestamp] == true {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                }
+                                if pack.fetchTimestamp == viewModel.selectedPackTimestamp {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                label
+            }
+        } else if viewModel.pack != nil {
+            label
+        }
+    }
+
+    private var label: some View {
+        HStack(spacing: Theme.spacingXS) {
+            Circle()
+                .fill(freshnessFresh ? Theme.green : Theme.amber)
+                .frame(width: 7, height: 7)
+            Text(currentPackLabel)
+                .font(.caption.weight(.medium))
+        }
+    }
+
+    private var currentPackLabel: String {
+        if let pack = viewModel.pack {
+            let daysOut = pack.daysOut
+            return daysOut >= 0 ? "D-\(daysOut)" : "D+\(abs(daysOut))"
+        }
+        return "History"
+    }
+
+    private var freshnessFresh: Bool {
+        viewModel.pack?.dataStatus?.fresh ?? true
+    }
+
+    private var freshnessText: String {
+        guard let status = viewModel.pack?.dataStatus else {
+            return initTimesText(viewModel.pack?.modelInitTimes ?? [:])
+        }
+        if status.fresh {
+            return initTimesText(status.modelInitTimes.isEmpty ? (viewModel.pack?.modelInitTimes ?? [:]) : status.modelInitTimes)
+        }
+        let stale = status.staleModels.map { $0.uppercased() }.joined(separator: ", ")
+        return stale.isEmpty ? "Updating…" : "Updating: \(stale)"
+    }
+
+    private func initTimesText(_ times: [String: Int]) -> String {
+        let parts = times
+            .sorted { $0.key < $1.key }
+            .prefix(3)
+            .map { "\($0.key.uppercased()) \(String(format: "%02d", $0.value))Z" }
+        return parts.isEmpty ? "Forecast" : parts.joined(separator: " · ")
     }
 }

@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// The Skew-T peer tab (§4.7 — promoted from a drill-up to its own full-screen
-/// tab). Shows the sounding for the shared `activePoint`; scrubbing the
-/// cross-section then switching here lands on that point. A route strip with
-/// ‹ prev / next › picks the point. Phase 4 adds overlay bands, interactivity,
-/// and the side-panel variable(s) in the RZSkewT package.
+/// The Skew-T sounding view (§4.7). Since #310 it is no longer a top-level tab
+/// — it renders **below the cross-section in the same scroll** (`embeddedHeight`
+/// set) and the cross-section's "Sounding ›" deep-link scrolls to it. Shows the
+/// sounding for the shared `activePoint`; a route strip with ‹ prev / next ›
+/// picks the point. When `embeddedHeight` is nil it fills its container.
 struct SkewTTabView: View {
     let viewModel: BriefingViewModel
+    /// Bounded height when embedded in a scroll (#310). nil = fill container.
+    var embeddedHeight: CGFloat? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,9 +17,10 @@ struct SkewTTabView: View {
                 pointStrip(indices: indices, current: current)
                 Divider()
                 SkewTDetailView(viewModel: viewModel, pointIndex: current)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: embeddedHeight, maxHeight: embeddedHeight ?? .infinity)
             } else {
                 placeholder
+                    .frame(maxWidth: .infinity, minHeight: embeddedHeight, maxHeight: embeddedHeight ?? .infinity)
             }
         }
         .background(Theme.bg)
