@@ -345,27 +345,34 @@ struct SquareCloudBandsLayer: CrossSectionLayerProtocol {
             let xL = transform.distanceToX(band.left.distanceNm)
             let xR = transform.distanceToX(band.right.distanceNm)
             let xMid = (xL + xR) / 2
-            let color = source.matchedRGBA(band.cl, band.matched).color
+            let rgba = source.matchedRGBA(band.cl, band.matched)
             fillFlatCell(&context, x0: xL, x1: xMid, baseFt: band.left.baseFt, topFt: band.left.topFt,
-                         transform: transform, color: color)
+                         transform: transform, fill: rgba)
             fillFlatCell(&context, x0: xMid, x1: xR, baseFt: band.right.baseFt, topFt: band.right.topFt,
-                         transform: transform, color: color)
+                         transform: transform, fill: rgba)
         }
     }
 }
 
 /// One flat (horizontal top/base) rectangular cloud cell. Skips tapered
 /// zero-height ends produced for unmatched zones.
+///
+/// Square has no blobs/feathering to add structure, so a faint cover-based fill
+/// dissolves into the (light) sky. Bump the fill to a visible floor and stroke a
+/// darker border so cells read as crisp ForeFlight-style blocks on any sky. (#7)
 private func fillFlatCell(
     _ context: inout GraphicsContext,
     x0: CGFloat, x1: CGFloat, baseFt: Double, topFt: Double,
-    transform: CoordTransform, color: Color
+    transform: CoordTransform, fill rgba: RGBA
 ) {
     guard x1 > x0 else { return }
     let yTop = transform.altitudeToY(topFt)
     let yBase = transform.altitudeToY(baseFt)
     guard yBase > yTop else { return }
-    context.fill(Path(CGRect(x: x0, y: yTop, width: x1 - x0, height: yBase - yTop)), with: .color(color))
+    let rect = CGRect(x: x0, y: yTop, width: x1 - x0, height: yBase - yTop)
+    context.fill(Path(rect), with: .color(rgba.withAlpha(max(rgba.a, 0.55))))
+    let border = RGBA(r: rgba.r * 0.55, g: rgba.g * 0.55, b: rgba.b * 0.65, a: 0.9)
+    context.stroke(Path(rect), with: .color(border.color), lineWidth: 0.75)
 }
 
 // MARK: - Shared single-point column fallback
