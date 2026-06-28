@@ -259,6 +259,10 @@ async function init(): Promise<void> {
     document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // URL params — declared before applyDeepLink() so the closure never reads it
+  // in its temporal dead zone if a future call-site is added above init's body.
+  const params = new URLSearchParams(window.location.search);
+
   // Deep-link (#308 Phase C): apply ?point=&model=&view=&preset=|advisory= once
   // the briefing is loaded, so an MCP/shared link opens a specific route point
   // with a given model + lens selected on a given surface. Best-effort: each
@@ -282,7 +286,7 @@ async function init(): Promise<void> {
     const pointRaw = params.get('point');
     if (pointRaw != null) {
       const idx = Number.parseInt(pointRaw, 10);
-      if (Number.isFinite(idx) && s.routeAnalyses.analyses.some(a => a.point_index === idx)) {
+      if (Number.isFinite(idx)) {
         // analyses are addressed by array position elsewhere; map point_index → position.
         const pos = s.routeAnalyses.analyses.findIndex(a => a.point_index === idx);
         if (pos >= 0) store.getState().setSelectedPoint(pos);
@@ -301,6 +305,12 @@ async function init(): Promise<void> {
     }
 
     // Surface — focus the Skew-T (or the compare/static variant) and scroll to it.
+    // Known limitation: the lens overlay state (applyAdvisoryPreset above) is
+    // pushed into the single-model SkewTRenderer via applySkewtPresetState();
+    // the compare and static renderers have no applyPreset(), so a
+    // ?view=skewt-compare&advisory=… link shades the cross-section but leaves the
+    // compare/static Skew-T generic. The MCP only ever emits view=skewt, so this
+    // affects only a hand-shared compare/static link — acceptable for now.
     const view = params.get('view');
     if (view === 'skewt' || view === 'skewt-compare' || view === 'skewt-static') {
       setSkewtViewMode(view === 'skewt-compare' ? 'compare' : view === 'skewt-static' ? 'static' : 'dynamic');
@@ -311,8 +321,7 @@ async function init(): Promise<void> {
     }
   }
 
-  // Get flight ID and optional pack timestamp from URL
-  const params = new URLSearchParams(window.location.search);
+  // Get flight ID and optional pack timestamp from URL (params declared above)
   const flightId = params.get('flight');
   const packTimestamp = params.get('pack');
   if (!flightId) {
@@ -679,15 +688,17 @@ async function init(): Promise<void> {
     const onIds = skewtRenderer ? skewtRenderer.getOverlayState() : {};
     const activeBands = SKEWT_OVERLAYS.filter(o => onIds[o.id]).map(o => o.label);
     const bandsHtml = activeBands.length
-      ? `<p class="skewt-help-bands"><strong>Shaded now:</strong> ${escapeHtml(activeBands.join(', '))}.</p>`
-      : '<p class="skewt-help-bands">No hazard bands shaded — this is the basic temperature / dewpoint / parcel view.</p>';
+      ? `<p class="skewt-help-bands"><strong>${escapeHtml(t('viz.skewtHelp.shadedNow'))}</strong> ${escapeHtml(activeBands.join(', '))}.</p>`
+      : `<p class="skewt-help-bands">${escapeHtml(t('viz.skewtHelp.noBands'))}</p>`;
 
-    const title = preset ? escapeHtml(preset.label) : 'Skew-T';
+    const title = preset
+      ? t('viz.skewtHelp.title', { preset: preset.label })
+      : t('viz.skewtHelp.title', { preset: t('viz.skewtHelp.titleFallback') });
     const html = `<div class="skewt-help-popup">`
-      + `<h3>Reading this Skew-T — ${title}</h3>`
+      + `<h3>${escapeHtml(title)}</h3>`
       + `<p>${escapeHtml(interpretation)}</p>`
       + bandsHtml
-      + (factsHtml ? `<p class="skewt-help-facts-label"><strong>This sounding:</strong></p>${factsHtml}` : '')
+      + (factsHtml ? `<p class="skewt-help-facts-label"><strong>${escapeHtml(t('viz.skewtHelp.thisSounding'))}</strong></p>${factsHtml}` : '')
       + `</div>`;
     showPopupContent(html);
   }
