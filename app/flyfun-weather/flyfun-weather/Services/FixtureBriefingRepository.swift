@@ -10,7 +10,11 @@ import Foundation
 ///
 /// Flights use far-future departures so they land in the list's "Future" group
 /// regardless of when the test runs.
-final class FixtureBriefingRepository: BriefingRepository, @unchecked Sendable {
+///
+/// An `actor` (like `BriefingCacheStore` / `PirepOfflineStore`) so the
+/// `createdFlights` mutation is properly isolated — every call already arrives
+/// via `await` through the `BriefingRepository` protocol.
+actor FixtureBriefingRepository: BriefingRepository {
 
     enum FixtureError: Error, CustomStringConvertible {
         case notProvided(String)

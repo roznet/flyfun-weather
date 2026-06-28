@@ -35,8 +35,12 @@ final class flyfun_weatherUITests: XCTestCase {
         // accessibility identifier, not fixture content, so renaming a fixture
         // route can't silently break iPad handling.
         if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 5) { return }
+        // iPad portrait: the list sits behind the split-view toggle — a system
+        // control with no stable identifier we can set, matched by its (English)
+        // label. CI runs English sims.
         let showSidebar = app.buttons["Show Sidebar"]
-        if showSidebar.exists { showSidebar.tap() }
+        if showSidebar.exists { showSidebar.tap(); return }
+        XCTFail("Could not reveal flight list: neither the list nor the sidebar toggle was found")
     }
 
     /// Journey 1 — launch in mock mode lands past the login gate on the flight
@@ -46,11 +50,11 @@ final class flyfun_weatherUITests: XCTestCase {
         let app = launchMockApp()
         revealFlightList(app)
 
-        // Both fixture flights' route titles appear (proves the list rendered
-        // from the fixture repository, not the login screen).
-        XCTAssertTrue(app.staticTexts["LFMD → LFML"].waitForExistence(timeout: 10),
+        // Both fixture flights render (keyed off the card identifiers, not the
+        // route text, so a route-formatter change can't break the assertion).
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-1"].waitForExistence(timeout: 10),
                       "first fixture flight should be listed")
-        XCTAssertTrue(app.staticTexts["EGTF → LFAT"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.descendants(matching: .any)["flightCard-fixture-2"].waitForExistence(timeout: 5),
                       "second fixture flight should be listed")
 
         // The primary action is reachable.
@@ -86,10 +90,12 @@ final class flyfun_weatherUITests: XCTestCase {
 
         submit.tap()
 
-        // Form dismisses and the created flight appears in the list.
-        revealFlightList(app)
+        // Creating the flight selects it, so the app navigates to the new flight's
+        // briefing. Confirm we landed there (the briefing header shows the route).
+        // The briefing header has no stable identifier yet — tracked in #318 — so
+        // this is the one assertion that keys off visible text by necessity.
         XCTAssertTrue(app.staticTexts["EGLL → EGKK"].waitForExistence(timeout: 10),
-                      "newly created flight should appear in the list")
+                      "the created flight's briefing should be shown")
     }
 
     @MainActor

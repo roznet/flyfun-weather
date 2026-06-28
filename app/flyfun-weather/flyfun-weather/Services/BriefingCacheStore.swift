@@ -51,16 +51,12 @@ actor BriefingCacheStore {
         }
     }
 
-    /// Designated initializer — the cache root is injectable so tests can point
-    /// it at a temp directory instead of the shared Application Support container.
-    init(cacheDir: URL) {
-        self.cacheDir = cacheDir
-    }
-
-    /// Production initializer — Application Support/BriefingCache.
-    convenience init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.init(cacheDir: appSupport.appendingPathComponent("BriefingCache", isDirectory: true))
+    /// The cache root is injectable so tests can point it at a temp directory;
+    /// production (`cacheDir: nil`) uses Application Support/BriefingCache.
+    init(cacheDir: URL? = nil) {
+        self.cacheDir = cacheDir ?? FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("BriefingCache", isDirectory: true)
     }
 
     // MARK: - Read / Write

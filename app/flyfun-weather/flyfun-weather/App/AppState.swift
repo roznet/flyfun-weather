@@ -113,18 +113,19 @@ final class AppState {
     }
 
     #if DEBUG
-    /// Wire up a fake authenticated session for UI tests. In mock mode the
-    /// repository serves fixtures; otherwise it points at the selected server so
-    /// tests can also run against a live dev backend. The fake JWT is set on the
-    /// observable mirror only — it is never written to the keychain.
+    /// Wire up the session for UI tests. In mock mode the repository serves
+    /// fixtures; otherwise it points at the selected server so tests can run
+    /// against a live dev backend. Never writes to the keychain.
     private func setupUITestSession() {
-        jwt = "uitest-token"
         if Self.isUITestMockMode {
+            // Fixtures need no real auth — a fake gate token is enough to render
+            // past LoginView, and it lives on the observable mirror only.
+            jwt = "uitest-token"
             repository = FixtureBriefingRepository()
         } else {
-            // Live-dev mode: don't write to the keychain — reuse whatever real
-            // token the developer already has, so we never leave a fake token
-            // behind that would 401 the real app on next launch.
+            // Live-dev mode: mirror the real keychain token so the auth gate
+            // matches what the API will actually use (nil → LoginView, as normal).
+            jwt = tokenStore.token
             setupClient()
         }
     }

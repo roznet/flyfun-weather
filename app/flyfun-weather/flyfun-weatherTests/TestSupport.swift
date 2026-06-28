@@ -27,6 +27,12 @@ enum MockError: Error, CustomStringConvertible {
 
 /// In-memory `BriefingRepository`. Configure the few results a test needs; the
 /// rest throw `notStubbed`.
+///
+/// `@unchecked Sendable` is sound here because each test drives a single
+/// instance sequentially — configure the result, then `await` one ViewModel
+/// call, then read the counter; the `await` establishes the ordering. It stays a
+/// `class` (not an `actor`) so tests keep the synchronous `repo.x = …` /
+/// `repo.callCount` configuration API.
 final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     // Configurable results (set per-test).
     var flightsResult: Result<[FlightResponse], Error> = .success([])
@@ -120,6 +126,9 @@ func makePirepRequest(remarks: String = "test") -> SubmitPirepRequest {
 func makeTempDir() -> URL {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("wbtests-\(UUID().uuidString)", isDirectory: true)
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    // try! on purpose: if the temp dir can't be created, crash here rather than
+    // returning a non-existent URL that makes every downstream write fail with a
+    // misleading "no such file" error.
+    try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
