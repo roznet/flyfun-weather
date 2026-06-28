@@ -76,9 +76,14 @@ struct CrossSectionView: View {
                         routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
                     )
                     // "Tap any point" coachmark above the canvas (#312); cleared
-                    // on the first scrub via `updateScrub`.
-                    TipView(scrubTip)
-                        .padding(.horizontal, Theme.cardPadding)
+                    // on the first scrub via `updateScrub`. Only render once
+                    // there's a canvas to interact with — otherwise the tip
+                    // would be consumed coaching against a loading/error
+                    // placeholder.
+                    if csVM.vizData != nil {
+                        TipView(scrubTip)
+                            .padding(.horizontal, Theme.cardPadding)
+                    }
                     crossSectionCanvas
                     RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
                                    leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)

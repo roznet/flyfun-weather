@@ -54,7 +54,9 @@ struct RefreshBriefingTip: Tip {
 /// so it never fires while the Advisory (or any other) tab is on screen.
 struct CrossSectionLayersTip: Tip {
     /// Set from `CrossSectionView`'s appear/disappear so the tip is eligible
-    /// only while that tab is the visible one.
+    /// only while that tab is the visible one. TipKit requires each `@Parameter`
+    /// to live on its own Tip type, so this is written in tandem with
+    /// `CrossSectionScrubTip.crossSectionVisible` — update both together.
     @Parameter static var crossSectionVisible: Bool = false
 
     var title: Text { Text("Choose what to show") }
@@ -71,6 +73,8 @@ struct CrossSectionLayersTip: Tip {
 /// the canvas the first time the tab is opened; invalidated once the user
 /// scrubs once. Shares the visibility gate with the Layers tip.
 struct CrossSectionScrubTip: Tip {
+    /// Written in tandem with `CrossSectionLayersTip.crossSectionVisible` from
+    /// `CrossSectionView`'s appear/disappear — update both together.
     @Parameter static var crossSectionVisible: Bool = false
 
     var title: Text { Text("Tap or drag anywhere") }
