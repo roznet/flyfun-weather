@@ -157,6 +157,40 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Konvektionscharakter unbestimmt",
         "es": "Carácter convectivo indeterminado",
     },
+    # --- convective_character below-base clearance (#298) ---
+    # Annotate-only notes appended to ISOLATED/SCATTERED. Below-base is "more
+    # circumnavigable" (see-and-avoid under the cells in VMC), NOT a vertical out
+    # the way overflying the tops is — precip shafts / gust fronts live below base.
+    "convective_character.depth_unresolved": {
+        "en": "cell depth unresolved — below-base clearance not assessable",
+        "fr": "profondeur des cellules indéterminée — marge sous la base non évaluable",
+        "de": "Zelltiefe unbestimmt — Abstand unter der Basis nicht beurteilbar",
+        "es": "profundidad de las células indeterminada — margen bajo la base no evaluable",
+    },
+    "convective_character.cruise_within_layer": {
+        "en": "cruise within the convective layer — not avoidable from below",
+        "fr": "croisière dans la couche convective — non contournable par en dessous",
+        "de": "Reiseflug in der Konvektionsschicht — von unten nicht umfliegbar",
+        "es": "crucero dentro de la capa convectiva — no sorteable por debajo",
+    },
+    "convective_character.deck_below_cells": {
+        "en": "cells above a BKN/OVC deck — below-base see-and-avoid not available",
+        "fr": "cellules au-dessus d'une couche BKN/OVC — pas de vol à vue sous la base",
+        "de": "Zellen über einer BKN/OVC-Schicht — Sicht-Ausweichen unter der Basis nicht möglich",
+        "es": "células sobre una capa BKN/OVC — sin ver-y-evitar bajo la base",
+    },
+    "convective_character.below_base_clear": {
+        "en": "bases ~FL{fl}, ~{margin} ft above cruise — comfortable see-and-avoid room below",
+        "fr": "bases ~FL{fl}, ~{margin} ft au-dessus de la croisière — marge confortable pour le vol à vue dessous",
+        "de": "Basen ~FL{fl}, ~{margin} ft über Reiseflug — komfortabler Sicht-Ausweichraum darunter",
+        "es": "bases ~FL{fl}, ~{margin} ft sobre el crucero — margen cómodo para ver-y-evitar debajo",
+    },
+    "convective_character.below_base_marginal": {
+        "en": "bases ~FL{fl}, ~{margin} ft above cruise (marginal) — more avoidable ~{drop} ft lower",
+        "fr": "bases ~FL{fl}, ~{margin} ft au-dessus de la croisière (marginal) — plus contournable ~{drop} ft plus bas",
+        "de": "Basen ~FL{fl}, ~{margin} ft über Reiseflug (grenzwertig) — besser umfliegbar ~{drop} ft tiefer",
+        "es": "bases ~FL{fl}, ~{margin} ft sobre el crucero (marginal) — más sorteable ~{drop} ft más abajo",
+    },
 
     # --- airport_wind ---
     "airport_wind.calm": {

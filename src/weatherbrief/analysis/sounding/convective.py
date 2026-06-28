@@ -1041,6 +1041,11 @@ class ConvCharPoint(NamedTuple):
     embedded: bool            # convective point sits under a BKN/OVC deck
     k_index: float | None     # native preferred, else MetPy
     total_totals: float | None
+    # Below-base avoidability geometry (#298) — consumed only by the annotate-only
+    # clearance note in the evaluator, never by classify_convective_character().
+    convective_base_ft: float | None = None  # model-native cell base; None = depth/base unresolved
+    convective_top_ft: float | None = None   # model-native cell top; None = no diagnosed tower
+    vmc_below_base: bool = True               # layer cruise→base free of a BKN/OVC deck (VMC see-and-avoid)
 
 
 _CHAR_BAND_ORDER = (
