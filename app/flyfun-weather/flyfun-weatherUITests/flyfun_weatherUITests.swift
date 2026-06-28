@@ -59,6 +59,36 @@ final class flyfun_weatherUITests: XCTestCase {
         add(shot)
     }
 
+    /// Journey 2 — add-flight form: submit is gated until ≥2 waypoints, then a
+    /// create round-trips and the new flight appears in the list.
+    @MainActor
+    func testAddFlightValidationAndCreate() throws {
+        let app = launchMockApp()
+        revealFlightList(app)
+
+        app.buttons["addFlightButton"].tap()
+
+        let waypoints = app.textFields["waypointsField"]
+        XCTAssertTrue(waypoints.waitForExistence(timeout: 5), "add-flight form should appear")
+        let submit = app.buttons["submitFlightButton"]
+
+        // One waypoint → submit disabled.
+        waypoints.tap()
+        waypoints.typeText("EGLL")
+        XCTAssertFalse(submit.isEnabled, "one waypoint is not enough to submit")
+
+        // Second waypoint → submit enabled.
+        waypoints.typeText(" EGKK")
+        XCTAssertTrue(submit.isEnabled, "two waypoints should enable submit")
+
+        submit.tap()
+
+        // Form dismisses and the created flight appears in the list.
+        revealFlightList(app)
+        XCTAssertTrue(app.staticTexts["EGLL → EGKK"].waitForExistence(timeout: 10),
+                      "newly created flight should appear in the list")
+    }
+
     @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
