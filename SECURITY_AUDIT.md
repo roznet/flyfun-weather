@@ -2,10 +2,81 @@
 
 **Initial audit:** 2026-02-26
 **Prior updates:** 2026-03-23, 2026-04-20 (fresh first-principles review), 2026-05-20 (magic-link / rolling-session auth surface), 2026-06-11 (five parallel blind workstreams)
+**Latest update:** 2026-06-28 (iOS-client-focused pass — native app + `flyfun-common` Swift auth: keychain at-rest, on-device cache/queue file protection, OAuth deep-link injection. See the 2026-06-28 section below.)
 **Current audit:** 2026-06-20 (fresh full-stack review by six parallel independent workstreams — auth/sessions/OAuth, API authorization/IDOR, injection/SSRF/prompt-injection, frontend/XSS/CSP, secrets/deploy/dependencies, PII/privacy/GDPR — run blind to this document, then reconciled against it. Targeted the new OAuth 2.1 / MCP-OAuth / DCR / token-scope surface and the GDPR data-export/PII-masking work, both of which postdate the 2026-06-11 pass. `flyfun-common` **was** in-checkout this time (source `~/Developer/public/flyfun-common`, git `0.5.3`, matching the prod pin) so OAuth findings are confirmed against real library code, not call sites; model: Opus 4.8 / 1M)
 **Scope:** Full-stack review — FastAPI backend, shared `flyfun-common` auth library, SQLAlchemy/MySQL/SQLite storage, vanilla TypeScript frontend, Docker/Caddy deployment, MCP server, iOS sync endpoints, Claude-CLI feedback triage.
 
 > **Note on paths:** `flyfun-common` was restructured since the 2026-04-20 audit — its Python package now lives under `flyfun-common/python/src/flyfun_common/…` (the older sections of this document reference the pre-move `flyfun-common/src/flyfun_common/…` paths). The 2026-06-11 pass ran against a checkout **without** `flyfun-common` vendored or installed, so findings inside that library rest on call sites, tests, and design docs, and are flagged accordingly.
+
+---
+
+## 2026-06-28 — iOS client security pass
+
+### Summary
+
+Prior passes concentrated on the FastAPI backend, the web frontend, and the
+OAuth/MCP server surface; the **native iOS client** had not had a dedicated
+review. This pass audited the app (`app/flyfun-weather`) and the `flyfun-common`
+**Swift** auth layer it consumes (`KeychainBearerTokenStore`,
+`RollingBearerSession`, `AuthCallbackParser`, `FlyFunAuthService`) plus the
+`rzutils` keychain wrapper: token storage, transport (ATS), at-rest caches,
+deep-link/URL-scheme handling, secrets, and logging. Reconciled against a
+parallel third-party (Codex) review of the same surface.
+
+The client is broadly sound: **HTTPS enforced** (no ATS exceptions, no `http://`),
+**no `WKWebView`/JS bridge**, no hardcoded secrets, no pasteboard use, **the JWT
+is never logged** (OSLog redacts by default), and all dev-login / UI-test auth
+bypasses are `#if DEBUG`-gated (compiled out of release). Auth uses
+`ASWebAuthenticationSession` + Apple Sign In; the magic-link endpoint is
+account-enumeration-safe. Two new at-rest findings (both **fixed this pass**) and
+one promotion of the long-open iOS deep-link High (**H8**) from idea to a written
+implementation design.
+
+### New findings (this pass)
+
+| ID | Sev | Headline | Status |
+|----|-----|----------|--------|
+| 2026-06-28-iOS-1 | Medium | **On-device caches written without file protection.** `BriefingCacheStore` (briefing packs — routes, positions, digest) and `PirepOfflineStore` (pilot-authored pending reports) wrote plain JSON with default protection and no backup exclusion — readable on a locked/lost device, and the regenerable cache migrated via backup. | **FIXED** |
+| 2026-06-28-iOS-2 | Low/Med | **Keychain bearer token not device-bound.** `SecureKeyChainItem` set no `kSecAttrAccessible`, so the JWT defaulted to `WhenUnlocked` (not `…ThisDeviceOnly`). Not iCloud-synced (synchronizable unset), but restorable onto another device via encrypted backup. (Codex did not flag this one.) | **FIXED** |
+
+### Remediation — fixed this pass
+
+| ID | What shipped | Commits |
+|----|--------------|---------|
+| iOS-1 | All cache writes now `.completeFileProtectionUntilFirstUserAuthentication`; briefing-cache root marked `isExcludedFromBackup`. PIREP queue file-protected but kept backup-eligible (unsynced user data, not regenerable). | weather `cdb5a469` |
+| iOS-2 | Token stored `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (no backup/iCloud migration; `AfterFirstUnlock` preserves background reads while locked). Enabled by a backward-compatible optional `accessible:` param added to the shared `rzutils` keychain wrapper. | `rzutils` `1.0.31` (`e2c6633`) → `flyfun-common` `61447af` → weather `e8a072c6` (Package.resolved bump) |
+
+Verified: `rzutils` builds, `flyfun-common` builds against `1.0.31`, full app
+`xcodebuild` succeeds end-to-end. Migration is graceful — existing keychain
+items adopt the new accessibility on the next token write (re-login / rolling
+renewal); existing cache files gain protection as they are rewritten.
+
+### H8 (iOS OAuth deep-link) — promoted to design, not yet implemented
+
+**H8** (iOS JWT returned in a custom-scheme `?token=` query + loose `flyfun[a-z0-9\-]*`
+scheme regex) remains **OPEN**. This pass adds the missing piece — a confirmed
+**login-CSRF / session-fixation** vector: `WeatherBriefApp.onOpenURL` →
+`AppState.handleAuthCallback` accepts *any* inbound `flyfunweather://auth?token=…`
+with no `state` binding, so an attacker-crafted link can force-log a victim into
+the attacker's account. (The normal Google flow is captured by
+`ASWebAuthenticationSession` internally, so `onOpenURL` is *extra* surface.)
+
+An implementation design now exists — **`flyfun-common/designs/oauth-deeplink-hardening.md`**
+(`flyfun-common` `6901bc3`): native authorization-code pattern (one-time `?code=`
++ HTTPS exchange + `state` nonce), exact scheme allowlist, a 3-phase
+always-emit-both rollout that breaks no installed users, and a **demo-scoped
+review-token carve-out** that preserves the App Store reviewer deep link. Status:
+**designed, not coded** — timing TBD by owner.
+
+### Codex cross-check (server-side carry-forwards, re-verified open)
+
+A parallel Codex review re-confirmed several already-tracked server-side items as
+still open (all out of iOS scope, unchanged here): **M-new-9** (`/refresh/active`
+cross-tenant leak + `/refresh/status` ungated — see 2026-06-20 carry-forward
+table), **H5** (pack-HMAC mismatch served; NULL trusted), raw `str(exc)` leaked on
+the SSE refresh + airport-profile streaming paths, the **M2** scope footgun, and
+**M-prior-8** (`_load_flight_or_404` fail-open — latent, no exploitable caller).
+No new server-side findings; no new SQLi/command-injection/SSRF/traversal/XSS.
 
 ---
 
