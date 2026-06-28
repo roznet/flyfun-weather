@@ -198,9 +198,10 @@ struct CrossSectionView: View {
             // `cursor`/`aircraft` — does NOT re-run its ~400 gradient fills. The
             // thin cursor rule + aircraft marker live in a cheap overlay Canvas
             // that redraws every tick instead (#303).
-            StaticCrossSectionScene(data: vizData, enabledLayers: layers, dataVersion: csVM.dataVersion)
+            StaticCrossSectionScene(data: vizData, enabledLayers: layers,
+                                    dataVersion: csVM.dataVersion, renderSize: canvasSize)
                 // `.equatable()` is load-bearing: it forces SwiftUI to gate the
-                // redraw on the custom `==` (dataVersion + layers). Without it the
+                // redraw on the custom `==` (dataVersion + layers + size). Without it the
                 // reconciler falls back to reflecting the stored properties, can't
                 // compare the non-Equatable `VizRouteData`, and redraws every scrub
                 // tick — defeating the split (#303). Do not remove.

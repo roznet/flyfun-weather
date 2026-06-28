@@ -15,9 +15,8 @@ import SwiftUI
 /// — without `.equatable()` the reconciler reflects the stored properties, can't
 /// compare the non-`Equatable` `VizRouteData`, and treats the view as changed
 /// every tick. We key `==` on the view model's monotonic `dataVersion` rather than
-/// diffing the deep `VizRouteData` value each tick. A frame/size change still
-/// re-runs the closure — the `Canvas`'s own `size` input changes — which is
-/// exactly the "rebuild on size change" behaviour we want. The cursor and aircraft
+/// diffing the deep `VizRouteData` value each tick, plus `renderSize` so a
+/// rotation/resize forces a redraw at the new dimensions. The cursor and aircraft
 /// are deliberately NOT drawn here; they live in `CrossSectionCursorOverlay`.
 struct StaticCrossSectionScene: View, Equatable {
     let data: VizRouteData
@@ -25,9 +24,16 @@ struct StaticCrossSectionScene: View, Equatable {
     /// Identity for `data` (bumped by `CrossSectionViewModel.update`). Comparing
     /// this int + the small layer dict is cheap; diffing `VizRouteData` is not.
     let dataVersion: Int
+    /// Rendered canvas size, fed from the call site's `GeometryReader`. Included
+    /// in `==` so a rotation/resize is a real change and forces a redraw, rather
+    /// than relying on the undocumented behaviour of `Canvas` re-running its
+    /// closure while `EquatableView` skips `body`.
+    let renderSize: CGSize
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.dataVersion == rhs.dataVersion && lhs.enabledLayers == rhs.enabledLayers
+        lhs.dataVersion == rhs.dataVersion
+            && lhs.renderSize == rhs.renderSize
+            && lhs.enabledLayers == rhs.enabledLayers
     }
 
     var body: some View {
