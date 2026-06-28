@@ -34,7 +34,10 @@ struct CrossSectionRenderer {
         var clipped = context
         clipped.clip(to: Path(skyRect))
         for layer in CrossSectionLayer.allLayers {
-            if enabledLayers[layer.id] ?? false {
+            // Terrain always renders (force-on, no UI toggle — mirrors the web
+            // panel which omits the terrain group). Its position in `allLayers`
+            // keeps the correct mid-stack z-order (after bands, before lines).
+            if layer.id == "terrain" || (enabledLayers[layer.id] ?? false) {
                 layer.render(context: &clipped, transform: transform, data: data)
             }
         }

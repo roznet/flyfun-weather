@@ -85,29 +85,50 @@ struct AdvisoryCardView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Per-model badges
+            // Per-model badges — FlowLayout packs them tightly and wraps to a
+            // second row instead of stretching across evenly-spaced columns.
             if !advisory.perModel.isEmpty {
-                let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: min(advisory.perModel.count, 4))
-                LazyVGrid(columns: columns, spacing: 4) {
+                FlowLayout(spacing: 4) {
                     ForEach(advisory.perModel) { modelResult in
                         ModelStatusBadge(model: modelResult.model, status: modelResult.status)
                     }
                 }
             }
 
-            // "Why it's RED ›" CTA — only when AMBER/RED (GREEN cards stay calm, §4.6 Rung 1).
-            if viewModel != nil, advisory.aggregateStatus == "amber" || advisory.aggregateStatus == "red" {
-                Button {
-                    showingDetail = true
-                } label: {
-                    HStack(spacing: 2) {
-                        Text("Why it's \(advisory.aggregateStatus.uppercased())")
-                        Image(systemName: "chevron.right")
+            // CTA row: "Why it's RED ›" (AMBER/RED only) + "On cross-section" lens
+            // chip for advisories that map to a cross-section lens (#6).
+            HStack(spacing: 14) {
+                if viewModel != nil, advisory.aggregateStatus == "amber" || advisory.aggregateStatus == "red" {
+                    Button {
+                        showingDetail = true
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text("Why it's \(advisory.aggregateStatus.uppercased())")
+                            Image(systemName: "chevron.right")
+                        }
+                        .font(.caption.weight(.semibold))
                     }
-                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
+                if let viewModel, let preset = CrossSectionPresets.preset(forAdvisory: advisory.advisoryId) {
+                    Button {
+                        viewModel.setFocusIntent(FocusIntent(
+                            target: .crossSection,
+                            model: viewModel.selectedModel,
+                            advisoryPresetId: preset.id,
+                            pointIndex: viewModel.activePointIndex
+                        ))
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "chart.xyaxis.line")
+                            Text("On cross-section")
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
             }
 
             // Expanded detail

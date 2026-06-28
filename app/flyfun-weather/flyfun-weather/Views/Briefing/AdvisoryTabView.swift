@@ -13,7 +13,6 @@ struct AdvisoryTabView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 heroSection
                     .spyAnchor("hero")
-                watchSection
                 advisoriesSection
                     .spyAnchor("advisories")
                 AirportConditionsView(viewModel: viewModel)
@@ -22,6 +21,9 @@ struct AdvisoryTabView: View {
                     AlternatesView(viewModel: viewModel)
                         .spyAnchor("alternates")
                 }
+                // Watch reads as the "keep an eye on this" close, so it sits at
+                // the very end (#4); anchored internally.
+                watchSection
             }
             .padding(.vertical, Theme.cardPadding)
         }
@@ -42,10 +44,10 @@ struct AdvisoryTabView: View {
 
     private var spySections: [SpySection] {
         var sections = [SpySection("hero", "Summary")]
-        if hasWatchItems { sections.append(SpySection("watch", "Watch")) }
         sections.append(SpySection("advisories", "Advisories"))
         sections.append(SpySection("conditions", "Conditions"))
         if hasAlternates { sections.append(SpySection("alternates", "Alternates")) }
+        if hasWatchItems { sections.append(SpySection("watch", "Watch")) }
         return sections
     }
 
@@ -79,51 +81,21 @@ struct AdvisoryTabView: View {
 
     // MARK: Watch chips
 
+    /// Watch items as readable markdown text (no deep-link — these are just a
+    /// list of things to keep an eye on, #4). Rendered last in the tab.
     @ViewBuilder
     private var watchSection: some View {
-        if case .loaded(let digest) = viewModel.digestState {
-            let items = digest.watchItemsList
-            if !items.isEmpty {
-                VStack(alignment: .leading, spacing: Theme.spacingS) {
-                    Text("Watch")
-                        .font(.headline)
-                        .foregroundStyle(Theme.text)
-                    FlowLayout(spacing: Theme.spacingS) {
-                        ForEach(items, id: \.self) { item in
-                            Button {
-                                viewModel.setFocusIntent(FocusIntent(
-                                    target: .crossSection,
-                                    model: viewModel.selectedModel,
-                                    layerId: Self.watchLayerId(for: item),
-                                    pointIndex: viewModel.activePointIndex
-                                ))
-                            } label: {
-                                HStack(spacing: Theme.spacingXS) {
-                                    Label(item, systemImage: "exclamationmark.circle")
-                                    Image(systemName: "chevron.right").font(.caption2)
-                                }
-                                .font(.subheadline)
-                                .foregroundStyle(Theme.amber)
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                .background(Theme.amber.opacity(0.12), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(.horizontal, Theme.cardPadding)
-                .spyAnchor("watch")
+        if case .loaded(let digest) = viewModel.digestState, let watch = digest.watchItemsMarkdown {
+            VStack(alignment: .leading, spacing: Theme.spacingS) {
+                Text("Watch")
+                    .font(.headline)
+                    .foregroundStyle(Theme.text)
+                DigestMarkdownText(markdown: watch)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.cardPadding)
+            .spyAnchor("watch")
         }
-    }
-
-    /// Map a watch-item phrase to the cross-section layer it most relates to.
-    private static func watchLayerId(for item: String) -> String? {
-        let s = item.lowercased()
-        if s.contains("ice") || s.contains("icing") { return "icing-ogimet-nwp-bands" }
-        if s.contains("conv") || s.contains("storm") || s.contains("cb") || s.contains("cape") { return "thermo-convective-bg" }
-        if s.contains("turb") || s.contains("shear") { return "cat-bands" }
-        return nil
     }
 
     // MARK: Advisories — responsive grid (#310 item 2)

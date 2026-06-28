@@ -516,7 +516,7 @@ private struct BriefingPackToolbar: View {
 
     private var currentPackLabel: String {
         if let pack = viewModel.pack {
-            return viewModel.packDayLabel(for: pack)
+            return viewModel.packChipLabel(for: pack)
         }
         return "History"
     }

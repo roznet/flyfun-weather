@@ -6,6 +6,9 @@ struct DigestResponse: Codable, Sendable {
     let assessment: String?
     let assessmentReason: String?
     let synoptic: String?
+    /// Hazard-by-hazard concerns (digest `specific_concerns`). Decoded via the
+    /// client's `.convertFromSnakeCase` strategy. Markdown.
+    let specificConcerns: String?
     let winds: String?
     let icing: String?
     let turbulence: String?
@@ -54,6 +57,14 @@ struct DigestResponse: Codable, Sendable {
     /// Watch items as an array of strings.
     var watchItemsList: [String] {
         watchItems?.values ?? []
+    }
+
+    /// Watch items reconstructed as a single markdown string (the server sends
+    /// `watch_items` as one markdown block; `FlexibleStringArray` splits it on
+    /// newlines, so re-join to render the original list). Empty → nil.
+    var watchItemsMarkdown: String? {
+        let joined = watchItemsList.joined(separator: "\n")
+        return joined.isEmpty ? nil : joined
     }
 }
 

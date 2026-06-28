@@ -256,6 +256,9 @@ const FOREFLIGHT_ENABLED: Record<string, boolean> = {
   'cruise-altitude': true,
 };
 
+// SYNC: the iOS app mirrors these layer presets (GRAMET / Windy / ForeFlight) in
+// app/flyfun-weather/flyfun-weather/Views/CrossSection/Layers/CrossSectionPresets.swift
+// (translated to iOS layer IDs). Keep the two in lockstep when editing presets.
 const PRESETS: Record<string, LayerPreset> = {
   gramet: {
     id: 'gramet',

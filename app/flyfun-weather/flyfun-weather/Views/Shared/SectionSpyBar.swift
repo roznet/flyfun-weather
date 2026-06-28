@@ -30,9 +30,13 @@ private struct SpyOffsetKey: PreferenceKey {
 extension View {
     /// Mark a scroll target and report its top offset for scroll-spy tracking.
     /// Pair with `ScrollSpyScroll`; the `id` must match a `SpySection.id`.
+    ///
+    /// `.id()` is applied LAST (outermost): `ScrollViewReader.scrollTo` only
+    /// finds a target whose `.id` is on the outermost layout view, so applying it
+    /// before `.background(GeometryReader…)` left tap-to-scroll a silent no-op
+    /// (scroll-position tracking still worked, masking it). (#3)
     func spyAnchor(_ id: String) -> some View {
         self
-            .id(id)
             .background(
                 GeometryReader { geo in
                     Color.clear.preference(
@@ -41,6 +45,7 @@ extension View {
                     )
                 }
             )
+            .id(id)
     }
 }
 

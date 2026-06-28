@@ -15,6 +15,7 @@ struct CrossSectionConfigSheet: View {
         NavigationStack {
             List {
                 presetSection
+                advisoryLensSection
                 methodSection
                 referenceSection
                 if showMore { moreSection }
@@ -55,13 +56,70 @@ struct CrossSectionConfigSheet: View {
         }
     }
 
+    // MARK: Advisory lens — focus the chart on one hazard (ported from web)
+
+    private var advisoryLensSection: some View {
+        Section {
+            Picker("Lens", selection: Binding(
+                get: { csVM.activeAdvisoryPreset ?? "" },
+                set: { id in if let p = CrossSectionPresets.advisory[id] { csVM.applyAdvisoryPreset(p) } }
+            )) {
+                Text("None").tag("")
+                ForEach(CrossSectionPresets.advisoryList) { Text($0.label).tag($0.id) }
+            }
+        } header: {
+            Text("Advisory view")
+        } footer: {
+            if let id = csVM.activeAdvisoryPreset, let p = CrossSectionPresets.advisory[id] {
+                Text(p.caption)
+            } else {
+                Text("Focus the chart on one hazard (icing, clouds, convection…).")
+            }
+        }
+    }
+
     // MARK: Method groups — one row per concern (pick-one method)
 
     private var methodSection: some View {
         Section("Conditions") {
-            ForEach(LayerGroup.allCases.filter(\.isMethodGroup), id: \.self) { group in
+            // Clouds get two independent axes (source + style); the other method
+            // groups stay single dropdowns. (#7)
+            cloudControl
+            ForEach(LayerGroup.allCases.filter { $0.isMethodGroup && $0 != .clouds }, id: \.self) { group in
                 methodRow(for: group)
             }
+        }
+    }
+
+    // MARK: Cloud control — Source (DD/NWP) × Style (Soft/Natural/Square)
+
+    @ViewBuilder
+    private var cloudControl: some View {
+        let axes = csVM.cloudAxes
+        Toggle(isOn: Binding(
+            get: { axes != nil },
+            set: { csVM.setCloudEnabled($0) }
+        )) {
+            HStack {
+                swatch(LegendColors.color(forGroup: .clouds))
+                Text("Clouds")
+            }
+        }
+        if let axes {
+            Picker("Source", selection: Binding(
+                get: { axes.source },
+                set: { csVM.setCloud(source: $0) }
+            )) {
+                ForEach(CloudSource.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Style", selection: Binding(
+                get: { axes.style },
+                set: { csVM.setCloud(style: $0) }
+            )) {
+                ForEach(CloudStyle.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
         }
     }
 
@@ -117,11 +175,13 @@ struct CrossSectionConfigSheet: View {
         }
     }
 
-    /// Reference + temperature toggle layers (terrain / freezing / -10 / -20),
-    /// excluding the stability lines which live under "More".
+    /// Reference + temperature toggle layers (freezing / -10 / -20 / cruise),
+    /// excluding the stability lines which live under "More". Terrain is
+    /// intentionally omitted — it always renders (force-on in the renderer),
+    /// mirroring the web panel which has no terrain toggle.
     private var referenceLayers: [any CrossSectionLayerProtocol] {
         CrossSectionLayer.allLayers.filter {
-            ($0.group == .reference || $0.group == .temperature || $0.group == .terrain)
+            ($0.group == .reference || $0.group == .temperature)
         }
     }
 
@@ -140,9 +200,6 @@ struct CrossSectionConfigSheet: View {
                     }
                 }
             }
-            Text("Cloud style (soft / natural / square) follows the preset; pick a method above to override.")
-                .font(.caption)
-                .foregroundStyle(Theme.textMuted)
         }
     }
 
