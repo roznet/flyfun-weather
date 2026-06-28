@@ -338,9 +338,9 @@ extension CrossSectionTheme {
             "high": c(255, 80, 60, 1.0),
             "extreme": c(255, 50, 30, 1.0),
         ]
-        t.softCloudFill = RGB(r: 255, g: 255, b: 255)
-        t.softCloudCoverageAlpha = ["OVC": 0.85, "BKN": 0.65, "SCT": 0.45, "FEW": 0.15]
-        t.softCloudFeather = 0.15
+        // Soft clouds inherit Standard's white fill / alphas unchanged — the web
+        // gramet `softClouds` block is identical to the factory default, so we
+        // don't re-state it here.
         return t
     }()
 
@@ -451,18 +451,18 @@ extension CrossSectionTheme {
 
     // MARK: - Active theme (module-level indirection, mirrors web get/setActiveTheme)
     //
-    // The cross-section renders synchronously on the main actor (SwiftUI Canvas)
-    // and the only writers are the main-actor view model / renderer, so a single
-    // shared value is safe. Marked `nonisolated(unsafe)` so the nonisolated
-    // `ColorScales` lookups can read it without hopping actors. Defaults to
-    // `.standard` as a safe fallback; the view model sets it to the booted
-    // theme (GRAMET) before the first frame.
+    // The cross-section renders synchronously on the main actor (SwiftUI Canvas),
+    // and so do the only writers (the view model / renderer). Isolating the shared
+    // value (and `ColorScales`, which reads it) to `@MainActor` makes that a
+    // compiler-enforced guarantee rather than a documented convention — an
+    // off-main caller won't compile. Defaults to `.standard`; the view model sets
+    // it to the booted theme (GRAMET) before the first frame.
 
-    nonisolated(unsafe) private static var _active: CrossSectionTheme = standard
+    @MainActor private static var _active: CrossSectionTheme = standard
 
-    static var active: CrossSectionTheme { _active }
+    @MainActor static var active: CrossSectionTheme { _active }
 
-    static func setActive(_ id: CrossSectionThemeID) {
+    @MainActor static func setActive(_ id: CrossSectionThemeID) {
         _active = all[id] ?? standard
     }
 }

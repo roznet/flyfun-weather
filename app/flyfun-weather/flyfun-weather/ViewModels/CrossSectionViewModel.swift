@@ -19,19 +19,29 @@ final class CrossSectionViewModel {
     /// booted GRAMET layer preset above, so the chart and the preset agree on
     /// boot. Theme is orthogonal to the layer preset (changing one doesn't reset
     /// the other) — mirrors the web, where `setVizTheme` leaves the preset alone.
-    private(set) var themeId: CrossSectionThemeID = .gramet
+    /// Persisted across launches via `UserDefaults` (the layer preset itself
+    /// isn't persisted yet, so a restart keeps your colours but resets layers).
+    private(set) var themeId: CrossSectionThemeID
+
+    /// `UserDefaults` key for the persisted theme choice.
+    private static let themeDefaultsKey = "crossSectionThemeId"
 
     init() {
-        // Sync the module-level active theme to our boot default so the very
-        // first frame (and the config sheet's legend swatches) render in the
-        // right palette even before the renderer runs.
+        // Restore the last-chosen theme; fall back to GRAMET (the boot preset's
+        // theme) when nothing is stored or the stored value is unknown.
+        let stored = UserDefaults.standard.string(forKey: Self.themeDefaultsKey)
+        themeId = stored.flatMap(CrossSectionThemeID.init(rawValue:)) ?? .gramet
+        // Sync the module-level active theme so the very first frame (and the
+        // config sheet's legend swatches) render in the right palette even before
+        // the renderer runs.
         CrossSectionTheme.setActive(themeId)
     }
 
-    /// Switch the colour theme. Independent of the layer preset.
+    /// Switch the colour theme. Independent of the layer preset. Persisted.
     func setTheme(_ id: CrossSectionThemeID) {
         themeId = id
         CrossSectionTheme.setActive(id)
+        UserDefaults.standard.set(id.rawValue, forKey: Self.themeDefaultsKey)
     }
 
     func update(routeAnalyses: RouteAnalysesResponse, elevation: ElevationResponse?, model: String) {

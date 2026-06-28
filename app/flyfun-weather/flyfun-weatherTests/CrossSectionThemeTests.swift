@@ -16,10 +16,18 @@
 //
 
 import Testing
+import Foundation
 @testable import flyfun_weather
 
 @MainActor
 @Suite(.serialized) struct CrossSectionThemeTests {
+
+    /// Runs before each test (Swift Testing builds a fresh suite instance per
+    /// test). Clears the persisted theme so a test that switches+persists a theme
+    /// (#320) doesn't leak into the next test's boot-default expectation.
+    init() {
+        UserDefaults.standard.removeObject(forKey: "crossSectionThemeId")
+    }
 
     // MARK: Registry
 
@@ -106,5 +114,15 @@ import Testing
         #expect(vm.themeId == .standard)
         #expect(CrossSectionTheme.active.id == .standard)
         #expect(vm.currentPreset == .gramet)   // layers untouched → still GRAMET
+    }
+
+    @Test func themeChoiceIsPersistedAcrossViewModelInstances() {
+        // The suite's init() cleared the persisted key, so this starts from the
+        // GRAMET boot default.
+        let vm1 = CrossSectionViewModel()
+        vm1.setTheme(.highContrast)
+        // A fresh instance (next launch / a re-created CrossSectionView) restores it.
+        let vm2 = CrossSectionViewModel()
+        #expect(vm2.themeId == .highContrast)
     }
 }

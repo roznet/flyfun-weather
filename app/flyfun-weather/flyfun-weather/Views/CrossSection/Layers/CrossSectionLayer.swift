@@ -1,11 +1,15 @@
 import SwiftUI
 
 /// Protocol for cross-section rendering layers.
+///
+/// `render` is `@MainActor` (it reads the main-actor `ColorScales`/active theme);
+/// conforming layers inherit that isolation, and they all already render from the
+/// main-actor `Canvas` closures, so no call site changes.
 protocol CrossSectionLayerProtocol {
     var id: String { get }
     var name: String { get }
     var group: LayerGroup { get }
-    func render(context: inout GraphicsContext, transform: CoordTransform, data: VizRouteData)
+    @MainActor func render(context: inout GraphicsContext, transform: CoordTransform, data: VizRouteData)
 }
 
 enum LayerGroup: String, CaseIterable {

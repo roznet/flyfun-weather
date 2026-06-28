@@ -1,6 +1,11 @@
 import SwiftUI
 
 /// Orchestrates rendering of all enabled layers on a GraphicsContext.
+///
+/// `@MainActor` because it drives `ColorScales` / the active theme; it's only ever
+/// built and invoked from the main-actor `Canvas` closures, so this just makes the
+/// existing reality compiler-enforced (#320).
+@MainActor
 struct CrossSectionRenderer {
     let data: VizRouteData
     let enabledLayers: [String: Bool]
@@ -32,12 +37,9 @@ struct CrossSectionRenderer {
     /// cloud style) and must only re-run on data/model/layer/size change — never
     /// on a scrub tick (#303). Does NOT draw the cursor or aircraft.
     func renderStatic(context: inout GraphicsContext, size: CGSize) {
-        // Writing the shared active theme is only safe on the main actor (see the
-        // `_active` note in CrossSectionTheme). The Canvas closure always runs on
-        // the main actor; this asserts that invariant in debug so a future
-        // off-main caller (e.g. a background snapshot render) trips immediately
-        // rather than racing silently. (#320)
-        MainActor.assertIsolated("CrossSectionRenderer.renderStatic must run on the main actor")
+        // Pin the shared active theme for this frame. The whole type is
+        // `@MainActor`, so the previously-needed runtime assert is now a
+        // compile-time guarantee (#320).
         CrossSectionTheme.setActive(themeId)
         let transform = CoordTransform(
             size: size,

@@ -20,7 +20,11 @@ struct RGBA: Sendable {
 /// switch recolours the whole chart (mirrors web's `getActiveTheme()`). The
 /// function/property names and signatures are unchanged from the pre-theme
 /// version so all call sites stay put — only the bodies now defer to the theme.
-nonisolated enum ColorScales {
+///
+/// `@MainActor`-isolated because it reads the main-actor active theme; all
+/// callers (layer renderers, the renderer, SwiftUI views) are already on the
+/// main actor, so this is a compile-time guarantee, not a new runtime constraint.
+@MainActor enum ColorScales {
     private static var theme: CrossSectionTheme { CrossSectionTheme.active }
 
     // MARK: - Icing risk
