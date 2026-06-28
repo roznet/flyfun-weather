@@ -45,6 +45,7 @@ struct AddFlightView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(viewModel.submitTitle) { submit() }
                         .disabled(!viewModel.canSubmit)
+                        .accessibilityIdentifier("submitFlightButton")
                 }
             }
             .confirmationDialog(
@@ -165,6 +166,7 @@ struct AddFlightView: View {
             TextField("LFBO TOU LFMT", text: $viewModel.waypointsText)
                 .textInputAutocapitalization(.characters)
                 .autocorrectionDisabled()
+                .accessibilityIdentifier("waypointsField")
 
             if !viewModel.waypoints.isEmpty {
                 Text(viewModel.waypoints.joined(separator: " \u{2192} "))

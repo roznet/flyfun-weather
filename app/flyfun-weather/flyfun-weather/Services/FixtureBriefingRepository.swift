@@ -40,10 +40,31 @@ final class FixtureBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
 
     private let flightsFixture = decodeFlights()
+    /// Flights created during a journey via `createFlight`, so the new flight
+    /// shows up on the next `flights()` reload.
+    private var createdFlights: [FlightResponse] = []
 
     // MARK: Served
 
-    func flights() async throws -> [FlightResponse] { flightsFixture }
+    func flights() async throws -> [FlightResponse] { flightsFixture + createdFlights }
+
+    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
+        let flight = FlightResponse(
+            id: "created-\(createdFlights.count + 1)",
+            userId: "uitest", profileId: nil, aircraftId: request.aircraftId, aircraft: nil,
+            routeName: request.waypoints.joined(separator: " "),
+            waypoints: request.waypoints,
+            departureTime: request.departureTime,
+            targetDate: "2099-07-05", targetTimeUtc: 1000,
+            cruiseAltitudeFt: request.cruiseAltitudeFt ?? 8000,
+            flightCeilingFt: request.flightCeilingFt ?? 13000,
+            flightDurationHours: request.flightDurationHours ?? 2.0,
+            private: false, autoRefresh: false, autoRefreshHour: nil,
+            createdAt: "2099-06-25T09:00:00Z", role: nil
+        )
+        createdFlights.append(flight)
+        return flight
+    }
     func aircraft() async throws -> [AircraftResponse] { [] }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
     func packs(flightId: String) async throws -> [PackMetaResponse] { [] }
@@ -54,7 +75,6 @@ final class FixtureBriefingRepository: BriefingRepository, @unchecked Sendable {
 
     // MARK: Not yet needed by a journey
 
-    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse { throw FixtureError.notProvided("createFlight") }
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw FixtureError.notProvided("updateFlight") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw FixtureError.notProvided("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw FixtureError.notProvided("parseFpl") }
