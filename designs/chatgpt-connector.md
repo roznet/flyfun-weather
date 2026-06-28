@@ -65,6 +65,7 @@ and ChatGPT cannot drift.
 | `refreshBriefing` | `POST /agent/v1/flights/{id}/briefing/refresh` | `refresh_briefing` |
 | `getAdvisoryDetail` | `GET /agent/v1/flights/{id}/advisories/{advisory_id}` | `get_advisory_detail` |
 | `getDigestContext` | `GET /agent/v1/flights/{id}/digest-context` | `get_digest_context` |
+| `getAlternates` | `GET /agent/v1/flights/{id}/alternates` | `get_alternates` |
 | `getAirportWeather` | `GET /agent/v1/airport-weather` | `get_airport_weather` |
 
 The operation **descriptions** (docstrings) mirror the MCP tool docstrings,

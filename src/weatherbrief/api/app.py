@@ -584,7 +584,10 @@ def create_app() -> FastAPI:
                 "the user and check again shortly. When the user questions or "
                 "doubts an advisory, call getAdvisoryDetail (and getDigestContext "
                 "for the deepest context) before answering — the cross-check is "
-                "context for discussion, never a downgrade signal."
+                "context for discussion, never a downgrade signal. For diversion "
+                "questions call getAlternates: these are weather-improvement "
+                "candidates, NOT operational alternates — verify with airport/AIP "
+                "data before recommending one."
             ),
             routes=agent_router.routes,
         )

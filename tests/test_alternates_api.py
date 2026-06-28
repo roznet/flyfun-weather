@@ -25,6 +25,7 @@ from weatherbrief.storage.flights import pack_dir_for, save_flight, save_pack_me
 
 _NOW = datetime.now(timezone.utc)
 _DEP = (_NOW + timedelta(days=2)).replace(hour=9, minute=0, second=0, microsecond=0)
+_OTHER_USER = "someone-else"
 
 _ALTERNATES = {
     "destination_icao": "LSGS",
@@ -83,12 +84,20 @@ def client(app_db, tmp_path, monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _seed(app_db, *, owner: str = DEV_USER_ID, suffix: str = "ok") -> tuple[Flight, str]:
+def _seed(app_db, *, owner: str = DEV_USER_ID, private: bool = False,
+          suffix: str = "ok") -> tuple[Flight, str]:
     fid = "egtk_lsgs-" + hashlib.sha256(suffix.encode()).hexdigest()[:6]
     session = app_db()
+    if owner != DEV_USER_ID and session.get(UserRow, owner) is None:
+        # flights.user_id is an FK — the owner row must exist before insert.
+        session.add(UserRow(
+            id=owner, provider="local", provider_sub=owner,
+            email=f"{owner}@localhost", display_name=owner, approved=True,
+        ))
+        session.flush()
     flight = Flight(
         id=fid, user_id=owner, route_name="egtk_lsgs",
-        waypoints=["EGTK", "LSGS"], departure_time=_DEP,
+        waypoints=["EGTK", "LSGS"], departure_time=_DEP, private=private,
         cruise_altitude_ft=8000, flight_ceiling_ft=18000,
         flight_duration_hours=4.5, created_at=_NOW - timedelta(days=1),
     )
@@ -134,6 +143,32 @@ def test_alternates_endpoint_404_when_no_snapshot(client, app_db):
     flight, ts = _seed(app_db, suffix="nosnap")
     pack_dir = Path(pack_dir_for(DEV_USER_ID, flight.id, ts))
     pack_dir.mkdir(parents=True, exist_ok=True)  # pack exists, no briefing.json
+
+    resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/alternates")
+    assert resp.status_code == 404, resp.text
+
+
+def test_alternates_endpoint_reads_snapshot_json_fallback(client, app_db):
+    """The endpoint falls back to snapshot.json when briefing.json is absent
+    (packs predating the split-storage naming)."""
+    flight, ts = _seed(app_db, suffix="snapfallback")
+    pack_dir = Path(pack_dir_for(DEV_USER_ID, flight.id, ts))
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "snapshot.json").write_text(json.dumps({"alternates": _ALTERNATES}))
+
+    resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/alternates")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["alternates"][0]["icao"] == "LFLP"
+
+
+def test_alternates_endpoint_404_for_private_other_user(client, app_db):
+    """The ownership gate (_get_pack_dir viewer_id) runs on the packs route the
+    MCP client calls — a flight owned by another user 404s even though its pack
+    (with alternates) exists on disk."""
+    flight, ts = _seed(app_db, owner=_OTHER_USER, private=True, suffix="altleak")
+    pack_dir = Path(pack_dir_for(_OTHER_USER, flight.id, ts))
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "briefing.json").write_text(json.dumps({"alternates": _ALTERNATES}))
 
     resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/alternates")
     assert resp.status_code == 404, resp.text
