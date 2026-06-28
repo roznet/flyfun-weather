@@ -430,6 +430,7 @@ private struct BriefingPackToolbar: View {
                                 Text(viewModel.packLabel(for: pack))
                                 if viewModel.packCacheStatus[pack.fetchTimestamp] == true {
                                     Image(systemName: "arrow.down.circle.fill")
+                                        .foregroundStyle(Theme.green)
                                 }
                                 if pack.fetchTimestamp == viewModel.selectedPackTimestamp {
                                     Image(systemName: "checkmark")
@@ -458,8 +459,7 @@ private struct BriefingPackToolbar: View {
 
     private var currentPackLabel: String {
         if let pack = viewModel.pack {
-            let daysOut = pack.daysOut
-            return daysOut >= 0 ? "D-\(daysOut)" : "D+\(abs(daysOut))"
+            return viewModel.packDayLabel(for: pack)
         }
         return "History"
     }
