@@ -3,7 +3,12 @@ import SwiftUI
 
 /// Converts API response to RZSkewT's SoundingProfile model.
 extension SoundingProfileResponse {
-    func toSoundingProfile() -> SoundingProfile {
+    /// Build the package profile. The `include*` flags gate which overlay-band
+    /// categories are drawn (#310 — host-side overlay-highlight toggles), so the
+    /// host can rebuild the profile with a category turned off without refetching.
+    func toSoundingProfile(includeClouds: Bool = true,
+                           includeIcing: Bool = true,
+                           includeInversions: Bool = true) -> SoundingProfile {
         let levels = self.levels.map {
             SoundingLevel(
                 pressureHPa: Double($0.pressureHpa),
@@ -29,15 +34,15 @@ extension SoundingProfileResponse {
             )
         }
 
-        let overlayCloudLayers = (cloudLayers ?? []).map {
+        let overlayCloudLayers = includeClouds ? (cloudLayers ?? []).map {
             OverlayBand(baseFt: $0.baseFt, topFt: $0.topFt, label: $0.coverage)
-        }
-        let overlayIcing = (icingZones ?? []).map {
+        } : []
+        let overlayIcing = includeIcing ? (icingZones ?? []).map {
             OverlayBand(baseFt: $0.baseFt, topFt: $0.topFt, label: $0.risk)
-        }
-        let overlayInversions = (inversionLayers ?? []).map {
+        } : []
+        let overlayInversions = includeInversions ? (inversionLayers ?? []).map {
             InversionBand(baseFt: $0.baseFt, topFt: $0.topFt, strengthC: $0.strengthC)
-        }
+        } : []
 
         return SoundingProfile(
             levels: levels,
@@ -85,24 +90,47 @@ struct SkewTDetailView: View {
     let pointIndex: Int
 
     @State private var profileState: LoadingState<SoundingProfileResponse> = .idle
+    /// Raw response, kept so the display profile can be rebuilt when an overlay
+    /// toggle flips without refetching.
+    @State private var loadedResponse: SoundingProfileResponse?
     /// Profile + offerable variables, built ONCE per sounding in `loadProfile`
     /// and cached here. `plotSection` runs in `body` on every cursor drag frame,
     /// so rebuilding these there (each ~50 structs + 9 closures + a filter pass)
     /// would jank interaction — build once, read many.
     @State private var cachedProfile: SoundingProfile?
-    @State private var availableVars: [SkewTVariable] = []
+    @State private var availableGroups: [SkewTVarGroup] = []
+    private var availableVars: [SkewTVariable] { availableGroups.flatMap(\.variables) }
     /// Shared crosshair pressure (§4.8 Tier 2): two-way with the Skew-T and read
     /// by the side-panel so both views show one linked cursor + readout.
     @State private var selectedPressureHPa: Double?
     /// Selected side-panel variable(s) (§4.8 Tier 3): one on iPhone, up to two on iPad.
     @State private var primaryVarId: String?
     @State private var secondaryVarId: String?
+    /// Overlay-band highlight toggles (#310): which categories are drawn on the
+    /// plot. Mirrors the web's grouped overlay checkboxes.
+    @State private var showClouds = true
+    @State private var showIcing = true
+    @State private var showInversions = true
     @Environment(\.horizontalSizeClass) private var hSizeClass
 
     // Web app pressure range (1050–250 hPa); shared by the plot and the panel so
-    // their pressure rows line up (the panel requires an identical config).
-    private let config = SkewTConfiguration(pTop: 250)
+    // their pressure rows line up (the panel requires an identical config). Wind
+    // barbs are off (#310 — wind is surfaced via the HW/XW side-panel variable),
+    // so the right margin is trimmed to just fit the FL labels.
+    private let config = SkewTConfiguration(
+        pTop: 250,
+        margins: .init(left: 40, right: 46, top: 20, bottom: 25),
+        showWindBarbs: false
+    )
     private var isPad: Bool { hSizeClass == .regular }
+
+    /// Track (°true) at this route point, for the HW/XW side-panel variable.
+    private var trackDeg: Double? {
+        if case .loaded(let analyses) = viewModel.routeAnalysesState {
+            return analyses.analyses.first { $0.pointIndex == pointIndex }?.trackDeg
+        }
+        return nil
+    }
 
     var body: some View {
         Group {
@@ -136,6 +164,7 @@ struct SkewTDetailView: View {
         let shown = shownVariables(availableVars)
         VStack(spacing: Theme.spacingXS) {
             header(response)
+            overlayChips(response)
             if !availableVars.isEmpty {
                 variablePicker(availableVars)
             }
@@ -176,6 +205,53 @@ struct SkewTDetailView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: Overlay-band highlight toggles (#310)
+
+    /// Toggle chips for the cloud / icing / inversion bands drawn on the plot,
+    /// mirroring the web's grouped overlay checkboxes. A category's chip appears
+    /// only when that sounding actually has bands of that kind.
+    @ViewBuilder
+    private func overlayChips(_ response: SoundingProfileResponse) -> some View {
+        let hasClouds = !(response.cloudLayers ?? []).isEmpty
+        let hasIcing = !(response.icingZones ?? []).isEmpty
+        let hasInversions = !(response.inversionLayers ?? []).isEmpty
+        if hasClouds || hasIcing || hasInversions {
+            HStack(spacing: Theme.spacingS) {
+                Text("Highlight").font(.caption2).foregroundStyle(Theme.textMuted)
+                if hasClouds {
+                    overlayChip("Cloud", color: .gray, isOn: $showClouds)
+                }
+                if hasIcing {
+                    overlayChip("Icing", color: .cyan, isOn: $showIcing)
+                }
+                if hasInversions {
+                    overlayChip("Inversion", color: .orange, isOn: $showInversions)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, Theme.cardPadding)
+        }
+    }
+
+    private func overlayChip(_ label: String, color: Color, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+            rebuildProfile()
+        } label: {
+            HStack(spacing: 4) {
+                Circle().fill(isOn.wrappedValue ? color : Color.clear)
+                    .overlay(Circle().stroke(color, lineWidth: 1))
+                    .frame(width: 8, height: 8)
+                Text(label).font(.caption2)
+            }
+            .foregroundStyle(isOn.wrappedValue ? Theme.text : Theme.textMuted)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(isOn.wrappedValue ? color.opacity(0.14) : Theme.surface, in: Capsule())
+            .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: Side-panel variable selection (§4.8 Tier 3)
 
     private func shownVariables(_ available: [SkewTVariable]) -> [SkewTVariable] {
@@ -213,8 +289,12 @@ struct SkewTDetailView: View {
     private func varMenu(fallback: String, selection: Binding<String?>, available: [SkewTVariable]) -> some View {
         let current = available.first { $0.id == selection.wrappedValue }
         return Menu {
-            ForEach(available) { v in
-                Button(v.unit.isEmpty ? v.label : "\(v.label) (\(v.unit))") { selection.wrappedValue = v.id }
+            ForEach(availableGroups) { group in
+                Section(group.label) {
+                    ForEach(group.variables) { v in
+                        Button(v.unit.isEmpty ? v.label : "\(v.label) (\(v.unit))") { selection.wrappedValue = v.id }
+                    }
+                }
             }
         } label: {
             HStack(spacing: 4) {
@@ -231,19 +311,32 @@ struct SkewTDetailView: View {
         guard viewModel.pack != nil else { return }
         profileState = .loading
         cachedProfile = nil
-        availableVars = []
+        loadedResponse = nil
+        availableGroups = []
         do {
             let response = try await viewModel.fetchSoundingProfile(pointIndex: pointIndex)
             // Build the heavy profile + variable catalog ONCE here, and pick the
             // default variables, all before publishing `.loaded` so the first
             // render already has them (perf + no first-frame flash).
-            let profile = response.toSoundingProfile()
+            let profile = response.toSoundingProfile(includeClouds: showClouds, includeIcing: showIcing,
+                                                     includeInversions: showInversions)
+            loadedResponse = response
             cachedProfile = profile
-            availableVars = SkewTVariableCatalog.variables(for: response, levels: profile.levels)
+            availableGroups = SkewTVariableCatalog.grouped(for: response, levels: profile.levels, trackDeg: trackDeg)
             ensureDefaults(availableVars)
             profileState = .loaded(response)
         } catch {
             profileState = .error(error)
         }
+    }
+
+    /// Rebuild just the display profile when an overlay toggle flips (no refetch).
+    /// Cheap (array maps); the expensive parcel-path/background work lives in the
+    /// renderer, which only re-runs because the profile *value* changed here — and
+    /// toggles are rare, not per-frame.
+    private func rebuildProfile() {
+        guard let response = loadedResponse else { return }
+        cachedProfile = response.toSoundingProfile(includeClouds: showClouds, includeIcing: showIcing,
+                                                   includeInversions: showInversions)
     }
 }
