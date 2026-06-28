@@ -199,10 +199,16 @@ final class BriefingViewModel {
         }
     }
 
+    /// Compact day label for a pack ("D-1" / "D+2"). Shared so the toolbar chip
+    /// and the history-menu rows can't drift.
+    func packDayLabel(for pack: PackMetaResponse) -> String {
+        let daysOut = pack.daysOut
+        return daysOut >= 0 ? "D-\(daysOut)" : "D+\(abs(daysOut))"
+    }
+
     /// Label for a pack in the history picker.
     func packLabel(for pack: PackMetaResponse) -> String {
-        let daysOut = pack.daysOut
-        let prefix = daysOut >= 0 ? "D-\(daysOut)" : "D+\(abs(daysOut))"
+        let prefix = packDayLabel(for: pack)
         // Extract date/time from fetchTimestamp
         if let date = ISO8601DateFormatter().date(from: pack.fetchTimestamp) {
             let fmt = DateFormatter()

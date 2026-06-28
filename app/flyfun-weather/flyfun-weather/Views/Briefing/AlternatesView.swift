@@ -70,7 +70,7 @@ struct AlternatesView: View {
 
     @ViewBuilder
     private func requirementBanner(_ req: AlternateRequirement?) -> some View {
-        if let req {
+        if let req, req.faa != nil || req.easa != nil {
             HStack(spacing: Theme.spacingM) {
                 if let faa = req.faa { regimeChip(label: "FAA", trigger: faa) }
                 if let easa = req.easa { regimeChip(label: "EASA", trigger: easa) }

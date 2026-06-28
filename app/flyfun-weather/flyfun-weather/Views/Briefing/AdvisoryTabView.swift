@@ -176,7 +176,10 @@ struct AdvisoryTabView: View {
             .joined(separator: " ").lowercased()
         if hay.contains("icing") || hay.contains("ice") { return digest.icing }
         if hay.contains("turb") { return digest.turbulence }
-        if hay.contains("wind") { return digest.winds }
+        // The winds digest is the en-route winds-aloft narrative — don't attach it
+        // to a runway crosswind/headwind advisory (a different phenomenon).
+        if (hay.contains("wind") || hay.contains("jet")) &&
+            !hay.contains("crosswind") && !hay.contains("headwind") { return digest.winds }
         if hay.contains("precip") || hay.contains("rain") { return digest.precipitation }
         if hay.contains("vis") { return digest.visibility }
         return nil

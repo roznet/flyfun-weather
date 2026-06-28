@@ -72,6 +72,16 @@ struct CrossSectionView: View {
                 withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .top) }
                 scrollTarget = nil
             }
+            .onAppear {
+                // The landscape-immersive layout has no ScrollViewReader, so a
+                // "Sounding ›" tap there sets `scrollTarget` with nothing to
+                // consume it. Returning to portrait re-mounts this scroll view —
+                // honor the pending target here (onChange won't fire: unchanged).
+                if let target = scrollTarget {
+                    proxy.scrollTo(target, anchor: .top)
+                    scrollTarget = nil
+                }
+            }
         }
     }
 
