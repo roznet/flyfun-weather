@@ -12,6 +12,9 @@ struct FlightListView: View {
     @State private var showSettings = false
     @State private var showSignOutWarning = false
     @State private var editingFlight: FlightResponse?
+    /// "Past" flights start collapsed (like the web app) so the list opens on
+    /// what's upcoming/recent.
+    @State private var pastExpanded = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -22,36 +25,36 @@ struct FlightListView: View {
                             emptyStateView
                         } else {
                             // Utility logbook (§4.4): Future · Recent · Past.
+                            // Past is collapsible (collapsed by default).
                             List(selection: $selectedFlight) {
                                 ForEach(Self.groupedFlights(flights), id: \.title) { group in
-                                    Section(group.title) {
-                                        ForEach(group.flights) { flight in
-                                            let hasCached = viewModel.cachedFlightIds.contains(flight.id)
-                                            NavigationLink(value: flight) {
-                                                FlightCardView(flight: flight, hasCachedData: hasCached,
-                                                               isOffline: viewModel.isOffline)
-                                            }
-                                            .disabled(viewModel.isOffline && !hasCached)
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                                // Subscribers can't edit shared flights, and editing
-                                                // is online-only (it regenerates the briefing).
-                                                if !viewModel.isOffline && flight.isEditable {
-                                                    Button {
-                                                        editingFlight = flight
-                                                    } label: {
-                                                        Label("Edit", systemImage: "pencil")
-                                                    }
-                                                    .tint(.blue)
+                                    if group.title == "Past" {
+                                        Section {
+                                            if pastExpanded {
+                                                ForEach(group.flights) { flight in
+                                                    flightRow(flight, viewModel: viewModel)
                                                 }
                                             }
-                                            .contextMenu {
-                                                if !viewModel.isOffline && flight.isEditable {
-                                                    Button {
-                                                        editingFlight = flight
-                                                    } label: {
-                                                        Label("Edit Flight", systemImage: "pencil")
-                                                    }
+                                        } header: {
+                                            Button {
+                                                withAnimation { pastExpanded.toggle() }
+                                            } label: {
+                                                HStack {
+                                                    Text("Past")
+                                                    Spacer()
+                                                    Text("\(group.flights.count)")
+                                                        .foregroundStyle(.secondary)
+                                                    Image(systemName: pastExpanded ? "chevron.down" : "chevron.right")
+                                                        .foregroundStyle(.secondary)
                                                 }
+                                                .contentShape(Rectangle())
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    } else {
+                                        Section(group.title) {
+                                            ForEach(group.flights) { flight in
+                                                flightRow(flight, viewModel: viewModel)
                                             }
                                         }
                                     }
@@ -177,6 +180,39 @@ struct FlightListView: View {
         .onChange(of: scenePhase) {
             if scenePhase == .active {
                 Task { await viewModel?.loadFlights() }
+            }
+        }
+    }
+
+    /// One flight row (navigation + edit swipe/context menu). Shared by every
+    /// section so the collapsible Past section renders identical rows.
+    @ViewBuilder
+    private func flightRow(_ flight: FlightResponse, viewModel: FlightListViewModel) -> some View {
+        let hasCached = viewModel.cachedFlightIds.contains(flight.id)
+        NavigationLink(value: flight) {
+            FlightCardView(flight: flight, hasCachedData: hasCached,
+                           isOffline: viewModel.isOffline)
+        }
+        .disabled(viewModel.isOffline && !hasCached)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            // Subscribers can't edit shared flights, and editing is online-only
+            // (it regenerates the briefing).
+            if !viewModel.isOffline && flight.isEditable {
+                Button {
+                    editingFlight = flight
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+        }
+        .contextMenu {
+            if !viewModel.isOffline && flight.isEditable {
+                Button {
+                    editingFlight = flight
+                } label: {
+                    Label("Edit Flight", systemImage: "pencil")
+                }
             }
         }
     }

@@ -337,18 +337,35 @@ struct SquareCloudBandsLayer: CrossSectionLayerProtocol {
         }
 
         forEachCloudBand(data, source: source) { band in
-            // Straight-edged trapezoid cell (ForeFlight-like), solid fill.
+            // Flat rectangular cells (ForeFlight-like): each endpoint contributes
+            // a flat cell at its own base/top, split at the segment midpoint — so
+            // adjacent cells step vertically instead of sloping. A single sloped
+            // trapezoid read as a soft/smooth band; this mirrors web
+            // drawColumnBand's per-point fillRect. (#7)
             let xL = transform.distanceToX(band.left.distanceNm)
             let xR = transform.distanceToX(band.right.distanceNm)
-            var path = Path()
-            path.move(to: CGPoint(x: xL, y: transform.altitudeToY(band.left.topFt)))
-            path.addLine(to: CGPoint(x: xR, y: transform.altitudeToY(band.right.topFt)))
-            path.addLine(to: CGPoint(x: xR, y: transform.altitudeToY(band.right.baseFt)))
-            path.addLine(to: CGPoint(x: xL, y: transform.altitudeToY(band.left.baseFt)))
-            path.closeSubpath()
-            context.fill(path, with: .color(source.matchedRGBA(band.cl, band.matched).color))
+            let xMid = (xL + xR) / 2
+            let color = source.matchedRGBA(band.cl, band.matched).color
+            fillFlatCell(&context, x0: xL, x1: xMid, baseFt: band.left.baseFt, topFt: band.left.topFt,
+                         transform: transform, color: color)
+            fillFlatCell(&context, x0: xMid, x1: xR, baseFt: band.right.baseFt, topFt: band.right.topFt,
+                         transform: transform, color: color)
         }
     }
+}
+
+/// One flat (horizontal top/base) rectangular cloud cell. Skips tapered
+/// zero-height ends produced for unmatched zones.
+private func fillFlatCell(
+    _ context: inout GraphicsContext,
+    x0: CGFloat, x1: CGFloat, baseFt: Double, topFt: Double,
+    transform: CoordTransform, color: Color
+) {
+    guard x1 > x0 else { return }
+    let yTop = transform.altitudeToY(topFt)
+    let yBase = transform.altitudeToY(baseFt)
+    guard yBase > yTop else { return }
+    context.fill(Path(CGRect(x: x0, y: yTop, width: x1 - x0, height: yBase - yTop)), with: .color(color))
 }
 
 // MARK: - Shared single-point column fallback
