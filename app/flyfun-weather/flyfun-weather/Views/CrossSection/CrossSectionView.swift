@@ -28,6 +28,11 @@ struct CrossSectionView: View {
     // Contextual tips (#312), gated on this tab being visible.
     private let layersTip = CrossSectionLayersTip()
     private let scrubTip = CrossSectionScrubTip()
+    /// One-shot guard so the scrub tip is retired exactly once — and only in
+    /// portrait, where its `TipView` is actually rendered. Landscape focus has
+    /// no scrub `TipView` (distraction-free by design), so a landscape drag must
+    /// not consume the tip before the user ever sees it.
+    @State private var scrubTipInvalidated = false
 
     /// iPhone landscape → immersive full-bleed focus mode (§4.7): cross-section
     /// is a wide artifact, so landscape gives it the right aspect ratio.
@@ -221,9 +226,13 @@ struct CrossSectionView: View {
 
     private func updateScrub(at location: CGPoint) {
         guard let vizData = csVM.vizData, canvasSize.width > 0, !vizData.points.isEmpty else { return }
-        // First real scrub retires the "tap any point" tip (idempotent — the
-        // drag fires this many times).
-        scrubTip.invalidate(reason: .actionPerformed)
+        // First real scrub retires the "tap any point" tip — but only in
+        // portrait, where the tip is shown. The drag fires this repeatedly, so
+        // short-circuit after the first to avoid hammering TipKit.
+        if !scrubTipInvalidated && !isLandscapeFocus {
+            scrubTipInvalidated = true
+            scrubTip.invalidate(reason: .actionPerformed)
+        }
         let transform = CoordTransform(size: canvasSize,
                                        maxDistanceNm: vizData.totalDistanceNm,
                                        maxAltitudeFt: vizData.flightCeilingFt)
