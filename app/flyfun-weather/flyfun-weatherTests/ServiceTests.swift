@@ -119,12 +119,9 @@ import Foundation
 
 @Suite struct PirepOfflineStoreTests {
 
-    private func store() -> PirepOfflineStore {
-        PirepOfflineStore(fileURL: makeTempDir().appendingPathComponent("pending.json"))
-    }
-
     @Test func enqueueIncrementsPendingCount() async {
-        let s = store()
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let s = PirepOfflineStore(fileURL: dir.appendingPathComponent("pending.json"))
         #expect(await s.pendingCount == 0)
         await s.enqueue(makePirepRequest(remarks: "a"))
         await s.enqueue(makePirepRequest(remarks: "b"))
@@ -132,7 +129,8 @@ import Foundation
     }
 
     @Test func syncDrainsOnSuccess() async {
-        let s = store()
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let s = PirepOfflineStore(fileURL: dir.appendingPathComponent("pending.json"))
         await s.enqueue(makePirepRequest())
         await s.enqueue(makePirepRequest())
         let repo = MockBriefingRepository()
@@ -145,7 +143,8 @@ import Foundation
     }
 
     @Test func syncKeepsQueueOnFailure() async {
-        let s = store()
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let s = PirepOfflineStore(fileURL: dir.appendingPathComponent("pending.json"))
         await s.enqueue(makePirepRequest())
         let repo = MockBriefingRepository()
         repo.submitPirepsBatchResult = .failure(MockError.injected("offline"))
@@ -156,7 +155,8 @@ import Foundation
     }
 
     @Test func syncEmptyQueueIsNoOp() async {
-        let s = store()
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let s = PirepOfflineStore(fileURL: dir.appendingPathComponent("pending.json"))
         let repo = MockBriefingRepository()
         let synced = await s.sync(using: repo)
         #expect(synced == 0)
@@ -164,7 +164,8 @@ import Foundation
     }
 
     @Test func queuePersistsAcrossStoreInstances() async {
-        let file = makeTempDir().appendingPathComponent("pending.json")
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("pending.json")
         let s1 = PirepOfflineStore(fileURL: file)
         await s1.enqueue(makePirepRequest(remarks: "persisted"))
         // A fresh store on the same file must load the queued PIREP.

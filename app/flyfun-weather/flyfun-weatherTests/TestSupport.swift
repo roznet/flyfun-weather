@@ -106,11 +106,14 @@ func makeFlight(
 }
 
 func makePirepRequest(remarks: String = "test") -> SubmitPirepRequest {
+    // Base is a fixed, safe JSON literal; set caller-controlled `remarks` on the
+    // decoded value so a string with quotes/backslashes can't break the JSON.
     let json = """
-    {"observed_at": "2026-06-24T12:00:00Z", "latitude": 43.5, "longitude": 6.95,
-     "remarks": "\(remarks)", "source": "inflight"}
+    {"observed_at": "2026-06-24T12:00:00Z", "latitude": 43.5, "longitude": 6.95, "source": "inflight"}
     """
-    return try! JSONDecoder.weatherBrief.decode(SubmitPirepRequest.self, from: Data(json.utf8))
+    var request = try! JSONDecoder.weatherBrief.decode(SubmitPirepRequest.self, from: Data(json.utf8))
+    request.remarks = remarks
+    return request
 }
 
 /// A unique temp directory for a test, auto-created. Caller removes it.
