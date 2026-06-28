@@ -1,9 +1,20 @@
 import SwiftUI
+import TipKit
 
 @main
 struct WeatherBriefApp: App {
     @State private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        // Contextual coachmarks for the briefing detail views (#312). Guarded
+        // `try?` — a tip-store failure must never block app launch. Revisit
+        // `.daily` later if the tips ever feel noisy.
+        try? Tips.configure([
+            .displayFrequency(.immediate),
+            .datastoreLocation(.applicationDefault),
+        ])
+    }
 
     var body: some Scene {
         WindowGroup {

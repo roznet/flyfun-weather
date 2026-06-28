@@ -1,4 +1,7 @@
 import SwiftUI
+#if DEBUG
+import TipKit
+#endif
 
 /// App settings: account management, links, and legal.
 struct SettingsView: View {
@@ -11,6 +14,9 @@ struct SettingsView: View {
     @State private var showFinalConfirmation = false
     @State private var isDeleting = false
     @State private var errorMessage: String?
+    #if DEBUG
+    @State private var tipsResetConfirmation: String?
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -77,6 +83,36 @@ struct SettingsView: View {
                             .font(.caption)
                     }
                 }
+
+                #if DEBUG
+                // Developer-only: TipKit persists which coachmarks have been
+                // seen, so they never reappear once dismissed. `resetDatastore()`
+                // can only run *before* `Tips.configure()` (it throws
+                // `tipsDatastoreAlreadyConfigured` at runtime), so for in-app
+                // testing we use the session overrides instead: "Show All"
+                // force-displays every tip ignoring seen-state and eligibility
+                // gates; "Reset" clears that override. Mirrors the debug server
+                // picker — present only in DEBUG builds.
+                Section {
+                    Button {
+                        Tips.showAllTipsForTesting()
+                        tipsResetConfirmation = "Showing all tips — open the briefing / Cross-Section tab to see them."
+                    } label: {
+                        Label("Show All Tips", systemImage: "lightbulb")
+                    }
+                    Button {
+                        Tips.hideAllTipsForTesting()
+                        tipsResetConfirmation = "Override cleared — tips follow their normal seen-state and gates again."
+                    } label: {
+                        Label("Reset Tips Override", systemImage: "lightbulb.slash")
+                    }
+                } header: {
+                    Text("Developer")
+                } footer: {
+                    Text(tipsResetConfirmation
+                         ?? "Force-show the briefing coachmarks (#312) for testing. Session-only — overrides reset on relaunch.")
+                }
+                #endif
             }
             .navigationTitle("Settings")
             .toolbar {
