@@ -51,19 +51,28 @@ struct AdvisoryCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header
-            Button {
-                withAnimation { setExpanded(!isExpanded) }
-            } label: {
-                HStack {
-                    AssessmentStringBadge(status: advisory.aggregateStatus)
-                    Text(catalogEntry?.name ?? advisory.advisoryId)
-                        .font(.headline)
-                    Spacer()
+            HStack {
+                Button {
+                    withAnimation { setExpanded(!isExpanded) }
+                } label: {
+                    HStack {
+                        AssessmentStringBadge(status: advisory.aggregateStatus)
+                        Text(catalogEntry?.name ?? advisory.advisoryId)
+                            .font(.headline)
+                    }
+                }
+                .buttonStyle(.plain)
+                // (i) help popup — content from the cached help catalog (#311).
+                HelpInfoButton(topic: .advisory(advisory.advisoryId))
+                Spacer()
+                Button {
+                    withAnimation { setExpanded(!isExpanded) }
+                } label: {
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             Text(advisory.aggregateDetail)
                 .font(.subheadline)

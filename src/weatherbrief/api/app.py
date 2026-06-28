@@ -35,6 +35,7 @@ from flyfun_common.db.models import UserPreferencesRow
 
 from weatherbrief.api.agent import router as agent_router
 from weatherbrief.api.aircraft import router as aircraft_router
+from weatherbrief.api.help import router as help_router
 from weatherbrief.api.debriefs import router as debriefs_router
 from weatherbrief.api.pireps import router as pireps_router
 from weatherbrief.api.flights import router as flights_router
@@ -547,6 +548,7 @@ def create_app() -> FastAPI:
     app.include_router(synoptic_charts_router, prefix="/api")
     app.include_router(tokens_router, prefix="/api")
     app.include_router(models_router, prefix="/api")
+    app.include_router(help_router, prefix="/api")
     app.include_router(data_sources_router, prefix="/api")
     app.include_router(refresh_router, prefix="/api")
     app.include_router(transparency_router, prefix="/api")

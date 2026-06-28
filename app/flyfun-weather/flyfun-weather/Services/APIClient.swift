@@ -58,6 +58,54 @@ actor APIClient {
         self.session = URLSession(configuration: config)
     }
 
+    // MARK: - Help catalog (ETag-cached)
+
+    /// Outcome of a conditional help-catalog fetch.
+    enum HelpCatalogFetchResult: Sendable {
+        /// Server returned `304` — the caller's cached copy is current.
+        case notModified
+        /// Fresh payload (raw JSON bytes) plus its `ETag`, if any. The caller
+        /// decodes (two-pass, see `HelpCatalogResponse`) and persists the bytes.
+        case updated(data: Data, etag: String?)
+    }
+
+    /// Conditionally fetch the help catalog, honoring `ETag`/`304`.
+    ///
+    /// Pass the cached `ETag` as `ifNoneMatch`; a `304` returns `.notModified`
+    /// and the caller keeps its cache. The endpoint is public, but the request
+    /// still flows through `rollingSession` so a signed-in user's token rolls
+    /// forward like every other call.
+    func fetchHelpCatalog(lang: String = "en", ifNoneMatch etag: String? = nil) async throws -> HelpCatalogFetchResult {
+        guard let url = URL(string: "/api/help/catalog?lang=\(lang)", relativeTo: baseURL) else {
+            throw APIError.networkError(URLError(.badURL))
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+
+        Self.logger.debug("GET /api/help/catalog (etag: \(etag ?? "none"))")
+
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            (data, http) = try await rollingSession.data(for: request)
+        } catch FlyFunAPIError.unauthorized {
+            throw APIError.unauthorized
+        } catch let FlyFunAPIError.networkError(inner) {
+            throw APIError.networkError(inner)
+        } catch {
+            throw APIError.networkError(error)
+        }
+
+        if http.statusCode == 304 {
+            return .notModified
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw APIError.serverError(http.statusCode, String(data: data, encoding: .utf8))
+        }
+        return .updated(data: data, etag: http.value(forHTTPHeaderField: "ETag"))
+    }
+
     // MARK: - Generic request methods
 
     /// Fetch and decode a JSON response.

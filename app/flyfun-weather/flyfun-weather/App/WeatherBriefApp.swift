@@ -22,6 +22,7 @@ struct WeatherBriefApp: App {
                 if scenePhase == .active {
                     Task { await appState.syncPendingPireps() }
                     Task { await appState.refreshUserPreferences() }
+                    Task { await appState.refreshHelpCatalog() }
                 }
             }
         }
