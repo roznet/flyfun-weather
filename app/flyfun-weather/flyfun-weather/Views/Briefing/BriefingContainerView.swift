@@ -195,7 +195,13 @@ private struct BriefingToolbarView: View {
             Button {
                 Task {
                     await viewModel.refresh()
-                    refreshTip.invalidate(reason: .actionPerformed)
+                    // Don't burn the coaching tip on a failed refresh — keep it
+                    // visible so the user can retry with the coaching present
+                    // (mirrors the download-tip guard). `.completed`/`.noRefresh`
+                    // are the successful terminal states; `.error` is failure.
+                    if case .error = viewModel.refreshState {} else {
+                        refreshTip.invalidate(reason: .actionPerformed)
+                    }
                 }
             } label: {
                 if viewModel.refreshState.isRefreshing {
