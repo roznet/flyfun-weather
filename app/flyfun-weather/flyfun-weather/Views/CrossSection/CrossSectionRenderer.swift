@@ -14,7 +14,20 @@ struct CrossSectionRenderer {
         let opacity: Double
     }
 
+    /// Convenience: render the whole scene in one pass (static scene + dynamic
+    /// cursor/aircraft overlay). The live view splits these into two separate
+    /// Canvases so a scrub tick redraws only the cheap overlay (#303); this stays
+    /// for any single-pass caller (previews, snapshots).
     func render(context: inout GraphicsContext, size: CGSize) {
+        renderStatic(context: &context, size: size)
+        renderCursor(context: &context, size: size)
+    }
+
+    /// The static scene: sky, all enabled data layers, and the axes/grid. This is
+    /// the expensive pass (O(n_slots × subBlobs) gradient fills for the natural
+    /// cloud style) and must only re-run on data/model/layer/size change — never
+    /// on a scrub tick (#303). Does NOT draw the cursor or aircraft.
+    func renderStatic(context: inout GraphicsContext, size: CGSize) {
         let transform = CoordTransform(
             size: size,
             maxDistanceNm: data.totalDistanceNm,
@@ -42,6 +55,29 @@ struct CrossSectionRenderer {
             }
         }
 
+        // Axes and grid (drawn outside clip)
+        drawAxes(context: &context, transform: transform, data: data)
+    }
+
+    /// The dynamic overlay: the scrub cursor rule + the live aircraft marker.
+    /// Cheap (O(1)) so it can redraw every drag tick / GPS update without jank
+    /// (#303). Both are clipped to the plot area, matching the static pass.
+    func renderCursor(context: inout GraphicsContext, size: CGSize) {
+        guard selectedDistanceNm != nil || aircraftPosition != nil else { return }
+        let transform = CoordTransform(
+            size: size,
+            maxDistanceNm: data.totalDistanceNm,
+            maxAltitudeFt: data.flightCeilingFt
+        )
+        let skyRect = CGRect(
+            x: transform.plotArea.left,
+            y: transform.plotArea.top,
+            width: transform.plotArea.width,
+            height: transform.plotArea.height
+        )
+        var clipped = context
+        clipped.clip(to: Path(skyRect))
+
         // Selected-point indicator (drawn inside clip so it stays in plot area)
         if let selectedNm = selectedDistanceNm {
             let x = transform.distanceToX(selectedNm)
@@ -55,9 +91,6 @@ struct CrossSectionRenderer {
         if let aircraft = aircraftPosition {
             drawAircraft(context: &clipped, transform: transform, position: aircraft)
         }
-
-        // Axes and grid (drawn outside clip)
-        drawAxes(context: &context, transform: transform, data: data)
     }
 
     // MARK: - Axes drawing

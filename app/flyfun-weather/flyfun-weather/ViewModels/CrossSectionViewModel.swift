@@ -9,9 +9,16 @@ final class CrossSectionViewModel {
     private(set) var enabledLayers: [String: Bool] = CrossSectionPresets.gramet
     /// Currently-applied advisory lens id (e.g. "icing"), or nil when none/Custom.
     private(set) var activeAdvisoryPreset: String?
+    /// Monotonic identity for `vizData`: bumped only when the data is rebuilt
+    /// (model/route/elevation change). `VizRouteData` is a deep value type with no
+    /// `Equatable` conformance, so the static cross-section scene keys its
+    /// `Equatable` redraw gate on this counter instead of diffing the whole struct
+    /// each scrub tick (#303).
+    private(set) var dataVersion: Int = 0
 
     func update(routeAnalyses: RouteAnalysesResponse, elevation: ElevationResponse?, model: String) {
         vizData = Self.extractVizData(from: routeAnalyses, model: model, elevation: elevation)
+        dataVersion += 1
     }
 
     func toggleLayer(_ id: String) {
