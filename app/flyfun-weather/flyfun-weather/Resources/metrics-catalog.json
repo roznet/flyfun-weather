@@ -1,0 +1,950 @@
+{
+  "cape_surface_jkg": {
+    "name": "CAPE",
+    "unit": "J/kg",
+    "vibe": "The atmosphere's battery level",
+    "primary_goal": "Measure total energy available for storm growth.",
+    "best_used_for": "Assessing how violent storms could be if they fire.",
+    "limitations": "High CAPE means nothing without a trigger (front, orography, sea breeze). CAPE alone doesn't tell you about storm organisation — you need shear for that.",
+    "theory": "Imagine heating a bubble of air at the ground and watching it rise. Wherever it's warmer than its surroundings, it accelerates upward — that's buoyancy. CAPE (Convective Available Potential Energy) sums all that upward energy from the Level of Free Convection to the Equilibrium Level: CAPE = ∫ g·(Tv_parcel − Tv_env)/Tv_env dz, where Tv is virtual temperature (accounts for moisture making air lighter). We trace a surface parcel upward through model temperature data and add up the positive energy.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Convective_available_potential_energy",
+    "thresholds": [
+      { "min": 0, "max": 100, "label": "None", "risk": "none", "meaning": "Storms won't have any legs." },
+      { "min": 100, "max": 500, "label": "Low", "risk": "low", "meaning": "Fair-weather cumulus, weak showers at best." },
+      { "min": 500, "max": 1500, "label": "Moderate", "risk": "moderate", "meaning": "Typical summer thunderstorms if triggered." },
+      { "min": 1500, "max": 3000, "label": "High", "risk": "high", "meaning": "Vigorous storms likely — significant turbulence, heavy rain." },
+      { "min": 3000, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Severe storm potential — large hail, strong updrafts. Avoid at all costs." }
+    ]
+  },
+  "mu_cape_jkg": {
+    "name": "MU-CAPE",
+    "unit": "J/kg",
+    "vibe": "The most unstable layer's storm potential",
+    "primary_goal": "Find the maximum storm energy from any level in the lower atmosphere.",
+    "best_used_for": "Catching elevated instability that surface CAPE misses — like warm air overrunning a front.",
+    "limitations": "Searches the lowest 300 hPa for the most unstable parcel. Can overestimate practical storm risk if the unstable layer is very thin.",
+    "theory": "Like regular CAPE, but instead of starting with surface air, it searches through the lowest 300 hPa (~3 km in a standard atmosphere) to find the parcel with the most energy. This catches situations where the most unstable air isn't at the surface — for example, when warm moist air rides over a cooler surface layer along a front. Same buoyancy integral as surface CAPE, just from the most energetic starting point.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Convective_available_potential_energy",
+    "thresholds": [
+      { "min": 0, "max": 100, "label": "None", "risk": "none", "meaning": "No elevated instability." },
+      { "min": 100, "max": 500, "label": "Low", "risk": "low", "meaning": "Weak elevated instability." },
+      { "min": 500, "max": 1500, "label": "Moderate", "risk": "moderate", "meaning": "Elevated thunderstorms possible if triggered." },
+      { "min": 1500, "max": 3000, "label": "High", "risk": "high", "meaning": "Vigorous elevated storms likely." },
+      { "min": 3000, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Extreme instability aloft — severe storms." }
+    ]
+  },
+  "ml_cape_jkg": {
+    "name": "ML-CAPE",
+    "unit": "J/kg",
+    "vibe": "The well-mixed afternoon storm potential",
+    "primary_goal": "Estimate storm energy using a well-mixed boundary layer parcel.",
+    "best_used_for": "The most realistic CAPE for a sunny afternoon when thermals have stirred up the lowest layer.",
+    "limitations": "Assumes the lowest 100 hPa (~1 km) is well-mixed — best for sunny afternoons. Less useful for nighttime or elevated convection.",
+    "theory": "Instead of using a single surface value (which can be unrepresentative), ML-CAPE averages the temperature and moisture in the lowest 100 hPa (~1 km in a standard atmosphere) to create a 'mixed layer' parcel, then lifts it. This mimics what happens on a sunny afternoon when thermals have blended the boundary layer. The parcel is then traced upward using the same buoyancy integral as standard CAPE. ML-CAPE is typically lower than surface-based CAPE because averaging includes drier air from above the surface, diluting the parcel's moisture and reducing its buoyancy.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Convective_available_potential_energy",
+    "thresholds": [
+      { "min": 0, "max": 100, "label": "None", "risk": "none", "meaning": "Stable mixed layer." },
+      { "min": 100, "max": 500, "label": "Low", "risk": "low", "meaning": "Weak instability in the mixed layer." },
+      { "min": 500, "max": 1500, "label": "Moderate", "risk": "moderate", "meaning": "Moderate storm potential from mixed-layer parcel." },
+      { "min": 1500, "max": 3000, "label": "High", "risk": "high", "meaning": "Strong instability. Vigorous afternoon storms." },
+      { "min": 3000, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Extreme mixed-layer instability." }
+    ]
+  },
+  "cin_surface_jkg": {
+    "name": "CIN",
+    "unit": "J/kg",
+    "vibe": "The lid on the pressure cooker",
+    "primary_goal": "Measure the energy barrier suppressing convection.",
+    "best_used_for": "Judging whether storms will fire easily or need a strong trigger to break through.",
+    "limitations": "CIN can erode quickly with afternoon heating. A strong cap at 09Z can vanish by 15Z. Check the trend, not just the snapshot.",
+    "theory": "Convective Inhibition (CIN) is the energy a rising air parcel must overcome before it can rise freely — like pushing a ball over a hill before it rolls down the other side. CIN is the sum of negative buoyancy below the LFC: CIN = ∫ g·(T_parcel − T_env)/T_env dz, where the parcel is cooler than its surroundings. A strong cap means the atmosphere needs a powerful push (front, mountain, sea breeze) to break through and release the CAPE above.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Convective_inhibition",
+    "thresholds": [
+      { "min": -50, "max": 0, "label": "Weak cap", "risk": "moderate", "meaning": "Convection fires easily with modest heating or lift." },
+      { "min": -200, "max": -50, "label": "Moderate cap", "risk": "low", "meaning": "Needs a front, sea-breeze, or strong heating to break. Storms delayed but can be intense." },
+      { "min": null, "max": -200, "label": "Strong cap", "risk": "none", "meaning": "Convection very unlikely unless a powerful trigger forces air through." }
+    ]
+  },
+  "lifted_index": {
+    "name": "Lifted Index",
+    "unit": "",
+    "vibe": "Thumbs up / thumbs down for convection",
+    "primary_goal": "Quick-check convective instability at 500 hPa.",
+    "best_used_for": "A fast yes/no on whether thunderstorms are thermodynamically possible.",
+    "limitations": "Only compares surface parcel to 500 hPa. Misses shallow convection below that level and elevated storms starting above the surface.",
+    "theory": "Take a parcel of surface air, lift it to about 18,000 ft (500 hPa), and compare its temperature with the actual air there. LI = T_environment − T_parcel at 500 hPa. Negative values mean the parcel is warmer than its surroundings — it wants to keep rising, which means instability and thunderstorm potential.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Lifted_index",
+    "thresholds": [
+      { "min": 0, "max": null, "label": "Stable", "risk": "none", "meaning": "Surface air stays put at 500 hPa." },
+      { "min": -3, "max": 0, "label": "Weak instability", "risk": "low", "meaning": "Bumpy cumulus, isolated showers." },
+      { "min": -6, "max": -3, "label": "Moderate instability", "risk": "moderate", "meaning": "Thunderstorms likely with a trigger." },
+      { "min": null, "max": -6, "label": "Extreme instability", "risk": "severe", "meaning": "Severe weather — strong updrafts, hail, turbulence." }
+    ]
+  },
+  "showalter_index": {
+    "name": "Showalter Index",
+    "unit": "",
+    "vibe": "The Lifted Index's cautious older brother",
+    "primary_goal": "Stability check using 850 hPa instead of the surface.",
+    "best_used_for": "Spotting elevated instability when the surface is unrepresentative (cold mornings, inversions, frontal overrunning).",
+    "limitations": "Ignores the surface layer entirely, so it will miss surface-based storms on hot afternoons where the LI would catch them.",
+    "theory": "Same idea as the Lifted Index but starts the parcel at 850 hPa (~5,000 ft) instead of the surface. SI = T_environment − T_parcel at 500 hPa, where the parcel starts from 850 hPa. Useful when the surface is misleading — cold mornings, low-level inversions, or frontal overrunning can make surface-based indices miss elevated storm potential.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_instability",
+    "thresholds": [
+      { "min": 3, "max": null, "label": "Stable", "risk": "none", "meaning": "No thunderstorm risk from elevated layers." },
+      { "min": 1, "max": 3, "label": "Marginal", "risk": "low", "meaning": "Keep an eye on trends." },
+      { "min": -2, "max": 1, "label": "Moderate", "risk": "moderate", "meaning": "Elevated thunderstorms possible." },
+      { "min": null, "max": -2, "label": "Strong", "risk": "severe", "meaning": "Severe elevated storms — dangerous because they can fire without surface heating." }
+    ]
+  },
+  "k_index": {
+    "name": "K-Index",
+    "unit": "",
+    "vibe": "The minesweeper difficulty setting for your route",
+    "primary_goal": "Estimate thunderstorm coverage in the area.",
+    "best_used_for": "Deciding if you can fly direct or need to weave around cells.",
+    "limitations": "Relies heavily on 700 hPa moisture. Over-predicts in tropical air masses and under-predicts in dry desert air.",
+    "theory": "Combines three thunderstorm ingredients into one number: low-to-mid instability, low-level moisture, and mid-level dryness. K = (T₈₅₀ − T₅₀₀) + Td₈₅₀ − (T₇₀₀ − Td₇₀₀). The first term measures lapse rate, the second adds low-level moisture, and the third penalises dry mid-levels (which choke storms). Higher values mean more storm coverage.",
+    "wikipedia": "https://en.wikipedia.org/wiki/K-index_(meteorology)",
+    "thresholds": [
+      { "min": null, "max": 0, "label": "Stable", "risk": "none", "meaning": "Very stable atmosphere. No thunderstorm threat." },
+      { "min": 0, "max": 20, "label": "Clear", "risk": "none", "meaning": "No air-mass storms expected." },
+      { "min": 20, "max": 30, "label": "Isolated", "risk": "low", "meaning": "A few cells to dodge." },
+      { "min": 30, "max": 40, "label": "Scattered", "risk": "moderate", "meaning": "Frequent deviations likely." },
+      { "min": 40, "max": null, "label": "Numerous", "risk": "severe", "meaning": "Expect a wall of weather." }
+    ]
+  },
+  "total_totals": {
+    "name": "Total Totals",
+    "unit": "",
+    "vibe": "The thunderstorm early warning siren",
+    "primary_goal": "Combined measure of moisture and temperature lapse rate.",
+    "best_used_for": "Early warning of severe weather formation.",
+    "limitations": "Prone to false positives in cold-core low pressure systems where the air is naturally very cold aloft but convection is shallow.",
+    "theory": "Adds two components: Vertical Totals (how fast temperature drops with height: T₈₅₀ − T₅₀₀) and Cross Totals (how moist the low levels are relative to cold air aloft: Td₈₅₀ − T₅₀₀). Formula: TT = (T₈₅₀ − T₅₀₀) + (Td₈₅₀ − T₅₀₀). Values above 50 start flagging severe weather risk, above 55 means widespread dangerous conditions.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Total_totals_index",
+    "thresholds": [
+      { "min": 0, "max": 44, "label": "Quiet", "risk": "none", "meaning": "No significant storms." },
+      { "min": 44, "max": 50, "label": "Scattered", "risk": "low", "meaning": "Scattered showers and isolated lightning." },
+      { "min": 50, "max": 55, "label": "Isolated severe", "risk": "moderate", "meaning": "Heavy rain and strong winds possible." },
+      { "min": 55, "max": null, "label": "Numerous severe", "risk": "severe", "meaning": "Widespread dangerous weather." }
+    ]
+  },
+  "bulk_shear_0_6km_kt": {
+    "name": "Shear 0-6km",
+    "unit": "kt",
+    "vibe": "The supercell detector",
+    "primary_goal": "Measure how organised storms will become.",
+    "best_used_for": "Predicting whether storms will be short-lived pop-ups or long-lived supercells.",
+    "limitations": "Shear alone doesn't create storms — you need instability too. High shear + no CAPE = windy but no convection.",
+    "theory": "The vector wind difference between the surface and 6 km altitude — how much the wind changes speed and direction through the lower atmosphere. Calculated as |V₆ₖₘ − V_sfc| using the full wind vector (both speed and direction). Strong shear tilts storm updrafts so rain falls away from the updraft instead of choking it, letting storms persist longer and sometimes rotate.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Wind_shear",
+    "thresholds": [
+      { "min": 0, "max": 25, "label": "Weak", "risk": "none", "meaning": "Storms are disorganised and short-lived (pulse/single-cell storms)." },
+      { "min": 25, "max": 40, "label": "Moderate", "risk": "moderate", "meaning": "Organised multicells. Storms persist with heavy rain and gusty winds." },
+      { "min": 40, "max": null, "label": "Strong", "risk": "severe", "meaning": "Supercell potential. Long-lived rotating storms." }
+    ]
+  },
+  "bulk_shear_0_1km_kt": {
+    "name": "Shear 0-1km",
+    "unit": "kt",
+    "vibe": "The final approach ambush detector",
+    "primary_goal": "Detect low-level wind shear hazards.",
+    "best_used_for": "Assessing approach and departure safety — and tornado risk near storms.",
+    "limitations": "Model resolution smooths out local effects like downbursts and microbursts. Real shear on approach can be much worse.",
+    "theory": "The vector wind difference between the surface and 1 km altitude: |V₁ₖₘ − V_sfc|. This low-level shear is critical for approach and departure safety — a sudden wind change on short final can cause dangerous airspeed excursions. In storm environments, strong low-level shear also contributes to tornado formation by spinning up rotation near the ground.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Wind_shear",
+    "thresholds": [
+      { "min": 0, "max": 15, "label": "Light", "risk": "none", "meaning": "Normal operations." },
+      { "min": 15, "max": 25, "label": "Moderate", "risk": "moderate", "meaning": "Bumpy approaches, brief airspeed excursions." },
+      { "min": 25, "max": null, "label": "Significant", "risk": "severe", "meaning": "Dangerous on approach/departure. Go-around risk." }
+    ]
+  },
+  "freezing_level_ft": {
+    "name": "Freezing Level",
+    "unit": "ft",
+    "vibe": "The icing floor — below here, ice melts off",
+    "primary_goal": "Mark the altitude where temperature crosses 0°C.",
+    "best_used_for": "The key reference for icing escape: descend below it to exit the icing zone.",
+    "limitations": "Can be multiple freezing levels in inversions. Model gives one value; real atmosphere can be messier.",
+    "theory": "The altitude where the air temperature crosses 0°C, found by interpolating between model levels above and below freezing. Below this line, ice melts; above it, supercooled water can freeze on contact with your aircraft. This is the primary reference point for icing decisions — descending below the freezing level is often the safest escape strategy.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Freezing_level",
+    "thresholds": [
+      { "min": 0, "max": 1000, "label": "Very low", "risk": "high", "meaning": "Freezing near surface. Ground icing, very limited escape options." },
+      { "min": 1000, "max": 3000, "label": "Low", "risk": "moderate", "meaning": "Limited room to descend below icing." },
+      { "min": 3000, "max": 10000, "label": "Moderate", "risk": "low", "meaning": "Reasonable icing-free zone below." },
+      { "min": 10000, "max": null, "label": "High", "risk": "none", "meaning": "Large icing-free zone below. Descent escape strategy is viable." }
+    ]
+  },
+  "freezing_level_m": {
+    "name": "Freezing Level",
+    "unit": "m",
+    "vibe": "The icing floor — below here, ice melts off",
+    "primary_goal": "Mark the altitude where temperature crosses 0°C.",
+    "best_used_for": "The key reference for icing escape: descend below it to exit the icing zone.",
+    "limitations": "Can be multiple freezing levels in inversions. Model gives one value; real atmosphere can be messier.",
+    "theory": "The altitude where the air temperature crosses 0°C, found by interpolating between model levels above and below freezing. Below this line, ice melts; above it, supercooled water can freeze on contact with your aircraft. This is the primary reference point for icing decisions — descending below the freezing level is often the safest escape strategy.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Freezing_level",
+    "thresholds": [
+      { "min": 0, "max": 300, "label": "Very low", "risk": "high", "meaning": "Freezing near surface. Ground icing, very limited escape options." },
+      { "min": 300, "max": 1000, "label": "Low", "risk": "moderate", "meaning": "Limited room to descend below icing." },
+      { "min": 1000, "max": 3000, "label": "Moderate", "risk": "low", "meaning": "Reasonable icing-free zone below." },
+      { "min": 3000, "max": null, "label": "High", "risk": "none", "meaning": "Large icing-free zone below." }
+    ]
+  },
+  "minus10c_level_ft": {
+    "name": "-10°C Level",
+    "unit": "ft",
+    "vibe": "The peak danger altitude for icing",
+    "primary_goal": "Mark the altitude of peak supercooled water content.",
+    "best_used_for": "Defining the worst icing band — freezing level to -10°C level is the danger zone.",
+    "limitations": "The actual peak depends on cloud type and moisture. This is a temperature proxy, not a direct measurement of liquid water.",
+    "theory": "The altitude where temperature drops to −10°C, found by interpolating the model temperature profile. The zone from the freezing level to −10°C contains the most supercooled liquid water — water that's below freezing but hasn't turned to ice yet. This is where icing is most dangerous (Clear/Mixed ice) because there's the most liquid water available to freeze onto your aircraft.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "thresholds": []
+  },
+  "minus20c_level_ft": {
+    "name": "-20°C Level",
+    "unit": "ft",
+    "vibe": "The ice crystal line — clouds are frozen, not wet",
+    "primary_goal": "Mark the altitude above which icing risk drops sharply.",
+    "best_used_for": "The icing ceiling — above here, most water is already ice crystals.",
+    "limitations": "Some supercooled water can persist below -20°C in vigorous convection (SLD). Don't treat this as a hard guarantee.",
+    "theory": "The altitude where temperature reaches −20°C. Above this level, most cloud droplets have frozen into ice crystals through a process called glaciation. Ice crystals bounce off your aircraft rather than sticking, so icing risk drops sharply. In calm stratiform clouds this is a reliable boundary, though vigorous thunderstorm updrafts can carry supercooled water higher.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "thresholds": []
+  },
+  "lcl_altitude_ft": {
+    "name": "LCL",
+    "unit": "ft",
+    "vibe": "The cloud factory floor — where puffs begin",
+    "primary_goal": "Estimate the base of convective clouds.",
+    "best_used_for": "Knowing where cumulus will start forming on a thermal day.",
+    "limitations": "Assumes a surface parcel lifting undisturbed. Actual cloud base depends on whether thermals are strong enough to reach it.",
+    "theory": "The altitude where a rising parcel of surface air cools enough for its moisture to condense — the theoretical base of cumulus clouds. As air rises it cools, and at some point it reaches the dewpoint and water droplets form. A quick approximation: LCL height ≈ 125 × (T − Td) meters. The exact value is computed from surface temperature, dewpoint, and pressure.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Lifted_condensation_level",
+    "thresholds": [
+      { "min": 0, "max": 3000, "label": "Low", "risk": "moderate", "meaning": "Low ceiling risk in unstable air." },
+      { "min": 3000, "max": 8000, "label": "Moderate", "risk": "low", "meaning": "Typical convective cloud base height." },
+      { "min": 8000, "max": null, "label": "High", "risk": "none", "meaning": "High cloud bases. Good visibility underneath." }
+    ]
+  },
+  "lfc_altitude_ft": {
+    "name": "LFC",
+    "unit": "ft",
+    "vibe": "The point of no return for a storm",
+    "primary_goal": "Identify the altitude where storms become self-sustaining.",
+    "best_used_for": "Judging how easily convection will fire.",
+    "limitations": "May not exist in stable profiles. When it does exist, a trigger (front, orography, heating) is still needed to push air up to it.",
+    "theory": "The Level of Free Convection (LFC) is the altitude above which a lifted air parcel becomes warmer than its environment and keeps rising on its own — the storm ignition point. Found by tracing a parcel upward through the model temperature profile and finding where it crosses from cooler-than-surroundings to warmer. If no crossing exists, the atmosphere is too stable for free convection.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Level_of_free_convection",
+    "thresholds": []
+  },
+  "el_altitude_ft": {
+    "name": "EL",
+    "unit": "ft",
+    "vibe": "The storm ceiling — where the anvil spreads out",
+    "primary_goal": "Estimate the top of convective storms.",
+    "best_used_for": "Knowing how tall storms will get — and whether you can fly over them.",
+    "limitations": "Theoretical maximum height. Real storm tops depend on entrainment and shear, so actual tops are usually a bit lower.",
+    "theory": "The Equilibrium Level (EL) is the altitude where a rising storm parcel cools back to the same temperature as its surroundings and stops accelerating — the theoretical storm top. Found by tracing the parcel above the LFC until its temperature matches the environment again. This is where thunderstorm anvils spread out horizontally. Higher EL means taller storms and more severe weather potential.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Equilibrium_level",
+    "thresholds": []
+  },
+  "precipitable_water_mm": {
+    "name": "Precipitable Water",
+    "unit": "mm",
+    "vibe": "The atmospheric sponge — how soaked is the air?",
+    "primary_goal": "Measure total moisture in the atmospheric column.",
+    "best_used_for": "Gauging how much rain or icing moisture is hiding above you.",
+    "limitations": "Climate-dependent. 25mm is extreme for Scotland but ordinary for the Mediterranean in summer. Interpret relative to the region.",
+    "theory": "If you squeezed all the water vapour out of a column of air from the ground to the top of the atmosphere, this is how deep the puddle would be. Calculated by adding up the moisture (mixing ratio) at each pressure level: PW = (1/g) × ∫ mixing_ratio dp. Higher values mean more moisture available for heavy rain and potentially faster icing accretion if that moisture is supercooled.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Precipitable_water",
+    "thresholds": [
+      { "min": 0, "max": 15, "label": "Dry", "risk": "none", "meaning": "Light precipitation at most." },
+      { "min": 15, "max": 25, "label": "Moist", "risk": "low", "meaning": "Moderate rain possible. Icing severity enhanced if in the icing zone." },
+      { "min": 25, "max": null, "label": "Very moist", "risk": "moderate", "meaning": "Heavy precipitation likely. Faster icing accretion rates." }
+    ]
+  },
+  "temperature_c": {
+    "name": "Temperature",
+    "unit": "°C",
+    "vibe": "The OAT before you leave the hangar",
+    "primary_goal": "Indicate surface conditions and engine performance.",
+    "best_used_for": "Takeoff/landing performance and frost risk.",
+    "limitations": "Model resolution might miss micro-climates like cold air pooling in a specific valley.",
+    "theory": "Surface air temperature measured at screen level (2 metres above ground), taken directly from the NWP model grid. Drives takeoff performance calculations (higher temperature = lower air density = longer takeoff roll), frost risk assessment, and serves as the starting point for sounding analysis of the atmosphere above.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Outside_air_temperature",
+    "thresholds": [
+      { "min": 2, "max": null, "label": "Standard ops", "risk": "none", "meaning": "No surface ice risk." },
+      { "min": null, "max": 2, "label": "Cold", "risk": "low", "meaning": "Watch for frost on wings and icy taxiways." }
+    ]
+  },
+  "dewpoint_2m_c": {
+    "name": "Dewpoint",
+    "unit": "°C",
+    "vibe": "How muggy it feels — and how close you are to fog",
+    "primary_goal": "Indicate surface moisture and condensation risk.",
+    "best_used_for": "Fog risk assessment, cloud base estimation, and understanding moisture availability.",
+    "limitations": "A single surface value — doesn't tell you about moisture at altitude. Very location-dependent near coasts and water bodies.",
+    "theory": "The temperature at which the air becomes fully saturated and water starts to condense — the closer it is to the actual temperature, the closer you are to fog or cloud. When T − Td < 3°C, visible moisture is likely. A quick cloud base estimate: height ≈ 125 × (T − Td) metres. Computed from temperature and relative humidity using the Magnus formula approximation.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Dew_point",
+    "thresholds": []
+  },
+  "dewpoint_depression_c": {
+    "name": "Dewpoint Depression",
+    "unit": "°C",
+    "vibe": "The gap between temperature and moisture — the cloud detector",
+    "primary_goal": "Measure how far the air is from saturation at each level.",
+    "best_used_for": "Detecting cloud layers — when the spread drops below 3°C, you're likely in or near cloud.",
+    "limitations": "The 3°C threshold is a rule of thumb, not a hard boundary. Thin clouds can exist with a spread just above 3°C.",
+    "theory": "Simply the difference between air temperature and dewpoint: DD = T − Td. When DD = 0, the air is fully saturated (cloud or fog). In cloud detection, consecutive pressure levels with DD < 3°C are grouped as cloud layers. The average depression within the layer estimates coverage: < 1°C = overcast, 1–2°C = broken, 2–3°C = scattered.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Dew_point",
+    "thresholds": [
+      { "min": 0, "max": 1, "label": "Saturated", "risk": "moderate", "meaning": "In cloud — saturated air. Icing risk if below freezing." },
+      { "min": 1, "max": 3, "label": "Near saturation", "risk": "low", "meaning": "Cloud or mist likely at this level." },
+      { "min": 3, "max": 10, "label": "Unsaturated", "risk": "none", "meaning": "Clear at this level." },
+      { "min": 10, "max": null, "label": "Very dry", "risk": "none", "meaning": "Far from cloud formation." }
+    ]
+  },
+  "wet_bulb_temperature_c": {
+    "name": "Wet-Bulb Temperature",
+    "unit": "°C",
+    "vibe": "What temperature ice really forms at",
+    "primary_goal": "The temperature accounting for evaporative cooling — determines icing type.",
+    "best_used_for": "Classifying icing as clear, mixed, or rime ice at each altitude.",
+    "limitations": "In very dry air, wet-bulb can be much lower than air temperature. The fixed temperature bands are a simplification — real icing severity is continuous. Icing type bands follow FAA AC 00-6B / ICAO SAT-based convention for consistency with PIREPs and AIRMETs. Wet-bulb is the more physically accurate driver of droplet freezing behaviour, but inside cloud at saturation Tw ≈ T so the distinction is small in practice.",
+    "theory": "The lowest temperature achievable by evaporating water into the air — measured by wrapping a thermometer in a wet cloth and letting it cool. Sits between the dewpoint and air temperature: Td ≤ Tw ≤ T. Calculated iteratively from temperature, dewpoint, and pressure using the psychrometric equation. It's the key temperature for icing because when supercooled droplets hit your aircraft, evaporation cools them further before they freeze. The classification bands below use the standard FAA/ICAO SAT temperature ranges rather than wet-bulb offsets, because those bands are what pilots see in PIREPs, AIRMETs, and certification documents.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Wet-bulb_temperature",
+    "llm_prompt": "explain why wet-bulb temperature (not air temperature) determines icing type: 0 to -10°C = clear ice, -10 to -15°C = mixed, -15 to -40°C = rime (FAA/ICAO convention), and how evaporative cooling affects ice accretion on an airframe",
+    "thresholds": [
+      { "min": 0, "max": null, "label": "Above freezing", "risk": "none", "meaning": "No icing concern." },
+      { "min": -10, "max": 0, "label": "Clear ice zone", "risk": "severe", "meaning": "Supercooled water freezes as dense, clear glaze. Most dangerous icing type (FAA/ICAO)." },
+      { "min": -15, "max": -10, "label": "Mixed ice zone", "risk": "moderate", "meaning": "Mix of clear and rime ice. Irregular buildup." },
+      { "min": -40, "max": -15, "label": "Rime ice zone", "risk": "low", "meaning": "Droplets freeze on contact as rough, opaque rime. Less dense than clear ice." },
+      { "min": null, "max": -40, "label": "Ice crystal zone", "risk": "none", "meaning": "Clouds are mostly ice crystals. They bounce off rather than stick." }
+    ]
+  },
+  "lapse_rate_c_km": {
+    "name": "Lapse Rate",
+    "unit": "°C/km",
+    "vibe": "How fast the air cools as you climb",
+    "primary_goal": "Measure the rate of temperature decrease with altitude.",
+    "best_used_for": "Assessing atmospheric stability — steep lapse rates mean turbulent, unstable air.",
+    "limitations": "Calculated between model pressure levels, so it's an average over thick layers. Sharp changes within a layer may be missed.",
+    "theory": "The temperature drop per kilometre of altitude: LR = −ΔT/Δz. Dry air cools at 9.8°C/km as it rises (the Dry Adiabatic Lapse Rate). Moist air cools more slowly at about 5–7°C/km because condensation releases heat (the Saturated Adiabatic Lapse Rate). If the actual lapse rate is steeper than the DALR, the atmosphere is absolutely unstable and convects freely. A negative lapse rate means an inversion — temperature increasing with height.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Lapse_rate",
+    "thresholds": [
+      { "min": null, "max": 0, "label": "Inversion", "risk": "moderate", "meaning": "Temperature increasing with height. Traps haze, creates turbulence at boundary." },
+      { "min": 0, "max": 6, "label": "Stable", "risk": "none", "meaning": "Below moist adiabatic rate. Smooth, stratified air." },
+      { "min": 6, "max": 9.8, "label": "Conditionally unstable", "risk": "low", "meaning": "Between moist and dry adiabatic rates. Unstable if air is saturated (in cloud)." },
+      { "min": 9.8, "max": null, "label": "Absolutely unstable", "risk": "moderate", "meaning": "Steeper than the dry rate. Convection occurs freely — thermals and turbulence." }
+    ]
+  },
+  "equivalent_potential_temperature_k": {
+    "name": "Theta-E (θe)",
+    "unit": "K",
+    "vibe": "The air's fingerprint — tracks where it came from",
+    "primary_goal": "Identify air masses and detect potential instability.",
+    "best_used_for": "Spotting boundaries between different air masses and layers where the atmosphere could overturn.",
+    "limitations": "Most useful for relative comparisons between levels, not as an absolute number. The value itself matters less than how it changes with height.",
+    "theory": "The temperature a parcel of air would reach if lifted dry-adiabatically to its LCL, then moist-adiabatically to very low pressure so that all its moisture condenses out and releases latent heat, then brought dry-adiabatically back down to a reference pressure of 1000 hPa. This combines temperature, moisture, and pressure into one number that is conserved under both dry and moist adiabatic processes — a 'fingerprint' of the air mass that stays constant as it rises or sinks. θe increasing with height = stable; θe decreasing with height = potentially unstable (convective instability). When θe decreases with height, warm moist air sits below cold dry air — if that layer is lifted as a whole (by a front or orography), it can overturn and release energy rapidly.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Equivalent_potential_temperature",
+    "llm_prompt": "explain how theta-e (equivalent potential temperature) decreasing with height signals potential instability, and how pilots can use theta-e profiles to identify air mass boundaries and convective risk",
+    "thresholds": []
+  },
+  "wind_speed_kt": {
+    "name": "Wind",
+    "unit": "kt",
+    "vibe": "How hard the air is moving",
+    "primary_goal": "Indicate wind conditions at the surface or at altitude.",
+    "best_used_for": "Crosswind limits, headwind/tailwind performance, and turbulence risk.",
+    "limitations": "Model winds are grid-averaged. Local effects (gusts, channelling) can differ significantly.",
+    "theory": "Wind speed at 10 metres above ground from the NWP model. Model winds represent an area average over the grid cell — local terrain channelling, buildings, and small-scale gusts aren't resolved. Reported in knots for aviation convention. Surface wind drives crosswind and headwind calculations for takeoff and landing performance.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Wind",
+    "thresholds": [
+      { "min": 0, "max": 15, "label": "Light", "risk": "none", "meaning": "Normal operations." },
+      { "min": 15, "max": 25, "label": "Moderate", "risk": "low", "meaning": "Check crosswind limits." },
+      { "min": 25, "max": null, "label": "Strong", "risk": "moderate", "meaning": "Significant crosswind/turbulence risk." }
+    ]
+  },
+  "wind_direction_deg": {
+    "name": "Wind Direction",
+    "unit": "°",
+    "vibe": "Where the wind is coming from",
+    "primary_goal": "Indicate wind direction for runway selection and headwind calculation.",
+    "best_used_for": "Runway selection and crosswind component calculation.",
+    "limitations": "Model gives direction at grid points. Local terrain effects can alter direction significantly.",
+    "theory": "The direction the wind is blowing FROM, measured clockwise from true north (meteorological convention). 360° = from the north, 090° = from the east, 180° = from the south, 270° = from the west. The crosswind component is calculated as: crosswind = wind_speed × sin(wind_direction − runway_heading).",
+    "wikipedia": "https://en.wikipedia.org/wiki/Wind",
+    "thresholds": []
+  },
+  "wind_gusts_kt": {
+    "name": "Wind Gusts",
+    "unit": "kt",
+    "vibe": "The surprise punch in the wind",
+    "primary_goal": "Indicate peak instantaneous wind speed at the surface.",
+    "best_used_for": "Crosswind limit checks, structural limits, and turbulence assessment on approach.",
+    "limitations": "Model gusts are parameterised estimates — real gusts near thunderstorms or terrain can be significantly worse. Not available from ECMWF.",
+    "theory": "Peak wind speed expected in gusts, typically lasting just a few seconds. NWP models estimate gusts using parameterisation schemes that account for boundary layer instability, surface roughness, and convective downdrafts. The gust factor (gust ÷ mean wind) is typically 1.3–1.5 in normal conditions but can exceed 2.0 near thunderstorms or in mountainous terrain.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Wind_gust",
+    "thresholds": [
+      { "min": 0, "max": 25, "label": "Light-moderate", "risk": "none", "meaning": "Normal operations." },
+      { "min": 25, "max": 35, "label": "Strong", "risk": "moderate", "meaning": "Check aircraft crosswind and gust limits." },
+      { "min": 35, "max": null, "label": "Very strong", "risk": "severe", "meaning": "Exceeds many GA aircraft limits. Consider delaying." }
+    ]
+  },
+  "visibility_m": {
+    "name": "Visibility",
+    "unit": "m",
+    "vibe": "How far you can see",
+    "primary_goal": "Indicate horizontal visibility for VFR/IFR classification.",
+    "best_used_for": "Flight rules determination — VFR needs good visibility, IFR has lower requirements.",
+    "limitations": "Only available from GFS and ICON models. Model visibility is parameterised from humidity and precipitation, not directly observed.",
+    "theory": "Horizontal distance at which objects can be identified, estimated by the NWP model from precipitation intensity, relative humidity, and cloud microphysics. Low visibility is caused by fog, rain, snow, haze, or low cloud. Standard aviation breakpoints: > 8 km = good VFR, 5–8 km = marginal VFR, 1.5–5 km = IFR, < 1.5 km = low IFR.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Visibility",
+    "thresholds": [
+      { "min": 8000, "max": null, "label": "Good VFR", "risk": "none", "meaning": "Excellent visibility." },
+      { "min": 5000, "max": 8000, "label": "Marginal VFR", "risk": "low", "meaning": "Flyable but reduced. Stay alert." },
+      { "min": 1500, "max": 5000, "label": "IFR", "risk": "moderate", "meaning": "Instrument conditions. VFR not recommended." },
+      { "min": 0, "max": 1500, "label": "Low IFR", "risk": "severe", "meaning": "Very poor visibility. IFR with low minimums." }
+    ]
+  },
+  "current_conditions": {
+    "name": "Current Conditions (METAR + SIGMET)",
+    "unit": "",
+    "vibe": "Ground truth along the route on the day of flight",
+    "primary_goal": "Overlay observed METAR flight categories and active route SIGMETs directly on the cross-section.",
+    "best_used_for": "Day-of-flight (D-0) reality check — comparing reporting airports' actual flight category against the forecast bands, and seeing where area hazards (SIGMETs) intersect the route.",
+    "limitations": "D-0 only — empty on D-1+ when no observations are fetched. Columns are placed at the airport's along-route position with a fixed ±2 nm width and 5000 ft height above the surface; they are markers, not a forecast field. Not every airport reports a METAR.",
+    "theory": "Each reporting airport is drawn as a column colored by its METAR flight category (VFR green, MVFR amber, IFR red, LIFR magenta), positioned by its along-route distance; where columns overlap, the airport closest to the route draws on top. SIGMETs are drawn as red diagonally-hatched zones over their enroute span and vertical band, deeper red for severe/embedded (SEV/EMBD) hazards. All data is model-independent, sourced directly from the briefing snapshot.",
+    "wikipedia": "https://en.wikipedia.org/wiki/METAR",
+    "thresholds": []
+  },
+  "cloud_cover_pct": {
+    "name": "Cloud Cover",
+    "unit": "%",
+    "vibe": "How much sky is hidden",
+    "primary_goal": "Indicate total cloud coverage.",
+    "best_used_for": "VFR/IFR assessment and flight planning.",
+    "limitations": "Total column value — doesn't tell you at which altitude the clouds are.",
+    "theory": "Total cloud coverage as a percentage of the sky, directly from the NWP model's cloud parameterisation. The model estimates how much of each grid cell is covered by cloud at any level, using sub-grid physics to account for clouds smaller than the grid spacing. 0% = completely clear, 100% = fully overcast. This is the total column value — for altitude-specific cloud info, check the low/mid/high breakdown.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": 0, "max": 25, "label": "Few", "risk": "none", "meaning": "Mostly clear skies." },
+      { "min": 25, "max": 50, "label": "Scattered", "risk": "none", "meaning": "Some clouds but VFR likely." },
+      { "min": 50, "max": 75, "label": "Broken", "risk": "low", "meaning": "Significant cloud. Check ceilings." },
+      { "min": 75, "max": null, "label": "Overcast", "risk": "moderate", "meaning": "Full cloud cover. IFR conditions possible." }
+    ]
+  },
+  "precipitation_mm": {
+    "name": "Precipitation",
+    "unit": "mm",
+    "vibe": "How wet it's going to get",
+    "primary_goal": "Indicate expected hourly precipitation amount.",
+    "best_used_for": "Planning for reduced visibility and icing in precipitation.",
+    "limitations": "Model grid averages smooth out local intensity peaks. Thunderstorm rain can be much heavier than shown.",
+    "theory": "Hourly accumulated precipitation from the NWP model. The model calculates rain and snow from its temperature, moisture, and vertical motion fields. The amount is a grid-cell average, so intense local cores (especially in thunderstorms) can be much heavier than the model shows. Any precipitation below the freezing level is rain; above it, expect supercooled water (icing hazard) or snow/ice pellets depending on temperature and crystal structure.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Precipitation_(meteorology)",
+    "thresholds": [
+      { "min": 0, "max": 0.5, "label": "Dry", "risk": "none", "meaning": "Negligible precipitation." },
+      { "min": 0.5, "max": 4, "label": "Light-moderate", "risk": "low", "meaning": "Some rain. Visibility may be reduced." },
+      { "min": 4, "max": null, "label": "Heavy", "risk": "moderate", "meaning": "Heavy precipitation. Significant visibility reduction." }
+    ]
+  },
+  "max_omega_pa_s": {
+    "name": "Max Omega",
+    "unit": "Pa/s",
+    "vibe": "The invisible hand pushing your plane up or down",
+    "primary_goal": "Detect large-scale rising or sinking air.",
+    "best_used_for": "Anticipating frontal lift, mountain waves, and large-scale weather development.",
+    "limitations": "Represents a grid-cell average. Cannot resolve local rotors, thermals, or microburst-scale features.",
+    "theory": "Omega (ω) is the vertical velocity in pressure coordinates — how fast air rises or sinks in the model. Negative ω = upward motion (air rising, clouds forming), positive ω = subsidence (air sinking, clearing skies). Converted to real vertical speed via w ≈ −ω/(ρ·g), where ρ is air density and g is gravity. Values stronger than ±1 Pa/s indicate active weather development, with ±10 Pa/s reserved for convective-scale motion.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Omega_equation",
+    "thresholds": [
+      { "min": -0.1, "max": 0.1, "label": "Quiescent", "risk": "none", "meaning": "Calm, stable air. Smooth flight." },
+      { "min": -1, "max": -0.1, "label": "Ascent", "risk": "low", "meaning": "Synoptic-scale lift. Cloud and precipitation developing." },
+      { "min": 0.1, "max": 1, "label": "Subsidence", "risk": "none", "meaning": "Sinking air. Clearing skies, generally smooth." },
+      { "min": null, "max": -1, "label": "Strong ascent", "risk": "moderate", "meaning": "Vigorous vertical motion. Active convection or frontal zone." },
+      { "min": 1, "max": null, "label": "Strong subsidence", "risk": "low", "meaning": "Strong sinking. Possible wind shear at inversion." }
+    ]
+  },
+  "convective_risk": {
+    "name": "Convective Risk (Thermo)",
+    "unit": "",
+    "vibe": "Thunderstorm threat from thermodynamic indices",
+    "primary_goal": "Assess convective risk from sounding-derived thermodynamic indices (CAPE, CIN, shear).",
+    "best_used_for": "Detailed convective analysis using classical stability parameters. Independent of the NWP model's convective scheme — works from raw temperature/wind profiles. Best when you want to understand why storms form, not just where the model predicts them.",
+    "limitations": "Based on CAPE thresholds with CIN modulation. Doesn't account for all trigger mechanisms. Tower tops estimated from thermodynamic equilibrium level which may differ from actual storm tops. Single-parcel approach doesn't capture mesoscale forcing.",
+    "theory": "Combines CAPE (storm energy) and CIN (the cap strength) from the atmospheric sounding. CAPE thresholds set the base risk from none to extreme. CIN modulates — a strong cap downgrades risk because storms need a powerful trigger. Additional severe flags check wind shear > 40kt, K-Index > 35, Total Totals > 55, and Lifted Index < −6. Tower base is LFC (Level of Free Convection), top is EL (Equilibrium Level).",
+    "wikipedia": "https://en.wikipedia.org/wiki/Convective_available_potential_energy",
+    "llm_prompt": "explain how CAPE, CIN, wind shear, K-Index, Total Totals, and Lifted Index are combined into a composite convective risk assessment, and how CIN modulates the threat level",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No convective threat." },
+      { "min": null, "max": null, "label": "Marginal", "risk": "marginal", "meaning": "Shallow convection possible. Scattered showers but no thunderstorms." },
+      { "min": null, "max": null, "label": "Low", "risk": "low", "meaning": "Weak showers possible. Manageable." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Thunderstorms possible with trigger. Plan alternates. Shown as TCU on the cross-section." },
+      { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Vigorous storms likely. Significant turbulence. Shown as CB on the cross-section." },
+      { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Severe weather expected. Delay or cancel. Shown as +TS on the cross-section." }
+    ]
+  },
+  "nwp_convective_risk": {
+    "name": "Convective Risk (NWP)",
+    "unit": "",
+    "vibe": "Where the model predicts convective cloud",
+    "primary_goal": "Show the NWP model's own convective cloud prediction — base, top, and coverage percentage.",
+    "best_used_for": "Seeing where the model's convective parameterisation places storms. This is what Autorouter GRAMET uses. More spatially accurate than thermodynamic indices because the model accounts for moisture convergence, orographic lifting, and mesoscale forcing that raw CAPE/CIN miss.",
+    "limitations": "Needs the model's convective cloud diagnostics: full base+top from GFS (global) and ICON (Europe); ECMWF gives convective top only (base falls back to LCL). Not currently available for Météo-France, UKMO, or GEM. The convective scheme is a parameterisation, not an explicit simulation — it can miss isolated storms or misplace them. Coverage percentage is a model estimate, not observed.",
+    "theory": "Uses the NWP model's convective cloud parameterisation output directly. The model runs its own convective scheme (e.g., Simplified Arakawa-Schubert for GFS, Tiedtke for ICON) to predict where convective clouds form, their base and top altitudes, and coverage fraction. This accounts for large-scale forcing, moisture transport, and orography that single-column thermodynamic analysis cannot capture. Risk level is derived from coverage percentage and cloud depth.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cumulus_parameterization",
+    "llm_prompt": "explain how NWP models parameterise convection using schemes like Arakawa-Schubert or Tiedtke, and how their convective cloud output compares to thermodynamic indices like CAPE",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No convective cloud predicted." },
+      { "min": null, "max": null, "label": "Marginal", "risk": "marginal", "meaning": "Trace convective cloud. Shallow cumulus." },
+      { "min": null, "max": null, "label": "Low", "risk": "low", "meaning": "Scattered convective cloud. Light showers possible." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Significant convective coverage. Thunderstorms likely. Shown as TCU on the cross-section." },
+      { "min": null, "max": null, "label": "High", "risk": "high", "meaning": "Widespread deep convection. Route avoidance recommended. Shown as CB on the cross-section." },
+      { "min": null, "max": null, "label": "Extreme", "risk": "severe", "meaning": "Intense convective system. Delay or cancel. Shown as +TS on the cross-section." }
+    ]
+  },
+  "icing_risk": {
+    "name": "Icing Risk (Ogimet-DD)",
+    "unit": "0–100",
+    "vibe": "How fast ice will build on your airframe",
+    "primary_goal": "Classify the icing severity in a cloud layer using dewpoint depression as the cloud signal.",
+    "best_used_for": "Deciding whether to enter, avoid, or exit a cloud layer. Uses sounding-derived moisture (no NWP model cloud data needed).",
+    "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to −14°C range (layered) or 0 to −20°C (convective). Relies on dewpoint depression which can miss sub-grid clouds that NWP models detect.",
+    "theory": "Uses the Ogimet continuous icing index, which peaks at −7°C matching where supercooled liquid water is most abundant. Cloud signal via continuous dewpoint depression attenuation — cosine taper from DD=0 (full index) to DD=2.0°C (zero). No NWP data used. The index blends a stratiform component (parabola over −14 to 0°C) with a convective component (vapor density difference from cloud base), weighted by CAPE. Index thresholds: ≥10 = light, ≥30 = moderate, ≥80 = severe.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain how the Ogimet continuous icing index works with DD attenuation, why it peaks at −7°C, and how temperature bands classify icing type (clear, mixed, rime)",
+    "thresholds": [
+      { "min": null, "max": 10, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": 10, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+    ]
+  },
+  "ogimet_index": {
+    "name": "Ogimet Icing Index",
+    "unit": "",
+    "vibe": "The ice magnet rating",
+    "primary_goal": "Physically-based calculation of ice buildup risk.",
+    "best_used_for": "The go/no-go decision for flight into clouds in the icing zone.",
+    "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to -14°C range (layered) or 0 to -20°C (convective). When GRIB2 cloud liquid water data is available (GFS/ICON), it may come from a different model run than the temperature and humidity profiles — check the freshness bar for init time discrepancies.",
+    "theory": "A physics-based icing index combining layered (stratiform) and convective cloud contributions. The layered component uses a parabola peaking at −7°C: 100 × (−t) × (t + 14) / 49 for −14 ≤ t ≤ 0°C. The convective component factors in the moisture difference between cloud base and interior. Both are weighted by estimated cloud type fraction: Combined = (layered% × layered_index + convective% × convective_index) / 200. Peaks at −7°C, matching observed maximum supercooled liquid water content.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain the Ogimet parabolic icing formula that peaks at -7°C and how it combines layered (stratiform) and convective cloud contributions",
+    "thresholds": [
+      { "min": 0, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Emergency action — exit cloud now." }
+    ]
+  },
+  "icing_ogimet_nwp_risk": {
+    "name": "Icing Risk (Ogimet-NWP)",
+    "unit": "0–100",
+    "vibe": "Ogimet icing scaled by NWP cloud cover",
+    "primary_goal": "Classify icing severity using NWP model cloud cover percentage as the cloud signal.",
+    "best_used_for": "Comparing against Ogimet-DD. This is the same approach used by Autorouter GRAMET — when cloud cover is 50%, the icing index is halved.",
+    "limitations": "Does not account for droplet size (SLD). Relies on NWP cloud cover which may differ between models. ECMWF cloud fraction per level comes from direct GRIB (cc variable) over Europe and US out to ~7 days; outside that area/range we fall back to bulk NWP cloud cover.",
+    "theory": "Uses the Ogimet continuous icing index — a parabolic formula peaking at −7°C that maps temperature to icing severity across the 0 to −14°C range (layered) or 0 to −20°C (convective). The cloud signal comes from NWP model cloud cover percentage at the level's altitude — 50% cloud = 50% of index. This is the same approach used by Autorouter GRAMET. No dewpoint depression gating. Thresholds: effective index ≥10 = light, ≥30 = moderate, ≥80 = severe.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain how the Ogimet-NWP icing method scales the icing index by NWP cloud cover percentage, and how it compares to the DD-attenuation approach",
+    "thresholds": [
+      { "min": null, "max": 10, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": 10, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+    ]
+  },
+  "sfip_risk": {
+    "name": "Icing Risk (SFIP-NWP)",
+    "unit": "0–100",
+    "vibe": "The fuzzy-logic ice detector",
+    "primary_goal": "Forecast icing potential using fuzzy-logic membership functions, the algorithm family behind Windy.com and European met service icing products.",
+    "best_used_for": "Comparing against Ogimet as a second opinion. Especially useful when cloud liquid water (CLW) is available for direct icing detection — currently for GFS globally, ECMWF over Europe and US out to ~7 days, and ICON over Europe out to 5 days.",
+    "limitations": "Proxy variant (without CLW) is less accurate than the full variant. Temperature range limited to 0 to −25°C. Does not account for droplet size (SLD). Severity thresholds are GA-tuned and may not match airliner certification categories. The full variant uses GRIB2 cloud liquid water and ice mixing ratio which may come from a different model run than the Open-Meteo temperature and humidity profiles — check the freshness bar for init time discrepancies.",
+    "theory": "Combines four fuzzy-logic membership functions with weighted averaging. Temperature membership peaks at 1.0 in [−5, −14]°C and tapers to zero at 0°C and −25°C. RH membership ramps from 0 at 50% to 1.0 at 100%. Cloud liquid water membership ramps over [0, 0.2] g/kg. Vertical velocity boosts the score for ascent (negative omega) and penalizes subsidence. Two variants: Full (SFIP_O) uses actual CLW from GRIB2 data (GFS, ECMWF, or ICON) with weights T=0.35, RH=0.15, CLW=0.35, VV=0.15. Proxy (SFIP_4) substitutes a dewpoint-depression + NWP cloud cover proxy when CLW is unavailable, with weights T=0.40, RH=0.25, proxy=0.25, VV=0.10. A glaciation factor reduces the score when ice mixing ratio dominates over liquid water. Cloud gating prevents false alarms: the full variant requires CLW > 0, the proxy variant requires proximity to a detected cloud layer.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain the SFIP (Simplified Forecast Icing Potential) fuzzy-logic icing algorithm, how it combines temperature, relative humidity, cloud liquid water, and vertical velocity membership functions, and the difference between the full CLW variant and the proxy variant",
+    "thresholds": [
+      { "min": 0, "max": 15, "label": "None", "risk": "none", "meaning": "No significant icing potential." },
+      { "min": 15, "max": 30, "label": "Light", "risk": "low", "meaning": "Trace to light icing possible in cloud." },
+      { "min": 30, "max": 55, "label": "Moderate", "risk": "moderate", "meaning": "Moderate icing likely — avoid prolonged exposure." },
+      { "min": 55, "max": 100, "label": "Severe", "risk": "severe", "meaning": "Severe icing — avoid or exit immediately." }
+    ]
+  },
+  "ieng_icing_risk": {
+    "name": "Icing Risk (IENG)",
+    "unit": "0–100",
+    "vibe": "CloudPath-style icing from temperature and cloud cover",
+    "primary_goal": "Classify icing severity using the IENG formula: temperature-based index scaled directly by NWP cloud coverage fraction.",
+    "best_used_for": "A simpler alternative to Ogimet-NWP. No glaciation correction — treats cloud fraction as a direct multiplier on icing potential. Matches the approach used by CloudPath.",
+    "limitations": "Does not account for droplet size (SLD) or cloud glaciation state. Relies on NWP cloud cover which may differ between models. Slightly overestimates icing in glaciated clouds compared to Ogimet-NWP.",
+    "theory": "Uses the same Ogimet layered index formula — a parabola peaking at −7°C: 100 × (−T) × (T + 14) / 49 for −14 ≤ T ≤ 0°C. The cloud signal is the NWP cloud coverage fraction at the level's altitude, used as a direct multiplier: effective = index × cloud_fraction. No glaciation factor is applied (unlike Ogimet-NWP which reduces the index when GRIB data shows ice-dominant cloud). Convective component added when CAPE > 100 J/kg from convective cloud cover.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",
+    "llm_prompt": "explain how the IENG icing index works — same temperature parabola as Ogimet but scaled directly by NWP cloud fraction without glaciation correction",
+    "thresholds": [
+      { "min": null, "max": 10, "label": "None", "risk": "none", "meaning": "No icing concern." },
+      { "min": 10, "max": 30, "label": "Light", "risk": "low", "meaning": "Manageable for equipped aircraft." },
+      { "min": 30, "max": 80, "label": "Moderate", "risk": "moderate", "meaning": "Dangerous — exit clouds if ice persists." },
+      { "min": 80, "max": null, "label": "Severe", "risk": "severe", "meaning": "Rapid buildup. Exit cloud and change altitude now." }
+    ]
+  },
+  "sld_risk": {
+    "name": "SLD Risk (Supercooled Large Droplets)",
+    "unit": "",
+    "vibe": "The droplet size danger signal — experimental",
+    "primary_goal": "Detect areas where supercooled large droplets (> 50 \u00b5m) are likely, which can cause rapid ice accretion beyond what standard de-ice systems handle. Experimental layer — not enabled by default.",
+    "best_used_for": "Identifying the most dangerous icing conditions — SLD can overwhelm even FIKI equipment. Works with all models (uses temperature/wet-bulb profile, not GRIB-specific fields).",
+    "limitations": "Currently only detects warm-nose freezing rain (the highest-confidence SLD signal). Collision-coalescence SLD in deep warm-top clouds is not yet detected — NWP models lack droplet size data needed to distinguish SLD from ordinary icing in those clouds. Experimental — enable manually to review.",
+    "theory": "Detects SLD from warm-nose freezing rain: when a warm layer (wet-bulb > 0\u00b0C) exists above a subfreezing surface layer, rain melts in the warm nose then refreezes as large drops (0.5\u20135 mm) in the cold layer below — freezing rain is SLD by definition. Severity scales with warm-nose depth: deeper melting layers produce heavier freezing rain. A second mechanism (collision-coalescence in deep warm-top clouds) is implemented but disabled pending better corroboration data.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Supercooled_large_drop_icing_conditions",
+    "llm_prompt": "explain what supercooled large droplets (SLD) are, the two formation mechanisms (warm-nose freezing rain and collision-coalescence in deep warm-top clouds), and why they exceed the FAR 25 Appendix C icing envelope",
+    "thresholds": [
+      { "min": null, "max": null, "label": "None", "risk": "none", "meaning": "No SLD-forming structure detected." },
+      { "min": null, "max": null, "label": "Moderate", "risk": "moderate", "meaning": "Freezing rain — SLD in the cold layer below warm nose. Avoid unless SLD-certified." },
+      { "min": null, "max": null, "label": "Severe", "risk": "severe", "meaning": "Heavy freezing rain (deep warm nose > 3000 ft). Avoid regardless of equipment." }
+    ]
+  },
+  "cat_risk": {
+    "name": "CAT Risk (Richardson)",
+    "unit": "",
+    "vibe": "The coffee spiller gauge",
+    "primary_goal": "Predict Clear Air Turbulence from Richardson number.",
+    "best_used_for": "Choosing a smooth flight level — or knowing which ones to avoid.",
+    "limitations": "Only detects shear-driven turbulence. Blind to mountain waves, convective turbulence, and wake turbulence.",
+    "theory": "Clear Air Turbulence risk classified from the Richardson number (Ri) at each atmospheric layer. Ri measures whether wind shear can overcome atmospheric stability: when it does, smooth airflow breaks down into turbulence through Kelvin-Helmholtz instability — like waves breaking on the ocean. The classical critical value is Ri < 0.25, but that applies to the true, local shear — and forecast models sample the atmosphere too coarsely (25–50 hPa between levels) to resolve the thin layers where turbulence actually forms, so model-derived Ri tends to read higher than reality. To catch turbulence the raw 0.25 cutoff would miss, the risk bands here are deliberately set higher as a tuning choice: severe below 0.5, moderate below 1.0, light below 2.0. These are pragmatic thresholds rather than calibrated values, so treat them as a guide. CAT occurs in clear air with no visual warning, making it particularly dangerous.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Clear-air_turbulence",
+    "llm_prompt": "explain how the Richardson number (ratio of stability to wind shear) predicts Clear Air Turbulence, including the critical Ri < 0.25 threshold and Kelvin-Helmholtz instability",
+    "thresholds": [
+      { "min": 2.0, "max": null, "label": "None", "risk": "none", "meaning": "Smooth. Laminar flow." },
+      { "min": 1.0, "max": 2.0, "label": "Light", "risk": "low", "meaning": "Intermittent bumps possible." },
+      { "min": 0.5, "max": 1.0, "label": "Moderate", "risk": "moderate", "meaning": "Turbulence likely. Unsecured items will move." },
+      { "min": null, "max": 0.5, "label": "Severe", "risk": "severe", "meaning": "Shear overwhelms stability — turbulent breakdown. Avoid this layer." }
+    ]
+  },
+  "e_shear_risk": {
+    "name": "CAT Risk (E-Shear)",
+    "unit": "",
+    "vibe": "Wind shear turbulence detector",
+    "primary_goal": "Predict Clear Air Turbulence from combined vertical and horizontal wind shear magnitude.",
+    "best_used_for": "An alternative to Richardson number that focuses on raw shear strength rather than the stability/shear balance. Matches the CloudPath GRAMET turbulence method. Works for all models.",
+    "limitations": "Does not consider atmospheric stability — strong shear in a very stable layer (high Ri) may trigger a false positive. Blind to mountain waves, convective turbulence, and wake turbulence. HWS component depends on route point spacing.",
+    "theory": "Computes the E parameter from combined wind shear: E = (5 × HWS + VWS² + 42) / 4. VWS (vertical wind shear) is computed between adjacent pressure levels from U/V wind components. HWS (horizontal wind shear) is computed between adjacent route points at matching pressure levels. The formula weights horizontal shear more heavily (×5) reflecting its importance for CAT along flight routes. Thresholds: E ≥ 40 light, E ≥ 80 moderate, E ≥ 160 severe.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Clear-air_turbulence",
+    "llm_prompt": "explain the E-parameter turbulence formula E = (5*HWS + VWS² + 42) / 4, how it combines vertical and horizontal wind shear, and how it compares to the Richardson number approach",
+    "thresholds": [
+      { "min": null, "max": 40, "label": "None", "risk": "none", "meaning": "Smooth. Minimal wind shear." },
+      { "min": 40, "max": 80, "label": "Light", "risk": "low", "meaning": "Minor shear. Occasional bumps." },
+      { "min": 80, "max": 160, "label": "Moderate", "risk": "moderate", "meaning": "Significant shear. Expect turbulence." },
+      { "min": 160, "max": null, "label": "Severe", "risk": "severe", "meaning": "Extreme wind shear. Avoid this layer." }
+    ]
+  },
+  "richardson_number": {
+    "name": "Richardson Number",
+    "unit": "",
+    "vibe": "The balance between smooth and chaotic air",
+    "primary_goal": "Predict Clear Air Turbulence.",
+    "best_used_for": "Choosing a smooth flight level — or knowing which ones to avoid.",
+    "limitations": "Only detects shear-driven turbulence. Blind to mountain waves, convective turbulence, and wake turbulence.",
+    "theory": "The ratio of atmospheric stability to wind shear: Ri = N²/S². N² (Brunt-Väisälä frequency) measures how strongly stable air resists being displaced vertically. S² measures how much the wind changes with altitude. When shear overpowers stability (Ri drops below 0.25), smooth flow breaks down into turbulence — a process called Kelvin-Helmholtz instability, visible as wave-like cloud patterns. Note: the Miles-Howard theorem gives Ri = 0.25 as a sufficient condition for stability, not a sharp turbulence on/off switch — real flows can be turbulent somewhat above 0.25 and laminar below it, depending on finite-amplitude perturbations.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Richardson_number",
+    "llm_prompt": "explain the Richardson number formula Ri = N²/S² (Brunt-Väisälä frequency vs wind shear), why the critical value is 0.25, and how pilots can use it to choose smoother flight levels",
+    "thresholds": [
+      { "min": 1.0, "max": null, "label": "Smooth", "risk": "none", "meaning": "Laminar flow — enjoy the view." },
+      { "min": 0.5, "max": 1.0, "label": "Light CAT", "risk": "low", "meaning": "Approaching critical. Intermittent bumps." },
+      { "min": 0.25, "max": 0.5, "label": "Moderate CAT", "risk": "moderate", "meaning": "Turbulence likely. Unsecured items will move." },
+      { "min": null, "max": 0.25, "label": "Severe CAT", "risk": "severe", "meaning": "Turbulent breakdown. Structural concern at high speed. Avoid." }
+    ]
+  },
+  "vertical_motion_class": {
+    "name": "Vertical Motion",
+    "unit": "",
+    "vibe": "Is the air going up, down, or sitting still?",
+    "primary_goal": "Classify the dominant vertical motion regime from omega profiles.",
+    "best_used_for": "Understanding whether the atmosphere is actively producing weather or is quiet.",
+    "limitations": "Based on model omega (vertical velocity in pressure coordinates). Cannot resolve convective-scale updrafts or local effects like mountain waves.",
+    "theory": "Classified from the omega (ω) profile across all pressure levels. The algorithm checks the magnitude and sign pattern of vertical velocity: all small values = quiescent, consistently negative = synoptic ascent (fronts, lows), consistently positive = synoptic subsidence (highs), alternating = oscillating (waves), extreme values = convective. Only available for models that provide omega (GFS, ECMWF).",
+    "wikipedia": "https://en.wikipedia.org/wiki/Omega_equation",
+    "llm_prompt": "explain how omega (vertical velocity in pressure coordinates) profiles are classified into regimes (quiescent, synoptic ascent/subsidence, convective, oscillating) and what each means for flight conditions",
+    "thresholds": [
+      { "min": null, "max": null, "label": "Quiescent", "risk": "none", "meaning": "Calm air. Minimal vertical motion. Smooth flying conditions." },
+      { "min": null, "max": null, "label": "Synoptic Ascent", "risk": "low", "meaning": "Large-scale rising air (frontal or low-pressure). Cloud and precipitation developing." },
+      { "min": null, "max": null, "label": "Synoptic Subsidence", "risk": "none", "meaning": "Large-scale sinking air (high-pressure). Clearing skies, generally smooth." },
+      { "min": null, "max": null, "label": "Convective", "risk": "moderate", "meaning": "Strong updrafts/downdrafts detected. Turbulence and weather likely." },
+      { "min": null, "max": null, "label": "Oscillating", "risk": "low", "meaning": "Alternating up/down patterns. Possible wave activity or unstable layers." }
+    ]
+  },
+  "cloud_coverage": {
+    "name": "Cloud Coverage (Natural DD)",
+    "unit": "",
+    "vibe": "Cloud layers as you'd see them out the window",
+    "primary_goal": "Describe cloud coverage derived from sounding dewpoint depression analysis, drawn as flat-bottom puffs with bumpy tops.",
+    "best_used_for": "An out-the-window visual: SCT shows discrete cumulus with sky gaps, BKN shows mostly-touching puffs with valleys between humps, OVC shows a continuous bumpy blanket. Coverage lives in the horizontal fill pattern, not opacity.",
+    "limitations": "Derived from 8 pressure levels (coarse). Can miss thin layers. Coverage is estimated from humidity, not observed. The gap pattern reads best on wider segments; very short bands fall back to a continuous bumpy fill so SCT and OVC look identical at that scale.",
+    "theory": "Cloud layers detected identically to the underlying DD method — dewpoint depression below 3°C indicates saturation and cloud presence. Rendering: a flat bottom along the band base, a series of quadratic-Bezier humps along the top reaching up to the band top with per-hump amplitude jitter. Coverage maps to horizontal fill fraction (SCT ≈ 45%, BKN ≈ 80%, OVC ≈ 100% — tunable). Puff slots are anchored on a global x grid so adjacent segments tile coherently; a deterministic per-band hash places the gaps so the same band keeps a stable shape across redraws.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "llm_prompt": "explain how cloud layers are detected by checking dewpoint depression below 3°C at each pressure level, and how the average depression maps to oktas (SCT/BKN/OVC)",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "3-4 oktas. Patches of cloud, generally VFR. Sun visible between gaps." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "5-7 oktas. Mostly cloudy with some breaks. May affect VFR ceiling." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "8/8 coverage. Full cloud layer, no gaps. IFR conditions likely if low." }
+    ]
+  },
+  "nwp_cloud_cover": {
+    "name": "NWP Cloud Cover (Natural)",
+    "unit": "%",
+    "vibe": "Model cloud cover drawn as you'd see it out the window",
+    "primary_goal": "Show NWP model cloud cover as flat-bottom puffs with bumpy tops; coverage lives in the gap pattern.",
+    "best_used_for": "Combining the NWP model's cloud prediction (which captures sub-grid processes the sounding misses) with an out-the-window pictorial rendering. Horizontal fill fraction comes straight from `meanCloudCoverPct / 100`, so a 60% cover area gets ~60% of its x-span filled with puffs.",
+    "limitations": "Same as the underlying NWP cloud cover: coverage is model-predicted, not observed. When GRIB diagnostics aren't available, falls back to synthesised layers from Open-Meteo cloud percentages narrowed by the dewpoint depression envelope. Very short bands fall back to a continuous bumpy fill so the gap pattern doesn't degrade.",
+    "theory": "Cloud cover percentages from the NWP model's cloud scheme (GRIB diagnostics or Open-Meteo synthesis), broken into three ICAO altitude bands: low (surface to ~6,500 ft), mid (~6,500–20,000 ft), and high (above ~20,000 ft). The model's cloud scheme uses sub-grid parameterisation to estimate cloud fraction — this includes thin layers and partial coverage that the coarser sounding-derived method might miss. The natural rendering draws a flat base, then a chain of quadratic-Bezier humps along the top with per-hump amplitude jitter; horizontal fill fraction encodes coverage so SCT shows sky gaps, BKN shows touching puffs with valleys, and OVC shows a continuous bumpy blanket.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": 0, "max": 25, "label": "Few", "risk": "none", "meaning": "Mostly clear at this level." },
+      { "min": 25, "max": 50, "label": "Scattered", "risk": "none", "meaning": "Some cloud but gaps." },
+      { "min": 50, "max": 75, "label": "Broken", "risk": "low", "meaning": "Significant cloud." },
+      { "min": 75, "max": null, "label": "Overcast", "risk": "moderate", "meaning": "Full cloud layer." }
+    ]
+  },
+  "soft_cloud_dd": {
+    "name": "Soft Clouds (DD)",
+    "unit": "",
+    "vibe": "Smooth gradient cloud fills from sounding moisture",
+    "primary_goal": "Visualise cloud layers with soft, feathered edges. Uses the same dewpoint depression detection as the DD source.",
+    "best_used_for": "A cleaner, more GRAMET-like visual. Identical cloud detection to the DD source — the difference is purely in rendering: gradient opacity fills with feathered edges. Coverage is shown by opacity (OVC = opaque, SCT = semi-transparent) and dewpoint depression modulates density (DD near 0 = denser cloud).",
+    "limitations": "Same as the DD source: derived from 8 pressure levels, can miss thin layers. Coverage estimated from humidity, not observed. The soft rendering may make boundaries less precise than the natural-puff or square-cell renderings.",
+    "theory": "Cloud layers detected identically to the DD source — dewpoint depression below 3°C indicates saturation and cloud presence. Rendering uses vertical gradient fills: each cloud band has feathered edges (top and bottom 15% fade to transparent) and coverage-proportional opacity. Dense cloud (DD ≈ 0°C) appears more opaque; thin cloud (DD ≈ 3°C) is more transparent.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Semi-transparent fill. Patches of cloud." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Moderate opacity. Mostly cloudy." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque fill. Full cloud layer." }
+    ]
+  },
+  "soft_cloud_nwp": {
+    "name": "Soft Clouds (NWP)",
+    "unit": "",
+    "vibe": "Smooth gradient cloud fills from model output",
+    "primary_goal": "Visualise NWP model cloud layers with soft, feathered edges. Uses the same NWP cloud detection as the NWP source.",
+    "best_used_for": "The recommended default cloud visualisation. Combines the NWP model's cloud prediction (which captures sub-grid processes the sounding misses) with the GRAMET-style soft rendering. This is what the GRAMET preset uses.",
+    "limitations": "Same as the NWP source: coverage is model-predicted, not observed. When GRIB diagnostics aren't available, falls back to synthesised layers from Open-Meteo cloud percentages narrowed by the dewpoint depression envelope.",
+    "theory": "Cloud layers from the NWP model's cloud scheme — either direct GRIB diagnostics (GFS explicit base/top per tier; ICON-EU and ECMWF cloud covers + ceiling) or synthesised from Open-Meteo low/mid/high cloud percentages constrained by the sounding's dewpoint depression envelope and capped at inversions. Rendering uses vertical gradient fills with feathered edges and coverage-proportional opacity, identical to Soft DD but using NWP cloud data instead of sounding-derived layers.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Semi-transparent fill. Patches of cloud." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Moderate opacity. Mostly cloudy." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque fill. Full cloud layer." }
+    ]
+  },
+  "square_cloud_dd": {
+    "name": "Square Clouds (DD)",
+    "unit": "",
+    "vibe": "Discrete cloud cells from sounding moisture",
+    "primary_goal": "Visualise cloud layers as solid filled rectangles, one per zone, with no puffs or gradient feathering. Uses the same dewpoint depression detection as the DD source.",
+    "best_used_for": "A ForeFlight-like cell view. Same cloud detection as Natural DD and Soft DD — the difference is purely rendering. Each detected cloud band fills a sharp-edged rectangle spanning its base/top altitudes; opacity scales with dewpoint depression and coverage class. Easy to compare zone extents at a glance.",
+    "limitations": "Same as the DD source: derived from 8 pressure levels, can miss thin layers. Coverage estimated from humidity, not observed. The cells reflect the zone-collapsed bands, not the raw per-pressure-level moisture distribution.",
+    "theory": "Cloud layers detected identically to the DD source — dewpoint depression below 3°C indicates saturation and cloud presence. Rendering fills each detected zone as a solid rectangle from base to top altitude. Fill colour blends from gray (DD ≈ 0, dense cloud) to white (DD ≈ 3, thin cloud); alpha scales with the coverage class (FEW/SCT/BKN/OVC). No puffs, no gradient feathering.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Lower opacity rectangle." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Mid opacity rectangle." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque rectangle." }
+    ]
+  },
+  "square_cloud_nwp": {
+    "name": "Square Clouds (NWP)",
+    "unit": "",
+    "vibe": "Discrete cloud cells from model output",
+    "primary_goal": "Visualise NWP model cloud layers as solid filled rectangles. Uses the same NWP cloud detection as the NWP source.",
+    "best_used_for": "A ForeFlight-like cell view of model cloud layers. Same data as Soft NWP and Natural NWP; the difference is purely rendering. Cells make zone boundaries crisp and side-by-side comparison of multiple bands easy.",
+    "limitations": "Same as the NWP source: coverage is model-predicted, not observed. When GRIB diagnostics aren't available, falls back to synthesised layers from Open-Meteo cloud percentages narrowed by the dewpoint depression envelope.",
+    "theory": "Cloud layers from the NWP model's cloud scheme (GRIB diagnostics or Open-Meteo synthesis), rendered as sharp-edged rectangles. Fill colour blends bright→dark with cloud cover percentage; alpha rises 0.30→0.85 with coverage. No puffs, no gradient feathering — just the cells.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "thresholds": [
+      { "min": null, "max": null, "label": "SCT (Scattered)", "risk": "none", "meaning": "Lower opacity, lighter shade." },
+      { "min": null, "max": null, "label": "BKN (Broken)", "risk": "low", "meaning": "Mid opacity." },
+      { "min": null, "max": null, "label": "OVC (Overcast)", "risk": "moderate", "meaning": "Near-opaque rectangle, darker shade." }
+    ]
+  },
+  "inversion_layer": {
+    "name": "Inversions",
+    "unit": "°C",
+    "vibe": "The invisible ceiling that traps haze, smoke, and turbulence",
+    "primary_goal": "Detect temperature inversions where air warms with altitude instead of cooling.",
+    "best_used_for": "Anticipating trapped pollution layers, turbulence at inversion boundaries, and restricted vertical visibility.",
+    "limitations": "Based on coarse pressure-level data (8 levels). Thin inversions may be missed. Strength is estimated from temperature increase across the layer.",
+    "theory": "A temperature inversion is where air gets warmer with altitude instead of the normal cooling — the lapse rate goes negative. Detected by finding layers where temperature increases with height. Inversions act as lids: they trap pollution, haze, and moisture below and restrict vertical visibility. They also decouple the flow above from the flow below, which allows wind-speed or wind-direction contrasts to develop across the boundary — a common ingredient in Low Level Wind Shear (LLWS) when the inversion sits below 2000 ft AGL. Common causes include radiative cooling (overnight) and subsidence (high-pressure systems).",
+    "wikipedia": "https://en.wikipedia.org/wiki/Inversion_(meteorology)",
+    "llm_prompt": "explain how temperature inversions are detected from sounding profiles, how they decouple flow and contribute to low-level wind shear (LLWS), trap haze/pollution, and the difference between radiation and subsidence inversions",
+    "thresholds": [
+      { "min": 0, "max": 1, "label": "Weak (<1°C)", "risk": "low", "meaning": "Mild inversion. Slight haze trapping, minor turbulence at boundary." },
+      { "min": 1, "max": 3, "label": "Moderate (1–3°C)", "risk": "moderate", "meaning": "Significant lid. Reduced visibility below, bumpy transition through." },
+      { "min": 3, "max": null, "label": "Strong (>3°C)", "risk": "high", "meaning": "Strong cap. Dense haze/fog trapped below. Flow above and below are decoupled, creating a setup where LLWS can develop if winds differ sharply across the boundary." }
+    ]
+  },
+  "sounding_ceiling_ft": {
+    "name": "Sounding Ceiling",
+    "unit": "ft",
+    "vibe": "The lowest dense cloud layer from the atmospheric profile",
+    "primary_goal": "Estimate the ceiling from sounding-derived cloud layers.",
+    "best_used_for": "Comparing against NWP ceiling — if both agree on a low ceiling, confidence is high.",
+    "limitations": "Derived from 8 pressure levels (coarse resolution). Thin cloud layers may be missed. Based on dewpoint depression, not direct observation.",
+    "theory": "The base of the lowest BKN (broken, 5–7 oktas) or OVC (overcast, 8 oktas) cloud layer detected from the atmospheric sounding. Cloud layers are identified where dewpoint depression drops below 3°C at consecutive pressure levels. Only BKN/OVC layers count as a 'ceiling' — scattered clouds allow VFR flight underneath.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Ceiling_(cloud)",
+    "thresholds": [
+      { "min": 0, "max": 200, "label": "LIFR", "risk": "severe", "meaning": "Very low ceiling. Low IFR conditions." },
+      { "min": 200, "max": 500, "label": "LIFR", "risk": "severe", "meaning": "Extremely low ceiling. Dangerous for most operations." },
+      { "min": 500, "max": 1000, "label": "IFR", "risk": "high", "meaning": "IFR ceiling. Instrument approaches required." },
+      { "min": 1000, "max": 3000, "label": "MVFR", "risk": "moderate", "meaning": "Marginal VFR. Low ceiling limits maneuvering." },
+      { "min": 3000, "max": null, "label": "VFR", "risk": "none", "meaning": "Good ceiling for VFR operations." }
+    ]
+  },
+  "nwp_ceiling_ft": {
+    "name": "NWP Ceiling",
+    "unit": "ft",
+    "vibe": "The weather model's direct ceiling prediction",
+    "primary_goal": "Show the model-predicted cloud ceiling height.",
+    "best_used_for": "Direct NWP ceiling estimate — often more reliable than sounding-derived for coverage, from GFS, ICON-EU, and ECMWF (within its direct-GRIB coverage area).",
+    "limitations": "Model grid resolution smooths out local effects. GFS reports geopotential height at cloud ceiling; ICON-EU and ECMWF report geometric height. None account for terrain-induced fog or valley inversions.",
+    "theory": "Cloud ceiling height directly from the NWP model's cloud diagnostics. GFS provides ceiling as geopotential height (gpm) converted to feet. ICON-EU and ECMWF provide ceiling as geometric height (meters) converted to feet. The model ceiling uses its own cloud parameterisation, which can differ from the sounding-derived ceiling because it uses sub-grid physics to estimate cloud at scales smaller than the grid spacing.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Ceiling_(cloud)",
+    "thresholds": [
+      { "min": 0, "max": 200, "label": "LIFR", "risk": "severe", "meaning": "Very low ceiling. Low IFR conditions." },
+      { "min": 200, "max": 500, "label": "LIFR", "risk": "severe", "meaning": "Extremely low ceiling. Dangerous for most operations." },
+      { "min": 500, "max": 1000, "label": "IFR", "risk": "high", "meaning": "IFR ceiling. Instrument approaches required." },
+      { "min": 1000, "max": 3000, "label": "MVFR", "risk": "moderate", "meaning": "Marginal VFR. Low ceiling limits maneuvering." },
+      { "min": 3000, "max": null, "label": "VFR", "risk": "none", "meaning": "Good ceiling for VFR operations." }
+    ]
+  },
+  "skewt_clouds_nwp": {
+    "name": "Clouds (NWP)",
+    "unit": "",
+    "vibe": "Where the model thinks clouds are",
+    "primary_goal": "Show cloud layers predicted directly by the NWP model's cloud parameterisation.",
+    "best_used_for": "Identifying cloud bases, tops, and coverage at each altitude. On the Skew-T, grey-blue bands show cloud layers with opacity proportional to coverage (SCT → BKN → OVC).",
+    "limitations": "NWP cloud schemes can miss thin layers and low stratus. Resolution varies by model — ICON-EU captures more detail than GFS. The model may place clouds where thermodynamic data (DD method) disagrees.",
+    "theory": "NWP models use sub-grid cloud parameterisation schemes to predict cloud fraction at each level. These bands show where the model predicts significant cloud cover. Compare with the DD (dewpoint depression) cloud overlay for a cross-check — agreement between both methods increases confidence.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
+    "llm_prompt": "explain how NWP model cloud parameterisation works and how to interpret NWP cloud bands on a Skew-T diagram compared to dewpoint-depression-based cloud detection",
+    "thresholds": []
+  },
+  "skewt_clouds_dd": {
+    "name": "Clouds (DD)",
+    "unit": "",
+    "vibe": "Where the air is moist enough for clouds",
+    "primary_goal": "Show cloud layers inferred from dewpoint depression — where air temperature and dewpoint are close together.",
+    "best_used_for": "Cross-checking NWP cloud predictions. On the Skew-T, look where the T (red) and Td (green) curves converge — that's where DD is small and clouds form. The grey bands mark these layers.",
+    "limitations": "DD < 2–3°C suggests cloud, but thin dry layers within clouds can create false gaps. High-altitude cirrus may have larger DD yet still contain ice cloud.",
+    "theory": "When air temperature minus dewpoint (the dewpoint depression) drops below ~2–3°C, the air is near saturation and cloud is likely. This method reads cloud layers directly from the sounding's moisture profile. On the Skew-T, you can visually confirm by checking where the T and Td curves nearly touch.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Dew_point_depression",
+    "llm_prompt": "explain how dewpoint depression is used to detect cloud layers on a Skew-T diagram, how to read the T/Td convergence visually, and how DD-based clouds compare with NWP model cloud output",
+    "thresholds": []
+  },
+  "skewt_inversions": {
+    "name": "Inversions",
+    "unit": "",
+    "vibe": "Temperature going the wrong way",
+    "primary_goal": "Highlight altitude bands where temperature increases with height instead of decreasing.",
+    "best_used_for": "Identifying stable layers that trap pollution/haze below, cause wind shear at their boundaries, and cap convection. On the Skew-T, look for where the T curve (red) bends rightward going up — the pink bands mark these layers. Stronger inversions have darker shading.",
+    "limitations": "Thin inversions may not be resolved by the model's vertical grid. The strength shown is the temperature increase across the layer, not the sharpness of the transition.",
+    "theory": "In a standard atmosphere, temperature decreases ~6.5°C/km. An inversion reverses this — temperature increases with height. Inversions form from subsidence (sinking air warming adiabatically), radiative cooling at the surface, or warm air advection aloft. They act as lids that suppress vertical mixing.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Temperature_inversion",
+    "llm_prompt": "explain how to identify temperature inversions on a Skew-T diagram by looking at the temperature profile slope, what causes subsidence and radiation inversions, and their impact on flight (turbulence, visibility, icing)",
+    "thresholds": []
+  },
+  "skewt_convective": {
+    "name": "Convective Zone",
+    "unit": "",
+    "vibe": "Where thunderstorms would live",
+    "primary_goal": "Show the altitude band between the Level of Free Convection (LFC) and Equilibrium Level (EL) where a lifted parcel would be buoyant.",
+    "best_used_for": "Visualising the vertical extent of potential thunderstorm activity. On the Skew-T, this is the altitude range where the parcel path (dashed line) is warmer than the environment temperature (red line) — shown as a light orange band. The wider this band, the deeper the convection.",
+    "limitations": "The zone only shows potential — convection requires a trigger (fronts, orography, heating). The parcel path assumes surface-based lifting which may not occur. Compare with CAPE value for the energy magnitude.",
+    "theory": "Between the LFC (where the parcel first becomes warmer than its environment) and the EL (where it becomes cooler again), the parcel accelerates upward. This is the engine of thunderstorms. The CAPE value integrates the energy across this zone. On the Skew-T, you can see this as the area between the dashed parcel path and the red temperature curve — the red-shaded CAPE region.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Level_of_free_convection",
+    "llm_prompt": "explain the LFC-to-EL convective zone on a Skew-T, how to read CAPE and CIN shading between the parcel path and environment curve, and what the depth of this zone means for thunderstorm severity",
+    "thresholds": []
+  },
+  "skewt_headwind_crosswind": {
+    "name": "Headwind / Crosswind",
+    "unit": "kt",
+    "vibe": "Is the wind with you or against you?",
+    "primary_goal": "Decompose the wind at each altitude into headwind/tailwind and crosswind components relative to your flight track.",
+    "best_used_for": "Finding the altitude with the best tailwind (or least headwind) for cruise, and checking whether crosswind exceeds limits at any level. On the side panel, red = headwind, green = tailwind. The amber dashed line shows crosswind. The zero line separates head from tail.",
+    "limitations": "Based on the model wind forecast — actual winds may differ, especially near terrain. The track heading is for the selected route leg, so the decomposition changes along the route.",
+    "theory": "Given wind direction (WD), wind speed (WS), and track heading (TRK): headwind = WS × cos(WD − TRK), positive = headwind, negative = tailwind. Crosswind = WS × sin(WD − TRK), positive = from the right. This is the same decomposition used for crosswind landing calculations, but applied at every pressure level.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Crosswind",
+    "llm_prompt": "explain headwind/tailwind and crosswind decomposition for GA flight planning, how to read the vertical wind profile on a Skew-T side panel, and how to pick the optimal cruise altitude for tailwind",
+    "thresholds": []
+  },
+  "skewt_relative_humidity": {
+    "name": "Relative Humidity",
+    "unit": "%",
+    "vibe": "How close the air is to saturation",
+    "primary_goal": "Show the moisture profile as a percentage of saturation at each altitude.",
+    "best_used_for": "Identifying moist layers (RH > 80% suggests cloud) and dry layers. Smoother than dewpoint depression for seeing overall moisture structure. On the Skew-T, you can cross-check by looking at the T/Td gap — a narrow gap means high RH.",
+    "limitations": "RH depends on temperature — the same moisture content gives higher RH at lower temperatures. A layer at 70% RH in cold air has less actual water than 70% RH in warm air.",
+    "theory": "RH = 100 × (actual vapor pressure / saturation vapor pressure at the current temperature). At 100%, the air is saturated and cloud forms. On the Skew-T, RH is derived from the temperature and dewpoint via the Magnus formula.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Relative_humidity",
+    "llm_prompt": "explain how to interpret a vertical relative humidity profile on a Skew-T side panel, how it relates to the T/Td curves on the main diagram, and what RH thresholds indicate cloud or clear air",
+    "thresholds": [
+      { "min": 0, "max": 40, "label": "Dry", "risk": "none", "meaning": "Clear, dry air." },
+      { "min": 40, "max": 70, "label": "Moderate", "risk": "low", "meaning": "Some moisture, unlikely cloud." },
+      { "min": 70, "max": 90, "label": "Moist", "risk": "moderate", "meaning": "Haze or thin cloud possible." },
+      { "min": 90, "max": 100, "label": "Near saturation", "risk": "high", "meaning": "Cloud very likely." }
+    ]
+  },
+  "skewt_cloud_liquid_water": {
+    "name": "Cloud Liquid Water",
+    "unit": "g/m\u00b3",
+    "vibe": "How much liquid is in the cloud",
+    "primary_goal": "Show the NWP model's predicted cloud liquid water content at each altitude.",
+    "best_used_for": "Assessing icing severity — more liquid water means more ice accretion. On the side panel, peaks indicate where the most supercooled water exists. Values > 0.3 g/m\u00b3 in the icing temperature range (-20°C to 0°C) suggest significant icing risk.",
+    "limitations": "Model resolution limits accuracy for thin cloud layers. The model partitions cloud water into liquid and ice — in mixed-phase zones the split is approximate.",
+    "theory": "Cloud liquid water content (LWC) is the mass of liquid water droplets per unit volume of air. It's a direct driver of icing severity — the FAA's SLD (Supercooled Large Droplet) criteria use LWC thresholds. The SFIP icing index incorporates CLW directly.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Liquid_water_content",
+    "llm_prompt": "explain cloud liquid water content and its role in aircraft icing assessment, how to read a CLW profile on a Skew-T side panel, and what LWC values are significant for GA icing risk",
+    "thresholds": [
+      { "min": 0, "max": 0.05, "label": "Trace", "risk": "none", "meaning": "Negligible liquid water." },
+      { "min": 0.05, "max": 0.2, "label": "Light", "risk": "low", "meaning": "Light icing possible in icing temperatures." },
+      { "min": 0.2, "max": 0.5, "label": "Moderate", "risk": "moderate", "meaning": "Moderate icing likely in icing temperatures." },
+      { "min": 0.5, "max": null, "label": "High", "risk": "high", "meaning": "Significant icing or SLD risk." }
+    ]
+  },
+  "skewt_ice_mixing_ratio": {
+    "name": "Ice Mixing Ratio",
+    "unit": "g/kg",
+    "vibe": "How much ice is in the cloud",
+    "primary_goal": "Show the NWP model's predicted ice crystal content at each altitude.",
+    "best_used_for": "Identifying glaciated cloud zones. Where ice dominates over liquid water, icing risk drops (ice crystals don't accrete the same way supercooled liquid does). Comparing the ICE and CLW profiles shows the glaciation transition.",
+    "limitations": "The liquid/ice partition in mixed-phase clouds is one of the hardest things for NWP models to get right. Treat as indicative, not precise.",
+    "theory": "Ice mixing ratio is the mass of ice crystals per unit mass of air. In clouds colder than about -15°C, ice crystals tend to dominate via the Bergeron process (ice grows at the expense of liquid). Fully glaciated clouds (all ice, no liquid) pose less icing risk than mixed-phase clouds.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Bergeron_process",
+    "llm_prompt": "explain the ice mixing ratio profile on a Skew-T, how it relates to glaciation and the Bergeron process, and how comparing ICE and CLW profiles helps assess whether icing will be liquid (dangerous) or glaciated (less dangerous)",
+    "thresholds": []
+  },
+  "skewt_vertical_velocity": {
+    "name": "Vertical Velocity",
+    "unit": "ft/min",
+    "vibe": "Is the air going up or down?",
+    "primary_goal": "Show the model's predicted vertical motion at each altitude.",
+    "best_used_for": "Identifying lift and sink regions. Positive values (upward) indicate areas of ascent that can trigger clouds and convection. Negative values indicate subsidence that suppresses cloud and creates stable layers. On the side panel, the zero line separates ascent from descent.",
+    "limitations": "NWP model vertical velocities are grid-scale averages — they miss thermals and small-scale turbulence. Values are typically small (< 100 ft/min) except in active convection. Converted from omega (Pa/s) using standard atmosphere density.",
+    "theory": "Vertical velocity (w) is converted from the model's pressure velocity (omega, in Pa/s) via w = -omega / (rho × g). Positive omega means descending air (increasing pressure), so the sign is flipped. Typical synoptic-scale ascent is 2–20 ft/min; convective-scale motion can exceed 100 ft/min.",
+    "wikipedia": "https://en.wikipedia.org/wiki/Vertical_draft",
+    "llm_prompt": "explain vertical velocity (omega/w) on a Skew-T side panel, how to interpret synoptic-scale lift vs subsidence, and how vertical velocity relates to cloud formation and convective initiation for GA flight planning",
+    "thresholds": []
+  },
+  "qnh": {
+    "name": "QNH",
+    "unit": "hPa",
+    "vibe": "The altimeter setting along the route",
+    "primary_goal": "Show mean sea-level pressure as the QNH a pilot would set.",
+    "best_used_for": "Spotting pressure gradients along the route (where QNH falls, expect a headwind shift and worsening weather) and anticipating altimeter resets across regions. Displayed in hPa for European routes and inHg for US routes per the unit preference.",
+    "limitations": "This is the model's mean sea-level pressure, a close proxy for QNH but not the exact reported altimeter setting — for the legal setting use the destination METAR. Models smooth tight pressure features, so a sharp low may read a few hPa high.",
+    "theory": "QNH is the pressure entered into an altimeter so it reads field elevation on the ground (and altitude above sea level in flight). It is derived by reducing station pressure to mean sea level using the standard atmosphere. We surface the model's pressure_msl field, which is the same mean-sea-level reduction, as the per-model QNH proxy.",
+    "wikipedia": "https://en.wikipedia.org/wiki/QNH",
+    "thresholds": []
+  }
+}

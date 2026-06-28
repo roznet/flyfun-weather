@@ -112,6 +112,7 @@ struct SkewTDetailView: View {
     @State private var showIcing = true
     @State private var showInversions = true
     @Environment(\.horizontalSizeClass) private var hSizeClass
+    @Environment(AppState.self) private var appState
 
     // Web app pressure range (1050–250 hPa); shared by the plot and the panel so
     // their pressure rows line up (the panel requires an identical config). Wind
@@ -278,6 +279,14 @@ struct SkewTDetailView: View {
     private func variablePicker(_ available: [SkewTVariable]) -> some View {
         HStack(spacing: Theme.spacingS) {
             varMenu(fallback: "Variable", selection: $primaryVarId, available: available)
+            // (i) help for the selected primary variable — content from the
+            // cached help catalog (#311). Hidden when the variable has no mapped
+            // metric or it isn't in the cache yet.
+            if let id = primaryVarId,
+               let metricId = SkewTVariableCatalog.helpMetricId[id],
+               appState.helpCatalog.metric(metricId) != nil {
+                HelpInfoButton(topic: .metric(metricId))
+            }
             if isPad {
                 varMenu(fallback: "2nd", selection: $secondaryVarId, available: available)
             }

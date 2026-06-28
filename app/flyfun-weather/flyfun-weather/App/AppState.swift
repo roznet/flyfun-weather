@@ -50,6 +50,9 @@ final class AppState {
     private(set) var repository: (any BriefingRepository)?
     let pirepOfflineStore = PirepOfflineStore()
     let userPreferences = UserPreferencesStore()
+    /// (i)-popup help content (metrics + advisories). Seeded from disk cache or
+    /// the bundled baseline at init; refreshed opportunistically when online.
+    let helpCatalog = HelpCatalogStore()
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AppState")
 
@@ -167,6 +170,13 @@ final class AppState {
         await userPreferences.refresh(using: apiClient)
     }
 
+    /// Pull the latest (i)-popup help content. Non-blocking; safe to call on
+    /// launch, sign-in, and foreground — a `304` is a cheap no-op.
+    func refreshHelpCatalog() async {
+        guard let apiClient else { return }
+        await helpCatalog.refresh(using: apiClient)
+    }
+
     // MARK: - Private
 
     /// Typed accessor for cache operations (download/delete).
@@ -190,5 +200,6 @@ final class AppState {
         let cache = BriefingCacheStore()
         repository = CachingBriefingRepository(client: client, online: online, cache: cache)
         Task { await userPreferences.refresh(using: client) }
+        Task { await helpCatalog.refresh(using: client) }
     }
 }

@@ -88,4 +88,25 @@ enum SkewTVariableCatalog {
                           trackDeg: Double?) -> [SkewTVariable] {
         grouped(for: response, levels: levels, trackDeg: trackDeg).flatMap(\.variables)
     }
+
+    /// Maps a side-panel variable id to its help-catalog metric id (#311).
+    /// These are id→id pointers only — the help *content* lives in the catalog,
+    /// never here. A variable with no mapping (or whose metric isn't cached) just
+    /// shows no (i) button.
+    static let helpMetricId: [String: String] = [
+        "headwind": "skewt_headwind_crosswind",
+        "wind_speed": "wind_speed_kt",
+        "dewpoint_depression": "dewpoint_depression_c",
+        "rh": "skewt_relative_humidity",
+        "cloud": "cloud_cover_pct",
+        "clw": "skewt_cloud_liquid_water",
+        "ice": "skewt_ice_mixing_ratio",
+        "icing-dd": "icing_risk",
+        "icing-nwp": "icing_ogimet_nwp_risk",
+        "sfip": "sfip_risk",
+        "lapse": "lapse_rate_c_km",
+        "ri": "richardson_number",
+        "w": "skewt_vertical_velocity",
+        "thetae": "equivalent_potential_temperature_k",
+    ]
 }
