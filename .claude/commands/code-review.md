@@ -53,6 +53,7 @@ Apply all of the following in the single pass:
 - Memory management (retain cycles, weak/unowned correctness)
 - Concurrency (actor isolation, data races, MainActor usage)
 - iOS best practices
+- For PRs touching `app/flyfun-weather/**`, apply the deeper **iOS app code** section below.
 
 **TypeScript**
 - Type safety, avoid `any`
@@ -100,6 +101,45 @@ Read deploy/weather.flyfun.aero.caddy for the active Content-Security-Policy. Ch
 - New iframes - blocked by frame-ancestors/default-src
 
 If a violation is found, flag it and suggest either updating the CSP or refactoring to stay within the current policy.
+
+---
+
+## iOS app code
+
+If the PR touches iOS code (`app/flyfun-weather/**`), also check:
+
+**DTO decode safety (highest priority)**
+The iOS app is an independent client of the same backend as the web app. `Models/API/*Response.swift` Codable types mirror the JSON each endpoint returns — but nothing on the server side fails to compile when that JSON shape changes, so a mismatch surfaces only as a **runtime decode failure on device**. For any changed response model, decoded field, or `CodingKeys`:
+
+- Does the Swift type match the JSON the endpoint actually returns? Cross-reference the Python response model in `src/` and the TS type in `web/ts/types/` for the same endpoint.
+- Are fields that the server may omit (new, optional, model-dependent) declared **optional** in Swift, with sensible defaults — so an older client degrades gracefully instead of throwing on the whole payload?
+- No force-unwraps (`!`) or `try!` on network/JSON-derived data.
+
+**Concurrency**
+- `@MainActor` isolation on ViewModels and any UI-mutating state; no off-main mutation of `@Published`/observable state.
+- `Sendable` correctness across `async` boundaries; no shared-mutable-state data races.
+- Correct handling of the SSE refresh stream (`APIClient.streamSSE` / `URLSession.bytes` → `AsyncThrowingStream<RefreshEvent, Error>`): cancellation, error propagation, and not leaking the task.
+
+**Memory**
+- Retain cycles in escaping/`async` closures and `Task {}` / Combine captures; `weak self` where the closure outlives the owner.
+
+**SwiftUI Canvas correctness**
+The cross-section renders in an immediate-mode `SwiftUI.Canvas`, which has **no intrinsic size**. Watch for layout assumptions that depend on intrinsic geometry — e.g. `.aspectRatio(nil, .fit)` silently collapses a Canvas to a sliver (this was the iPhone-landscape bug in commit `9f03fd54`). Verify portrait/landscape and iPhone/iPad sizing paths.
+
+**Auth/storage**
+- Bearer tokens go through the FlyFunCommon Keychain helpers (`KeychainBearerTokenStore`, `RollingBearerSession`), not ad-hoc `UserDefaults`/file storage.
+
+---
+
+## Cross-platform parity (web ↔ iOS)
+
+Web and iOS share several **hand-copied** surfaces. If the diff touches any of them on one platform, flag that the counterpart on the other platform likely needs a matching change, and recommend running `/sync-ios-web` to enumerate the divergences:
+
+- **Cross-section preset tables** — `CrossSectionPresets.swift` ↔ `web/ts/visualization/cross-section/{layer-registry,advisory-presets,layers/cloud-bands-factory}.ts` (these carry reciprocal `SYNC` comments).
+- **`metrics-catalog.json`** — byte-identical copy in `web/ts/data/` and `app/.../Resources/`.
+- **API DTOs** — `Models/API/*Response.swift` ↔ backend response models (`src/`) ↔ `web/ts/types/`.
+
+This is a flag-and-defer check: note the parity risk, don't try to fix the other platform inside this review.
 
 ---
 
