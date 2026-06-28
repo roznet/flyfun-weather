@@ -1,0 +1,56 @@
+import SwiftUI
+
+/// The static cross-section scene: sky, all enabled data layers, and axes/grid.
+///
+/// This is the heavy render pass — the natural cloud style alone draws
+/// O(n_slots × subBlobsPerSlot) radial-gradient fills per band per segment
+/// (~400+ gradient fills on a typical route). It must redraw only when the data,
+/// model, layer set, or canvas size changes — NOT on every scrub drag tick
+/// (~60 fps), which used to re-run the whole stack and jank older A-series chips
+/// (#303).
+///
+/// The redraw gate is `Equatable`: SwiftUI skips re-evaluating this view (and so
+/// re-running the inner `Canvas` closure) when `==` reports no change. We key on
+/// the view model's monotonic `dataVersion` rather than diffing the deep
+/// `VizRouteData` value each tick. A frame/size change still re-runs the closure
+/// — the `Canvas`'s own `size` input changes — which is exactly the "rebuild on
+/// size change" behaviour we want. The cursor and aircraft are deliberately NOT
+/// drawn here; they live in `CrossSectionCursorOverlay`.
+struct StaticCrossSectionScene: View, Equatable {
+    let data: VizRouteData
+    let enabledLayers: [String: Bool]
+    /// Identity for `data` (bumped by `CrossSectionViewModel.update`). Comparing
+    /// this int + the small layer dict is cheap; diffing `VizRouteData` is not.
+    let dataVersion: Int
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.dataVersion == rhs.dataVersion && lhs.enabledLayers == rhs.enabledLayers
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            CrossSectionRenderer(data: data, enabledLayers: enabledLayers)
+                .renderStatic(context: &context, size: size)
+        }
+    }
+}
+
+/// The dynamic cross-section overlay: the scrub cursor rule + the live aircraft
+/// marker. Drawn in its own `Canvas` so a scrub tick or GPS update redraws only
+/// these O(1) primitives, leaving the cached static scene untouched (#303).
+/// Non-interactive — the scrub gesture lives on the static scene beneath it.
+struct CrossSectionCursorOverlay: View {
+    let data: VizRouteData
+    let cursorDistanceNm: Double?
+    let aircraft: CrossSectionRenderer.AircraftPosition?
+
+    var body: some View {
+        Canvas { context, size in
+            CrossSectionRenderer(data: data, enabledLayers: [:],
+                                 selectedDistanceNm: cursorDistanceNm,
+                                 aircraftPosition: aircraft)
+                .renderCursor(context: &context, size: size)
+        }
+        .allowsHitTesting(false)
+    }
+}

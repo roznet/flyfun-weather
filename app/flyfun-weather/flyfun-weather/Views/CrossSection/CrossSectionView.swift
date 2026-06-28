@@ -193,22 +193,25 @@ struct CrossSectionView: View {
             let cursor = scrubDistanceNm ?? activePointDistanceNm
             let layers = csVM.enabledLayers
 
-            Canvas { context, size in
-                CrossSectionRenderer(data: vizData, enabledLayers: layers,
-                                     selectedDistanceNm: cursor,
-                                     aircraftPosition: aircraft)
-                    .render(context: &context, size: size)
-            }
-            .frame(minHeight: 300)
-            // Portrait constrains to a 2:1 artifact; landscape fills the screen.
-            // (Passing `nil` to aspectRatio means "use intrinsic ratio" — a
-            // Canvas has none, which collapsed the chart to a sliver. #9)
-            .modifier(CanvasAspectModifier(landscape: isLandscapeFocus))
-            .background(GeometryReader { geo in
-                Color.clear.onAppear { canvasSize = geo.size }
-                    .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
-            })
-            .gesture(scrubGesture)
+            // Static scene (sky + cloud bands + axes) is the expensive pass and is
+            // gated behind an `Equatable` key so a scrub tick — which only changes
+            // `cursor`/`aircraft` — does NOT re-run its ~400 gradient fills. The
+            // thin cursor rule + aircraft marker live in a cheap overlay Canvas
+            // that redraws every tick instead (#303).
+            StaticCrossSectionScene(data: vizData, enabledLayers: layers, dataVersion: csVM.dataVersion)
+                .frame(minHeight: 300)
+                // Portrait constrains to a 2:1 artifact; landscape fills the screen.
+                // (Passing `nil` to aspectRatio means "use intrinsic ratio" — a
+                // Canvas has none, which collapsed the chart to a sliver. #9)
+                .modifier(CanvasAspectModifier(landscape: isLandscapeFocus))
+                .overlay {
+                    CrossSectionCursorOverlay(data: vizData, cursorDistanceNm: cursor, aircraft: aircraft)
+                }
+                .background(GeometryReader { geo in
+                    Color.clear.onAppear { canvasSize = geo.size }
+                        .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
+                })
+                .gesture(scrubGesture)
         } else {
             switch viewModel.routeAnalysesState {
             case .idle, .loading:
