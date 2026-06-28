@@ -1506,6 +1506,40 @@ it ISOLATED→AMBER, matching ground truth; a genuine squall line still goes RED
 because it has *widespread realized showers*. Shear stays a *severity* signal
 (it makes cells nasty, not numerous).
 
+### Below-base clearance — an altitude *modifier*, not a band driver (#298)
+
+The classifier above is altitude-agnostic — coverage sets the band. #298 adds a
+below-base avoidability note **after** the band is decided, in the *evaluator*
+(`_below_base_geometry`/`_format_below_base`), leaving `classify_convective_character`
+untouched. It is **annotate-only**: it never changes the colour, and fires **only
+on ISOLATED/SCATTERED** (the bands that are already "avoidable"). This mirrors the
+severity-side overfly filter (`top_clearance_ft`, default 2000 ft) but from below,
+reusing the same 2000 ft default as a tunable `base_clearance_ft`.
+
+**The asymmetry (deliberate):** an above-tops buffer is a genuine vertical out —
+you *overfly* in clear air. A below-base buffer is only "*more circumnavigable*"
+(see-and-avoid under the cells), **never** a vertical out: precip shafts, gust
+fronts/downbursts, and lowering bases/vis all live below cloud base. So below-base
+relieves downward pressure on the note's wording but is not symmetric to overflying.
+
+**The VMC gate (the load-bearing correctness check):** "below the bases" only buys
+see-and-avoid if the layer you'd actually fly — cruise up to the cell base — is
+genuinely VMC. `_vmc_below_base` returns False when a **BKN/OVC** cloud layer
+overlaps that band (you'd be descending *into* cloud — the embedded case from
+below). Only BKN/OVC breaks VMC (FEW/SCT is see-and-avoid-compatible); bulk
+low/mid cover is **not** used here because at cumuliform bases it reflects the
+cells' own cu and would over-suppress a genuinely clear sub-base layer.
+
+**Tower-not-resolved → no softening.** When a realized cell's model-native base is
+`None` — the `nwp_precip` ghost column (firing `cp`, no diagnosed tower), the
+`nwp_lcl_top` path without an LCL, the CAPE fallback, or non-GRIB models — the
+geometry is unmeasurable, so the note degrades to an honest *"cell depth
+unresolved — below-base clearance not assessable"* rather than claiming a
+clearance. **Precedence is safety-first**: within-layer (cruise inside a cell) >
+deck-below-cells (IMC) > unresolved > the positive clear/marginal notes, so a
+softer phrase can never mask a worse geometry, and a single unresolved or
+non-VMC cell on the route suppresses the "more avoidable lower" hint.
+
 ### Signals, and the per-model asymmetry
 
 - **`showers_mm`** is the uniform realized-convection signal (fetched for every
@@ -1555,6 +1589,14 @@ reasons.
 `__init__.py` + `fill.py` (ECMWF kx/totalx decode + plumb). Tests:
 `tests/test_convective.py`, `tests/test_digest_assertions.py`,
 `tests/test_ecmwf_sample.py`.
+
+**#298 below-base clearance (this iteration):** `ConvCharPoint` gains
+`convective_base_ft`/`convective_top_ft`/`vmc_below_base`;
+`analysis/advisories/convective_character.py` gains `_vmc_below_base`,
+`_below_base_geometry`, `_format_below_base`, the `base_clearance_ft` param, and
+the annotate-only wiring; `advisories/strings.py` adds 5 keys (en/fr/de/es).
+Tests in `tests/test_convective.py` (`_below_base_geometry` / `_vmc_below_base`).
+`classify_convective_character` is deliberately **untouched** (annotate-only).
 
 ---
 

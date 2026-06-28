@@ -1571,3 +1571,147 @@ def test_character_k_nudge_plus_forcing_organizes_scattered():
         classify_convective_character(iso, front_present=True)
         is ConvectiveCharacter.SCATTERED
     )
+
+
+# ---------------------------------------------------------------------------
+# Below-base clearance + VMC gate (#298) — annotate-only avoidability geometry
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from weatherbrief.analysis.advisories.convective_character import (  # noqa: E402
+    _below_base_geometry,
+    _vmc_below_base,
+)
+from weatherbrief.models import CloudCoverage, EnhancedCloudLayer  # noqa: E402
+
+_CRUISE = 10_000.0
+_BUFFER = 2_000.0
+
+
+def _geo_pt(base_ft, *, top_ft=25_000.0, vmc=True, realized=True, is_conv=True):
+    """A realized convective ConvCharPoint carrying below-base geometry."""
+    return ConvCharPoint(
+        is_convective=is_conv,
+        realized=realized,
+        embedded=False,
+        k_index=None,
+        total_totals=None,
+        convective_base_ft=base_ft,
+        convective_top_ft=top_ft,
+        vmc_below_base=vmc,
+    )
+
+
+def _sounding(layers, *, low=None, mid=None):
+    """Minimal stand-in exposing the fields _vmc_below_base reads."""
+    return SimpleNamespace(
+        cloud_layers=layers,
+        cloud_cover_low_pct=low,
+        cloud_cover_mid_pct=mid,
+    )
+
+
+# --- _vmc_below_base ---------------------------------------------------------
+
+
+def test_vmc_below_base_clear_when_no_deck():
+    # Cells based at 12k, cruise 10k, only a SCT layer below — VMC underneath.
+    snd = _sounding(
+        [EnhancedCloudLayer(base_ft=4000, top_ft=6000, coverage=CloudCoverage.SCT)]
+    )
+    assert _vmc_below_base(snd, _CRUISE, 12_000.0) is True
+
+
+def test_vmc_below_base_false_when_deck_between_cruise_and_base():
+    # A BKN deck 10.5k–11.5k sits between cruise (10k) and the cell base (12k):
+    # descending below the cells means entering cloud → not VMC.
+    snd = _sounding(
+        [EnhancedCloudLayer(base_ft=10_500, top_ft=11_500, coverage=CloudCoverage.BKN)]
+    )
+    assert _vmc_below_base(snd, _CRUISE, 12_000.0) is False
+
+
+def test_vmc_below_base_false_when_overcast_straddles_cruise():
+    snd = _sounding(
+        [EnhancedCloudLayer(base_ft=9000, top_ft=10_500, coverage=CloudCoverage.OVC)]
+    )
+    assert _vmc_below_base(snd, _CRUISE, 12_000.0) is False
+
+
+def test_vmc_below_base_ignores_deck_entirely_below_cruise():
+    # An OVC deck topping out at 8k is below cruise — you're above it, can still
+    # see-and-avoid the cells. VMC in the band cruise→base.
+    snd = _sounding(
+        [EnhancedCloudLayer(base_ft=2000, top_ft=8000, coverage=CloudCoverage.OVC)]
+    )
+    assert _vmc_below_base(snd, _CRUISE, 12_000.0) is True
+
+
+def test_vmc_below_base_false_when_base_unresolved_or_below_cruise():
+    snd = _sounding([])
+    assert _vmc_below_base(snd, _CRUISE, None) is False
+    assert _vmc_below_base(snd, _CRUISE, 9_000.0) is False
+
+
+# --- _below_base_geometry ----------------------------------------------------
+
+
+def test_below_base_none_when_no_realized_cells():
+    pts = [_geo_pt(12_000.0, realized=False)]
+    assert _below_base_geometry(pts, _CRUISE, _BUFFER).kind == "none"
+
+
+def test_below_base_clear_with_comfortable_margin():
+    # Base 13k vs cruise 10k → 3000 ft margin ≥ buffer → comfortable.
+    res = _below_base_geometry([_geo_pt(13_000.0)], _CRUISE, _BUFFER)
+    assert res.kind == "clear"
+    assert res.base_fl == 130
+    assert res.margin_ft == 3000
+
+
+def test_below_base_boundary_exactly_buffer_is_clear():
+    # Margin exactly 2000 ft → clear (>= buffer), no descent hint.
+    res = _below_base_geometry([_geo_pt(12_000.0)], _CRUISE, _BUFFER)
+    assert res.kind == "clear"
+    assert res.drop_ft is None
+
+
+def test_below_base_marginal_emits_altitude_hint():
+    # The Sunday reference geometry: base ~11k, cruise 10k → 1000 ft margin
+    # (< buffer) → marginal + "more avoidable ~N ft lower" hint.
+    res = _below_base_geometry([_geo_pt(11_000.0)], _CRUISE, _BUFFER)
+    assert res.kind == "marginal"
+    assert res.base_fl == 110
+    assert res.margin_ft == 1000
+    assert res.drop_ft == 1000  # ceil((2000-1000)/500)*500
+
+
+def test_below_base_within_layer_not_softened():
+    # Cruise at/above a cell base → inside the layer, no softening.
+    res = _below_base_geometry([_geo_pt(9_500.0)], _CRUISE, _BUFFER)
+    assert res.kind == "within_layer"
+
+
+def test_below_base_deck_below_cells_not_softened():
+    # Below the bases but a deck intervenes (vmc=False) → no see-and-avoid.
+    res = _below_base_geometry([_geo_pt(12_000.0, vmc=False)], _CRUISE, _BUFFER)
+    assert res.kind == "deck"
+
+
+def test_below_base_depth_unresolved_when_base_none():
+    # Tower-not-resolved (nwp_precip ghost column etc.) → no softening, honest note.
+    res = _below_base_geometry([_geo_pt(None)], _CRUISE, _BUFFER)
+    assert res.kind == "unresolved"
+
+
+def test_below_base_unresolved_dominates_mixed_route():
+    # One cell clearly below, one with unresolved depth → can't promise see-and-
+    # avoid route-wide, so the conservative note wins over "clear".
+    pts = [_geo_pt(13_000.0), _geo_pt(None)]
+    assert _below_base_geometry(pts, _CRUISE, _BUFFER).kind == "unresolved"
+
+
+def test_below_base_within_layer_dominates_deck_and_unresolved():
+    pts = [_geo_pt(9_500.0), _geo_pt(12_000.0, vmc=False), _geo_pt(None)]
+    assert _below_base_geometry(pts, _CRUISE, _BUFFER).kind == "within_layer"
