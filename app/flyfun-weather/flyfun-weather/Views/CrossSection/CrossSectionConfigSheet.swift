@@ -62,7 +62,13 @@ struct CrossSectionConfigSheet: View {
         Section {
             Picker("Lens", selection: Binding(
                 get: { csVM.activeAdvisoryPreset ?? "" },
-                set: { id in if let p = CrossSectionPresets.advisory[id] { csVM.applyAdvisoryPreset(p) } }
+                set: { id in
+                    if id.isEmpty {
+                        csVM.clearAdvisoryPreset()  // "None" — deselect the lens
+                    } else if let p = CrossSectionPresets.advisory[id] {
+                        csVM.applyAdvisoryPreset(p)
+                    }
+                }
             )) {
                 Text("None").tag("")
                 ForEach(CrossSectionPresets.advisoryList) { Text($0.label).tag($0.id) }

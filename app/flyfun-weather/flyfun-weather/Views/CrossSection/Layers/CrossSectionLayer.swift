@@ -73,34 +73,9 @@ enum CrossSectionLayer {
         ReferenceLinesLayer(),
     ]
 
-    /// GRAMET-aligned defaults (matches web's GRAMET preset, the production default):
-    /// Soft NWP clouds + Ogimet-NWP icing + CAT (Ri) + NWP convective + freezing
-    /// level + terrain + cruise altitude.
-    static let defaultEnabled: [String: Bool] = [
-        "soft-nwp-cloud-bands": true,
-        "soft-cloud-bands": false,
-        "nwp-cloud-bands": false,
-        "cloud-bands": false,
-        "square-nwp-cloud-bands": false,
-        "square-cloud-bands": false,
-        "thermo-convective-bg": false,
-        "nwp-convective-bg": true,
-        "icing-bands": false,
-        "icing-ogimet-nwp-bands": true,
-        "sfip-bands": false,
-        "cat-bands": true,
-        "inversion-bands": false,
-        "terrain": true,
-        "freezing-level": true,
-        "minus-10c": false,
-        "minus-20c": false,
-        // Stability lines stay default-off (design §4.5 buries them as expert
-        // toggles / clean default view); IDs match web for prefs sync + presets.
-        "lcl": false,
-        "lfc": false,
-        "el": false,
-        "reference-lines": true,
-    ]
+    // The default enabled-layer set now lives in `CrossSectionPresets.gramet`
+    // (the boot state and the GRAMET preset are the same map). The old
+    // `defaultEnabled` static was removed once both its uses moved there.
 
     /// For each method group, ordered list of layer IDs (from preferred to alternates).
     /// Used by the dropdown picker UI: "None" + each method, in this display order.
