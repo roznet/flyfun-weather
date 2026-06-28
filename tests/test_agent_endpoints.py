@@ -140,6 +140,112 @@ _ADVISORIES = {
 }
 
 
+# A minimal serialized RouteAlternates block, as it sits under the "alternates"
+# key of briefing.json. Exercises the snapshot-extraction + shaper wiring.
+_ALTERNATES = {
+    "destination_icao": "LSGS",
+    "destination_category": "MVFR",
+    "destination_crosswind_kt": 12.0,
+    "corridor_nm": 20.0,
+    "radius_nm": 50.0,
+    "candidates_evaluated": 40,
+    "approach_filter_relaxed": False,
+    "nearest_improving": [
+        {"axis": "category", "icao": "LFLP", "distance_from_dest_nm": 18.0,
+         "position": "before"},
+    ],
+    "alternates": [
+        {"icao": "LFLP", "name": "Annecy", "lat": 45.9, "lon": 6.1,
+         "distance_from_dest_nm": 18.0, "position": "before", "flight_category": "VFR",
+         "best_approach_type": "RNP", "point_of_entry": True, "is_major": False,
+         "dominates_destination": True,
+         "faa": {"verdict": "likely", "source": "nwp"},
+         "easa": {"verdict": "likely", "source": "nwp"}},
+    ],
+    "alternate_requirement": {
+        "destination_icao": "LSGS",
+        "faa": {"regime": "faa", "status": "not_required", "reason": "ok",
+                "source": "nwp",
+                "ceiling": {"label": "ceiling", "unit": "ft", "forecast": 1500.0,
+                            "required_min": 600.0, "required_max": 600.0,
+                            "verdict": "not_required"},
+                "visibility": {"label": "visibility", "unit": "m", "forecast": 8000.0,
+                               "required_min": 1600.0, "required_max": 1600.0,
+                               "verdict": "not_required"}},
+        "easa": {"regime": "easa", "status": "required", "reason": "low",
+                 "source": "nwp",
+                 "ceiling": {"label": "ceiling", "unit": "ft", "forecast": 900.0,
+                             "required_min": 600.0, "required_max": 800.0,
+                             "verdict": "required"},
+                 "visibility": {"label": "visibility", "unit": "m", "forecast": 8000.0,
+                                "required_min": 1600.0, "required_max": 3200.0,
+                                "verdict": "required"}},
+        "caveats": ["estimated minima"],
+    },
+}
+
+
+def test_get_alternates_happy_path(client, app_db):
+    flight = _seed_flight(app_db, suffix="alt")
+    ts = _seed_pack(app_db, flight)
+    pd = _pack_dir(flight, ts)
+    (pd / "briefing.json").write_text(json.dumps({"alternates": _ALTERNATES}))
+
+    resp = client.get(f"/agent/v1/flights/{flight.id}/alternates")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ready"
+    assert body["flight_id"] == flight.id
+    assert body["destination"]["icao"] == "LSGS"
+    assert body["requirement"]["faa"]["status"] == "not_required"
+    assert body["requirement"]["easa"]["status"] == "required"
+    assert body["candidates"][0]["icao"] == "LFLP"
+    assert body["candidates"][0]["point_of_entry"] is True
+    # The weather-vs-operational caveat must ship in the payload.
+    assert "operational" in body["note"].lower()
+    assert body["web_url"].endswith(f"flight={flight.id}")
+
+
+def test_get_alternates_none_when_not_computed(client, app_db):
+    """A pack whose snapshot has no alternates returns a 200 'none' envelope."""
+    flight = _seed_flight(app_db, suffix="altnone")
+    ts = _seed_pack(app_db, flight)
+    pd = _pack_dir(flight, ts)
+    (pd / "briefing.json").write_text(json.dumps({"route": {"waypoints": []}}))
+
+    resp = client.get(f"/agent/v1/flights/{flight.id}/alternates")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "none"
+
+
+def test_get_alternates_404_for_private_other_user(client, app_db):
+    """Ownership gate runs first — no leak of a private flight's alternates."""
+    flight = _seed_flight(app_db, owner=_OTHER_USER, private=True, suffix="altleak")
+    ts = _seed_pack(app_db, flight, owner=_OTHER_USER)
+    pd = _pack_dir(flight, ts, owner=_OTHER_USER)
+    (pd / "briefing.json").write_text(json.dumps({"alternates": _ALTERNATES}))
+
+    resp = client.get(f"/agent/v1/flights/{flight.id}/alternates")
+    assert resp.status_code == 404, resp.text
+
+
+def test_get_briefing_includes_alternates_hook(client, app_db):
+    """get_briefing carries the compact alternates hook (not the full list)."""
+    flight = _seed_flight(app_db, suffix="althook")
+    ts = _seed_pack(app_db, flight)
+    pd = _pack_dir(flight, ts)
+    (pd / "route_advisories.json").write_text(json.dumps(_ADVISORIES))
+    (pd / "briefing.json").write_text(json.dumps({"alternates": _ALTERNATES}))
+
+    resp = client.get(f"/agent/v1/flights/{flight.id}/briefing")
+    assert resp.status_code == 200, resp.text
+    hook = resp.json()["alternates"]
+    assert hook["detail_tool"] == "get_alternates"
+    assert hook["candidate_count"] == 1
+    assert hook["alternate_required"] == {"faa": "not_required", "easa": "required"}
+    assert "candidates" not in hook  # hook stays lean
+
+
 def test_get_briefing_happy_path(client, app_db):
     flight = _seed_flight(app_db, suffix="happy")
     ts = _seed_pack(app_db, flight)

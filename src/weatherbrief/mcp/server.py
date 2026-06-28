@@ -33,9 +33,11 @@ from pydantic import AnyHttpUrl, Field
 from weatherbrief.connectors.views import (
     CONVECTIVE_NOTE as _CONVECTIVE_NOTE,
     advisory_detail as _advisory_detail,
+    alternates_hook as _alternates_hook,
     briefing_freshness_status as _briefing_freshness_status,
     convective_detail as _convective_detail,
     summarize_advisories as _summarize_advisories,
+    summarize_alternates as _summarize_alternates,
     summarize_altitude_table as _summarize_altitude_table,
 )
 from weatherbrief.mcp.client import API_BASE, WeatherbriefClient
@@ -152,6 +154,12 @@ mcp = FastMCP(
         "model's own convective cloud field. A convective advisory driven RED by "
         "high CAPE while the model's convective cover is ~0 ('blue sky') is "
         "consistent, not contradictory — explain it, don't argue it down.\n\n"
+        "When the user asks about diversions or alternates (or get_briefing's "
+        "'alternates' hook flags a candidate), call get_alternates for the full "
+        "divert picture. These are WEATHER-improvement candidates, NOT "
+        "operational alternates: operational suitability (hours, customs, fuel, "
+        "NOTAMs, approach currency) is not evaluated — combine each candidate "
+        "with airport/AIP data before recommending a divert.\n\n"
         "All tools return a web_url for the full interactive briefing with "
         "cross-sections, Skew-T diagrams, and route maps — present this link "
         "to the pilot for visual details."
@@ -491,6 +499,13 @@ def get_briefing(
         if alt_table:
             result["altitude_table"] = _summarize_altitude_table(alt_table)
 
+        # Weather-based divert alternates: a compact hook only (the required-flag,
+        # candidate count and nearest-improving picks). The full candidate list +
+        # regulatory detail lives in get_alternates — keep the briefing lean.
+        alternates = client.get_alternates(flight_id, timestamp)
+        if alternates:
+            result["alternates"] = _alternates_hook(alternates)
+
     return result
 
 
@@ -727,6 +742,81 @@ def get_advisory_detail(
             flight_id, advisory_id, point_index=peak_point, model=peak_model
         )
 
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_alternates
+# ---------------------------------------------------------------------------
+
+@mcp.tool(
+    title="Get Weather Alternates",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+)
+def get_alternates(
+    flight_id: Annotated[
+        str,
+        Field(description="Flight ID from list_flights or create_flight"),
+    ],
+) -> dict[str, Any]:
+    """Get the weather-based divert alternates for a flight's destination.
+
+    Use this when the user asks about diversions, alternates, "where could I go
+    if the destination is below minima", or whether a filed alternate is
+    required. get_briefing carries only a compact 'alternates' hook (the
+    required-flag + candidate count); the full picture is here.
+
+    Returns, for the destination:
+    - requirement: the advisory FAA + EASA "is an alternate required?" trigger
+      (FAA is binary; EASA is a Likely/Marginal/Unlikely band off estimated
+      approach minima), each with the forecast vs required ceiling/visibility.
+    - nearest_improving: the closest airport that fixes each deficient axis
+      (better category / lower wind / lower crosswind).
+    - candidates: ranked divert airports with consensus weather at ETA AND
+      suitability fields (approach type, longest/hard runway, point_of_entry).
+
+    IMPORTANT — these are WEATHER-improvement candidates, NOT operational
+    alternates. Operational suitability (opening hours, customs/PPR, fuel,
+    NOTAMs, approach currency) is NOT evaluated. When advising a pilot, combine
+    each candidate with airport/AIP data (e.g. the euro_aip / airfield-directory
+    tools) to confirm it is operationally usable before recommending it. The
+    returned 'note' restates this caveat.
+    """
+    try:
+        client = _get_client()
+    except ValueError as e:
+        return _error_result(str(e))
+
+    with client:
+        try:
+            timestamp, status = _resolve_pack(client, flight_id)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"API error: {e.response.text}", e.response.status_code)
+        if status is not None:
+            return status
+
+        try:
+            alternates = client.get_alternates(flight_id, timestamp)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"API error: {e.response.text}", e.response.status_code)
+
+    if not alternates:
+        return {
+            "status": "none",
+            "flight_id": flight_id,
+            "message": (
+                "No weather alternates were computed for this briefing. Either "
+                "compute_alternates is disabled in the user's profile, or the "
+                "destination forecast was not marginal enough to surface diverts."
+            ),
+            "web_url": _flight_web_url(flight_id),
+        }
+
+    result = _summarize_alternates(alternates)
+    result["status"] = "ready"
+    result["flight_id"] = flight_id
+    result["briefing_timestamp"] = timestamp
+    result["web_url"] = _flight_web_url(flight_id)
     return result
 
 

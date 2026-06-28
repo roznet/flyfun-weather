@@ -2311,6 +2311,42 @@ def get_route_analyses(
     return FileResponse(ra_path, media_type="application/json")
 
 
+@router.get("/{timestamp}/alternates")
+def get_alternates(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Get the weather-based alternates block from a pack's snapshot (#210/#249).
+
+    The ``RouteAlternates`` block lives on the analysis snapshot (``alternates``
+    key of ``briefing.json``), not a standalone artifact. We extract just that
+    block so connectors (web already reads it from the snapshot bundle; iOS /
+    MCP / ChatGPT use this endpoint) don't have to pull the whole snapshot.
+
+    404 when the pack predates split storage, has no snapshot, or alternates
+    were not computed (``compute_alternates`` off, or the destination forecast
+    wasn't marginal enough to surface diverts).
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    snap_path = pack_dir / "briefing.json"
+    if not snap_path.exists():
+        snap_path = pack_dir / "snapshot.json"
+    if not snap_path.exists():
+        raise HTTPException(status_code=404, detail="Snapshot not available")
+    try:
+        snapshot = json_mod.loads(snap_path.read_text())
+    except (json_mod.JSONDecodeError, OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Snapshot not readable")
+    alternates = snapshot.get("alternates")
+    if not alternates:
+        raise HTTPException(
+            status_code=404, detail="No weather alternates computed for this briefing"
+        )
+    return alternates
+
+
 @router.get("/{timestamp}/advisories")
 def get_advisories(
     flight_id: str,

@@ -119,6 +119,15 @@ class WeatherbriefClient:
                 return None
             raise
 
+    def get_alternates(self, flight_id: str, timestamp: str) -> dict | None:
+        """Get the weather-based alternates block for a pack (None if none)."""
+        try:
+            return self._get(f"/flights/{flight_id}/packs/{timestamp}/alternates")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
     def get_digest_json(self, flight_id: str, timestamp: str) -> dict | None:
         try:
             return self._get(f"/flights/{flight_id}/packs/{timestamp}/digest/json")
