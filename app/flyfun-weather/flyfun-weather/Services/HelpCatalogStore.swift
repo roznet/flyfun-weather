@@ -36,9 +36,7 @@ final class HelpCatalogStore {
 
     func metric(_ id: String) -> MetricHelp? { catalog?.metrics[id] }
 
-    func advisory(_ id: String) -> AdvisoryCatalogEntry? {
-        catalog?.advisories.first { $0.id == id }
-    }
+    func advisory(_ id: String) -> AdvisoryCatalogEntry? { catalog?.advisoriesById[id] }
 
     // MARK: - Sync
 

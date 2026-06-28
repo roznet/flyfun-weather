@@ -36,6 +36,7 @@ struct AdvisoryCardView: View {
     var externalExpanded: Binding<Bool>? = nil
     @State private var internalExpanded = false
     @State private var showingDetail = false
+    @Environment(AppState.self) private var appState
 
     private var isExpanded: Bool { externalExpanded?.wrappedValue ?? internalExpanded }
 
@@ -63,7 +64,12 @@ struct AdvisoryCardView: View {
                 }
                 .buttonStyle(.plain)
                 // (i) help popup — content from the cached help catalog (#311).
-                HelpInfoButton(topic: .advisory(advisory.advisoryId))
+                // Gated on cache presence so first-run (pre-sync, before any
+                // advisory help has been fetched) shows no dead button — mirrors
+                // the Skew-T variable picker's gate.
+                if appState.helpCatalog.advisory(advisory.advisoryId) != nil {
+                    HelpInfoButton(topic: .advisory(advisory.advisoryId))
+                }
                 Spacer()
                 Button {
                     withAnimation { setExpanded(!isExpanded) }

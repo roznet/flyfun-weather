@@ -76,7 +76,14 @@ actor APIClient {
     /// still flows through `rollingSession` so a signed-in user's token rolls
     /// forward like every other call.
     func fetchHelpCatalog(lang: String = "en", ifNoneMatch etag: String? = nil) async throws -> HelpCatalogFetchResult {
-        guard let url = URL(string: "/api/help/catalog?lang=\(lang)", relativeTo: baseURL) else {
+        // Build via URLComponents so `lang` is percent-encoded rather than
+        // interpolated raw (robust if a non-ASCII / reserved-char value is ever passed).
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("/api/help/catalog"),
+                                             resolvingAgainstBaseURL: true) else {
+            throw APIError.networkError(URLError(.badURL))
+        }
+        components.queryItems = [URLQueryItem(name: "lang", value: lang)]
+        guard let url = components.url else {
             throw APIError.networkError(URLError(.badURL))
         }
         var request = URLRequest(url: url)

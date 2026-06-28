@@ -25,6 +25,16 @@ struct HelpCatalogResponse: Sendable {
     let metrics: [String: MetricHelp]
     /// Advisory help (same shape as `AdvisoriesResponse.catalog`).
     let advisories: [AdvisoryCatalogEntry]
+    /// O(1) advisory lookup by id, built once at construction — mirrors the
+    /// metrics dict so both popup call sites have the same access cost.
+    let advisoriesById: [String: AdvisoryCatalogEntry]
+
+    init(version: String, metrics: [String: MetricHelp], advisories: [AdvisoryCatalogEntry]) {
+        self.version = version
+        self.metrics = metrics
+        self.advisories = advisories
+        self.advisoriesById = Dictionary(advisories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 
     /// Decode a full server payload (`{version, metrics, advisories}`).
     static func decode(from data: Data) throws -> HelpCatalogResponse {
