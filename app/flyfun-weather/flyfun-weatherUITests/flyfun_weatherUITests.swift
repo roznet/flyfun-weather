@@ -31,7 +31,10 @@ final class flyfun_weatherUITests: XCTestCase {
     /// toggle. Reveal it so the list is reachable on both idioms.
     @MainActor
     private func revealFlightList(_ app: XCUIApplication) {
-        if app.staticTexts["LFMD → LFML"].waitForExistence(timeout: 5) { return }
+        // Already on screen (iPhone, or iPad landscape) — keyed off the list's
+        // accessibility identifier, not fixture content, so renaming a fixture
+        // route can't silently break iPad handling.
+        if app.descendants(matching: .any)["flightList"].waitForExistence(timeout: 5) { return }
         let showSidebar = app.buttons["Show Sidebar"]
         if showSidebar.exists { showSidebar.tap() }
     }

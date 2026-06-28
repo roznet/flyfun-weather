@@ -122,7 +122,9 @@ final class AppState {
         if Self.isUITestMockMode {
             repository = FixtureBriefingRepository()
         } else {
-            applyToken("uitest-token")
+            // Live-dev mode: don't write to the keychain — reuse whatever real
+            // token the developer already has, so we never leave a fake token
+            // behind that would 401 the real app on next launch.
             setupClient()
         }
     }

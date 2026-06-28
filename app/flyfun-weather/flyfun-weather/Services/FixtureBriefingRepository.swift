@@ -36,7 +36,10 @@ final class FixtureBriefingRepository: BriefingRepository, @unchecked Sendable {
           }
         ]
         """
-        return (try? JSONDecoder.weatherBrief.decode([FlightResponse].self, from: Data(json.utf8))) ?? []
+        // try! on purpose: this fixture must always decode. If a model change
+        // breaks it, fail loudly here rather than silently emptying the list and
+        // making every UI journey fail with a misleading "no flights" message.
+        return try! JSONDecoder.weatherBrief.decode([FlightResponse].self, from: Data(json.utf8))
     }
 
     private let flightsFixture = decodeFlights()
