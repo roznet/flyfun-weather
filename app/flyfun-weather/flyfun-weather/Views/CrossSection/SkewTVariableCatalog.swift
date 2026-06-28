@@ -29,7 +29,14 @@ enum SkewTVariableCatalog {
             SkewTVariable(id: "ri", label: "Ri", color: .brown) { ext($0)?.richardsonNumber },
             SkewTVariable(id: "omega", label: "ω", unit: "Pa/s", color: .indigo) { ext($0)?.omegaPaS },
             SkewTVariable(id: "cloud", label: "Cloud", unit: "%", color: .gray, range: 0...100) { ext($0)?.cloudAreaFractionPct },
-            SkewTVariable(id: "icing", label: "Icing", color: .cyan) { ext($0).flatMap { $0.icingIndexNwp ?? $0.icingIndex } },
+            // Icing kept source-explicit (matches the web panel): Ogimet NWP vs
+            // DD vs SFIP are distinct variables, not a silent NWP→DD fallback.
+            // Absent ones are dropped per-sounding by the presence filter below
+            // (e.g. GFS without NWP icing just shows fewer entries).
+            SkewTVariable(id: "icing-nwp", label: "Icing (NWP)", color: .cyan) { ext($0)?.icingIndexNwp },
+            SkewTVariable(id: "icing-dd", label: "Icing (DD)", color: .cyan.opacity(0.6)) { ext($0)?.icingIndex },
+            SkewTVariable(id: "sfip", label: "SFIP", color: .purple) { ext($0)?.sfip100 },
+            SkewTVariable(id: "ice", label: "ICE", unit: "g/kg", color: .cyan) { ext($0)?.iceMixingRatioGKg },
             SkewTVariable(id: "clw", label: "CLW", unit: "g/m³", color: .mint) { ext($0)?.cloudLiquidWaterGM3 },
         ]
         // Reuse each variable's own closure for the presence check (no duplicated

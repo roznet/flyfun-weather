@@ -85,6 +85,12 @@ struct SkewTDetailView: View {
     let pointIndex: Int
 
     @State private var profileState: LoadingState<SoundingProfileResponse> = .idle
+    /// Profile + offerable variables, built ONCE per sounding in `loadProfile`
+    /// and cached here. `plotSection` runs in `body` on every cursor drag frame,
+    /// so rebuilding these there (each ~50 structs + 9 closures + a filter pass)
+    /// would jank interaction — build once, read many.
+    @State private var cachedProfile: SoundingProfile?
+    @State private var availableVars: [SkewTVariable] = []
     /// Shared crosshair pressure (§4.8 Tier 2): two-way with the Skew-T and read
     /// by the side-panel so both views show one linked cursor + readout.
     @State private var selectedPressureHPa: Double?
@@ -105,7 +111,12 @@ struct SkewTDetailView: View {
                 ProgressView("Loading sounding...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded(let response):
-                plotSection(response)
+                if let profile = cachedProfile {
+                    plotSection(response, profile: profile)
+                } else {
+                    ProgressView("Loading sounding...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             case .error(let error):
                 ContentUnavailableView("Sounding Unavailable",
                                        systemImage: "chart.xyaxis.line",
@@ -120,14 +131,13 @@ struct SkewTDetailView: View {
     }
 
     @ViewBuilder
-    private func plotSection(_ response: SoundingProfileResponse) -> some View {
-        let profile = response.toSoundingProfile()
-        let available = SkewTVariableCatalog.variables(for: response, levels: profile.levels)
-        let shown = shownVariables(available)
+    private func plotSection(_ response: SoundingProfileResponse, profile: SoundingProfile) -> some View {
+        // Reads the cached profile / variables — no recompute on cursor drag.
+        let shown = shownVariables(availableVars)
         VStack(spacing: Theme.spacingXS) {
             header(response)
-            if !available.isEmpty {
-                variablePicker(available)
+            if !availableVars.isEmpty {
+                variablePicker(availableVars)
             }
             HStack(spacing: 0) {
                 SkewTView(profile: profile, config: config, selectedPressureHPa: $selectedPressureHPa)
@@ -138,8 +148,10 @@ struct SkewTDetailView: View {
                 }
             }
         }
-        .onAppear { ensureDefaults(available) }
-        .onChange(of: isPad) { ensureDefaults(available) }
+        // Re-pick defaults only when the size class flips (iPad gains a 2nd axis).
+        // First-display defaults are set in `loadProfile` before `.loaded`, so the
+        // panel renders on the first frame (no no-panel→panel flash).
+        .onChange(of: isPad) { ensureDefaults(availableVars) }
     }
 
     private func header(_ response: SoundingProfileResponse) -> some View {
@@ -216,10 +228,19 @@ struct SkewTDetailView: View {
     }
 
     private func loadProfile() async {
-        guard let pack = viewModel.pack else { return }
+        guard viewModel.pack != nil else { return }
         profileState = .loading
+        cachedProfile = nil
+        availableVars = []
         do {
             let response = try await viewModel.fetchSoundingProfile(pointIndex: pointIndex)
+            // Build the heavy profile + variable catalog ONCE here, and pick the
+            // default variables, all before publishing `.loaded` so the first
+            // render already has them (perf + no first-frame flash).
+            let profile = response.toSoundingProfile()
+            cachedProfile = profile
+            availableVars = SkewTVariableCatalog.variables(for: response, levels: profile.levels)
+            ensureDefaults(availableVars)
             profileState = .loaded(response)
         } catch {
             profileState = .error(error)
