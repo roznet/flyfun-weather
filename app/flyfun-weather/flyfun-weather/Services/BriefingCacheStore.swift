@@ -30,9 +30,16 @@ actor BriefingCacheStore {
     private var index: [String: CachedPackEntry] = [:] // keyed by "flightId/timestamp"
     private var loaded = false
 
-    init() {
+    /// Designated initializer — the cache root is injectable so tests can point
+    /// it at a temp directory instead of the shared Application Support container.
+    init(cacheDir: URL) {
+        self.cacheDir = cacheDir
+    }
+
+    /// Production initializer — Application Support/BriefingCache.
+    convenience init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        cacheDir = appSupport.appendingPathComponent("BriefingCache", isDirectory: true)
+        self.init(cacheDir: appSupport.appendingPathComponent("BriefingCache", isDirectory: true))
     }
 
     // MARK: - Read / Write

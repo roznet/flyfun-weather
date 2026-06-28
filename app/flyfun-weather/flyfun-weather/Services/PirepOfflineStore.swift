@@ -9,9 +9,16 @@ actor PirepOfflineStore {
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "PirepOffline")
 
-    init() {
+    /// Designated initializer — the queue file is injectable so tests can point
+    /// it at a temp file instead of the shared Documents container.
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+    }
+
+    /// Production initializer — Documents/pending_pireps.json.
+    convenience init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        fileURL = docs.appendingPathComponent("pending_pireps.json")
+        self.init(fileURL: docs.appendingPathComponent("pending_pireps.json"))
     }
 
     /// Load pending PIREPs from disk.

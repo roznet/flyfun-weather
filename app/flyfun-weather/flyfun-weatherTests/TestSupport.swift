@@ -32,9 +32,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var flightsResult: Result<[FlightResponse], Error> = .success([])
     var aircraftResult: Result<[AircraftResponse], Error> = .success([])
     var createFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("createFlight"))
+    var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
 
     // Call counters for behaviour assertions.
     private(set) var flightsCallCount = 0
+    private(set) var submitPirepsBatchCallCount = 0
 
     func flights() async throws -> [FlightResponse] {
         flightsCallCount += 1
@@ -63,7 +65,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw MockError.notStubbed("refreshStatus") }
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw MockError.notStubbed("submitPirep") }
-    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] { throw MockError.notStubbed("submitPirepsBatch") }
+    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] {
+        submitPirepsBatchCallCount += 1
+        return try submitPirepsBatchResult.get()
+    }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { throw MockError.notStubbed("fetchPireps") }
 }
 
@@ -98,4 +103,20 @@ func makeFlight(
         createdAt: "2026-06-20T09:00:00Z",
         role: role
     )
+}
+
+func makePirepRequest(remarks: String = "test") -> SubmitPirepRequest {
+    let json = """
+    {"observed_at": "2026-06-24T12:00:00Z", "latitude": 43.5, "longitude": 6.95,
+     "remarks": "\(remarks)", "source": "inflight"}
+    """
+    return try! JSONDecoder.weatherBrief.decode(SubmitPirepRequest.self, from: Data(json.utf8))
+}
+
+/// A unique temp directory for a test, auto-created. Caller removes it.
+func makeTempDir() -> URL {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wbtests-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
 }
