@@ -387,23 +387,31 @@ private struct BriefingTabBand: View {
     @Binding var selection: BriefingTab
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Theme.spacingS) {
-                ForEach(tabs, id: \.self) { tab in
-                    let active = tab == selection
-                    Button { selection = tab } label: {
-                        Label(tab.title, systemImage: tab.systemImage)
-                            .font(.subheadline.weight(active ? .semibold : .regular))
-                            .foregroundStyle(active ? Theme.primary : Theme.textMuted)
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(active ? Theme.primary.opacity(0.12) : Color.clear, in: Capsule())
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.spacingS) {
+                    ForEach(tabs, id: \.self) { tab in
+                        let active = tab == selection
+                        Button { selection = tab } label: {
+                            Label(tab.title, systemImage: tab.systemImage)
+                                .font(.subheadline.weight(active ? .semibold : .regular))
+                                .foregroundStyle(active ? Theme.primary : Theme.textMuted)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .background(active ? Theme.primary.opacity(0.12) : Color.clear, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .id(tab)
                     }
-                    .buttonStyle(.plain)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, Theme.cardPadding)
+                .padding(.vertical, Theme.spacingS)
             }
-            .padding(.horizontal, Theme.cardPadding)
-            .padding(.vertical, Theme.spacingS)
+            // Keep the active tab visible if a deep-link switches tabs while the
+            // band is scrolled (robust if the tab set ever overflows).
+            .onChange(of: selection) { _, newValue in
+                withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(newValue, anchor: .center) }
+            }
         }
         .background(Theme.surface)
         .overlay(alignment: .bottom) {

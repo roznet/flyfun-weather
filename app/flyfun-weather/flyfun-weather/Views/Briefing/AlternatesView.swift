@@ -106,15 +106,20 @@ struct AlternatesView: View {
         } else {
             VStack(alignment: .leading, spacing: Theme.spacingXS) {
                 ForEach(valid) { pick in
-                    HStack(spacing: Theme.spacingXS) {
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.spacingXS) {
                         Image(systemName: "arrow.triangle.branch").font(.caption2).foregroundStyle(Theme.primary)
-                        Text("Nearest \(pick.axisLabel): ")
-                            .font(.caption).foregroundStyle(Theme.textMuted)
-                        + Text(pick.icao ?? "—").font(.caption.weight(.semibold)).foregroundStyle(Theme.text)
-                        + Text(pick.distanceFromDestNm.map { " \(Int($0.rounded()))nm" } ?? "")
-                            .font(.caption).foregroundStyle(Theme.textMuted)
-                        + Text(pick.position.map { " \($0)" } ?? "")
-                            .font(.caption).foregroundStyle(Theme.textMuted)
+                        (
+                            Text("Nearest \(pick.axisLabel): ")
+                                .font(.caption).foregroundStyle(Theme.textMuted)
+                            + Text(pick.icao ?? "—").font(.caption.weight(.semibold)).foregroundStyle(Theme.text)
+                            + Text(pick.distanceFromDestNm.map { " \(Int($0.rounded()))nm" } ?? "")
+                                .font(.caption).foregroundStyle(Theme.textMuted)
+                            + Text(pick.position.map { " \($0)" } ?? "")
+                                .font(.caption).foregroundStyle(Theme.textMuted)
+                        )
+                        // One layout unit; let it wrap instead of truncating on narrow widths.
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -195,13 +200,19 @@ struct AlternatesView: View {
         }
     }
 
-    private func verdictColor(_ status: String) -> Color {
-        switch status {
-        case "required", "unlikely": Theme.red
-        case "marginal": Theme.amber
-        case "not_required", "likely": Theme.green
-        default: Theme.textMuted
-        }
+    private func verdictColor(_ status: String) -> Color { alternateVerdictColor(status) }
+}
+
+/// Shared verdict→color mapping for the destination requirement banner and the
+/// per-candidate FAA/EASA qual chips, so the color signal can't diverge between
+/// them. Covers both the trigger statuses (required/not_required) and the
+/// per-candidate band verdicts (likely/marginal/unlikely).
+fileprivate func alternateVerdictColor(_ status: String) -> Color {
+    switch status {
+    case "required", "unlikely": Theme.red
+    case "marginal": Theme.amber
+    case "not_required", "likely": Theme.green
+    default: Theme.textMuted
     }
 }
 
@@ -301,12 +312,7 @@ private struct AlternateCard: View {
     }
 
     private func qualChip(_ label: String, _ verdict: String) -> some View {
-        let color: Color = switch verdict {
-        case "likely": Theme.green
-        case "marginal": Theme.amber
-        case "unlikely": Theme.red
-        default: Theme.textMuted
-        }
+        let color = alternateVerdictColor(verdict)
         return Text("\(label): \(verdict.capitalized)")
             .font(.caption2.weight(.medium))
             .foregroundStyle(color)

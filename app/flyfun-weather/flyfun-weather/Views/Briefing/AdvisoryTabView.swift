@@ -35,9 +35,16 @@ struct AdvisoryTabView: View {
         return false
     }
 
+    private var hasWatchItems: Bool {
+        if case .loaded(let digest) = viewModel.digestState { return !digest.watchItemsList.isEmpty }
+        return false
+    }
+
     private var spySections: [SpySection] {
-        var sections = [SpySection("hero", "Summary"), SpySection("advisories", "Advisories"),
-                        SpySection("conditions", "Conditions")]
+        var sections = [SpySection("hero", "Summary")]
+        if hasWatchItems { sections.append(SpySection("watch", "Watch")) }
+        sections.append(SpySection("advisories", "Advisories"))
+        sections.append(SpySection("conditions", "Conditions"))
         if hasAlternates { sections.append(SpySection("alternates", "Alternates")) }
         return sections
     }
@@ -105,6 +112,7 @@ struct AdvisoryTabView: View {
                     }
                 }
                 .padding(.horizontal, Theme.cardPadding)
+                .spyAnchor("watch")
             }
         }
     }

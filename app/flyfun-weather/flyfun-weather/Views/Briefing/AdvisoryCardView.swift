@@ -30,10 +30,19 @@ struct AdvisoryCardView: View {
     var hazardNarrative: String? = nil
     /// Needed for the Rung-3 "why it's RED" detail sheet (§4.6).
     var viewModel: BriefingViewModel? = nil
-    /// Green pills start expanded when surfaced from the all-clear strip.
-    var startExpanded: Bool = false
-    @State private var isExpanded = false
+    /// When the host owns expansion (the all-clear strip drives it from a single
+    /// `expandedId`), it passes a binding so the pill highlight and the card's
+    /// expansion can't diverge. nil → the card manages its own state (grid cards).
+    var externalExpanded: Binding<Bool>? = nil
+    @State private var internalExpanded = false
     @State private var showingDetail = false
+
+    private var isExpanded: Bool { externalExpanded?.wrappedValue ?? internalExpanded }
+
+    private func setExpanded(_ value: Bool) {
+        if let externalExpanded { externalExpanded.wrappedValue = value }
+        else { internalExpanded = value }
+    }
 
     private var catalogEntry: AdvisoryCatalogEntry? {
         catalog.first { $0.id == advisory.advisoryId }
@@ -43,7 +52,7 @@ struct AdvisoryCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Header
             Button {
-                withAnimation { isExpanded.toggle() }
+                withAnimation { setExpanded(!isExpanded) }
             } label: {
                 HStack {
                     AssessmentStringBadge(status: advisory.aggregateStatus)
@@ -124,7 +133,6 @@ struct AdvisoryCardView: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .onAppear { if startExpanded { isExpanded = true } }
         .sheet(isPresented: $showingDetail) {
             if let viewModel {
                 AdvisoryDetailView(viewModel: viewModel, advisoryId: advisory.advisoryId,
@@ -182,8 +190,13 @@ struct GreenAdvisoryStrip: View {
             }
 
             if let expandedId, let advisory = advisories.first(where: { $0.advisoryId == expandedId }) {
+                // Card expansion is driven by `expandedId`: collapsing inside the
+                // card clears it, removing the card and un-highlighting the pill —
+                // so the two never diverge.
                 AdvisoryCardView(advisory: advisory, catalog: catalog, viewModel: viewModel,
-                                 startExpanded: true)
+                                 externalExpanded: Binding(
+                                    get: { self.expandedId == advisory.advisoryId },
+                                    set: { if !$0 { withAnimation { self.expandedId = nil } } }))
             }
         }
         .padding()
