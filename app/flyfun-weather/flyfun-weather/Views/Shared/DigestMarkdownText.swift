@@ -30,18 +30,21 @@ struct DigestMarkdownText: View {
 
     /// Force each list item onto its own line. The LLM often emits watch items /
     /// concerns as one run-on string ("1. … 2. … 3. …" or "- … - …"), so insert a
-    /// newline before any numbered ("N. ") or bulleted ("- ", "• ") marker that
-    /// isn't already at the start of a line. `\d+\.\s` (digit-dot-space) won't
-    /// match decimals like "10.5" (no space after the dot).
+    /// newline before any numbered ("N. ") or bulleted ("- ", "• ") marker.
+    ///
+    /// The marker must be preceded by a clause/sentence terminator (`. , : ; )`)
+    /// so we break between list items but NOT before a sentence-final integer
+    /// (e.g. "gusts to 25. Expect…" stays one line) or a range ("5 - 10 kt").
+    /// `\d+\.\s` won't match decimals like "10.5" (no space after the dot).
     static func normalize(_ s: String) -> String {
         var out = s
-        // Break before "N. " markers that follow other text on the same line.
+        // Break before "N. " markers that close a previous clause/item.
         out = out.replacingOccurrences(
-            of: "(?<=\\S)[ \\t]+(?=\\d+\\.\\s)",
+            of: "(?<=[.,:;)])[ \\t]+(?=\\d+\\.\\s)",
             with: "\n", options: .regularExpression)
-        // Break before "- " / "• " bullets mid-line.
+        // Break before "- " / "• " bullets that close a previous clause/item.
         out = out.replacingOccurrences(
-            of: "(?<=\\S)[ \\t]+(?=[-•]\\s)",
+            of: "(?<=[.,:;)])[ \\t]+(?=[-•]\\s)",
             with: "\n", options: .regularExpression)
         return out
     }

@@ -6,7 +6,7 @@ import Foundation
 //       web/ts/visualization/cross-section/layer-registry.ts  (PRESETS, *_ENABLED)
 //   • Advisory lenses (Basic / Icing / Clouds / Convective / Turbulence / VFR / IFR):
 //       web/ts/visualization/cross-section/advisory-presets.ts (ADVISORY_PRESETS,
-//       ADVISORY_TO_PRESET, getPresetForAdvisory)
+//       ADVISORY_TO_PRESET, ADVISORY_OVERRIDES, getPresetForAdvisory)
 //   • Cloud source×style axes:
 //       web/ts/visualization/cross-section/cloud-bands-factory.ts (CLOUD_LAYER_BY_AXES,
 //       parseCloudLayerId)
@@ -148,10 +148,24 @@ enum CrossSectionPresets {
         "vfr_feasibility": "vfr", "ifr_feasibility": "ifr",
     ]
 
+    /// Per-advisory extras unioned onto the base lens. Mirrors web
+    /// `ADVISORY_OVERRIDES`: e.g. FIKI icing adds warm-nose isotherms. iOS-missing
+    /// line ids (e.g. `sld-bands`) are kept here for parity and dropped at apply
+    /// time by `applyAdvisoryPreset`'s `m[id] != nil` guard.
+    static let advisoryOverrides: [String: (groups: [LayerGroup], lines: [String])] = [
+        "fiki_icing": (groups: [], lines: ["minus-10c", "minus-20c", "sld-bands"]),
+    ]
+
     /// The lens a given advisory's chip should apply, or nil if it has no chip.
+    /// Unions `advisoryOverrides` onto the base lens (mirrors web
+    /// `getPresetForAdvisory`).
     static func preset(forAdvisory advisoryId: String) -> AdvisoryPreset? {
-        guard let presetId = advisoryToPreset[advisoryId] else { return nil }
-        return advisory[presetId]
+        guard let presetId = advisoryToPreset[advisoryId], var p = advisory[presetId] else { return nil }
+        if let o = advisoryOverrides[advisoryId] {
+            p.groups += o.groups
+            p.lines += o.lines
+        }
+        return p
     }
 
     // MARK: - Cloud axes (source × style ⇄ layer id)
