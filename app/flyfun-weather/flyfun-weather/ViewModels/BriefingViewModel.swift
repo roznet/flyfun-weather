@@ -569,6 +569,12 @@ final class BriefingViewModel {
         do {
             let response = try await repository.fetchPireps(flightId: flight.id)
             pirepsState = .loaded(response.items)
+        } catch let apiError as APIError where apiError.isCancellation {
+            // Task was cancelled (view disappeared / superseded) — benign, not a
+            // failure. Leave state as .loading so the next .task run reloads.
+            Self.logger.debug("PIREP load cancelled — ignoring")
+        } catch is CancellationError {
+            Self.logger.debug("PIREP load cancelled — ignoring")
         } catch {
             pirepsState = .error(error)
             Self.logger.error("Failed to load PIREPs: \(error)")

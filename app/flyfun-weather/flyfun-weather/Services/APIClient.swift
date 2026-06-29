@@ -19,6 +19,15 @@ enum APIError: LocalizedError {
             .contains(urlError.code)
     }
 
+    /// True when the underlying request was cancelled (Swift Concurrency task
+    /// cancellation surfaces as `URLError.cancelled` / `-999`). Callers should
+    /// treat this as benign — the consumer went away, not a real failure.
+    var isCancellation: Bool {
+        guard case .networkError(let inner) = self else { return false }
+        if inner is CancellationError { return true }
+        return (inner as? URLError)?.code == .cancelled
+    }
+
     var errorDescription: String? {
         switch self {
         case .unauthorized: "Session expired. Please sign in again."
