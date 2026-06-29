@@ -1,3 +1,4 @@
+import OSLog
 import RZSkewT
 import SwiftUI
 
@@ -86,6 +87,7 @@ extension SoundingProfileResponse {
 
 /// Shows a Skew-T plot for a selected route point, loaded from the API.
 struct SkewTDetailView: View {
+    private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "SkewT")
     let viewModel: BriefingViewModel
     let pointIndex: Int
 
@@ -350,6 +352,15 @@ struct SkewTDetailView: View {
             availableGroups = SkewTVariableCatalog.grouped(for: response, levels: profile.levels, trackDeg: trackDeg)
             ensureDefaults(availableVars)
             profileState = .loaded(response)
+        } catch let apiError as APIError where apiError.isCancellation {
+            // Scrubbing the cross-section changes the active point, which
+            // cancels this in-flight sounding fetch via `.task(id:)`. That's
+            // benign — a fresh task is already loading the new point — so don't
+            // flash a "network error cancelled" wall (mirrors loadPireps). Leave
+            // state as .loading; the superseding task publishes the result.
+            Self.logger.debug("Sounding load cancelled — ignoring")
+        } catch is CancellationError {
+            Self.logger.debug("Sounding load cancelled — ignoring")
         } catch {
             profileState = .error(error)
         }
