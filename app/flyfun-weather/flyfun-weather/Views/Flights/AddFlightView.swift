@@ -77,6 +77,20 @@ struct AddFlightView: View {
             .task {
                 await viewModel.loadRecentRoutes()
             }
+            .task {
+                // Pre-warm the keyboard and put the cursor in the route field as
+                // soon as the form opens (create only). Otherwise the first tap
+                // pays the iOS keyboard cold-start, which reads as "the field is
+                // frozen for a beat". Focusing also pins the scroll to the route
+                // field, so the aircraft/profile sections loading above can't
+                // shift it out from under the pilot's tap. The short sleep lets
+                // the sheet finish presenting before we grab focus (focus set
+                // mid-transition is dropped by UIKit).
+                guard !viewModel.isEditing, viewModel.waypointsText.isEmpty else { return }
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
+                routeFieldFocused = true
+            }
             .sheet(isPresented: $showAircraftSheet) {
                 AircraftFormSheet(viewModel: viewModel) {
                     showAircraftSheet = false
