@@ -117,12 +117,24 @@ struct SkewTDetailView: View {
     // Web app pressure range (1050–250 hPa); shared by the plot and the panel so
     // their pressure rows line up (the panel requires an identical config). Wind
     // barbs are off (#310 — wind is surfaced via the HW/XW side-panel variable),
-    // so the right margin is trimmed to just fit the FL labels.
-    private let config = SkewTConfiguration(
-        pTop: 250,
-        margins: .init(left: 40, right: 46, top: 20, bottom: 25),
-        showWindBarbs: false
-    )
+    // so the right margin is trimmed to just fit the FL labels. On a narrow
+    // iPhone the axis gutters are trimmed further so the plot interior doesn't
+    // collapse to a sliver (#7, iOS feedback).
+    private var config: SkewTConfiguration {
+        if isPad {
+            return SkewTConfiguration(
+                pTop: 250,
+                margins: .init(left: 40, right: 46, top: 20, bottom: 25),
+                showWindBarbs: false
+            )
+        } else {
+            return SkewTConfiguration(
+                pTop: 250,
+                margins: .init(left: 32, right: 36, top: 16, bottom: 22),
+                showWindBarbs: false
+            )
+        }
+    }
     private var isPad: Bool { hSizeClass == .regular }
 
     /// Track (°true) at this route point, for the HW/XW side-panel variable.
@@ -171,10 +183,14 @@ struct SkewTDetailView: View {
             }
             HStack(spacing: 0) {
                 SkewTView(profile: profile, config: config, selectedPressureHPa: $selectedPressureHPa)
+                    // Deterministically take the remaining width so the plot
+                    // can't collapse to a sliver next to the fixed side panel on
+                    // a narrow iPhone (#7).
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if !shown.isEmpty {
                     SkewTVariablePanel(profile: profile, variables: shown, config: config,
                                        selectedPressureHPa: selectedPressureHPa)
-                        .frame(width: isPad ? 220 : 96)
+                        .frame(width: isPad ? 220 : 84)
                 }
             }
         }

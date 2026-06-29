@@ -72,6 +72,13 @@ struct FlightListView: View {
             }
             .navigationTitle("Flights")
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    // Subtle in-place refresh indicator — the list stays visible
+                    // underneath instead of being replaced by a spinner (#1).
+                    if viewModel?.isRefreshing == true {
+                        ProgressView().controlSize(.small)
+                    }
+                }
                 #if DEBUG
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {

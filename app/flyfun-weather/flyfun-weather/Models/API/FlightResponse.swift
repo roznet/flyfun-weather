@@ -18,6 +18,11 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     let autoRefresh: Bool
     let autoRefreshHour: Int?
     let createdAt: String
+    /// Latest briefing pack summary (assessment / outlook / advisory chips),
+    /// inlined by `/api/flights` so the list card shows a traffic-light tag
+    /// without a per-flight round-trip — same payload the web card reads. nil
+    /// for a flight that has never been briefed.
+    let latestBriefing: BriefingStatusInfo?
     /// Owner vs subscriber. Absent on older servers — treated as owner.
     let role: FlightRole?
 
@@ -60,4 +65,36 @@ struct AircraftInfo: Codable, Hashable, Sendable {
         if let tailNumber, !tailNumber.isEmpty { return tailNumber }
         return typeName
     }
+}
+
+/// Summary of a flight's latest briefing pack, inlined in the flights list so
+/// each card can render a status tag from the single `/api/flights` response
+/// (mirrors the web `BriefingStatusInfo`). Scalar fields are optional so a
+/// partial/legacy payload decodes rather than failing the whole flight.
+struct BriefingStatusInfo: Codable, Sendable {
+    /// GREEN / AMBER / RED traffic-light verdict (short-range, within the GRIB
+    /// horizon). nil when only a long-range `outlook` is available.
+    let assessment: String?
+    let assessmentReason: String?
+    /// Long-range early outlook (beyond the GRIB horizon), e.g.
+    /// TRENDING_SETTLED / MIXED_SIGNALS / TRENDING_UNSETTLED. Mutually
+    /// exclusive with `assessment` — a tendency, not a verdict.
+    let outlook: String?
+    let outlookReason: String?
+    let hasAdvisories: Bool?
+    let advisorySummary: AdvisorySummary?
+}
+
+/// Compact RED/AMBER advisory breakdown for the flights-list card chips.
+struct AdvisorySummary: Codable, Sendable {
+    let red: Int
+    let amber: Int
+    /// Severity-ordered named concerns, capped at 3 server-side.
+    let top: [AdvisoryChip]
+}
+
+/// One named advisory concern for the summary chips.
+struct AdvisoryChip: Codable, Sendable {
+    let status: String  // "RED" | "AMBER"
+    let name: String
 }

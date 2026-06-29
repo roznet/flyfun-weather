@@ -105,7 +105,10 @@ final class BriefingViewModel {
 
     // UI state
     var selectedTab: BriefingTab = .advisory
-    var selectedModel: String = "gfs"
+    /// Default to ECMWF (#8, iOS feedback). The effective choice is reconciled
+    /// against the models a given flight actually carries via `preferredModel`;
+    /// a user's explicit pick is remembered across flights/launches (#9).
+    var selectedModel: String = BriefingViewModel.storedPreferredModel ?? "ecmwf"
     var availableModels: [String] = []
 
     /// Shared active route point (§4.7) — the scrub/selected point on the
@@ -498,9 +501,35 @@ final class BriefingViewModel {
         if !models.isEmpty {
             availableModels = models
             if !models.contains(selectedModel) {
-                selectedModel = models.first ?? "gfs"
+                selectedModel = preferredModel(from: models)
             }
         }
+    }
+
+    /// `UserDefaults` key for the sticky model preference.
+    private static let preferredModelKey = "preferredCrossSectionModel"
+
+    /// The user's last explicit model pick, if any.
+    static var storedPreferredModel: String? {
+        UserDefaults.standard.string(forKey: preferredModelKey)
+    }
+
+    /// Choose which model to show for a flight whose current selection isn't
+    /// available: the user's sticky preference when this flight carries it, else
+    /// ECMWF (the #8 default), else GFS, else whatever's first. Never persists —
+    /// a fallback for an ECMWF-less flight must not clobber the saved preference.
+    private func preferredModel(from available: [String]) -> String {
+        if let pref = Self.storedPreferredModel, available.contains(pref) { return pref }
+        if available.contains("ecmwf") { return "ecmwf" }
+        if available.contains("gfs") { return "gfs" }
+        return available.first ?? selectedModel
+    }
+
+    /// Record an explicit user model choice so it sticks across flights and
+    /// launches (#8/#9, iOS feedback). Programmatic fallbacks must NOT call this.
+    func selectModel(_ model: String) {
+        selectedModel = model
+        UserDefaults.standard.set(model, forKey: Self.preferredModelKey)
     }
 
     // MARK: - Section loaders
@@ -544,7 +573,7 @@ final class BriefingViewModel {
                 let raModels = response.models.sorted()
                 availableModels = raModels
                 if !raModels.contains(selectedModel) {
-                    selectedModel = raModels.first ?? selectedModel
+                    selectedModel = preferredModel(from: raModels)
                     Self.logger.info("Switched model to \(self.selectedModel) (previous not in route analyses)")
                 }
             }

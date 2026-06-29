@@ -19,12 +19,15 @@ final class CrossSectionViewModel {
     /// booted GRAMET layer preset above, so the chart and the preset agree on
     /// boot. Theme is orthogonal to the layer preset (changing one doesn't reset
     /// the other) — mirrors the web, where `setVizTheme` leaves the preset alone.
-    /// Persisted across launches via `UserDefaults` (the layer preset itself
-    /// isn't persisted yet, so a restart keeps your colours but resets layers).
+    /// Persisted across launches via `UserDefaults`.
     private(set) var themeId: CrossSectionThemeID
 
     /// `UserDefaults` key for the persisted theme choice.
     private static let themeDefaultsKey = "crossSectionThemeId"
+    /// `UserDefaults` key for the persisted layer enablement map.
+    private static let layersDefaultsKey = "crossSectionEnabledLayers"
+    /// `UserDefaults` key for the persisted advisory-lens id (absent when none).
+    private static let advisoryPresetDefaultsKey = "crossSectionAdvisoryPreset"
 
     init() {
         // Restore the last-chosen theme; fall back to GRAMET (the boot preset's
@@ -35,6 +38,22 @@ final class CrossSectionViewModel {
         // config sheet's legend swatches) render in the right palette even before
         // the renderer runs.
         CrossSectionTheme.setActive(themeId)
+
+        // Restore the last layer config so a relaunch keeps the user's layers
+        // (not just colours) — mirrors the web, which persists the whole viz
+        // config (#9, iOS testing feedback). Keep only ids the current build
+        // still knows about (a renamed/removed layer can't resurrect a stale id),
+        // and merge restored values over the GRAMET defaults so a newly-added
+        // layer gets its default state rather than vanishing.
+        if let data = UserDefaults.standard.data(forKey: Self.layersDefaultsKey),
+           let decoded = try? JSONDecoder().decode([String: Bool].self, from: data) {
+            var merged = CrossSectionPresets.gramet
+            for (id, on) in decoded where merged[id] != nil {
+                merged[id] = on
+            }
+            enabledLayers = merged
+        }
+        activeAdvisoryPreset = UserDefaults.standard.string(forKey: Self.advisoryPresetDefaultsKey)
     }
 
     /// Switch the colour theme. Independent of the layer preset. Persisted.
@@ -42,6 +61,19 @@ final class CrossSectionViewModel {
         themeId = id
         CrossSectionTheme.setActive(id)
         UserDefaults.standard.set(id.rawValue, forKey: Self.themeDefaultsKey)
+    }
+
+    /// Persist the current layer set + active advisory lens. Called after every
+    /// mutation so the config survives relaunch (#9, iOS testing feedback).
+    private func persistLayerConfig() {
+        if let data = try? JSONEncoder().encode(enabledLayers) {
+            UserDefaults.standard.set(data, forKey: Self.layersDefaultsKey)
+        }
+        if let id = activeAdvisoryPreset {
+            UserDefaults.standard.set(id, forKey: Self.advisoryPresetDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.advisoryPresetDefaultsKey)
+        }
     }
 
     func update(routeAnalyses: RouteAnalysesResponse, elevation: ElevationResponse?, model: String) {
@@ -52,6 +84,7 @@ final class CrossSectionViewModel {
     func toggleLayer(_ id: String) {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
         activeAdvisoryPreset = nil  // a manual edit is no longer a named lens
+        persistLayerConfig()
     }
 
     /// Force-enable a known layer (e.g. a deep-link focus intent turning on the
@@ -59,6 +92,7 @@ final class CrossSectionViewModel {
     func enableLayer(_ id: String) {
         guard enabledLayers[id] != nil else { return }
         enabledLayers[id] = true
+        persistLayerConfig()
     }
 
     // MARK: - Layer presets (§4.5; ported from web — see CrossSectionPresets).
@@ -89,6 +123,7 @@ final class CrossSectionViewModel {
         if !map.isEmpty { enabledLayers = map }
         if let tid = preset.themeId { setTheme(tid) }
         activeAdvisoryPreset = nil
+        persistLayerConfig()
     }
 
     /// The preset matching the current layer set, or `.custom` if it's been
@@ -129,12 +164,14 @@ final class CrossSectionViewModel {
         }
         enabledLayers = m
         activeAdvisoryPreset = preset.id
+        persistLayerConfig()
     }
 
     /// Clear the active lens (the picker's "None") without otherwise touching the
     /// layer config.
     func clearAdvisoryPreset() {
         activeAdvisoryPreset = nil
+        persistLayerConfig()
     }
 
     // MARK: - Methods (clouds/icing/turbulence/convection — one method per group)
@@ -154,6 +191,7 @@ final class CrossSectionViewModel {
             enabledLayers[id] = (id == layerId)
         }
         activeAdvisoryPreset = nil
+        persistLayerConfig()
     }
 
     // MARK: - Cloud axes (source × style — two independent controls, #7)
