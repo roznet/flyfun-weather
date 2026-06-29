@@ -222,7 +222,7 @@ struct FlightListView: View {
     struct FlightGroup { let title: String; let flights: [FlightResponse] }
 
     /// Group flights into Future (upcoming), Recent (flown in the last 7 days),
-    /// and Past. Future sorted soonest-first; the rest most-recent-first. Empty
+    /// and Past. All sorted most-recent-first (latest departure at top). Empty
     /// groups are dropped.
     static func groupedFlights(_ flights: [FlightResponse], now: Date = Date()) -> [FlightGroup] {
         let recentCutoff = now.addingTimeInterval(-7 * 24 * 3600)
@@ -236,7 +236,7 @@ struct FlightListView: View {
             else { past.append(f) }
         }
         func date(_ f: FlightResponse) -> Date { f.departureDate ?? now }
-        future.sort { date($0) < date($1) }
+        future.sort { date($0) > date($1) }
         recent.sort { date($0) > date($1) }
         past.sort { date($0) > date($1) }
         return [
