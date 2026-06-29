@@ -4,11 +4,16 @@ import SwiftUI
 /// the digest's four narrative sections — Synoptic, Specific Concerns, Trend and
 /// Watch Items — as markdown. Watch is repeated here from the Advisory tab on
 /// purpose (it reads as the "what to keep an eye on" close of the discussion).
+///
+/// A sticky scroll-spy pill bar (the same `ScrollSpyScroll` the Advisory tab
+/// uses) lets the pilot jump straight to a section instead of hunting through
+/// the prose (#5, iOS feedback). The bar auto-suppresses when only one section
+/// is present.
 struct DiscussionTabView: View {
     let viewModel: BriefingViewModel
 
     var body: some View {
-        ScrollView {
+        ScrollSpyScroll(sections: spySections) {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 content
             }
@@ -16,6 +21,13 @@ struct DiscussionTabView: View {
             .padding(.vertical, Theme.cardPadding)
         }
         .background(Theme.bg)
+    }
+
+    /// Spy-bar sections — only the populated narrative sections, in order. Empty
+    /// for the loading/error/empty states, so the bar hides itself there.
+    private var spySections: [SpySection] {
+        guard case .loaded(let digest) = viewModel.digestState else { return [] }
+        return Self.sections(from: digest).map { SpySection($0.id, $0.title) }
     }
 
     @ViewBuilder
@@ -32,7 +44,7 @@ struct DiscussionTabView: View {
                                        description: Text("No discussion is available for this briefing."))
                     .padding(.top, Theme.sectionSpacing)
             } else {
-                ForEach(sections, id: \.title) { section in
+                ForEach(sections, id: \.id) { section in
                     VStack(alignment: .leading, spacing: Theme.spacingS) {
                         Text(section.title)
                             .font(.headline)
@@ -41,6 +53,7 @@ struct DiscussionTabView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Theme.cardPadding)
+                    .spyAnchor(section.id)
                 }
             }
         case .error(let error):
@@ -51,18 +64,19 @@ struct DiscussionTabView: View {
     }
 
     /// The discussion's four narrative sections, in order, dropping any the
-    /// digest didn't populate.
-    private static func sections(from digest: DigestResponse) -> [(title: String, text: String)] {
-        var result: [(String, String)] = []
-        func add(_ title: String, _ text: String?) {
+    /// digest didn't populate. Each carries a stable id used both as the
+    /// `ForEach` key and the scroll-spy anchor/pill id.
+    private static func sections(from digest: DigestResponse) -> [(id: String, title: String, text: String)] {
+        var result: [(String, String, String)] = []
+        func add(_ id: String, _ title: String, _ text: String?) {
             if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                result.append((title, text))
+                result.append((id, title, text))
             }
         }
-        add("Synoptic Overview", digest.synoptic)
-        add("Specific Concerns", digest.specificConcerns)
-        add("Trend", digest.trend)
-        add("Watch Items", digest.watchItemsMarkdown)
+        add("synoptic", "Synoptic Overview", digest.synoptic)
+        add("concerns", "Specific Concerns", digest.specificConcerns)
+        add("trend", "Trend", digest.trend)
+        add("watch", "Watch Items", digest.watchItemsMarkdown)
         return result
     }
 }

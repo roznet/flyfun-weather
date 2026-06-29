@@ -168,12 +168,9 @@ struct AdvisoryCardView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if let entry = catalogEntry {
-                    Text(entry.description)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 4)
-                }
+                // The advisory description is intentionally NOT repeated here —
+                // it's one tap away via the (i) HelpInfoButton in the header (#311),
+                // and duplicating it just consumed vertical space (iOS testing feedback).
             }
         }
         .padding()

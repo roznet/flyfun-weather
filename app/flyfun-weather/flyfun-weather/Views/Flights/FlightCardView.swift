@@ -55,18 +55,56 @@ struct FlightCardView: View {
                     .font(.caption)
             }
 
-            if let assessment = flight.assessment {
-                AssessmentStringBadge(status: assessment)
-            }
+            statusBadge
         }
         .padding(.vertical, 4)
         .opacity(isOffline && !hasCachedData ? 0.4 : 1.0)
         .accessibilityIdentifier("flightCard-\(flight.id)")
     }
+
+    /// Trailing status tag: the GREEN/AMBER/RED traffic light when a short-range
+    /// assessment exists, otherwise the soft long-range outlook badge (matches
+    /// the web flights card). Nothing when the flight hasn't been briefed.
+    @ViewBuilder
+    private var statusBadge: some View {
+        if let assessment = flight.latestBriefing?.assessment {
+            AssessmentStringBadge(status: assessment)
+        } else if let outlook = flight.latestBriefing?.outlook {
+            OutlookBadge(outlook: outlook)
+        }
+    }
 }
 
-// Extension to get assessment from a FlightResponse — not in server response for flights,
-// but will be available after we fetch the pack meta. For now, this is nil.
-extension FlightResponse {
-    var assessment: String? { nil }
+/// Soft tinted badge for a flight's long-range outlook (beyond the GRIB
+/// horizon). Deliberately softer than the assessment traffic light — an
+/// outlook is a tendency ("what to expect"), not a verdict.
+private struct OutlookBadge: View {
+    let outlook: String
+
+    private var label: String {
+        switch outlook.uppercased() {
+        case "TRENDING_SETTLED": "Settled"
+        case "TRENDING_UNSETTLED": "Unsettled"
+        default: "Mixed"
+        }
+    }
+
+    private var tint: Color {
+        switch outlook.uppercased() {
+        case "TRENDING_SETTLED": Theme.green
+        case "TRENDING_UNSETTLED": Theme.red
+        default: Theme.amber
+        }
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.opacity(0.15), in: Capsule())
+            .overlay(Capsule().stroke(tint.opacity(0.4), lineWidth: 0.5))
+            .accessibilityLabel("Outlook: \(label)")
+    }
 }

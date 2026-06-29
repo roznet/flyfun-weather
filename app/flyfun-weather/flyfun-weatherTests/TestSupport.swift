@@ -111,6 +111,7 @@ func makeFlight(
         autoRefresh: false,
         autoRefreshHour: nil,
         createdAt: "2026-06-20T09:00:00Z",
+        latestBriefing: nil,
         role: role
     )
 }

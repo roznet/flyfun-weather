@@ -17,8 +17,9 @@ struct CrossSectionView: View {
     @State private var chromeHidden = false
     /// Route-graph metric selection, lifted here so the readout strip and the
     /// graph share one cursor + one metric choice (§4.7 unified cursor).
-    @State private var graphLeftMetricId = "headwind"
-    @State private var graphRightMetricId = "cloud-cover"
+    /// Persisted (#9) so the chosen metrics survive relaunch, like the web.
+    @AppStorage("crossSectionGraphLeftMetric") private var graphLeftMetricId = "headwind"
+    @AppStorage("crossSectionGraphRightMetric") private var graphRightMetricId = "cloud-cover"
     /// Scroll-to target inside the tab (#310): the "Sounding ›" deep-link and a
     /// `FocusIntent.target == .skewT` set this to "skewt"; the ScrollViewReader
     /// scrolls to the embedded Skew-T and resets it to nil.
@@ -159,7 +160,7 @@ struct CrossSectionView: View {
         HStack(spacing: Theme.spacingM) {
             ModelSelectorView(selectedModel: Binding(
                 get: { viewModel.selectedModel },
-                set: { viewModel.selectedModel = $0 }
+                set: { viewModel.selectModel($0) }  // sticky pick (#8/#9)
             ), models: viewModel.availableModels)
             Spacer()
             layersPill

@@ -85,16 +85,38 @@ struct RouteGraphView: View {
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
             }
         }
+        // Pin the X domain to the full route (0…total) so a given distance maps
+        // to the SAME fraction of the plot width the cross-section uses — without
+        // this, Charts auto-domains to the data's min/max distance and the cursor
+        // drifts out of register with the cross-section above (#6, iOS feedback).
+        .chartXScale(domain: 0...max(vizData.totalDistanceNm, 1))
         .chartXAxisLabel("Distance (nm)")
         .chartYAxis {
-            AxisMarks(position: .leading) { _ in
+            AxisMarks(position: .leading) { value in
                 AxisGridLine()
-                AxisValueLabel()
-                    .foregroundStyle(leftMetric.color)
+                AxisValueLabel {
+                    if let v = value.as(Double.self) {
+                        // Fixed-width label pins the leading gutter to the
+                        // cross-section's left margin so the two plot areas share
+                        // the same left edge (#6). Right-aligned in the gutter.
+                        Text(Self.axisLabel(v))
+                            .frame(width: CoordTransform.margins.left - 6, alignment: .trailing)
+                    }
+                }
+                .foregroundStyle(leftMetric.color)
             }
         }
         .frame(height: 150)
-        .padding(.horizontal, 12)
+        // Reserve the cross-section's right margin so the plot's right edge lines
+        // up too; the leading edge is handled by the fixed-width Y label above.
+        .padding(.trailing, CoordTransform.margins.right)
+    }
+
+    /// Compact Y-axis number: integer-valued metrics (kt, %, °C) print clean;
+    /// fractional ones (precip mm) keep one decimal. Keeps the fixed-width
+    /// gutter narrow enough to match the cross-section's left margin.
+    private static func axisLabel(_ v: Double) -> String {
+        v == v.rounded() ? String(Int(v)) : String(format: "%.1f", v)
     }
 
     private func extractData(points: [VizPoint], metric: RouteGraphMetric) -> [ChartDataPoint] {
