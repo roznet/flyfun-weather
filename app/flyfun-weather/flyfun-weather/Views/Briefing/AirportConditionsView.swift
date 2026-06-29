@@ -39,13 +39,13 @@ private struct AirportConditionCard: View {
     /// top-line rating. Defaults expanded.
     @State private var isExpanded = true
 
-    /// Worst (most restrictive) flight category across the models, for the
-    /// collapsed summary badge. Severity: LIFR > IFR > MVFR > VFR.
-    private var worstCategory: String? {
+    /// The worst (most restrictive) per-model condition — drives the collapsed
+    /// summary line. Severity: LIFR > IFR > MVFR > VFR.
+    private var worstCondition: AirportModelCondition? {
         let order = ["lifr": 3, "ifr": 2, "mvfr": 1, "vfr": 0]
-        return summary.conditions
-            .map(\.flightCategory)
-            .max { (order[$0.lowercased()] ?? -1) < (order[$1.lowercased()] ?? -1) }
+        return summary.conditions.max {
+            (order[$0.flightCategory.lowercased()] ?? -1) < (order[$1.flightCategory.lowercased()] ?? -1)
+        }
     }
 
     var body: some View {
@@ -66,11 +66,6 @@ private struct AirportConditionCard: View {
                             .lineLimit(1)
                     }
                     Spacer()
-                    // Collapsed: surface the worst rating so the card is still
-                    // glanceable without expanding.
-                    if !isExpanded, let worst = worstCategory {
-                        FlightCategoryBadge(category: worst)
-                    }
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -81,31 +76,44 @@ private struct AirportConditionCard: View {
 
             if isExpanded {
                 ForEach(summary.conditions) { condition in
-                    HStack(spacing: 12) {
-                        Text(condition.model.shortModelName)
-                            .font(.caption.bold())
-                            .frame(width: 60, alignment: .leading)
-
-                        FlightCategoryBadge(category: condition.flightCategory)
-
-                        if let wind = condition.windSpeedKt, let dir = condition.windDirectionDeg {
-                            Label("\(Int(dir))@\(Int(wind))kt", systemImage: "wind")
-                                .font(.caption)
-                        }
-
-                        if let rw = condition.bestRunway {
-                            Text("Rwy \(rw.runwayId)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-                    }
+                    conditionRow(condition)
                 }
+            } else if let worst = worstCondition {
+                // Collapsed: keep the card glanceable — worst rating + its wind
+                // and runway, like the web's top-line summary (#4, iOS feedback).
+                conditionRow(worst, showModel: false)
             }
         }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// One condition line: model (optional) · category · wind · best runway.
+    /// Shared by the expanded per-model list and the collapsed summary line.
+    @ViewBuilder
+    private func conditionRow(_ condition: AirportModelCondition, showModel: Bool = true) -> some View {
+        HStack(spacing: 12) {
+            if showModel {
+                Text(condition.model.shortModelName)
+                    .font(.caption.bold())
+                    .frame(width: 60, alignment: .leading)
+            }
+
+            FlightCategoryBadge(category: condition.flightCategory)
+
+            if let wind = condition.windSpeedKt, let dir = condition.windDirectionDeg {
+                Label("\(Int(dir))@\(Int(wind))kt", systemImage: "wind")
+                    .font(.caption)
+            }
+
+            if let rw = condition.bestRunway {
+                Text("Rwy \(rw.runwayId)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
     }
 }
 
