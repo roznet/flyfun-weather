@@ -116,26 +116,31 @@ struct SkewTDetailView: View {
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(AppState.self) private var appState
 
-    // Web app pressure range (1050–250 hPa); shared by the plot and the panel so
-    // their pressure rows line up (the panel requires an identical config). Wind
-    // barbs are off (#310 — wind is surfaced via the HW/XW side-panel variable),
-    // so the right margin is trimmed to just fit the FL labels. On a narrow
-    // iPhone the axis gutters are trimmed further so the plot interior doesn't
-    // collapse to a sliver (#7, iOS feedback).
-    private var config: SkewTConfiguration {
-        if isPad {
-            return SkewTConfiguration(
-                pTop: 250,
-                margins: .init(left: 40, right: 46, top: 20, bottom: 25),
-                showWindBarbs: false
-            )
-        } else {
-            return SkewTConfiguration(
-                pTop: 250,
-                margins: .init(left: 32, right: 36, top: 16, bottom: 22),
-                showWindBarbs: false
-            )
-        }
+    // Axis margins — trimmed on a narrow iPhone so the plot interior keeps room.
+    // Wind barbs are off (#310 — wind is surfaced via the HW/XW side-panel
+    // variable), so the right margin is just enough for the FL labels.
+    private var margins: SkewTConfiguration.Margins {
+        isPad ? .init(left: 40, right: 46, top: 20, bottom: 25)
+              : .init(left: 32, right: 36, top: 16, bottom: 22)
+    }
+
+    /// Build the Skew-T config for a concrete plot box (1050–250 hPa range,
+    /// shared identically by the plot and the side panel so their pressure rows
+    /// line up). The skew angle is the fix for #7: RZSkewT aspect-corrects the
+    /// skew to keep a true visual 45°, which on a tall/narrow iPhone plot (h≫w)
+    /// makes `skewFactor = tan45·h/w` large and pushes the cold upper-air data
+    /// off the right edge. Capping the effective skew factor at the classic
+    /// square-aspect value (1.0) keeps the diagram readable: `tan(θ)·h/w = 1 ⇒
+    /// θ = atan(w/h)`. Wide plots (iPad/landscape) keep the full 45°.
+    private func skewConfig(plotWidth: CGFloat, plotHeight: CGFloat) -> SkewTConfiguration {
+        let m = margins
+        let interiorW = max(plotWidth - m.left - m.right, 1)
+        let interiorH = max(plotHeight - m.top - m.bottom, 1)
+        let angleDeg = interiorH > interiorW
+            ? atan(Double(interiorW / interiorH)) * 180 / .pi
+            : 45
+        return SkewTConfiguration(pTop: 250, tMin: -40, tMax: 50,
+                                  skewAngle: angleDeg, margins: m, showWindBarbs: false)
     }
     private var isPad: Bool { hSizeClass == .regular }
 
@@ -183,17 +188,22 @@ struct SkewTDetailView: View {
             if !availableVars.isEmpty {
                 variablePicker(availableVars)
             }
-            HStack(spacing: 0) {
-                SkewTView(profile: profile, config: config, selectedPressureHPa: $selectedPressureHPa)
-                    // Deterministically take the remaining width so the plot
-                    // can't collapse to a sliver next to the fixed side panel on
-                    // a narrow iPhone (#7).
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if !shown.isEmpty {
-                    SkewTVariablePanel(profile: profile, variables: shown, config: config,
-                                       selectedPressureHPa: selectedPressureHPa)
-                        .frame(width: isPad ? 220 : 84)
+            GeometryReader { geo in
+                // Side panel is a fixed-width strip; the plot takes the rest.
+                // The config (and its aspect-aware skew angle) is derived from
+                // the real plot box so the diagram fits the available space (#7).
+                let panelW: CGFloat = shown.isEmpty ? 0 : (isPad ? 220 : 100)
+                let cfg = skewConfig(plotWidth: geo.size.width - panelW, plotHeight: geo.size.height)
+                HStack(spacing: 0) {
+                    SkewTView(profile: profile, config: cfg, selectedPressureHPa: $selectedPressureHPa)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if !shown.isEmpty {
+                        SkewTVariablePanel(profile: profile, variables: shown, config: cfg,
+                                           selectedPressureHPa: selectedPressureHPa)
+                            .frame(width: panelW)
+                    }
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
         }
         // Re-pick defaults only when the size class flips (iPad gains a 2nd axis).
