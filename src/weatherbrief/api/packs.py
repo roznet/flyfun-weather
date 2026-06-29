@@ -1989,12 +1989,17 @@ def get_refresh_status(
     if entry is None:
         return {"active": False}
     label = _STAGE_LABELS.get(entry.stage, entry.stage) if entry.stage else None
+    # Mirror the fraction the SSE stream emits (_STAGE_PROGRESS) so a client that
+    # polls status (e.g. after navigating away and back) can drive the progress
+    # bar instead of being stuck at 0%.
+    progress = _STAGE_PROGRESS.get(entry.stage, 0.0) if entry.stage else 0.0
     return {
         "active": True,
         "status": entry.status,
         "stage": entry.stage,
         "label": label,
         "detail": entry.detail,
+        "progress": progress,
         "triggered_by": entry.triggered_by,
         "queued_at": entry.queued_at,
     }

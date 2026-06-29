@@ -439,7 +439,7 @@ final class BriefingViewModel {
                 refreshState = .refreshing(
                     stage: status.label ?? status.stage ?? "In progress",
                     detail: status.detail,
-                    progress: 0
+                    progress: status.progress ?? 0
                 )
                 // Poll until complete
                 await pollRefreshStatus()
@@ -473,7 +473,7 @@ final class BriefingViewModel {
                 refreshState = .refreshing(
                     stage: status.label ?? status.stage ?? "In progress",
                     detail: status.detail,
-                    progress: 0
+                    progress: status.progress ?? 0
                 )
             } catch {
                 break

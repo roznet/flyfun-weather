@@ -38,4 +38,8 @@ struct RefreshStatusResponse: Codable, Sendable {
     let stage: String?
     let label: String?
     let detail: String?
+    /// Stage-derived completion fraction (0...1), mirroring the SSE stream's
+    /// `progress`. Lets the poll path drive the progress bar after the user
+    /// navigates away and back. Absent on older servers → treat as 0.
+    let progress: Double?
 }
