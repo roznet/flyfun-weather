@@ -100,7 +100,8 @@ struct RouteGraphView: View {
                         // cross-section's left margin so the two plot areas share
                         // the same left edge (#6). Right-aligned in the gutter.
                         Text(Self.axisLabel(v))
-                            .frame(width: CoordTransform.margins.left - 6, alignment: .trailing)
+                            .frame(width: CoordTransform.margins.left - CoordTransform.axisLabelPadding,
+                                   alignment: .trailing)
                     }
                 }
                 .foregroundStyle(leftMetric.color)

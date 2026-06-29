@@ -18,6 +18,11 @@ struct CoordTransform {
 
     static let margins = (left: CGFloat(50), right: CGFloat(40), top: CGFloat(20), bottom: CGFloat(30))
 
+    /// Gap between a left-axis value label and the plot edge. The route graph
+    /// reserves `margins.left - axisLabelPadding` for its fixed-width Y labels so
+    /// its plot area lines up with the cross-section's (#6).
+    static let axisLabelPadding: CGFloat = 6
+
     init(size: CGSize, maxDistanceNm: Double, maxAltitudeFt: Double) {
         self.maxDistanceNm = maxDistanceNm
         self.maxAltitudeFt = maxAltitudeFt

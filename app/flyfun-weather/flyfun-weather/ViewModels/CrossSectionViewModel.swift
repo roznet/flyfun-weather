@@ -91,6 +91,7 @@ final class CrossSectionViewModel {
     /// advisory's layer). No-op for an unknown id.
     func enableLayer(_ id: String) {
         guard enabledLayers[id] != nil else { return }
+        guard enabledLayers[id] != true else { return }  // already on — skip the redundant write
         enabledLayers[id] = true
         persistLayerConfig()
     }

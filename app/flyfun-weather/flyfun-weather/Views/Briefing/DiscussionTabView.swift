@@ -23,11 +23,16 @@ struct DiscussionTabView: View {
         .background(Theme.bg)
     }
 
-    /// Spy-bar sections — only the populated narrative sections, in order. Empty
-    /// for the loading/error/empty states, so the bar hides itself there.
-    private var spySections: [SpySection] {
+    /// Populated narrative sections, in order — built once and read by both the
+    /// spy bar and the content body. Empty for loading/error/empty states.
+    private var loadedSections: [(id: String, title: String, text: String)] {
         guard case .loaded(let digest) = viewModel.digestState else { return [] }
-        return Self.sections(from: digest).map { SpySection($0.id, $0.title) }
+        return Self.sections(from: digest)
+    }
+
+    /// Spy-bar sections (the bar hides itself when there's fewer than two).
+    private var spySections: [SpySection] {
+        loadedSections.map { SpySection($0.id, $0.title) }
     }
 
     @ViewBuilder
@@ -37,8 +42,8 @@ struct DiscussionTabView: View {
             ProgressView("Generating discussion…")
                 .frame(maxWidth: .infinity)
                 .padding(.top, Theme.sectionSpacing)
-        case .loaded(let digest):
-            let sections = Self.sections(from: digest)
+        case .loaded:
+            let sections = loadedSections
             if sections.isEmpty {
                 ContentUnavailableView("No Discussion", systemImage: "text.alignleft",
                                        description: Text("No discussion is available for this briefing."))
