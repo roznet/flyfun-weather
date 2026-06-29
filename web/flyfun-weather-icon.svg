@@ -1,4 +1,10 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FlyFun Weather">
+  <!-- FLYFUN-ICON-ART: convective-tower scene. Keep all copies in sync (grep "FLYFUN-ICON-ART"):
+       web/flyfun-weather-icon.svg (this file — web display, rounded squircle),
+       web/flyfun-weather-icon-dark.svg  -> iOS "App Icon Dark.png", web/apple-touch-icon.png, web/favicon-64.png,
+       web/flyfun-weather-icon-light.svg -> iOS "AppLogo.png" + "AppLogo@2x.png",
+       web/login.html GRAMET hero (inline, own proportions).
+       Geometry (clouds + I-beam tower) is identical across the 3 squircle SVGs; only the palette differs. -->
   <defs>
     <!-- richer GRAMET sky: subtle vertical gradient -->
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
@@ -23,9 +29,9 @@
 
     <!-- soft stratiform clouds (upper left) -->
     <g filter="url(#soft)" fill="#ffffff">
-      <ellipse cx="150" cy="196" rx="96"  ry="30" opacity="0.62"/>
-      <ellipse cx="246" cy="180" rx="60"  ry="20" opacity="0.42"/>
-      <ellipse cx="86"  cy="210" rx="54"  ry="18" opacity="0.40"/>
+      <ellipse cx="150" cy="233" rx="110" ry="71" opacity="0.70"/>
+      <ellipse cx="250" cy="212" rx="66"  ry="46" opacity="0.50"/>
+      <ellipse cx="82"  cy="246" rx="60"  ry="46" opacity="0.48"/>
     </g>
 
     <!-- cruise altitude reference — light gray, dashed -->
@@ -34,16 +40,18 @@
     <!-- freezing level (0°C) — faint red dashed -->
     <line x1="0" y1="300" x2="512" y2="300" stroke="#FF4444" stroke-width="4" stroke-dasharray="13 10" opacity="0.7"/>
 
-    <!-- convective tower (CB): anvil cap + hatched red column -->
+    <!-- convective tower (CB): flared cap + base bars, hatched red column, lifted off the ground -->
     <g>
-      <!-- faint full-height wash behind the cell -->
-      <rect x="318" y="0" width="118" height="512" fill="rgba(220,53,69,0.10)"/>
-      <!-- tower body -->
-      <rect x="332" y="168" width="96" height="226" fill="rgba(220,53,69,0.32)"/>
-      <rect x="332" y="168" width="96" height="226" fill="url(#hatch)"/>
-      <rect x="333" y="169" width="94" height="224" fill="none" stroke="rgba(200,40,40,0.65)" stroke-width="3"/>
-      <!-- anvil strip, flared beyond the column -->
-      <rect x="296" y="160" width="168" height="16" rx="5" fill="rgba(220,53,69,0.9)"/>
+      <!-- faint wash behind the cell, cap down to the cloud base -->
+      <rect x="318" y="90" width="118" height="214" fill="rgba(220,53,69,0.10)"/>
+      <!-- tower body: top floats in the blue sky, base sits above the terrain -->
+      <rect x="332" y="98" width="96" height="198" fill="rgba(220,53,69,0.32)"/>
+      <rect x="332" y="98" width="96" height="198" fill="url(#hatch)"/>
+      <rect x="333" y="99" width="94" height="196" fill="none" stroke="rgba(200,40,40,0.65)" stroke-width="3"/>
+      <!-- anvil cap, flared beyond the column -->
+      <rect x="296" y="90" width="168" height="16" rx="5" fill="rgba(220,53,69,0.9)"/>
+      <!-- base bar, matching the cap -->
+      <rect x="296" y="288" width="168" height="16" rx="5" fill="rgba(220,53,69,0.9)"/>
     </g>
 
     <!-- GRAMET terrain: golden ochre with darker outline -->

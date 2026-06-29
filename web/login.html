@@ -17,9 +17,11 @@
       <h1>Flyfun Weather</h1>
       <p class="login-subtitle">Aviation weather briefings for GA pilots</p>
 
-      <!-- GRAMET mini cross-section hero. Uses the app's real GRAMET theme
+      <!-- FLYFUN-ICON-ART: convective-tower scene (banner proportions; grep "FLYFUN-ICON-ART"
+           for the square icon SVGs in web/flyfun-weather-icon*.svg that share this motif).
+           GRAMET mini cross-section hero. Uses the app's real GRAMET theme
            colors (sky #2B5DA8, terrain #8B6914/#6B5010, soft white clouds,
-           cruise/freezing reference lines, hatched convective tower) so it
+           cruise/freezing reference lines, hatched convective I-beam tower) so it
            reads as a genuine weather cross-section rather than clip-art. -->
       <div class="login-hero">
         <svg viewBox="0 0 336 168" xmlns="http://www.w3.org/2000/svg">
@@ -48,30 +50,33 @@
             <line x1="0" y1="84" x2="336" y2="84" stroke="#FF4444" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.85"/>
             <text x="6" y="79" font-family="sans-serif" font-size="9" fill="#FF6A6A" font-weight="600">0°C</text>
 
-            <!-- soft stratiform clouds (BKN/SCT) on the left -->
+            <!-- soft stratiform clouds (BKN/SCT) on the left, sitting around the
+                 convective cloud base (level with the bottom of the tower) -->
             <g filter="url(#soft)" fill="#ffffff">
-              <ellipse cx="60"  cy="50" rx="40" ry="12" opacity="0.65"/>
-              <ellipse cx="104" cy="44" rx="28" ry="9"  opacity="0.45"/>
-              <ellipse cx="34"  cy="56" rx="24" ry="8"  opacity="0.45"/>
-              <ellipse cx="150" cy="92" rx="34" ry="9"  opacity="0.45"/>
+              <ellipse cx="74"  cy="97"  rx="56" ry="18" opacity="0.66"/>
+              <ellipse cx="124" cy="90"  rx="36" ry="13" opacity="0.50"/>
+              <ellipse cx="34"  cy="104" rx="32" ry="12" opacity="0.50"/>
+              <ellipse cx="158" cy="100" rx="30" ry="10" opacity="0.42"/>
             </g>
 
             <!-- convective tower (CB) — stylised like the app's thermo-convective
                  layer: hatched column + anvil strip + CB pill. GRAMET "high" risk. -->
             <g>
-              <!-- faint full-height background wash -->
-              <rect x="224" y="0" width="40" height="168" fill="rgba(220,53,69,0.10)"/>
+              <!-- faint background wash, cap down to the cloud base -->
+              <rect x="224" y="34" width="40" height="74" fill="rgba(220,53,69,0.10)"/>
               <!-- tower body fill (base→top); base raised off terrain -->
-              <rect x="224" y="44" width="40" height="60" fill="rgba(220,53,69,0.30)"/>
+              <rect x="224" y="37" width="40" height="66" fill="rgba(220,53,69,0.30)"/>
               <!-- diagonal hatching within tower bounds -->
-              <rect x="224" y="44" width="40" height="60" fill="url(#hatch)"/>
+              <rect x="224" y="37" width="40" height="66" fill="url(#hatch)"/>
               <!-- tower edge outline -->
-              <rect x="224.5" y="44.5" width="39" height="59" fill="none" stroke="rgba(200,40,40,0.6)" stroke-width="1.5"/>
-              <!-- anvil strip at top (extends beyond column each side) -->
-              <rect x="216" y="44" width="56" height="5" fill="rgba(220,53,69,0.85)"/>
+              <rect x="224.5" y="37.5" width="39" height="65" fill="none" stroke="rgba(200,40,40,0.6)" stroke-width="1.5"/>
+              <!-- anvil cap at top (extends beyond column each side) -->
+              <rect x="216" y="34" width="56" height="5" rx="1.5" fill="rgba(220,53,69,0.85)"/>
+              <!-- base bar, matching the cap (I-beam) -->
+              <rect x="216" y="101" width="56" height="5" rx="1.5" fill="rgba(220,53,69,0.85)"/>
               <!-- CB label pill (sky-colored bg, GRAMET CB-label red) -->
-              <rect x="233" y="63" width="22" height="14" rx="3" fill="#2B5DA8" opacity="0.9"/>
-              <text x="244" y="73" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="10" font-weight="700" fill="#FF503C">CB</text>
+              <rect x="233" y="62" width="22" height="14" rx="3" fill="#2B5DA8" opacity="0.9"/>
+              <text x="244" y="72" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="10" font-weight="700" fill="#FF503C">CB</text>
             </g>
 
             <!-- GRAMET terrain: golden ochre with darker outline -->
