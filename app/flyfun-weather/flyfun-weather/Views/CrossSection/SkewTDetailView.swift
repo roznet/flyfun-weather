@@ -124,23 +124,15 @@ struct SkewTDetailView: View {
               : .init(left: 32, right: 36, top: 16, bottom: 22)
     }
 
-    /// Build the Skew-T config for a concrete plot box (1050–250 hPa range,
-    /// shared identically by the plot and the side panel so their pressure rows
-    /// line up). The skew angle is the fix for #7: RZSkewT aspect-corrects the
-    /// skew to keep a true visual 45°, which on a tall/narrow iPhone plot (h≫w)
-    /// makes `skewFactor = tan45·h/w` large and pushes the cold upper-air data
-    /// off the right edge. Capping the effective skew factor at the classic
-    /// square-aspect value (1.0) keeps the diagram readable: `tan(θ)·h/w = 1 ⇒
-    /// θ = atan(w/h)`. Wide plots (iPad/landscape) keep the full 45°.
-    private func skewConfig(plotWidth: CGFloat, plotHeight: CGFloat) -> SkewTConfiguration {
-        let m = margins
-        let interiorW = max(plotWidth - m.left - m.right, 1)
-        let interiorH = max(plotHeight - m.top - m.bottom, 1)
-        let angleDeg = interiorH > interiorW
-            ? atan(Double(interiorW / interiorH)) * 180 / .pi
-            : 45
-        return SkewTConfiguration(pTop: 250, tMin: -40, tMax: 50,
-                                  skewAngle: angleDeg, margins: m, showWindBarbs: false)
+    /// Skew-T config (1050–250 hPa range, shared identically by the plot and the
+    /// side panel so their pressure rows line up). Uses the default 45° skew:
+    /// RZSkewT clamps its internal skew factor at the classic square-aspect
+    /// value, so a tall/narrow iPhone plot (h≫w) keeps the cold upper-air data
+    /// on the chart with no app-side angle correction. Wide plots
+    /// (iPad/landscape) get the full visual 45°. (RZSkewT owns the #7 fix.)
+    private var skewConfig: SkewTConfiguration {
+        SkewTConfiguration(pTop: 250, tMin: -40, tMax: 50,
+                           margins: margins, showWindBarbs: false)
     }
     private var isPad: Bool { hSizeClass == .regular }
 
@@ -188,23 +180,19 @@ struct SkewTDetailView: View {
             if !availableVars.isEmpty {
                 variablePicker(availableVars)
             }
-            GeometryReader { geo in
-                // Side panel is a fixed-width strip; the plot takes the rest.
-                // The config (and its aspect-aware skew angle) is derived from
-                // the real plot box so the diagram fits the available space (#7).
-                let panelW: CGFloat = shown.isEmpty ? 0 : (isPad ? 220 : 100)
-                let cfg = skewConfig(plotWidth: geo.size.width - panelW, plotHeight: geo.size.height)
-                HStack(spacing: 0) {
-                    SkewTView(profile: profile, config: cfg, selectedPressureHPa: $selectedPressureHPa)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if !shown.isEmpty {
-                        SkewTVariablePanel(profile: profile, variables: shown, config: cfg,
-                                           selectedPressureHPa: selectedPressureHPa)
-                            .frame(width: panelW)
-                    }
+            // Side panel is a fixed-width strip; the plot takes the rest.
+            let panelW: CGFloat = shown.isEmpty ? 0 : (isPad ? 220 : 100)
+            let cfg = skewConfig
+            HStack(spacing: 0) {
+                SkewTView(profile: profile, config: cfg, selectedPressureHPa: $selectedPressureHPa)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if !shown.isEmpty {
+                    SkewTVariablePanel(profile: profile, variables: shown, config: cfg,
+                                       selectedPressureHPa: selectedPressureHPa)
+                        .frame(width: panelW)
                 }
-                .frame(width: geo.size.width, height: geo.size.height)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         // Re-pick defaults only when the size class flips (iPad gains a 2nd axis).
         // First-display defaults are set in `loadProfile` before `.loaded`, so the
