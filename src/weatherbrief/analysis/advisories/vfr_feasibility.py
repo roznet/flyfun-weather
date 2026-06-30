@@ -23,10 +23,21 @@ from weatherbrief.models import (
     AdvisoryParameterDef,
     AdvisoryStatus,
     CloudCoverage,
+    Mitigation,
+    MitigationKind,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
 from weatherbrief.models.airport_conditions import FlightCategory
+
+# Minimum clearance above the highest terrain along the route for a lower cruise
+# altitude to be a valid VFR mitigation. Mirrors the icing-escape terrain gate
+# (``sounding/advisories.py:_TERRAIN_CLEARANCE_FT``): a clear band below MSA is
+# not a flyable option, so the RED is genuine and no mitigation is offered.
+_TERRAIN_CLEARANCE_FT = 1000
+
+# Step (ft) for the downward scan when searching for a clear lower altitude.
+_MITIGATION_STEP_FT = 500
 
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
@@ -77,18 +88,23 @@ def _check_enroute_vfr(
     ctx: RouteContext,
     model: str,
     cloud_clearance_ft: float,
+    altitude_ft: float,
 ) -> tuple[int, int, int, int]:
-    """Check en-route cloud clearance for VFR.
+    """Check en-route cloud clearance for VFR at ``altitude_ft``.
+
+    Takes the evaluated altitude explicitly (rather than reading
+    ``ctx.cruise_altitude_ft``) so it can be re-run at candidate altitudes when
+    searching for a lower-altitude mitigation.
 
     Returns (total, imc_count, marginal_count, clear_count).
-    - imc_count: points where cruise is inside BKN/OVC cloud
+    - imc_count: points where the altitude is inside BKN/OVC cloud
     - marginal_count: points where cloud clearance < threshold (but not in cloud)
     """
     total = 0
     imc_count = 0
     marginal_count = 0
     clear_count = 0
-    cruise = ctx.cruise_altitude_ft
+    cruise = altitude_ft
 
     for rpa in ctx.analyses:
         sounding = rpa.sounding.get(model)
@@ -121,6 +137,30 @@ def _check_enroute_vfr(
             clear_count += 1
 
     return total, imc_count, marginal_count, clear_count
+
+
+def _enroute_vfr_status(
+    total: int,
+    imc_count: int,
+    marginal_count: int,
+    imc_pct_amber: float,
+    imc_pct_red: float,
+) -> AdvisoryStatus:
+    """Grade the en-route cloud-clearance axis from point counts.
+
+    Shared by ``evaluate`` and the vertical-mitigation scan so a candidate
+    altitude is graded with exactly the same thresholds as cruise.
+    """
+    if total <= 0:
+        return AdvisoryStatus.GREEN
+    affected = imc_count + marginal_count
+    imc_pct = 100.0 * imc_count / total
+    affected_pct = 100.0 * affected / total
+    if imc_pct >= imc_pct_red:
+        return AdvisoryStatus.RED
+    if affected_pct >= imc_pct_amber:
+        return AdvisoryStatus.AMBER
+    return AdvisoryStatus.GREEN
 
 
 def _field_elevation_ft(ctx: RouteContext, distance_nm: float) -> float:
@@ -208,6 +248,170 @@ def _check_corridor_vfr(
             parts.append(adv_t(key, loc, cov="BKN", icao=icao or fallback))
 
     return worst, parts
+
+
+_SEVERITY = {AdvisoryStatus.GREEN: 0, AdvisoryStatus.AMBER: 1, AdvisoryStatus.RED: 2}
+
+
+def _vertical_mitigation(
+    ctx: RouteContext,
+    model: str,
+    cloud_clearance_ft: float,
+    imc_pct_amber: float,
+    imc_pct_red: float,
+    cruise_status: AdvisoryStatus,
+    loc: str | None,
+) -> Mitigation | None:
+    """Search for a lower cruise altitude that clears en-route cloud (cruise_imc).
+
+    Scans downward from ``cruise - step`` to a terrain floor
+    (``max terrain + _TERRAIN_CLEARANCE_FT``), re-grading the en-route axis at
+    each candidate. Returns an ALTITUDE mitigation reporting the **highest**
+    altitude whose status strictly improves on cruise, preferring a fully clear
+    (GREEN) band over a merely-better (AMBER) one. Returns None when the
+    en-route axis is already green, or when the only improving band lies below
+    the terrain floor (the RED is genuine).
+
+    ``mitigated_status`` is the status of the *cruise IMC axis alone* at the
+    chosen altitude — NOT the overall advisory status (a corridor deck or
+    airport issue can still hold the grade higher).
+    """
+    if cruise_status == AdvisoryStatus.GREEN:
+        return None
+
+    cruise = ctx.cruise_altitude_ft
+    max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
+    floor = max_terrain + _TERRAIN_CLEARANCE_FT
+
+    best_alt: int | None = None
+    best_status: AdvisoryStatus | None = None
+
+    alt = cruise - _MITIGATION_STEP_FT
+    while alt >= floor:
+        total, imc, marg, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
+        cand = _enroute_vfr_status(total, imc, marg, imc_pct_amber, imc_pct_red)
+        # Only an altitude that strictly improves on cruise is worth offering.
+        if _SEVERITY[cand] < _SEVERITY[cruise_status]:
+            if best_status is None or _SEVERITY[cand] < _SEVERITY[best_status]:
+                best_alt = int(alt)
+                best_status = cand
+            # Scanning high→low, the first GREEN is the highest GREEN and the
+            # best we can do — stop rather than descend further for no gain.
+            if cand == AdvisoryStatus.GREEN:
+                break
+        alt -= _MITIGATION_STEP_FT
+
+    if best_alt is None or best_status is None:
+        return None
+
+    return Mitigation(
+        kind=MitigationKind.ALTITUDE,
+        addresses="cruise_imc",
+        detail=adv_t("vfr.mitigation.altitude", loc, alt=best_alt),
+        mitigated_status=best_status,
+        altitude_ft=best_alt,
+    )
+
+
+def _corridor_blocked_profile(
+    ctx: RouteContext,
+    model: str,
+    corridor_nm: float,
+    phase: str,
+) -> list[tuple[float, bool]]:
+    """Per-point (distance, blocked) for a corridor phase, sorted by distance.
+
+    A point is *blocked* when a BKN/OVC layer lies entirely between field
+    elevation and cruise (``floor < top_ft < cruise``) — the same deck condition
+    ``_check_corridor_vfr`` uses, but reported per point so a mitigation can
+    locate where the deck breaks.
+    """
+    cruise = ctx.cruise_altitude_ft
+    total = ctx.total_distance_nm
+    profile: list[tuple[float, bool]] = []
+
+    for rpa in ctx.analyses:
+        d = rpa.distance_from_origin_nm or 0.0
+        if phase == "climb":
+            in_corridor = d <= corridor_nm and d <= total / 2
+        else:
+            in_corridor = (total - d) <= corridor_nm and d > total / 2
+        if not in_corridor:
+            continue
+        sounding = rpa.sounding.get(model)
+        if sounding is None:
+            continue
+        floor = _field_elevation_ft(ctx, d)
+        blocked = any(
+            cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+            and floor < cl.top_ft < cruise
+            for cl in sounding.cloud_layers
+        )
+        profile.append((d, blocked))
+
+    profile.sort(key=lambda t: t[0])
+    return profile
+
+
+def _corridor_mitigation(
+    ctx: RouteContext,
+    model: str,
+    corridor_nm: float,
+    loc: str | None,
+) -> list[Mitigation]:
+    """Find along-route repositioning mitigations for blocked corridor decks.
+
+    Climb-out: if the corridor points nearest departure are blocked but farther
+    ones clear, offer "climb to cruise after ~d* nm from departure" (``d*`` is
+    the nearest confirmed-clear distance beyond the blocked region). Descent is
+    symmetric near the arrival end. Only offered when there is a genuine
+    clear/blocked split — a uniformly blocked corridor cannot be repositioned
+    around, so no mitigation (the RED/AMBER is genuine).
+
+    ``mitigated_status`` is GREEN: repositioning clears that phase's deck. It
+    speaks only for the corridor axis, not the overall advisory.
+    """
+    total = ctx.total_distance_nm
+    mitigations: list[Mitigation] = []
+
+    # --- Climb-out: deck near departure, clear beyond d* ---
+    climb = _corridor_blocked_profile(ctx, model, corridor_nm, "climb")
+    blocked = [d for d, b in climb if b]
+    clear = [d for d, b in climb if not b]
+    if blocked and clear:
+        max_blocked = max(blocked)
+        beyond = [d for d in clear if d > max_blocked]
+        if beyond:
+            d_star = min(beyond)
+            mitigations.append(Mitigation(
+                kind=MitigationKind.ROUTE_POSITION,
+                addresses="climb_deck",
+                detail=adv_t("vfr.mitigation.climb_after", loc, dist=round(d_star)),
+                mitigated_status=AdvisoryStatus.GREEN,
+                distance_nm=round(d_star, 1),
+                reference="departure",
+            ))
+
+    # --- Descent: deck near arrival, clear before it ---
+    descent = _corridor_blocked_profile(ctx, model, corridor_nm, "descent")
+    blocked = [d for d, b in descent if b]
+    clear = [d for d, b in descent if not b]
+    if blocked and clear:
+        min_blocked = min(blocked)
+        before = [d for d in clear if d < min_blocked]
+        if before:
+            d_star = max(before)
+            dist_before_arrival = total - d_star
+            mitigations.append(Mitigation(
+                kind=MitigationKind.ROUTE_POSITION,
+                addresses="descent_deck",
+                detail=adv_t("vfr.mitigation.descend_before", loc, dist=round(dist_before_arrival)),
+                mitigated_status=AdvisoryStatus.GREEN,
+                distance_nm=round(dist_before_arrival, 1),
+                reference="arrival",
+            ))
+
+    return mitigations
 
 
 @register
@@ -299,7 +503,7 @@ class VFRFeasibilityEvaluator:
 
             # 2. En-route cloud clearance
             total, imc_count, marginal_count, _ = _check_enroute_vfr(
-                ctx, model, cloud_clearance_ft
+                ctx, model, cloud_clearance_ft, ctx.cruise_altitude_ft
             )
 
             # 3. Climb-out / descent corridor decks (BKN/OVC below cruise near airports)
@@ -323,28 +527,24 @@ class VFRFeasibilityEvaluator:
 
             # 4. Determine en-route status
             affected = imc_count + marginal_count
-            enroute_status = AdvisoryStatus.GREEN
+            enroute_status = _enroute_vfr_status(
+                total, imc_count, marginal_count, imc_pct_amber, imc_pct_red
+            )
             enroute_detail = ""
 
-            if total > 0:
-                imc_pct = 100.0 * imc_count / total
-                affected_pct = 100.0 * affected / total
-
+            if total > 0 and affected > 0:
                 ext = format_extent(affected, total, ctx.total_distance_nm)
-
-                if imc_pct >= imc_pct_red:
-                    enroute_status = AdvisoryStatus.RED
+                if enroute_status == AdvisoryStatus.RED:
                     enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
-                elif affected_pct >= imc_pct_amber:
-                    enroute_status = AdvisoryStatus.AMBER
+                elif enroute_status == AdvisoryStatus.AMBER:
                     if marginal_count > 0 and imc_count > 0:
                         enroute_detail = adv_t("vfr.imc_marginal", loc, extent=ext)
                     elif imc_count > 0:
                         enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
                     else:
                         enroute_detail = adv_t("vfr.marginal", loc, extent=ext)
-                elif affected > 0:
-                    enroute_detail = adv_t("vfr.minor", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
+                else:  # GREEN status but some points affected → minor clearance issues
+                    enroute_detail = adv_t("vfr.minor", loc, extent=ext)
 
             # 5. En-route precipitation (visibility proxy) — capped at AMBER
             # in the composite; the standalone advisory grades it fully.
@@ -386,10 +586,23 @@ class VFRFeasibilityEvaluator:
             else:
                 detail = " | ".join(detail_parts)
 
+            # 7. Mitigations (advice only — never change the grade). Vertical:
+            # a lower altitude that clears cruise IMC. Along-route: reposition
+            # the climb/descent to thread a corridor deck.
+            mitigations: list[Mitigation] = []
+            vertical = _vertical_mitigation(
+                ctx, model, cloud_clearance_ft,
+                imc_pct_amber, imc_pct_red, enroute_status, loc,
+            )
+            if vertical is not None:
+                mitigations.append(vertical)
+            mitigations.extend(_corridor_mitigation(ctx, model, corridor_nm, loc))
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                mitigations=mitigations,
             ))
 
         return RouteAdvisoryResult.from_per_model("vfr_feasibility", per_model, params)

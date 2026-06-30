@@ -88,6 +88,8 @@ from weatherbrief.models.advisories import (  # noqa: F401
     AltitudeAdvisoryDelta,
     AltitudeAdvisoryRow,
     AltitudeTableResult,
+    Mitigation,
+    MitigationKind,
     ModelAdvisoryResult,
     RouteAdvisoriesManifest,
     RouteAdvisoryResult,
