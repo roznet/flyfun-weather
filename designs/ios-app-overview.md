@@ -52,7 +52,9 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 - Cached-flight indicators — `FlightListViewModel.cachedFlightIds: Set<String>` from `caching.cachedPacks()`; green dot per card, non-cached disabled offline
 - Resilient fallback — serves any matching cached timestamp, not just exact requested
 - Explicit per-pack download button with real byte-level progress (`requestDataStreaming` + `StreamingDownloadDelegate`; a single bundled, server-gzipped request fetches all endpoints, then writes each per-endpoint payload to disk)
-- Caches 5 endpoints (advisories, digest, snapshot, route-analyses, elevation) to `Application Support/BriefingCache/<flightId>/<timestamp>/<endpoint>.json` as plain JSON (decompressed on write); sounding-profile stays online-only
+- Caches the 5 required endpoints (advisories, digest, snapshot, route-analyses, elevation) **plus every `(point, model)` sounding profile** (keyed `sounding-{pt}-{model}`, straight from the bundle) to `Application Support/BriefingCache/<flightId>/<timestamp>/<endpoint>.json` as plain JSON (decompressed on write). Because the sounding keys match what `soundingProfile()` reads, a downloaded pack renders Skew-Ts instantly and fully offline — no per-tap round-trip
+- **Auto-download (opt-in, default Wi-Fi only)** — `AppSettingsStore.autoDownloadMode` (`off` / `wifiOnly` / `wifiAndCellular`, in Settings). When a briefing is displayed for a flight that is **today or later**, the latest pack auto-downloads in the background (gated by `NetworkMonitor` connectivity), reusing the same bundle + download banner. `BriefingViewModel.maybeAutoDownloadLatest()` fires from `loadBriefing` and after a refresh produces a new pack
+- **Cache eviction** — `CachingBriefingRepository.pruneStalePacks(olderThanDays:)` drops packs whose flight departed > `AppState.cacheRetentionDays` (7) days ago; departure date comes from `CachedPackEntry.departureTime` (captured at download), falling back to the cached flight record. Runs on launch/foreground (`scenePhase == .active`). Packs whose departure can't be determined are kept (conservative)
 - `BriefingCacheStore` actor with JSON index (`index.json`)
 - Sign-out protection when offline (would strand auth)
 
@@ -63,8 +65,7 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 
 - Push notifications for briefing updates (Phase 2 M2)
 - SwiftData persistence (current cache is file-based)
-- Auto-sync / background refresh
-- Sounding profiles in offline download (online-only for now)
+- True background refresh (auto-download runs only while the briefing screen is open / on foreground, not via `BGTaskScheduler` or a background `URLSession`)
 - Phase 3 M2: route/airport watches, APNs notifications, spatial matching
 - Phase 3 M3: post-flight debrief, validation tooling
 - Phase 3a: voice PIREP (Siri shortcut), proactive prompting engine

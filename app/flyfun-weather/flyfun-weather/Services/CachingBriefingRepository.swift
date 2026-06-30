@@ -246,6 +246,7 @@ final class CachingBriefingRepository: BriefingRepository {
         flightTitle: String,
         assessment: String?,
         packMeta: PackMetaResponse? = nil,
+        departureTime: String? = nil,
         progress: @Sendable @escaping (_ fraction: Double, _ receivedBytes: Int64, _ totalBytes: Int64) -> Void
     ) async throws {
         progress(0, 0, 0)
@@ -284,7 +285,8 @@ final class CachingBriefingRepository: BriefingRepository {
             flightTitle: flightTitle,
             assessment: assessment,
             endpoints: downloaded,
-            totalBytes: diskBytes
+            totalBytes: diskBytes,
+            departureTime: departureTime
         )
         // Cache pack metadata for offline latestPack() recovery
         if let packMeta, let metaData = try? JSONEncoder.weatherBrief.encode(packMeta) {
@@ -303,6 +305,50 @@ final class CachingBriefingRepository: BriefingRepository {
 
     func cachedPacks() async -> [CachedPackEntry] {
         await cache.cachedPacks()
+    }
+
+    // MARK: - Cache eviction
+
+    /// Evict cached packs whose flight departed more than `days` ago.
+    ///
+    /// Departure date comes from the value captured at download time, falling
+    /// back to the cached flight record for legacy entries. Packs whose
+    /// departure can't be determined are kept (conservative — we never delete
+    /// data we can't prove is stale). Returns the number of packs removed.
+    @discardableResult
+    func pruneStalePacks(olderThanDays days: Int) async -> Int {
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        var removed = 0
+        for entry in await cache.cachedPacks() {
+            guard let departure = await departureDate(for: entry) else { continue }
+            if departure < cutoff {
+                await cache.deletePack(flightId: entry.flightId, timestamp: entry.timestamp)
+                removed += 1
+            }
+        }
+        if removed > 0 {
+            Self.logger.info("Pruned \(removed) stale cached pack(s) older than \(days)d")
+        }
+        return removed
+    }
+
+    /// Best-effort departure date for a cached pack: the value stored at download
+    /// time, else the cached flight metadata (for entries predating that field).
+    private func departureDate(for entry: CachedPackEntry) async -> Date? {
+        if let ts = entry.departureTime, let date = Self.parseISO(ts) { return date }
+        if let data = await cache.readFlightMetadata(flightId: entry.flightId, name: "flight"),
+           let flight = try? JSONDecoder.weatherBrief.decode(FlightResponse.self, from: data) {
+            return flight.departureDate
+        }
+        return nil
+    }
+
+    /// Parse an ISO-8601 timestamp, tolerating the optional fractional seconds
+    /// the server sometimes includes.
+    private static func parseISO(_ s: String) -> Date? {
+        let frac = ISO8601DateFormatter()
+        frac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return frac.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
 
     // MARK: - Private

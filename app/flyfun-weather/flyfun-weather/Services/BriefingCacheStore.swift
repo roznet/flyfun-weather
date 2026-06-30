@@ -10,6 +10,11 @@ struct CachedPackEntry: Codable, Sendable, Identifiable {
     let downloadedAt: Date
     var endpoints: Set<String>
     var totalBytes: Int64
+    /// Flight departure (ISO-8601) captured at download time so cache eviction
+    /// can age packs out by flight date without a separate flight-metadata
+    /// lookup. Optional for backward compatibility with index entries written
+    /// before this field existed (they fall back to the cached flight record).
+    var departureTime: String? = nil
 
     var id: String { "\(flightId)/\(timestamp)" }
 
@@ -121,7 +126,8 @@ actor BriefingCacheStore {
         flightTitle: String,
         assessment: String?,
         endpoints: Set<String>,
-        totalBytes: Int64
+        totalBytes: Int64,
+        departureTime: String? = nil
     ) {
         ensureLoaded()
         let key = "\(flightId)/\(timestamp)"
@@ -132,7 +138,8 @@ actor BriefingCacheStore {
             assessment: assessment,
             downloadedAt: Date(),
             endpoints: endpoints,
-            totalBytes: totalBytes
+            totalBytes: totalBytes,
+            departureTime: departureTime
         )
         saveIndex()
     }

@@ -83,6 +83,11 @@ enum RefreshState: Equatable {
 final class BriefingViewModel {
     let flight: FlightResponse
     private let repository: any BriefingRepository
+    /// Local settings (offline auto-download mode) + connectivity. Optional so
+    /// fixtures/tests can construct a view model without the full app graph;
+    /// auto-download is simply skipped when either is absent.
+    private let settings: AppSettingsStore?
+    private let networkMonitor: NetworkMonitor?
 
     // Pack metadata
     private(set) var pack: PackMetaResponse?
@@ -131,9 +136,16 @@ final class BriefingViewModel {
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "Briefing")
 
-    init(flight: FlightResponse, repository: any BriefingRepository) {
+    init(
+        flight: FlightResponse,
+        repository: any BriefingRepository,
+        settings: AppSettingsStore? = nil,
+        networkMonitor: NetworkMonitor? = nil
+    ) {
         self.flight = flight
         self.repository = repository
+        self.settings = settings
+        self.networkMonitor = networkMonitor
     }
 
     // MARK: - Deep-link focus (§4.6/§4.7/§4.9)
@@ -187,6 +199,7 @@ final class BriefingViewModel {
             async let dataTask: () = loadPackData(timestamp: pack.fetchTimestamp)
             _ = await (historyTask, dataTask)
             await checkCacheStatus()
+            await maybeAutoDownloadLatest()
         } catch APIError.notFound {
             // No briefing pack exists yet — this is the normal state right after a
             // flight is created (POST /api/flights only saves the flight; it does
@@ -332,6 +345,38 @@ final class BriefingViewModel {
         }
     }
 
+    /// Auto-download the latest pack for offline use when the pilot has opted in
+    /// (Settings → Offline Auto-Download, default Wi-Fi only) and the flight is
+    /// today or in the future. No-op if the pack is already cached, a download is
+    /// already running, or the current connectivity doesn't match the chosen
+    /// mode. Past flights are intentionally skipped — they age out via
+    /// `pruneStalePacks`. Reuses `downloadCurrentPack`, so the download banner
+    /// gives the same visible progress as a manual download.
+    private func maybeAutoDownloadLatest() async {
+        guard let settings, let networkMonitor,
+              repository is CachingBriefingRepository,
+              let pack else { return }
+
+        guard Self.isTodayOrFuture(flight.departureDate) else { return }
+        if packCacheStatus[pack.fetchTimestamp] == true { return }
+        if case .downloading = downloadState { return }
+
+        guard settings.autoDownloadMode.allows(
+            isOnWiFi: networkMonitor.isOnWiFi,
+            isConnected: networkMonitor.isConnected
+        ) else { return }
+
+        Self.logger.info("Auto-downloading pack \(pack.fetchTimestamp) for offline use")
+        await downloadCurrentPack()
+    }
+
+    /// Whether a departure is today or later (local calendar). A nil departure is
+    /// treated as eligible — better to cache than to silently skip.
+    private static func isTodayOrFuture(_ date: Date?) -> Bool {
+        guard let date else { return true }
+        return date >= Calendar.current.startOfDay(for: Date())
+    }
+
     /// Download the current pack for offline access.
     func downloadCurrentPack() async {
         guard let pack, let caching = repository as? CachingBriefingRepository else { return }
@@ -342,7 +387,8 @@ final class BriefingViewModel {
                 timestamp: pack.fetchTimestamp,
                 flightTitle: flight.shortTitle,
                 assessment: pack.assessment,
-                packMeta: pack
+                packMeta: pack,
+                departureTime: flight.departureTime
             ) { [weak self] fraction, received, total in
                 Task { @MainActor in
                     self?.downloadState = .downloading(progress: fraction, receivedBytes: received, totalBytes: total)
@@ -396,6 +442,8 @@ final class BriefingViewModel {
                         updateModels(from: newPack)
                         await loadPackHistory()
                         await loadPackData(timestamp: newPack.fetchTimestamp)
+                        await checkCacheStatus()
+                        await maybeAutoDownloadLatest()
                     }
                     // Clear the transient banner after a delay.
                     try? await Task.sleep(for: .seconds(10))
