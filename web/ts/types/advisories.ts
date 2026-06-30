@@ -2,6 +2,26 @@
 
 export type AdvisoryStatus = 'green' | 'amber' | 'red' | 'unavailable';
 
+/** Axis along which an advisory's flagged sub-issue could be mitigated. */
+export type MitigationKind = 'altitude' | 'route_position' | 'timing';
+
+/**
+ * A decision that could improve a flagged sub-issue — advice only.
+ * A mitigation NEVER changes the advisory's grade (same contract as
+ * `cross_check`). `mitigated_status` is the status of the addressed sub-issue
+ * if applied, NOT the advisory overall. `addresses` is a stable English machine
+ * tag (never displayed raw); `detail` is already localized server-side.
+ */
+export interface Mitigation {
+  kind: MitigationKind;
+  addresses: string;
+  detail: string;
+  mitigated_status: AdvisoryStatus;
+  altitude_ft?: number | null;
+  distance_nm?: number | null;
+  reference?: string | null;
+}
+
 export interface AdvisoryParameterDef {
   key: string;
   label: string;
@@ -35,6 +55,7 @@ export interface ModelAdvisoryResult {
   affected_nm: number;
   total_nm: number;
   cross_check?: string | null;
+  mitigations?: Mitigation[];
 }
 
 export interface RouteAdvisoryResult {
@@ -43,6 +64,7 @@ export interface RouteAdvisoryResult {
   aggregate_detail: string;
   per_model: ModelAdvisoryResult[];
   parameters_used: Record<string, number>;
+  aggregate_mitigations?: Mitigation[];
 }
 
 export type FlightCategory = 'VFR' | 'MVFR' | 'IFR' | 'LIFR';

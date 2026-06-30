@@ -312,6 +312,14 @@ function renderAdvisoryCard(
     ? `<button class="metric-info-btn advisory-view-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.showOnCrossSection')}" aria-label="${t('advisories.showOnCrossSection')}">\u{1F4C8}</button>`
     : '';
 
+  // Mitigation presence hint (#330): a soft lightbulb shown only when this
+  // advisory carries mitigations. It is a *presence hint* — the text lives in
+  // the (i) popup, mirroring how cross_check is a two-layer pattern. Never alters
+  // the status badge or colour; advice only, never a regrade.
+  const lightbulb = adv.aggregate_mitigations?.length
+    ? `<span class="advisory-mitigation-hint" title="${t('advisories.mitigationAvailable')}" aria-label="${t('advisories.mitigationAvailable')}">\u{1F4A1}</span>`
+    : '';
+
   // Compact (two-line) variant for the all-clear band: header + the detail line,
   // dropping the per-model badge row and the description to save space.
   if (compact) {
@@ -320,6 +328,7 @@ function renderAdvisoryCard(
       <div class="advisory-card-header">
         <span class="badge ${aggClass}">${statusLabel(adv.aggregate_status)}</span>
         <span class="advisory-name">${name}</span>
+        ${lightbulb}
         ${chip}
         ${infoBtn}
       </div>
@@ -333,6 +342,7 @@ function renderAdvisoryCard(
       <div class="advisory-card-header">
         <span class="badge ${aggClass}">${statusLabel(adv.aggregate_status)}</span>
         <span class="advisory-name">${name}</span>
+        ${lightbulb}
         ${chip}
         ${infoBtn}
       </div>

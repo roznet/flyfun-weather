@@ -38,11 +38,26 @@ export function renderAdvisoryPopup(
        ).join('')}</ul>`
     : '';
 
+  // Mitigations (#330): advice-only tips that never change the grade. Rendered in
+  // neutral "tip" chrome (blue-gray, lightbulb) — deliberately distinct from the
+  // diagnostic cross_check (info-circle). `detail` is already localized;
+  // `addresses` is a machine tag and is never displayed.
+  const mitigations = adv?.aggregate_mitigations ?? [];
+  const mitigationHtml = mitigations.length > 0
+    ? `<div class="advisory-mitigation" role="note">
+         <p class="advisory-mitigation-title"><span class="advisory-mitigation-icon" aria-hidden="true">\u{1F4A1}</span>${escapeHtml(t('advisories.mitigationTitle'))}</p>
+         <ul class="advisory-mitigation-list">${mitigations.map((m) =>
+           `<li>${escapeHtml(m.detail)}</li>`
+         ).join('')}</ul>
+       </div>`
+    : '';
+
   return `
     <div class="popup-header"><h3>${escapeHtml(entry.name)}</h3></div>
     <p class="advisory-popup-category">${escapeHtml(entry.category)}</p>
     <p style="margin: 0.75rem 0;">${escapeHtml(entry.description)}</p>
     ${crossCheckHtml}
+    ${mitigationHtml}
     ${paramsHtml}
   `;
 }
