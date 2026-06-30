@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import logging
 
-from weatherbrief.models import DerivedLevel, HourlyForecast, PressureLevelData, SoundingAnalysis
+from weatherbrief.models import (
+    DerivedLevel,
+    EnhancedCloudLayer,
+    HourlyForecast,
+    PressureLevelData,
+    SoundingAnalysis,
+)
+from weatherbrief.models.analysis import CloudCoverage
 
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
 
@@ -26,6 +33,40 @@ _RD = 287.05
 # OVC/BKN/SCT classes with moisture-defined edges, that overlay degrades
 # rather than improves the result. Kept callable so we can A/B it later.
 _APPLY_NWP_COVERAGE_OVERLAY = False
+
+
+def compute_sounding_ceiling_ft(
+    cloud_layers: list[EnhancedCloudLayer],
+    derived_levels: list[DerivedLevel],
+    lcl_altitude_ft: float | None,
+) -> float | None:
+    """Lowest BKN/OVC cloud base (ft) as the sounding ceiling, floored to the LCL.
+
+    Returns the base altitude of the lowest broken/overcast layer, or None when
+    there is no BKN/OVC layer. The LCL floor applies only to a *surface-rooted*
+    deck — one whose base pressure is at or below the surface level of the
+    sounding (``base_pressure_hpa >= derived_levels[0].pressure_hpa``) — because
+    such a deck cannot realistically have a base below the lifting condensation
+    level; in that case the ceiling is raised to the LCL.
+
+    Extracted from ``analyze_sounding`` so it can be unit-tested directly (and so
+    tests exercise the production logic rather than a copy of it).
+    """
+    bkn_ovc_layers = [
+        cl for cl in cloud_layers
+        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+    ]
+    if not bkn_ovc_layers:
+        return None
+    lowest = min(bkn_ovc_layers, key=lambda cl: cl.base_ft)
+    ceiling_ft: float | None = lowest.base_ft
+    if (lcl_altitude_ft is not None
+            and derived_levels
+            and lowest.base_pressure_hpa is not None
+            and lowest.base_pressure_hpa >= derived_levels[0].pressure_hpa
+            and lcl_altitude_ft > ceiling_ft):
+        ceiling_ft = round(lcl_altitude_ft)
+    return ceiling_ft
 
 
 def _enrich_lwc(
@@ -275,22 +316,9 @@ def analyze_sounding_lite(
     )
 
     # Compute ceiling from NWP-reclassified cloud layers
-    from weatherbrief.models.analysis import CloudCoverage
-
-    sounding_ceiling_ft: float | None = None
-    bkn_ovc_layers = [
-        cl for cl in cloud_layers
-        if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
-    ]
-    if bkn_ovc_layers:
-        lowest = min(bkn_ovc_layers, key=lambda cl: cl.base_ft)
-        sounding_ceiling_ft = lowest.base_ft
-        if (indices.lcl_altitude_ft is not None
-                and derived_levels
-                and lowest.base_pressure_hpa is not None
-                and lowest.base_pressure_hpa >= derived_levels[0].pressure_hpa
-                and indices.lcl_altitude_ft > sounding_ceiling_ft):
-            sounding_ceiling_ft = round(indices.lcl_altitude_ft)
+    sounding_ceiling_ft = compute_sounding_ceiling_ft(
+        cloud_layers, derived_levels, indices.lcl_altitude_ft,
+    )
 
     nwp_ceiling_ft: float | None = None
     if hourly and hourly.nwp_cloud_diagnostics:

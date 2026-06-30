@@ -62,6 +62,27 @@ Counts of the ~50 analysis modules audited this session:
 > numbers were **hand-derived from each module's own formula**. That proves code-matches-design,
 > not design-matches-reality. They are scored Reg ✅ / Ext ❌|📄, not Ext ✅.
 
+### Progress log
+
+**2026-06-30 — Tier-1 bundle (committed).** Decisions confirmed by user: B1→delegate to MetPy,
+B2→align icing % to 20/50, A1→verify EDR against the paper first.
+- **B1** `prepare.py` dewpoint → now delegates to `mpcalc.dewpoint_from_relative_humidity`
+  (Bolton 1980). Magnus discrepancy (Bug #1) resolved; Ext: ⚪→🔵 delegated.
+- **B2** `ifr_feasibility.py` icing % unified to **20/50** via shared `_ICING_PCT_*_DEFAULT`
+  constants + guard test (Bug #2 resolved).
+- **A2** `e_shear.py` — exact-E + scale-factor oracle tests added. Ext: 🟡→✅. **The scale-factor
+  assertion caught a real defect (Bug #7):** truncated knot constants (`0.51444` vs `1.94384`,
+  not exact reciprocals) → replaced with exact `1852/3600` forms. `_HWS_SCALE` now exactly 360000.
+- **A3** `thermodynamics.py` — `_find_temperature_crossing` and `_compute_bulk_shear` now
+  value-tested against hand-computed oracles. Ext (those two helpers): ❌→✅. The bulk-shear test
+  documents the nearest-level approximation (interpolate-to-exact-height logged as a TODO).
+- **C1** Bug #4 resolved — extracted `compute_sounding_ceiling_ft`; `TestLCLFloor` now exercises
+  production code instead of a copy.
+- **A1** EDR — verification only **partial**: `20_45kft (-2.953, 0.602)` confirmed against
+  Sharman & Pearson 2017; lower bands unverifiable (sources network-blocked). Test deferred
+  pending the paper's Table 1 (see §2 TODO).
+- Verified: full suite **3063 passed**, 1 pre-existing unrelated auth/OAuth env failure.
+
 ---
 
 ## 1. Thermodynamic core (`src/weatherbrief/analysis/sounding/`)
@@ -196,12 +217,14 @@ analytic fields or round-trip the code's own output.
 
 ## Concrete discrepancies / bugs surfaced this session (act on regardless)
 
-1. **`prepare.py` Magnus constants** `a=17.27, b=237.7` vs `analysis-metrics.md` documents `17.67 / 243.5` — code/doc disagree (~0.1 °C). Reconcile and pin the chosen variant.
-2. **`ifr_feasibility.py` icing-% mismatch** — `catalog_entry()` 20/50 vs `evaluate()` fallback 15/30, untested, on a go/no-go axis.
-3. **`edr.py` C1/C2 not pinned** to the Kim et al. 2020 table — only an algebraic-identity test guards it (passes with wrong constants).
-4. **`test_nwp_cloud_and_ceiling.py::TestLCLFloor`** re-implements the production ceiling logic locally → can't catch a regression in the real function.
+1. ~~**`prepare.py` Magnus constants** `a=17.27, b=237.7` vs doc `17.67 / 243.5`.~~ **RESOLVED (B1)** — now delegates to `mpcalc.dewpoint_from_relative_humidity`.
+2. ~~**`ifr_feasibility.py` icing-% mismatch** — catalog 20/50 vs evaluate fallback 15/30.~~ **RESOLVED (B2)** — unified to 20/50 via shared constant + guard test.
+3. **`edr.py` C1/C2 not pinned** to the Kim et al. 2020 table — only an algebraic-identity test guards it (passes with wrong constants). **Partially addressed (A1):** `20_45kft` confirmed vs Sharman & Pearson 2017; pin-test deferred until lower bands verified.
+4. ~~**`test_nwp_cloud_and_ceiling.py::TestLCLFloor`** re-implements production ceiling logic locally.~~ **RESOLVED (C1)** — extracted `compute_sounding_ceiling_ft`; test calls production.
 5. **Cloud okta cutpoints** BKN=50 / SCT=25 % diverge from WMO okta midpoints, with no test noting it.
 6. **`thermodynamics.py` blanket `try/except → None`** — a physics bug surfaces as "missing data" rather than an error.
+7. ~~**`e_shear.py` truncated knot constants** — `0.51444` (kt→m/s) and `1.94384` (m/s→kt) are not exact reciprocals (~1e-5 inconsistency); `_HWS_SCALE` came out 359999.168 not 360000.~~ **RESOLVED (A2)** — replaced with exact `1852/3600` forms. *Caught by the new scale-factor assertion, not by inspection.*
+8. **`grib/decode.py:1413`** uses the same truncated `_KT_PER_MS = 1.94384` — follow-up, out of Tier-1 scope. ~2 ppm wind-conversion error in GRIB decode.
 
 ---
 
@@ -227,12 +250,16 @@ analytic fields or round-trip the code's own output.
 ## Consolidated TODO — external validation required (work queue)
 
 **Tier 1 — quick oracle wins (oracle exists, ~1 assertion each):**
-- [ ] `edr.py` — pin C1/C2 to Kim 2020 table.
-- [ ] `e_shear.py` — exact-E-float + scale-factor assertion.
+- [~] `edr.py` — pin C1/C2 to Kim 2020 table. **Blocked:** only `20_45kft` externally
+  confirmed; lower-band values not in accessible sources + primary PDFs network-blocked. Needs
+  the paper's Table 1 (user access or unblocked fetch) before the pin-test is meaningful.
+- [x] `e_shear.py` — exact-E-float + scale-factor assertion. *(also fixed Bug #7 + #8 logged)*
 - [ ] `analysis/sun.py` — NOAA/astral fixed-case oracle.
-- [ ] `thermodynamics.py` — index values vs `mpcalc` direct; value-test the 2 hand-rolled helpers.
-- [ ] `prepare.py` — unit suite + Magnus reconciliation.
-- [ ] Fix bugs #2 (ifr_feasibility mismatch) and #4 (self-reimplementing test).
+- [x] `thermodynamics.py` — value-test the 2 hand-rolled helpers. *(full index-vs-mpcalc oracle
+  still open; helpers done)*
+- [x] `prepare.py` — dewpoint delegated to MetPy (Magnus reconciled). *(broader unit suite still open)*
+- [x] Fix bugs #2 (ifr_feasibility mismatch) and #4 (self-reimplementing test).
+- [ ] `grib/decode.py:1413` — replace truncated `1.94384` with exact `3600/1852` (Bug #8).
 
 **Tier 2 — reproduce published reference cases:**
 - [ ] `sfip.py` — Belo-Pereira 2015 / Morcrette 2019 reference soundings.
