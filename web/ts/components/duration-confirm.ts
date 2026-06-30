@@ -118,8 +118,9 @@ export async function confirmZeroDuration(waypoints: string[]): Promise<Duration
 
 function buildSuggestionsHtml(distanceNm: number | null): string {
   if (distanceNm == null || distanceNm <= 0) return '';
-  // Round up to whole hours — the model's duration unit is hours and the
-  // existing waypoint-blur auto-calc (flights-main.ts) does the same.
+  // Whole-hour suggestions — conservative (rounded up, never shorter) and they
+  // land on valid 15-min dropdown values. The caller snaps the chosen value to
+  // the duration dropdowns via setDurationControls/splitDurationCeil.
   const at120 = Math.ceil(distanceNm / 120);
   const at150 = Math.ceil(distanceNm / 150);
   const distLabel = t('flights.form.zeroDurationDistance', { dist: distanceNm.toFixed(0) });

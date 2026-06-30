@@ -7,6 +7,7 @@ import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRouteCompact, isFlightPast } from '../utils';
 import { getDateLocale, t } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
+import { splitDurationCeil, buildDurationHourOptions, buildDurationMinuteOptions, formatDurationHM } from '../utils/duration';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefSummary } from '../components/debrief-summary';
 import { showRoutePopup } from '../components/route-interpret';
@@ -126,6 +127,12 @@ export function renderFlightInfo(
       return `<option value="${m}"${sel}>${m.toString().padStart(2, '0')}</option>`;
     }).join('');
 
+    // Build duration hour/minute options (split stored decimal hours, rounding
+    // up to the next 15-min unit so the dropdowns never show less than stored).
+    const durParts = splitDurationCeil(flight.flight_duration_hours);
+    const durationHourOptions = buildDurationHourOptions(durParts.hours);
+    const durationMinuteOptions = buildDurationMinuteOptions(durParts.minutes);
+
     // Build profile options
     const profileOptions = profiles.map(p => {
       const sel = p.id === flight.profile_id ? ' selected' : '';
@@ -213,7 +220,12 @@ export function renderFlightInfo(
         <div class="info-row">
           <span class="info-label">Duration</span>
           <span class="info-value">
-            <input type="number" id="edit-duration" class="edit-input" value="${flight.flight_duration_hours}" min="0" max="24" step="0.5" style="width:70px"> hrs
+            <div class="time-input-group">
+              <select id="edit-duration-hours" class="edit-input">${durationHourOptions}</select>
+              <span class="time-separator">h</span>
+              <select id="edit-duration-minutes" class="edit-input">${durationMinuteOptions}</select>
+              <span class="time-separator">m</span>
+            </div>
           </span>
         </div>
         <div class="info-row edit-actions">
@@ -336,7 +348,7 @@ export function renderFlightInfo(
         </div>
         <div class="info-row">
           <span class="info-label">Duration</span>
-          <span class="info-value">${flight.flight_duration_hours}h</span>
+          <span class="info-value">${formatDurationHM(flight.flight_duration_hours)}</span>
         </div>
         <div class="info-row">
           <span class="info-label">End time</span>

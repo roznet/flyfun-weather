@@ -627,7 +627,7 @@
   "page.flights.time": "Uhrzeit",
   "page.flights.altitude": "Flughöhe (ft)",
   "page.flights.ceiling": "Gipfelhöhe (ft)",
-  "page.flights.duration": "Dauer (Std.)",
+  "page.flights.duration": "Dauer",
   "page.flights.createFlight": "Flug erstellen",
   "page.flights.loading": "Flüge werden geladen...",
   "page.settings.title": "Einstellungen",

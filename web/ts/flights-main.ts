@@ -26,6 +26,7 @@ import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup } from './components/info-popup';
 import { iasToTasISA, resolveCruiseSpeedIAS } from './utils/atmo';
+import { splitDurationCeil, combineDuration } from './utils/duration';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
@@ -161,11 +162,33 @@ async function fetchRouteAndUpdateUI(): Promise<void> {
   }
 }
 
+/** Read the duration hour/minute dropdowns as decimal hours. */
+function getDurationHours(): number {
+  const hoursSel = document.getElementById('input-duration-hours') as HTMLSelectElement | null;
+  const minsSel = document.getElementById('input-duration-minutes') as HTMLSelectElement | null;
+  const hours = parseInt(hoursSel?.value || '0', 10) || 0;
+  const minutes = parseInt(minsSel?.value || '0', 10) || 0;
+  return combineDuration(hours, minutes);
+}
+
+/** Populate the duration hour/minute dropdowns from a decimal-hours value,
+ *  rounding UP to the nearest 15-minute unit (never shorter — see
+ *  splitDurationCeil). Setting ``.value`` does not fire a change event, so the
+ *  durationManuallyEdited guard stays untouched on programmatic updates. */
+function setDurationControls(decimalHours: number): void {
+  const { hours, minutes } = splitDurationCeil(decimalHours);
+  const hoursSel = document.getElementById('input-duration-hours') as HTMLSelectElement | null;
+  const minsSel = document.getElementById('input-duration-minutes') as HTMLSelectElement | null;
+  if (hoursSel) hoursSel.value = String(hours);
+  if (minsSel) minsSel.value = String(minutes);
+}
+
 /** Auto-calculate the duration field from the cached route distance and the
  *  resolved cruise speed (aircraft IAS first, then flight-default profile —
  *  see getCruiseSpeedIAS), unless the user has edited it manually. The speed is
  *  cruise IAS; we convert it to TAS at the selected cruise altitude (ISA
- *  standard atmosphere) so distance ÷ TAS = still-air duration. */
+ *  standard atmosphere) so distance ÷ TAS = still-air duration. The estimate is
+ *  rounded UP to the next 15-minute unit when populating the dropdowns. */
 function recalcDurationEstimate(): void {
   if (durationManuallyEdited || lastTotalDistanceNm <= 0) return;
   const iasKt = getCruiseSpeedIAS();
@@ -173,9 +196,7 @@ function recalcDurationEstimate(): void {
   const altFt = parseInt(
     (document.getElementById('input-altitude') as HTMLInputElement)?.value || '8000', 10);
   const tasKt = iasToTasISA(iasKt, altFt);
-  const durationHours = Math.ceil(lastTotalDistanceNm / tasKt);
-  const durationInput = document.getElementById('input-duration') as HTMLInputElement;
-  if (durationInput) durationInput.value = String(durationHours);
+  setDurationControls(lastTotalDistanceNm / tasKt);
 }
 
 /** Populate the Recent Routes dropdown from the user's flight history.
@@ -242,7 +263,7 @@ function translateStaticElements(): void {
   set('label[for="input-hour"]', 'page.flights.time');
   set('label[for="input-altitude"]', 'page.flights.altitude');
   set('label[for="input-ceiling"]', 'page.flights.ceiling');
-  set('label[for="input-duration"]', 'page.flights.duration');
+  set('label[for="input-duration-hours"]', 'page.flights.duration');
   set('#loading-spinner', 'page.flights.loading');
   const submitBtn = document.querySelector('#create-flight-form button[type="submit"]');
   if (submitBtn) submitBtn.textContent = t('page.flights.createFlight');
@@ -296,11 +317,8 @@ async function applyParsedFpl(text: string): Promise<void> {
 
     // Duration
     if (parsed.duration_hours != null) {
-      const durInput = document.getElementById('input-duration') as HTMLInputElement;
-      if (durInput) {
-        durInput.value = String(parsed.duration_hours);
-        durationManuallyEdited = true; // prevent auto-calc from overwriting
-      }
+      setDurationControls(parsed.duration_hours);
+      durationManuallyEdited = true; // prevent auto-calc from overwriting
     }
 
     // Trigger route distance fetch to populate timezones and validate
@@ -688,7 +706,7 @@ async function init(): Promise<void> {
       const { hour: utcHour, minute: utcMinute } = localTimeToUtc();
       const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value || '8000', 10);
       const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value || '18000', 10);
-      let duration = parseFloat((document.getElementById('input-duration') as HTMLInputElement).value || '0');
+      let duration = getDurationHours();
       const profileSelect = document.getElementById('input-profile') as HTMLSelectElement;
       const profileId = profileSelect?.value ? parseInt(profileSelect.value, 10) : undefined;
       const aircraftSelect = document.getElementById('input-aircraft') as HTMLSelectElement;
@@ -719,9 +737,10 @@ async function init(): Promise<void> {
       if (!duration || duration <= 0) {
         const confirm = await confirmZeroDuration(waypoints);
         if (!confirm.confirmed) return;
-        duration = confirm.duration;
-        const durationInput = document.getElementById('input-duration') as HTMLInputElement;
-        if (durationInput) durationInput.value = String(duration);
+        // Reflect the confirmed value in the dropdowns (rounded up to the next
+        // 15-min unit) and re-read so the submitted value matches what's shown.
+        setDurationControls(confirm.duration);
+        duration = getDurationHours();
       }
 
       try {
@@ -809,10 +828,9 @@ async function init(): Promise<void> {
   });
 
   // --- Track manual duration edits ---
-  const durationInput = document.getElementById('input-duration') as HTMLInputElement;
-  durationInput?.addEventListener('input', () => {
-    durationManuallyEdited = true;
-  });
+  const onDurationEdit = () => { durationManuallyEdited = true; };
+  document.getElementById('input-duration-hours')?.addEventListener('change', onDurationEdit);
+  document.getElementById('input-duration-minutes')?.addEventListener('change', onDurationEdit);
 
   // --- Recompute the duration estimate when cruise altitude changes ---
   // TAS (and therefore still-air duration) depends on altitude. Recompute from

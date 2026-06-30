@@ -10,6 +10,7 @@ import { copyFlightShareLink, redirectToLogin, renderUserInfo } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { localToUtc, utcToLocal } from './utils/timezone';
+import { combineDuration } from './utils/duration';
 import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
 import { createFlight, fetchRouteAdvisories, moveFlight } from './adapters/api-adapter';
 import { flaggedTagsFromAdvisories } from './components/debrief-taxonomy';
@@ -293,7 +294,8 @@ async function init(): Promise<void> {
       const aircraftEl = document.getElementById('edit-aircraft') as HTMLSelectElement;
       const altEl = document.getElementById('edit-altitude') as HTMLInputElement;
       const ceilEl = document.getElementById('edit-ceiling') as HTMLInputElement;
-      const durEl = document.getElementById('edit-duration') as HTMLInputElement;
+      const durHoursEl = document.getElementById('edit-duration-hours') as HTMLSelectElement;
+      const durMinutesEl = document.getElementById('edit-duration-minutes') as HTMLSelectElement;
       const altEnabledEl = document.getElementById('edit-alt-enabled') as HTMLInputElement;
 
       syncUtcFromLocal();
@@ -302,7 +304,10 @@ async function init(): Promise<void> {
       const aircraftId = aircraftEl?.value ? parseInt(aircraftEl.value, 10) : undefined;
       const altitude = parseInt(altEl.value, 10);
       const ceiling = parseInt(ceilEl.value, 10);
-      const duration = parseFloat(durEl.value);
+      const duration = combineDuration(
+        parseInt(durHoursEl?.value || '0', 10) || 0,
+        parseInt(durMinutesEl?.value || '0', 10) || 0,
+      );
 
       // Save handles non-structural changes only — date/origin/dest stay the same.
       const departureTime = `${flight.target_date}T${editUtcHour.toString().padStart(2, '0')}:${editUtcMinute.toString().padStart(2, '0')}:00Z`;

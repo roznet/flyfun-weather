@@ -627,7 +627,7 @@
   "page.flights.time": "Hora",
   "page.flights.altitude": "Altitud (ft)",
   "page.flights.ceiling": "Techo (ft)",
-  "page.flights.duration": "Duración (hrs)",
+  "page.flights.duration": "Duración",
   "page.flights.createFlight": "Crear vuelo",
   "page.flights.loading": "Cargando vuelos...",
   "page.settings.title": "Configuración",
