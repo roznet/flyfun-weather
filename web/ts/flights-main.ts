@@ -26,7 +26,10 @@ import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup } from './components/info-popup';
 import { iasToTasISA, resolveCruiseSpeedIAS } from './utils/atmo';
-import { splitDurationCeil, combineDuration } from './utils/duration';
+import {
+  splitDurationCeil, combineDuration,
+  buildDurationHourOptions, buildDurationMinuteOptions,
+} from './utils/duration';
 import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
@@ -678,6 +681,12 @@ async function init(): Promise<void> {
       hourSelect.appendChild(opt);
     }
   }
+
+  // --- Populate duration dropdowns from the shared helpers (default 0h00) ---
+  const durHoursSelect = document.getElementById('input-duration-hours') as HTMLSelectElement | null;
+  if (durHoursSelect) durHoursSelect.innerHTML = buildDurationHourOptions(0);
+  const durMinutesSelect = document.getElementById('input-duration-minutes') as HTMLSelectElement | null;
+  if (durMinutesSelect) durMinutesSelect.innerHTML = buildDurationMinuteOptions(0);
 
   // --- First-login welcome wizard ---
   if (!user.setup_completed) {

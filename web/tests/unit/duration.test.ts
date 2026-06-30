@@ -65,6 +65,12 @@ describe('formatDurationHM', () => {
     expect(formatDurationHM(12.75)).toBe('12h45');
   });
 
+  it('rounds up to the 15-min grid so view matches the edit dropdowns', () => {
+    // 2.1h -> 2h15 (ceil), agreeing with splitDurationCeil rather than 2h06.
+    expect(formatDurationHM(2.1)).toBe('2h15');
+    expect(formatDurationHM(1 + 1 / 60)).toBe('1h15');
+  });
+
   it('handles non-positive / invalid input as 0h', () => {
     expect(formatDurationHM(-1)).toBe('0h');
     expect(formatDurationHM(NaN)).toBe('0h');

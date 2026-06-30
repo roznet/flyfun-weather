@@ -7,6 +7,7 @@
 import { fetchRouteDistance } from '../adapters/api-adapter';
 import { escapeHtml } from '../utils';
 import { t } from '../i18n/i18n';
+import { buildDurationHourOptions, buildDurationMinuteOptions, combineDuration, MAX_DURATION_HOURS } from '../utils/duration';
 
 export interface DurationConfirmResult {
   confirmed: boolean;
@@ -40,12 +41,15 @@ export async function confirmZeroDuration(waypoints: string[]): Promise<Duration
       <h3>${escapeHtml(t('flights.form.zeroDurationTitle'))}</h3>
       <p style="margin-top:0.5rem;">${escapeHtml(t('flights.form.zeroDurationMessage'))}</p>
       <div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;">
-        <label for="zero-duration-input" style="font-weight:600;">
+        <label for="zero-duration-hours" style="font-weight:600;">
           ${escapeHtml(t('flights.form.zeroDurationLabel'))}
         </label>
-        <input id="zero-duration-input" type="number" min="0" max="24" step="0.5" value="0"
-               style="width:5rem;padding:0.35rem;font-size:1rem;" />
-        <span style="color:var(--text-muted,#6b7280);">${escapeHtml(t('flights.form.zeroDurationHoursUnit'))}</span>
+        <div class="time-input-group">
+          <select id="zero-duration-hours">${buildDurationHourOptions(0)}</select>
+          <span class="time-separator">h</span>
+          <select id="zero-duration-minutes">${buildDurationMinuteOptions(0)}</select>
+          <span class="time-separator">m</span>
+        </div>
       </div>
       ${buildSuggestionsHtml(distanceNm)}
       <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;">
@@ -63,9 +67,9 @@ export async function confirmZeroDuration(waypoints: string[]): Promise<Duration
 
     modal.addEventListener('click', (e) => e.stopPropagation());
 
-    const input = modal.querySelector('#zero-duration-input') as HTMLInputElement | null;
-    input?.focus();
-    input?.select();
+    const hoursSel = modal.querySelector('#zero-duration-hours') as HTMLSelectElement | null;
+    const minutesSel = modal.querySelector('#zero-duration-minutes') as HTMLSelectElement | null;
+    hoursSel?.focus();
 
     const cleanup = () => {
       document.removeEventListener('keydown', onEsc);
@@ -78,32 +82,36 @@ export async function confirmZeroDuration(waypoints: string[]): Promise<Duration
     };
 
     const accept = () => {
-      const raw = parseFloat(input?.value || '0');
-      const duration = isNaN(raw) ? 0 : Math.max(0, raw);
+      const hours = parseInt(hoursSel?.value || '0', 10) || 0;
+      const minutes = parseInt(minutesSel?.value || '0', 10) || 0;
       cleanup();
-      resolve({ confirmed: true, duration });
+      resolve({ confirmed: true, duration: combineDuration(hours, minutes) });
     };
 
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') cancel();
     };
 
-    // Enter inside the field commits the value (matches form-submit muscle memory)
-    input?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        accept();
-      }
+    // Enter inside the dropdowns commits the value (matches form-submit muscle memory)
+    [hoursSel, minutesSel].forEach((sel) => {
+      sel?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          accept();
+        }
+      });
     });
 
-    // Suggestion chips fill the input but don't auto-submit — the pilot
-    // still sees the value before clicking Continue.
+    // Suggestion chips fill the hour dropdown but don't auto-submit — the pilot
+    // still sees the value before clicking Continue. Suggestions are whole hours,
+    // so the minute dropdown resets to 00.
     modal.querySelectorAll<HTMLButtonElement>('.zero-duration-suggestion').forEach((btn) => {
       btn.addEventListener('click', () => {
         const hours = btn.dataset.hours;
-        if (hours && input) {
-          input.value = hours;
-          input.focus();
+        if (hours && hoursSel) {
+          hoursSel.value = hours;
+          if (minutesSel) minutesSel.value = '0';
+          hoursSel.focus();
         }
       });
     });
@@ -119,10 +127,10 @@ export async function confirmZeroDuration(waypoints: string[]): Promise<Duration
 function buildSuggestionsHtml(distanceNm: number | null): string {
   if (distanceNm == null || distanceNm <= 0) return '';
   // Whole-hour suggestions — conservative (rounded up, never shorter) and they
-  // land on valid 15-min dropdown values. The caller snaps the chosen value to
-  // the duration dropdowns via setDurationControls/splitDurationCeil.
-  const at120 = Math.ceil(distanceNm / 120);
-  const at150 = Math.ceil(distanceNm / 150);
+  // land on valid 15-min dropdown values. Clamped to the hour dropdown's ceiling
+  // so the chip can actually be applied on very long routes.
+  const at120 = Math.min(Math.ceil(distanceNm / 120), MAX_DURATION_HOURS);
+  const at150 = Math.min(Math.ceil(distanceNm / 150), MAX_DURATION_HOURS);
   const distLabel = t('flights.form.zeroDurationDistance', { dist: distanceNm.toFixed(0) });
   const hint = t('flights.form.zeroDurationSuggestionsHint');
   return `
