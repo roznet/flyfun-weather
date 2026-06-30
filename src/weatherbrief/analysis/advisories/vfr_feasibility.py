@@ -183,8 +183,8 @@ def _corridor_points(
     model: str,
     corridor_nm: float,
     phase: str,
-) -> Iterator[tuple[float, bool, bool]]:
-    """Yield ``(distance_nm, has_ovc, has_bkn)`` for each climb/descent corridor point.
+) -> Iterator[tuple[float, bool, bool, float | None]]:
+    """Yield ``(distance_nm, has_ovc, has_bkn, base_agl_ft)`` for each corridor point.
 
     Single source of truth for both corridor membership and the transitable-deck
     condition, shared by the corridor grade (``_check_corridor_vfr``) and the
@@ -198,6 +198,11 @@ def _corridor_points(
       (``floor < top_ft < cruise``) is one the flight must climb/descend through.
       A layer whose top reaches cruise is cruise-in-cloud and is left to
       ``_check_enroute_vfr`` rather than double-counted here.
+
+    ``base_agl_ft`` is the height **above terrain** of the lowest blocking deck's
+    base (``None`` when the point carries no deck) — the VFR room available
+    *beneath* the deck, used by the mitigation's reachability gate. The grade
+    ignores it.
 
     Points are yielded in ``ctx.analyses`` order (callers that need distance order
     sort the result).
@@ -219,6 +224,7 @@ def _corridor_points(
         floor = _field_elevation_ft(ctx, d)
         has_ovc = False
         has_bkn = False
+        lowest_base_ft: float | None = None
         for cl in sounding.cloud_layers:
             if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
                 continue
@@ -227,7 +233,10 @@ def _corridor_points(
                     has_ovc = True
                 else:
                     has_bkn = True
-        yield d, has_ovc, has_bkn
+                if lowest_base_ft is None or cl.base_ft < lowest_base_ft:
+                    lowest_base_ft = cl.base_ft
+        base_agl_ft = (lowest_base_ft - floor) if lowest_base_ft is not None else None
+        yield d, has_ovc, has_bkn, base_agl_ft
 
 
 def _check_corridor_vfr(
@@ -264,7 +273,7 @@ def _check_corridor_vfr(
     for phase, key, icao, fallback in phases:
         has_ovc = False
         has_bkn = False
-        for _d, p_ovc, p_bkn in _corridor_points(ctx, model, corridor_nm, phase):
+        for _d, p_ovc, p_bkn, _base in _corridor_points(ctx, model, corridor_nm, phase):
             has_ovc = has_ovc or p_ovc
             has_bkn = has_bkn or p_bkn
 
@@ -346,26 +355,47 @@ def _corridor_blocked_profile(
     model: str,
     corridor_nm: float,
     phase: str,
-) -> list[tuple[float, bool]]:
-    """Per-point (distance, blocked) for a corridor phase, sorted by distance.
+) -> list[tuple[float, bool, float | None]]:
+    """Per-point (distance, blocked, base_agl_ft) for a corridor phase, sorted by distance.
 
     A point is *blocked* when it carries a transitable BKN/OVC deck (see
     ``_corridor_points`` for the membership + deck condition). Collapses the
-    per-point OVC/BKN split to a single ``blocked`` bool so a mitigation can
-    locate where the deck breaks.
+    per-point OVC/BKN split to a single ``blocked`` bool and carries the
+    lowest-deck base height above terrain (``base_agl_ft``) so the mitigation can
+    both locate where the deck breaks and check there is VFR room beneath it.
     """
     profile = [
-        (d, p_ovc or p_bkn)
-        for d, p_ovc, p_bkn in _corridor_points(ctx, model, corridor_nm, phase)
+        (d, p_ovc or p_bkn, base_agl)
+        for d, p_ovc, p_bkn, base_agl in _corridor_points(ctx, model, corridor_nm, phase)
     ]
     profile.sort(key=lambda t: t[0])
     return profile
+
+
+def _under_deck_flyable(
+    blocked_points: list[tuple[float, float | None]],
+    min_base_agl_ft: float,
+) -> bool:
+    """True if every blocked corridor point has VFR room beneath its deck.
+
+    The along-route mitigation tells the pilot to stay *below* the deck until it
+    breaks, then climb (or to descend below it before it starts). That only works
+    if there is flyable VFR airspace under the deck along the whole blocked
+    stretch — i.e. each blocked point's lowest deck base sits at least
+    ``min_base_agl_ft`` above terrain. If the deck scrapes the ground anywhere on
+    that stretch, the clear air can't be reached and the RED/AMBER is genuine.
+    """
+    return all(
+        base_agl is not None and base_agl >= min_base_agl_ft
+        for _d, base_agl in blocked_points
+    )
 
 
 def _corridor_mitigation(
     ctx: RouteContext,
     model: str,
     corridor_nm: float,
+    min_base_agl_ft: float,
     loc: str | None,
 ) -> list[Mitigation]:
     """Find along-route repositioning mitigations for blocked corridor decks.
@@ -373,9 +403,14 @@ def _corridor_mitigation(
     Climb-out: if the corridor points nearest departure are blocked but farther
     ones clear, offer "climb to cruise after ~d* nm from departure" (``d*`` is
     the nearest confirmed-clear distance beyond the blocked region). Descent is
-    symmetric near the arrival end. Only offered when there is a genuine
-    clear/blocked split — a uniformly blocked corridor cannot be repositioned
-    around, so no mitigation (the RED/AMBER is genuine).
+    symmetric near the arrival end. Two gates must BOTH hold:
+
+    1. A genuine clear/blocked split — a uniformly blocked corridor cannot be
+       repositioned around.
+    2. The deck is flyable underneath along the blocked stretch
+       (``_under_deck_flyable``) — otherwise the clear air is unreachable.
+
+    If either fails, no mitigation (the RED/AMBER is genuine).
 
     ``mitigated_status`` is GREEN: repositioning clears that phase's deck. It
     speaks only for the corridor axis, not the overall advisory.
@@ -385,10 +420,10 @@ def _corridor_mitigation(
 
     # --- Climb-out: deck near departure, clear beyond d* ---
     climb = _corridor_blocked_profile(ctx, model, corridor_nm, "climb")
-    blocked = [d for d, b in climb if b]
-    clear = [d for d, b in climb if not b]
-    if blocked and clear:
-        max_blocked = max(blocked)
+    blocked = [(d, base_agl) for d, b, base_agl in climb if b]
+    clear = [d for d, b, _ in climb if not b]
+    if blocked and clear and _under_deck_flyable(blocked, min_base_agl_ft):
+        max_blocked = max(d for d, _ in blocked)
         beyond = [d for d in clear if d > max_blocked]
         if beyond:
             # Round once: the phrasing is qualitative ("~X nm"), so detail and
@@ -405,10 +440,10 @@ def _corridor_mitigation(
 
     # --- Descent: deck near arrival, clear before it ---
     descent = _corridor_blocked_profile(ctx, model, corridor_nm, "descent")
-    blocked = [d for d, b in descent if b]
-    clear = [d for d, b in descent if not b]
-    if blocked and clear:
-        min_blocked = min(blocked)
+    blocked = [(d, base_agl) for d, b, base_agl in descent if b]
+    clear = [d for d, b, _ in descent if not b]
+    if blocked and clear and _under_deck_flyable(blocked, min_base_agl_ft):
+        min_blocked = min(d for d, _ in blocked)
         before = [d for d in clear if d < min_blocked]
         if before:
             d_star = max(before)
@@ -497,6 +532,17 @@ class VFRFeasibilityEvaluator:
                     max=20,
                     step=1,
                 ),
+                AdvisoryParameterDef(
+                    key="mitigation_min_base_agl_ft",
+                    label="Mitigation min deck base (AGL)",
+                    description="Minimum cloud-deck base above terrain for an along-route 'stay below the deck then climb/descend' mitigation to be offered — below this there isn't VFR room beneath the deck to reach the clear air",
+                    type="altitude",
+                    unit="ft",
+                    default=3000,
+                    min=1000,
+                    max=6000,
+                    step=500,
+                ),
             ],
         )
 
@@ -506,6 +552,7 @@ class VFRFeasibilityEvaluator:
         imc_pct_amber = params.get("imc_pct_amber", 15)
         imc_pct_red = params.get("imc_pct_red", 30)
         corridor_nm = params.get("terminal_corridor_nm", 5)
+        mitigation_min_base_agl_ft = params.get("mitigation_min_base_agl_ft", 3000)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -608,7 +655,9 @@ class VFRFeasibilityEvaluator:
             )
             if vertical is not None:
                 mitigations.append(vertical)
-            mitigations.extend(_corridor_mitigation(ctx, model, corridor_nm, loc))
+            mitigations.extend(_corridor_mitigation(
+                ctx, model, corridor_nm, mitigation_min_base_agl_ft, loc,
+            ))
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
