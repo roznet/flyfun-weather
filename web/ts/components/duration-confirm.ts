@@ -141,9 +141,10 @@ function buildSuggestionsHtml(distanceNm: number | null): string {
         <button type="button" class="zero-duration-suggestion btn btn-outline btn-sm" data-hours="${at120}">
           120 kt &rarr; ${at120} h
         </button>
+        ${at150 !== at120 ? `
         <button type="button" class="zero-duration-suggestion btn btn-outline btn-sm" data-hours="${at150}">
           150 kt &rarr; ${at150} h
-        </button>
+        </button>` : ''}
       </div>
     </div>
   `;

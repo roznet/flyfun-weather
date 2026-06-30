@@ -63,7 +63,6 @@
   "flights.form.zeroDurationTitle": "Confirmer la dur\u00e9e du vol",
   "flights.form.zeroDurationMessage": "Vous avez saisi une dur\u00e9e de 0 heure. C'est inhabituel \u2014 cela produit une \u00e9tude m\u00e9t\u00e9o \u00e0 un instant donn\u00e9 plut\u00f4t que sur une fen\u00eatre de vol. Vouliez-vous vraiment laisser ce champ vide ?",
   "flights.form.zeroDurationLabel": "Dur\u00e9e :",
-  "flights.form.zeroDurationHoursUnit": "heures",
   "flights.form.zeroDurationDistance": "Distance de la route : {dist} NM",
   "flights.form.zeroDurationSuggestionsHint": "Dur\u00e9es sugg\u00e9r\u00e9es selon la vitesse de croisi\u00e8re :",
   "flights.form.zeroDurationContinue": "Continuer",

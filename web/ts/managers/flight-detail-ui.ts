@@ -7,7 +7,7 @@ import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRouteCompact, isFlightPast } from '../utils';
 import { getDateLocale, t } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
-import { splitDurationCeil, buildDurationHourOptions, buildDurationMinuteOptions, formatDurationHM } from '../utils/duration';
+import { splitDurationCeil, combineDuration, buildDurationHourOptions, buildDurationMinuteOptions, formatDurationHM } from '../utils/duration';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefSummary } from '../components/debrief-summary';
 import { showRoutePopup } from '../components/route-interpret';
@@ -73,7 +73,10 @@ export function renderFlightInfo(
   const dt = new Date(flight.departure_time);
   const utcHour = dt.getUTCHours();
   const utcMinute = dt.getUTCMinutes();
-  const endTime = new Date(dt.getTime() + flight.flight_duration_hours * 3600_000);
+  // End time uses the same ceil-to-15-min duration as the read-only Duration
+  // label so the two never disagree for legacy non-15-min stored values.
+  const endParts = splitDurationCeil(flight.flight_duration_hours);
+  const endTime = new Date(dt.getTime() + combineDuration(endParts.hours, endParts.minutes) * 3600_000);
   const endTimeStr = `${endTime.getUTCHours().toString().padStart(2, '0')}:${endTime.getUTCMinutes().toString().padStart(2, '0')}Z`;
 
   // Profile display name

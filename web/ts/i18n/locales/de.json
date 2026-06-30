@@ -63,7 +63,6 @@
   "flights.form.zeroDurationTitle": "Flugdauer best\u00e4tigen",
   "flights.form.zeroDurationMessage": "Sie haben eine Dauer von 0 Stunden eingegeben. Das ist ungew\u00f6hnlich \u2014 es erzeugt eine Momentaufnahme der Wetterlage statt eines Flugfensters. Wollten Sie das Feld wirklich leer lassen?",
   "flights.form.zeroDurationLabel": "Dauer:",
-  "flights.form.zeroDurationHoursUnit": "Stunden",
   "flights.form.zeroDurationDistance": "Streckenl\u00e4nge: {dist} NM",
   "flights.form.zeroDurationSuggestionsHint": "Vorgeschlagene Dauer nach Reisegeschwindigkeit:",
   "flights.form.zeroDurationContinue": "Weiter",

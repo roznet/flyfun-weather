@@ -66,7 +66,6 @@
   "flights.form.zeroDurationTitle": "Confirm flight duration",
   "flights.form.zeroDurationMessage": "You entered a duration of 0 hours. That's unusual \u2014 it produces a snapshot-in-time briefing rather than a flight window. Did you mean to leave it blank?",
   "flights.form.zeroDurationLabel": "Duration:",
-  "flights.form.zeroDurationHoursUnit": "hours",
   "flights.form.zeroDurationDistance": "Route distance: {dist} NM",
   "flights.form.zeroDurationSuggestionsHint": "Suggested durations based on cruise speed:",
   "flights.form.zeroDurationContinue": "Continue",
