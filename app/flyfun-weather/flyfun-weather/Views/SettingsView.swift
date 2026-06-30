@@ -36,6 +36,21 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Auto-Download", selection: Binding(
+                        get: { appState.settings.autoDownloadMode },
+                        set: { appState.settings.autoDownloadMode = $0 }
+                    )) {
+                        ForEach(AutoDownloadMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                } header: {
+                    Text("Offline")
+                } footer: {
+                    Text("Automatically download upcoming briefings (today and later) for offline use, so Skew-Ts and the full briefing open instantly without a connection. Briefings for flights more than \(AppState.cacheRetentionDays) days past are cleared automatically.")
+                }
+
+                Section {
                     Label("Supplementary Tool", systemImage: "info.circle")
                         .foregroundStyle(.secondary)
                 } footer: {

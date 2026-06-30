@@ -70,9 +70,11 @@ unavailable }` with SwiftUI `color` + `label`. This is the GREEN/AMBER/RED route
 - `BriefingCacheStore` (`BriefingCacheStore.swift`) — `actor`. On-disk cache of pack endpoints under
   Application Support (`BriefingCache/<flightId>/<timestamp>/<endpoint>.json`). Maintains an
   `index.json` of `CachedPackEntry` (`flightId`, `timestamp`, `flightTitle`, `assessment`,
-  `downloadedAt`, `endpoints: Set<String>`, `totalBytes`). `requiredEndpoints` = advisories, digest,
-  snapshot, route-analyses, elevation — a pack `isComplete` when all are present. Also stores
-  root/per-flight metadata files for offline list fallback.
+  `downloadedAt`, `endpoints: Set<String>`, `totalBytes`, `departureTime?`). `requiredEndpoints` =
+  advisories, digest, snapshot, route-analyses, elevation — a pack `isComplete` when all are present
+  (a downloaded pack also holds `sounding-{pt}-{model}` profiles from the bundle). `departureTime`
+  (optional, captured at download) lets `pruneStalePacks(olderThanDays:)` age packs out by flight
+  date. Also stores root/per-flight metadata files for offline list fallback.
 - `PirepOfflineStore` (`PirepOfflineStore.swift`) — `actor`. JSON-file queue of unsent
   `SubmitPirepRequest`s at `Documents/pending_pireps.json`. `enqueue` on failure, `sync(using:)`
   flushes via a batch submit. Server dedups on `clientUuid`.

@@ -50,6 +50,11 @@ final class AppState {
     private(set) var repository: (any BriefingRepository)?
     let pirepOfflineStore = PirepOfflineStore()
     let userPreferences = UserPreferencesStore()
+    /// Local device settings (e.g. offline auto-download mode). Server-side flags
+    /// live in `userPreferences`; this is the on-device counterpart.
+    let settings = AppSettingsStore()
+    /// Live network reachability — gates Wi-Fi-only auto-download.
+    let networkMonitor = NetworkMonitor()
     /// (i)-popup help content (metrics + advisories). Seeded from disk cache or
     /// the bundled baseline at init; refreshed opportunistically when online.
     let helpCatalog = HelpCatalogStore()
@@ -256,6 +261,17 @@ final class AppState {
         guard let apiClient else { return }
         await userPreferences.refresh(using: apiClient)
     }
+
+    /// Evict cached packs for flights that departed more than a week ago, so the
+    /// offline cache doesn't grow unbounded as auto-download fills it. Safe to
+    /// call on launch and foreground — a no-op when nothing is stale.
+    func pruneStaleCache() async {
+        guard let caching = cachingRepository else { return }
+        await caching.pruneStalePacks(olderThanDays: Self.cacheRetentionDays)
+    }
+
+    /// Cached packs are kept until their flight is this many days in the past.
+    static let cacheRetentionDays = 7
 
     /// Pull the latest (i)-popup help content. Non-blocking; safe to call on
     /// launch, sign-in, and foreground — a `304` is a cheap no-op.

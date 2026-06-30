@@ -45,6 +45,51 @@ import Foundation
     @Test func idIsFlightSlashTimestamp() {
         #expect(entry([]).id == "flt-1/2026-06-24T09:00:00Z")
     }
+
+    /// Index entries written before `departureTime` existed must still decode
+    /// (the field is optional → nil), so a cache upgrade doesn't wipe the index.
+    @Test func decodesLegacyEntryWithoutDepartureTime() throws {
+        let legacy = Data("""
+        {"flightId":"f1","timestamp":"t1","flightTitle":"T","assessment":"green",
+         "downloadedAt":0,"endpoints":["advisories"],"totalBytes":10}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(CachedPackEntry.self, from: legacy)
+        #expect(decoded.departureTime == nil)
+        #expect(decoded.flightId == "f1")
+    }
+
+    @Test func departureTimeRoundTrips() throws {
+        let e = CachedPackEntry(
+            flightId: "f1", timestamp: "t1", flightTitle: "T", assessment: nil,
+            downloadedAt: Date(timeIntervalSince1970: 0), endpoints: [], totalBytes: 0,
+            departureTime: "2026-06-24T12:00:00Z"
+        )
+        let back = try JSONDecoder().decode(CachedPackEntry.self, from: JSONEncoder().encode(e))
+        #expect(back.departureTime == "2026-06-24T12:00:00Z")
+    }
+}
+
+// MARK: - AutoDownloadMode (pure connectivity gate)
+
+@Suite struct AutoDownloadModeTests {
+
+    @Test func offNeverDownloads() {
+        #expect(AutoDownloadMode.off.allows(isOnWiFi: true, isConnected: true) == false)
+    }
+
+    @Test func wifiOnlyRequiresWiFi() {
+        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: true, isConnected: true))
+        // Connected but on cellular (not Wi-Fi) → blocked.
+        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: false, isConnected: true) == false)
+        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: false, isConnected: false) == false)
+    }
+
+    @Test func wifiAndCellularNeedsOnlyConnectivity() {
+        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: false, isConnected: true))
+        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: true, isConnected: true))
+        // Fully offline → still nothing to download.
+        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: false, isConnected: false) == false)
+    }
 }
 
 // MARK: - BriefingCacheStore (on-disk index + pack data, temp dir)

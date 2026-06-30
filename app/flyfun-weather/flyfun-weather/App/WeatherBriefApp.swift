@@ -34,6 +34,7 @@ struct WeatherBriefApp: App {
                     Task { await appState.syncPendingPireps() }
                     Task { await appState.refreshUserPreferences() }
                     Task { await appState.refreshHelpCatalog() }
+                    Task { await appState.pruneStaleCache() }
                 }
             }
         }

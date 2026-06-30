@@ -92,7 +92,12 @@ struct BriefingContainerView: View {
             if let caching = repo as? CachingBriefingRepository {
                 await caching.cacheFlightData(flight)
             }
-            let vm = BriefingViewModel(flight: flight, repository: repo)
+            let vm = BriefingViewModel(
+                flight: flight,
+                repository: repo,
+                settings: appState.settings,
+                networkMonitor: appState.networkMonitor
+            )
             viewModel = vm
             await vm.loadBriefing()
             await vm.checkActiveRefresh()
