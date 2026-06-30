@@ -57,6 +57,37 @@ class AdvisoryStatus(str, Enum):
         return cls.worst(tied)
 
 
+class MitigationKind(str, Enum):
+    """Axis along which an advisory's flagged issue could be mitigated."""
+
+    ALTITUDE = "altitude"             # fly a different altitude
+    ROUTE_POSITION = "route_position"  # climb/descend at a different point along the route
+    TIMING = "timing"                 # reserved for future use
+
+
+class Mitigation(BaseModel):
+    """A decision that could improve a flagged sub-issue — advice only.
+
+    A mitigation never changes the advisory's grade (same contract as
+    ``cross_check``). It reports the status **of the specific sub-issue it
+    addresses** if applied (``mitigated_status``), NOT the overall advisory
+    status — an advisory grades several axes via ``worst`` and a mitigation
+    on one axis says nothing about the others. The ``addresses`` tag is a
+    stable English machine token (not localized); human phrasing lives in the
+    localized ``detail``.
+    """
+
+    kind: MitigationKind
+    addresses: str                    # stable tag of the sub-issue, e.g. "cruise_imc",
+                                      # "climb_deck", "descent_deck" (NOT localized)
+    detail: str                       # localized human phrasing (via adv_t)
+    mitigated_status: AdvisoryStatus  # status OF THE ADDRESSED ISSUE if applied —
+                                      # NOT the advisory overall status
+    altitude_ft: int | None = None    # set for ALTITUDE
+    distance_nm: float | None = None  # set for ROUTE_POSITION
+    reference: str | None = None      # e.g. "departure" / "arrival" — disambiguates distance
+
+
 class AdvisoryParameterDef(BaseModel):
     """Definition of a user-tunable parameter for an advisory."""
 
@@ -106,6 +137,10 @@ class ModelAdvisoryResult(BaseModel):
     # an independent second derivation (e.g. convective DD-vs-model scheme).
     # Never affects the grade; surfaced only in the info popup and LLM digest.
     cross_check: str | None = None
+    # Per-model mitigations: alternative/mitigating decisions that would improve
+    # a flagged sub-issue (advice only — never alters ``status``). Defaults empty
+    # so old packs deserialize cleanly.
+    mitigations: list[Mitigation] = Field(default_factory=list)
 
     @classmethod
     def build(
@@ -119,6 +154,7 @@ class ModelAdvisoryResult(BaseModel):
         total_distance_nm: float,
         affected_mod: int | None = None,
         cross_check: str | None = None,
+        mitigations: list[Mitigation] | None = None,
     ) -> ModelAdvisoryResult:
         """Build a result, computing pct and nm from point counts.
 
@@ -141,7 +177,26 @@ class ModelAdvisoryResult(BaseModel):
             affected_mod_pct=round(100 * mod / total, 1) if total > 0 else 0,
             affected_mod_nm=round(total_distance_nm * mod / total, 1) if total > 0 else 0,
             cross_check=cross_check,
+            mitigations=mitigations if mitigations is not None else [],
         )
+
+
+def _aggregate_mitigations(
+    per_model: list[ModelAdvisoryResult],
+    agg_status: AdvisoryStatus,
+) -> list[Mitigation]:
+    """Aggregate per-model mitigations (representative-model policy).
+
+    Returns the mitigations of the first per-model result whose status equals
+    the aggregate status — the same representative used to choose
+    ``aggregate_detail`` — else an empty list. Kept as a standalone module-level
+    function so the policy can later be swapped for a "conservative,
+    all-or-nothing per kind" merge by editing this one place.
+    """
+    for m in per_model:
+        if m.status == agg_status:
+            return list(m.mitigations)
+    return []
 
 
 class RouteAdvisoryResult(BaseModel):
@@ -152,6 +207,10 @@ class RouteAdvisoryResult(BaseModel):
     aggregate_detail: str = ""
     per_model: list[ModelAdvisoryResult] = Field(default_factory=list)
     parameters_used: dict[str, float] = Field(default_factory=dict)
+    # Aggregate mitigations chosen by ``_aggregate_mitigations`` (representative
+    # model). Advice only — never alters ``aggregate_status``. Defaults empty so
+    # old packs deserialize cleanly.
+    aggregate_mitigations: list[Mitigation] = Field(default_factory=list)
 
     @classmethod
     def from_per_model(
@@ -182,6 +241,7 @@ class RouteAdvisoryResult(BaseModel):
             aggregate_detail=representative.detail if representative else "",
             per_model=per_model,
             parameters_used=params,
+            aggregate_mitigations=_aggregate_mitigations(per_model, agg),
         )
 
 

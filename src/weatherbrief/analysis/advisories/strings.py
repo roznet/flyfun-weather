@@ -408,6 +408,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "{cov}-Schicht im Sinkflug bei {icao}",
         "es": "Capa {cov} en descenso en {icao}",
     },
+    "vfr.mitigation.altitude": {
+        "en": "VMC available at {alt:,} ft",
+        "fr": "VMC possible à {alt:,} ft",
+        "de": "VMC verfügbar auf {alt:,} ft",
+        "es": "VMC disponible a {alt:,} ft",
+    },
+    "vfr.mitigation.climb_after": {
+        "en": "VMC climb to cruise possible after ~{dist} nm from departure",
+        "fr": "Montée VMC vers la croisière possible après ~{dist} nm du départ",
+        "de": "VMC-Steigflug auf Reiseflughöhe ab ~{dist} nm nach dem Start möglich",
+        "es": "Ascenso VMC a crucero posible tras ~{dist} nm desde la salida",
+    },
+    "vfr.mitigation.descend_before": {
+        "en": "VMC descent possible until ~{dist} nm before arrival",
+        "fr": "Descente VMC possible jusqu'à ~{dist} nm avant l'arrivée",
+        "de": "VMC-Sinkflug bis ~{dist} nm vor der Ankunft möglich",
+        "es": "Descenso VMC posible hasta ~{dist} nm antes de la llegada",
+    },
 
     # --- ifr_feasibility ---
     "ifr.lifr_below_min": {
