@@ -3,7 +3,7 @@
 import type { RouteAdvisoriesManifest, RouteAdvisoryResult, AdvisoryStatus, ModelAdvisoryResult, AdvisoryCatalogEntry, AirportConditions, AirportConditionsSummary, AirportModelCondition, FlightCategory, RunwayWind, AltitudeTableResult } from '../types/advisories';
 import type { DisplayMode } from '../types/metrics';
 import { showPopupContent } from '../components/info-popup';
-import { renderAdvisoryPopup } from '../helpers/advisory-popup';
+import { renderAdvisoryPopup, renderMitigationBlock, renderMitigationPopup } from '../helpers/advisory-popup';
 import { renderFrontsInfo } from '../helpers/fronts-info';
 import { advisoryBand, isCompactBand, compareAdvisories } from '../helpers/advisory-order';
 import { formatAltitudeDeltaNote } from '../helpers/altitude-diff';
@@ -61,10 +61,14 @@ function flightCatBadgeClass(cat: FlightCategory): string {
 
 /** Popup for a single per-model advisory badge: "ECMWF · Fronts" + status + detail. */
 function formatModelDetailPopup(advName: string, m: ModelAdvisoryResult): string {
+  // Per-model "Options to improve" (#330): this model's own mitigations, shown
+  // below its condition. Optional — `renderMitigationBlock` returns '' when the
+  // model carries none, so the section only appears when there's advice.
   return `
     <div class="popup-header"><h3>${escapeHtml(modelLabel(m.model))} &middot; ${escapeHtml(advName)}</h3></div>
     <p><span class="badge ${statusBadgeClass(m.status)}">${statusLabel(m.status)}</span></p>
     <p class="advisory-detail">${escapeHtml(m.detail)}</p>
+    ${renderMitigationBlock(m.mitigations)}
   `;
 }
 
@@ -312,12 +316,12 @@ function renderAdvisoryCard(
     ? `<button class="metric-info-btn advisory-view-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.showOnCrossSection')}" aria-label="${t('advisories.showOnCrossSection')}">\u{1F4C8}</button>`
     : '';
 
-  // Mitigation presence hint (#330): a soft lightbulb shown only when this
-  // advisory carries mitigations. It is a *presence hint* — the text lives in
-  // the (i) popup, mirroring how cross_check is a two-layer pattern. Never alters
-  // the status badge or colour; advice only, never a regrade.
+  // Mitigation hint (#330): a soft lightbulb shown only when this advisory
+  // carries mitigations. Tapping it opens a popup listing the "Options to
+  // improve"; the same list also appears in the (i) popup. Never alters the
+  // status badge or colour; advice only, never a regrade.
   const lightbulb = adv.aggregate_mitigations?.length
-    ? `<span class="advisory-mitigation-hint" title="${t('advisories.mitigationAvailable')}" aria-label="${t('advisories.mitigationAvailable')}">\u{1F4A1}</span>`
+    ? `<span class="advisory-mitigation-hint advisory-mitigation-hint--tappable" data-advisory-id="${escapeHtml(adv.advisory_id)}" role="button" tabindex="0" title="${t('advisories.mitigationAvailable')}" aria-label="${t('advisories.mitigationAvailable')}">\u{1F4A1}</span>`
     : '';
 
   // Compact (two-line) variant for the all-clear band: header + the detail line,
@@ -713,6 +717,29 @@ export function renderAdvisories(
         showPopupContent(renderFrontsInfo());
       });
     }
+  });
+
+  // Wire mitigation lightbulb popups (#330, event delegation). Tap/click — or
+  // Enter/Space while focused — opens the "Options to improve" list, reliable on
+  // touch where the native `title` tooltip never fires.
+  const showMitigations = (hint: HTMLElement): void => {
+    const advId = hint.dataset.advisoryId;
+    if (!advId) return;
+    const entry = catalog.get(advId);
+    const adv = manifest.advisories.find(a => a.advisory_id === advId);
+    if (!entry || !adv) return;
+    showPopupContent(renderMitigationPopup(entry, adv));
+  };
+  el.addEventListener('click', (e) => {
+    const hint = (e.target as HTMLElement).closest('.advisory-mitigation-hint--tappable') as HTMLElement | null;
+    if (hint) showMitigations(hint);
+  });
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const hint = (e.target as HTMLElement).closest('.advisory-mitigation-hint--tappable') as HTMLElement | null;
+    if (!hint) return;
+    e.preventDefault();
+    showMitigations(hint);
   });
 
   // Wire per-model badge popups (event delegation). Tap/click — or Enter/Space

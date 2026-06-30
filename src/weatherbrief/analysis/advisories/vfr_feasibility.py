@@ -406,26 +406,58 @@ def _under_deck_flyable(
     )
 
 
+def _deck_then_clear(
+    profile_from_airport: list[tuple[float, bool, float | None]],
+) -> tuple[list[tuple[float, float | None]], float | None]:
+    """Walk outward from the airport through the deck to the first clear point.
+
+    ``profile_from_airport`` is ordered airport → midpoint. Returns
+    ``(deck, d_clear)`` where ``deck`` is the run of consecutive blocked points
+    adjacent to the airport (each ``(distance_nm, base_agl_ft)``) and ``d_clear``
+    is the distance of the first clear point inland of that deck — the point
+    where a VMC climb/descent becomes possible.
+
+    ``d_clear`` is ``None`` when the airport-most point is already clear (no deck
+    to thread) or when the deck runs unbroken to the midpoint (the profile is
+    capped at ``total/2``, so reaching the end with no clear point means there is
+    no VMC break before halfway → the RED/AMBER is genuine).
+    """
+    deck: list[tuple[float, float | None]] = []
+    for d, blocked, base_agl in profile_from_airport:
+        if not blocked:
+            return deck, d
+        deck.append((d, base_agl))
+    return deck, None
+
+
 def _corridor_mitigation(
     ctx: RouteContext,
     model: str,
-    corridor_nm: float,
     min_base_agl_ft: float,
+    max_reposition_nm: float,
     loc: str | None,
 ) -> list[Mitigation]:
     """Find along-route repositioning mitigations for blocked corridor decks.
 
-    Climb-out: if the corridor points nearest departure are blocked but farther
-    ones clear, offer "climb to cruise after ~d* nm from departure" (``d*`` is
-    the nearest confirmed-clear distance beyond the blocked region). Descent is
-    symmetric near the arrival end. Two gates must BOTH hold:
+    The deck a climb/descent transits can extend beyond the terminal grade
+    corridor, so the mitigation search is NOT bounded by ``terminal_corridor_nm``:
+    it scans from the airport toward the route midpoint (the ``_corridor_points``
+    half-route guard) for the nearest VMC break.
 
-    1. A genuine clear/blocked split — a uniformly blocked corridor cannot be
-       repositioned around.
-    2. The deck is flyable underneath along the blocked stretch
+    Climb-out: walk outward from departure through the deck; if a clear point is
+    reached, offer "climb to cruise after ~d* nm from departure" (``d*`` = that
+    clear distance). Descent is symmetric from the arrival end ("descend before
+    ~d* nm before arrival"). Three gates must hold:
+
+    1. A clear break before the midpoint — a deck unbroken to halfway cannot be
+       repositioned around (``_deck_then_clear`` returns ``d_clear=None``).
+    2. That break is within ``max_reposition_nm`` of the airport — a clear point
+       50+ nm out means flying under the deck for most of the leg, which is not a
+       useful "climb after / descend before" maneuver, so no mitigation.
+    3. The deck is flyable underneath along the blocked stretch
        (``_under_deck_flyable``) — otherwise the clear air is unreachable.
 
-    If either fails, no mitigation (the RED/AMBER is genuine).
+    If any fails, no mitigation (the RED/AMBER is genuine).
 
     ``mitigated_status`` is GREEN: repositioning clears that phase's deck. It
     speaks only for the corridor axis, not the overall advisory.
@@ -433,45 +465,41 @@ def _corridor_mitigation(
     total = ctx.total_distance_nm
     mitigations: list[Mitigation] = []
 
-    # --- Climb-out: deck near departure, clear beyond d* ---
-    climb = _corridor_blocked_profile(ctx, model, corridor_nm, "climb")
-    blocked = [(d, base_agl) for d, b, base_agl in climb if b]
-    clear = [d for d, b, _ in climb if not b]
-    if blocked and clear and _under_deck_flyable(blocked, min_base_agl_ft):
-        max_blocked = max(d for d, _ in blocked)
-        beyond = [d for d in clear if d > max_blocked]
-        if beyond:
-            # Round once: the phrasing is qualitative ("~X nm"), so detail and
-            # the structured distance must report the same integer.
-            dist = round(min(beyond))
-            mitigations.append(Mitigation(
-                kind=MitigationKind.ROUTE_POSITION,
-                addresses="climb_deck",
-                detail=adv_t("vfr.mitigation.climb_after", loc, dist=dist),
-                mitigated_status=AdvisoryStatus.GREEN,
-                distance_nm=dist,
-                reference="departure",
-            ))
+    # --- Climb-out: deck near departure, first clear point inland (d* nm out) ---
+    # `_corridor_blocked_profile` is sorted ascending by distance — already
+    # departure → midpoint, so it reads airport-outward directly.
+    climb = _corridor_blocked_profile(ctx, model, total, "climb")
+    deck, d_clear = _deck_then_clear(climb)
+    if (deck and d_clear is not None and d_clear <= max_reposition_nm
+            and _under_deck_flyable(deck, min_base_agl_ft)):
+        # Round once: the phrasing is qualitative ("~X nm"), so detail and the
+        # structured distance must report the same integer.
+        dist = round(d_clear)
+        mitigations.append(Mitigation(
+            kind=MitigationKind.ROUTE_POSITION,
+            addresses="climb_deck",
+            detail=adv_t("vfr.mitigation.climb_after", loc, dist=dist),
+            mitigated_status=AdvisoryStatus.GREEN,
+            distance_nm=dist,
+            reference="departure",
+        ))
 
-    # --- Descent: deck near arrival, clear before it ---
-    descent = _corridor_blocked_profile(ctx, model, corridor_nm, "descent")
-    blocked = [(d, base_agl) for d, b, base_agl in descent if b]
-    clear = [d for d, b, _ in descent if not b]
-    if blocked and clear and _under_deck_flyable(blocked, min_base_agl_ft):
-        min_blocked = min(d for d, _ in blocked)
-        before = [d for d in clear if d < min_blocked]
-        if before:
-            d_star = max(before)
-            # Round once (see climb case): nm before arrival, same int in both.
-            dist = round(total - d_star)
-            mitigations.append(Mitigation(
-                kind=MitigationKind.ROUTE_POSITION,
-                addresses="descent_deck",
-                detail=adv_t("vfr.mitigation.descend_before", loc, dist=dist),
-                mitigated_status=AdvisoryStatus.GREEN,
-                distance_nm=dist,
-                reference="arrival",
-            ))
+    # --- Descent: deck near arrival, first clear point inland (d* nm before) ---
+    # Reverse the ascending profile so it reads arrival → midpoint.
+    descent = _corridor_blocked_profile(ctx, model, total, "descent")
+    deck, d_clear = _deck_then_clear(list(reversed(descent)))
+    if (deck and d_clear is not None and (total - d_clear) <= max_reposition_nm
+            and _under_deck_flyable(deck, min_base_agl_ft)):
+        # Round once (see climb case): nm before arrival, same int in both.
+        dist = round(total - d_clear)
+        mitigations.append(Mitigation(
+            kind=MitigationKind.ROUTE_POSITION,
+            addresses="descent_deck",
+            detail=adv_t("vfr.mitigation.descend_before", loc, dist=dist),
+            mitigated_status=AdvisoryStatus.GREEN,
+            distance_nm=dist,
+            reference="arrival",
+        ))
 
     return mitigations
 
@@ -558,6 +586,17 @@ class VFRFeasibilityEvaluator:
                     max=6000,
                     step=500,
                 ),
+                AdvisoryParameterDef(
+                    key="mitigation_max_reposition_nm",
+                    label="Max reposition distance",
+                    description="Only offer an along-route 'climb after / descend before' mitigation when the VMC break is within this distance of the airport. Beyond it the deck is too extensive to thread by repositioning (you'd fly under it for most of the leg), so no mitigation is offered.",
+                    type="distance",
+                    unit="nm",
+                    default=25,
+                    min=5,
+                    max=50,
+                    step=5,
+                ),
             ],
         )
 
@@ -568,6 +607,7 @@ class VFRFeasibilityEvaluator:
         imc_pct_red = params.get("imc_pct_red", 30)
         corridor_nm = params.get("terminal_corridor_nm", 5)
         mitigation_min_base_agl_ft = params.get("mitigation_min_base_agl_ft", 3000)
+        mitigation_max_reposition_nm = params.get("mitigation_max_reposition_nm", 25)
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -671,7 +711,8 @@ class VFRFeasibilityEvaluator:
             if vertical is not None:
                 mitigations.append(vertical)
             mitigations.extend(_corridor_mitigation(
-                ctx, model, corridor_nm, mitigation_min_base_agl_ft, loc,
+                ctx, model, mitigation_min_base_agl_ft,
+                mitigation_max_reposition_nm, loc,
             ))
 
             per_model.append(ModelAdvisoryResult.build(

@@ -3836,6 +3836,18 @@ label {
   opacity: 0.8;
   cursor: default;
 }
+/* Tappable lightbulb: opens the "Options to improve" popup. Pointer + a soft
+   lift on hover/focus signal it's interactive, matching the per-model badge. */
+.advisory-mitigation-hint--tappable {
+  cursor: pointer;
+}
+.advisory-mitigation-hint--tappable:hover,
+.advisory-mitigation-hint--tappable:focus-visible {
+  opacity: 1;
+  outline: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 
 /* Mitigation tip block in the (i) popup: neutral blue-gray "tip" chrome,
    reusing --primary at low saturation. Never green/red — advice only, never a

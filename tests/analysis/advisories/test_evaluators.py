@@ -649,7 +649,7 @@ class TestVFRFeasibility:
         entry = VFRFeasibilityEvaluator.catalog_entry()
         assert entry.id == "vfr_feasibility"
         assert entry.category == "flight_rules"
-        assert len(entry.parameters) == 5
+        assert len(entry.parameters) == 6
 
     def test_tunable_clearance(self, vfr_marginal_clearance_context: RouteContext):
         """With 500ft clearance threshold, 800ft gap is comfortable → GREEN."""

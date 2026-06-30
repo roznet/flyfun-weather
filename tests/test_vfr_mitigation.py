@@ -35,7 +35,14 @@ _VFR_DEFAULTS = {
     "imc_pct_red": 30,
     "terminal_corridor_nm": 5,
     "mitigation_min_base_agl_ft": 3000,
+    "mitigation_max_reposition_nm": 25,
 }
+
+# The along-route tests build 200nm routes on a 20nm grid, so their VMC break
+# falls 40-60nm out — past the 25nm reposition cap. Tests that exercise the
+# split / under-deck / beyond-grade-corridor logic (not the cap) raise it so the
+# cap doesn't suppress the mitigation under test; the cap has its own test.
+_NO_REPOSITION_CAP = {"mitigation_max_reposition_nm": 1000}
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +193,7 @@ def test_along_route_climb_happy_path():
     # Blocked at 0 & 20nm, clear at 40 & 60nm → climb after ~40nm.
     analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (0, 1) else []}) for i in range(10)]
     result = VFRFeasibilityEvaluator.evaluate(
-        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
 
     assert result.aggregate_status == AdvisoryStatus.RED  # OVC corridor deck
@@ -209,7 +216,7 @@ def test_along_route_descent_happy_path():
     # ~60nm from arrival (200 − 140).
     analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (8, 9) else []}) for i in range(10)]
     result = VFRFeasibilityEvaluator.evaluate(
-        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
 
     assert result.aggregate_status == AdvisoryStatus.RED
@@ -223,18 +230,72 @@ def test_along_route_descent_happy_path():
 
 
 def test_along_route_uniformly_blocked():
-    """Deck over the whole climb corridor → no along-route mitigation
-    (the deck can't be avoided by repositioning)."""
+    """Deck unbroken from departure to the route midpoint → no along-route
+    mitigation (no VMC break before halfway to reposition around)."""
     # High enough base to clear the AGL gate, so the no-mitigation result is due
-    # to the uniformly-blocked corridor (no clear/blocked split), not the gate.
+    # to the deck running unbroken to the midpoint (no clear point before
+    # total/2), not the gate. Route total = 200nm, midpoint = 100nm; blocking
+    # every point out to d=100 leaves no clear break in the departure half.
     deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
-    analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (0, 1, 2, 3) else []}) for i in range(10)]
+    analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i <= 5 else []}) for i in range(10)]
     result = VFRFeasibilityEvaluator.evaluate(
-        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
 
     assert result.aggregate_status == AdvisoryStatus.RED
     assert not any(m.addresses == "climb_deck" for m in _mitigations(result))
+
+
+def test_along_route_descent_clear_beyond_grade_corridor():
+    """The mitigation looks past the terminal grade corridor to the midpoint.
+
+    Regression for the GFS/EGTF case: a narrow ``terminal_corridor_nm`` (5nm)
+    grades the terminal deck RED, but the clear point that threads it sits well
+    beyond 5nm. The mitigation must still find it (its search runs to the route
+    midpoint, not the grade corridor).
+    """
+    # Route 180nm (points 0..180 every 20nm), midpoint 90nm. Deck near arrival at
+    # 160 & 180nm; clear at 140nm and inland. Grade corridor only 5nm → grades on
+    # the d=180 point alone, but the VMC break is 40nm out.
+    deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (8, 9) else []}) for i in range(10)]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses, total_distance_nm=180.0),
+        {**_VFR_DEFAULTS, "terminal_corridor_nm": 5, **_NO_REPOSITION_CAP},
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED  # terminal OVC deck
+    descent = [m for m in _mitigations(result) if m.addresses == "descent_deck"]
+    assert len(descent) == 1
+    assert descent[0].distance_nm == 40.0  # descend before ~40nm (180 − 140)
+    assert descent[0].reference == "arrival"
+    assert descent[0].mitigated_status == AdvisoryStatus.GREEN
+
+
+def test_along_route_reposition_distance_capped():
+    """A VMC break beyond ``mitigation_max_reposition_nm`` → no mitigation.
+
+    The deck near departure runs 0–40nm with clear air at 60nm. Flying under it
+    for 60nm is not a useful "climb after" maneuver, so the default 25nm cap
+    suppresses the tip; raising the cap past 60nm re-enables it.
+    """
+    deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
+    # Blocked 0..40nm (i=0,1,2), clear from 60nm on → climb break is 60nm out.
+    analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (0, 1, 2) else []}) for i in range(10)]
+
+    capped = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}  # default 25nm cap
+    )
+    assert capped.aggregate_status == AdvisoryStatus.RED  # deck still grades RED
+    assert not any(m.addresses == "climb_deck" for m in _mitigations(capped))
+
+    # Raise the cap above the 60nm break → the mitigation returns.
+    uncapped = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, "mitigation_max_reposition_nm": 80}
+    )
+    climb = [m for m in _mitigations(uncapped) if m.addresses == "climb_deck"]
+    assert len(climb) == 1
+    assert climb[0].distance_nm == 60.0
 
 
 def test_along_route_low_base_not_reachable():
@@ -248,7 +309,7 @@ def test_along_route_low_base_not_reachable():
     analyses = [_rpa(i, i * 20.0, {"gfs": [low_deck] if i in (0, 1) else []}) for i in range(10)]
 
     blocked = VFRFeasibilityEvaluator.evaluate(
-        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
     assert blocked.aggregate_status == AdvisoryStatus.RED  # deck still grades RED
     assert not any(m.addresses == "climb_deck" for m in _mitigations(blocked))
@@ -256,7 +317,8 @@ def test_along_route_low_base_not_reachable():
     # With the gate lowered below the deck's 1000ft AGL base, the mitigation returns.
     relaxed = VFRFeasibilityEvaluator.evaluate(
         _ctx(analyses),
-        {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, "mitigation_min_base_agl_ft": 500},
+        {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, "mitigation_min_base_agl_ft": 500,
+         **_NO_REPOSITION_CAP},
     )
     assert any(m.addresses == "climb_deck" for m in _mitigations(relaxed))
 
@@ -277,7 +339,7 @@ def test_cooccurrence_vertical_and_along_route():
         for i in range(10)
     ]
     result = VFRFeasibilityEvaluator.evaluate(
-        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
 
     assert result.aggregate_status == AdvisoryStatus.RED  # worst(...) unchanged

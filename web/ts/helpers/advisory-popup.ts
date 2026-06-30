@@ -1,6 +1,6 @@
 /** Shared advisory info popup renderer — used in both briefing and settings pages. */
 
-import type { AdvisoryCatalogEntry, AdvisoryParameterDef, RouteAdvisoryResult } from '../types/advisories';
+import type { AdvisoryCatalogEntry, AdvisoryParameterDef, Mitigation, RouteAdvisoryResult } from '../types/advisories';
 import { escapeHtml, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
 
@@ -40,17 +40,9 @@ export function renderAdvisoryPopup(
 
   // Mitigations (#330): advice-only tips that never change the grade. Rendered in
   // neutral "tip" chrome (blue-gray, lightbulb) — deliberately distinct from the
-  // diagnostic cross_check (info-circle). `detail` is already localized;
-  // `addresses` is a machine tag and is never displayed.
-  const mitigations = adv?.aggregate_mitigations ?? [];
-  const mitigationHtml = mitigations.length > 0
-    ? `<div class="advisory-mitigation" role="note">
-         <p class="advisory-mitigation-title"><span class="advisory-mitigation-icon" aria-hidden="true">\u{1F4A1}</span>${escapeHtml(t('advisories.mitigationTitle'))}</p>
-         <ul class="advisory-mitigation-list">${mitigations.map((m) =>
-           `<li>${escapeHtml(m.detail)}</li>`
-         ).join('')}</ul>
-       </div>`
-    : '';
+  // diagnostic cross_check (info-circle). Shared with the standalone lightbulb
+  // popup (`renderMitigationPopup`) so both surfaces stay identical.
+  const mitigationHtml = renderMitigationBlock(adv?.aggregate_mitigations);
 
   return `
     <div class="popup-header"><h3>${escapeHtml(entry.name)}</h3></div>
@@ -59,5 +51,38 @@ export function renderAdvisoryPopup(
     ${crossCheckHtml}
     ${mitigationHtml}
     ${paramsHtml}
+  `;
+}
+
+/**
+ * Render the neutral "Options to improve" tip block for a list of mitigations,
+ * or '' when the list is empty. Shared across every surface that shows
+ * mitigations — the aggregate (i) popup, the standalone lightbulb popup, and the
+ * per-model badge popup — so they never drift.
+ *
+ * `detail` is already localized; `addresses` is a machine tag, never displayed.
+ */
+export function renderMitigationBlock(mitigations?: Mitigation[]): string {
+  if (!mitigations || mitigations.length === 0) return '';
+  return `<div class="advisory-mitigation" role="note">
+       <p class="advisory-mitigation-title"><span class="advisory-mitigation-icon" aria-hidden="true">\u{1F4A1}</span>${escapeHtml(t('advisories.mitigationTitle'))}</p>
+       <ul class="advisory-mitigation-list">${mitigations.map((m) =>
+         `<li>${escapeHtml(m.detail)}</li>`
+       ).join('')}</ul>
+     </div>`;
+}
+
+/**
+ * Popup shown when the card's mitigation lightbulb is tapped: the advisory name
+ * plus the "Options to improve" list. Focused on the advice — distinct from the
+ * full (i) popup, which also carries the description, cross-checks, and params.
+ */
+export function renderMitigationPopup(
+  entry: AdvisoryCatalogEntry,
+  adv: RouteAdvisoryResult,
+): string {
+  return `
+    <div class="popup-header"><h3>${escapeHtml(entry.name)}</h3></div>
+    ${renderMitigationBlock(adv.aggregate_mitigations)}
   `;
 }
