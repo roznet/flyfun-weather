@@ -269,6 +269,8 @@
   "advisories.value": "Wert",
   "advisories.description": "Beschreibung",
   "advisories.crossCheck": "Gegenprüfung (Modellschema)",
+  "advisories.mitigationTitle": "Optionen zur Verbesserung",
+  "advisories.mitigationAvailable": "Verbesserungsoption verfügbar",
   "viz.xSection": "Querschnitt",
   "viz.compare": "Vergleich",
   "viz.split": "Teilen",

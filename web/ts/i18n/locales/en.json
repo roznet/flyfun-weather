@@ -331,6 +331,8 @@
   "advisories.value": "Value",
   "advisories.description": "Description",
   "advisories.crossCheck": "Cross-check (model scheme)",
+  "advisories.mitigationTitle": "Options to improve",
+  "advisories.mitigationAvailable": "mitigation available",
 
   "viz.xSection": "X-Section",
   "viz.compare": "Compare",

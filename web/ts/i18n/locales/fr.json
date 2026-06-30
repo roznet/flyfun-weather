@@ -269,6 +269,8 @@
   "advisories.value": "Valeur",
   "advisories.description": "Description",
   "advisories.crossCheck": "Vérification croisée (schéma du modèle)",
+  "advisories.mitigationTitle": "Options pour améliorer",
+  "advisories.mitigationAvailable": "option d'amélioration disponible",
   "viz.xSection": "Coupe",
   "viz.compare": "Comparer",
   "viz.split": "Diviser",
