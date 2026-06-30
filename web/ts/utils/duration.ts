@@ -36,13 +36,12 @@ export function combineDuration(hours: number, minutes: number): number {
   return hours + minutes / 60;
 }
 
-/** Format decimal hours as a compact "1h15" / "2h" label for read-only display,
- *  rounding to the nearest minute. "0h" for non-positive / invalid input. */
+/** Format decimal hours as a compact "1h15" / "2h" label for read-only display.
+ *  Rounds UP to the next 15-minute unit (via splitDurationCeil) so the label
+ *  agrees with what the edit dropdowns show for the same stored value. "0h" for
+ *  non-positive / invalid input. */
 export function formatDurationHM(decimalHours: number): string {
-  if (!Number.isFinite(decimalHours) || decimalHours <= 0) return '0h';
-  const totalMinutes = Math.round(decimalHours * 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+  const { hours, minutes } = splitDurationCeil(decimalHours);
   return minutes ? `${hours}h${minutes.toString().padStart(2, '0')}` : `${hours}h`;
 }
 
