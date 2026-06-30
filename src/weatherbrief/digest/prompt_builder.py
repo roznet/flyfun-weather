@@ -20,6 +20,7 @@ from weatherbrief.models import (
     AltitudeTableResult,
     ConvectiveRisk,
     ForecastSnapshot,
+    MitigationKind,
     ModelDivergence,
     PrecipPhase,
     RouteAdvisoriesManifest,
@@ -104,11 +105,13 @@ def build_digest_context(
     if confidence_note:
         sections.append(f"=== FORECAST CONFIDENCE ===\n{confidence_note}")
 
-    # --- Altitude options (deterministic; from the precomputed table) ---
-    if altitude_table is not None:
-        alt_block = _format_altitude_options_context(altitude_table)
-        if alt_block:
-            sections.append(alt_block)
+    # --- Options to improve (deterministic): the altitude trade-off plus
+    #     tactical (non-altitude) mitigations, consolidated into one section so
+    #     the LLM phrases a pre-typed structure rather than reconciling overlaps.
+    #     Advice only — never changes the assessment (#330). ---
+    options_block = _format_options_to_improve_context(altitude_table, route_advisories)
+    if options_block:
+        sections.append(options_block)
 
     # --- Quantitative data per waypoint ---
     if longrange:
@@ -697,12 +700,16 @@ def _format_alternates_context(alt: RouteAlternates) -> str:
 
 
 def _format_altitude_options_context(table: AltitudeTableResult) -> str | None:
-    """Build the deterministic ALTITUDE OPTIONS block from the precomputed table.
+    """Build the deterministic Altitude sub-block of OPTIONS TO IMPROVE.
 
     Compares the planned-cruise row against the best lower/higher options using
     the shared altitude-diff primitive, so the LLM only *phrases* the trade-off
-    — it never invents which advisory improves or worsens. Returns ``None`` when
-    the table has no usable planned row (e.g. degenerate single-altitude sweep).
+    — it never invents which advisory improves or worsens. The altitude axis
+    OWNS the altitude decision: it is the only view that shows the cross-advisory
+    trade (improves X, worsens Y), so per-advisory ALTITUDE mitigations are
+    dropped from the digest (see ``_format_tactical_mitigations_context``).
+    Returns ``None`` when the table has no usable planned row (e.g. degenerate
+    single-altitude sweep).
     """
     planned = row_for_altitude(table, table.cruise_altitude_ft)
     if planned is None or not planned.statuses:
@@ -738,7 +745,7 @@ def _format_altitude_options_context(table: AltitudeTableResult) -> str | None:
         return f"  {label} {alt_ft:,} ft: improves {improves}; worsens {worsens}."
 
     lines = [
-        "=== ALTITUDE OPTIONS (altitude-dependent advisories only) ===",
+        "Altitude (one choice, affects all altitude-dependent advisories):",
         f"  Planned {table.cruise_altitude_ft:,} ft: {_status_summary(planned)}.",
         _option_line("Lower option", table.best_below_cruise),
     ]
@@ -750,6 +757,64 @@ def _format_altitude_options_context(table: AltitudeTableResult) -> str | None:
     else:
         lines.append(_option_line("Higher option", table.best_above_cruise))
     return "\n".join(lines)
+
+
+def _format_tactical_mitigations_context(
+    manifest: RouteAdvisoriesManifest,
+) -> str | None:
+    """Build the Tactical (non-altitude) sub-block of OPTIONS TO IMPROVE.
+
+    Each advisory's ``aggregate_mitigations`` filtered to ROUTE_POSITION /
+    TIMING (``kind != ALTITUDE``), grouped by advisory name, using the already
+    localized ``mitigation.detail``. Per-advisory ALTITUDE mitigations are
+    intentionally excluded — the Altitude sub-block owns that axis and shows the
+    worsens-Y trade-off a single-advisory altitude mitigation would hide.
+    Returns ``None`` when no advisory has a non-altitude mitigation.
+    """
+    name_map = {entry.id: entry.name for entry in manifest.catalog}
+    lines: list[str] = []
+    for result in manifest.advisories:
+        if result.advisory_id in _DIGEST_EXCLUDE_IDS:
+            continue
+        tactical = [
+            m for m in result.aggregate_mitigations
+            if m.kind != MitigationKind.ALTITUDE
+        ]
+        if not tactical:
+            continue
+        name = name_map.get(result.advisory_id, result.advisory_id)
+        for m in tactical:
+            lines.append(f"  {name}: {m.detail}")
+    if not lines:
+        return None
+    return "\n".join(["Tactical (per-advisory, no altitude change):", *lines])
+
+
+def _format_options_to_improve_context(
+    altitude_table: AltitudeTableResult | None,
+    route_advisories: RouteAdvisoriesManifest | None,
+) -> str | None:
+    """Consolidated OPTIONS TO IMPROVE block: altitude trade-off + tactical
+    mitigations, computed deterministically (the LLM phrases a pre-typed
+    structure; it is never asked to reconcile overlaps).
+
+    Advice only — these are optional decisions that would improve a specific
+    sub-issue; they never change the assessment. Returns ``None`` when neither
+    sub-part has content.
+    """
+    sub_blocks: list[str] = []
+    if altitude_table is not None:
+        alt = _format_altitude_options_context(altitude_table)
+        if alt:
+            sub_blocks.append(alt)
+    if route_advisories is not None:
+        tactical = _format_tactical_mitigations_context(route_advisories)
+        if tactical:
+            sub_blocks.append(tactical)
+    if not sub_blocks:
+        return None
+    header = "=== OPTIONS TO IMPROVE (advice only — do NOT change the assessment) ==="
+    return "\n".join([header, *sub_blocks])
 
 
 def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:

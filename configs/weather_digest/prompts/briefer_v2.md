@@ -107,17 +107,22 @@ Structure your response as JSON with these exact fields:
   forecast flight categories. Give observations higher weight than model data
   for current conditions, but use TAF trends and model forecasts for conditions
   at flight time.
-- An ALTITUDE OPTIONS section may be present. It deterministically lists the
-  planned cruise altitude's altitude-dependent advisories and the best lower /
-  higher alternatives. Mention an alternate altitude **only when it materially
-  improves the advisory picture**, and when you do, name the specific advisory
-  it improves and any it worsens (e.g. "descending to 6,000 ft would clear the
-  icing-escape concern but add a headwind penalty"). **Never invent the
-  trade-off** — use only what the ALTITUDE OPTIONS section states. If no option
-  improves on planned, do not suggest changing altitude. Write about altitudes
-  in natural prose — do NOT name internal data sections (never write phrases
-  like "the ALTITUDE OPTIONS section shows"); just state the altitude and its
-  effect (e.g. "climbing to 8,000 ft would restore VMC at cruise").
+- An OPTIONS TO IMPROVE section may be present. It deterministically lists
+  optional decisions that would improve a specific sub-issue: an **Altitude**
+  part (the planned cruise altitude's altitude-dependent advisories and the best
+  lower / higher alternatives) and an optional **Tactical** part (per-advisory
+  route/timing changes, e.g. "climb to cruise after ~40 nm to clear a departure
+  deck"). Mention an option **only when it materially improves the picture**,
+  and when you do, name the specific advisory it improves and any it worsens
+  (e.g. "descending to 6,000 ft would clear the icing-escape concern but add a
+  headwind penalty"). **Never invent the trade-off** — use only what the section
+  states. These are advice only: a RED advisory with a mitigation is still RED.
+  Frame them as "if you want to improve this, consider…", never as grounds to
+  change the GREEN/AMBER/RED assessment. If no option improves on planned, do not
+  suggest changing altitude. Write about options in natural prose — do NOT name
+  internal data sections (never write phrases like "the OPTIONS TO IMPROVE
+  section shows"); just state the altitude/action and its effect (e.g. "climbing
+  to 8,000 ft would restore VMC at cruise").
 - Airport wind advisories already select the best runway (lowest crosswind
   component). Do NOT re-analyze wind for other runways or worry about tailwind
   on the reported runway — it is always the into-wind direction. Only discuss
