@@ -11,6 +11,12 @@ struct AdvisoryDetailView: View {
     let viewModel: BriefingViewModel
     let advisoryId: String
     let fallbackName: String
+    /// Advice-only mitigations sourced from the card's already-loaded
+    /// `RouteAdvisoryResult.aggregateMitigations` (#330) — NOT from the fetched
+    /// `AdvisoryDetailResponse` (the shaper that would carry them there is the
+    /// MCP slice). Keeping this client-side means the tip renders without a
+    /// server round-trip. Advice only: never changes the grade.
+    var mitigations: [Mitigation] = []
 
     @Environment(\.dismiss) private var dismiss
     @State private var state: LoadingState<AdvisoryDetailResponse> = .idle
@@ -48,6 +54,7 @@ struct AdvisoryDetailView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 header(detail)
                 whyThisGrade(detail)
+                optionsToImprove()
                 whatFiredIt(detail)
                 if let desc = detail.description {
                     section("About this advisory") {
@@ -141,6 +148,23 @@ struct AdvisoryDetailView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    // MARK: OPTIONS TO IMPROVE (advice only — #330)
+
+    /// Advice-only mitigations: decisions that would improve a specific flagged
+    /// sub-issue. Rendered in the neutral "tip" variant of `explainer()` — same
+    /// blue info chrome, lightbulb instead of info-circle. A mitigation NEVER
+    /// changes the grade: a RED advisory with a mitigation is still RED.
+    @ViewBuilder
+    private func optionsToImprove() -> some View {
+        if !mitigations.isEmpty {
+            section("Options to improve") {
+                ForEach(mitigations) { m in
+                    tip(m.detail)
+                }
+            }
+        }
+    }
+
     // MARK: WHAT FIRED IT
 
     @ViewBuilder
@@ -218,6 +242,19 @@ struct AdvisoryDetailView: View {
     private func explainer(_ text: String) -> some View {
         HStack(alignment: .top, spacing: Theme.spacingXS) {
             Image(systemName: "info.circle").foregroundStyle(Theme.primary)
+            Text(text).font(.caption).foregroundStyle(Theme.textMuted)
+        }
+        .padding(Theme.spacingS)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.spacingS))
+    }
+
+    /// Tip variant of `explainer()` for advice-only mitigations (#330): identical
+    /// neutral blue chrome, lightbulb (idea/actionable) instead of the info-circle
+    /// (diagnostic). Never amber/red — a mitigation is advice, never a regrade.
+    private func tip(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.spacingXS) {
+            Image(systemName: "lightbulb").foregroundStyle(Theme.primary)
             Text(text).font(.caption).foregroundStyle(Theme.textMuted)
         }
         .padding(Theme.spacingS)

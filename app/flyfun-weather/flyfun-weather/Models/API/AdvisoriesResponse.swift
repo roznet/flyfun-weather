@@ -18,6 +18,10 @@ struct RouteAdvisoryResult: Codable, Identifiable, Sendable {
     let aggregateDetail: String
     let perModel: [ModelAdvisoryResult]
     let parametersUsed: [String: Double]
+    /// Advice-only mitigations (representative-model policy). A mitigation NEVER
+    /// changes `aggregateStatus` — same "informs but doesn't grade" contract as
+    /// `crossCheck`. Optional so old packs decode cleanly.
+    let aggregateMitigations: [Mitigation]?
 
     var id: String { advisoryId }
 }
@@ -35,8 +39,31 @@ struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
     /// quiet). Present mainly for convective; nil otherwise. Per `CROSS_CHECK_NOTE`
     /// this is an EXPLAINER, never an alert — render in neutral chrome, never amber/red.
     let crossCheck: String?
+    /// Per-model advice-only mitigations. Never alters `status`. Optional so old
+    /// packs decode cleanly.
+    let mitigations: [Mitigation]?
 
     var id: String { model }
+}
+
+/// A decision that could improve a flagged sub-issue — advice only.
+///
+/// A mitigation NEVER changes an advisory's grade (same contract as
+/// `crossCheck`). `mitigatedStatus` is the status of the ADDRESSED sub-issue if
+/// applied — NOT the advisory overall. `addresses` is a stable English machine
+/// tag (never displayed raw); `detail` is already localized server-side.
+/// Keys arrive snake_case and map via the decoder's `.convertFromSnakeCase`
+/// strategy (`mitigated_status`, `altitude_ft`, `distance_nm`).
+struct Mitigation: Codable, Identifiable, Sendable {
+    let kind: String            // "altitude" | "route_position" | "timing"
+    let addresses: String       // machine tag, e.g. "cruise_imc" — not for display
+    let detail: String          // localized human phrasing
+    let mitigatedStatus: String // status of the addressed sub-issue if applied
+    let altitudeFt: Int?
+    let distanceNm: Double?
+    let reference: String?      // "departure" / "arrival"
+
+    var id: String { "\(kind)-\(addresses)-\(detail)" }
 }
 
 struct AdvisoryCatalogEntry: Codable, Identifiable, Sendable {
