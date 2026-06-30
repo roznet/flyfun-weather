@@ -179,27 +179,17 @@ class TestLCLFloor:
         derived_levels: list[DerivedLevel],
         lcl_altitude_ft: float | None,
     ) -> float | None:
-        """Replicate the ceiling computation from analyze_sounding."""
-        from weatherbrief.models.analysis import CloudCoverage
+        """Call the production ceiling computation used by analyze_sounding.
 
-        indices = ThermodynamicIndices(lcl_altitude_ft=lcl_altitude_ft)
+        Exercises the real ``compute_sounding_ceiling_ft`` so a regression in
+        the production logic actually fails these tests (previously this helper
+        re-implemented the logic locally and could not catch such a change).
+        """
+        from weatherbrief.analysis.sounding import compute_sounding_ceiling_ft
 
-        sounding_ceiling_ft: float | None = None
-        bkn_ovc_layers = [
-            cl for cl in cloud_layers
-            if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
-        ]
-        if bkn_ovc_layers:
-            lowest = min(bkn_ovc_layers, key=lambda cl: cl.base_ft)
-            sounding_ceiling_ft = lowest.base_ft
-            if (indices.lcl_altitude_ft is not None
-                    and derived_levels
-                    and lowest.base_pressure_hpa is not None
-                    and lowest.base_pressure_hpa >= derived_levels[0].pressure_hpa
-                    and indices.lcl_altitude_ft > sounding_ceiling_ft):
-                sounding_ceiling_ft = round(indices.lcl_altitude_ft)
-
-        return sounding_ceiling_ft
+        return compute_sounding_ceiling_ft(
+            cloud_layers, derived_levels, lcl_altitude_ft,
+        )
 
     def test_lcl_floor_applied(self):
         """Cloud at first level (1000 hPa), LCL at 1400ft → ceiling = 1400."""

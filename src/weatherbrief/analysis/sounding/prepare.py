@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+from metpy.calc import dewpoint_from_relative_humidity
 from metpy.units import units
 
 if TYPE_CHECKING:
@@ -41,10 +42,18 @@ class PreparedProfile:
 
 
 def _derive_dewpoint(temperature_c: float, relative_humidity_pct: float) -> float:
-    """Derive dewpoint from temperature and RH using Magnus formula."""
-    a, b = 17.27, 237.7
-    gamma = (a * temperature_c) / (b + temperature_c) + np.log(relative_humidity_pct / 100.0)
-    return (b * gamma) / (a - gamma)
+    """Derive dewpoint (degC) from temperature and RH.
+
+    Delegates to MetPy's ``dewpoint_from_relative_humidity`` (Bolton 1980,
+    constants 17.67/243.5) so the derivation matches the rest of the sounding
+    pipeline and the documented Magnus variant. Replaces a hand-rolled
+    Tetens (17.27/237.7) formula that differed from MetPy by ~0.1 degC.
+    """
+    dewpoint = dewpoint_from_relative_humidity(
+        temperature_c * units.degC,
+        relative_humidity_pct * units.percent,
+    )
+    return float(dewpoint.to("degC").magnitude)
 
 
 def prepare_profile(

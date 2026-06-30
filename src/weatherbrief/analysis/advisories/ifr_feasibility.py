@@ -31,6 +31,14 @@ _CONVECTIVE_SEVERITY = [
 ]
 _CONVECTIVE_SEVERITY_INDEX = {r: i for i, r in enumerate(_CONVECTIVE_SEVERITY)}
 
+# Default icing-exposure thresholds (route % with icing near cruise altitude).
+# Single source of truth shared by catalog_entry() parameter defaults and the
+# evaluate() fallbacks so the two cannot drift. They previously disagreed —
+# catalog advertised 20/50 while evaluate() fell back to 15/30 — meaning a call
+# without explicit params graded icing more aggressively than the UI showed.
+_ICING_PCT_AMBER_DEFAULT = 20
+_ICING_PCT_RED_DEFAULT = 50
+
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
     """Return the most severe status from the given values."""
@@ -198,7 +206,7 @@ class IFRFeasibilityEvaluator:
                     description="Route percentage with icing near cruise for amber",
                     type="percent",
                     unit="%",
-                    default=20,
+                    default=_ICING_PCT_AMBER_DEFAULT,
                     min=5,
                     max=50,
                     step=5,
@@ -209,7 +217,7 @@ class IFRFeasibilityEvaluator:
                     description="Route percentage with icing near cruise for red",
                     type="percent",
                     unit="%",
-                    default=50,
+                    default=_ICING_PCT_RED_DEFAULT,
                     min=10,
                     max=80,
                     step=5,
@@ -259,8 +267,8 @@ class IFRFeasibilityEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         min_dep_ceiling_ft = params.get("min_dep_ceiling_ft", 200)
         min_arr_ceiling_ft = params.get("min_arr_ceiling_ft", 400)
-        icing_pct_amber = params.get("icing_pct_amber", 15)
-        icing_pct_red = params.get("icing_pct_red", 30)
+        icing_pct_amber = params.get("icing_pct_amber", _ICING_PCT_AMBER_DEFAULT)
+        icing_pct_red = params.get("icing_pct_red", _ICING_PCT_RED_DEFAULT)
         icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
         convective_min_risk = int(params.get("convective_min_risk", 3))
         convective_pct_red = params.get("convective_pct_red", 10)

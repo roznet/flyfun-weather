@@ -32,14 +32,29 @@ _E_LIGHT = 40.0  # lower threshold for light turbulence detection
 # (Previously 1e3/1e5, i.e. m/s-per-km and m/s-per-100km — that overstated
 # VWS ×1.69 (×2.85 after squaring) and understated HWS ×3.6 relative to the
 # formula's calibration units.)
-_MS_TO_KT = 1.94384
-_VWS_SCALE = _MS_TO_KT * 304.8     # (m/s per m) → kt per 1000 ft  (≈ 592.5)
-_HWS_SCALE = _MS_TO_KT * 185200.0  # (m/s per m) → kt per 100 nm   (≈ 360,000)
+# Constants are the *exact* international definitions (1 nm = 1852 m,
+# 1 ft = 0.3048 m, 1 hr = 3600 s) so kt↔m/s round-trips exactly. Earlier the
+# code mixed truncated values (1.94384 one way, 0.51444 the other) that were
+# not exact reciprocals, leaving a ~1e-5 inconsistency and making _HWS_SCALE
+# 359999.168 instead of exactly 360000.
+_KT_TO_MS = 1852.0 / 3600.0        # 1 kt = 1852 m / 3600 s  (≈ 0.514444)
+_MS_TO_KT = 3600.0 / 1852.0        # exact reciprocal        (≈ 1.943844)
+_VWS_SCALE = _MS_TO_KT * 304.8     # (m/s per m) → kt per 1000 ft  (≈ 592.484)
+_HWS_SCALE = _MS_TO_KT * 185200.0  # (m/s per m) → kt per 100 nm   (= 360000)
 
 # Min zone half-thickness for visibility
 _MIN_ZONE_HALF_FT = 500
 # Max pressure gap for grouping
 _ZONE_MAX_PRESSURE_GAP_HPA = 100
+
+
+def _e_parameter(hws: float, vws: float) -> float:
+    """CloudPath E-Shear parameter ``E = (5·HWS + VWS² + 42) / 4``.
+
+    HWS in kt/100nm, VWS in kt/1000ft. Single definition of the formula so it
+    can be value-tested directly (see tests/test_e_shear.py).
+    """
+    return (5.0 * hws + vws * vws + 42.0) / 4.0
 
 
 def _classify_e_risk(e_val: float) -> CATRiskLevel:
@@ -54,7 +69,7 @@ def _classify_e_risk(e_val: float) -> CATRiskLevel:
 
 def _wind_to_uv(speed_kt: float, direction_deg: float) -> tuple[float, float]:
     """Convert wind speed/direction to U/V components in m/s."""
-    speed_ms = speed_kt * 0.51444
+    speed_ms = speed_kt * _KT_TO_MS
     rad = math.radians(direction_deg)
     u = -speed_ms * math.sin(rad)
     v = -speed_ms * math.cos(rad)
@@ -109,7 +124,7 @@ def compute_e_shear_per_sounding(
             hws = hws_at_level.get(lv.pressure_hpa, 0.0)
 
         # E parameter
-        e_val = (5.0 * hws + vws * vws + 42.0) / 4.0
+        e_val = _e_parameter(hws, vws)
 
         risk = _classify_e_risk(e_val)
         if risk == CATRiskLevel.NONE:
