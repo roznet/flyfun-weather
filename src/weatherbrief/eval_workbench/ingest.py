@@ -161,6 +161,22 @@ def build_corpus_meta(pack_dir: Path, *, notes: str = "") -> CorpusMeta | None:
         departure_time = snapshot.departure_time.isoformat()
     else:
         departure_time = f"{snapshot.target_date}T09:00:00+00:00"
+
+    # Cruise/ceiling: the real flight values live in the prod advisory baseline
+    # (the snapshot doesn't carry them). Without this corpus_meta would default
+    # to 8000/18000 and the resolver would synthesize the eval Flight at that
+    # bogus cruise — the briefing cross-section would then draw the cruise line
+    # at the wrong altitude, inconsistent with the advisories (computed at the
+    # real cruise). Fall back to the snapshot, then the safe defaults.
+    cruise_altitude_ft = (
+        (advisories.cruise_altitude_ft if advisories and advisories.cruise_altitude_ft else None)
+        or getattr(snapshot, "cruise_altitude_ft", None)
+        or 8000
+    )
+    flight_ceiling_ft = (
+        (advisories.flight_ceiling_ft if advisories and advisories.flight_ceiling_ft else None)
+        or 18000
+    )
     # Corpus is keyed by corpus_id; the resolver ignores ts for disambiguation,
     # so a date-precision fetch_timestamp is sufficient identity for the view.
     fetch_timestamp = f"{snapshot.fetch_date}T00:00:00+00:00"
@@ -174,7 +190,8 @@ def build_corpus_meta(pack_dir: Path, *, notes: str = "") -> CorpusMeta | None:
         departure_time=departure_time,
         fetch_timestamp=fetch_timestamp,
         days_out=snapshot.days_out,
-        cruise_altitude_ft=getattr(snapshot, "cruise_altitude_ft", 8000) or 8000,
+        cruise_altitude_ft=cruise_altitude_ft,
+        flight_ceiling_ft=flight_ceiling_ft,
         assessment=assessment,
         assessment_reason=digest.get("assessment_reason"),
         situations=situations,
