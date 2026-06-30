@@ -55,20 +55,33 @@ def test_freshness_falls_back_to_min_rule_when_gate_absent():
 # summarize_advisories — discoverability hints + neutral guardrail flags
 # --------------------------------------------------------------------------
 
-def _adv_manifest(status: str, cross_check: str | None = None):
+def _mitigation(kind: str = "altitude", addresses: str = "cruise_imc",
+                mitigated_status: str = "green"):
+    return {
+        "kind": kind,
+        "addresses": addresses,
+        "detail": "Fly 6,000 ft to stay below the deck.",
+        "mitigated_status": mitigated_status,
+        "altitude_ft": 6000,
+    }
+
+
+def _adv_manifest(status: str, cross_check: str | None = None,
+                  aggregate_mitigations: list | None = None):
     per_model = [{"model": "gfs", "status": status, "detail": "d", "affected_pct": 40}]
     if cross_check:
         per_model[0]["cross_check"] = cross_check
+    adv = {
+        "advisory_id": "convective",
+        "aggregate_status": status,
+        "aggregate_detail": "agg",
+        "per_model": per_model,
+        "parameters_used": {"cape_red": 1500},
+    }
+    if aggregate_mitigations is not None:
+        adv["aggregate_mitigations"] = aggregate_mitigations
     return {
-        "advisories": [
-            {
-                "advisory_id": "convective",
-                "aggregate_status": status,
-                "aggregate_detail": "agg",
-                "per_model": per_model,
-                "parameters_used": {"cape_red": 1500},
-            }
-        ],
+        "advisories": [adv],
         "catalog": [{"id": "convective", "name": "Convective", "category": "convective"}],
     }
 
@@ -90,6 +103,34 @@ def test_summarize_advisories_green_stays_compact():
     assert "per_model" not in entry
     assert "detail_tool" not in entry
     assert entry["cross_check_present"] is False
+    # The mitigation hook is always present and False when there are none.
+    assert entry["aggregate_mitigations_present"] is False
+
+
+def test_summarize_advisories_red_with_mitigations_expands_full_objects():
+    out = views.summarize_advisories(
+        _adv_manifest("red", aggregate_mitigations=[_mitigation()])
+    )
+    entry = out[0]
+    assert entry["aggregate_mitigations_present"] is True
+    # Full objects expand in the same non-green window as cross_check/per_model.
+    assert entry["aggregate_mitigations"][0]["addresses"] == "cruise_imc"
+    assert entry["aggregate_mitigations"][0]["mitigated_status"] == "green"
+    assert entry["detail_tool"] == "get_advisory_detail"
+
+
+def test_summarize_advisories_green_with_mitigation_flags_present_but_stays_compact():
+    # A mitigation on an otherwise-green-and-quiet advisory sets the present hook
+    # (so the agent knows to drill in) but keeps the summary compact — the full
+    # objects live in get_advisory_detail. Mitigation presence is NOT a new
+    # expansion trigger, mirroring how green-and-quiet stays compact.
+    out = views.summarize_advisories(
+        _adv_manifest("green", aggregate_mitigations=[_mitigation()])
+    )
+    entry = out[0]
+    assert entry["aggregate_mitigations_present"] is True
+    assert "aggregate_mitigations" not in entry
+    assert "detail_tool" not in entry
 
 
 def test_summarize_advisories_green_with_cross_check_expands():
@@ -131,6 +172,39 @@ def test_advisory_detail_without_catalog_entry_omits_name():
     out = views.advisory_detail({"advisory_id": "cloud_top", "per_model": []}, None)
     assert out["cross_check_note"] == views.CROSS_CHECK_NOTE
     assert "name" not in out
+
+
+def test_advisory_detail_surfaces_mitigations_and_note():
+    adv = {
+        "advisory_id": "vfr_feasibility",
+        "aggregate_status": "red",
+        "aggregate_detail": "VFR not feasible",
+        "per_model": [
+            {"model": "gfs", "status": "red", "detail": "deck", "affected_pct": 25,
+             "mitigations": [_mitigation(kind="route_position", addresses="climb_deck",
+                                         mitigated_status="amber")]},
+        ],
+        "parameters_used": {},
+        "aggregate_mitigations": [_mitigation()],
+    }
+    out = views.advisory_detail(adv, None)
+    # Aggregate + per-model mitigations surface verbatim; the guardrail is present.
+    assert out["aggregate_mitigations"][0]["addresses"] == "cruise_imc"
+    assert out["per_model"][0]["mitigations"][0]["addresses"] == "climb_deck"
+    assert out["mitigation_note"] == views.MITIGATION_NOTE
+
+
+def test_advisory_detail_omits_mitigation_note_when_none():
+    # No mitigations anywhere → the guardrail note is omitted, keeping the
+    # drill-down quiet for mitigation-free advisories (backward-compat).
+    adv = {
+        "advisory_id": "cloud_top",
+        "aggregate_status": "amber",
+        "per_model": [{"model": "gfs", "status": "amber", "detail": "d"}],
+    }
+    out = views.advisory_detail(adv, None)
+    assert "mitigation_note" not in out
+    assert "aggregate_mitigations" not in out
 
 
 # --------------------------------------------------------------------------

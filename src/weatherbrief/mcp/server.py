@@ -149,6 +149,15 @@ mcp = FastMCP(
         "get_briefing summary alone even though it looks sufficient. Treat "
         "cross-check notes and per-model splits as context for the discussion, "
         "not a reason to downgrade an advisory.\n\n"
+        "Mitigations: when get_briefing flags aggregate_mitigations_present on an "
+        "advisory (the same two-layer hook as cross_check), drill in with "
+        "get_advisory_detail for the full mitigation objects. A mitigation is a "
+        "decision that would improve a specific flagged sub-issue (e.g. fly a "
+        "lower altitude, climb after N nm) — it is ADVICE ONLY and never changes "
+        "the grade. Each carries mitigated_status: the status of the sub-issue it "
+        "addresses if applied, NOT the advisory overall. Explain the trade-off "
+        "('flying 6,000 ft would improve that sub-issue to GREEN — the advisory "
+        "itself stays RED'); never use a mitigation to downgrade an advisory.\n\n"
         "Provenance note: the AI digest narrates 'convective tops' that are "
         "parcel-derived (the thermodynamic equilibrium level from CAPE), NOT the "
         "model's own convective cloud field. A convective advisory driven RED by "
@@ -417,6 +426,12 @@ def get_briefing(
     Returns the overall assessment (GREEN/AMBER/RED), route advisories,
     AI weather digest, and a link to the full interactive briefing.
 
+    Each advisory carries neutral drill-in hooks: ``cross_check_present`` (model
+    scheme reconciliation) and ``aggregate_mitigations_present`` (advice-only
+    options that would improve a flagged sub-issue). When either is set, call
+    get_advisory_detail for the full objects — a mitigation is ADVICE ONLY and
+    never changes the grade.
+
     Status values:
     - ready: briefing available with fresh data
     - stale: briefing exists but weather models have updated since
@@ -650,6 +665,10 @@ def get_advisory_detail(
     Returns a server-side summary (never the raw forecast grid):
     - per-model status, detail, affected extent, and the cross-check note
     - parameters_used: the thresholds that produced the grade
+    - aggregate_mitigations + per-model mitigations (when present): advice-only
+      options that would improve a flagged sub-issue, with a mitigation_note
+      guardrail. Each carries mitigated_status (the status of the addressed
+      sub-issue if applied, NOT the advisory overall).
     - for the convective advisory: per-model CAPE range + the location (nm /
       waypoint) of the peak, the convective cover % (cover ≈ 0 is the
       machine-readable "blue sky" signal), and whether the assessment used the
@@ -657,7 +676,8 @@ def get_advisory_detail(
 
     The cross-check is **context for discussion, not a downgrade signal** — high
     CAPE matters even when the model's own convective scheme is quiet. Use it to
-    EXPLAIN the grade, not to argue it down.
+    EXPLAIN the grade, not to argue it down. Mitigations are likewise ADVICE
+    ONLY — explain the trade-off, never use one to downgrade an advisory.
     """
     try:
         client = _get_client()

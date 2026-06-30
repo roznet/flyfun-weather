@@ -62,10 +62,48 @@ _ADVISORIES = {
             ],
             "parameters_used": {"cape_red_jkg": 1000.0},
         },
+        {
+            "advisory_id": "vfr_feasibility",
+            "aggregate_status": "red",
+            "aggregate_detail": "VFR not feasible — departure deck",
+            "per_model": [
+                {
+                    "model": "gfs",
+                    "status": "red",
+                    "detail": "OVC deck below cruise",
+                    "affected_pct": 25.0,
+                    "affected_nm": 22.0,
+                    "total_nm": 90.0,
+                    "cross_check": None,
+                    "mitigations": [
+                        {
+                            "kind": "route_position",
+                            "addresses": "climb_deck",
+                            "detail": "Climb to cruise after ~40 nm to clear the deck.",
+                            "mitigated_status": "amber",
+                            "distance_nm": 40.0,
+                            "reference": "departure",
+                        }
+                    ],
+                }
+            ],
+            "parameters_used": {},
+            "aggregate_mitigations": [
+                {
+                    "kind": "altitude",
+                    "addresses": "cruise_imc",
+                    "detail": "Fly 6,000 ft to stay below the cloud base.",
+                    "mitigated_status": "green",
+                    "altitude_ft": 6000,
+                }
+            ],
+        },
     ],
     "catalog": [
         {"id": "icing", "name": "Icing", "category": "hazard", "description": "Airframe icing risk."},
         {"id": "convective", "name": "Convective", "category": "hazard", "description": "Thunderstorm risk."},
+        {"id": "vfr_feasibility", "name": "VFR Feasibility", "category": "feasibility",
+         "description": "Composite VFR go/no-go."},
     ],
 }
 
@@ -164,6 +202,29 @@ def test_convective_advisory_detail(client, app_db):
     assert "convective" in body
     assert isinstance(body["convective"], dict)
     assert "convective_note" in body
+
+
+def test_advisory_detail_surfaces_mitigations(client, app_db):
+    # The shaper plumbs mitigations through to the REST detail endpoint (#330):
+    # aggregate + per-model objects plus the advice-only guardrail note.
+    flight, ts = _seed(app_db)
+    resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/advisories/vfr_feasibility/detail")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["aggregate_status"] == "red"  # mitigation never changes the grade
+    assert body["aggregate_mitigations"][0]["addresses"] == "cruise_imc"
+    assert body["aggregate_mitigations"][0]["mitigated_status"] == "green"
+    assert body["per_model"][0]["mitigations"][0]["addresses"] == "climb_deck"
+    assert "mitigation_note" in body
+
+
+def test_advisory_detail_no_mitigation_note_when_absent(client, app_db):
+    # Mitigation-free advisory → no guardrail note, no aggregate_mitigations key.
+    flight, ts = _seed(app_db)
+    resp = client.get(f"/api/flights/{flight.id}/packs/{ts}/advisories/icing/detail")
+    body = resp.json()
+    assert "mitigation_note" not in body
+    assert "aggregate_mitigations" not in body
 
 
 def test_unknown_advisory_returns_404(client, app_db):

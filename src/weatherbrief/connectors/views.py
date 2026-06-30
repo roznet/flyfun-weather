@@ -21,6 +21,14 @@ CROSS_CHECK_NOTE = (
     "downgrade signal. Explain the grade with them; do not argue it down."
 )
 
+MITIGATION_NOTE = (
+    "Mitigations are advice only; they never change the grade. Each reports the "
+    "status of the specific sub-issue it addresses if applied (mitigated_status), "
+    "NOT the advisory overall — explain the trade-off (e.g. 'flying 6,000 ft would "
+    "improve that sub-issue to GREEN — the advisory itself stays RED'), do not "
+    "downgrade."
+)
+
 CONVECTIVE_NOTE = (
     "thermo.peak.el_top_ft is parcel-derived (the equilibrium level the digest "
     "narrates as 'convective tops'), NOT the model's convective cloud field. "
@@ -123,11 +131,19 @@ def summarize_advisories(advisories: dict) -> list[dict]:
                 entry_m["cross_check"] = cc
             per_model.append(entry_m)
 
+        # Mitigations (#330): advice-only options that would improve a flagged
+        # sub-issue. A neutral presence hook mirrors ``cross_check_present`` — it
+        # NEVER alters the grade. The full objects expand only in the same
+        # non-green/flagged window as cross_check/per_model (kept compact for
+        # green-and-quiet advisories; the agent can still drill in explicitly).
+        aggregate_mitigations = adv.get("aggregate_mitigations") or []
+
         entry: dict[str, Any] = {
             "id": adv_id,
             "status": adv.get("aggregate_status"),
             "detail": adv.get("aggregate_detail"),
             "cross_check_present": cross_check_present,
+            "aggregate_mitigations_present": bool(aggregate_mitigations),
             "per_model_present": bool(per_model),
         }
         cat = catalog.get(adv_id)
@@ -144,6 +160,8 @@ def summarize_advisories(advisories: dict) -> list[dict]:
         if entry["status"] in ("amber", "red") or cross_check_present:
             entry["per_model"] = per_model
             entry["parameters_used"] = adv.get("parameters_used", {})
+            if aggregate_mitigations:
+                entry["aggregate_mitigations"] = aggregate_mitigations
             entry["detail_tool"] = "get_advisory_detail"
 
         results.append(entry)
@@ -338,6 +356,11 @@ def advisory_detail(adv: dict, catalog_entry: dict | None) -> dict[str, Any]:
         cc = m.get("cross_check")
         if cc:
             entry_m["cross_check"] = cc
+        # Per-model mitigations (#330): advice-only options for this model's view.
+        # Verbatim Mitigation objects; advice only, never a downgrade.
+        mits = m.get("mitigations")
+        if mits:
+            entry_m["mitigations"] = mits
         per_model.append(entry_m)
 
     result: dict[str, Any] = {
@@ -348,6 +371,17 @@ def advisory_detail(adv: dict, catalog_entry: dict | None) -> dict[str, Any]:
         "parameters_used": adv.get("parameters_used", {}),
         "cross_check_note": CROSS_CHECK_NOTE,
     }
+    # Aggregate mitigations + guardrail (#330): the two-layer drill-in (mirrors
+    # cross_check). Only attach the note when there is something to explain, so
+    # mitigation-free advisories stay quiet. Never changes the grade.
+    aggregate_mitigations = adv.get("aggregate_mitigations") or []
+    has_mitigations = bool(aggregate_mitigations) or any(
+        m.get("mitigations") for m in adv.get("per_model", [])
+    )
+    if aggregate_mitigations:
+        result["aggregate_mitigations"] = aggregate_mitigations
+    if has_mitigations:
+        result["mitigation_note"] = MITIGATION_NOTE
     if catalog_entry:
         result["name"] = catalog_entry.get("name")
         result["category"] = catalog_entry.get("category")
