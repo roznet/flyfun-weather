@@ -150,6 +150,29 @@ def test_vertical_blocked_by_terrain():
     assert not any(m.kind == MitigationKind.ALTITUDE for m in _mitigations(result))
 
 
+def test_vertical_amber_band_uses_marginal_phrasing():
+    """When the best reachable band is only AMBER (cruise RED, no clear band above
+    the floor), the detail must NOT claim 'VMC available' — it says 'marginal' to
+    match the AMBER axis status."""
+    # OVC 7000–12000 → cruise (8000) IMC/RED. Terrain 5200 → floor 6200: the
+    # clear band (6000) is below the floor, but the marginal band (6500, within
+    # 1000ft of base) clears it → best candidate is AMBER at 6500.
+    deck = EnhancedCloudLayer(base_ft=7000, top_ft=12000, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [deck]}) for i in range(10)]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses, elevation=_elevation(max_elev_ft=5200)), _VFR_DEFAULTS
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED
+    alt = [m for m in _mitigations(result) if m.kind == MitigationKind.ALTITUDE]
+    assert len(alt) == 1
+    m = alt[0]
+    assert m.mitigated_status == AdvisoryStatus.AMBER
+    assert m.altitude_ft == 6500
+    assert "marginal" in m.detail.lower()
+    assert "VMC available" not in m.detail  # the GREEN-only phrasing
+
+
 # ---------------------------------------------------------------------------
 # Along-route mitigation (addresses climb_deck / descent_deck)
 # ---------------------------------------------------------------------------
