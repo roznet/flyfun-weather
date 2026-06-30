@@ -287,6 +287,9 @@ def _check_corridor_vfr(
     return worst, parts
 
 
+# Only the graded statuses are mapped: `_vertical_mitigation` guards on
+# AMBER/RED cruise status and the candidate statuses come from
+# `_enroute_vfr_status` (always GREEN/AMBER/RED), so UNAVAILABLE is never indexed.
 _SEVERITY = {AdvisoryStatus.GREEN: 0, AdvisoryStatus.AMBER: 1, AdvisoryStatus.RED: 2}
 
 
@@ -313,7 +316,11 @@ def _vertical_mitigation(
     chosen altitude — NOT the overall advisory status (a corridor deck or
     airport issue can still hold the grade higher).
     """
-    if cruise_status == AdvisoryStatus.GREEN:
+    # Only compute a mitigation for an axis that is actually flagged (#328
+    # decision 6). Restricting to AMBER/RED also keeps every `_SEVERITY[...]`
+    # lookup below provably safe — both `cruise_status` and the candidate
+    # statuses are then graded (never GREEN-skip or UNAVAILABLE).
+    if cruise_status not in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
         return None
 
     cruise = ctx.cruise_altitude_ft
@@ -341,10 +348,18 @@ def _vertical_mitigation(
     if best_alt is None or best_status is None:
         return None
 
+    # Honest phrasing: a GREEN band is clear VMC; an AMBER band (offered only
+    # when cruise is RED and no clear band clears the terrain floor) is merely
+    # *less* IMC — say "marginal" so the detail doesn't contradict the badge.
+    detail_key = (
+        "vfr.mitigation.altitude"
+        if best_status == AdvisoryStatus.GREEN
+        else "vfr.mitigation.altitude_marginal"
+    )
     return Mitigation(
         kind=MitigationKind.ALTITUDE,
         addresses="cruise_imc",
-        detail=adv_t("vfr.mitigation.altitude", loc, alt=best_alt),
+        detail=adv_t(detail_key, loc, alt=best_alt),
         mitigated_status=best_status,
         altitude_ft=best_alt,
     )
