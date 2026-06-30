@@ -748,7 +748,7 @@
   "page.flights.time": "Time",
   "page.flights.altitude": "Altitude (ft)",
   "page.flights.ceiling": "Ceiling (ft)",
-  "page.flights.duration": "Duration (hrs)",
+  "page.flights.duration": "Duration",
   "page.flights.createFlight": "Create Flight",
   "page.flights.loading": "Loading flights...",
 

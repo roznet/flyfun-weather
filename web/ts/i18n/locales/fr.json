@@ -627,7 +627,7 @@
   "page.flights.time": "Heure",
   "page.flights.altitude": "Altitude (ft)",
   "page.flights.ceiling": "Plafond (ft)",
-  "page.flights.duration": "Durée (h)",
+  "page.flights.duration": "Durée",
   "page.flights.createFlight": "Créer un vol",
   "page.flights.loading": "Chargement des vols...",
   "page.settings.title": "Paramètres",
