@@ -33,10 +33,14 @@ and ChatGPT cannot drift.
 - **`weatherbrief/connectors/views.py`** `[project]` — pure `dict → dict` shapers,
   the only logic shared between the two connectors. Carries the guardrails:
   cross-check is *context, not a downgrade signal* (#178); the convective
-  provenance note (parcel-derived "tops" vs the model's own convective cover).
-  Key exports: `summarize_advisories`, `summarize_altitude_table`,
-  `advisory_detail`, `convective_detail`, `briefing_freshness_status`,
-  `CROSS_CHECK_NOTE`, `CONVECTIVE_NOTE`.
+  provenance note (parcel-derived "tops" vs the model's own convective cover);
+  the mitigation note (advice only, reports the *sub-issue's* status if applied,
+  never a grade downgrade — #330). Advisory mitigations mirror `cross_check`'s
+  two-layer exposure: a neutral `aggregate_mitigations_present` hook always, full
+  objects only in the non-green/flagged window. Key exports:
+  `summarize_advisories`, `summarize_altitude_table`, `advisory_detail`,
+  `convective_detail`, `briefing_freshness_status`, `CROSS_CHECK_NOTE`,
+  `CONVECTIVE_NOTE`, `MITIGATION_NOTE`.
 
 - **`weatherbrief/api/agent.py`** `[project]` — the ChatGPT front-door router,
   mounted at `/agent/v1`. **In-process reuse, no localhost loopback:**

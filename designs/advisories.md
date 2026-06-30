@@ -147,6 +147,60 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 **Sun pipeline (issue #227):** the heavy/airport-independent parts (night intervals + sun-side summary) are computed once in `tasks/analyze.py` and stored on `RouteAnalysesManifest.sun` (served to the client for cross-section night shading). The advise stage recomputes the full `RouteSunAnalysis` — adding dep/arr glare from the wind-best runway (shared `select_best_runway` helper in `airport_conditions.py`) — onto `RouteContext.sun`, where `run_advisories_from_pack` also rebuilds it so recalculation works. Solar math lives in the `euro_aip` solar primitive (`euro_aip/utils/solar.py`, astral-backed); azimuths and runway headings are both **true** degrees, so glare needs no magnetic conversion.
 
+## Mitigations (advice only — #328/#330)
+
+An advisory can carry **mitigations**: decisions that would improve a *specific
+flagged sub-issue* if applied. A mitigation **never changes the grade** — same
+contract as `cross_check`. A RED advisory with a mitigation is still RED.
+
+`Mitigation` (in `models/advisories.py`):
+
+| Field | Meaning |
+|-------|---------|
+| `kind` | `MitigationKind`: `ALTITUDE` / `ROUTE_POSITION` / `TIMING` (timing reserved) |
+| `addresses` | stable English machine token for the sub-issue (e.g. `cruise_imc`, `climb_deck`, `descent_deck`) — NOT localized |
+| `detail` | localized human phrasing (via `adv_t`) |
+| `mitigated_status` | status **of the addressed sub-issue alone** if applied — NOT the advisory overall (an advisory grades several axes via `worst`; a mitigation on one axis says nothing about the others) |
+| `altitude_ft` | set for `ALTITUDE` |
+| `distance_nm` + `reference` | set for `ROUTE_POSITION` (`reference` = `"departure"`/`"arrival"` disambiguates the distance) |
+
+Mitigations live at two levels: `ModelAdvisoryResult.mitigations` (per-model) and
+`RouteAdvisoryResult.aggregate_mitigations`. The aggregate is chosen by
+`_aggregate_mitigations` — the **representative-model policy**: the mitigations of
+the first per-model result whose status equals the aggregate status (same
+representative that sets `aggregate_detail`). Kept as a standalone function so the
+policy can later swap to a conservative per-kind merge in one place. Both default
+to `[]`, so old packs deserialize cleanly.
+
+**Worked example — only `vfr_feasibility` populates mitigations so far** (PoC).
+Two generators in `vfr_feasibility.py`:
+- `_vertical_mitigation` → `ALTITUDE`, `addresses="cruise_imc"`: scans downward
+  from cruise to a terrain floor (`max_terrain + _TERRAIN_CLEARANCE_FT`, 1000 ft),
+  re-grading the en-route cloud axis at each step; offers the highest altitude that
+  strictly improves it (prefers a fully clear GREEN band over a merely-better AMBER
+  one). No mitigation when the only improving band is below the terrain floor — the
+  RED is genuine. Only computed for an already-flagged (AMBER/RED) axis.
+- `_corridor_mitigation` → `ROUTE_POSITION`, `addresses="climb_deck"`/`"descent_deck"`:
+  when a corridor deck blocks climb-out/descent near one end but clears beyond, offers
+  "climb to cruise after ~d nm" / "descend before ~d nm". Gated on BOTH a genuine
+  clear/blocked split AND flyable VFR room beneath the deck along the blocked stretch
+  (`_under_deck_flyable`, `mitigation_min_base_agl_ft` default 3000 ft) — otherwise the
+  clear air is unreachable and the grade is genuine.
+
+**Surfacing** (each consumer treats mitigations as a soft hook, never a verdict):
+- **Web / iOS**: a neutral "lightbulb" hook on the advisory card → tip detail
+  (neutral blue-gray, never green/red).
+- **Digest** (`prompt_builder.py`): consolidated into the deterministic
+  `=== OPTIONS TO IMPROVE ===` block — `ALTITUDE` mitigations are dropped here
+  (the altitude-options sub-block owns that axis and shows the cross-advisory
+  trade-off); non-altitude (`ROUTE_POSITION`/`TIMING`) ones list under a Tactical
+  sub-block. See [digest.md](./digest.md).
+- **MCP / ChatGPT** (`connectors/views.py`): `summarize_advisories` sets a neutral
+  `aggregate_mitigations_present` hook (always) and expands the full objects only in
+  the same non-green/flagged window as `cross_check`; `advisory_detail` includes
+  per-model `mitigations` + top-level `aggregate_mitigations` plus a `MITIGATION_NOTE`
+  guardrail (sibling of `CROSS_CHECK_NOTE`). See [chatgpt-connector.md](./chatgpt-connector.md).
+
 ## Shared Helpers (`_helpers.py`)
 
 - **`format_extent(affected, total, total_distance_nm)`** → `"30nm/55nm (55%)"` — human-readable spatial extent
