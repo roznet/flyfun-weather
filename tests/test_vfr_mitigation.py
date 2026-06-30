@@ -327,13 +327,20 @@ def test_along_route_low_base_not_reachable():
 # Co-occurrence
 # ---------------------------------------------------------------------------
 
-def test_cooccurrence_vertical_and_along_route():
-    """Cruise IMC AND a corridor deck → two mitigations; grade still RED."""
+def test_cruise_imc_suppresses_corridor_mitigation():
+    """Cruise IMC en route → corridor mitigation suppressed, only the vertical.
+
+    When cruise is itself IMC, "climb to cruise after ~X nm" is useless (you'd
+    re-enter cloud at cruise). The corridor mitigation is gated on the en-route
+    axis being GREEN, so only the vertical "fly lower" mitigation is offered —
+    the two are mutually exclusive by construction.
+    """
     cruise_deck = EnhancedCloudLayer(base_ft=7000, top_ft=12000, coverage=CloudCoverage.OVC)
     # Low deck base 4000 over 500ft terrain = 3500ft AGL, clears the base gate.
     low_deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
-    # Every point has the cruise-level deck (IMC); points 0,20 also carry a low
-    # corridor deck. Points 40,60 are clear in the corridor → climb after ~40nm.
+    # Every point has the cruise-level deck (IMC at cruise → enroute RED); points
+    # 0,20 also carry a low corridor deck that WOULD support a climb mitigation
+    # were cruise clear.
     analyses = [
         _rpa(i, i * 20.0, {"gfs": [cruise_deck, low_deck] if i in (0, 1) else [cruise_deck]})
         for i in range(10)
@@ -343,11 +350,9 @@ def test_cooccurrence_vertical_and_along_route():
     )
 
     assert result.aggregate_status == AdvisoryStatus.RED  # worst(...) unchanged
-    mits = _mitigations(result)
-    addresses = {m.addresses for m in mits}
-    assert "cruise_imc" in addresses
-    assert "climb_deck" in addresses
-    assert len(mits) == 2
+    addresses = {m.addresses for m in _mitigations(result)}
+    assert "cruise_imc" in addresses       # the relevant lever: fly lower
+    assert "climb_deck" not in addresses   # suppressed — cruise is IMC anyway
 
 
 # ---------------------------------------------------------------------------

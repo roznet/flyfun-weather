@@ -435,9 +435,19 @@ def _corridor_mitigation(
     model: str,
     min_base_agl_ft: float,
     max_reposition_nm: float,
+    enroute_status: AdvisoryStatus,
     loc: str | None,
 ) -> list[Mitigation]:
     """Find along-route repositioning mitigations for blocked corridor decks.
+
+    Only offered when the en-route cruise axis is GREEN — i.e. cruise is itself a
+    viable VMC level. The corridor mitigation's premise is "you can reach (or
+    leave) cruise VMC by repositioning the climb/descent"; that is only useful if
+    cruise is worth being at. When cruise is itself IMC en route, climbing to it
+    just puts you back in cloud, so the relevant lever is the vertical mitigation
+    ("fly at a lower clear altitude"), not this one. The two are therefore
+    mutually exclusive (the vertical mitigation fires only when cruise is
+    AMBER/RED, this one only when cruise is GREEN).
 
     The deck a climb/descent transits can extend beyond the terminal grade
     corridor, so the mitigation search is NOT bounded by ``terminal_corridor_nm``:
@@ -462,6 +472,10 @@ def _corridor_mitigation(
     ``mitigated_status`` is GREEN: repositioning clears that phase's deck. It
     speaks only for the corridor axis, not the overall advisory.
     """
+    # Cruise must itself be a clear VMC level, else reaching it is pointless.
+    if enroute_status != AdvisoryStatus.GREEN:
+        return []
+
     total = ctx.total_distance_nm
     mitigations: list[Mitigation] = []
 
@@ -712,7 +726,7 @@ class VFRFeasibilityEvaluator:
                 mitigations.append(vertical)
             mitigations.extend(_corridor_mitigation(
                 ctx, model, mitigation_min_base_agl_ft,
-                mitigation_max_reposition_nm, loc,
+                mitigation_max_reposition_nm, enroute_status, loc,
             ))
 
             per_model.append(ModelAdvisoryResult.build(
