@@ -34,6 +34,7 @@ _VFR_DEFAULTS = {
     "imc_pct_amber": 15,
     "imc_pct_red": 30,
     "terminal_corridor_nm": 5,
+    "mitigation_min_base_agl_ft": 3000,
 }
 
 
@@ -156,7 +157,8 @@ def test_vertical_blocked_by_terrain():
 def test_along_route_climb_happy_path():
     """OVC deck below cruise over the corridor points nearest departure,
     clear beyond → one ROUTE_POSITION climb mitigation."""
-    deck = EnhancedCloudLayer(base_ft=3000, top_ft=5000, coverage=CloudCoverage.OVC)
+    # base 4000 over 500ft terrain = 3500ft AGL, clears the mitigation base gate.
+    deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
     # Wide corridor (60nm) so points 0,20,40,60 are in the climb corridor.
     # Blocked at 0 & 20nm, clear at 40 & 60nm → climb after ~40nm.
     analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (0, 1) else []}) for i in range(10)]
@@ -178,7 +180,8 @@ def test_along_route_climb_happy_path():
 
 def test_along_route_descent_happy_path():
     """Symmetric to climb: deck near arrival, clear before → descent mitigation."""
-    deck = EnhancedCloudLayer(base_ft=3000, top_ft=5000, coverage=CloudCoverage.OVC)
+    # base 4000 over 500ft terrain = 3500ft AGL, clears the mitigation base gate.
+    deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
     # Blocked at 160 & 180nm (near arrival), clear at 140nm → descend before
     # ~60nm from arrival (200 − 140).
     analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (8, 9) else []}) for i in range(10)]
@@ -199,7 +202,9 @@ def test_along_route_descent_happy_path():
 def test_along_route_uniformly_blocked():
     """Deck over the whole climb corridor → no along-route mitigation
     (the deck can't be avoided by repositioning)."""
-    deck = EnhancedCloudLayer(base_ft=3000, top_ft=5000, coverage=CloudCoverage.OVC)
+    # High enough base to clear the AGL gate, so the no-mitigation result is due
+    # to the uniformly-blocked corridor (no clear/blocked split), not the gate.
+    deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
     analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i in (0, 1, 2, 3) else []}) for i in range(10)]
     result = VFRFeasibilityEvaluator.evaluate(
         _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}
@@ -209,6 +214,30 @@ def test_along_route_uniformly_blocked():
     assert not any(m.addresses == "climb_deck" for m in _mitigations(result))
 
 
+def test_along_route_low_base_not_reachable():
+    """A clear/blocked split exists, but the blocked-stretch deck base is too low
+    to fly under (1500ft base over 500ft terrain = 1000ft AGL < 3000 default) →
+    no along-route mitigation: the clear air beyond is unreachable VFR.
+
+    Tunable: lowering the threshold below the deck's AGL base re-enables it.
+    """
+    low_deck = EnhancedCloudLayer(base_ft=1500, top_ft=5000, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [low_deck] if i in (0, 1) else []}) for i in range(10)]
+
+    blocked = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60}
+    )
+    assert blocked.aggregate_status == AdvisoryStatus.RED  # deck still grades RED
+    assert not any(m.addresses == "climb_deck" for m in _mitigations(blocked))
+
+    # With the gate lowered below the deck's 1000ft AGL base, the mitigation returns.
+    relaxed = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses),
+        {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, "mitigation_min_base_agl_ft": 500},
+    )
+    assert any(m.addresses == "climb_deck" for m in _mitigations(relaxed))
+
+
 # ---------------------------------------------------------------------------
 # Co-occurrence
 # ---------------------------------------------------------------------------
@@ -216,7 +245,8 @@ def test_along_route_uniformly_blocked():
 def test_cooccurrence_vertical_and_along_route():
     """Cruise IMC AND a corridor deck → two mitigations; grade still RED."""
     cruise_deck = EnhancedCloudLayer(base_ft=7000, top_ft=12000, coverage=CloudCoverage.OVC)
-    low_deck = EnhancedCloudLayer(base_ft=3000, top_ft=5000, coverage=CloudCoverage.OVC)
+    # Low deck base 4000 over 500ft terrain = 3500ft AGL, clears the base gate.
+    low_deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
     # Every point has the cruise-level deck (IMC); points 0,20 also carry a low
     # corridor deck. Points 40,60 are clear in the corridor → climb after ~40nm.
     analyses = [
