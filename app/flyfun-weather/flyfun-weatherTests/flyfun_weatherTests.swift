@@ -193,6 +193,89 @@ struct Phase0DataPlumbingTests {
         // cross_check is optional — models without it decode with nil.
         let ecmwf = try #require(advisory.perModel.first { $0.model == "ecmwf" })
         #expect(ecmwf.crossCheck == nil)
+
+        // aggregate_mitigations / per-model mitigations are optional — absent on
+        // this pack, so they decode to nil (backward-compat with old packs, #330).
+        #expect(advisory.aggregateMitigations == nil)
+        #expect(gfs.mitigations == nil)
+    }
+
+    /// `aggregate_mitigations` (route level) and per-model `mitigations` decode
+    /// into the advisory models with snake_case keys mapped via the decoder's
+    /// `.convertFromSnakeCase` strategy (#330). Mitigations are advice only and
+    /// never change the grade.
+    @Test func routeAdvisoryResultDecodesMitigations() throws {
+        let json = """
+        {
+          "advisories": [
+            {
+              "advisory_id": "vfr_feasibility",
+              "aggregate_status": "red",
+              "aggregate_detail": "VFR not feasible",
+              "parameters_used": {},
+              "per_model": [
+                {
+                  "model": "gfs",
+                  "status": "red",
+                  "detail": "Departure deck OVC below cruise",
+                  "affected_points": 3,
+                  "total_points": 12,
+                  "affected_pct": 25.0,
+                  "affected_nm": 22.0,
+                  "total_nm": 90.0,
+                  "mitigations": [
+                    {
+                      "kind": "route_position",
+                      "addresses": "climb_deck",
+                      "detail": "Climb to cruise after ~40 nm from departure to clear the deck.",
+                      "mitigated_status": "amber",
+                      "distance_nm": 40.0,
+                      "reference": "departure"
+                    }
+                  ]
+                }
+              ],
+              "aggregate_mitigations": [
+                {
+                  "kind": "altitude",
+                  "addresses": "cruise_imc",
+                  "detail": "Fly 6,000 ft to stay below the cloud base.",
+                  "mitigated_status": "green",
+                  "altitude_ft": 6000
+                }
+              ]
+            }
+          ],
+          "catalog": [],
+          "route_name": "LFML LFMD",
+          "cruise_altitude_ft": 8000,
+          "flight_ceiling_ft": 13000,
+          "total_distance_nm": 90.0,
+          "models": ["gfs"],
+          "aggregation": "worst"
+        }
+        """
+        let data = Data(json.utf8)
+        let response = try JSONDecoder.weatherBrief.decode(AdvisoriesResponse.self, from: data)
+
+        let advisory = try #require(response.advisories.first)
+        // Mitigations never change the grade — the advisory stays RED.
+        #expect(advisory.aggregateStatus == "red")
+
+        let agg = try #require(advisory.aggregateMitigations)
+        #expect(agg.count == 1)
+        #expect(agg[0].kind == "altitude")
+        #expect(agg[0].addresses == "cruise_imc")
+        #expect(agg[0].mitigatedStatus == "green")
+        #expect(agg[0].altitudeFt == 6000)
+        #expect(agg[0].distanceNm == nil)
+
+        let gfs = try #require(advisory.perModel.first { $0.model == "gfs" })
+        let perModel = try #require(gfs.mitigations)
+        #expect(perModel.count == 1)
+        #expect(perModel[0].kind == "route_position")
+        #expect(perModel[0].distanceNm == 40.0)
+        #expect(perModel[0].reference == "departure")
     }
 }
 

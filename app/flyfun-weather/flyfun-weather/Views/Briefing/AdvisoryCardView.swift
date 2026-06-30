@@ -114,6 +114,16 @@ struct AdvisoryCardView: View {
                 if appState.helpCatalog.advisory(advisory.advisoryId) != nil {
                     HelpInfoButton(topic: .advisory(advisory.advisoryId))
                 }
+                // Mitigation presence hint (#330): a soft lightbulb shown only when
+                // this advisory carries mitigations. Presence cue only — the tip
+                // text lives in the detail sheet. Neutral tint, never a status
+                // colour; advice only, never a regrade.
+                if !(advisory.aggregateMitigations ?? []).isEmpty {
+                    Image(systemName: "lightbulb")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("mitigation available")
+                }
                 Spacer()
                 Button {
                     withAnimation { setExpanded(!isExpanded) }
@@ -179,7 +189,8 @@ struct AdvisoryCardView: View {
         .sheet(isPresented: $showingDetail) {
             if let viewModel {
                 AdvisoryDetailView(viewModel: viewModel, advisoryId: advisory.advisoryId,
-                                   fallbackName: catalogEntry?.name ?? advisory.advisoryId)
+                                   fallbackName: catalogEntry?.name ?? advisory.advisoryId,
+                                   mitigations: advisory.aggregateMitigations ?? [])
             }
         }
     }
