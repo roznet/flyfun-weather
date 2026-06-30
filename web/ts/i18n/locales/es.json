@@ -63,7 +63,6 @@
   "flights.form.zeroDurationTitle": "Confirmar la duraci\u00f3n del vuelo",
   "flights.form.zeroDurationMessage": "Ha introducido una duraci\u00f3n de 0 horas. Es inusual \u2014 produce una instant\u00e1nea meteorol\u00f3gica en lugar de una ventana de vuelo. \u00bfQuer\u00eda dejarlo en blanco?",
   "flights.form.zeroDurationLabel": "Duraci\u00f3n:",
-  "flights.form.zeroDurationHoursUnit": "horas",
   "flights.form.zeroDurationDistance": "Distancia de la ruta: {dist} NM",
   "flights.form.zeroDurationSuggestionsHint": "Duraciones sugeridas seg\u00fan la velocidad de crucero:",
   "flights.form.zeroDurationContinue": "Continuar",
