@@ -216,44 +216,96 @@ fileprivate func alternateVerdictColor(_ status: String) -> Color {
     }
 }
 
-/// One divert candidate as a card. Geometry (before/after + detour), consensus
-/// category + winds, approach tier, regulatory qual, and the vs-dest "Better"
-/// badge.
+/// One divert candidate as a collapsible card. Collapsed (default) shows only
+/// the identity + at-a-glance signals: ICAO, consensus flight category, and the
+/// FAA/EASA alternate-minima tags. Expanding reveals the rest — name, MAJOR /
+/// "Better" flags, distance + agreement, geometry (before/after + detour),
+/// winds, and approach tier. Defaults collapsed so more candidates fit on screen.
 private struct AlternateCard: View {
     let apt: AlternateAirport
 
+    @State private var expanded = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacingS) {
+            // Header (always visible) — tap anywhere to expand/collapse.
+            Button {
+                withAnimation { expanded.toggle() }
+            } label: {
+                collapsedHeader
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                expandedDetail
+                    .transition(.opacity)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: Collapsed summary — category + FAA/EASA tags + ICAO identity.
+
+    @ViewBuilder
+    private var collapsedHeader: some View {
+        VStack(alignment: .leading, spacing: Theme.spacingXS) {
             HStack(spacing: Theme.spacingS) {
                 Text(apt.icao)
                     .font(.headline)
                     .foregroundStyle(Theme.text)
-                if apt.isMajor == true {
-                    Text("MAJOR")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Theme.textMuted)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Theme.border, in: Capsule())
-                }
-                Spacer()
-                if apt.dominatesDestination == true {
-                    Text("Better")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Theme.green, in: Capsule())
-                }
-            }
-
-            if let name = apt.name, !name.isEmpty {
-                Text(name)
+                FlightCategoryBadge(category: apt.flightCategory)
+                Spacer(minLength: 0)
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
                     .font(.caption)
                     .foregroundStyle(Theme.textMuted)
-                    .lineLimit(1)
+            }
+
+            // Regulatory qual chips — the FAA/EASA alternate tags.
+            if apt.faa != nil || apt.easa != nil {
+                HStack(spacing: Theme.spacingS) {
+                    if let faa = apt.faa { qualChip("FAA", faa.verdict) }
+                    if let easa = apt.easa { qualChip("EASA", easa.verdict) }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    // MARK: Expanded detail — everything else.
+
+    @ViewBuilder
+    private var expandedDetail: some View {
+        VStack(alignment: .leading, spacing: Theme.spacingS) {
+            if (apt.name != nil && !(apt.name ?? "").isEmpty) || apt.isMajor == true || apt.dominatesDestination == true {
+                HStack(spacing: Theme.spacingS) {
+                    if let name = apt.name, !name.isEmpty {
+                        Text(name)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textMuted)
+                            .lineLimit(1)
+                    }
+                    if apt.isMajor == true {
+                        Text("MAJOR")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Theme.textMuted)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Theme.border, in: Capsule())
+                    }
+                    Spacer(minLength: 0)
+                    if apt.dominatesDestination == true {
+                        Text("Better")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Theme.green, in: Capsule())
+                    }
+                }
             }
 
             HStack(spacing: Theme.spacingS) {
-                FlightCategoryBadge(category: apt.flightCategory)
                 if let agree = apt.agreement?["flight_category"] {
                     Text(agree)
                         .font(.caption2)
@@ -296,19 +348,7 @@ private struct AlternateCard: View {
                 Spacer(minLength: 0)
             }
             .foregroundStyle(Theme.textMuted)
-
-            // Regulatory qual chips.
-            if apt.faa != nil || apt.easa != nil {
-                HStack(spacing: Theme.spacingS) {
-                    if let faa = apt.faa { qualChip("FAA", faa.verdict) }
-                    if let easa = apt.easa { qualChip("EASA", easa.verdict) }
-                    Spacer(minLength: 0)
-                }
-            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func qualChip(_ label: String, _ verdict: String) -> some View {
