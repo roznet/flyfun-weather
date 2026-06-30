@@ -13,6 +13,8 @@ caution. The standalone advisory still grades it fully (snow can RED).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import format_extent
 from weatherbrief.analysis.advisories.enroute_precip import classify_enroute_precip
@@ -176,6 +178,58 @@ def _field_elevation_ft(ctx: RouteContext, distance_nm: float) -> float:
     return nearest.elevation_ft
 
 
+def _corridor_points(
+    ctx: RouteContext,
+    model: str,
+    corridor_nm: float,
+    phase: str,
+) -> Iterator[tuple[float, bool, bool]]:
+    """Yield ``(distance_nm, has_ovc, has_bkn)`` for each climb/descent corridor point.
+
+    Single source of truth for both corridor membership and the transitable-deck
+    condition, shared by the corridor grade (``_check_corridor_vfr``) and the
+    corridor mitigation (``_corridor_blocked_profile``):
+
+    - **Membership**: within ``corridor_nm`` of the origin (climb) or destination
+      (descent), with a nearer-half tiebreak so the two corridors stay mutually
+      exclusive on short routes / large ``corridor_nm`` (a point at the midpoint
+      is attributed to the climb-out).
+    - **Deck**: a BKN/OVC layer lying entirely between field elevation and cruise
+      (``floor < top_ft < cruise``) is one the flight must climb/descend through.
+      A layer whose top reaches cruise is cruise-in-cloud and is left to
+      ``_check_enroute_vfr`` rather than double-counted here.
+
+    Points are yielded in ``ctx.analyses`` order (callers that need distance order
+    sort the result).
+    """
+    cruise = ctx.cruise_altitude_ft
+    total = ctx.total_distance_nm
+
+    for rpa in ctx.analyses:
+        d = rpa.distance_from_origin_nm or 0.0
+        if phase == "climb":
+            in_corridor = d <= corridor_nm and d <= total / 2
+        else:
+            in_corridor = (total - d) <= corridor_nm and d > total / 2
+        if not in_corridor:
+            continue
+        sounding = rpa.sounding.get(model)
+        if sounding is None:
+            continue
+        floor = _field_elevation_ft(ctx, d)
+        has_ovc = False
+        has_bkn = False
+        for cl in sounding.cloud_layers:
+            if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
+                continue
+            if floor < cl.top_ft < cruise:
+                if cl.coverage == CloudCoverage.OVC:
+                    has_ovc = True
+                else:
+                    has_bkn = True
+        yield d, has_ovc, has_bkn
+
+
 def _check_corridor_vfr(
     ctx: RouteContext,
     model: str,
@@ -195,8 +249,6 @@ def _check_corridor_vfr(
 
     Returns (worst_status, detail_fragments).
     """
-    cruise = ctx.cruise_altitude_ft
-    total = ctx.total_distance_nm
     worst = AdvisoryStatus.GREEN
     parts: list[str] = []
     loc = ctx.locale
@@ -212,33 +264,9 @@ def _check_corridor_vfr(
     for phase, key, icao, fallback in phases:
         has_ovc = False
         has_bkn = False
-        for rpa in ctx.analyses:
-            d = rpa.distance_from_origin_nm or 0.0
-            # Distance to this phase's airport, plus a nearer-half tiebreak so the
-            # climb and descent corridors stay mutually exclusive when they would
-            # otherwise overlap (short routes / large terminal_corridor_nm). A
-            # point exactly at the midpoint is attributed to the climb-out.
-            if phase == "climb":
-                in_corridor = d <= corridor_nm and d <= total / 2
-            else:
-                in_corridor = (total - d) <= corridor_nm and d > total / 2
-            if not in_corridor:
-                continue
-            sounding = rpa.sounding.get(model)
-            if sounding is None:
-                continue
-            floor = _field_elevation_ft(ctx, d)
-            for cl in sounding.cloud_layers:
-                if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
-                    continue
-                # A deck we must transit on climb/descent: lies entirely between
-                # the field and cruise. A layer whose top reaches cruise is
-                # cruise-in-cloud — left to _check_enroute_vfr, not double-counted.
-                if floor < cl.top_ft < cruise:
-                    if cl.coverage == CloudCoverage.OVC:
-                        has_ovc = True
-                    else:
-                        has_bkn = True
+        for _d, p_ovc, p_bkn in _corridor_points(ctx, model, corridor_nm, phase):
+            has_ovc = has_ovc or p_ovc
+            has_bkn = has_bkn or p_bkn
 
         if has_ovc:
             worst = _worst_status(worst, AdvisoryStatus.RED)
@@ -321,34 +349,15 @@ def _corridor_blocked_profile(
 ) -> list[tuple[float, bool]]:
     """Per-point (distance, blocked) for a corridor phase, sorted by distance.
 
-    A point is *blocked* when a BKN/OVC layer lies entirely between field
-    elevation and cruise (``floor < top_ft < cruise``) — the same deck condition
-    ``_check_corridor_vfr`` uses, but reported per point so a mitigation can
+    A point is *blocked* when it carries a transitable BKN/OVC deck (see
+    ``_corridor_points`` for the membership + deck condition). Collapses the
+    per-point OVC/BKN split to a single ``blocked`` bool so a mitigation can
     locate where the deck breaks.
     """
-    cruise = ctx.cruise_altitude_ft
-    total = ctx.total_distance_nm
-    profile: list[tuple[float, bool]] = []
-
-    for rpa in ctx.analyses:
-        d = rpa.distance_from_origin_nm or 0.0
-        if phase == "climb":
-            in_corridor = d <= corridor_nm and d <= total / 2
-        else:
-            in_corridor = (total - d) <= corridor_nm and d > total / 2
-        if not in_corridor:
-            continue
-        sounding = rpa.sounding.get(model)
-        if sounding is None:
-            continue
-        floor = _field_elevation_ft(ctx, d)
-        blocked = any(
-            cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
-            and floor < cl.top_ft < cruise
-            for cl in sounding.cloud_layers
-        )
-        profile.append((d, blocked))
-
+    profile = [
+        (d, p_ovc or p_bkn)
+        for d, p_ovc, p_bkn in _corridor_points(ctx, model, corridor_nm, phase)
+    ]
     profile.sort(key=lambda t: t[0])
     return profile
 
@@ -382,13 +391,15 @@ def _corridor_mitigation(
         max_blocked = max(blocked)
         beyond = [d for d in clear if d > max_blocked]
         if beyond:
-            d_star = min(beyond)
+            # Round once: the phrasing is qualitative ("~X nm"), so detail and
+            # the structured distance must report the same integer.
+            dist = round(min(beyond))
             mitigations.append(Mitigation(
                 kind=MitigationKind.ROUTE_POSITION,
                 addresses="climb_deck",
-                detail=adv_t("vfr.mitigation.climb_after", loc, dist=round(d_star)),
+                detail=adv_t("vfr.mitigation.climb_after", loc, dist=dist),
                 mitigated_status=AdvisoryStatus.GREEN,
-                distance_nm=round(d_star, 1),
+                distance_nm=dist,
                 reference="departure",
             ))
 
@@ -401,13 +412,14 @@ def _corridor_mitigation(
         before = [d for d in clear if d < min_blocked]
         if before:
             d_star = max(before)
-            dist_before_arrival = total - d_star
+            # Round once (see climb case): nm before arrival, same int in both.
+            dist = round(total - d_star)
             mitigations.append(Mitigation(
                 kind=MitigationKind.ROUTE_POSITION,
                 addresses="descent_deck",
-                detail=adv_t("vfr.mitigation.descend_before", loc, dist=round(dist_before_arrival)),
+                detail=adv_t("vfr.mitigation.descend_before", loc, dist=dist),
                 mitigated_status=AdvisoryStatus.GREEN,
-                distance_nm=round(dist_before_arrival, 1),
+                distance_nm=dist,
                 reference="arrival",
             ))
 
