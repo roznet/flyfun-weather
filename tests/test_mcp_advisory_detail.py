@@ -187,6 +187,50 @@ def test_summarize_emits_discoverability_hints():
     assert green["cross_check_present"] is False
     assert green["per_model_present"] is True
     assert "detail_tool" not in green
+    # Mitigation hook always present and False when there are none.
+    assert conv["aggregate_mitigations_present"] is False
+    assert green["aggregate_mitigations_present"] is False
+
+
+# Manifest with advisory mitigations (advice only — never changes the grade).
+MITIGATION_ADVISORIES = {
+    "advisories": [
+        {
+            "advisory_id": "vfr_feasibility",
+            "aggregate_status": "red",
+            "aggregate_detail": "VFR not feasible — departure deck",
+            "parameters_used": {},
+            "per_model": [
+                {"model": "gfs", "status": "red", "detail": "OVC deck below cruise",
+                 "affected_pct": 25.0, "affected_nm": 22.0, "total_nm": 90.0,
+                 "mitigations": [
+                     {"kind": "route_position", "addresses": "climb_deck",
+                      "detail": "Climb to cruise after ~40 nm to clear the deck.",
+                      "mitigated_status": "amber", "distance_nm": 40.0,
+                      "reference": "departure"}
+                 ]},
+            ],
+            "aggregate_mitigations": [
+                {"kind": "altitude", "addresses": "cruise_imc",
+                 "detail": "Fly 6,000 ft to stay below the cloud base.",
+                 "mitigated_status": "green", "altitude_ft": 6000},
+            ],
+        },
+    ],
+    "catalog": [
+        {"id": "vfr_feasibility", "name": "VFR Feasibility", "category": "feasibility",
+         "description": "Composite VFR go/no-go."},
+    ],
+}
+
+
+def test_summarize_emits_mitigation_present_hook_and_expands_objects():
+    out = server._summarize_advisories(MITIGATION_ADVISORIES)
+    vfr = next(a for a in out if a["id"] == "vfr_feasibility")
+    assert vfr["aggregate_mitigations_present"] is True
+    # RED → full objects expand alongside per_model.
+    assert vfr["aggregate_mitigations"][0]["addresses"] == "cruise_imc"
+    assert vfr["detail_tool"] == "get_advisory_detail"
 
 
 # --------------------------------------------------------------------------
@@ -245,6 +289,16 @@ def test_get_advisory_detail_convective(patch_client):
     assert "advisory=convective" in res["web_url"]
     assert "point=1" in res["web_url"]
     assert "model=ecmwf" in res["web_url"]
+
+
+def test_get_advisory_detail_surfaces_mitigations(patch_client):
+    patch_client(advisories=MITIGATION_ADVISORIES)
+    res = server.get_advisory_detail("flight-1", "vfr_feasibility")
+    assert res["aggregate_status"] == "red"  # mitigation never changes the grade
+    assert res["aggregate_mitigations"][0]["addresses"] == "cruise_imc"
+    assert res["per_model"][0]["mitigations"][0]["addresses"] == "climb_deck"
+    # The advice-only guardrail note is present and load-bearing.
+    assert "never change the grade" in res["mitigation_note"]
 
 
 def test_advisory_web_url_deep_links():
