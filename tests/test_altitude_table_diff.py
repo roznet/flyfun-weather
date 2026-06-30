@@ -1,4 +1,4 @@
-"""Tests for the altitude-diff primitive and the digest ALTITUDE OPTIONS block (#259)."""
+"""Tests for the altitude-diff primitive and the digest OPTIONS TO IMPROVE block (#259, #330)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,21 @@ from weatherbrief.analysis.advisories.altitude_table import (
     diff_altitude_rows,
     row_for_altitude,
 )
-from weatherbrief.digest.prompt_builder import _format_altitude_options_context
+from weatherbrief.digest.prompt_builder import (
+    _format_altitude_options_context,
+    _format_options_to_improve_context,
+    _format_tactical_mitigations_context,
+)
 from weatherbrief.models import (
+    AdvisoryCatalogEntry,
     AdvisoryStatus,
     AltitudeAdvisoryRow,
     AltitudeTableResult,
+    Mitigation,
+    MitigationKind,
+    ModelAdvisoryResult,
+    RouteAdvisoriesManifest,
+    RouteAdvisoryResult,
 )
 
 _NAMES = {"icing_escape": "Icing Escape", "headwind": "Headwind", "vmc_cruise": "VMC Cruise"}
@@ -69,7 +79,7 @@ def test_row_for_altitude_exact_match():
 def test_altitude_options_block_names_tradeoff():
     block = _format_altitude_options_context(_table())
     assert block is not None
-    assert "ALTITUDE OPTIONS" in block
+    assert "Altitude (one choice, affects all altitude-dependent advisories):" in block
     assert "Planned 8,000 ft" in block
     assert "improves Icing Escape (AMBER→GREEN)" in block
     assert "worsens Headwind (GREEN→AMBER)" in block
@@ -100,3 +110,85 @@ def test_altitude_options_block_same_picture_when_statuses_match():
     assert block is not None
     assert "Lower option 4,000 ft: same advisory picture as planned." in block
     assert "Higher option: planned altitude is already best at/above cruise." in block
+
+
+# --- OPTIONS TO IMPROVE: tactical mitigations + consolidation (#330) ---
+
+
+def _manifest(*advisories: RouteAdvisoryResult) -> RouteAdvisoriesManifest:
+    catalog = [
+        AdvisoryCatalogEntry(
+            id="vfr_feasibility", name="VFR Feasibility",
+            short_description="", description="", category="feasibility",
+        ),
+        AdvisoryCatalogEntry(
+            id="cloud_top", name="Cloud Top",
+            short_description="", description="", category="cloud",
+        ),
+    ]
+    return RouteAdvisoriesManifest(advisories=list(advisories), catalog=catalog)
+
+
+def _advisory(advisory_id: str, *mitigations: Mitigation) -> RouteAdvisoryResult:
+    return RouteAdvisoryResult(
+        advisory_id=advisory_id,
+        aggregate_status=AdvisoryStatus.RED,
+        aggregate_detail="",
+        per_model=[ModelAdvisoryResult(model="gfs", status=AdvisoryStatus.RED)],
+        aggregate_mitigations=list(mitigations),
+    )
+
+
+def test_tactical_block_groups_nonaltitude_mitigations_by_advisory():
+    tactical = Mitigation(
+        kind=MitigationKind.ROUTE_POSITION, addresses="climb_deck",
+        detail="climb to cruise after ~40 nm from departure",
+        mitigated_status=AdvisoryStatus.GREEN, distance_nm=40.0, reference="departure",
+    )
+    block = _format_tactical_mitigations_context(_manifest(_advisory("vfr_feasibility", tactical)))
+    assert block is not None
+    assert "Tactical (per-advisory, no altitude change):" in block
+    assert "VFR Feasibility: climb to cruise after ~40 nm from departure" in block
+
+
+def test_tactical_block_drops_altitude_mitigations():
+    # An ALTITUDE mitigation must NOT appear in the tactical block — the altitude
+    # sub-block owns that axis (and shows the worsens-Y trade-off it would hide).
+    altitude = Mitigation(
+        kind=MitigationKind.ALTITUDE, addresses="cruise_imc",
+        detail="fly 6,000 ft to stay below the deck",
+        mitigated_status=AdvisoryStatus.GREEN, altitude_ft=6000,
+    )
+    assert _format_tactical_mitigations_context(_manifest(_advisory("cloud_top", altitude))) is None
+
+
+def test_tactical_block_none_when_no_mitigations():
+    assert _format_tactical_mitigations_context(_manifest(_advisory("vfr_feasibility"))) is None
+
+
+def test_options_to_improve_consolidates_altitude_and_tactical():
+    tactical = Mitigation(
+        kind=MitigationKind.ROUTE_POSITION, addresses="climb_deck",
+        detail="climb to cruise after ~40 nm from departure",
+        mitigated_status=AdvisoryStatus.AMBER, distance_nm=40.0,
+    )
+    block = _format_options_to_improve_context(
+        _table(), _manifest(_advisory("vfr_feasibility", tactical))
+    )
+    assert block is not None
+    assert "=== OPTIONS TO IMPROVE (advice only — do NOT change the assessment) ===" in block
+    # Both sub-parts present under the one fence.
+    assert "Altitude (one choice" in block
+    assert "Tactical (per-advisory, no altitude change):" in block
+
+
+def test_options_to_improve_none_when_both_empty():
+    # No table and no tactical mitigations → whole section omitted.
+    assert _format_options_to_improve_context(None, _manifest(_advisory("vfr_feasibility"))) is None
+
+
+def test_options_to_improve_altitude_only_when_no_tactical():
+    block = _format_options_to_improve_context(_table(), _manifest(_advisory("vfr_feasibility")))
+    assert block is not None
+    assert "Altitude (one choice" in block
+    assert "Tactical" not in block
