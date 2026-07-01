@@ -451,7 +451,11 @@ def run_fetch(
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
                 progress_callback=progress_callback,
-                as_of_time=as_of_time if historical_mode else None,
+                # `as_of_time` pins GRIB run-selection to runs initialized before
+                # it. Set for historical flights (departure) and for in-progress
+                # flights (also departure, so the run covers the window); None for
+                # normal future flights, which then use the freshest run.
+                as_of_time=as_of_time,
             )
             grib_enriched = True
             logger.info("GRIB2 enrichment applied")
