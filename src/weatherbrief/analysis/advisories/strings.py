@@ -340,6 +340,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Vereisung über {extent}, warmer Ausweg verfügbar",
         "es": "Engelamiento sobre {extent}, escape cálido disponible",
     },
+    "icing_escape.mitigation.descend": {
+        "en": "Descend to {alt} ft (below the freezing level) to stay clear of icing",
+        "fr": "Descendre à {alt} ft (sous l'isotherme 0°C) pour éviter le givrage",
+        "de": "Auf {alt} ft sinken (unter die Frostgrenze), um Vereisung zu meiden",
+        "es": "Descender a {alt} ft (bajo la isoterma 0°C) para evitar el engelamiento",
+    },
+    "icing_escape.mitigation.climb": {
+        "en": "Climb to {alt} ft (on top) to stay clear of icing",
+        "fr": "Monter à {alt} ft (au-dessus) pour éviter le givrage",
+        "de": "Auf {alt} ft steigen (obenauf), um Vereisung zu meiden",
+        "es": "Ascender a {alt} ft (por encima) para evitar el engelamiento",
+    },
+    "icing_escape.mitigation.profile": {
+        "en": "A climb over then descent below the icing keeps you clear (see profile)",
+        "fr": "Une montée au-dessus puis descente sous le givrage vous maintient à l'écart (voir profil)",
+        "de": "Ein Steigen über und anschließendes Sinken unter die Vereisung hält Sie frei (siehe Profil)",
+        "es": "Ascender por encima y luego descender bajo el engelamiento lo mantiene libre (ver perfil)",
+    },
 
     # --- vmc_cruise ---
     "vmc_cruise.ovc": {

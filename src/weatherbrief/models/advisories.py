@@ -65,6 +65,41 @@ class MitigationKind(str, Enum):
     TIMING = "timing"                 # reserved for future use
 
 
+class MitigationSegment(BaseModel):
+    """One along-route band of a mitigation's vertical profile (issue #335).
+
+    ``(dist_from_nm, dist_to_nm)`` is the along-track extent flown at ``altitude_ft``.
+    Lives in the cross-section's native ``(distance × altitude)`` space so the
+    varying-altitude overlay can render a mitigation profile directly.
+    """
+
+    dist_from_nm: float
+    dist_to_nm: float
+    altitude_ft: int
+
+
+class MitigationTransition(BaseModel):
+    """A climb/descent between two adjacent bands of a mitigation profile (issue #335)."""
+
+    from_nm: float
+    to_nm: float
+    from_altitude_ft: int
+    to_altitude_ft: int
+
+
+class MitigationProfile(BaseModel):
+    """The full vertical profile behind a mitigation — bands + transitions (issue #335).
+
+    Optional and additive: v1 renders only the flat one-line ``detail`` on
+    :class:`Mitigation`, while this carries the structured profile the shared
+    vertical-profile solver produced, ready for the cross-section overlay. Old packs
+    (no profile) deserialize with ``profile=None``.
+    """
+
+    segments: list[MitigationSegment] = Field(default_factory=list)
+    transitions: list[MitigationTransition] = Field(default_factory=list)
+
+
 class Mitigation(BaseModel):
     """A decision that could improve a flagged sub-issue — advice only.
 
@@ -86,6 +121,10 @@ class Mitigation(BaseModel):
     altitude_ft: int | None = None    # set for ALTITUDE
     distance_nm: float | None = None  # set for ROUTE_POSITION
     reference: str | None = None      # e.g. "departure" / "arrival" — disambiguates distance
+    # Optional structured profile from the shared vertical-profile solver (#335).
+    # Additive/backward-compatible: v1 UIs render ``detail``; the cross-section overlay
+    # consumes ``profile``. None on old packs and on non-solver mitigations.
+    profile: MitigationProfile | None = None
 
 
 class AdvisoryParameterDef(BaseModel):
