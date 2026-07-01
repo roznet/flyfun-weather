@@ -1894,7 +1894,7 @@ function digestFeedbackHtml(flightId: string, packTimestamp: string): string {
       <button type="button" class="digest-thumb-btn" id="digest-thumb-up" aria-label="${t('feedback.thumbs.up')}" title="${t('feedback.thumbs.up')}">👍</button>
       <button type="button" class="digest-thumb-btn" id="digest-thumb-down" aria-label="${t('feedback.thumbs.down')}" title="${t('feedback.thumbs.down')}">👎</button>
       <div class="digest-feedback-form" id="digest-feedback-form" style="display:none;">
-        <p class="digest-feedback-helper"><strong id="digest-feedback-helper-title"></strong><br><span id="digest-feedback-helper-body"></span></p>
+        <p class="digest-feedback-helper" aria-live="polite"><strong id="digest-feedback-helper-title"></strong><br><span id="digest-feedback-helper-body"></span></p>
         <textarea id="digest-feedback-comment" rows="3" maxlength="2000"></textarea>
         <label class="digest-feedback-consent">
           <input type="checkbox" id="digest-feedback-contact-ok" checked> ${t('feedback.contactOk')}

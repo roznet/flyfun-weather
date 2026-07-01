@@ -1524,8 +1524,9 @@ label {
 
 /* Toolbar variant: the thumb widget lives at the far right of the briefing
    toolbar instead of under the synopsis. Lay the prompt + thumbs out inline,
-   strip the section divider, and float the thumbs-down comment box as a
-   right-anchored dropdown so it never reflows the toolbar row. */
+   strip the section divider, and float the shared comment box (thumbs-up and
+   thumbs-down both open it) as a right-anchored dropdown so it never reflows
+   the toolbar row. */
 .digest-feedback-slot {
   position: relative;
   margin-left: auto;
