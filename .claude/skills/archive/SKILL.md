@@ -34,21 +34,67 @@ Verify that the Release/production build will NOT use localhost. Check `app/flyf
 - The localhost URL (`localhost.ro-z.me:8000`) must only appear inside `#if DEBUG`
 - If localhost is in the production path, **stop and warn the user**
 
-### 2b — App tests
+### 2b — App tests (unit + UI), iPhone **and** iPad
 
-Run the Xcode test suite. Use a generic simulator destination so the check
-doesn't fail on a machine that happens not to have a specific device model
-installed:
+Run the Xcode test suite on **both** an iPhone and an iPad simulator. This is a
+universal app (`TARGETED_DEVICE_FAMILY = "1,2,7"` — iPhone + iPad + visionOS),
+and the flight-list/add-flight flows the UI tests walk cross a real idiom fork:
+`FlightListView` is a `NavigationSplitView` that collapses to the list on iPhone
+(compact) but to the detail pane behind a "Show Sidebar" toggle on iPad portrait
+(regular). Other surfaces branch on `horizontalSizeClass` too (`RouteMapView`
+dual metrics, `BriefingContainerView`, `SkewTDetailView`, `AirportConditionsView`).
+So "iPhone passes" does **not** imply "iPad passes" — and the UI test's
+iPad-portrait branch in `revealFlightList()` (the "Show Sidebar" tap) is *only*
+exercised when the suite actually runs on an iPad. iPhone-only leaves that path
+untested and free to rot.
 
+The `flyfun-weather` scheme's Test action includes **both** testable targets,
+neither skipped, so each run executes them together:
+- `flyfun-weatherTests` — unit tests
+- `flyfun-weatherUITests` — **UI tests** (e.g. `testFlightListRendersSeededFlights`,
+  `testAddFlightValidationAndCreate`)
+
+The UI tests are an important part of this preflight check — they exercise the
+real app launch + flight-list/add-flight flows, which is exactly what we ship.
+Do not skip or disable the UI test target to make the build go faster; if a UI
+test fails on **either** idiom, treat it as a release blocker like any other
+test. UI tests are slower and more sensitive to simulator state than unit tests,
+so use a generous timeout (see below) and, if they flake on simulator boot,
+retry once before concluding there's a real failure.
+
+Use concrete device names (not `generic/platform=iOS Simulator`, which can
+build-for-testing but won't actually *run* the UI tests). The iPad pass uses
+portrait, the idiom where the split-view fork lives. Pick a model the machine
+has installed — list with `xcrun simctl list devices available` and substitute
+the closest current iPhone / iPad if these exact names aren't present.
+
+**iPhone pass:**
 ```bash
 xcodebuild test \
   -project app/flyfun-weather/flyfun-weather.xcodeproj \
   -scheme flyfun-weather \
-  -destination "generic/platform=iOS Simulator" \
+  -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
   -quiet \
   2>&1 | tail -30
 ```
-If tests fail, stop and show the failures. Use timeout of 300000ms.
+
+**iPad pass:**
+```bash
+xcodebuild test \
+  -project app/flyfun-weather/flyfun-weather.xcodeproj \
+  -scheme flyfun-weather \
+  -destination "platform=iOS Simulator,name=iPad Pro 11-inch (M5)" \
+  -quiet \
+  2>&1 | tail -30
+```
+
+If tests fail on either idiom, stop and show the failures, noting which device
+the failure was on. Because each run boots a simulator and drives the app, and
+this now runs twice, use a timeout of 600000ms (10 min) **per pass**.
+
+> Note: running both idioms is the standard for the archive preflight (infrequent,
+> ships universal). For the day-to-day dev inner loop, an iPhone-only run is an
+> acceptable fast gate — but the archive must run both.
 
 ### 2c — Backend tests
 
