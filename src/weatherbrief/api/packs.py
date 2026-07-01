@@ -880,6 +880,38 @@ _STAGE_PROGRESS: dict[str, float] = {
 }
 
 
+# Grace period after a flight's estimated arrival during which it still counts
+# as "in progress" for refresh purposes. A pilot who refreshes shortly after
+# (or during) the flight legitimately wants a fresh, full briefing — paid API,
+# LLM digest, GRAMET, no admin gate — for the remaining route, not the degraded
+# historical path. Only once the flight is well past does it become historical.
+_INFLIGHT_GRACE = timedelta(hours=3)
+
+
+def _classify_refresh_time(flight, now: datetime | None = None) -> tuple[bool, datetime | None]:
+    """Classify a flight for refresh, returning ``(is_historical, grib_as_of)``.
+
+    - Not yet departed → ``(False, None)``: normal live refresh.
+    - In progress or within the post-arrival grace window →
+      ``(False, departure_time)``: still a live refresh (paid API + digest),
+      but GRIB run-selection is pinned to the departure time so the chosen run
+      actually forecasts the flight window. Without this, run-selection would
+      pick the freshest run — whose init can fall *after* the window — and
+      ``bracket_forecast_hours`` would clamp every pre-init hour to f000 (the
+      analysis snapshot), silently mis-enriching the flight.
+    - Well past (beyond estimated arrival + grace) → ``(True, None)``:
+      historical archive path (free API, no digest, admin-only).
+    """
+    now = now or datetime.now(timezone.utc)
+    if flight.departure_time >= now:
+        return False, None
+    duration_h = flight.flight_duration_hours or 0.0
+    flight_end = flight.departure_time + timedelta(hours=duration_h)
+    if now <= flight_end + _INFLIGHT_GRACE:
+        return False, flight.departure_time
+    return True, None
+
+
 def _build_route_config(flight, db_path):
     """Build a RouteConfig from a flight, resolving waypoints."""
     from weatherbrief.airports import resolve_waypoints
@@ -1023,11 +1055,18 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
             logger.info("LLM digest daily limit reached for %s — skipping", user_id)
             do_llm_digest = False
 
-    # Detect historical mode: flight departure is in the past
-    is_historical = flight.departure_time < datetime.now(timezone.utc)
+    # Classify by flight time. A just-departed / in-progress flight stays on the
+    # live path (paid API + LLM digest + GRAMET); only a well-past flight becomes
+    # historical (free archive API, no digest/GRAMET).
+    is_historical, inflight_as_of = _classify_refresh_time(flight)
     if is_historical:
         do_gramet = False
         do_llm_digest = False
+    # Pin GRIB run-selection to departure for an in-progress flight so the run
+    # covers the window instead of clamping pre-init hours to f000. An explicit
+    # admin as_of_date (already in `as_of_time`) takes precedence.
+    if as_of_time is None and inflight_as_of is not None:
+        as_of_time = inflight_as_of
 
     options = BriefingOptions(
         enrich_grib=True,
@@ -1522,7 +1561,7 @@ async def refresh_briefing(
     """
     flight = _load_owned_flight(db, flight_id, user_id)
 
-    is_historical = flight.departure_time < datetime.now(timezone.utc)
+    is_historical, _ = _classify_refresh_time(flight)
 
     # Parse and validate as_of_date for historical refreshes
     as_of_time = None
@@ -1695,7 +1734,7 @@ async def refresh_briefing_stream(
     try:
         flight = _load_owned_flight(db, flight_id, user_id)
 
-        is_historical = flight.departure_time < datetime.now(timezone.utc)
+        is_historical, _ = _classify_refresh_time(flight)
 
         # Parse and validate as_of_date for historical refreshes
         as_of_time = None

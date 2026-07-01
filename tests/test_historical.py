@@ -259,3 +259,75 @@ def test_pipeline_allows_past_date_with_historical():
     assert days_out < 0
     should_reject = days_out < 0 and not opts.historical_mode
     assert should_reject is False
+
+
+# --- _classify_refresh_time: in-progress vs historical refresh ---
+
+from types import SimpleNamespace
+
+from weatherbrief.api.packs import _INFLIGHT_GRACE, _classify_refresh_time
+
+
+def _flight(dep: datetime, duration_h: float):
+    return SimpleNamespace(departure_time=dep, flight_duration_hours=duration_h)
+
+
+def test_classify_future_flight_is_live_no_pin():
+    """A not-yet-departed flight is a normal live refresh (no as_of pin)."""
+    now = datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc)
+    flight = _flight(now + timedelta(hours=2), duration_h=3.0)
+    is_historical, as_of = _classify_refresh_time(flight, now=now)
+    assert is_historical is False
+    assert as_of is None
+
+
+def test_classify_just_departed_is_live_pinned():
+    """Refreshing an hour after departure keeps it live but pins GRIB to departure.
+
+    This is the reported bug: a flight departed 07:00, refreshed 08:00, must
+    still get the full live briefing (digest), not the degraded historical path.
+    """
+    dep = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc)
+    now = dep + timedelta(hours=1)
+    is_historical, as_of = _classify_refresh_time(_flight(dep, 5.0), now=now)
+    assert is_historical is False
+    assert as_of == dep
+
+
+def test_classify_mid_flight_is_live_pinned():
+    now = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
+    dep = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc)  # 3h into a 5h flight
+    is_historical, as_of = _classify_refresh_time(_flight(dep, 5.0), now=now)
+    assert is_historical is False
+    assert as_of == dep
+
+
+def test_classify_within_grace_after_arrival_is_live():
+    """Just after arrival, still within the grace window → live."""
+    dep = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc)
+    arrival = dep + timedelta(hours=5)
+    now = arrival + _INFLIGHT_GRACE - timedelta(minutes=1)
+    is_historical, as_of = _classify_refresh_time(_flight(dep, 5.0), now=now)
+    assert is_historical is False
+    assert as_of == dep
+
+
+def test_classify_beyond_grace_is_historical():
+    """Well past arrival + grace → historical archive path, no pin."""
+    dep = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc)
+    arrival = dep + timedelta(hours=5)
+    now = arrival + _INFLIGHT_GRACE + timedelta(minutes=1)
+    is_historical, as_of = _classify_refresh_time(_flight(dep, 5.0), now=now)
+    assert is_historical is True
+    assert as_of is None
+
+
+def test_classify_zero_duration_uses_grace_only():
+    """A flight with no recorded duration still gets the grace window off departure."""
+    dep = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc)
+    # within grace of departure → live
+    within = _classify_refresh_time(_flight(dep, 0.0), now=dep + _INFLIGHT_GRACE - timedelta(minutes=1))
+    assert within == (False, dep)
+    # beyond grace → historical
+    beyond = _classify_refresh_time(_flight(dep, 0.0), now=dep + _INFLIGHT_GRACE + timedelta(minutes=1))
+    assert beyond == (True, None)
