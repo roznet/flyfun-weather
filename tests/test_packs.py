@@ -299,6 +299,23 @@ class TestDecideRefresh:
         assert decide_refresh(status, 2).mode == "full"
         assert decide_refresh(status, 5).mode == "full"
 
+    def test_in_progress_past_midnight_no_eligible_is_realtime(self):
+        # An in-progress flight refreshed after crossing UTC midnight has
+        # days_out == -1 but is still live (see _classify_refresh_time). With no
+        # covering model it must fall back to realtime METAR/TAF, not no-op.
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("awaiting", False), ("awaiting", False))
+        assert decide_refresh(status, -1).mode == "realtime"
+
+    def test_in_progress_past_midnight_partial_updated_is_realtime(self):
+        # days_out == -1, covering models present but under threshold: still
+        # realtime (the fallback), where days_out == 0 already was and -1 wasn't.
+        from weatherbrief.api.packs import decide_refresh
+
+        status = _status(("awaiting", True), ("awaiting", True), ("awaiting", True))
+        assert decide_refresh(status, -1).mode == "realtime"
+
     def test_one_model_not_updated_d2_none_d0_realtime(self):
         from weatherbrief.api.packs import decide_refresh
 
