@@ -376,6 +376,37 @@ def _build_vfr_cost_model(
     )
 
 
+def _has_interior_below_cruise(profile: Profile, cruise: int) -> bool:
+    """True if the profile dips below cruise somewhere OTHER than the terminal runs.
+
+    A corridor mitigation ("climb to cruise after ~X nm" / "descend before ~X nm") is
+    only honest when the low flying is confined to the departure climb-out and/or the
+    arrival descent. If the profile *also* drops below cruise in the interior — a mid-route
+    deck the profile has to descend under and climb back out of — then a "climb to cruise
+    after X nm" claim is misleading (you'd have to come back down further out). This is the
+    exact "climb after 10 nm when cruise is IMC 40 nm later" failure the redesign removes;
+    the emergent mutual-exclusivity only holds for *contiguous* IMC, so an interior deck
+    needs this explicit guard. When it fires we offer no corridor mitigation (the old
+    ``enroute_status == GREEN`` gate's safe-but-silent behavior).
+    """
+    segs = profile.segments
+    n = len(segs)
+    below = [i for i, s in enumerate(segs) if s.alt_ft < cruise]
+    if not below:
+        return False
+    lead: set[int] = set()
+    i = 0
+    while i < n and segs[i].alt_ft < cruise:
+        lead.add(i)
+        i += 1
+    trail: set[int] = set()
+    j = n - 1
+    while j >= 0 and segs[j].alt_ft < cruise:
+        trail.add(j)
+        j -= 1
+    return any(i not in lead and i not in trail for i in below)
+
+
 def _solver_mitigations(
     ctx: RouteContext,
     model: str,
@@ -421,6 +452,10 @@ def _solver_mitigations(
     total = ctx.total_distance_nm
     max_alt = max(s.alt_ft for s in profile.segments)
     reaches_cruise = max_alt >= cruise
+    # A corridor mitigation is only honest for a clean terminal deck — if the profile also
+    # dips below cruise in the interior (a mid-route deck), "climb to cruise after X nm"
+    # would be misleading, so suppress both corridor tips (#338 review finding 2).
+    clean_terminal = not _has_interior_below_cruise(profile, cruise)
     prof_obj = to_mitigation_profile(profile)
     mitigations: list[Mitigation] = []
 
@@ -445,7 +480,7 @@ def _solver_mitigations(
             ))
 
     # climb_deck — departure forced low, climbs to cruise before the midpoint.
-    if reaches_cruise and profile.segments[0].alt_ft < cruise:
+    if reaches_cruise and clean_terminal and profile.segments[0].alt_ft < cruise:
         climb = next(
             (t for t in profile.transitions if t.to_alt_ft > t.from_alt_ft and t.to_alt_ft >= cruise),
             None,
@@ -463,7 +498,7 @@ def _solver_mitigations(
             ))
 
     # descent_deck — arrival forced low, descends from cruise after the midpoint.
-    if reaches_cruise and profile.segments[-1].alt_ft < cruise:
+    if reaches_cruise and clean_terminal and profile.segments[-1].alt_ft < cruise:
         descent = next(
             (t for t in reversed(profile.transitions) if t.from_alt_ft > t.to_alt_ft and t.from_alt_ft >= cruise),
             None,

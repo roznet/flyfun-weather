@@ -27,6 +27,7 @@ from weatherbrief.models import (
     AdvisoryParameterDef,
     AdvisoryStatus,
     IcingRisk,
+    IcingType,
     Mitigation,
     MitigationKind,
     ModelAdvisoryResult,
@@ -36,36 +37,37 @@ from weatherbrief.models import (
 # Altitude-bin granularity (ft) for the shared vertical-profile solver.
 _MITIGATION_BIN_STEP_FT = 500
 
-# Finite crossing cost per icing severity — thin/light rime is cheaply crossable so the
-# solver can climb over it; moderate is discouraged; severe is near-blocking but still
-# finite (a determined climb-through). SLD / freezing precip is a hard wall (``INF``),
-# handled separately in ``_icing_cell_cost`` (design decision 8).
-_RISK_COST = {
-    IcingRisk.NONE: 0.0,
-    IcingRisk.LIGHT: 1.0,
-    IcingRisk.MODERATE: 4.0,
-    IcingRisk.SEVERE: 20.0,
-}
+# Finite crossing cost for the ONLY icing a non-FIKI aircraft may be advised to transit:
+# thin/light RIME (design decision 8 — "only thin/light rime is finite-crossable … the
+# solver must not casually price non-FIKI icing transit"). Everything heavier is a hard
+# wall (see ``_icing_cell_cost``): MODERATE/SEVERE at any type, non-rime light (clear/
+# mixed ice), and SLD/freezing precip. The value only has to make the solver prefer a
+# hazard-free reroute (0) over crossing the rime when one exists.
+_LIGHT_RIME_COST = 1.0
 
 
 def _icing_cell_cost(sounding, alt_ft: float) -> float:
     """Occupancy cost of one altitude at one route point for the icing cost field.
 
     ``0`` below the freezing level (warm air — icing can't persist, feasible even in
-    cloud), ``INF`` inside an SLD/freezing-precip zone (hard wall — never route a
-    non-FIKI aircraft through it), else a finite ``_RISK_COST`` by severity (soft wall —
-    crossable at a penalty). This is the only advisory-specific piece; the solver, floor,
-    ceiling, anchoring and profile output are shared (design decision 3).
+    cloud); ``INF`` for any icing a non-FIKI aircraft must route *around* rather than
+    through — SLD/freezing precip, MODERATE/SEVERE at any type, and non-rime (clear/mixed)
+    light ice; ``_LIGHT_RIME_COST`` only for thin/light RIME, the sole soft wall (design
+    decision 8). This is the only advisory-specific piece; the solver, floor, ceiling,
+    anchoring and profile output are shared (design decision 3).
     """
     fz = sounding.indices.freezing_level_ft if sounding.indices else None
     if fz is not None and alt_ft < fz:
         return 0.0
     worst = 0.0
     for z in sounding.icing_zones:
-        if z.base_ft <= alt_ft <= z.top_ft:
-            if z.sld_risk:
-                return INF
-            worst = max(worst, _RISK_COST.get(z.risk, 0.0))
+        if not (z.base_ft <= alt_ft <= z.top_ft):
+            continue
+        if z.risk == IcingRisk.NONE and not z.sld_risk:
+            continue  # no meaningful icing in this zone at this altitude
+        if z.sld_risk or z.risk != IcingRisk.LIGHT or z.icing_type != IcingType.RIME:
+            return INF  # hard wall — never priced as a "climb-through" for non-FIKI
+        worst = max(worst, _LIGHT_RIME_COST)  # thin/light rime — the one soft wall
     return worst
 
 
@@ -159,6 +161,9 @@ def _icing_escape_mitigations(
 
     max_alt = max(s.alt_ft for s in profile.segments)
     min_alt = min(s.alt_ft for s in profile.segments)
+    # GREEN = a fully ice-free escape (zero residual cost). Any residual cost can now
+    # only be thin/light RIME (everything heavier is INF and never routed through — see
+    # _icing_cell_cost), so AMBER is the right ceiling for a non-zero-cost escape.
     mitigated = AdvisoryStatus.GREEN if profile.total_cost == 0 else AdvisoryStatus.AMBER
 
     if max_alt > cruise and min_alt < cruise:

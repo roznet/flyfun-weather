@@ -299,6 +299,14 @@ the same step, or a solver bug is indistinguishable from a shape change in the d
   icing gains the climb-on-top / climb-over-then-descend maneuver the old single-transition
   code could not express. Both attach the structured `MitigationProfile` for the future
   cross-section overlay. Grades are untouched (advice-only).
+- **Icing soft wall is LIGHT+RIME only** (decision 8, tightened in #338 review): the sole
+  finite-crossable cell is thin/light *rime*; MODERATE/SEVERE at any type, non-rime light
+  (clear/mixed) ice, and SLD are all hard walls (`∞`) — a non-FIKI aircraft routes *around*
+  them, never "climbs through at a penalty".
+- **Corridor tips require a clean terminal deck** (#338 review): a `climb_deck`/`descent_deck`
+  is suppressed when the profile also dips below cruise in the *interior* (a mid-route deck),
+  so "climb to cruise after ~X nm" is never offered when the flight has to descend again
+  further out — closing the same failure the deleted cruise-green gate guarded against.
 - **Tests:** `tests/test_vertical_profile.py` (solver, synthetic grids),
   `tests/test_vfr_mitigation.py` (VFR port), `tests/test_icing_escape_mitigation.py`
   (icing port). Full suite green (3109 passed).
