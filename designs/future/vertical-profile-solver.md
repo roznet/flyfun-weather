@@ -307,6 +307,16 @@ the same step, or a solver bug is indistinguishable from a shape change in the d
   is suppressed when the profile also dips below cruise in the *interior* (a mid-route deck),
   so "climb to cruise after ~X nm" is never offered when the flight has to descend again
   further out — closing the same failure the deleted cruise-green gate guarded against.
+- **Shared `build_cost_model`** (`_helpers.py`, #338 round-2 follow-up): bin construction,
+  terrain-floor/ceiling walling and floor anchoring live once; each advisory supplies only
+  its `cell_cost` mapping + floor margin. Terrain is looked up once (linear interp,
+  `terrain_at_distance`) so VFR and icing compute the *same* floor for a point, and
+  `MITIGATION_BIN_STEP_FT` is sourced once from `vertical_profile.py`.
+- **`cruise_imc` scans for the flat altitude** (#338 round-2 follow-up): the solver gates
+  feasibility (Blockage → no tip), then a downward per-step scan picks the highest
+  whole-route-improving flat altitude — so a staircasing profile (deck height varies) no
+  longer drops an otherwise-valid "fly lower" tip. Regression:
+  `test_vertical_staircase_deck_scans_for_flat_altitude`.
 - **Tests:** `tests/test_vertical_profile.py` (solver, synthetic grids),
   `tests/test_vfr_mitigation.py` (VFR port), `tests/test_icing_escape_mitigation.py`
   (icing port). Full suite green (3109 passed).

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    build_cost_model,
     format_extent,
     has_relevant_icing,
     max_terrain_near_point,
     pct_above_threshold,
-    terrain_at_distance,
     to_mitigation_profile,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -18,8 +18,6 @@ from weatherbrief.analysis.advisories.vertical_profile import (
     Blockage,
     CostModel,
     Profile,
-    floor_bin,
-    floor_reachable_bins,
     solve,
 )
 from weatherbrief.models import (
@@ -33,9 +31,6 @@ from weatherbrief.models import (
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
-
-# Altitude-bin granularity (ft) for the shared vertical-profile solver.
-_MITIGATION_BIN_STEP_FT = 500
 
 # Finite crossing cost for the ONLY icing a non-FIKI aircraft may be advised to transit:
 # thin/light RIME (design decision 8 — "only thin/light rime is finite-crossable … the
@@ -76,50 +71,14 @@ def _build_icing_cost_model(
     model: str,
     terrain_margin_ft: float,
 ) -> CostModel | None:
-    """Assemble the ``(point × altitude)`` icing cost field for the shared solver.
+    """Icing cost model: the shared builder plus this advisory's icing hazard→cost mapping.
 
-    Floor is ``terrain + terrain_margin_ft`` (the same clearance the escape check
-    already uses), ceiling is the flight ceiling. Start/end anchored to the
-    floor-reachable band at departure/arrival (decision 9) — for the icing soft wall the
-    band climbs *through* light icing (finite), stopping only at SLD hard walls. Returns
-    None when no route point carries this model's sounding.
+    Floor is ``terrain + terrain_margin_ft`` (the same clearance the escape check already
+    uses). For the icing soft wall the floor-reachable band climbs *through* light rime
+    (finite), stopping only at hard walls (see ``_icing_cell_cost``). Bin construction,
+    terrain-floor / ceiling walling and anchoring all live in ``build_cost_model``.
     """
-    cruise = ctx.cruise_altitude_ft
-    ceiling = ctx.flight_ceiling_ft
-    step = _MITIGATION_BIN_STEP_FT
-    top = max(int(ceiling), int(cruise))
-    bins = list(range(step, top + step, step))
-
-    points = [
-        (rpa.distance_from_origin_nm or 0.0, rpa.sounding[model])
-        for rpa in ctx.analyses
-        if model in rpa.sounding
-    ]
-    points.sort(key=lambda t: t[0])
-    if not points:
-        return None
-
-    distances = [d for d, _ in points]
-    cost_field: list[list[float]] = []
-    floors: list[float] = []
-    for d, sounding in points:
-        terrain = terrain_at_distance(ctx.elevation, d) or 0.0
-        floor = terrain + terrain_margin_ft
-        floors.append(floor)
-        cost_field.append([
-            INF if (alt < floor or alt > ceiling) else _icing_cell_cost(sounding, alt)
-            for alt in bins
-        ])
-
-    start = floor_reachable_bins(cost_field[0], floor_bin(bins, floors[0]))
-    end = floor_reachable_bins(cost_field[-1], floor_bin(bins, floors[-1]))
-    return CostModel(
-        cost_field=cost_field,
-        distances_nm=distances,
-        bin_altitudes_ft=bins,
-        allowed_start_bins=start,
-        allowed_end_bins=end,
-    )
+    return build_cost_model(ctx, model, _icing_cell_cost, terrain_margin_ft)
 
 
 def _icing_escape_mitigations(

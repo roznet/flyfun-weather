@@ -181,6 +181,30 @@ def test_vertical_amber_band_uses_marginal_phrasing():
     assert "VMC available" not in m.detail  # the GREEN-only phrasing
 
 
+def test_vertical_staircase_deck_scans_for_flat_altitude():
+    """A deck whose base VARIES along the route → the cruise_imc tip must scan for the
+    best flat altitude, not just re-check the profile's top band (#338 review finding 1).
+
+    First half deck base 7000, second half base 8000, cruise 10000 (RED everywhere). The
+    min-cost profile staircases (≈6000 then ≈7000), so its top band is 7000 — which is
+    *inside* the first-half deck when flown flat. A single re-check at 7000 would drop the
+    tip; scanning finds 6000, clear the whole way (GREEN).
+    """
+    first = EnhancedCloudLayer(base_ft=7000, top_ft=12000, coverage=CloudCoverage.OVC)
+    second = EnhancedCloudLayer(base_ft=8000, top_ft=12000, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [first if i < 5 else second]}) for i in range(10)]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses, cruise_altitude_ft=10000), _VFR_DEFAULTS
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED
+    alt = [m for m in _mitigations(result) if m.kind == MitigationKind.ALTITUDE]
+    assert len(alt) == 1
+    m = alt[0]
+    assert m.altitude_ft == 6000  # highest flat altitude clear over the WHOLE route
+    assert m.mitigated_status == AdvisoryStatus.GREEN
+
+
 def test_vertical_tight_terrain_gap_suppresses_mitigation():
     """Under the unified conservative floor (terrain + 3000, #335), a marginal band
     that doesn't clear the floor yields NO 'fly lower' tip — scud-running into a tight

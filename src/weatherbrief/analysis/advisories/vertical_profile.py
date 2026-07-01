@@ -35,6 +35,11 @@ from dataclasses import dataclass
 
 INF = math.inf
 
+# Canonical altitude-bin granularity (ft) for every consumer's cost grid. 500 ft matches
+# the resolution of the VFR vertical-mitigation altitudes. Sourced here so VFR and icing
+# share one value rather than redefining it per module.
+MITIGATION_BIN_STEP_FT = 500
+
 
 @dataclass(frozen=True)
 class CostModel:

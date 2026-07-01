@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from collections.abc import Callable
+
 from weatherbrief.models import (
     AdvisoryStatus,
     ElevationProfile,
@@ -15,8 +17,69 @@ from weatherbrief.models import (
 )
 
 if TYPE_CHECKING:
-    from weatherbrief.analysis.advisories.vertical_profile import Profile
-    from weatherbrief.models import RouteCrossSection
+    from weatherbrief.analysis.advisories import RouteContext
+    from weatherbrief.analysis.advisories.vertical_profile import CostModel, Profile
+    from weatherbrief.models import RouteCrossSection, SoundingAnalysis
+
+
+def build_cost_model(
+    ctx: RouteContext,
+    model: str,
+    cell_cost: Callable[[SoundingAnalysis, float], float],
+    floor_margin_ft: float,
+) -> CostModel | None:
+    """Assemble a ``(point × altitude)`` :class:`CostModel` for the shared solver (#335).
+
+    The one place bin construction, per-point terrain-floor / ceiling walling, and
+    floor-band start/end anchoring live — each advisory supplies only ``cell_cost``
+    (its hazard→cost mapping) and the ``floor_margin_ft`` above terrain. Terrain is looked
+    up once here via ``terrain_at_distance`` (linear interpolation) so every consumer of
+    the shared solver computes the *same* floor for the same physical point. Returns None
+    when no route point carries this model's sounding.
+    """
+    from weatherbrief.analysis.advisories.vertical_profile import (
+        INF,
+        MITIGATION_BIN_STEP_FT,
+        CostModel,
+        floor_bin,
+        floor_reachable_bins,
+    )
+
+    cruise = ctx.cruise_altitude_ft
+    ceiling = ctx.flight_ceiling_ft
+    step = MITIGATION_BIN_STEP_FT
+    top = max(int(ceiling), int(cruise))
+    bins = list(range(step, top + step, step))
+
+    points = [
+        (rpa.distance_from_origin_nm or 0.0, rpa.sounding[model])
+        for rpa in ctx.analyses
+        if model in rpa.sounding
+    ]
+    points.sort(key=lambda t: t[0])
+    if not points:
+        return None
+
+    distances = [d for d, _ in points]
+    cost_field: list[list[float]] = []
+    floors: list[float] = []
+    for d, sounding in points:
+        floor = (terrain_at_distance(ctx.elevation, d) or 0.0) + floor_margin_ft
+        floors.append(floor)
+        cost_field.append([
+            INF if (alt < floor or alt > ceiling) else cell_cost(sounding, alt)
+            for alt in bins
+        ])
+
+    start = floor_reachable_bins(cost_field[0], floor_bin(bins, floors[0]))
+    end = floor_reachable_bins(cost_field[-1], floor_bin(bins, floors[-1]))
+    return CostModel(
+        cost_field=cost_field,
+        distances_nm=distances,
+        bin_altitudes_ft=bins,
+        allowed_start_bins=start,
+        allowed_end_bins=end,
+    )
 
 
 def to_mitigation_profile(profile: Profile) -> MitigationProfile:

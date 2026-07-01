@@ -16,17 +16,20 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, to_mitigation_profile
+from weatherbrief.analysis.advisories._helpers import (
+    build_cost_model,
+    format_extent,
+    to_mitigation_profile,
+)
 from weatherbrief.analysis.advisories.enroute_precip import classify_enroute_precip
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.advisories.vertical_profile import (
     INF,
+    MITIGATION_BIN_STEP_FT,
     Blockage,
     CostModel,
     Profile,
-    floor_bin,
-    floor_reachable_bins,
     solve,
 )
 from weatherbrief.models import (
@@ -40,10 +43,6 @@ from weatherbrief.models import (
     RouteAdvisoryResult,
 )
 from weatherbrief.models.airport_conditions import FlightCategory
-
-# Altitude-bin granularity for the vertical-profile solver (ft). 500 ft matches the
-# resolution of the vertical mitigation's reported altitudes.
-_MITIGATION_BIN_STEP_FT = 500
 
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
@@ -328,51 +327,18 @@ def _build_vfr_cost_model(
     cloud_clearance_ft: float,
     floor_margin_ft: float,
 ) -> CostModel | None:
-    """Assemble the ``(point × altitude)`` VFR cost field for the shared solver.
+    """VFR cost model: the shared builder plus this advisory's cloud hazard→cost mapping.
 
-    Cells are ``INF`` in cloud, ``_MARGINAL_COST`` within clearance, else ``0`` (see
-    ``_vfr_cell_cost``), further walled ``INF`` below ``terrain + floor_margin_ft`` (the
-    unified conservative floor — the scud-running margin under a deck AND the terrain
-    clearance for a lower cruise are the same single floor here, #335) and above the
-    flight ceiling. Start/end are anchored to the floor-reachable band at the departure
-    and arrival points (decision 9). Returns None when no route point carries this
-    model's sounding.
+    ``INF`` in BKN/OVC cloud, ``_MARGINAL_COST`` within clearance, else ``0`` (see
+    ``_vfr_cell_cost``). The floor is ``terrain + floor_margin_ft`` — the unified
+    conservative floor (the scud-running margin under a deck AND the terrain clearance for
+    a lower cruise are one floor here, #335). Bin construction, terrain-floor / ceiling
+    walling and floor-band anchoring all live in ``build_cost_model``.
     """
-    cruise = ctx.cruise_altitude_ft
-    ceiling = ctx.flight_ceiling_ft
-    step = _MITIGATION_BIN_STEP_FT
-    top = max(int(ceiling), int(cruise))
-    bins = list(range(step, top + step, step))
-
-    points = [
-        (rpa.distance_from_origin_nm or 0.0, rpa.sounding[model])
-        for rpa in ctx.analyses
-        if model in rpa.sounding
-    ]
-    points.sort(key=lambda t: t[0])
-    if not points:
-        return None
-
-    distances = [d for d, _ in points]
-    cost_field: list[list[float]] = []
-    floors: list[float] = []
-    for d, sounding in points:
-        floor = _field_elevation_ft(ctx, d) + floor_margin_ft
-        floors.append(floor)
-        col = [
-            INF if (alt < floor or alt > ceiling) else _vfr_cell_cost(sounding, alt, cloud_clearance_ft)
-            for alt in bins
-        ]
-        cost_field.append(col)
-
-    start = floor_reachable_bins(cost_field[0], floor_bin(bins, floors[0]))
-    end = floor_reachable_bins(cost_field[-1], floor_bin(bins, floors[-1]))
-    return CostModel(
-        cost_field=cost_field,
-        distances_nm=distances,
-        bin_altitudes_ft=bins,
-        allowed_start_bins=start,
-        allowed_end_bins=end,
+    return build_cost_model(
+        ctx, model,
+        lambda sounding, alt: _vfr_cell_cost(sounding, alt, cloud_clearance_ft),
+        floor_margin_ft,
     )
 
 
@@ -425,9 +391,14 @@ def _solver_mitigations(
     the right advice in every case, and the old special-cases fall out:
 
     - **cruise_imc** ("fly lower"): the cruise axis is flagged and the continuous profile
-      never reaches planned cruise → the whole route is under cloud. Reported at the
-      highest sustainable band; graded by ``_enroute_vfr_status`` at that altitude so the
-      mitigated status matches the advisory's own grading exactly.
+      never reaches planned cruise → the whole route is under cloud. The solver's role here
+      is the feasibility gate (a :class:`Blockage` — a full-column cloud wall — means no
+      lower band is flyable, so no tip); the reported single flat altitude is then found by
+      scanning downward for the highest whole-route altitude that strictly improves,
+      graded by ``_enroute_vfr_status`` so the status matches the advisory's own grading.
+      (Scanning rather than reusing the profile's top band matters when the deck height
+      varies along the route: the min-cost profile staircases, and its highest band can be
+      inside the deck elsewhere — a single flat altitude lower down may still clear.)
     - **climb_deck** / **descent_deck**: the profile reaches cruise but is forced low
       next to an airport → a climb-to-cruise (near departure) or descent-from-cruise
       (near arrival) transition, reported at that break. The cruise-green mutual
@@ -459,23 +430,37 @@ def _solver_mitigations(
     prof_obj = to_mitigation_profile(profile)
     mitigations: list[Mitigation] = []
 
-    # cruise_imc — the profile can't sustain cruise; recommend the highest clear band.
+    # cruise_imc — the profile can't sustain cruise; the solver has confirmed a lower band
+    # is flyable (not a Blockage), so scan downward for the best single flat altitude to
+    # report (highest strictly-improving, preferring GREEN over AMBER — mirrors the old
+    # per-step scan so a staircasing profile doesn't drop an otherwise-valid tip, #338).
     if enroute_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED) and not reaches_cruise:
-        alt = max_alt
-        tot, imc, marg, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
-        cand = _enroute_vfr_status(tot, imc, marg, imc_pct_amber, imc_pct_red)
-        if _SEVERITY[cand] < _SEVERITY[enroute_status]:
+        max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
+        floor = max_terrain + floor_margin_ft
+        best_alt: int | None = None
+        best_status: AdvisoryStatus | None = None
+        alt = cruise - MITIGATION_BIN_STEP_FT
+        while alt >= floor:
+            tot, imc, marg, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
+            cand = _enroute_vfr_status(tot, imc, marg, imc_pct_amber, imc_pct_red)
+            if _SEVERITY[cand] < _SEVERITY[enroute_status]:
+                if best_status is None or _SEVERITY[cand] < _SEVERITY[best_status]:
+                    best_alt, best_status = int(alt), cand
+                if cand == AdvisoryStatus.GREEN:
+                    break  # highest GREEN — can't do better
+            alt -= MITIGATION_BIN_STEP_FT
+        if best_alt is not None and best_status is not None:
             detail_key = (
                 "vfr.mitigation.altitude"
-                if cand == AdvisoryStatus.GREEN
+                if best_status == AdvisoryStatus.GREEN
                 else "vfr.mitigation.altitude_marginal"
             )
             mitigations.append(Mitigation(
                 kind=MitigationKind.ALTITUDE,
                 addresses="cruise_imc",
-                detail=adv_t(detail_key, loc, alt=alt),
-                mitigated_status=cand,
-                altitude_ft=alt,
+                detail=adv_t(detail_key, loc, alt=best_alt),
+                mitigated_status=best_status,
+                altitude_ft=best_alt,
                 profile=prof_obj,
             ))
 
