@@ -765,7 +765,11 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
     # No model's latest run reaches the flight horizon yet — a full refresh
     # can't help, so never "full" (n_updated is necessarily 0 here too).
     if n_eligible == 0:
-        if days_out == 0:
+        # days_out <= 0 (not just == 0): an in-progress flight refreshed after
+        # crossing UTC midnight has days_out == -1 but is still live (see
+        # _classify_refresh_time) and must still get the realtime METAR/TAF
+        # fallback rather than a silent no-op. Matches _refresh_threshold's <= 0.
+        if days_out <= 0:
             return RefreshDecision(
                 mode="realtime",
                 reason="D-0: refreshing live METAR/TAF (no model run covers the flight horizon)",
@@ -805,7 +809,7 @@ def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
     k = needed - n_updated
     eta_useful = pending[k - 1][1] if 0 < k <= len(pending) else None
 
-    if days_out == 0:
+    if days_out <= 0:  # includes in-progress flights past UTC midnight (days_out == -1)
         return RefreshDecision(
             mode="realtime",
             reason=(
