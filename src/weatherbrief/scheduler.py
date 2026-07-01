@@ -410,7 +410,7 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
             logger.warning("Auto-refresh: AIRPORTS_DB not configured, skipping %s", flight_row.id)
             return
 
-        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
+        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
             flight, db_path, user_id, flight_row.id, db=db, is_privileged=True,
         )
 
@@ -438,6 +438,7 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
         meta = _finalize_refresh(
             flight_row.id, flight, fetch_ts, pack_path, result, db,
             user_id=user_id, model_metadata=model_metadata,
+            as_of_time=resolved_as_of,
         )
         db.commit()
 

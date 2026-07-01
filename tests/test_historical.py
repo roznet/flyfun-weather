@@ -265,7 +265,11 @@ def test_pipeline_allows_past_date_with_historical():
 
 from types import SimpleNamespace
 
-from weatherbrief.api.packs import _INFLIGHT_GRACE, _classify_refresh_time
+from weatherbrief.api.packs import (
+    _INFLIGHT_GRACE,
+    _MAX_INFLIGHT_WINDOW,
+    _classify_refresh_time,
+)
 
 
 def _flight(dep: datetime, duration_h: float):
@@ -320,6 +324,21 @@ def test_classify_beyond_grace_is_historical():
     is_historical, as_of = _classify_refresh_time(_flight(dep, 5.0), now=now)
     assert is_historical is True
     assert as_of is None
+
+
+def test_classify_oversized_duration_capped_at_max_window():
+    """A large/unbounded flight_duration_hours can't keep a flight live forever.
+
+    Without the cap a 100h duration would stay "in progress" for ~103h; the
+    window is bounded to _MAX_INFLIGHT_WINDOW from departure.
+    """
+    dep = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc)
+    # Just inside the cap → still live.
+    live = _classify_refresh_time(_flight(dep, 100.0), now=dep + _MAX_INFLIGHT_WINDOW - timedelta(minutes=1))
+    assert live == (False, dep)
+    # Just past the cap → historical, despite the huge stored duration.
+    hist = _classify_refresh_time(_flight(dep, 100.0), now=dep + _MAX_INFLIGHT_WINDOW + timedelta(minutes=1))
+    assert hist == (True, None)
 
 
 def test_classify_zero_duration_uses_grace_only():

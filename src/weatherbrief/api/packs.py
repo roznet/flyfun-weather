@@ -891,6 +891,15 @@ _STAGE_PROGRESS: dict[str, float] = {
 # historical path. Only once the flight is well past does it become historical.
 _INFLIGHT_GRACE = timedelta(hours=3)
 
+# Hard upper bound on the live window, measured from departure. `flight_duration_hours`
+# is user-supplied and not upper-bounded server-side (the web UI caps it at 12h, but
+# the API doesn't enforce that), so a large value would otherwise keep a flight
+# classified "in progress" indefinitely — never admin-gated, never dropping to the
+# free archive path, always spending on the paid API + LLM digest + GRAMET. Cap the
+# live window so a flight is "in progress" for at most this long after departure,
+# regardless of the stored duration.
+_MAX_INFLIGHT_WINDOW = timedelta(hours=12)
+
 
 def _classify_refresh_time(flight, now: datetime | None = None) -> tuple[bool, datetime | None]:
     """Classify a flight for refresh, returning ``(is_historical, grib_as_of)``.
@@ -903,15 +912,19 @@ def _classify_refresh_time(flight, now: datetime | None = None) -> tuple[bool, d
       pick the freshest run — whose init can fall *after* the window — and
       ``bracket_forecast_hours`` would clamp every pre-init hour to f000 (the
       analysis snapshot), silently mis-enriching the flight.
-    - Well past (beyond estimated arrival + grace) → ``(True, None)``:
-      historical archive path (free API, no digest, admin-only).
+    - Well past (beyond estimated arrival + grace, or past the max window) →
+      ``(True, None)``: historical archive path (free API, no digest, admin-only).
+
+    The live window is ``min(duration + grace, _MAX_INFLIGHT_WINDOW)`` from
+    departure, so an unbounded/oversized ``flight_duration_hours`` can't keep a
+    flight "in progress" (and off the historical cost ceiling) forever.
     """
     now = now or datetime.now(timezone.utc)
     if flight.departure_time >= now:
         return False, None
     duration_h = flight.flight_duration_hours or 0.0
-    flight_end = flight.departure_time + timedelta(hours=duration_h)
-    if now <= flight_end + _INFLIGHT_GRACE:
+    live_window = min(timedelta(hours=duration_h) + _INFLIGHT_GRACE, _MAX_INFLIGHT_WINDOW)
+    if now <= flight.departure_time + live_window:
         return False, flight.departure_time
     return True, None
 
@@ -1131,7 +1144,11 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     # Fetch current model metadata to record in the pack (skip for historical)
     model_metadata = None if is_historical else fetch_model_metadata()
 
-    return route, fetch_ts, pack_path, options, model_metadata
+    # Return the *resolved* as_of_time (may have been set to the in-progress GRIB
+    # pin above) so callers finalize the pack with the same value the pipeline
+    # used — otherwise _build_pack_meta recomputes days_out from "today" and a
+    # cross-midnight in-progress pack gets a negative/stale lead time.
+    return route, fetch_ts, pack_path, options, model_metadata, as_of_time
 
 
 def _measure_pack_size(pack_path: Path) -> int:
@@ -1559,8 +1576,11 @@ async def refresh_briefing(
     Checks model freshness first and skips the pipeline if data
     hasn't changed (returns 200).  Pass ``?force=true`` (admin/dev
     only) to bypass.
-    Pass ``?as_of_date=YYYY-MM-DD`` for historical flights to fetch
-    forecasts as they were on that date.
+    Pass ``?as_of_date=YYYY-MM-DD`` to pin model-run selection to that date
+    (a backtest of the forecast as it stood then); it works for any of the
+    caller's own flights, not just historical ones. In-progress flights are
+    already auto-pinned to their departure, and only well-past (historical)
+    flights are admin-gated.
     Returns 409 if a refresh is already in progress for this flight.
     """
     flight = _load_owned_flight(db, flight_id, user_id)
@@ -1654,7 +1674,7 @@ async def refresh_briefing(
     # Prepare pipeline inputs while we still have the request-scoped DB
     is_privileged = _can_force_refresh(request, db)
     try:
-        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
+        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=is_privileged,
             as_of_time=as_of_time,
@@ -1690,7 +1710,7 @@ async def refresh_briefing(
                 _finalize_refresh(
                     flight_id, flight, fetch_ts, pack_path, result, thread_db,
                     user_id=user_id, model_metadata=model_metadata,
-                    as_of_time=as_of_time,
+                    as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
             finally:
@@ -1726,8 +1746,11 @@ async def refresh_briefing_stream(
 
     Checks model freshness first and returns immediately if data
     hasn't changed.  Pass ``?force=true`` (admin/dev only) to bypass.
-    Pass ``?as_of_date=YYYY-MM-DD`` for historical flights to fetch
-    forecasts as they were on that date.
+    Pass ``?as_of_date=YYYY-MM-DD`` to pin model-run selection to that date
+    (a backtest of the forecast as it stood then); it works for any of the
+    caller's own flights, not just historical ones. In-progress flights are
+    already auto-pinned to their departure, and only well-past (historical)
+    flights are admin-gated.
     Pass ``?notify_email=true`` to receive an email when the refresh completes.
     Returns an SSE error event if a refresh is already in progress.
     """
@@ -1855,7 +1878,7 @@ async def refresh_briefing_stream(
             )
         registered = True
 
-        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
+        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=_can_force_refresh(request, db),
             as_of_time=as_of_time,
@@ -1955,7 +1978,7 @@ async def refresh_briefing_stream(
                 meta = _persist_pack_finalize(
                     flight_id, flight, fetch_ts, pack_path, result, thread_db,
                     user_id=user_id, model_metadata=model_metadata,
-                    as_of_time=as_of_time,
+                    as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
             finally:

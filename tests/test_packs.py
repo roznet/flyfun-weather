@@ -119,7 +119,7 @@ class TestPrepareRefresh:
         monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
         flight = self._make_flight(["EGTK", "LSGS"])
-        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
+        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
             flight, "/fake/db", "test-user", "test-flight",
         )
 
@@ -137,7 +137,7 @@ class TestPrepareRefresh:
         monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
         flight = self._make_flight(["EGTK", "LSGS"])
-        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
+        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
             flight, "/fake/db", dev_user, "test-flight", db=db_session,
         )
 
@@ -154,7 +154,7 @@ class TestPrepareRefresh:
         monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
         flight = self._make_flight(["EGTK", "LSGS"], departure_offset_days=-3)
-        route, fetch_ts, pack_path, options, model_metadata = _prepare_refresh(
+        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
             flight, "/fake/db", "test-user", "test-flight",
         )
 
