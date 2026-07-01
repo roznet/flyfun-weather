@@ -10,13 +10,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import math
+
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
+from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator, _icing_cell_cost
 from weatherbrief.models import (
     AdvisoryStatus,
     ElevationPoint,
     ElevationProfile,
     IcingRisk,
+    IcingType,
     IcingZone,
     MitigationKind,
     RoutePointAnalysis,
@@ -72,6 +75,35 @@ def _ctx(analyses, *, terrain_ft=500.0, cruise_altitude_ft=8000, total_distance_
 def _mits(result, model="gfs"):
     per = next(m for m in result.per_model if m.model == model)
     return per.mitigations
+
+
+def test_icing_cell_cost_only_light_rime_is_soft(  ):
+    """Decision 8: ONLY thin/light RIME is finite-crossable; heavier icing is a hard wall.
+
+    Guards against pricing MODERATE/SEVERE (or non-rime light, or SLD) as a cheap
+    "climb-through" for a non-FIKI aircraft (#338 review finding 1).
+    """
+    def snd(zone):
+        return SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=3000), icing_zones=[zone])
+
+    light_rime = IcingZone(base_ft=6000, top_ft=8000, risk=IcingRisk.LIGHT, icing_type=IcingType.RIME)
+    light_clear = IcingZone(base_ft=6000, top_ft=8000, risk=IcingRisk.LIGHT, icing_type=IcingType.CLEAR)
+    moderate = IcingZone(base_ft=6000, top_ft=8000, risk=IcingRisk.MODERATE, icing_type=IcingType.RIME)
+    severe = IcingZone(base_ft=6000, top_ft=8000, risk=IcingRisk.SEVERE, icing_type=IcingType.RIME)
+    sld = IcingZone(base_ft=6000, top_ft=8000, risk=IcingRisk.LIGHT, icing_type=IcingType.RIME, sld_risk=True)
+
+    # Thin/light rime → the one soft wall (finite, > 0).
+    c = _icing_cell_cost(snd(light_rime), 7000)
+    assert 0 < c < math.inf
+    # Everything heavier → hard wall.
+    assert _icing_cell_cost(snd(light_clear), 7000) == math.inf   # non-rime light
+    assert _icing_cell_cost(snd(moderate), 7000) == math.inf
+    assert _icing_cell_cost(snd(severe), 7000) == math.inf
+    assert _icing_cell_cost(snd(sld), 7000) == math.inf           # SLD regardless of type
+    # Warm air below the freezing level is always free, even inside a zone.
+    assert _icing_cell_cost(snd(severe), 2000) == 0.0
+    # Outside every zone → free.
+    assert _icing_cell_cost(snd(light_rime), 9000) == 0.0
 
 
 def test_descend_below_icing_mitigation():

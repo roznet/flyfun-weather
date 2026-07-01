@@ -375,6 +375,33 @@ def test_cruise_imc_suppresses_corridor_mitigation():
     assert "climb_deck" not in addresses   # suppressed — cruise is IMC anyway
 
 
+def test_interior_deck_suppresses_corridor_mitigation():
+    """An INTERIOR deck (away from both terminals) must NOT yield a corridor tip (#338).
+
+    Departure deck forces a low climb-out; the profile reaches cruise; but a mid-route
+    deck (spanning cruise to the ceiling) forces it back down and up again. The old
+    ``reaches_cruise`` check alone would emit a misleading "climb to cruise after ~20nm"
+    even though the flight has to descend again at the interior deck. The interior-dip
+    guard suppresses both corridor tips — the safe-but-silent behavior.
+    """
+    dep_deck = EnhancedCloudLayer(base_ft=4000, top_ft=6000, coverage=CloudCoverage.OVC)
+    # Interior deck spans cruise (8000) up to the ceiling → no on-top escape, must dip low.
+    interior = EnhancedCloudLayer(base_ft=7000, top_ft=18000, coverage=CloudCoverage.OVC)
+    layers = {}
+    analyses = [
+        _rpa(i, i * 20.0, {"gfs": [dep_deck] if i in (0, 1) else ([interior] if i in (4, 5) else [])})
+        for i in range(10)
+    ]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED  # interior OVC at cruise
+    addresses = {m.addresses for m in _mitigations(result)}
+    assert "climb_deck" not in addresses      # would be misleading (must descend again)
+    assert "descent_deck" not in addresses
+
+
 # ---------------------------------------------------------------------------
 # Aggregation — representative-model policy
 # ---------------------------------------------------------------------------

@@ -189,7 +189,6 @@ def solve(model: CostModel, preferred_alt_ft: int, rate_limit: float | None = No
     if n == 0:
         return Blockage(0.0, 0.0, "no route points")
     nbins = len(model.bin_altitudes_ft)
-    dist = model.distances_nm
     alts = model.bin_altitudes_ft
 
     start_bins = model.allowed_start_bins if model.allowed_start_bins is not None else set(range(nbins))
