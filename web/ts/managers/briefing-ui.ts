@@ -1958,6 +1958,14 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
   // both (default-on) — since the user is now shown the form and the checkbox,
   // a reply is no longer an unprompted surprise as it would be for a bare 👍.
   function openForm(sentiment: 'up' | 'down'): void {
+    // On a sentiment switch, discard whatever was typed for the previous
+    // sentiment (and any stale error). Otherwise a comment written for 👍
+    // would ride along on a 👎 submit — the wrong sentiment for that text.
+    // Guarded on change so re-clicking the same thumb doesn't wipe the draft.
+    if (sentiment !== pendingSentiment || form.style.display === 'none') {
+      commentEl.value = '';
+      errorEl.textContent = '';
+    }
     pendingSentiment = sentiment;
     const up = sentiment === 'up';
     upBtn.classList.toggle('active', up);
