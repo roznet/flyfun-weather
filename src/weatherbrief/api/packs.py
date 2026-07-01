@@ -1929,7 +1929,11 @@ async def refresh_briefing_stream(
                 meta = _persist_pack_provisional(
                     flight_id, flight, fetch_ts, pack_path, result, thread_db,
                     model_metadata=model_metadata,
-                    as_of_time=as_of_time,
+                    # Use the resolved as_of (incl. the in-progress GRIB pin), same as
+                    # _persist_pack_finalize below — otherwise the provisional pack
+                    # persists a stale/negative days_out for a cross-midnight
+                    # in-progress flight until the final persist overwrites it.
+                    as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
             except Exception:
