@@ -161,13 +161,14 @@ def test_vertical_amber_band_uses_marginal_phrasing():
     """When the best reachable band is only AMBER (cruise RED, no clear band above
     the floor), the detail must NOT claim 'VMC available' — it says 'marginal' to
     match the AMBER axis status."""
-    # OVC 7000–12000 → cruise (8000) IMC/RED. Terrain 5200 → floor 6200: the
-    # clear band (6000) is below the floor, but the marginal band (6500, within
-    # 1000ft of base) clears it → best candidate is AMBER at 6500.
+    # OVC 7000–12000 → cruise (8000) IMC/RED. Terrain 3500 → floor 6500 (unified
+    # terrain + mitigation_min_base_agl_ft, #335): the clear band (≤6000) is below
+    # the floor, but the marginal band 6500 (within 1000ft of base 7000) clears it →
+    # best candidate is AMBER at 6500.
     deck = EnhancedCloudLayer(base_ft=7000, top_ft=12000, coverage=CloudCoverage.OVC)
     analyses = [_rpa(i, i * 20.0, {"gfs": [deck]}) for i in range(10)]
     result = VFRFeasibilityEvaluator.evaluate(
-        _ctx(analyses, elevation=_elevation(max_elev_ft=5200)), _VFR_DEFAULTS
+        _ctx(analyses, elevation=_elevation(max_elev_ft=3500)), _VFR_DEFAULTS
     )
 
     assert result.aggregate_status == AdvisoryStatus.RED
@@ -178,6 +179,25 @@ def test_vertical_amber_band_uses_marginal_phrasing():
     assert m.altitude_ft == 6500
     assert "marginal" in m.detail.lower()
     assert "VMC available" not in m.detail  # the GREEN-only phrasing
+
+
+def test_vertical_tight_terrain_gap_suppresses_mitigation():
+    """Under the unified conservative floor (terrain + 3000, #335), a marginal band
+    that doesn't clear the floor yields NO 'fly lower' tip — scud-running into a tight
+    terrain-to-deck gap is not recommended, even though the old 1000ft-floor scan would
+    have offered it.
+
+    OVC 7000–12000, terrain 5200 → floor 8200 sits inside the deck; the only
+    non-IMC air (marginal 6000–7000) is below the floor → the RED is genuine, no tip.
+    """
+    deck = EnhancedCloudLayer(base_ft=7000, top_ft=12000, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [deck]}) for i in range(10)]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses, elevation=_elevation(max_elev_ft=5200)), _VFR_DEFAULTS
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED
+    assert not any(m.kind == MitigationKind.ALTITUDE for m in _mitigations(result))
 
 
 # ---------------------------------------------------------------------------

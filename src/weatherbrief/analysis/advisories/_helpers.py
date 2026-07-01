@@ -5,10 +5,39 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from weatherbrief.models import AdvisoryStatus, ElevationProfile, IcingZone
+from weatherbrief.models import (
+    AdvisoryStatus,
+    ElevationProfile,
+    IcingZone,
+    MitigationProfile,
+    MitigationSegment,
+    MitigationTransition,
+)
 
 if TYPE_CHECKING:
+    from weatherbrief.analysis.advisories.vertical_profile import Profile
     from weatherbrief.models import RouteCrossSection
+
+
+def to_mitigation_profile(profile: Profile) -> MitigationProfile:
+    """Convert a solver :class:`Profile` into the storable :class:`MitigationProfile`.
+
+    Shared by every advisory that derives mitigations from the vertical-profile solver
+    (VFR feasibility, icing escape — issue #335), so the solver→model bridge lives once.
+    """
+    return MitigationProfile(
+        segments=[
+            MitigationSegment(dist_from_nm=s.dist_from_nm, dist_to_nm=s.dist_to_nm, altitude_ft=s.alt_ft)
+            for s in profile.segments
+        ],
+        transitions=[
+            MitigationTransition(
+                from_nm=t.from_nm, to_nm=t.to_nm,
+                from_altitude_ft=t.from_alt_ft, to_altitude_ft=t.to_alt_ft,
+            )
+            for t in profile.transitions
+        ],
+    )
 
 
 def format_extent(

@@ -16,10 +16,19 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent
+from weatherbrief.analysis.advisories._helpers import format_extent, to_mitigation_profile
 from weatherbrief.analysis.advisories.enroute_precip import classify_enroute_precip
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
+from weatherbrief.analysis.advisories.vertical_profile import (
+    INF,
+    Blockage,
+    CostModel,
+    Profile,
+    floor_bin,
+    floor_reachable_bins,
+    solve,
+)
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -32,14 +41,9 @@ from weatherbrief.models import (
 )
 from weatherbrief.models.airport_conditions import FlightCategory
 
-# Minimum clearance above the highest terrain along the route for a lower cruise
-# altitude to be a valid VFR mitigation. Mirrors the icing-escape terrain gate
-# (``sounding/advisories.py:_TERRAIN_CLEARANCE_FT``): a clear band below MSA is
-# not a flyable option, so the RED is genuine and no mitigation is offered.
-_TERRAIN_CLEARANCE_FT = 1000
-
-# Step (ft) for the downward scan when searching for a clear lower altitude.
-_MITIGATION_STEP_FT = 500
+# Altitude-bin granularity for the vertical-profile solver (ft). 500 ft matches the
+# resolution of the vertical mitigation's reported altitudes.
+_MITIGATION_BIN_STEP_FT = 500
 
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
@@ -287,233 +291,196 @@ def _check_corridor_vfr(
     return worst, parts
 
 
-# Only the graded statuses are mapped: `_vertical_mitigation` guards on
-# AMBER/RED cruise status and the candidate statuses come from
-# `_enroute_vfr_status` (always GREEN/AMBER/RED), so UNAVAILABLE is never indexed.
+# Severity order for the strict-improvement check on the cruise_imc mitigation.
+# Both operands come from `_enroute_vfr_status` (always GREEN/AMBER/RED), so
+# UNAVAILABLE is never indexed.
 _SEVERITY = {AdvisoryStatus.GREEN: 0, AdvisoryStatus.AMBER: 1, AdvisoryStatus.RED: 2}
 
+# Finite occupancy cost of a cell within cloud-clearance of a deck ("marginal"): a
+# flyable-but-VFR-marginal band. Any positive constant works — it only has to make the
+# solver prefer a truly-clear (0-cost) band over a marginal one on the hazard tier.
+_MARGINAL_COST = 1.0
 
-def _vertical_mitigation(
+
+def _vfr_cell_cost(sounding, alt_ft: float, cloud_clearance_ft: float) -> float:
+    """Occupancy cost of one altitude at one route point for the VFR cost field.
+
+    ``INF`` inside a BKN/OVC layer (a hard wall — cannot fly VFR in cloud, regardless of
+    coverage; the BKN/OVC distinction lives in the *grade*, not the path — decision 7),
+    ``_MARGINAL_COST`` within ``cloud_clearance_ft`` of a layer (flyable but sub-VFR
+    separation), else ``0``. Mirrors the per-point logic of ``_check_enroute_vfr`` so the
+    solver's feasibility matches the advisory's own grading of the same cell.
+    """
+    marginal = False
+    for cl in sounding.cloud_layers:
+        if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
+            continue
+        if cl.base_ft <= alt_ft <= cl.top_ft:
+            return INF
+        if min(abs(alt_ft - cl.base_ft), abs(alt_ft - cl.top_ft)) < cloud_clearance_ft:
+            marginal = True
+    return _MARGINAL_COST if marginal else 0.0
+
+
+def _build_vfr_cost_model(
+    ctx: RouteContext,
+    model: str,
+    cloud_clearance_ft: float,
+    floor_margin_ft: float,
+) -> CostModel | None:
+    """Assemble the ``(point × altitude)`` VFR cost field for the shared solver.
+
+    Cells are ``INF`` in cloud, ``_MARGINAL_COST`` within clearance, else ``0`` (see
+    ``_vfr_cell_cost``), further walled ``INF`` below ``terrain + floor_margin_ft`` (the
+    unified conservative floor — the scud-running margin under a deck AND the terrain
+    clearance for a lower cruise are the same single floor here, #335) and above the
+    flight ceiling. Start/end are anchored to the floor-reachable band at the departure
+    and arrival points (decision 9). Returns None when no route point carries this
+    model's sounding.
+    """
+    cruise = ctx.cruise_altitude_ft
+    ceiling = ctx.flight_ceiling_ft
+    step = _MITIGATION_BIN_STEP_FT
+    top = max(int(ceiling), int(cruise))
+    bins = list(range(step, top + step, step))
+
+    points = [
+        (rpa.distance_from_origin_nm or 0.0, rpa.sounding[model])
+        for rpa in ctx.analyses
+        if model in rpa.sounding
+    ]
+    points.sort(key=lambda t: t[0])
+    if not points:
+        return None
+
+    distances = [d for d, _ in points]
+    cost_field: list[list[float]] = []
+    floors: list[float] = []
+    for d, sounding in points:
+        floor = _field_elevation_ft(ctx, d) + floor_margin_ft
+        floors.append(floor)
+        col = [
+            INF if (alt < floor or alt > ceiling) else _vfr_cell_cost(sounding, alt, cloud_clearance_ft)
+            for alt in bins
+        ]
+        cost_field.append(col)
+
+    start = floor_reachable_bins(cost_field[0], floor_bin(bins, floors[0]))
+    end = floor_reachable_bins(cost_field[-1], floor_bin(bins, floors[-1]))
+    return CostModel(
+        cost_field=cost_field,
+        distances_nm=distances,
+        bin_altitudes_ft=bins,
+        allowed_start_bins=start,
+        allowed_end_bins=end,
+    )
+
+
+def _solver_mitigations(
     ctx: RouteContext,
     model: str,
     cloud_clearance_ft: float,
     imc_pct_amber: float,
     imc_pct_red: float,
-    cruise_status: AdvisoryStatus,
-    loc: str | None,
-) -> Mitigation | None:
-    """Search for a lower cruise altitude that clears en-route cloud (cruise_imc).
-
-    Scans downward from ``cruise - step`` to a terrain floor
-    (``max terrain + _TERRAIN_CLEARANCE_FT``), re-grading the en-route axis at
-    each candidate. Returns an ALTITUDE mitigation reporting the **highest**
-    altitude whose status strictly improves on cruise, preferring a fully clear
-    (GREEN) band over a merely-better (AMBER) one. Returns None when the
-    en-route axis is already green, or when the only improving band lies below
-    the terrain floor (the RED is genuine).
-
-    ``mitigated_status`` is the status of the *cruise IMC axis alone* at the
-    chosen altitude — NOT the overall advisory status (a corridor deck or
-    airport issue can still hold the grade higher).
-    """
-    # Only compute a mitigation for an axis that is actually flagged (#328
-    # decision 6). Restricting to AMBER/RED also keeps every `_SEVERITY[...]`
-    # lookup below provably safe — both `cruise_status` and the candidate
-    # statuses are then graded (never GREEN-skip or UNAVAILABLE).
-    if cruise_status not in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
-        return None
-
-    cruise = ctx.cruise_altitude_ft
-    max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
-    floor = max_terrain + _TERRAIN_CLEARANCE_FT
-
-    best_alt: int | None = None
-    best_status: AdvisoryStatus | None = None
-
-    alt = cruise - _MITIGATION_STEP_FT
-    while alt >= floor:
-        total, imc, marg, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
-        cand = _enroute_vfr_status(total, imc, marg, imc_pct_amber, imc_pct_red)
-        # Only an altitude that strictly improves on cruise is worth offering.
-        if _SEVERITY[cand] < _SEVERITY[cruise_status]:
-            if best_status is None or _SEVERITY[cand] < _SEVERITY[best_status]:
-                best_alt = int(alt)
-                best_status = cand
-            # Scanning high→low, the first GREEN is the highest GREEN and the
-            # best we can do — stop rather than descend further for no gain.
-            if cand == AdvisoryStatus.GREEN:
-                break
-        alt -= _MITIGATION_STEP_FT
-
-    if best_alt is None or best_status is None:
-        return None
-
-    # Honest phrasing: a GREEN band is clear VMC; an AMBER band (offered only
-    # when cruise is RED and no clear band clears the terrain floor) is merely
-    # *less* IMC — say "marginal" so the detail doesn't contradict the badge.
-    detail_key = (
-        "vfr.mitigation.altitude"
-        if best_status == AdvisoryStatus.GREEN
-        else "vfr.mitigation.altitude_marginal"
-    )
-    return Mitigation(
-        kind=MitigationKind.ALTITUDE,
-        addresses="cruise_imc",
-        detail=adv_t(detail_key, loc, alt=best_alt),
-        mitigated_status=best_status,
-        altitude_ft=best_alt,
-    )
-
-
-def _corridor_blocked_profile(
-    ctx: RouteContext,
-    model: str,
-    corridor_nm: float,
-    phase: str,
-) -> list[tuple[float, bool, float | None]]:
-    """Per-point (distance, blocked, base_agl_ft) for a corridor phase, sorted by distance.
-
-    A point is *blocked* when it carries a transitable BKN/OVC deck (see
-    ``_corridor_points`` for the membership + deck condition). Collapses the
-    per-point OVC/BKN split to a single ``blocked`` bool and carries the
-    lowest-deck base height above terrain (``base_agl_ft``) so the mitigation can
-    both locate where the deck breaks and check there is VFR room beneath it.
-    """
-    profile = [
-        (d, p_ovc or p_bkn, base_agl)
-        for d, p_ovc, p_bkn, base_agl in _corridor_points(ctx, model, corridor_nm, phase)
-    ]
-    profile.sort(key=lambda t: t[0])
-    return profile
-
-
-def _under_deck_flyable(
-    blocked_points: list[tuple[float, float | None]],
-    min_base_agl_ft: float,
-) -> bool:
-    """True if every blocked corridor point has VFR room beneath its deck.
-
-    The along-route mitigation tells the pilot to stay *below* the deck until it
-    breaks, then climb (or to descend below it before it starts). That only works
-    if there is flyable VFR airspace under the deck along the whole blocked
-    stretch — i.e. each blocked point's lowest deck base sits at least
-    ``min_base_agl_ft`` above terrain. If the deck scrapes the ground anywhere on
-    that stretch, the clear air can't be reached and the RED/AMBER is genuine.
-    """
-    return all(
-        base_agl is not None and base_agl >= min_base_agl_ft
-        for _d, base_agl in blocked_points
-    )
-
-
-def _deck_then_clear(
-    profile_from_airport: list[tuple[float, bool, float | None]],
-) -> tuple[list[tuple[float, float | None]], float | None]:
-    """Walk outward from the airport through the deck to the first clear point.
-
-    ``profile_from_airport`` is ordered airport → midpoint. Returns
-    ``(deck, d_clear)`` where ``deck`` is the run of consecutive blocked points
-    adjacent to the airport (each ``(distance_nm, base_agl_ft)``) and ``d_clear``
-    is the distance of the first clear point inland of that deck — the point
-    where a VMC climb/descent becomes possible.
-
-    ``d_clear`` is ``None`` when the airport-most point is already clear (no deck
-    to thread) or when the deck runs unbroken to the midpoint (the profile is
-    capped at ``total/2``, so reaching the end with no clear point means there is
-    no VMC break before halfway → the RED/AMBER is genuine).
-    """
-    deck: list[tuple[float, float | None]] = []
-    for d, blocked, base_agl in profile_from_airport:
-        if not blocked:
-            return deck, d
-        deck.append((d, base_agl))
-    return deck, None
-
-
-def _corridor_mitigation(
-    ctx: RouteContext,
-    model: str,
-    min_base_agl_ft: float,
+    floor_margin_ft: float,
     max_reposition_nm: float,
     enroute_status: AdvisoryStatus,
     loc: str | None,
 ) -> list[Mitigation]:
-    """Find along-route repositioning mitigations for blocked corridor decks.
+    """Derive all VFR mitigations from a single solved vertical profile (#335).
 
-    Only offered when the en-route cruise axis is GREEN — i.e. cruise is itself a
-    viable VMC level. The corridor mitigation's premise is "you can reach (or
-    leave) cruise VMC by repositioning the climb/descent"; that is only useful if
-    cruise is worth being at. When cruise is itself IMC en route, climbing to it
-    just puts you back in cloud, so the relevant lever is the vertical mitigation
-    ("fly at a lower clear altitude"), not this one. The two are therefore
-    mutually exclusive (the vertical mitigation fires only when cruise is
-    AMBER/RED, this one only when cruise is GREEN).
+    Replaces the former per-axis scans (`_vertical_mitigation` + `_corridor_mitigation`
+    and their gates). One min-cost profile over the ``(distance × altitude)`` grid yields
+    the right advice in every case, and the old special-cases fall out:
 
-    The deck a climb/descent transits can extend beyond the terminal grade
-    corridor, so the mitigation search is NOT bounded by ``terminal_corridor_nm``:
-    it scans from the airport toward the route midpoint (the ``_corridor_points``
-    half-route guard) for the nearest VMC break.
+    - **cruise_imc** ("fly lower"): the cruise axis is flagged and the continuous profile
+      never reaches planned cruise → the whole route is under cloud. Reported at the
+      highest sustainable band; graded by ``_enroute_vfr_status`` at that altitude so the
+      mitigated status matches the advisory's own grading exactly.
+    - **climb_deck** / **descent_deck**: the profile reaches cruise but is forced low
+      next to an airport → a climb-to-cruise (near departure) or descent-from-cruise
+      (near arrival) transition, reported at that break. The cruise-green mutual
+      exclusivity is emergent: when cruise is IMC the profile never reaches it, so no
+      corridor transition exists — nothing to suppress.
 
-    Climb-out: walk outward from departure through the deck; if a clear point is
-    reached, offer "climb to cruise after ~d* nm from departure" (``d*`` = that
-    clear distance). Descent is symmetric from the arrival end ("descend before
-    ~d* nm before arrival"). Three gates must hold:
-
-    1. A clear break before the midpoint — a deck unbroken to halfway cannot be
-       repositioned around (``_deck_then_clear`` returns ``d_clear=None``).
-    2. That break is within ``max_reposition_nm`` of the airport — a clear point
-       50+ nm out means flying under the deck for most of the leg, which is not a
-       useful "climb after / descend before" maneuver, so no mitigation.
-    3. The deck is flyable underneath along the blocked stretch
-       (``_under_deck_flyable``) — otherwise the clear air is unreachable.
-
-    If any fails, no mitigation (the RED/AMBER is genuine).
-
-    ``mitigated_status`` is GREEN: repositioning clears that phase's deck. It
-    speaks only for the corridor axis, not the overall advisory.
+    The along-route break must fall before the route midpoint (a deck unbroken to
+    halfway can't be repositioned around) and within ``max_reposition_nm`` of the airport
+    (a break far out means flying under the deck for most of the leg). A :class:`Blockage`
+    (no continuous flyable band from the floor) yields no mitigation — the RED is genuine.
     """
-    # Cruise must itself be a clear VMC level, else reaching it is pointless.
-    if enroute_status != AdvisoryStatus.GREEN:
+    model_cm = _build_vfr_cost_model(ctx, model, cloud_clearance_ft, floor_margin_ft)
+    if model_cm is None:
         return []
 
+    cruise = ctx.cruise_altitude_ft
+    result = solve(model_cm, preferred_alt_ft=cruise)
+    if isinstance(result, Blockage):
+        return []
+
+    profile: Profile = result
     total = ctx.total_distance_nm
+    max_alt = max(s.alt_ft for s in profile.segments)
+    reaches_cruise = max_alt >= cruise
+    prof_obj = to_mitigation_profile(profile)
     mitigations: list[Mitigation] = []
 
-    # --- Climb-out: deck near departure, first clear point inland (d* nm out) ---
-    # `_corridor_blocked_profile` is sorted ascending by distance — already
-    # departure → midpoint, so it reads airport-outward directly.
-    climb = _corridor_blocked_profile(ctx, model, total, "climb")
-    deck, d_clear = _deck_then_clear(climb)
-    if (deck and d_clear is not None and d_clear <= max_reposition_nm
-            and _under_deck_flyable(deck, min_base_agl_ft)):
-        # Round once: the phrasing is qualitative ("~X nm"), so detail and the
-        # structured distance must report the same integer.
-        dist = round(d_clear)
-        mitigations.append(Mitigation(
-            kind=MitigationKind.ROUTE_POSITION,
-            addresses="climb_deck",
-            detail=adv_t("vfr.mitigation.climb_after", loc, dist=dist),
-            mitigated_status=AdvisoryStatus.GREEN,
-            distance_nm=dist,
-            reference="departure",
-        ))
+    # cruise_imc — the profile can't sustain cruise; recommend the highest clear band.
+    if enroute_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED) and not reaches_cruise:
+        alt = max_alt
+        tot, imc, marg, _ = _check_enroute_vfr(ctx, model, cloud_clearance_ft, alt)
+        cand = _enroute_vfr_status(tot, imc, marg, imc_pct_amber, imc_pct_red)
+        if _SEVERITY[cand] < _SEVERITY[enroute_status]:
+            detail_key = (
+                "vfr.mitigation.altitude"
+                if cand == AdvisoryStatus.GREEN
+                else "vfr.mitigation.altitude_marginal"
+            )
+            mitigations.append(Mitigation(
+                kind=MitigationKind.ALTITUDE,
+                addresses="cruise_imc",
+                detail=adv_t(detail_key, loc, alt=alt),
+                mitigated_status=cand,
+                altitude_ft=alt,
+                profile=prof_obj,
+            ))
 
-    # --- Descent: deck near arrival, first clear point inland (d* nm before) ---
-    # Reverse the ascending profile so it reads arrival → midpoint.
-    descent = _corridor_blocked_profile(ctx, model, total, "descent")
-    deck, d_clear = _deck_then_clear(list(reversed(descent)))
-    if (deck and d_clear is not None and (total - d_clear) <= max_reposition_nm
-            and _under_deck_flyable(deck, min_base_agl_ft)):
-        # Round once (see climb case): nm before arrival, same int in both.
-        dist = round(total - d_clear)
-        mitigations.append(Mitigation(
-            kind=MitigationKind.ROUTE_POSITION,
-            addresses="descent_deck",
-            detail=adv_t("vfr.mitigation.descend_before", loc, dist=dist),
-            mitigated_status=AdvisoryStatus.GREEN,
-            distance_nm=dist,
-            reference="arrival",
-        ))
+    # climb_deck — departure forced low, climbs to cruise before the midpoint.
+    if reaches_cruise and profile.segments[0].alt_ft < cruise:
+        climb = next(
+            (t for t in profile.transitions if t.to_alt_ft > t.from_alt_ft and t.to_alt_ft >= cruise),
+            None,
+        )
+        if climb is not None and climb.from_nm <= total / 2 and climb.from_nm <= max_reposition_nm:
+            dist = round(climb.from_nm)
+            mitigations.append(Mitigation(
+                kind=MitigationKind.ROUTE_POSITION,
+                addresses="climb_deck",
+                detail=adv_t("vfr.mitigation.climb_after", loc, dist=dist),
+                mitigated_status=AdvisoryStatus.GREEN,
+                distance_nm=dist,
+                reference="departure",
+                profile=prof_obj,
+            ))
+
+    # descent_deck — arrival forced low, descends from cruise after the midpoint.
+    if reaches_cruise and profile.segments[-1].alt_ft < cruise:
+        descent = next(
+            (t for t in reversed(profile.transitions) if t.from_alt_ft > t.to_alt_ft and t.from_alt_ft >= cruise),
+            None,
+        )
+        if descent is not None:
+            before = total - descent.to_nm
+            if before <= total / 2 and before <= max_reposition_nm:
+                dist = round(before)
+                mitigations.append(Mitigation(
+                    kind=MitigationKind.ROUTE_POSITION,
+                    addresses="descent_deck",
+                    detail=adv_t("vfr.mitigation.descend_before", loc, dist=dist),
+                    mitigated_status=AdvisoryStatus.GREEN,
+                    distance_nm=dist,
+                    reference="arrival",
+                    profile=prof_obj,
+                ))
 
     return mitigations
 
@@ -591,8 +558,8 @@ class VFRFeasibilityEvaluator:
                 ),
                 AdvisoryParameterDef(
                     key="mitigation_min_base_agl_ft",
-                    label="Mitigation min deck base (AGL)",
-                    description="Minimum cloud-deck base above terrain for an along-route 'stay below the deck then climb/descend' mitigation to be offered — below this there isn't VFR room beneath the deck to reach the clear air",
+                    label="Mitigation floor (AGL)",
+                    description="Minimum height above terrain for any mitigation altitude — the floor of the vertical-profile solver (#335). A lower cruise or an under-deck corridor must sit at least this far above terrain to be offered; below it there isn't safe VFR room, so the RED is genuine. Doubles as the scud-running margin beneath a deck.",
                     type="altitude",
                     unit="ft",
                     default=3000,
@@ -714,20 +681,17 @@ class VFRFeasibilityEvaluator:
             else:
                 detail = " | ".join(detail_parts)
 
-            # 7. Mitigations (advice only — never change the grade). Vertical:
-            # a lower altitude that clears cruise IMC. Along-route: reposition
-            # the climb/descent to thread a corridor deck.
-            mitigations: list[Mitigation] = []
-            vertical = _vertical_mitigation(
+            # 7. Mitigations (advice only — never change the grade). All derived
+            # from a single continuous vertical profile over the (distance ×
+            # altitude) grid (#335): "fly lower" (cruise_imc) when the profile
+            # can't sustain cruise, "climb after / descend before" (climb_deck /
+            # descent_deck) when a terminal deck forces the climb/descent low.
+            mitigations: list[Mitigation] = _solver_mitigations(
                 ctx, model, cloud_clearance_ft,
-                imc_pct_amber, imc_pct_red, enroute_status, loc,
+                imc_pct_amber, imc_pct_red,
+                mitigation_min_base_agl_ft, mitigation_max_reposition_nm,
+                enroute_status, loc,
             )
-            if vertical is not None:
-                mitigations.append(vertical)
-            mitigations.extend(_corridor_mitigation(
-                ctx, model, mitigation_min_base_agl_ft,
-                mitigation_max_reposition_nm, enroute_status, loc,
-            ))
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
