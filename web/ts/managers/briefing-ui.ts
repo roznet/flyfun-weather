@@ -1894,8 +1894,8 @@ function digestFeedbackHtml(flightId: string, packTimestamp: string): string {
       <button type="button" class="digest-thumb-btn" id="digest-thumb-up" aria-label="${t('feedback.thumbs.up')}" title="${t('feedback.thumbs.up')}">👍</button>
       <button type="button" class="digest-thumb-btn" id="digest-thumb-down" aria-label="${t('feedback.thumbs.down')}" title="${t('feedback.thumbs.down')}">👎</button>
       <div class="digest-feedback-form" id="digest-feedback-form" style="display:none;">
-        <p class="digest-feedback-helper"><strong>${t('feedback.thumbs.helperTitle')}</strong><br>${t('feedback.thumbs.helperBody')}</p>
-        <textarea id="digest-feedback-comment" rows="3" maxlength="2000" placeholder="${t('feedback.thumbs.placeholder')}"></textarea>
+        <p class="digest-feedback-helper"><strong id="digest-feedback-helper-title"></strong><br><span id="digest-feedback-helper-body"></span></p>
+        <textarea id="digest-feedback-comment" rows="3" maxlength="2000"></textarea>
         <label class="digest-feedback-consent">
           <input type="checkbox" id="digest-feedback-contact-ok" checked> ${t('feedback.contactOk')}
         </label>
@@ -1919,6 +1919,12 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
   const cancelBtn = widget.querySelector<HTMLButtonElement>('#digest-feedback-cancel')!;
   const form = widget.querySelector<HTMLElement>('#digest-feedback-form')!;
   const errorEl = widget.querySelector<HTMLElement>('#digest-feedback-error')!;
+  const helperTitleEl = widget.querySelector<HTMLElement>('#digest-feedback-helper-title')!;
+  const helperBodyEl = widget.querySelector<HTMLElement>('#digest-feedback-helper-body')!;
+  const commentEl = widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')!;
+
+  // Sentiment chosen by the last thumb click, submitted when Send is pressed.
+  let pendingSentiment: 'up' | 'down' = 'down';
 
   async function post(sentiment: 'up' | 'down', comment: string, contactOk: boolean): Promise<void> {
     errorEl.textContent = '';
@@ -1947,32 +1953,36 @@ function attachDigestFeedback(el: HTMLElement, flightId: string, packTimestamp: 
     }
   }
 
-  upBtn.addEventListener('click', () => {
-    // Bare thumbs-up: no comment, no consent checkbox shown. contact_ok is
-    // deliberately false here (not the opt-out default) — the user was never
-    // told a reply might come, so an unprompted reply to a 👍 would be exactly
-    // the surprise the consent flag exists to avoid. The thumbs-down path
-    // shows the checkbox (default-on) for the case where a reply is expected.
-    void post('up', '', false);
-  });
-
-  downBtn.addEventListener('click', () => {
-    downBtn.classList.add('active');
-    upBtn.classList.remove('active');
+  // Both thumbs open the same optional-comment form; only the prompt wording
+  // and the sentiment we'll submit differ. The consent checkbox is shown for
+  // both (default-on) — since the user is now shown the form and the checkbox,
+  // a reply is no longer an unprompted surprise as it would be for a bare 👍.
+  function openForm(sentiment: 'up' | 'down'): void {
+    pendingSentiment = sentiment;
+    const up = sentiment === 'up';
+    upBtn.classList.toggle('active', up);
+    downBtn.classList.toggle('active', !up);
+    helperTitleEl.textContent = t(up ? 'feedback.thumbs.helperTitleUp' : 'feedback.thumbs.helperTitle');
+    helperBodyEl.textContent = t(up ? 'feedback.thumbs.helperBodyUp' : 'feedback.thumbs.helperBody');
+    commentEl.placeholder = t(up ? 'feedback.thumbs.placeholderUp' : 'feedback.thumbs.placeholder');
     form.style.display = '';
-    widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')?.focus();
-  });
+    commentEl.focus();
+  }
+
+  upBtn.addEventListener('click', () => openForm('up'));
+  downBtn.addEventListener('click', () => openForm('down'));
 
   cancelBtn.addEventListener('click', () => {
     form.style.display = 'none';
+    upBtn.classList.remove('active');
     downBtn.classList.remove('active');
     errorEl.textContent = '';
   });
 
   sendBtn.addEventListener('click', () => {
-    const comment = widget.querySelector<HTMLTextAreaElement>('#digest-feedback-comment')!.value.trim();
+    const comment = commentEl.value.trim();
     const contactOk = widget.querySelector<HTMLInputElement>('#digest-feedback-contact-ok')!.checked;
-    void post('down', comment, contactOk);
+    void post(pendingSentiment, comment, contactOk);
   });
 }
 

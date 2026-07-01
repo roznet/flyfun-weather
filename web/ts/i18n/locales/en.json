@@ -426,6 +426,9 @@
   "feedback.thumbs.helperTitle": "Thanks — this really helps us improve the briefing.",
   "feedback.thumbs.helperBody": "What seemed off? A quick note on what the digest got wrong, or which advisory didn't match what you saw, makes a big difference.",
   "feedback.thumbs.placeholder": "What seemed off? (optional)",
+  "feedback.thumbs.helperTitleUp": "Glad it was helpful — thank you!",
+  "feedback.thumbs.helperBodyUp": "What looked good or was useful? A quick note on what the digest got right, or which advisory matched what you saw, helps us keep it that way.",
+  "feedback.thumbs.placeholderUp": "What was useful? (optional)",
   "feedback.thumbs.send": "Send",
   "feedback.thumbs.thanks": "Thanks 🙏 — your feedback helps improve the briefing.",
 
