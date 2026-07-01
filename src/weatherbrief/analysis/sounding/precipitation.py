@@ -106,11 +106,20 @@ def _classify_intensity(precip_mm: float | None) -> PrecipIntensity:
     return PrecipIntensity.HEAVY
 
 
+# Wet-bulb phase boundaries. Falling snow melts only when the wet-bulb rises
+# above 0 °C (evaporative cooling holds the flake at Tw), and melting is
+# complete near Tw ≈ +1.3 °C (Matsuo & Sasyo 1981; same convention as common
+# NWP precip-type post-processing). Below 0 °C precipitation is snow — there
+# is no partial melting at sub-zero wet-bulb.
+_TW_SNOW_MAX_C = 0.0
+_TW_RAIN_MIN_C = 1.3
+
+
 def _level_phase_from_wet_bulb(wet_bulb_c: float) -> PrecipPhase:
     """Classify precipitation phase from wet-bulb temperature."""
-    if wet_bulb_c < -5.0:
+    if wet_bulb_c < _TW_SNOW_MAX_C:
         return PrecipPhase.SNOW
-    if wet_bulb_c < 0.0:
+    if wet_bulb_c <= _TW_RAIN_MIN_C:
         return PrecipPhase.MIXED
     return PrecipPhase.RAIN
 
@@ -251,15 +260,12 @@ def _determine_surface_phase(
     if has_rain and has_snow:
         return PrecipPhase.MIXED
 
-    # Fallback: use surface wet-bulb from lowest DerivedLevel
+    # Fallback: use surface wet-bulb from lowest DerivedLevel (same
+    # boundaries as the per-level classifier).
     if levels:
         surface = levels[0]
         if surface.wet_bulb_c is not None:
-            if surface.wet_bulb_c < 0.0:
-                return PrecipPhase.SNOW
-            if surface.wet_bulb_c <= 1.3:
-                return PrecipPhase.MIXED
-            return PrecipPhase.RAIN
+            return _level_phase_from_wet_bulb(surface.wet_bulb_c)
 
     # Final fallback: check surface temperature
     if hourly and hourly.temperature_2m_c is not None:

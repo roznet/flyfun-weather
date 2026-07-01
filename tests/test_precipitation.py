@@ -47,18 +47,32 @@ def test_intensity_heavy():
 
 
 def test_wet_bulb_snow():
+    """Sub-zero wet-bulb is snow — no partial melting below Tw 0 °C."""
     assert _level_phase_from_wet_bulb(-10.0) == PrecipPhase.SNOW
-    assert _level_phase_from_wet_bulb(-5.1) == PrecipPhase.SNOW
+    assert _level_phase_from_wet_bulb(-5.0) == PrecipPhase.SNOW
+    assert _level_phase_from_wet_bulb(-0.1) == PrecipPhase.SNOW
 
 
 def test_wet_bulb_mixed():
-    assert _level_phase_from_wet_bulb(-5.0) == PrecipPhase.MIXED
-    assert _level_phase_from_wet_bulb(-0.1) == PrecipPhase.MIXED
+    """Melting band: begins at Tw 0 °C, complete near +1.3 (Matsuo & Sasyo)."""
+    assert _level_phase_from_wet_bulb(0.0) == PrecipPhase.MIXED  # exact boundary
+    assert _level_phase_from_wet_bulb(0.5) == PrecipPhase.MIXED
+    assert _level_phase_from_wet_bulb(1.3) == PrecipPhase.MIXED  # exact boundary
 
 
 def test_wet_bulb_rain():
-    assert _level_phase_from_wet_bulb(0.0) == PrecipPhase.RAIN
+    assert _level_phase_from_wet_bulb(1.4) == PrecipPhase.RAIN
     assert _level_phase_from_wet_bulb(5.0) == PrecipPhase.RAIN
+
+
+def test_wet_bulb_matches_surface_fallback_convention():
+    """Per-level and surface-fallback classification share one convention:
+    wet snow (Tw 0..+1.3) counts toward the snow/mixed hazard band rather
+    than reading as plain rain."""
+    levels = [DerivedLevel(pressure_hpa=1000, altitude_ft=300, wet_bulb_c=0.8)]
+    hourly = HourlyForecast(time=datetime(2025, 1, 1), precipitation_mm=1.0)
+    result = assess_precipitation(levels, [], hourly=hourly)
+    assert result.surface_phase == PrecipPhase.MIXED
 
 
 # --- GRIB2 ice fraction ---

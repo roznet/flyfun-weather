@@ -1678,3 +1678,69 @@ does not count as the "independent" RED. Deferred (needs its own re-validation).
 kept for rollback/diff), `configs/weather_digest/{default,openai}.json` (repointed
 `briefer` → v2). Builds on §15 (`analysis/sounding/convective.py`
 `classify_convective_character`).
+
+---
+
+## 17. Wet-bulb precipitation phase boundaries realigned to the melting-physics convention
+
+**Date:** 2026-07-01
+**Status:** Implemented.
+**Context:** The full validation review (testing-accuracy-review.md session 2) found
+the per-level wet-bulb phase classifier (`precipitation.py
+_level_phase_from_wet_bulb`) used bands shifted several degrees cold of the
+literature: `Tw < −5 °C → SNOW`, `−5 ≤ Tw < 0 → MIXED`, `Tw ≥ 0 → RAIN`. Both
+edges were physically wrong: falling snow does not melt at sub-zero wet-bulb
+(evaporative cooling holds the hydrometeor at Tw, so there is no "partial
+melting" at Tw −3 °C), and snow routinely survives to Tw ≈ +1 °C, so labelling
+Tw +0.5 as pure RAIN dropped real wet-snow situations out of the snow band.
+
+### The decision
+
+One convention for both the per-level classifier and the surface fallback
+(which already used it): **melting begins at Tw > 0 °C and completes near
+Tw ≈ +1.3 °C** (Matsuo & Sasyo 1981; the same wet-bulb convention used in
+common NWP precipitation-type post-processing).
+
+- `Tw < 0.0 °C → SNOW`
+- `0.0 ≤ Tw ≤ 1.3 °C → MIXED` (melting band / wet snow / sleet)
+- `Tw > 1.3 °C → RAIN`
+
+Constants `_TW_SNOW_MAX_C = 0.0` / `_TW_RAIN_MIN_C = 1.3`; the surface-phase
+fallback in `_determine_surface_phase` now calls the shared classifier (its
+values were already 0/1.3 — the aloft classifier was the outlier).
+
+### Exposure honestly stated
+
+The en-route precipitation advisory (§11b) was **mostly shielded**: it grades on
+`surface_phase`, whose primary path is the model's own rain/snow split, and
+whose Tw fallback already used 0/1.3. Also `enroute_precip._SNOW_PHASES`
+includes MIXED, so the mislabelled −5..0 band still counted toward snow extent.
+The real leaks were:
+1. **Wet snow (Tw 0..+1.3) read RAIN** in the per-level classification — under-
+   warn in the one band where snow is stickiest (airframe adhesion), affecting
+   any consumer of `precipitation_zones` / `DerivedLevel.precip_phase`.
+2. **The digest narrative** — zones flow into the LLM prompt
+   (`digest/prompt_builder.py`, `digest/text.py`), so a pure-snow column at
+   Tw −3 was narrated as "mixed" (which suggests freezing-rain-adjacent
+   concerns the profile does not support).
+
+### Direction of change
+
+Strictly conservative for the snow/mixed hazard band: everything previously
+SNOW or MIXED stays in `_SNOW_PHASES`; the 0..+1.3 band moves RAIN → MIXED
+(more warning); −5..0 relabels MIXED → SNOW (more honest, same grading).
+
+### Real-world validation needed
+
+- A marginal wet-snow day (surface Tw +0.5..+1) — confirm the snow/mixed extent
+  now ambers where METARs report SN/RASN while the old code read plain rain.
+- The ice-fraction path (GRIB CLWMR/ICMR) takes precedence where available and
+  is unchanged; spot-check a mixed-phase GRIB case for zone-boundary agreement
+  between the two paths.
+
+### Files changed
+
+`src/weatherbrief/analysis/sounding/precipitation.py`
+(`_level_phase_from_wet_bulb`, `_determine_surface_phase`),
+`tests/test_precipitation.py` (exact-boundary pins at 0.0 and 1.3, fallback
+consistency test).

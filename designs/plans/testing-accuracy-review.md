@@ -83,6 +83,20 @@ B2→align icing % to 20/50, A1→verify EDR against the paper first.
   pending the paper's Table 1 (see §2 TODO).
 - Verified: full suite **3063 passed**, 1 pre-existing unrelated auth/OAuth env failure.
 
+**2026-07-01 — Full independent review (5 parallel section audits vs code+tests).** ~90% of
+tracker claims verified exactly; corrections folded into the rows below (stale rows marked
+*(corrected 2026-07-01)*). New bugs #9–#17 logged. Meteorological verdicts from the review:
+- **Physics confirmed sound:** wet-bulb RK4 integrand (standard pseudoadiabat, MetPy constants),
+  N²/Ri forms, crosswind trig + signs, DA formula (27.3 ft/hPa, 118.8 ft/°C), Hewson TFP
+  (cos-lat-corrected, K/100 km) modulo the documented θe-for-θw substitution, FAA 91.169 and
+  EASA planning-minima values, European CAPE tier calibration.
+- **Bug #9 (precipitation phase bands) FIXED this session** — see decisions §17. Boundaries
+  moved from −5/0 °C to the Matsuo & Sasyo 0/+1.3 °C melting convention; per-level classifier
+  and surface fallback unified; exact-boundary tests added. Full suite **3092 passed**, 0 failed.
+- Remaining meteorology items needing a decision (not code errors): okta cutpoints (#5, now
+  precisely characterized), MVFR boundary inclusivity (#12), SLD severity proxy (#13),
+  Ogimet /2 stratiform cap (#14), dry-θ (not θv) in N² (#15).
+
 ---
 
 ## 1. Thermodynamic core (`src/weatherbrief/analysis/sounding/`)
@@ -90,9 +104,9 @@ B2→align icing % to 20/50, A1→verify EDR against the paper first.
 | Module | Reg | Ext (basis) | UsrT | UsrT+Eval | Risk | Notes |
 |---|---|---|---|---|---|---|
 | `wet_bulb.py` | ✅ | ✅ vs MetPy `wet_bulb_temperature` (`MetPy/lib`) — 2,860-pt grid, \|Δ\|<0.001 | ☐ | ☐ | 🟢 | **Gold-standard oracle — the template to replicate.** Hand-rolled RK4 but rigorously checked. |
-| `thermodynamics.py` | 🟡 | 🔵 delegated MetPy for indices (`delegated`); 3 hand-rolled helpers `❌ unused` | ☐ | ☐ | 🟠 | Every index is `mpcalc.*` (right-by-construction) but **no test asserts a computed value**. `_find_temperature_crossing`, `_compute_bulk_shear`, `_derive_dewpoint` untested. Blanket `try/except → None` masks bugs as missing data. |
-| `vertical_motion.py` | ✅ | ❌ unused (`judgment`/analytic) | ☐ | ☐ | 🟠 | Tests feed hand-set Ri/ω and check bands+sign only; **N²/Richardson computation never value-tested.** Oracle = hand-computed analytic profile. |
-| `prepare.py` | ❌ | ⚪ N/A (`judgment`/plumbing) | ☐ | ☐ | 🟠 | No dedicated test (input-construction layer everything trusts). **Magnus constant discrepancy — see Bugs #1.** |
+| `thermodynamics.py` | 🟡 | 🔵 delegated MetPy for indices (`delegated`); 2 helpers now ✅ (A3) | ☐ | ☐ | 🟠 | Every index is `mpcalc.*` (right-by-construction) but **no test asserts a computed value**. `_find_temperature_crossing` + `_compute_bulk_shear` value-tested (A3); `_derive_dewpoint` lives in **prepare.py** *(corrected 2026-07-01)*. Blanket `try/except → None` masks bugs (see Bugs #6 nuance). Also hand-rolled: per-level lapse rate (:307) and 196.85 fpm constant (:400), untested; ISA-altitude fallback silently substitutes for geopotential height in crossings/shear. |
+| `vertical_motion.py` | ✅ | ❌ unused (`judgment`/analytic) | ☐ | ☐ | 🟠 | Tests feed hand-set Ri/ω and check bands+sign only; **N²/Richardson computation never value-tested.** Oracle = hand-computed analytic profile. Formula verified correct by inspection (2026-07-01) but uses **dry θ, not θv** — see Bugs #15. |
+| `prepare.py` | ❌ | ⚪ N/A (`judgment`/plumbing) | ☐ | ☐ | 🟠 | No dedicated test (input-construction layer everything trusts). ~~Magnus constant discrepancy — see Bugs #1.~~ Resolved (B1). **Wind/height all-or-nothing gating — see Bugs #16.** |
 
 **TODO (Ext required):**
 - [ ] `thermodynamics.py`: oracle test re-computing indices vs `mpcalc` direct on the `_make_levels()` fixture; value-test `_find_temperature_crossing` + `_compute_bulk_shear`; replace blanket `try/except → None` with explicit handling.
@@ -105,24 +119,24 @@ B2→align icing % to 20/50, A1→verify EDR against the paper first.
 
 | Module | Reg | Ext (basis) | UsrT | UsrT+Eval | Risk | Notes |
 |---|---|---|---|---|---|---|
-| `icing.py` (Ogimet DD/NWP/IENG) | 🟡 | 📄 Ogimet index + `obs-only` (PIREP) | ☐ | ☐ | 🔴 | "Ogimet" cited but **no primary ref in code**. Index thresholds 10/30/80 only edge-tested vs own constants. Zone-width PIREP calibration explicitly deferred (decisions §2). |
+| `icing.py` (Ogimet DD/NWP/IENG) | 🟡 | 📄 Ogimet index + `obs-only` (PIREP) | ☐ | ☐ | 🔴 | "Ogimet" cited but **no primary ref in code** (likely none exists — Ogimet is a website, not a paper). Index thresholds 10/30/80 only edge-tested vs own constants. Zone-width PIREP calibration explicitly deferred (decisions §2). **/2 cap + dead code — see Bugs #14.** |
 | `sfip.py` | 🟡 | 📄 Belo-Pereira 2015 & Morcrette 2019 (cited, **never checked against**) | ☐ | ☐ | 🔴 | Best hand-derived coverage of the set — but all vs the module's own formulas. **The cited papers ARE an available oracle, currently unused.** |
 | `convective.py` | ✅ | ⚪ `obs-only` (lightning/radar/TS); tiers ESSL/ESTOFEX-calibrated | ☐ | ☐ | 🔴 | Most-documented module (decisions §4/§5/§14/§15/§16). Boundary-rigorous, but anchors are **prod-flight snapshots that record the code's own verdict**. Every §lists "real-world validation needed". |
 | `icing_common.py` | 🟡 | ⚪ `obs-only`/literature (accretion physics) | ☐ | ☐ | 🟠 | Icing-type bands (−4/−11 °C) textbook-adjacent but ~1 °C app-shifted; glaciation floors 0.8/0.15 untested at boundaries, undocumented. |
-| `sld.py` | 🟡 | ⚪ `obs-only` (FZRA METAR events) | ☐ | ☐ | 🟠 | Warm-nose SEVERE depth (3000 ft) not edge-tested. Collision-coalescence path disabled. |
-| `precipitation.py` | 🟡 | 📄/⚪ snow-rain partition climatology (uncited) | ☐ | ☐ | 🟠 | Wet-bulb phase boundaries (−5/0 °C) rule-of-thumb, uncited; `_compute_ice_fraction` is a true arithmetic oracle. |
+| `sld.py` | 🟡 | ⚪ `obs-only` (FZRA METAR events) | ☐ | ☐ | 🟠 | Warm-nose SEVERE depth (3000 ft) not edge-tested. Collision-coalescence path disabled. **Severity proxy nonstandard (thickness, not nose max temp) — see Bugs #13.** |
+| `precipitation.py` | ✅ | ✅ Matsuo & Sasyo 1981 Tw melting convention (0/+1.3 °C), exact-boundary tested; `_compute_ice_fraction` arithmetic oracle | ☐ | ☐ | 🟠 | ~~Wet-bulb bands −5/0 °C uncited~~ **fixed 2026-07-01 (Bug #9, decisions §17)** — per-level classifier + surface fallback unified. Obs validation (wet-snow day vs METAR SN/RASN) still open; FZRA-vs-PL level-count criterion still resolution-dependent (Bugs #13). |
 | `clouds.py` | 🟡 | ⚪ `obs-only` (METAR oktas) | ☐ | ☐ | 🟠 | DD→coverage and okta cutpoints app-invented. **BKN=50/SCT=25 % diverge from WMO midpoints — see Bugs #5.** DD coverage bands tested mid-band only, not at edges. |
-| `edr.py` | ✅ | ❌ unused — Kim et al. 2020 C1/C2 table + Sharman & Pearson 2017 (`paper`) | ☐ | ☐ | 🟠 | **Oracle one assertion away.** The climatology-looking test is an algebraic identity that passes with *wrong* constants — a transcription typo is uncaught. See Bugs #3. |
+| `edr.py` | ✅ | ❌ unused — Kim et al. 2020 C1/C2 table + Sharman & Pearson 2017 (`paper`) | ☐ | ☐ | 🟠 | **Oracle one assertion away.** The climatology-looking test is an algebraic identity that passes with *wrong* constants — a transcription typo is uncaught. See Bugs #3. *(Also: calibration accumulator collects nothing in prod — feature inert per #221/PR #230 memory; keep that in mind when prioritizing the pin-test.)* |
 | `e_shear.py` | ✅ | 🟡 CloudPath formula (hand-derived from own formula; close to ✅) | ☐ | ☐ | 🟢 | E pinned via kt-unit profiles, but assertions land on the *tier* not the exact E float; scale factors (~592.5 / ~360000) exercised but not independently asserted vs `1.94384×304.8`. |
 | `inversions.py` | ✅ | ✅ definitional, hand-arithmetic (`judgment` — no index exists) | ☐ | ☐ | 🟢 | Strength values hand-computed exactly. Adequate as-is. |
-| `advisories.py` (sounding aggregation) | ✅ | ⚪ N/A (derived logic) | ☐ | ☐ | 🟢 | Escape/aggregation arithmetic hand-checked. Inherits upstream risk from icing/convective. |
+| `advisories.py` (sounding aggregation) | ✅ | ⚪ N/A (derived logic) | ☐ | ☐ | 🟢 | Escape/aggregation arithmetic hand-checked — **descend path only** *(corrected 2026-07-01)*: `_climb_above_icing`, `_cat_turbulence_advisory`, `_strong_motion_advisory`, `_cloud_top_uncertainty_advisory` have no direct tests. Inherits upstream risk from icing/convective. |
 
 **TODO (Ext required):**
 - [ ] `edr.py`: assert `C1_C2_BY_BAND == Kim et al. 2020 published table values` (cheapest high-value win).
 - [ ] `e_shear.py`: add exact-E-float + independent scale-factor assertion (CloudPath is the oracle).
 - [ ] `sfip.py`: reproduce Belo-Pereira 2015 / Morcrette 2019 reference soundings.
 - [ ] `icing.py`: reproduce published Ogimet index values for sample soundings.
-- [ ] **(obs-only / user-test track)** `clouds.py` METAR-okta validation; `icing.py`/`sfip.py`/`sld.py` PIREP calibration; `convective.py` lightning/radar/TS validation of named cases; `precipitation.py` phase-boundary vs published partition climatology.
+- [ ] **(obs-only / user-test track)** `clouds.py` METAR-okta validation; `icing.py`/`sfip.py`/`sld.py` PIREP calibration; `convective.py` lightning/radar/TS validation of named cases; `precipitation.py` ~~phase-boundary vs climatology~~ *(done — Bug #9/decisions §17)* → wet-snow day validation vs METAR SN/RASN.
 
 ---
 
@@ -131,33 +145,34 @@ B2→align icing % to 20/50, A1→verify EDR against the paper first.
 | Evaluator | Reg | Ext (basis) | UsrT | UsrT+Eval | Risk | Notes |
 |---|---|---|---|---|---|---|
 | `flight_category.py` | ✅ | ✅ FAA MVFR/IFR ceiling+vis table (`reg/std`) | ☐ | ☐ | 🟢 | Cutoffs exactly match published categories; boundary-tested. |
-| `vfr_feasibility.py` | ✅ | ✅ partial — FAA cat + VFR cloud-clearance regs (decisions §10) | ☐ | ☐ | 🟢 | Mitigation machinery untested (gap). |
+| `vfr_feasibility.py` | ✅ | ✅ partial — FAA cat + VFR cloud-clearance regs (decisions §10) | ☐ | ☐ | 🟢 | ~~Mitigation machinery untested~~ *(corrected 2026-07-01 — `tests/test_vfr_mitigation.py`, 12 tests, exact altitudes/distances)*. |
 | `convective.py` | ✅ | ✅ boundary + ESSL/ESTOFEX (decisions §4/§14) | ☐ | ☐ | 🟢 | DD-floor altitude filter, cross-check additive-only, headline boundaries tested. |
 | `freezing_precip.py` | ✅ | ✅ boundary + cert reasoning (decisions §9) | ☐ | ☐ | 🟢 | FZRA/PL→RED, warm-nose detection tested. |
 | `enroute_precip.py` | ✅ | ✅ boundary (decisions §11b) | ☐ | ☐ | 🟢 | snow≫rain grading boundary-tested. |
 | `headwind.py` | ✅ | ✅ boundary + ISA TAS physics (decisions §11c) | ☐ | ☐ | 🟢 | Minor doc drift on TAS param. |
 | `mountain_wind.py` | ✅ | ✅ boundary + classical wave theory (decisions §11d) | ☐ | ☐ | 🟢 | Corroborated-RED w/ wave signature tested. |
 | `density_altitude.py` | ✅ | ✅ formula vs hand-computed (ISA, 118.8 ft/°C) | ☐ | ☐ | 🟠 | **Formula validated** (`compute(2000,30)≈4253`, ISA SL→0). Cutoffs 5000/8000 ft are judgment, undocumented. |
-| `fronts.py` | ✅ | ⚪ realized-gate ESSL anchors (decisions §6/§7/§13); 15000 ft cutoff judgment | ☐ | ☐ | 🟠 | ~28 boundary tests. Experimental, advisory default-off. |
-| `ifr_feasibility.py` | 🟡 | 🟡 200 ft ≈ ILS CAT-I DH (loose); icing/conv % judgment | ☐ | ☐ | 🟠 | **Config bug: icing-% defaults 20/50 (catalog) vs 15/30 (evaluate) — see Bugs #2.** %-boundaries not pinned. |
+| `fronts.py` | ✅ | ⚪ realized-gate ESSL anchors (decisions §6/§7/§13); 15000 ft cutoff judgment | ☐ | ☐ | 🟠 | 26 boundary tests. Experimental, advisory default-off. |
+| `ifr_feasibility.py` | 🟡 | 🟡 200 ft ≈ ILS CAT-I DH (loose); icing/conv % judgment | ☐ | ☐ | 🟠 | ~~Config bug 20/50 vs 15/30~~ **fixed (B2, guard test in `test_ifr_feasibility_defaults.py`)**. %-boundaries still not pinned (tests use 100 %-icing fixtures vs 30/80, never near 20/50). |
 | `fiki_icing.py` | ✅ | ⚪ `judgment` (no published formula) | ☐ | ☐ | 🟠 | Thickness/clear-cruise/buffer boundary-tested but thresholds undocumented. |
-| `icing_escape.py` | 🟡 | ⚪ `judgment` | ☐ | ☐ | 🟠 | 15%-RED, tight-margin AMBER, missing-data→no-escape branches **untested**; loose membership asserts only. |
+| `icing_escape.py` | 🟡 | ⚪ `judgment` | ☐ | ☐ | 🟠 | 15%-RED, tight-margin AMBER, missing-data→no-escape branches **untested**; loose membership asserts only. Note: pack with icing but **no elevation profile → every point counts no-escape → RED** — conservative, but "no terrain data" masquerades as terrain entrapment; consider distinct wording/UNAVAILABLE. |
 | `cloud_top.py` | ❌ | ⚪ `judgment` | ☐ | ☐ | 🟠 | Hardcoded `red_pct=60`; **every test asserts only GREEN — RED/AMBER path unexercised.** |
-| `vmc_cruise.py` | 🟡 | ⚪ `judgment` | ☐ | ☐ | 🟠 | `ovc_pct_red=50` RED path untested beyond one 100%-OVC case; no AMBER/boundary test. |
-| `turbulence.py` | ❌ | ⚪ upstream Ri/EDR (decisions §8c) | ☐ | ☐ | 🟠 | Smoke only; **wrong param key** in a test; no SEVERE→RED or fpm boundary coverage. |
-| `airport_wind.py` | 🟡 | ❌ not tied to aircraft demonstrated crosswind (`judgment`) | ☐ | ☐ | 🟠 | Grade boundaries tested BUT **crosswind decomposition fed pre-computed, never numerically verified** — a projection bug mis-grades RED while passing. |
-| `llws.py` | 🟡 | ❌ not tied to any LLWS/windshear standard (`judgment`) | ☐ | ☐ | 🟠 | Same shape as airport_wind: **bulk-shear vector math fed in, never recomputed/verified.** |
+| `vmc_cruise.py` | 🟡 | ⚪ `judgment` | ☐ | ☐ | 🟠 | `ovc_pct_red=50` RED path tested only via the 60 %-OVC + 40 %-BKN `cloudy_context` fixture *(detail corrected 2026-07-01)*; no AMBER/boundary test. |
+| `turbulence.py` | ❌ | ⚪ upstream Ri/EDR (decisions §8c) | ☐ | ☐ | 🟠 | Smoke only; **bogus param key `icing_coverage_pct_amber` in tests — see Bugs #10**; no SEVERE→RED or fpm boundary coverage; `red_pct=50` hardcoded, invisible in catalog. |
+| `airport_wind.py` | 🟡 | 🟡 trig oracle-tested; limits `judgment` | ☐ | ☐ | 🟠 | *(corrected 2026-07-01)* The crosswind decomposition **is** numerically verified incl. signs and the 45° oracle (`tests/analysis/test_airport_conditions.py::TestRunwayWinds`); remaining gap is only that the advisory-level tests feed pre-computed `RunwayWind` fixtures, and limits aren't tied to aircraft demonstrated crosswind. |
+| `llws.py` | 🟡 | 🟡 shear math oracle-tested (A3); standard tie-in `judgment` | ☐ | ☐ | 🟠 | *(corrected 2026-07-01)* `_compute_bulk_shear` got hand-computed oracles in the Tier-1 commit; advisory tests still feed `bulk_shear_0_1km_kt` directly, and 20/30 kt grades aren't tied to any published LLWS standard. |
 | `sun.py` (advisory) | ✅ | 🔵 delegated euro_aip/astral; primitive unchecked | ☐ | ☐ | 🟢 | Glare geometry boundary-tested; solar primitive validation tracked under §5 `analysis/sun.py`. |
 | `model_agreement.py` | 🟡 | ⚪ dev/calibration signal | ☐ | ☐ | 🟢 | Disabled by default. |
-| `dd_nwp_agreement.py` | ❌ | ⚪ dev/diagnostic signal | ☐ | ☐ | 🟢 | **No dedicated test;** Jaccard helper untested. Disabled by default. |
+| `dd_nwp_agreement.py` | ❌ | ⚪ dev/diagnostic signal | ☐ | ☐ | 🟢 | **No dedicated test;** Jaccard helper untested — **and buggy: can exceed 1.0, overstating agreement (Bugs #11)**. Disabled by default. |
 
 Supporting (no weather thresholds): `registry.py` (aggregation plumbing), `strings.py` (i18n detail strings), `altitude_table.py` (altitude-sweep orchestration).
 
 **TODO (Ext required):**
 - [ ] `ifr_feasibility.py`: fix 20/50-vs-15/30 mismatch; boundary-test icing %.
-- [ ] `cloud_top.py`, `vmc_cruise.py`, `icing_escape.py`, `turbulence.py`: add AMBER/RED boundary tests for the untested severity paths (and fix turbulence's wrong param key + add SEVERE→RED).
-- [ ] `airport_wind.py`, `llws.py`: numerically verify the wind→crosswind decomposition and bulk-shear vector math (currently fixture-fed); consider tying `airport_wind` limits to aircraft demonstrated crosswind.
+- [ ] `cloud_top.py`, `vmc_cruise.py`, `icing_escape.py`, `turbulence.py`: add AMBER/RED boundary tests for the untested severity paths (and fix turbulence's bogus `icing_coverage_pct_amber` test key — Bugs #10 — + add SEVERE→RED).
+- [ ] `airport_wind.py`, `llws.py`: ~~numerically verify decomposition/shear~~ *(done — trig + bulk-shear oracles exist)*; add advisory-level tests that recompute from raw wind instead of fixtures; consider tying `airport_wind` limits to aircraft demonstrated crosswind and `llws` grades to a published windshear criterion.
 - [ ] Document the judgment thresholds (`fiki_icing`, `density_altitude` cutoffs, `cloud_top`, `vmc_cruise`) in `meteorology-decisions.md`.
+- [ ] **Exact-boundary pin pattern:** almost no `>=` threshold is tested at its exact `==` value (headwind 20/40, mountain_wind 30/40, enroute_precip 5/25/30, ifr icing 20/50, DD bands 1.0/2.0/3.0 …) — a comparison-direction flip survives nearly every suite. Add a parametrized exact-boundary test per evaluator (fiki's `5000 == 5000 → RED` is the model).
 
 ---
 
@@ -171,8 +186,8 @@ analytic fields or round-trip the code's own output.
 
 | Module | Reg | Ext (basis) | UsrT | UsrT+Eval | Risk | Notes |
 |---|---|---|---|---|---|---|
-| `detect.py` | ✅(synthetic) | 📄 Hewson 1998 TFP (faithful) + `obs-only` (DWD charts) | ☐ | ☐ | 🔴 | TFP `−∇\|∇τ\|·∇̂τ` = published; θe for θw; thresholds T=2.0/θe=4.0/wind=2.0 tuned. |
-| `tracking.py` | ✅(synthetic) | ⚪ app-invented two-pass anomaly filtering | ☐ | ☐ | 🔴 | Clearance timing on hand-built sequences; anomaly 1.0/2.0, floor 2.0/4.0 tuned. |
+| `detect.py` | ✅(synthetic) | 📄 Hewson 1998 TFP (faithful) + `obs-only` (DWD charts) | ☐ | ☐ | 🔴 | TFP `−∇\|∇τ\|·∇̂τ` = published; θe for θw; thresholds T=2.0/θe=4.0/wind=2.0 tuned. *(2026-07-01)* Two TFP implementations with different unit scalings + `np.roll` edge wraparound — see Bugs #17; note the route/contour paths classify warm/cold by **advection sign**, a second distinct substitution for Hewson's front-speed rule. |
+| `tracking.py` | 🟡(synthetic) | ⚪ app-invented two-pass anomaly filtering | ☐ | ☐ | 🔴 | *(downgraded 2026-07-01)* Only the clearance-timing helpers are tested; `apply_anomaly_filter` + `build_zone_timeseries` have **zero coverage**, and `_apply_persistence_filter` is dead code (Bugs #17). Anomaly 1.0/2.0, floor 2.0/4.0 tuned. |
 | `route_sampling.py` | ✅(synthetic) | ⚪ gate stack app-defined; TFP walk faithful | ☐ | ☐ | 🔴 | Gate config 6.0/5.0/2.0 "validated on 1 case". |
 | `gates.py` | ✅ | ⚪ `judgment` — thresholds from single 2026-05-31 case | ☐ | ☐ | 🟠 | `gradient_min=6.0` is a midpoint of "significant(>4)/classical(>8)" convention. |
 | `contour_fronts.py` | ✅(synthetic) | 📄 closest to literal Hewson line-extraction (TFP=0 contour) | ☐ | ☐ | 🟠 | Synthetic meridional front tested. |
@@ -181,7 +196,7 @@ analytic fields or round-trip the code's own output.
 | `sources.py` | ✅ | ⚪ N/A (data plumbing) | ☐ | ☐ | 🟢 | Snapshot==direct-compute equivalence. |
 | `case.py` | ✅ | ⚪ N/A (calibration loader) | ☐ | ☐ | 🟢 | Save/load round-trip. |
 | `cache.py` | 🟡 | ⚪ N/A | ☐ | ☐ | 🟢 | Cache-key round-trip only. |
-| `cli.py` | 🟡 | ⚪ hosts the only real ground-truth path (`score`/`validate` vs DWD charts) — **untested, baseline deleted** | ☐ | ☐ | 🟠 | POD/FAR/CSI machinery exists but exercised only manually; last baseline (0.5°, FAR≈77%) cases deleted. |
+| `cli.py` | 🟡 | ⚪ hosts the only real ground-truth path (`score`/`validate` vs DWD charts) — **untested, baseline deleted** | ☐ | ☐ | 🟠 | POD/FAR/CSI machinery exists but exercised only manually; the two pilot-annotated `expected.yaml` baselines were deleted from git in `9d689a6f`; three local (gitignored) skeletons exist but are unannotated `zones: {}` TODOs *(precision 2026-07-01)*. |
 | `hewson/precompute.py` | ✅(synthetic) | ⚪ diagnostics = `detect.py` | ☐ | ☐ | 🟠 | Tendency/purge/schema tested on synthetic. |
 | `hewson/era5_case.py` | ✅(synthetic) | ❌ builds Storm-Ciarán snapshot but **no truth assertion** | ☐ | ☐ | 🟠 | Schema/path tested on a synthetic "ciaran" tmp case. |
 | `hewson/cli.py` | ❌ | ⚪ thin wrapper | ☐ | ☐ | 🟢 | No dedicated test. |
@@ -198,20 +213,21 @@ analytic fields or round-trip the code's own output.
 
 | Module | Reg | Ext (basis) | UsrT | UsrT+Eval | Risk | Notes |
 |---|---|---|---|---|---|---|
-| `alternate_requirement.py` | ✅ | ✅ FAA 14 CFR 91.169 + EASA NCO.OP.140/143 (`reg/std`) | ☐ | ☐ | 🟢 | **Oracle-grade vs regulation text** (~60 tests); guards the real "conflated 140/143" bug. *Residual:* `APPROACH_CLASS_PROXY` DH ranges are bespoke (no plate-minima oracle) → EASA band width is calibration, conservative-by-design (🟠 for that piece). |
-| `airport_conditions.py` | ✅ | ✅ standard US VFR/MVFR/IFR/LIFR table (`reg/std`) | ☐ | ☐ | 🟢 | Every category boundary tested. |
+| `alternate_requirement.py` | ✅ | ✅ FAA 14 CFR 91.169 + EASA NCO.OP.140/143 (`reg/std`) | ☐ | ☐ | 🟢 | **Oracle-grade vs regulation text** (67 tests); guards the real "conflated 140/143" bug. *Residual:* `APPROACH_CLASS_PROXY` DH ranges are bespoke (no plate-minima oracle) → EASA band width is calibration, conservative-by-design (🟠 for that piece). *(2026-07-01)* Values match the regs; **verify the "NCO.OP.143" citation numbering** for the selection-minima table (may belong under NCO.OP.142/AMC). |
+| `airport_conditions.py` | ✅ | ✅ standard US VFR/MVFR/IFR/LIFR table (`reg/std`) | ☐ | ☐ | 🟢 | *(corrected 2026-07-01)* MVFR/VFR edges pinned both sides, but exact 500 ft / 1000 ft / 1 SM / 3 SM edges untested; **exact 3000 ft / 5 SM classify VFR vs the inclusive FAA/AWC convention — see Bugs #12.** |
 | `wind.py` | ✅ | ✅ trig identity, hand-computed (`MetPy/lib`-class) | ☐ | ☐ | 🟢 | head=V·cos, cross=V·sin verified incl. sign convention. |
-| `spatial_interpolation.py` | 🟡 | ✅ hand-computed interpolation on known grid | ☐ | ☐ | 🟢 | CLW/ICMR path oracle-tested; `interpolate_diagnostics_spatially`/`_lerp_diagnostics` path **untested**. |
+| `spatial_interpolation.py` | ✅ | ✅ hand-computed interpolation on known grid | ☐ | ☐ | 🟢 | CLW/ICMR path oracle-tested; *(corrected 2026-07-01)* the diagnostics path **is** oracle-tested too (`tests/test_grib_fill.py::TestSpatialDiagnostics`, exact midpoints). Interp is 1-D linear in along-route nm (haversine distances — no cos(lat) issue). Minor: `_lerp_optional` one-sided fallback can copy the far neighbor verbatim. |
 | `comparison.py` | ✅ | ✅ circular mean/spread trig; thresholds ⚪ spec | ☐ | ☐ | 🟢 | Wraparound (350↔010) tested; GOOD/MODERATE/POOR thresholds are spec values (advisory). |
-| `airport_consensus.py` | 🟡 | ⚪ bespoke "worst" rules; reuses validated category/wind | ☐ | ☐ | 🟢 | Tested via equivalence to `map_queries._consensus`; no direct worst-mode unit test. |
+| `airport_consensus.py` | ✅ | ⚪ bespoke "worst" rules; reuses validated category/wind | ☐ | ☐ | 🟢 | *(corrected 2026-07-01)* Worst/majority modes **are** directly unit-tested via the now-delegating `map_queries._consensus` wrapper (`tests/test_map_queries.py:325+`). Minor: re-declares `_M_PER_SM` locally despite `units.py` claiming single source of truth. |
 | `sun.py` | 🟡 | 🔵 delegated euro_aip solar primitive; **never checked vs NOAA/astral** | ☐ | ☐ | 🟠 | All `test_sun.py` assertions qualitative — a silent azimuth/elevation error would pass. |
 | `route_geometry.py` | 🟡 | 🔵 delegated euro_aip haversine | ☐ | ☐ | 🟢 | Thin wrapper, exercised indirectly. |
 
 **TODO (Ext required):**
-- [ ] `sun.py`: 2–3 fixed (lat, lon, UTC) → assert solar elevation/azimuth within ~0.5° of NOAA / `astral` (pins the euro_aip primitive).
-- [ ] `spatial_interpolation.py`: add a test for the `interpolate_diagnostics_spatially` / `_lerp_diagnostics` path.
-- [ ] `alternate_requirement.py`: add per-constant CFR/NCO citation comments; source real plate-minima for `APPROACH_CLASS_PROXY` DH ranges.
-- [ ] `airport_consensus.py`: direct unit test of `consensus(mode="worst")` xw=max / hw=min picks.
+- [ ] `sun.py`: 2–3 fixed (lat, lon, UTC) → assert solar elevation/azimuth within ~0.5° of NOAA / `astral` (pins the euro_aip primitive; current tests tolerate a silent systematic error up to ~±15–20° azimuth).
+- [x] ~~`spatial_interpolation.py`: diagnostics-path test~~ — already exists (`tests/test_grib_fill.py::TestSpatialDiagnostics`).
+- [ ] `alternate_requirement.py`: add per-constant CFR/NCO citation comments (and verify NCO.OP.143 vs 142 numbering); source real plate-minima for `APPROACH_CLASS_PROXY` DH ranges.
+- [x] ~~`airport_consensus.py`: direct worst-mode unit test~~ — exists via the delegating wrapper (`tests/test_map_queries.py:325+`).
+- [ ] `airport_conditions.py`: pin the exact 500/1000 ft and 1/3 SM edges; decide Bugs #12 (MVFR inclusivity).
 
 ---
 
@@ -222,9 +238,63 @@ analytic fields or round-trip the code's own output.
 3. **`edr.py` C1/C2 not pinned** to the Kim et al. 2020 table — only an algebraic-identity test guards it (passes with wrong constants). **Partially addressed (A1):** `20_45kft` confirmed vs Sharman & Pearson 2017; pin-test deferred until lower bands verified.
 4. ~~**`test_nwp_cloud_and_ceiling.py::TestLCLFloor`** re-implements production ceiling logic locally.~~ **RESOLVED (C1)** — extracted `compute_sounding_ceiling_ft`; test calls production.
 5. **Cloud okta cutpoints** BKN=50 / SCT=25 % diverge from WMO okta midpoints, with no test noting it.
-6. **`thermodynamics.py` blanket `try/except → None`** — a physics bug surfaces as "missing data" rather than an error.
+   *Precision (2026-07-01):* 25/50/87.5 % are the okta-band **starts** (2/4/7 oktas), not the
+   category boundaries (FEW/SCT 31.25, SCT/BKN 56.25, BKN/OVC 93.75 %) — every category is
+   entered ½–1 okta early, so coverage over-reads (a 50 %-cover layer is METAR SCT but becomes
+   BKN, i.e. a ceiling). Over-warn direction, consistent with the safety asymmetry, but it is an
+   undocumented calibration choice inflating every DD ceiling and the "embedded" classifier.
+   Also the inline comment mislabels BKN as "5–6 oktas" (METAR BKN is 5–7). → document in
+   meteorology-decisions.md or move to boundary values.
+6. **`thermodynamics.py` blanket `try/except → None`** — a physics bug surfaces as "missing data" rather than an error. *(Nuance 2026-07-01: most sites log at debug with `exc_info`; `_mag` (:30) and `_compute_bulk_shear` (:264) are fully silent.)*
 7. ~~**`e_shear.py` truncated knot constants** — `0.51444` (kt→m/s) and `1.94384` (m/s→kt) are not exact reciprocals (~1e-5 inconsistency); `_HWS_SCALE` came out 359999.168 not 360000.~~ **RESOLVED (A2)** — replaced with exact `1852/3600` forms. *Caught by the new scale-factor assertion, not by inspection.*
-8. **`grib/decode.py:1413`** uses the same truncated `_KT_PER_MS = 1.94384` — follow-up, out of Tier-1 scope. ~2 ppm wind-conversion error in GRIB decode.
+8. **`fetch/grib/decode.py:1413`** *(path corrected)* uses the same truncated `_KT_PER_MS = 1.94384` (consumed at :1482/:1800/:1808 for ECMWF winds) — follow-up, out of Tier-1 scope. ~2 ppm wind-conversion error. Related: the Bolton–Magnus 17.67/243.5 dewpoint formula is hand-rolled in **four** places (`fetch/open_meteo.py`, `fetch/grib/decode.py:1449`, `analysis/sounding/icing.py:119`, `storage/sounding_profiles.py`) — constants all consistent with MetPy, but duplicated; consolidate when touching.
+9. ~~**`precipitation.py` wet-bulb phase bands physically wrong** — `−5 ≤ Tw < 0 → MIXED`
+   (no melting occurs at sub-zero wet-bulb; that band is snow) and `Tw ≥ 0 → RAIN` (snow
+   survives to Tw ≈ +1; wet snow read as plain rain — under-warn in the stickiest band).~~
+   **RESOLVED (2026-07-01)** — realigned to the Matsuo & Sasyo melting convention
+   (SNOW < 0 / MIXED 0..+1.3 / RAIN > 1.3), per-level classifier unified with the surface
+   fallback, exact-boundary tests added. See meteorology-decisions.md §17. Exposure was
+   mostly digest-narrative + zones (advisory grades on `surface_phase`, largely shielded).
+10. **`tests/analysis/advisories/test_evaluators.py:143,148` (turbulence) pass a bogus param
+    key** `icing_coverage_pct_amber` (copy-paste from icing_escape; real key is
+    `route_pct_amber`) — the override silently never lands and the test passes on the
+    defaults. Fix alongside the missing SEVERE→RED / `strong_w_fpm` boundary tests (§3 TODO).
+11. **`dd_nwp_agreement._cloud_overlap_fraction` "Jaccard" can exceed 1.0** — intersection is
+    summed pairwise (`_intersect_length`) while the union merges overlaps, so internally-
+    overlapping cloud layers double-count intersection → agreement **overstated** → the
+    disagreement flag under-fires. Default-off diagnostic; exactly what its missing test
+    would catch.
+12. **VFR/MVFR boundary inclusivity** — exactly 3000 ft / 5 SM classifies **VFR**
+    (`airport_conditions.py` strict `<`), but the FAA/AWC convention is inclusive
+    (MVFR = 1000–3000 ft and/or 3–5 SM). Deliberately pinned by `test_boundary_vfr_ceiling`,
+    so it's a chosen convention — either flip to `<=` or record as a decision.
+13. **`sld.py` severity proxy is nonstandard** — FZRA severity graded on warm-nose
+    *thickness* (≥3000 ft) only; the usual discriminator includes nose **max temperature**
+    (complete melting needs Tmax ≳ +1 °C), so a thin-but-warm nose (classic large-drop FZRA)
+    grades MODERATE. Also `warm_levels >= 2` / `cold_depth >= 3` are level *counts*, making
+    the FZRA-vs-ice-pellets call resolution-dependent.
+14. **`icing.py` /2 normalization silently caps stratiform Ogimet at 50** — layered parabola
+    peaks at 100, halved to 50, SEVERE needs ≥80 ⇒ pure stratiform icing can never grade
+    SEVERE from this index (only the convective moisture-differential term reaches it).
+    Possibly fine by design (SLD owns severe-stratiform) but undocumented and interacts with
+    decisions §2. Same file: `_enhance_severity`, `_detect_sld`, `_lwc_to_icing_severity`
+    are **dead code** (never called) — their thresholds must not be counted as live logic;
+    and `test_ogimet_nwp_scales_by_cloud_pct` asserts zone *count*, not scaling.
+15. **`vertical_motion.py` N² uses dry θ, not θv** — overestimates stability in moist layers
+    → Ri biased high → CAT under-warned. Partially offset by the deliberately loosened
+    0.5/1.0/2.0 Ri thresholds, but that interplay is undocumented. Ratify (one decisions-log
+    line) or switch to virtual potential temperature.
+16. **`prepare.py` wind gating is all-or-nothing** — one level missing wind speed/direction
+    silently drops wind for the *entire* sounding → no bulk shear, no Ri, no CAT layers, no
+    trace. Same pattern for heights. Load-bearing, undocumented, untested (part of the
+    prepare.py unit-suite TODO in §1).
+17. **`frontal/detect.py` `_tfp_proximity_mask` uses `np.roll`** — TFP sign comparisons wrap
+    around the domain edges, creating spurious "zero-crossings" along the boundary rows/
+    columns, then dilated 2 cells inward. Same stack: two TFP implementations coexist with
+    different unit scalings (zones path K/km² unscaled vs diagnostics path K/(100 km)²) under
+    the same `"tfp"` key — a 10⁴ trap for any future threshold; and
+    `tracking._apply_persistence_filter` is dead code (parameterised, documented, never
+    called). Experimental/default-off, so contained.
 
 ---
 
@@ -244,6 +314,7 @@ analytic fields or round-trip the code's own output.
 - **WMO okta cloud-cover definitions.** — `sounding/clouds.py` (cutpoint divergence to reconcile).
 - **Ogimet icing index** (informal — no primary ref in code). — `sounding/icing.py`. *(find/confirm primary reference)*.
 - **Magnus / Alduchov-Eskridge (1996)** dewpoint constants. — `sounding/prepare.py` (constant reconciliation).
+- **Matsuo, T. & Sasyo, Y. (1981).** "Non-melting phenomena of snowflakes observed in subsaturated air below freezing level." *J. Meteor. Soc. Japan* — `sounding/precipitation.py` wet-bulb phase boundaries (0/+1.3 °C melting convention). **USED** as of 2026-07-01 (Bug #9 fix).
 
 ---
 
@@ -259,7 +330,10 @@ analytic fields or round-trip the code's own output.
   still open; helpers done)*
 - [x] `prepare.py` — dewpoint delegated to MetPy (Magnus reconciled). *(broader unit suite still open)*
 - [x] Fix bugs #2 (ifr_feasibility mismatch) and #4 (self-reimplementing test).
-- [ ] `grib/decode.py:1413` — replace truncated `1.94384` with exact `3600/1852` (Bug #8).
+- [x] `precipitation.py` — wet-bulb phase bands realigned to the Matsuo & Sasyo 0/+1.3 °C
+  melting convention, exact boundaries pinned (Bug #9, decisions §17). *(2026-07-01)*
+- [ ] `fetch/grib/decode.py:1413` — replace truncated `1.94384` with exact `3600/1852` (Bug #8); consolidate the 4 hand-rolled Magnus copies while there.
+- [ ] Turbulence test bogus key + `dd_nwp_agreement` Jaccard overlap-merge (Bugs #10/#11) — small, mechanical.
 
 **Tier 2 — reproduce published reference cases:**
 - [ ] `sfip.py` — Belo-Pereira 2015 / Morcrette 2019 reference soundings.
