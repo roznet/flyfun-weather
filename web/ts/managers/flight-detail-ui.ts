@@ -88,6 +88,9 @@ export function renderFlightInfo(
   const altUtcHour = altDt ? altDt.getUTCHours() : -1;
   const altUtcMinute = altDt ? altDt.getUTCMinutes() : 0;
   const hasAlt = altUtcHour >= 0;
+  // Timing-scenario Flexibility mode; legacy flights with an alt time but no
+  // stored mode render as 'alternate' (matches the migration-074 backfill).
+  const flexibility = flight.flexibility || (hasAlt ? 'alternate' : 'none');
 
   if (editing) {
     // Reference date for TZ calculations
@@ -195,13 +198,16 @@ export function renderFlightInfo(
           </span>
         </div>
         <div class="info-row">
-          <span class="info-label">Alt Time</span>
+          <span class="info-label">Flexibility</span>
           <span class="info-value">
-            <label class="alt-time-toggle">
-              <input type="checkbox" id="edit-alt-enabled" ${hasAlt ? 'checked' : ''}>
-              <span>Alternate departure</span>
-            </label>
-            <div class="time-input-group" id="edit-alt-time-group" style="${hasAlt ? '' : 'display:none'}">
+            <select id="edit-flexibility" class="edit-input">
+              <option value="none"${flexibility === 'none' ? ' selected' : ''}>None — just this flight</option>
+              <option value="alternate"${flexibility === 'alternate' ? ' selected' : ''}>Alternate time — grade one other departure</option>
+              <option value="same_day"${flexibility === 'same_day' ? ' selected' : ''}>Same day — scan for better windows</option>
+              <option value="prev_day"${flexibility === 'prev_day' ? ' selected' : ''}>Previous day</option>
+              <option value="next_day"${flexibility === 'next_day' ? ' selected' : ''}>Next day</option>
+            </select>
+            <div class="time-input-group" id="edit-alt-time-group" style="${flexibility === 'alternate' ? '' : 'display:none'}">
               <select id="edit-alt-hour" class="edit-input">${altHourOptions}</select>
               <span class="time-separator">:</span>
               <select id="edit-alt-minute" class="edit-input">${altMinuteOptions}</select>
@@ -246,11 +252,11 @@ export function renderFlightInfo(
       tzSelect.value = defaultTz;
     }
 
-    // Toggle alt time group visibility
-    const altCheckbox = document.getElementById('edit-alt-enabled') as HTMLInputElement;
+    // The alt time selects only apply to the 'alternate' Flexibility mode
+    const flexSelect = document.getElementById('edit-flexibility') as HTMLSelectElement;
     const altTimeGroup = document.getElementById('edit-alt-time-group');
-    altCheckbox?.addEventListener('change', () => {
-      if (altTimeGroup) altTimeGroup.style.display = altCheckbox.checked ? '' : 'none';
+    flexSelect?.addEventListener('change', () => {
+      if (altTimeGroup) altTimeGroup.style.display = flexSelect.value === 'alternate' ? '' : 'none';
     });
 
     // When profile changes, update altitude/ceiling to match the selected profile
@@ -270,17 +276,29 @@ export function renderFlightInfo(
       }
     });
   } else {
-    // Alt time display with delta
+    // Flexibility display: the mode, plus the alternate time (with delta)
+    // when that's the mode.
     let altTimeHtml = '';
-    if (altDt) {
+    if (flexibility === 'alternate' && altDt) {
       const deltaMs = altDt.getTime() - dt.getTime();
       const deltaH = deltaMs / 3600_000;
       const sign = deltaH >= 0 ? '+' : '';
       const deltaStr = Number.isInteger(deltaH) ? `${sign}${deltaH}h` : `${sign}${deltaH.toFixed(1)}h`;
       altTimeHtml = `
         <div class="info-row">
-          <span class="info-label">Alt Time</span>
-          <span class="info-value">${formatDepartureTime(flight.alt_departure_time!)} <span class="muted">(${deltaStr})</span></span>
+          <span class="info-label">Flexibility</span>
+          <span class="info-value">Alternate time — ${formatDepartureTime(flight.alt_departure_time!)} <span class="muted">(${deltaStr})</span></span>
+        </div>`;
+    } else if (flexibility !== 'none') {
+      const flexLabels: Record<string, string> = {
+        same_day: 'Same day — scan for better windows',
+        prev_day: 'Previous day',
+        next_day: 'Next day',
+      };
+      altTimeHtml = `
+        <div class="info-row">
+          <span class="info-label">Flexibility</span>
+          <span class="info-value">${escapeHtml(flexLabels[flexibility] || flexibility)}</span>
         </div>`;
     }
 

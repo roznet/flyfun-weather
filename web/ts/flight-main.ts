@@ -296,7 +296,7 @@ async function init(): Promise<void> {
       const ceilEl = document.getElementById('edit-ceiling') as HTMLInputElement;
       const durHoursEl = document.getElementById('edit-duration-hours') as HTMLSelectElement;
       const durMinutesEl = document.getElementById('edit-duration-minutes') as HTMLSelectElement;
-      const altEnabledEl = document.getElementById('edit-alt-enabled') as HTMLInputElement;
+      const flexEl = document.getElementById('edit-flexibility') as HTMLSelectElement;
 
       syncUtcFromLocal();
 
@@ -311,8 +311,11 @@ async function init(): Promise<void> {
 
       // Save handles non-structural changes only — date/origin/dest stay the same.
       const departureTime = `${flight.target_date}T${editUtcHour.toString().padStart(2, '0')}:${editUtcMinute.toString().padStart(2, '0')}:00Z`;
-      const altEnabled = altEnabledEl?.checked ?? false;
-      const altDepartureTime = altEnabled
+      // Flexibility: the alternate time selects only apply in 'alternate'
+      // mode; other modes clear the stored alt time ("" clears server-side).
+      const flexibility = (flexEl?.value || 'none') as
+        'none' | 'alternate' | 'same_day' | 'prev_day' | 'next_day';
+      const altDepartureTime = flexibility === 'alternate'
         ? `${flight.target_date}T${editAltUtcHour.toString().padStart(2, '0')}:${editAltUtcMinute.toString().padStart(2, '0')}:00Z`
         : '';
 
@@ -333,6 +336,7 @@ async function init(): Promise<void> {
         aircraft_id: aircraftId,
         departure_time: departureTime,
         alt_departure_time: altDepartureTime,
+        flexibility,
         cruise_altitude_ft: altitude,
         flight_ceiling_ft: ceiling,
         flight_duration_hours: duration,

@@ -720,6 +720,8 @@ async function init(): Promise<void> {
       const profileId = profileSelect?.value ? parseInt(profileSelect.value, 10) : undefined;
       const aircraftSelect = document.getElementById('input-aircraft') as HTMLSelectElement;
       const aircraftId = aircraftSelect?.value ? parseInt(aircraftSelect.value, 10) : undefined;
+      const flexSelect = document.getElementById('input-flexibility') as HTMLSelectElement;
+      const flexibility = (flexSelect?.value || 'none') as 'none' | 'same_day' | 'prev_day' | 'next_day';
 
       if (!targetDate) {
         ui.renderError(t('flights.form.errorDate'));
@@ -762,6 +764,7 @@ async function init(): Promise<void> {
           profileId: !isNaN(profileId!) ? profileId : undefined,
           aircraftId: !isNaN(aircraftId!) ? aircraftId : undefined,
           rawRoute: wpRaw,
+          flexibility,
         });
         // Pass flight_id via context (top-level field) so server-side
         // enrichment (upsert_flight_dim) picks it up.

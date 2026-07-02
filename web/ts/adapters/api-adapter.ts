@@ -123,6 +123,9 @@ export interface UpdateFlightRequest {
   aircraft_id?: number;
   departure_time?: string;
   alt_departure_time?: string | null;
+  // Timing-scenario Flexibility mode; omit for no change. 'alternate'
+  // requires an alt_departure_time (server 422s otherwise).
+  flexibility?: 'none' | 'alternate' | 'same_day' | 'prev_day' | 'next_day';
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
@@ -540,6 +543,56 @@ export async function computeAltAdvisories(
   return apiFetch<RouteAdvisoriesManifest>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/alt/compute`,
     { method: 'POST' },
+  );
+}
+
+export type FlexibilityMode = 'none' | 'alternate' | 'same_day' | 'prev_day' | 'next_day';
+
+export interface TimeScanStatusDTO {
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+  flexibility: FlexibilityMode;
+  reason: string;
+  updated_at: string;
+}
+
+export interface TimeCandidateDTO {
+  departure_time: string;
+  departure_shift_hours: number;
+  assessment: string;            // GREEN / AMBER / RED
+  assessment_reason: string;
+  models_used: string[];
+  improves: string[];
+  worsens: string[];
+  margin: number;
+  confidence: 'confirmed_in_window' | 'ecmwf_only' | 'confirmed';
+  is_baseline: boolean;
+  is_alternate: boolean;
+}
+
+export interface TimeWindowScanDTO {
+  flexibility: FlexibilityMode;
+  baseline: { departure_time: string; assessment: string; assessment_reason: string };
+  window: { start: string; end: string; daylight_clipped: boolean; horizon_clipped: boolean } | null;
+  candidates: TimeCandidateDTO[];
+  refused_times: string[];
+  generated_at: string;
+}
+
+export interface TimeOptionsResponse {
+  status: TimeScanStatusDTO | null;
+  scan: TimeWindowScanDTO | null;
+}
+
+/** Timing-scenario scan (Flexibility) — status + result, poll-friendly.
+ *  The scan runs as a background job after the briefing, so the client polls
+ *  this after briefing_ready until status is terminal (done/failed/skipped).
+ *  404s when the flight has Flexibility "none" and no scan was ever run. */
+export async function fetchTimeOptions(
+  flightId: string,
+  timestamp: string,
+): Promise<TimeOptionsResponse> {
+  return apiFetch<TimeOptionsResponse>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/time-options`
   );
 }
 

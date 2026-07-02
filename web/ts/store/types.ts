@@ -51,6 +51,9 @@ export interface FlightResponse {
   waypoints: string[];
   departure_time: string;
   alt_departure_time: string | null;
+  // Timing-scenario Flexibility mode (what the scenario job grades).
+  // 'alternate' uses alt_departure_time; day modes scan a daylight window.
+  flexibility: 'none' | 'alternate' | 'same_day' | 'prev_day' | 'next_day';
   target_date: string;        // backward compat (computed from departure_time)
   target_time_utc: number;    // backward compat (computed from departure_time)
   cruise_altitude_ft: number;
@@ -118,6 +121,9 @@ export interface CreateFlightRequest {
   flight_duration_hours?: number;
   profile_id?: number;
   aircraft_id?: number;
+  // Timing-scenario Flexibility. 'alternate' is set post-create via PATCH
+  // (needs an alt time), so create only offers the scan modes.
+  flexibility?: 'none' | 'same_day' | 'prev_day' | 'next_day';
   // Original Field-15 input. Present from web Save flows where the
   // pilot typed something like "EGTK DCT LFPB DCT LSGS" and the
   // interpret popup confirmed the resolved waypoints. Omitted from

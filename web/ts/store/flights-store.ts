@@ -39,6 +39,7 @@ export interface FlightsState {
     profileId?: number;
     aircraftId?: number;
     rawRoute?: string;  // original Field-15 input from the popup flow
+    flexibility?: 'none' | 'same_day' | 'prev_day' | 'next_day';
   }) => Promise<FlightResponse>;
   deleteFlight: (id: string) => Promise<void>;
   unsubscribeFlight: (id: string) => Promise<void>;
@@ -147,6 +148,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
         profile_id: opts?.profileId,
         aircraft_id: opts?.aircraftId,
         raw_route: opts?.rawRoute,
+        flexibility: opts?.flexibility,
       });
       // Refresh the list
       await get().loadFlights();
