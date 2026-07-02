@@ -262,6 +262,49 @@ def load_cross_sections(pack_dir: Path) -> list[RouteCrossSection]:
     ]
 
 
+def save_time_options(pack_dir: Path, scan: "TimeWindowScan") -> None:
+    """Persist the timing-scenario scan as ``time_options.json`` (decision G:
+    this is the only artifact the scan writes — extended enrichment stays
+    ephemeral, published pack artifacts are never mutated)."""
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "time_options.json").write_text(scan.model_dump_json(indent=2))
+
+
+def load_time_options(pack_dir: Path) -> "TimeWindowScan | None":
+    """Load the timing-scenario scan, returning *None* if absent/corrupt."""
+    from weatherbrief.models import TimeWindowScan
+
+    path = pack_dir / "time_options.json"
+    if not path.exists():
+        return None
+    try:
+        return TimeWindowScan.model_validate_json(path.read_text())
+    except Exception:
+        logger.warning("Failed to load time_options.json from %s", pack_dir, exc_info=True)
+        return None
+
+
+def save_time_scan_status(pack_dir: Path, status: "TimeScanStatus") -> None:
+    """Persist the small ``time_scan_status.json`` sidecar the polling
+    endpoint reads while the scan is pending/running."""
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "time_scan_status.json").write_text(status.model_dump_json())
+
+
+def load_time_scan_status(pack_dir: Path) -> "TimeScanStatus | None":
+    """Load the scan status sidecar, returning *None* if absent/corrupt."""
+    from weatherbrief.models import TimeScanStatus
+
+    path = pack_dir / "time_scan_status.json"
+    if not path.exists():
+        return None
+    try:
+        return TimeScanStatus.model_validate_json(path.read_text())
+    except Exception:
+        logger.warning("Failed to load time_scan_status.json from %s", pack_dir, exc_info=True)
+        return None
+
+
 def load_elevation_profile(pack_dir: Path) -> ElevationProfile | None:
     """Load elevation profile, returning *None* if missing."""
     ep_path = pack_dir / "elevation_profile.json"

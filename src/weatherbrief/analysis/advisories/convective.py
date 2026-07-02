@@ -63,6 +63,7 @@ class ConvectiveEvaluator:
                 "High/Extreme risk at any point triggers RED."
             ),
             category="convective",
+            timing_class="scan",
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

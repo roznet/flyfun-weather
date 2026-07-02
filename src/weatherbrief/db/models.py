@@ -111,6 +111,10 @@ class FlightRow(Base):
     alt_departure_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # Timing-scenario flexibility mode (timing-scenario-plan.md):
+    # none | alternate | same_day | prev_day | next_day. "alternate" grades the
+    # single alt_departure_time; the day modes run the departure-window scan.
+    flexibility: Mapped[str] = mapped_column(String(16), default="none")
     last_auto_refresh_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

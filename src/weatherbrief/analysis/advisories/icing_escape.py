@@ -162,6 +162,7 @@ class IcingEscapeEvaluator:
                 "icing coverage along the route."
             ),
             category="icing",
+            timing_class="scan",
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

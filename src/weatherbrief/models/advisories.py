@@ -7,6 +7,7 @@ deterministic GREEN/AMBER/RED assessments per advisory per model.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -151,6 +152,19 @@ class AdvisoryCatalogEntry(BaseModel):
     category: str  # e.g. "icing", "cloud", "turbulence", "convective", "model"
     default_enabled: bool = True
     altitude_dependent: bool = False
+    # Timing-scenario participation (timing-scenario-plan.md). Declarative
+    # sibling of ``altitude_dependent`` — the scan asks the registry, so a new
+    # evaluator auto-participates. The unifying principle: scan-worthy ⟺
+    # GRIB-dependent ⟺ OM-insufficient.
+    #   "scan"  — timing-sensitive and GRIB-dependent; ranks the scan margin
+    #   "cheap" — timing-sensitive but OM-sufficient; never drives the scan
+    #   "none"  — timing is not the lever (default)
+    timing_class: Literal["scan", "cheap", "none"] = "none"
+    # Participates in the "set Flexibility to scan for a better window" hint on
+    # flights with Flexibility=None even when not scan-class (e.g. airport
+    # fog/ceiling burn-off is OM/TAF-graded but a classic timing case). The
+    # hint set is scan-class ∪ {timing_hint=True}.
+    timing_hint: bool = False
     parameters: list[AdvisoryParameterDef] = Field(default_factory=list)
 
 

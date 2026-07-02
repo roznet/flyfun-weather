@@ -77,6 +77,7 @@ class FIKIIcingEvaluator:
                 "cruise in icing are concerning."
             ),
             category="icing",
+            timing_class="scan",
             default_enabled=False,  # opt-in for FIKI operators
             altitude_dependent=True,
             parameters=[

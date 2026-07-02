@@ -120,6 +120,8 @@ class FlightCategoryEvaluator:
                 "fraction of the route it covers."
             ),
             category="airport",
+            timing_class="cheap",
+            timing_hint=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="amber_ceiling_ft",

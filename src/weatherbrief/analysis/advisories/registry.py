@@ -34,6 +34,30 @@ def get_altitude_dependent_ids() -> set[str]:
     return {aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().altitude_dependent}
 
 
+def get_scan_class_ids() -> set[str]:
+    """IDs of ``timing_class="scan"`` evaluators — the timing-scan ranking set.
+
+    These are the timing-sensitive, GRIB-dependent hazards; the scan's
+    improvement margin is summed over this set (while every candidate is still
+    graded on the *full* advisory set).
+    """
+    _ensure_loaded()
+    return {aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().timing_class == "scan"}
+
+
+def get_timing_hint_ids() -> set[str]:
+    """IDs whose RED/AMBER triggers the Flexibility hint on unscanned flights.
+
+    The scan-class set plus explicitly ``timing_hint=True`` entries (e.g.
+    ``flight_category`` — OM/TAF-graded, so never scan-class, but airport
+    fog/ceiling burn-off is a classic timing case worth hinting on).
+    """
+    _ensure_loaded()
+    return get_scan_class_ids() | {
+        aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().timing_hint
+    }
+
+
 def resolve_enabled_ids(enabled_map: dict[str, bool] | None) -> set[str] | None:
     """Resolve a saved per-profile advisory enable map into the set to evaluate.
 

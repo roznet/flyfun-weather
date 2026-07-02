@@ -176,6 +176,7 @@ class IFRFeasibilityEvaluator:
                 "triggers RED."
             ),
             category="flight_rules",
+            timing_class="scan",
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

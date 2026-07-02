@@ -718,6 +718,9 @@ def run_alt_from_pack(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    cross_sections: list[RouteCrossSection] | None = None,
+    persist: bool = True,
+    detect_fronts: bool = True,
 ) -> AdvisoryResult:
     """Re-run analysis + advisories at an alt departure time using existing pack data.
 
@@ -725,6 +728,15 @@ def run_alt_from_pack(
     ``analyze_all_route_points`` with the alt departure time (which picks
     different hourly forecasts via ``at_time()``), then evaluates advisories.
     Saves the result as ``route_advisories_alt.json``.
+
+    The timing-scenario scan (``tasks/time_scan.py``) drives this in a
+    per-candidate loop, so three knobs let it reuse the machinery without side
+    effects: ``cross_sections`` skips the disk load and grades against the
+    given (possibly enrichment-extended) sections; ``persist=False`` skips
+    writing ``route_advisories_alt.json`` (candidates live in
+    ``time_options.json``); ``detect_fronts=False`` skips the alt front re-run
+    (``fronts`` is timing-``none`` and re-detecting per candidate would write
+    files in a tight loop).
     """
     from weatherbrief.tasks.analyze import analyze_all_route_points
     from weatherbrief.tasks.artifacts import (
@@ -734,7 +746,8 @@ def run_alt_from_pack(
         save_alt_advisory_artifacts,
     )
 
-    cross_sections = load_cross_sections(pack_dir)
+    if cross_sections is None:
+        cross_sections = load_cross_sections(pack_dir)
     route_points = load_route_points(pack_dir)
     elevation = load_elevation_profile(pack_dir)
 
@@ -784,7 +797,7 @@ def run_alt_from_pack(
         # scenario against stale fronts. Re-sampling the same snapshot at the alt
         # hours costs ~nothing. Gated on the primary artifact's presence (= the
         # ``auto_front_detection`` master was on at briefing time).
-        if pack_dir is not None and (pack_dir / "route_fronts.json").exists():
+        if detect_fronts and pack_dir is not None and (pack_dir / "route_fronts.json").exists():
             try:
                 from weatherbrief.tasks.fronts import run_fronts
 
@@ -830,7 +843,8 @@ def run_alt_from_pack(
             airport_conditions=airport_conds,
         )
 
-        save_alt_advisory_artifacts(pack_dir, manifest)
+        if persist:
+            save_alt_advisory_artifacts(pack_dir, manifest)
         logger.info("Alt advisory evaluation complete: %d advisories", len(advisory_results))
 
         return AdvisoryResult(manifest=manifest, airport_conditions=airport_conds)

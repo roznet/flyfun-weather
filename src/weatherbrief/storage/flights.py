@@ -90,6 +90,7 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
         alt_departure_time=flight.alt_departure_time,
+        flexibility=flight.flexibility,
         private=flight.private,
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
@@ -114,6 +115,7 @@ def _row_to_flight(row: FlightRow) -> Flight:
         flight_ceiling_ft=row.flight_ceiling_ft,
         flight_duration_hours=row.flight_duration_hours,
         alt_departure_time=_ensure_utc(row.alt_departure_time) if row.alt_departure_time else None,
+        flexibility=row.flexibility or "none",
         private=row.private,
         auto_refresh=row.auto_refresh,
         auto_refresh_hour=row.auto_refresh_hour,
@@ -408,6 +410,7 @@ def save_flight(session: Session, flight: Flight, user_id: str) -> None:
         existing.flight_ceiling_ft = flight.flight_ceiling_ft
         existing.flight_duration_hours = flight.flight_duration_hours
         existing.alt_departure_time = flight.alt_departure_time
+        existing.flexibility = flight.flexibility
         existing.private = flight.private
         existing.auto_refresh = flight.auto_refresh
         existing.auto_refresh_hour = flight.auto_refresh_hour

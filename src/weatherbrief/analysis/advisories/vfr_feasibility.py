@@ -530,6 +530,7 @@ class VFRFeasibilityEvaluator:
                 "AMBER flags marginal conditions or a BKN deck in a corridor."
             ),
             category="flight_rules",
+            timing_class="scan",
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

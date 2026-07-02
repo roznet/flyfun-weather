@@ -81,6 +81,7 @@ class AirportWindEvaluator:
                 "component. Thresholds are configurable for both crosswind and gusts."
             ),
             category="airport",
+            timing_class="cheap",
             parameters=[
                 AdvisoryParameterDef(
                     key="crosswind_green_kt",

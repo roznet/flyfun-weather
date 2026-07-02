@@ -43,7 +43,14 @@ class Flight(BaseModel):
     flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
     private: bool = False
-    alt_departure_time: datetime | None = None  # optional same-day alt departure
+    alt_departure_time: datetime | None = None  # the "Alternate time" flexibility value
+    # Timing-scenario flexibility (timing-scenario-plan.md): how much departure
+    # flexibility the pilot has, and therefore what the scenario job grades.
+    #   none      — no scenario work (local yes/no flights)
+    #   alternate — grade the one alt_departure_time as a pinned candidate
+    #   same_day  — scan the daylight window of the target date
+    #   prev_day / next_day — scan the adjacent day as well (needs extra OM fetch)
+    flexibility: Literal["none", "alternate", "same_day", "prev_day", "next_day"] = "none"
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     last_auto_refresh_at: datetime | None = None

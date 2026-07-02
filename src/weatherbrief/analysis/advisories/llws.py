@@ -86,6 +86,7 @@ class LLWSEvaluator:
                 "or different timing (morning mixing erodes a nocturnal jet)."
             ),
             category="airport",
+            timing_class="cheap",
             parameters=[
                 AdvisoryParameterDef(
                     key="shear_amber_kt",

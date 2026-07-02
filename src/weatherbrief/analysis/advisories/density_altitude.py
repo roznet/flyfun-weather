@@ -94,6 +94,7 @@ class DensityAltitudeEvaluator:
                 "terrain data."
             ),
             category="airport",
+            timing_class="cheap",
             parameters=[
                 AdvisoryParameterDef(
                     key="da_amber_ft",

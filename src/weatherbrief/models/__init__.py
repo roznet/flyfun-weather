@@ -97,6 +97,16 @@ from weatherbrief.models.advisories import (  # noqa: F401
     RouteAdvisoriesManifest,
     RouteAdvisoryResult,
 )
+from weatherbrief.models.time_scan import (  # noqa: F401
+    FlexibilityMode,
+    ModelCoverage,
+    TimeCandidate,
+    TimeConfirmation,
+    TimeScanBaseline,
+    TimeScanStatus,
+    TimeScanWindow,
+    TimeWindowScan,
+)
 from weatherbrief.models.fronts import (  # noqa: F401
     FrontChainModel,
     FrontChainNodeModel,
