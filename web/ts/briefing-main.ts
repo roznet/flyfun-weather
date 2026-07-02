@@ -480,6 +480,86 @@ async function init(): Promise<void> {
     }
   }
 
+  /** Timing-scenario section (Flexibility) — attention-director framing:
+   *  candidates are "what changes if you leave at X", never a go/no-go.
+   *  Data arrives from the background scan via the polled store state. */
+  function renderTimeScenarios(state: BriefingState): void {
+    const wrapper = document.getElementById('time-scenarios-wrapper');
+    const section = document.getElementById('time-scenarios-section');
+    if (!wrapper || !section) return;
+
+    const flex = state.flight?.flexibility ?? 'none';
+    const to = state.timeOptions;
+    if (flex === 'none' || !to) {
+      wrapper.style.display = 'none';
+      return;
+    }
+    wrapper.style.display = '';
+
+    const status = to.status?.status;
+    if (status === 'pending' || status === 'running' || (!status && !to.scan)) {
+      section.innerHTML = '<p class="muted">Scenarios running… checking other departure times against this briefing.</p>';
+      return;
+    }
+    if (status === 'failed') {
+      section.innerHTML = '<p class="muted">Scenario check failed — it will run again on the next refresh.</p>';
+      return;
+    }
+    if (status === 'skipped' || !to.scan) {
+      const reason = to.status?.reason === 'no_alternate_time'
+        ? 'Set an alternate departure time to grade it here.'
+        : 'No scenario data for this briefing.';
+      section.innerHTML = `<p class="muted">${escapeHtml(reason)}</p>`;
+      return;
+    }
+
+    const scan = to.scan;
+    const names = new Map<string, string>(
+      (state.routeAdvisories?.catalog ?? []).map((c) => [c.id, c.name]),
+    );
+    const nameOf = (id: string) => names.get(id) ?? id;
+    const chip = (assessment: string) => {
+      const cls = assessment === 'GREEN' ? 'assessment-green'
+        : assessment === 'AMBER' ? 'assessment-amber'
+        : assessment === 'RED' ? 'assessment-red' : 'assessment-none';
+      return `<span class="assessment-chip ${cls}">${escapeHtml(assessment)}</span>`;
+    };
+
+    const rows = scan.candidates.map((c) => {
+      const time = formatDepartureTime(c.departure_time);
+      const shift = c.is_baseline
+        ? 'as planned'
+        : `${c.departure_shift_hours >= 0 ? '+' : ''}${c.departure_shift_hours}h`;
+      const tag = c.is_baseline ? '' : c.is_alternate ? ' ★ your alternate' : '';
+      const diffs: string[] = [];
+      if (c.improves.length) diffs.push(`improves: ${c.improves.map(nameOf).join(', ')}`);
+      if (c.worsens.length) diffs.push(`worsens: ${c.worsens.map(nameOf).join(', ')}`);
+      const conf = c.confidence === 'confirmed_in_window' || c.confidence === 'confirmed'
+        ? 'all models checked'
+        : 'ECMWF only — not yet confirmed by other models';
+      return `
+        <div class="info-row">
+          <span class="info-label">${escapeHtml(time)}</span>
+          <span class="info-value">
+            ${chip(c.assessment)}
+            <span class="muted">${escapeHtml(shift)}${escapeHtml(tag)}</span>
+            ${diffs.length ? `<div>${escapeHtml(diffs.join(' · '))}</div>` : ''}
+            <div class="muted" style="font-size:0.8em;">${escapeHtml(conf)}</div>
+          </span>
+        </div>`;
+    }).join('');
+
+    const better = scan.candidates.filter((c) => !c.is_baseline && !c.is_alternate).length;
+    const headline = better > 0
+      ? `${better} departure window${better > 1 ? 's' : ''} look${better === 1 ? 's' : ''} smoother than the planned time — worth a look, not a verdict.`
+      : 'No clearly better window found in the hours checkable from this briefing.';
+    const refusedNote = scan.refused_times.length
+      ? `<p class="muted" style="font-size:0.85em;">${scan.refused_times.length} daylight hour${scan.refused_times.length > 1 ? 's' : ''} couldn’t be checked from this briefing’s data (outside the fetched forecast window).</p>`
+      : '';
+
+    section.innerHTML = `<p>${escapeHtml(headline)}</p>${rows}${refusedNote}`;
+  }
+
   /** Build alt time toggle config if alt advisories are available. */
   function getAltTimeToggleConfig(state: BriefingState): AltTimeToggleConfig | undefined {
     if (!state.flight?.alt_departure_time || !state.altAdvisories) return undefined;
@@ -1430,6 +1510,13 @@ async function init(): Promise<void> {
       renderPointSections(state);
       renderVisualization(state);
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
+    }
+    if (
+      state.timeOptions !== prev.timeOptions ||
+      state.currentPack !== prev.currentPack ||
+      state.flight !== prev.flight
+    ) {
+      renderTimeScenarios(state);
     }
     if (
       state.freshness !== prev.freshness ||

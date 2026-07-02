@@ -4,7 +4,7 @@ import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { RouteFrontsManifest } from '../types/fronts';
-import type { RouteWindOverlay } from '../adapters/api-adapter';
+import type { RouteWindOverlay, TimeOptionsResponse } from '../adapters/api-adapter';
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
@@ -125,6 +125,10 @@ export interface BriefingState {
   altitudeTableLoading: boolean;
   emailing: boolean;
   error: string | null;
+  /** Timing-scenario scan (Flexibility): status + result from the background
+   * job, polled after pack load until the status is terminal. null when the
+   * flight has Flexibility "none" (section hidden). */
+  timeOptions: TimeOptionsResponse | null;
 
   // Actions
   loadFlight: (id: string) => Promise<void>;
@@ -161,6 +165,9 @@ export interface BriefingState {
   loadAltAdvisories: () => Promise<void>;
   computeAltAdvisories: () => Promise<void>;
   toggleAltView: () => void;
+  /** Poll the timing-scenario scan for the current pack (backoff, stops on
+   * terminal status or pack change). Safe to call unconditionally. */
+  loadTimeOptions: () => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
   subscribe: () => Promise<void>;
@@ -249,6 +256,8 @@ function isStreamDrop(err: unknown): boolean {
 // scope (not store state) — purely transient request bookkeeping.
 let _windOverlayTimer: number | null = null;
 let _windOverlaySeq = 0;
+// Timing-scenario poll backoff (3s → ×1.5 → cap 15s); reset on pack change.
+let timeOptionsPollDelay = 3_000;
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
   flight: null,
@@ -260,6 +269,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   routeAdvisories: null,
   routeFronts: null,
   altAdvisories: null,
+  timeOptions: null,
   windOverlay: null,
   showingAlt: false,
   elevationProfile: null,
@@ -374,10 +384,17 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
+      }
+      // Timing scenarios (Flexibility): kick off the status poll. The
+      // endpoint lazy-schedules the scan if Flexibility was enabled after
+      // this pack was generated.
+      timeOptionsPollDelay = 3_000;
+      if (get().flight?.flexibility && get().flight!.flexibility !== 'none') {
+        void get().loadTimeOptions();
       }
     } catch (err) {
       set({ loading: false, error: `Failed to load pack: ${err}` });
@@ -794,6 +811,43 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ altAdvisories: altAdv, currentPack: updatedPack });
     } catch (err) {
       set({ error: `Alt advisories computation failed: ${err}` });
+    }
+  },
+
+  loadTimeOptions: async () => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack || flight.flexibility === 'none') return;
+    const packTs = currentPack.fetch_timestamp;
+    try {
+      const resp = await api.fetchTimeOptions(flight.id, packTs);
+      // Stale-guard: the user may have switched packs while we were fetching.
+      if (get().currentPack?.fetch_timestamp !== packTs) return;
+      set({ timeOptions: resp });
+
+      const status = resp.status?.status;
+      if (status === 'pending' || status === 'running' || (!status && !resp.scan)) {
+        // Background job still working — poll with a gentle backoff. The
+        // refresh SSE stream is already closed by the time the scan runs, so
+        // polling is the delivery channel (see timing-scenario-plan.md).
+        timeOptionsPollDelay = Math.min(timeOptionsPollDelay * 1.5, 15_000);
+        window.setTimeout(() => {
+          if (get().currentPack?.fetch_timestamp === packTs) {
+            void get().loadTimeOptions();
+          }
+        }, timeOptionsPollDelay);
+        return;
+      }
+      timeOptionsPollDelay = 3_000;
+      // The scan's pinned alternate row also (re)writes the legacy alt
+      // artifact + pack fields — pick them up when we don't have them yet.
+      if (status === 'done' && !get().altAdvisories) {
+        void get().loadAltAdvisories();
+      }
+    } catch {
+      // 404 (flexibility none / legacy pack) or transient error — hide section.
+      if (get().currentPack?.fetch_timestamp === packTs) {
+        set({ timeOptions: null });
+      }
     }
   },
 
