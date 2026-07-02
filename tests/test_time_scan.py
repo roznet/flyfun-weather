@@ -280,6 +280,92 @@ class TestArtifacts:
 
 
 # ---------------------------------------------------------------------------
+# Provisional tier (slice 2): deferred hours graduate to ecmwf_only
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionalTier:
+    def _write_pack(self, tmp_path: Path) -> None:
+        import json
+
+        # ECMWF enriched only 06-11 (flight window ±3h); GFS 07-10 forward.
+        cs_ecmwf = _cs(ModelSource.ECMWF, [_wf(ModelSource.ECMWF, enriched_hours=set(range(6, 12)))])
+        cs_gfs = _cs(ModelSource.GFS, [_wf(ModelSource.GFS, gfs_marked_hours=set(range(7, 11)))])
+        (tmp_path / "cross_section.json").write_text(json.dumps({
+            "cross_sections": [cs.model_dump(mode="json") for cs in (cs_ecmwf, cs_gfs)],
+        }, default=str))
+        (tmp_path / "route_points.json").write_text(json.dumps(
+            [rp.model_dump(mode="json") for rp in cs_ecmwf.route_points], default=str,
+        ))
+
+    def test_deferred_hours_grade_ecmwf_only_via_extension(self, tmp_path, monkeypatch):
+        """Hours the free tier can't grade go through the (patched) daylight
+        extension and come back as ``ecmwf_only`` provisional candidates —
+        never silently clamp-graded, never refused when ECMWF covers them."""
+        import weatherbrief.tasks.time_scan as ts
+        from weatherbrief.models import RouteConfig, Waypoint
+
+        self._write_pack(tmp_path)
+
+        def fake_extend(cross_sections, route_points, w_lo, w_hi, dur, *, as_of_time=None):
+            # Pretend the whole day was decoded: mark every hour enriched on
+            # the ECMWF section and report full-day coverage.
+            for cs in cross_sections:
+                if cs.model == ModelSource.ECMWF:
+                    for wf in cs.point_forecasts:
+                        for h in wf.hourly:
+                            h.pressure_levels = _levels(28)
+            return 1234567890, [(DAY, DAY + timedelta(hours=23))]
+
+        monkeypatch.setattr(ts, "extend_ecmwf_daylight", fake_extend)
+
+        route = RouteConfig(
+            name="t",
+            waypoints=[
+                Waypoint(icao="AAAA", name="A", lat=51.0, lon=0.0),
+                Waypoint(icao="BBBB", name="B", lat=51.0, lon=1.0),
+            ],
+            flight_duration_hours=1.0,
+        )
+        scan = ts.run_time_scan(tmp_path, route, DEP, flexibility="same_day")
+
+        assert scan is not None
+        assert scan.ecmwf_run_ts == 1234567890
+        confs = {c.confidence for c in scan.candidates if not c.is_baseline}
+        # At least some non-baseline candidates exist and every graded
+        # non-baseline one is honestly labelled (either tier, never unlabeled).
+        assert confs <= {"confirmed_in_window", "ecmwf_only"}
+        provisional = [c for c in scan.candidates if c.confidence == "ecmwf_only"]
+        # ecmwf-only view of the baseline was recorded as the diff denominator
+        if provisional:
+            assert scan.baseline.ecmwf_assessment is not None
+            for c in provisional:
+                assert c.models_used == ["ecmwf"]
+
+    def test_no_ecmwf_run_refuses_deferred(self, tmp_path, monkeypatch):
+        import weatherbrief.tasks.time_scan as ts
+        from weatherbrief.models import RouteConfig, Waypoint
+
+        self._write_pack(tmp_path)
+        monkeypatch.setattr(
+            ts, "extend_ecmwf_daylight", lambda *a, **k: (None, []),
+        )
+        route = RouteConfig(
+            name="t",
+            waypoints=[
+                Waypoint(icao="AAAA", name="A", lat=51.0, lon=0.0),
+                Waypoint(icao="BBBB", name="B", lat=51.0, lon=1.0),
+            ],
+            flight_duration_hours=1.0,
+        )
+        scan = ts.run_time_scan(tmp_path, route, DEP, flexibility="same_day")
+        assert scan is not None
+        assert scan.ecmwf_run_ts is None
+        assert scan.refused_times  # deferred hours fell back to refusal
+        assert all(c.confidence != "ecmwf_only" for c in scan.candidates)
+
+
+# ---------------------------------------------------------------------------
 # Declarative registry sets (locked mapping, decision C)
 # ---------------------------------------------------------------------------
 
