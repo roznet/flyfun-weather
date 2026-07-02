@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import pytest
-
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.vfr_feasibility import VFRFeasibilityEvaluator
 from weatherbrief.models import (
@@ -273,20 +271,53 @@ def test_along_route_descent_happy_path():
     assert m.mitigated_status == AdvisoryStatus.GREEN
 
 
-def test_along_route_uniformly_blocked():
-    """Deck unbroken from departure to the route midpoint → no along-route
-    mitigation (no VMC break before halfway to reposition around)."""
-    # High enough base to clear the AGL gate, so the no-mitigation result is due
-    # to the deck running unbroken to the midpoint (no clear point before
-    # total/2), not the gate. Route total = 200nm, midpoint = 100nm; blocking
-    # every point out to d=100 leaves no clear break in the departure half.
+def test_along_route_terminal_deck_past_midpoint_emits():
+    """A clean terminal deck extending PAST the route midpoint still earns its tip when the
+    break is within the reposition cap — the half-route knife-edge is gone (#342 Bug B).
+
+    Arrival deck from 100nm inward (past the 100nm midpoint) on a 200nm route; clear before.
+    The profile stays on top until it must descend under the deck ~80nm out, so the descent
+    completes 120nm before arrival — ``before`` (120) > ``total/2`` (100). The old
+    ``before <= total/2`` gate dropped this correct tip on exactly that kind of overshoot,
+    letting only a spurious departure tip survive. ``clean_terminal`` already guarantees the
+    interior is clear, so with the split removed the tip is offered whenever the break is
+    within ``max_reposition_nm`` (raised here to admit the 120nm break the deck's size
+    dictates; the default cap has its own test).
+    """
     deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
-    analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i <= 5 else []}) for i in range(10)]
+    analyses = [_rpa(i, i * 20.0, {"gfs": [deck] if i >= 5 else []}) for i in range(10)]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses),
+        {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, "mitigation_max_reposition_nm": 150},
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED  # terminal OVC deck
+    descent = [m for m in _mitigations(result) if m.addresses == "descent_deck"]
+    assert len(descent) == 1
+    assert descent[0].distance_nm == 120.0  # before = 200 − 80, past the 100nm midpoint
+    assert descent[0].reference == "arrival"
+    assert descent[0].mitigated_status == AdvisoryStatus.GREEN
+
+
+def test_along_route_single_point_terminal_deck_suppressed():
+    """A lone terminal-field cloud at cruise → NO spurious corridor tip (#342 Bug A).
+
+    A thin cloud sitting at the planned cruise altitude over the departure field ONLY
+    makes the min-cost profile start below cruise (as every climb-out does) and climb
+    up once past it — which the profile-shape gate alone reads as a ``climb_deck``. But
+    nothing forced the flight low beyond the field's own cloud, so the tip is noise. The
+    real-deck gate (≥2 route points / ≥15nm of deck) suppresses it; a genuine multi-point
+    departure deck (the happy-path test) still emits.
+    """
+    # Thin OVC 7900–8100 straddles cruise (8000) at the departure field (nm 0) only.
+    field_cloud = EnhancedCloudLayer(base_ft=7900, top_ft=8100, coverage=CloudCoverage.OVC)
+    analyses = [_rpa(i, i * 20.0, {"gfs": [field_cloud] if i == 0 else []}) for i in range(10)]
     result = VFRFeasibilityEvaluator.evaluate(
         _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
 
-    assert result.aggregate_status == AdvisoryStatus.RED
+    # The profile is forced below cruise at nm 0 and climbs after — absent the real-deck
+    # gate this would emit a spurious "climb to cruise after ~20nm". It must not.
     assert not any(m.addresses == "climb_deck" for m in _mitigations(result))
 
 
@@ -402,28 +433,31 @@ def test_cruise_imc_suppresses_corridor_mitigation():
 def test_interior_deck_suppresses_corridor_mitigation():
     """An INTERIOR deck (away from both terminals) must NOT yield a corridor tip (#338).
 
-    Departure deck forces a low climb-out; the profile reaches cruise; but a mid-route
-    deck (spanning cruise to the ceiling) forces it back down and up again. The old
-    ``reaches_cruise`` check alone would emit a misleading "climb to cruise after ~20nm"
-    even though the flight has to descend again at the interior deck. The interior-dip
-    guard suppresses both corridor tips — the safe-but-silent behavior.
+    The profile reaches cruise, dips under a mid-route deck, climbs back to cruise, then
+    descends for the arrival deck — a genuine climb/dip/climb interior excursion. A thin
+    at-cruise interior deck (8000–8500) is what actually triggers the dip: a departure
+    deck instead traps the profile low for the whole route (one contiguous below-cruise
+    run, no interior dip), which is a distance-from-airport concern the reposition cap
+    handles, not the interior-dip guard. Here the guard fires (``clean_terminal`` False)
+    and suppresses the arrival ``descent_deck`` tip that would otherwise be misleading —
+    the flight has to descend at the interior deck too, not just at arrival.
     """
-    dep_deck = EnhancedCloudLayer(base_ft=4000, top_ft=6000, coverage=CloudCoverage.OVC)
-    # Interior deck spans cruise (8000) up to the ceiling → no on-top escape, must dip low.
-    interior = EnhancedCloudLayer(base_ft=7000, top_ft=18000, coverage=CloudCoverage.OVC)
-    layers = {}
+    # Thin at-cruise interior deck → the profile dips just under it, then climbs back.
+    interior = EnhancedCloudLayer(base_ft=8000, top_ft=8500, coverage=CloudCoverage.OVC)
+    # Arrival deck below cruise → a descent_deck candidate absent the interior dip.
+    arr_deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
     analyses = [
-        _rpa(i, i * 20.0, {"gfs": [dep_deck] if i in (0, 1) else ([interior] if i in (4, 5) else [])})
+        _rpa(i, i * 20.0, {"gfs": [interior] if i in (3, 4) else ([arr_deck] if i in (8, 9) else [])})
         for i in range(10)
     ]
     result = VFRFeasibilityEvaluator.evaluate(
         _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
 
-    assert result.aggregate_status == AdvisoryStatus.RED  # interior OVC at cruise
+    assert result.aggregate_status == AdvisoryStatus.RED  # arrival OVC deck
     addresses = {m.addresses for m in _mitigations(result)}
-    assert "climb_deck" not in addresses      # would be misleading (must descend again)
-    assert "descent_deck" not in addresses
+    assert "climb_deck" not in addresses      # departure at cruise → no climb candidate
+    assert "descent_deck" not in addresses    # suppressed — interior dip, must descend twice
 
 
 # ---------------------------------------------------------------------------

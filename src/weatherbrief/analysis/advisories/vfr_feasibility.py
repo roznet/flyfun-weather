@@ -300,6 +300,14 @@ _SEVERITY = {AdvisoryStatus.GREEN: 0, AdvisoryStatus.AMBER: 1, AdvisoryStatus.RE
 # solver prefer a truly-clear (0-cost) band over a marginal one on the hazard tier.
 _MARGINAL_COST = 1.0
 
+# A terminal (departure/arrival) deck earns a corridor tip only when it covers more than a
+# single route point: >= 2 route points OR a >= 15 nm along-track run. A lone terminal-field
+# cloud — which every normal climb-out transits — fails this and yields no "climb after /
+# descend before" tip. The profile-shape gate alone (``segments[0].alt_ft < cruise``) fires
+# for both a real deck and a single field cloud and cannot tell them apart (#342 Bug A).
+_TERMINAL_DECK_MIN_POINTS = 2
+_TERMINAL_DECK_MIN_RUN_NM = 15.0
+
 
 def _vfr_cell_cost(sounding, alt_ft: float, cloud_clearance_ft: float) -> float:
     """Occupancy cost of one altitude at one route point for the VFR cost field.
@@ -373,6 +381,56 @@ def _has_interior_below_cruise(profile: Profile, cruise: int) -> bool:
     return any(i not in lead and i not in trail for i in below)
 
 
+def _terminal_deck_span(
+    ctx: RouteContext,
+    model: str,
+    cruise: float,
+    lo_nm: float,
+    hi_nm: float,
+) -> tuple[int, float]:
+    """Count route points carrying a real climb/descent deck within ``[lo_nm, hi_nm]``.
+
+    A "deck" here is any BKN/OVC layer intruding the climb/descent band — ``top_ft`` above
+    the field and ``base_ft`` below cruise — i.e. a layer the flight must transit to reach
+    cruise (a sub-cruise deck, cruise itself clear) OR a cloud reaching cruise over the
+    field. Scanning only the terminal below-cruise run and requiring more than one such
+    point is what separates a genuine terminal deck from a lone departure-/arrival-field
+    cloud that every normal climb-out passes through (#342 Bug A). ``_check_enroute_vfr``
+    at cruise would count only the cruise-reaching clouds, silently dropping every
+    ordinary sub-cruise deck (the *primary* ``climb_deck`` case), so the band test is used
+    instead — it covers both while still keying on the same "not a single point" rule.
+
+    Returns ``(point_count, span_nm)`` over the qualifying points.
+    """
+    dists: list[float] = []
+    for rpa in ctx.analyses:
+        d = rpa.distance_from_origin_nm or 0.0
+        if not (lo_nm <= d <= hi_nm):
+            continue
+        sounding = rpa.sounding.get(model)
+        if sounding is None:
+            continue
+        floor = _field_elevation_ft(ctx, d)
+        for cl in sounding.cloud_layers:
+            if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
+                continue
+            if cl.top_ft > floor and cl.base_ft < cruise:
+                dists.append(d)
+                break
+    if not dists:
+        return 0, 0.0
+    return len(dists), max(dists) - min(dists)
+
+
+def _is_real_terminal_deck(count: int, span_nm: float) -> bool:
+    """A terminal deck earns a corridor tip only when it spans more than one point.
+
+    ``>= 2`` route points OR ``>= 15`` nm of along-track run (#342 Bug A). A single
+    terminal point — the departure/arrival field's own cloud — never qualifies.
+    """
+    return count >= _TERMINAL_DECK_MIN_POINTS or span_nm >= _TERMINAL_DECK_MIN_RUN_NM
+
+
 def _solver_mitigations(
     ctx: RouteContext,
     model: str,
@@ -405,10 +463,15 @@ def _solver_mitigations(
       exclusivity is emergent: when cruise is IMC the profile never reaches it, so no
       corridor transition exists — nothing to suppress.
 
-    The along-route break must fall before the route midpoint (a deck unbroken to
-    halfway can't be repositioned around) and within ``max_reposition_nm`` of the airport
-    (a break far out means flying under the deck for most of the leg). A :class:`Blockage`
-    (no continuous flyable band from the floor) yields no mitigation — the RED is genuine.
+    A terminal (climb/descent) tip is emitted only when the forcing deck is *real* — it
+    covers more than a single route point (>= 2 points / >= 15 nm), not just the departure/
+    arrival field's own cloud that every climb-out transits (#342 Bug A) — and the break is
+    within ``max_reposition_nm`` of the airport (a break far out means flying under the deck
+    for most of the leg). The former ``<= total / 2`` half-route split is gone: ``clean_terminal``
+    already guarantees the interior is clear, so the split only produced a knife-edge that
+    silently dropped the correct arrival tip on a fractional-mile miss (#342 Bug B). A
+    :class:`Blockage` (no continuous flyable band from the floor) yields no mitigation — the
+    RED is genuine.
     """
     model_cm = _build_vfr_cost_model(ctx, model, cloud_clearance_ft, floor_margin_ft)
     if model_cm is None:
@@ -464,13 +527,25 @@ def _solver_mitigations(
                 profile=prof_obj,
             ))
 
-    # climb_deck — departure forced low, climbs to cruise before the midpoint.
+    # climb_deck — departure forced low by a *real* terminal deck, climbing to cruise near
+    # departure. Two guards beyond profile shape:
+    #   - the deck must span more than a single point (>= 2 points / >= 15 nm), else it's the
+    #     departure field's own cloud that every climb-out transits — not a repositionable
+    #     deck (#342 Bug A);
+    #   - the break must be within `max_reposition_nm`. The old `<= total / 2` half-route
+    #     split is dropped: `clean_terminal` already guarantees the interior is clear, so a
+    #     terminal tip is meaningful whenever the break is close to the field — the half-route
+    #     knife-edge that silently dropped the correct tip on a 0.4 nm miss is gone (#342 Bug B).
     if reaches_cruise and clean_terminal and profile.segments[0].alt_ft < cruise:
         climb = next(
             (t for t in profile.transitions if t.to_alt_ft > t.from_alt_ft and t.to_alt_ft >= cruise),
             None,
         )
-        if climb is not None and climb.from_nm <= total / 2 and climb.from_nm <= max_reposition_nm:
+        if (
+            climb is not None
+            and climb.from_nm <= max_reposition_nm
+            and _is_real_terminal_deck(*_terminal_deck_span(ctx, model, cruise, 0.0, climb.to_nm))
+        ):
             dist = round(climb.from_nm)
             mitigations.append(Mitigation(
                 kind=MitigationKind.ROUTE_POSITION,
@@ -482,7 +557,9 @@ def _solver_mitigations(
                 profile=prof_obj,
             ))
 
-    # descent_deck — arrival forced low, descends from cruise after the midpoint.
+    # descent_deck — arrival forced low by a *real* terminal deck, descending from cruise
+    # near arrival. Same real-deck gate (#342 Bug A) and same drop of the `<= total / 2`
+    # split (#342 Bug B) as climb_deck above.
     if reaches_cruise and clean_terminal and profile.segments[-1].alt_ft < cruise:
         descent = next(
             (t for t in reversed(profile.transitions) if t.from_alt_ft > t.to_alt_ft and t.from_alt_ft >= cruise),
@@ -490,7 +567,9 @@ def _solver_mitigations(
         )
         if descent is not None:
             before = total - descent.to_nm
-            if before <= total / 2 and before <= max_reposition_nm:
+            if before <= max_reposition_nm and _is_real_terminal_deck(
+                *_terminal_deck_span(ctx, model, cruise, descent.from_nm, total)
+            ):
                 dist = round(before)
                 mitigations.append(Mitigation(
                     kind=MitigationKind.ROUTE_POSITION,

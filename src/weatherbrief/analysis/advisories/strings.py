@@ -467,10 +467,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "VMC disponible a {alt:,} ft",
     },
     "vfr.mitigation.altitude_marginal": {
-        "en": "Marginal VMC at {alt:,} ft",
-        "fr": "VMC marginale à {alt:,} ft",
-        "de": "Marginale VMC auf {alt:,} ft",
-        "es": "VMC marginal a {alt:,} ft",
+        # `cruise_imc` always scans downward from planned cruise, so this altitude is a
+        # fly-lower target — "around" reads as an option to act on, not a flat condition
+        # (#342 copy). Parallel to the GREEN `vfr.mitigation.altitude` ("VMC available at …").
+        "en": "Marginal VMC around {alt:,} ft",
+        "fr": "VMC marginale autour de {alt:,} ft",
+        "de": "Marginale VMC um {alt:,} ft",
+        "es": "VMC marginal en torno a {alt:,} ft",
     },
     "vfr.mitigation.climb_after": {
         "en": "VMC climb to cruise possible after ~{dist} nm from departure",
