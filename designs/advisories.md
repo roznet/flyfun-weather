@@ -186,6 +186,16 @@ Two generators in `vfr_feasibility.py`:
   clear/blocked split AND flyable VFR room beneath the deck along the blocked stretch
   (`_under_deck_flyable`, `mitigation_min_base_agl_ft` default 3000 ft) — otherwise the
   clear air is unreachable and the grade is genuine.
+  - Since #335 both generators are unified in `_solver_mitigations` over one min-cost
+    vertical profile; the corridor tips carry two extra guards (#342): a terminal tip is
+    emitted only when the forcing deck is *real* — it covers ≥2 route points or ≥15 nm,
+    not just the departure/arrival field's own cloud that every climb-out transits
+    (`_terminal_deck_span`, **Bug A**) — and only when the break is within
+    `mitigation_max_reposition_nm`. The former `<= total/2` half-route split is gone:
+    `clean_terminal` already guards interior decks, so the split only produced a
+    knife-edge that dropped the correct arrival tip on a fractional-mile overshoot
+    (**Bug B**). The `cruise_imc` `altitude_marginal` copy reads "Marginal VMC around
+    {alt} ft" (a fly-lower target, parallel to the GREEN "VMC available at {alt} ft").
 
 **Surfacing** (each consumer treats mitigations as a soft hook, never a verdict):
 - **Web / iOS**: a neutral "lightbulb" hook on the advisory card → tip detail
