@@ -4,6 +4,7 @@ import { createStore } from 'zustand/vanilla';
 import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { RouteFrontsManifest } from '../types/fronts';
+import type { TimeWindowScan } from '../types/time-scan';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
 import type { DisplayMode, Tier } from '../types/metrics';
 import type { VizLayout, VizSettings } from '../visualization/types';
@@ -92,6 +93,10 @@ export interface BriefingState {
    *  + cross-section front overlays. */
   routeFronts: RouteFrontsManifest | null;
   altAdvisories: RouteAdvisoriesManifest | null;
+  /** Timing-scenario scan (better departure windows). null when the scan
+   *  hasn't run / was gated off (endpoint 404s) — the panel then shows nothing.
+   *  Reset to null on pack load, like `altAdvisories`. */
+  timeOptions: TimeWindowScan | null;
   /** Per-route-point wind components at the advisoryAltitudeOverride.
    * null when no override is active (manifest values are correct). */
   windOverlay: RouteWindOverlay | null;
@@ -160,6 +165,13 @@ export interface BriefingState {
   sendEmail: () => Promise<void>;
   loadAltAdvisories: () => Promise<void>;
   computeAltAdvisories: () => Promise<void>;
+  /** Load the timing-scenario scan for the current pack (best-effort; 404 →
+   *  null → panel hidden). Called after a pack loads, like `loadAltAdvisories`. */
+  loadTimeOptions: () => Promise<void>;
+  /** "Check all models" for one candidate: calls the confirm endpoint and
+   *  merges the returned confirmation into the matching candidate (setting its
+   *  `confirmed` + `confidence="confirmed"`). Never switches the displayed plan. */
+  confirmTimeCandidate: (departureTime: string) => Promise<void>;
   toggleAltView: () => void;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
@@ -260,6 +272,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   routeAdvisories: null,
   routeFronts: null,
   altAdvisories: null,
+  timeOptions: null,
   windOverlay: null,
   showingAlt: false,
   elevationProfile: null,
@@ -374,11 +387,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, timeOptions: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
       }
+      // Load the timing-scenario scan (best-effort; 404 → stays null → hidden).
+      get().loadTimeOptions();
     } catch (err) {
       set({ loading: false, error: `Failed to load pack: ${err}` });
     }
@@ -799,6 +814,74 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   toggleAltView: () => {
     set({ showingAlt: !get().showingAlt });
+  },
+
+  loadTimeOptions: async () => {
+    const { flight, currentPack, routeAdvisories } = get();
+    if (!flight || !currentPack) return;
+    const packTimestamp = currentPack.fetch_timestamp;
+
+    // The scan runs as a *detached background job* after the briefing finishes
+    // (the daylight ECMWF re-decode takes a couple of minutes), so right after
+    // a refresh time_options.json won't exist yet. When a scan is plausibly
+    // pending — a scan-class advisory (timing_class === 'scan') is flagged
+    // RED/AMBER — poll a few times so the panel appears without a manual reload.
+    // Otherwise (no scan expected, or old pack) a single fetch is enough.
+    const scanPending = (() => {
+      if (!routeAdvisories) return false;
+      const scanIds = new Set(
+        routeAdvisories.catalog
+          .filter(c => c.timing_class === 'scan')
+          .map(c => c.id),
+      );
+      return routeAdvisories.advisories.some(
+        a => scanIds.has(a.advisory_id)
+          && (a.aggregate_status === 'red' || a.aggregate_status === 'amber'),
+      );
+    })();
+    const maxAttempts = scanPending ? 10 : 1;  // ~10 × 20s ≈ 3.3 min ceiling
+    const retryDelayMs = 20_000;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const scan = await api.fetchTimeOptions(flight.id, packTimestamp);
+        // Drop the response if the user switched packs while it was in flight.
+        if (get().currentPack?.fetch_timestamp !== packTimestamp) return;
+        if (scan) {
+          set({ timeOptions: scan });
+          return;
+        }
+      } catch {
+        // Non-critical — timing options may not exist for this pack.
+      }
+      if (attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, retryDelayMs));
+        // Bail out of the poll loop if the user navigated to another pack.
+        if (get().currentPack?.fetch_timestamp !== packTimestamp) return;
+      }
+    }
+  },
+
+  confirmTimeCandidate: async (departureTime: string) => {
+    const { flight, currentPack, timeOptions } = get();
+    if (!flight || !currentPack || !timeOptions) return;
+    try {
+      const confirmation = await api.confirmTimeOption(
+        flight.id, currentPack.fetch_timestamp, departureTime,
+      );
+      // Merge the confirmation into the matching candidate and upgrade its
+      // confidence. Never touches the displayed briefing (no auto-switch).
+      const current = get().timeOptions;
+      if (!current) return;
+      const candidates = current.candidates.map(c =>
+        c.departure_time === departureTime
+          ? { ...c, confirmed: confirmation, confidence: 'confirmed' as const }
+          : c,
+      );
+      set({ timeOptions: { ...current, candidates } });
+    } catch (err) {
+      set({ error: `Timing confirm failed: ${err}` });
+    }
   },
 
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => {

@@ -860,6 +860,7 @@ _STAGE_LABELS: dict[str, str] = {
     "generate_skewt": "Generating Skew-T",
     "briefing_ready": "Briefing ready",
     "llm_digest": "Generating AI digest",
+    "time_scan": "Scanning for a smoother departure window",
 }
 
 _STAGE_PROGRESS: dict[str, float] = {
@@ -881,6 +882,9 @@ _STAGE_PROGRESS: dict[str, float] = {
     # to surface the stage label between provisional persist and digest.
     "briefing_ready": 0.88,
     "llm_digest": 0.95,
+    # Runs after the digest; the briefing is already shown, so this only adds
+    # the "a smoother departure may exist" hook when it finishes.
+    "time_scan": 0.97,
 }
 
 
@@ -2591,6 +2595,101 @@ def compute_alt_advisories(
         db.flush()
 
     return advisory_result.manifest.model_dump()
+
+
+@router.get("/{timestamp}/time-options")
+def get_time_options(
+    flight_id: str,
+    timestamp: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Return the timing-scenario scan (``time_options.json``) for a pack.
+
+    404 while the scan hasn't run (or was gated off) — the client shows
+    "looking…" / nothing rather than an empty verdict.
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    path = pack_dir / "time_options.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Timing options not available")
+    return FileResponse(path, media_type="application/json")
+
+
+class TimeConfirmRequest(BaseModel):
+    """Body for the on-tap multi-model confirm — identifies the candidate."""
+
+    departure_time: str  # ISO-8601 of the candidate departure to confirm
+
+
+@router.post("/{timestamp}/time-options/confirm")
+def confirm_time_option(
+    flight_id: str,
+    timestamp: str,
+    body: TimeConfirmRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Multi-model confirm of one candidate departure (the deferred, gated cost).
+
+    Runs the full GFS+ICON+ECMWF enrichment at the candidate's flight window and
+    grades it multi-model, caching the :class:`TimeConfirmation` onto the
+    candidate in ``time_options.json``. Synchronous (FastAPI runs this in a
+    worker thread); the ICON/GFS decode is BACKGROUND-priority. A future
+    enhancement can make this SSE-streamed (plan Open question 4).
+    """
+    from weatherbrief.tasks.artifacts import load_time_options, save_time_options
+    from weatherbrief.tasks.time_scan import confirm_candidate
+
+    flight = _load_owned_flight(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    scan = load_time_options(pack_dir)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Timing options not available")
+
+    try:
+        cand_time = datetime.fromisoformat(body.departure_time)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="departure_time must be ISO-8601")
+
+    candidate = scan.candidate_at(cand_time)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="No such candidate departure time")
+
+    db_path = getattr(request.app.state, "db_path", "")
+    route = _build_route_config(flight, db_path)
+    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, _auto_front_detection = \
+        _load_advisory_profile(db, flight, user_id, request, pack_dir)
+
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    confirmation = confirm_candidate(
+        pack_dir,
+        route,
+        cand_time,
+        data_dir=data_dir,
+        advisory_models=adv_models,
+        enabled_ids=enabled_ids,
+        advisory_enabled=enabled_map,
+        user_params=user_params,
+        aggregation=aggregation,
+        airport_conditions_recompute=recompute_conds,
+        icing_method=icing_method,
+        cloud_method=cloud_method,
+        convective_method=convective_method,
+        locale=locale,
+        cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
+    )
+    if confirmation is None:
+        raise HTTPException(status_code=500, detail="Multi-model confirm failed")
+
+    # Cache the confirmation onto the candidate and upgrade its confidence.
+    candidate.confirmed = confirmation
+    candidate.confidence = "confirmed"
+    save_time_options(pack_dir, scan)
+
+    return confirmation.model_dump()
 
 
 def _recompute_airport_conditions(

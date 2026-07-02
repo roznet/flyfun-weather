@@ -160,6 +160,9 @@ class BriefingResult:
     models_skipped_region: list[str] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     alt_advisory_result: AdvisoryResult | None = None
+    # Timing-scenario scan (timing-scenario-scan feature). None when gated off
+    # (no scan-class advisory flagged) or ECMWF unavailable.
+    time_scan: "TimeWindowScan | None" = None
     # DWD Surface Analysis & Forecast — references into the shared chart
     # cache (DATA_DIR/dwd_charts/<run_cycle>/). Bytes are not stored here.
     dwd_charts_run_cycle: str | None = None
@@ -782,6 +785,42 @@ def execute_briefing(
         if digest_result.diagnostic:
             result.diagnostics.append(digest_result.diagnostic)
         stage_timings["llm_digest"] = perf_counter() - _t0
+
+    # === 7.5 Timing-scenario scan (detached background, ECMWF-only) ===
+    # Fire-and-forget: the briefing finishes and `complete` fires as usual; the
+    # scan runs on a separate thread and writes `time_options.json` when done,
+    # which the client picks up the next time the briefing is viewed. We do NOT
+    # block the refresh on it (the daylight ECMWF re-decode can take a couple of
+    # minutes). The Relevance gate inside run_time_scan makes it a fast no-op on
+    # the common case (no scan-class advisory flagged → returns before any
+    # decode). The scan reads everything it needs from pack_dir on disk, so it
+    # is safe to run after execute_briefing returns.
+    if pack_dir and route_advisories_manifest is not None:
+        from weatherbrief.tasks.time_scan import submit_time_scan_background
+
+        submit_time_scan_background(
+            pack_dir,
+            route,
+            departure_time,
+            flight_duration_hours=route.flight_duration_hours,
+            advisory_models=options.advisory_models,
+            enabled_ids=adv_enabled_ids,
+            advisory_enabled=options.advisory_enabled,
+            user_params=options.advisory_params,
+            aggregation=adv_aggregation,
+            airports_db_path=options.airports_db_path,
+            icing_method=options.icing_method,
+            cloud_method=options.cloud_method,
+            convective_method=options.convective_method,
+            locale=options.locale,
+            cruise_speed_ias_kt=options.cruise_speed_ias_kt,
+            # alt_departure_time is reframed as the pinned "preferred departure
+            # time" — always graded as a candidate when set.
+            preferred_departure_time=options.alt_departure_time,
+            as_of_time=as_of_time,
+            # ECMWF GRIB dir comes from the ECMWF_GRIB_DIR env var (same as the
+            # main enrichment path), resolved inside run_time_scan.
+        )
 
     # === 8. Always: text digest ===
     from weatherbrief.digest.text import format_digest

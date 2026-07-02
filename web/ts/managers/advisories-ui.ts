@@ -22,6 +22,17 @@ export function setLiveAdvisoryCatalog(entries: AdvisoryCatalogEntry[]): void {
   liveCatalog = entries;
 }
 
+/** Resolve an advisory id to its display name, preferring the live catalog
+ *  (current code copy) then the pack-baked manifest catalog, falling back to the
+ *  raw id. Shared with the timing-options panel so both surfaces name advisories
+ *  the same way. */
+export function advisoryName(id: string, manifest?: RouteAdvisoriesManifest | null): string {
+  const live = liveCatalog?.find(e => e.id === id);
+  if (live) return live.name;
+  const packed = manifest?.catalog.find(e => e.id === id);
+  return packed?.name ?? id;
+}
+
 /** Visibility for an airport condition, region-aware.
  *  Prefers raw meters (visibility_m); falls back to legacy SM for old packs. */
 function formatCondVis(cond: AirportModelCondition): string | null {

@@ -67,6 +67,7 @@ class FIKIIcingEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="fiki_icing",
+            timing_class="scan",
             name="FIKI Icing",
             short_description="Icing manageable for FIKI-equipped",
             description=(

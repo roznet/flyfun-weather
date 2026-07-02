@@ -42,6 +42,8 @@ export interface AdvisoryCatalogEntry {
   category: string;
   default_enabled: boolean;
   altitude_dependent: boolean;
+  /** Timing-scan participation: "scan" | "cheap" | "none" (timing-scenario scan). */
+  timing_class?: string;
   parameters: AdvisoryParameterDef[];
 }
 

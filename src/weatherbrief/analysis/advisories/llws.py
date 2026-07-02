@@ -70,6 +70,7 @@ class LLWSEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="llws",
+            timing_class="cheap",
             name="Low-Level Wind Shear",
             short_description="Wind shear in the lowest 1000m at departure and arrival",
             description=(

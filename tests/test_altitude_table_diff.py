@@ -183,8 +183,18 @@ def test_options_to_improve_consolidates_altitude_and_tactical():
 
 
 def test_options_to_improve_none_when_both_empty():
-    # No table and no tactical mitigations → whole section omitted.
-    assert _format_options_to_improve_context(None, _manifest(_advisory("vfr_feasibility"))) is None
+    # No table, no tactical mitigations, and no flagged scan-class advisory
+    # (empty manifest → no timing hint either) → whole section omitted.
+    assert _format_options_to_improve_context(None, _manifest()) is None
+
+
+def test_options_to_improve_timing_hint_when_scan_class_flagged():
+    # A flagged scan-class advisory (vfr_feasibility RED) adds the timing
+    # pointer sub-block even with no altitude table / tactical mitigations.
+    block = _format_options_to_improve_context(None, _manifest(_advisory("vfr_feasibility")))
+    assert block is not None
+    assert "Timing" in block
+    assert "Timing options in the app" in block
 
 
 def test_options_to_improve_altitude_only_when_no_tactical():

@@ -498,7 +498,14 @@ def get_briefing(
         # Fetch advisories
         advisories = client.get_advisories(flight_id, timestamp)
         if advisories:
-            result["advisories"] = _summarize_advisories(advisories)
+            adv_summary = _summarize_advisories(advisories)
+            result["advisories"] = adv_summary
+            # Timing-scenario referral: point to the app when a scan-class
+            # hazard is flagged (the interactive confirm is web-only).
+            if any(a.get("timing_referral") for a in adv_summary):
+                from weatherbrief.connectors.views import TIMING_NOTE
+
+                result["timing_note"] = TIMING_NOTE
 
         # Fetch digest
         digest_json = client.get_digest_json(flight_id, timestamp)

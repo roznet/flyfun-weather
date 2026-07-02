@@ -24,6 +24,7 @@ class VMCCruiseEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="vmc_cruise",
+            timing_class="scan",
             name="VMC at Cruise",
             short_description="Can maintain VMC at cruise altitude",
             description=(

@@ -45,6 +45,7 @@ class FreezingPrecipEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="freezing_precip",
+            timing_class="scan",  # scan? → scan: severe & diurnal T-crossing (safety wins)
             name="Freezing Precipitation",
             short_description="Freezing rain / ice pellets along the route",
             description=(

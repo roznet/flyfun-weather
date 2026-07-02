@@ -14,6 +14,7 @@ import type {
 } from '../store/types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { RouteFrontsManifest } from '../types/fronts';
+import type { TimeConfirmation, TimeWindowScan } from '../types/time-scan';
 import type { SoundingProfileData } from '../visualization/skewt/types';
 import { API_BASE, apiFetch, redirectToLogin } from '../utils';
 
@@ -598,6 +599,43 @@ export async function fetchAltitudeTableCached(
   return apiFetch<AltitudeTableResult>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/altitude-table`,
     { method: 'GET' },
+  );
+}
+
+// --- Timing-scenario scan (better departure windows) ---
+
+/** Fetch the timing-scenario scan (``time_options.json``) for a pack.
+ *  Returns null on 404 — the scan hasn't run or was gated off, which the client
+ *  treats as "nothing to show", not an error. Other errors propagate. */
+export async function fetchTimeOptions(
+  flightId: string,
+  timestamp: string,
+): Promise<TimeWindowScan | null> {
+  try {
+    return await apiFetch<TimeWindowScan>(
+      `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/time-options`,
+    );
+  } catch (err) {
+    // apiFetch surfaces the status in the message as `API 404: …`.
+    if (err instanceof Error && /^API 404:/.test(err.message)) return null;
+    throw err;
+  }
+}
+
+/** Multi-model confirm of one candidate departure ("check all models"). The
+ *  server runs the full GFS+ICON+ECMWF enrichment synchronously (several
+ *  seconds) and caches the confirmation onto the candidate. */
+export async function confirmTimeOption(
+  flightId: string,
+  timestamp: string,
+  departureTime: string,
+): Promise<TimeConfirmation> {
+  return apiFetch<TimeConfirmation>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/time-options/confirm`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ departure_time: departureTime }),
+    },
   );
 }
 

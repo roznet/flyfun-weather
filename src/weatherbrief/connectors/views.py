@@ -29,6 +29,14 @@ MITIGATION_NOTE = (
     "downgrade."
 )
 
+TIMING_NOTE = (
+    "Timing options (candidate departure windows scanned against ECMWF) are a "
+    "web-app feature — the connector is stateless/synchronous and can't run the "
+    "interactive 'tap to check all models' confirm. When an advisory carries "
+    "timing_referral, tell the user a smoother departure window may exist and to "
+    "open the briefing in the app to explore it. Do NOT invent alternate times."
+)
+
 CONVECTIVE_NOTE = (
     "thermo.peak.el_top_ft is parcel-derived (the equilibrium level the digest "
     "narrates as 'convective tops'), NOT the model's convective cloud field. "
@@ -150,6 +158,14 @@ def summarize_advisories(advisories: dict) -> list[dict]:
         if cat:
             entry["name"] = cat.get("name")
             entry["category"] = cat.get("category")
+
+        # Timing referral (timing-scenario scan): a neutral pointer, set on a
+        # flagged scan-class advisory, telling the agent that candidate
+        # departure windows can be explored in the app. Stateless connectors
+        # can't run the interactive confirm, so we refer rather than expose half
+        # a workflow. Never a valenced flag, never changes the grade.
+        if cat and cat.get("timing_class") == "scan" and entry["status"] in ("amber", "red"):
+            entry["timing_referral"] = True
 
         # Layer A: expand the full per-model detail + thresholds, and point the
         # agent at the drill-down tool, only when there is something worth

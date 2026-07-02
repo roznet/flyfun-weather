@@ -518,6 +518,7 @@ class VFRFeasibilityEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="vfr_feasibility",
+            timing_class="scan",
             name="VFR Feasibility",
             short_description="Overall VFR flight viability",
             description=(

@@ -229,6 +229,7 @@ class ConvectiveCharacterEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="convective_character",
+            timing_class="scan",
             name="Convective Character",
             short_description="Is convection circumnavigable VFR?",
             description=(

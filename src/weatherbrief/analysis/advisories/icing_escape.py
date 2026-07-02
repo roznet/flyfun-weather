@@ -153,6 +153,7 @@ class IcingEscapeEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="icing_escape",
+            timing_class="scan",
             name="Icing Escape (non-FIKI)",
             short_description="Icing at cruise and warm-air escape viability",
             description=(

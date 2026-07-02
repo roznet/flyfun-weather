@@ -73,6 +73,7 @@ class AirportWindEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="airport_wind",
+            timing_class="cheap",
             name="Airport Wind",
             short_description="Crosswind and gusts at airports",
             description=(

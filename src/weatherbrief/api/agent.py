@@ -303,7 +303,11 @@ def get_briefing(
 
     advisories = _read_json(pack_dir, "route_advisories.json")
     if advisories:
-        result["advisories"] = views.summarize_advisories(advisories)
+        adv_summary = views.summarize_advisories(advisories)
+        result["advisories"] = adv_summary
+        # Timing-scenario referral: web-only interactive confirm → point there.
+        if any(a.get("timing_referral") for a in adv_summary):
+            result["timing_note"] = views.TIMING_NOTE
 
     digest_json = _read_json(pack_dir, "digest.json")
     if digest_json:

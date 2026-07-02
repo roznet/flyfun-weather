@@ -165,6 +165,7 @@ class IFRFeasibilityEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="ifr_feasibility",
+            timing_class="scan",
             name="IFR Feasibility",
             short_description="Overall IFR flight viability",
             description=(

@@ -790,6 +790,38 @@ def _format_tactical_mitigations_context(
     return "\n".join(["Tactical (per-advisory, no altitude change):", *lines])
 
 
+def _format_timing_hint_context(
+    manifest: RouteAdvisoriesManifest,
+) -> str | None:
+    """Synchronous timing *pointer* for the digest — no numbers, no async scan.
+
+    The full timing-scenario scan is a low-priority background job that runs
+    *after* the digest is generated, so the digest can't cite its results. The
+    honest synchronous hint uses the same Relevance signal the scan gates on: a
+    ``scan``-class advisory (GRIB-dependent, genuinely diurnal — convection,
+    cloud, icing, feasibility) flagged RED/AMBER at the planned time. When one
+    is, a calmer departure window *may* exist; point the pilot at the app's
+    Timing options rather than inventing numbers here.
+    """
+    from weatherbrief.analysis.advisories import get_scan_class_ids
+
+    scan_ids = get_scan_class_ids()
+    name_map = {entry.id: entry.name for entry in manifest.catalog}
+    flagged = [
+        name_map.get(a.advisory_id, a.advisory_id)
+        for a in manifest.advisories
+        if a.advisory_id in scan_ids and a.aggregate_status in ("red", "amber")
+    ]
+    if not flagged:
+        return None
+    joined = ", ".join(flagged[:3])
+    return (
+        "Timing (see Timing options in the app — a scan runs there):\n"
+        f"  {joined} — these can vary through the day; a calmer departure window "
+        "may exist. Pointer only — the app checks candidate departure times against ECMWF."
+    )
+
+
 def _format_options_to_improve_context(
     altitude_table: AltitudeTableResult | None,
     route_advisories: RouteAdvisoriesManifest | None,
@@ -811,6 +843,9 @@ def _format_options_to_improve_context(
         tactical = _format_tactical_mitigations_context(route_advisories)
         if tactical:
             sub_blocks.append(tactical)
+        timing = _format_timing_hint_context(route_advisories)
+        if timing:
+            sub_blocks.append(timing)
     if not sub_blocks:
         return None
     header = "=== OPTIONS TO IMPROVE (advice only — do NOT change the assessment) ==="

@@ -262,6 +262,53 @@ def load_cross_sections(pack_dir: Path) -> list[RouteCrossSection]:
     ]
 
 
+def save_cross_sections_ext(
+    pack_dir: Path, cross_sections: list[RouteCrossSection],
+) -> None:
+    """Persist the daylight-extended cross-sections to ``cross_section_ext.json``.
+
+    Written by the timing-scenario scan after :func:`extend_ecmwf_enrichment_daylight`
+    re-decodes the daylight ECMWF fhours. Kept as a *separate* artifact so the
+    background job never clobbers the primary ``cross_section.json`` that the
+    live briefing, altitude table, and alt path read. The confirm endpoint
+    reloads it to grade a candidate at ICON/GFS's nearest native step.
+    """
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    cs_data = [cs.model_dump(mode="json") for cs in cross_sections]
+    (pack_dir / "cross_section_ext.json").write_text(json.dumps({"cross_sections": cs_data}))
+
+
+def load_cross_sections_ext(pack_dir: Path) -> list[RouteCrossSection]:
+    """Load the daylight-extended cross-sections, or ``[]`` if not scanned yet."""
+    data = _read_json_or_gz(pack_dir / "cross_section_ext.json")
+    if not data:
+        return []
+    return [
+        RouteCrossSection.model_validate(item)
+        for item in data.get("cross_sections", [])
+    ]
+
+
+def save_time_options(pack_dir: Path, scan: "TimeWindowScan") -> None:
+    """Persist the timing-scenario scan to ``time_options.json``."""
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "time_options.json").write_text(scan.model_dump_json(indent=2))
+
+
+def load_time_options(pack_dir: Path) -> "TimeWindowScan | None":
+    """Load the timing-scenario scan, returning *None* if not present."""
+    from weatherbrief.models import TimeWindowScan
+
+    to_path = pack_dir / "time_options.json"
+    if not to_path.exists():
+        return None
+    try:
+        return TimeWindowScan.model_validate_json(to_path.read_text())
+    except Exception:
+        logger.warning("Failed to load time_options.json from %s", pack_dir, exc_info=True)
+        return None
+
+
 def load_elevation_profile(pack_dir: Path) -> ElevationProfile | None:
     """Load elevation profile, returning *None* if missing."""
     ep_path = pack_dir / "elevation_profile.json"

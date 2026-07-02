@@ -79,6 +79,7 @@ class DensityAltitudeEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="density_altitude",
+            timing_class="cheap",
             name="Density Altitude",
             short_description="Aircraft performance at departure and arrival",
             description=(

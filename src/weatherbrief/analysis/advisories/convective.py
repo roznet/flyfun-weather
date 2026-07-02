@@ -55,6 +55,7 @@ class ConvectiveEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="convective",
+            timing_class="scan",
             name="Convective Activity",
             short_description="Can fly around convective activity",
             description=(

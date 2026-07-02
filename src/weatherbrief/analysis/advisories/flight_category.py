@@ -106,6 +106,8 @@ class FlightCategoryEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="flight_category",
+            timing_class="cheap",  # scan? → cheap: IMC/fog burn-off is a timing case,
+                                   # but ceiling/vis fidelity is OM/TAF not GRIB
             name="Airport Weather",
             short_description="Flight category and convective risk at departure and arrival",
             description=(

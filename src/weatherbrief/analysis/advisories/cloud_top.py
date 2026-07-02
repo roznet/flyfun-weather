@@ -23,6 +23,7 @@ class CloudTopEvaluator:
     def catalog_entry() -> AdvisoryCatalogEntry:
         return AdvisoryCatalogEntry(
             id="cloud_top",
+            timing_class="scan",
             name="Cloud Tops",
             short_description="Can fly above cloud tops",
             description=(

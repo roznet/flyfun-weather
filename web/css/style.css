@@ -3887,6 +3887,128 @@ label {
   margin-top: 0.25rem;
 }
 
+/* Timing-scenario panel (#330 TIMING axis): a neutral soft hook surfacing
+   calmer departure windows. Attention-director, never a verdict — the panel
+   chrome reuses the mitigation "tip" blue-gray (never green/red on the hook).
+   The per-candidate ECMWF/confirm badges DO carry status colour (that's a real
+   grade for that window), but the panel itself stays neutral. */
+.time-options-panel {
+  margin: 1rem 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius);
+  border-left: 3px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+}
+.time-options-header {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.6rem;
+}
+.time-options-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.time-option-row {
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.time-option-row--baseline {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.85;
+}
+.time-option-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.time-option-time {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.time-option-shift {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.time-option-tag {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.time-option-tag--preferred {
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.time-option-diff {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text);
+  line-height: 1.4;
+}
+.time-option-worsens {
+  color: var(--text-muted);
+}
+.time-option-provisional {
+  margin-top: 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.time-option-provisional-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.time-option-confirm-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+.time-option-confirm-btn:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.time-option-confirm-btn:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+.time-option-confirmed {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.time-option-confirmed-label {
+  font-weight: 600;
+}
+.time-option-confirmed-detail {
+  color: var(--text-muted);
+  margin-left: 0.35rem;
+}
+/* The downgrade ("actually not better") is a first-class outcome, shown plainly
+   in neutral text — not an error, not red. */
+.time-option-confirmed--downgrade .time-option-confirmed-label {
+  color: var(--text-muted);
+}
+.time-option-note,
+.time-option-footnote {
+  margin: 0.6rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 /* "All clear" block: unanimous-green + unavailable advisories as two-line
    compact cards (header + detail, no per-model row) in a denser grid, so a long
    consistent-green list doesn't dominate the section. */

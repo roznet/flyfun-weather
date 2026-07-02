@@ -72,6 +72,7 @@ class SunEvaluator:
             category="sun",
             default_enabled=True,
             altitude_dependent=False,
+            timing_class="cheap",  # pure astronomy — glare time is computable exactly
             parameters=[
                 AdvisoryParameterDef(
                     key="glare_azimuth_deg",

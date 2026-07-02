@@ -34,6 +34,25 @@ def get_altitude_dependent_ids() -> set[str]:
     return {aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().altitude_dependent}
 
 
+def get_timing_class_ids(timing_class: str) -> set[str]:
+    """Return IDs of evaluators whose catalog ``timing_class`` matches.
+
+    Used by the timing-scenario scan: ``get_timing_class_ids("scan")`` is the
+    set whose RED/AMBER presence triggers (and is ranked by) the ECMWF day-scan.
+    Declarative — a new evaluator that sets ``timing_class="scan"`` auto-joins.
+    """
+    _ensure_loaded()
+    return {
+        aid for aid, cls in _EVALUATORS.items()
+        if cls.catalog_entry().timing_class == timing_class
+    }
+
+
+def get_scan_class_ids() -> set[str]:
+    """Convenience: the ``"scan"``-class advisory IDs (the timing-scan trigger set)."""
+    return get_timing_class_ids("scan")
+
+
 def resolve_enabled_ids(enabled_map: dict[str, bool] | None) -> set[str] | None:
     """Resolve a saved per-profile advisory enable map into the set to evaluate.
 

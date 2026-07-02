@@ -6,7 +6,8 @@ import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
 import { renderPirepList } from './managers/pirep-ui';
-import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
+import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, advisoryName, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
+import { renderTimeOptions } from './managers/time-options-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog } from './adapters/preferences-adapter';
@@ -510,6 +511,20 @@ async function init(): Promise<void> {
       return overlayAltitudeStatuses(base, state.altitudeTable, state.advisoryAltitudeOverride);
     }
     return base;
+  }
+
+  /** Render the timing-scenario panel (better departure windows). Suppresses
+   *  itself when there's nothing better to show. Advisory ids are named via the
+   *  shared advisory catalog lookup so both surfaces agree. */
+  function renderTimeOptionsPanel(state: BriefingState): void {
+    renderTimeOptions(
+      document.getElementById('time-options-wrapper'),
+      state.timeOptions,
+      {
+        onConfirm: (dt) => store.getState().confirmTimeCandidate(dt),
+        resolveName: (id) => advisoryName(id, state.routeAdvisories),
+      },
+    );
   }
 
   // Apply initial display mode
@@ -1412,6 +1427,7 @@ async function init(): Promise<void> {
       state.routeAnalyses !== prev.routeAnalyses ||
       state.routeAdvisories !== prev.routeAdvisories ||
       state.altAdvisories !== prev.altAdvisories ||
+      state.timeOptions !== prev.timeOptions ||
       state.showingAlt !== prev.showingAlt ||
       state.elevationProfile !== prev.elevationProfile ||
       state.advisoryAltitudeOverride !== prev.advisoryAltitudeOverride ||
@@ -1419,6 +1435,7 @@ async function init(): Promise<void> {
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip);
+      renderTimeOptionsPanel(state);
       ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
@@ -1927,6 +1944,7 @@ async function init(): Promise<void> {
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories, s.digestPending, () => store.getState().generateDigest());
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
+    renderTimeOptionsPanel(s);
     ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
