@@ -63,6 +63,7 @@ class FreezingPrecipEvaluator:
                 "precipitation data."
             ),
             category="icing",
+            timing_class="scan",
             parameters=[
                 AdvisoryParameterDef(
                     key="primed_pct_amber",

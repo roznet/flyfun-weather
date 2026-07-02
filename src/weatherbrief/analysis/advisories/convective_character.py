@@ -240,6 +240,7 @@ class ConvectiveCharacterEvaluator:
                 "(severity) advisory — a big cell still grades RED there regardless."
             ),
             category="convective",
+            timing_class="scan",
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

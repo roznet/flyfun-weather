@@ -33,6 +33,7 @@ class CloudTopEvaluator:
                 "the pilot cannot get on top if needed."
             ),
             category="cloud",
+            timing_class="scan",
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

@@ -70,6 +70,7 @@ class SunEvaluator:
                 "dusk AMBER via warn_near_sunset; glare AMBER always applies."
             ),
             category="sun",
+            timing_class="cheap",
             default_enabled=True,
             altitude_dependent=False,
             parameters=[

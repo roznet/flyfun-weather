@@ -1101,8 +1101,12 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     )
     if as_of_time:
         options.as_of_time = as_of_time
-    if flight.alt_departure_time:
-        options.alt_departure_time = flight.alt_departure_time
+    # NOTE: options.alt_departure_time is deliberately NOT set anymore — the
+    # synchronous in-pipeline alt stage is retired. Alternate-time grading now
+    # runs in the timing-scenario background job (``tasks/time_scan_runner``,
+    # queued by ``_persist_pack_finalize``), gated on Flight.flexibility, and
+    # still writes route_advisories_alt.json + the pack-row alt fields. The
+    # BriefingOptions field stays for direct pipeline callers (tests/debug).
     if icing_method:
         options.icing_method = icing_method
     if cloud_method:
@@ -1504,6 +1508,17 @@ def _persist_pack_finalize(
             db, user_id, flight_id, result.usage, result_size_bytes=pack_size,
         )
         _charge_briefing_cost(db, user_id, result.usage, pack_size, usage_row_id)
+
+    # Timing-scenario scan (Flexibility): queued AFTER the briefing is fully
+    # persisted so it never delays or fails a refresh. All three refresh paths
+    # (streaming, sync, scheduler) converge here — one wire. The runner itself
+    # skips (with a terminal "skipped" status) when flexibility is "none".
+    try:
+        from weatherbrief.tasks.time_scan_runner import schedule_time_scan
+
+        schedule_time_scan(flight_id, Path(pack_path), fetch_ts)
+    except Exception:
+        logger.warning("time-scan: post-refresh scheduling failed", exc_info=True)
 
     logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
     return meta
@@ -2522,6 +2537,52 @@ def get_alt_advisories(
     return FileResponse(adv_path, media_type="application/json")
 
 
+@router.get("/{timestamp}/time-options")
+def get_time_options(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Timing-scenario scan for a pack — status + result, poll-friendly.
+
+    Response shape: ``{"status": <TimeScanStatus fields>, "scan": <TimeWindowScan|null>}``.
+    The client polls after ``briefing_ready`` (the refresh SSE stream closes
+    before the background scan finishes, so there is no push channel) and stops
+    on a terminal status (``done`` / ``failed`` / ``skipped``).
+
+    Lazy-schedules the scan when the flight has Flexibility set but this pack
+    has no status yet — covers "pilot enabled Flexibility after the briefing
+    ran" without a re-refresh.
+    """
+    from weatherbrief.tasks.artifacts import load_time_options, load_time_scan_status
+    from weatherbrief.tasks.time_scan_runner import schedule_time_scan
+
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    status = load_time_scan_status(pack_dir)
+    scan = load_time_options(pack_dir)
+
+    if status is None and scan is None:
+        if flight.flexibility != "none":
+            try:
+                fetch_ts = datetime.fromisoformat(timestamp)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="Invalid pack timestamp")
+            db_path = getattr(request.app.state, "db_path", "")
+            schedule_time_scan(flight_id, pack_dir, fetch_ts, db_path=db_path)
+            status = load_time_scan_status(pack_dir)
+        else:
+            raise HTTPException(status_code=404, detail="Timing options not available")
+
+    return {
+        "status": status.model_dump(mode="json") if status else None,
+        "scan": scan.model_dump(mode="json") if scan else None,
+    }
+
+
 @router.post("/{timestamp}/advisories/alt/compute")
 def compute_alt_advisories(
     flight_id: str,
@@ -2664,7 +2725,7 @@ def _recompute_airport_conditions(
     return None
 
 
-def _load_advisory_profile(db, flight, user_id, request, pack_dir):
+def _load_advisory_profile(db, flight, user_id, request, pack_dir, *, db_path: str = ""):
     """Load advisory profile settings and build a recompute-conditions callback.
 
     Shared by recalculate_advisories and altitude_table endpoints.
@@ -2676,6 +2737,9 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     no advisory customization). It is threaded through to the front advisory so
     an explicit ``fronts: false`` opt-out is honored independently of the
     ``auto_front_detection`` master (issue #196, model B).
+
+    ``request`` may be ``None`` for non-request callers (the timing-scan
+    background runner) — pass ``db_path`` explicitly then.
     """
     from weatherbrief.analysis.advisories import resolve_enabled_ids
     from weatherbrief.api.preferences import load_user_locale
@@ -2697,7 +2761,8 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir):
     cloud_method = profile_settings.get("cloud_method")
     convective_method = profile_settings.get("convective_method")
     auto_front_detection = bool(profile_settings.get("auto_front_detection", False))
-    db_path = getattr(request.app.state, "db_path", "")
+    if request is not None:
+        db_path = getattr(request.app.state, "db_path", "") or db_path
     locale = load_user_locale(db, user_id)
 
     def recompute_conds(rp_analyses, cross_sections, advisory_model_names):

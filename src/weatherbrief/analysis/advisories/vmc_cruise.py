@@ -31,6 +31,7 @@ class VMCCruiseEvaluator:
                 "BKN or OVC coverage at cruise means IMC conditions."
             ),
             category="cloud",
+            timing_class="scan",
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

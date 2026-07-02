@@ -67,6 +67,10 @@ class CreateFlightRequest(BaseModel):
     flight_duration_hours: float | None = None
     profile_id: int | None = None  # flight profile to associate
     aircraft_id: int | None = None  # user aircraft to associate
+    # Timing-scenario Flexibility mode. "alternate" needs alt_departure_time,
+    # which is set via PATCH after creation (mirrors the existing alt flow), so
+    # it is rejected here; the web form creates then patches.
+    flexibility: Literal["none", "same_day", "prev_day", "next_day"] = "none"
 
     @field_validator("departure_time")
     @classmethod
@@ -143,6 +147,9 @@ class FlightResponse(BaseModel):
     waypoints: list[str] = []
     departure_time: str
     alt_departure_time: str | None = None
+    # Timing-scenario Flexibility mode (timing-scenario-plan.md): what the
+    # scenario job grades for this flight. "alternate" uses alt_departure_time.
+    flexibility: Literal["none", "alternate", "same_day", "prev_day", "next_day"] = "none"
     target_date: str  # backward compat (computed from departure_time)
     target_time_utc: int  # backward compat (computed from departure_time)
     cruise_altitude_ft: int
@@ -403,6 +410,7 @@ def _flight_to_response(
         waypoints=flight.waypoints,
         departure_time=flight.departure_time.isoformat(),
         alt_departure_time=flight.alt_departure_time.isoformat() if flight.alt_departure_time else None,
+        flexibility=flight.flexibility,
         target_date=flight.target_date,
         target_time_utc=flight.target_time_utc,
         cruise_altitude_ft=flight.cruise_altitude_ft,
@@ -720,6 +728,7 @@ def create_flight(
         flight_duration_hours=flight_duration_hours,
         raw_route=raw_route,
         parser_version=parser_version,
+        flexibility=req.flexibility,
         created_at=datetime.now(tz=timezone.utc),
     )
 
@@ -1615,6 +1624,9 @@ class UpdateFlightRequest(BaseModel):
     aircraft_id: int | None = None  # switch aircraft (applies speed/ceiling defaults)
     departure_time: str | None = None  # ISO 8601 (time-of-day change only; date must match)
     alt_departure_time: str | None = None  # ISO 8601 or "" to clear
+    # Timing-scenario Flexibility mode; None = no change. "alternate" grades
+    # alt_departure_time; day modes run the departure-window scan.
+    flexibility: Literal["none", "alternate", "same_day", "prev_day", "next_day"] | None = None
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
@@ -1818,6 +1830,16 @@ def update_flight(
                     detail="Alt departure time must differ from the primary departure time.",
                 )
             row.alt_departure_time = alt_dt
+
+    if req.flexibility is not None:
+        if req.flexibility == "alternate" and row.alt_departure_time is None and (
+            req.alt_departure_time in (None, "")
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Flexibility 'alternate' requires an alt departure time.",
+            )
+        row.flexibility = req.flexibility
 
     db.flush()
     updated = load_flight(db, flight_id)
