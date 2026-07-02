@@ -254,3 +254,40 @@ Tell the user:
 - It should now appear in **Xcode → Window → Organizer**
 - From there they can **Distribute App** → **App Store Connect** to upload
 - Remind them to push the version bump commit when ready
+
+## Step 10 — App Store reviewer sign-in token (ask first)
+
+Do **not** mint this by default. After reporting, ask the user:
+
+> Are you submitting this build to the App Store for review? If so, the App
+> Review notes need a working sign-in deep link, and the previous reviewer
+> token expires 7–60 days after it was minted — so it may be stale. Mint a
+> fresh one?
+
+Only if they say yes, mint it:
+
+```bash
+source venv/bin/activate && python3 scripts/mint_reviewer_token.py --days 60
+```
+
+Then give the user the printed `flyfunweather://auth?token=…` line to paste into
+**App Store Connect → App Review Information → Notes** (alongside the "tap this
+link on the device / simulator to sign in" instruction).
+
+**Background so you can explain it if asked:**
+- The reviewer signs in through the app's `flyfunweather://auth?token=<jwt>`
+  deep link. The JWT is self-contained — auth verifies the signature only, it
+  does **not** hit the DB — so the token can be minted from a dev checkout as
+  long as it's signed with the production `JWT_SECRET` (the dev `.env`
+  `JWT_SECRET` *is* the prod secret).
+- The token is bound to a dedicated **"Sign in with Apple" test account**
+  (private-relay email). The account already exists in the prod DB; the script
+  only issues a session token for it, it does not create the user.
+- The standard `flyfun_common.auth.create_token` helper only issues **7-day**
+  tokens — too short for a review cycle — which is why this dedicated script
+  exists with a configurable (default 60-day) expiry.
+- **Nothing sensitive is committed.** The script reads everything from `.env`
+  (gitignored): `JWT_SECRET` (the only real secret) plus the reviewer identity
+  `REVIEWER_USER_ID` / `REVIEWER_EMAIL` / `REVIEWER_NAME`. If a fresh checkout
+  is missing these, the script exits with a message naming the missing var —
+  re-add them to `.env` (they are not in the repo by design).
