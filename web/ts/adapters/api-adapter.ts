@@ -555,6 +555,16 @@ export interface TimeScanStatusDTO {
   updated_at: string;
 }
 
+export interface TimeConfirmationDTO {
+  models_checked: string[];
+  assessment: string;
+  assessment_reason: string;
+  better_than_baseline: boolean;
+  improves: string[];
+  worsens: string[];
+  confirmed_at: string;
+}
+
 export interface TimeCandidateDTO {
   departure_time: string;
   departure_shift_hours: number;
@@ -567,6 +577,8 @@ export interface TimeCandidateDTO {
   confidence: 'confirmed_in_window' | 'ecmwf_only' | 'confirmed';
   is_baseline: boolean;
   is_alternate: boolean;
+  confirmed: TimeConfirmationDTO | null;
+  confirm_pending: boolean;
 }
 
 export interface TimeWindowScanDTO {
@@ -593,6 +605,19 @@ export async function fetchTimeOptions(
 ): Promise<TimeOptionsResponse> {
   return apiFetch<TimeOptionsResponse>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/time-options`
+  );
+}
+
+/** Queue the on-tap multi-model check of one provisional candidate (202);
+ *  the result lands on the candidate via the regular time-options poll. */
+export async function confirmTimeOption(
+  flightId: string,
+  timestamp: string,
+  departureTime: string,
+): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/time-options/confirm`,
+    { method: 'POST', body: JSON.stringify({ departure_time: departureTime }) },
   );
 }
 

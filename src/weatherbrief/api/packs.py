@@ -2557,11 +2557,17 @@ def get_time_options(
     ran" without a re-refresh.
     """
     from weatherbrief.tasks.artifacts import load_time_options, load_time_scan_status
-    from weatherbrief.tasks.time_scan_runner import schedule_time_scan
+    from weatherbrief.tasks.time_scan_runner import (
+        reconcile_stale_confirms,
+        schedule_time_scan,
+    )
 
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
+    # A restart mid-confirm orphans confirm_pending flags — clear them here
+    # so pollers don't see an eternal "checking all models…".
+    reconcile_stale_confirms(pack_dir)
     status = load_time_scan_status(pack_dir)
     scan = load_time_options(pack_dir)
 
@@ -2581,6 +2587,56 @@ def get_time_options(
         "status": status.model_dump(mode="json") if status else None,
         "scan": scan.model_dump(mode="json") if scan else None,
     }
+
+
+class TimeConfirmRequest(BaseModel):
+    """Body for the on-tap multi-model confirm — identifies the candidate."""
+
+    departure_time: str  # ISO-8601 of the candidate departure to confirm
+
+
+@router.post("/{timestamp}/time-options/confirm", status_code=202)
+def confirm_time_option(
+    flight_id: str,
+    timestamp: str,
+    body: TimeConfirmRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Queue the multi-model check of one provisional candidate.
+
+    The deferred cost the plan gates on demonstrated user intent: fetches
+    GFS+ICON for the candidate's shifted flight window (roughly one
+    briefing-equivalent, tens of seconds to minutes), so it runs on the
+    background queue — 202 immediately, the client keeps polling
+    ``GET .../time-options`` until the candidate carries ``confirmed``.
+    """
+    from weatherbrief.tasks.time_scan_runner import schedule_time_confirm
+
+    flight = _load_owned_flight(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    try:
+        cand_time = datetime.fromisoformat(body.departure_time)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="departure_time must be ISO-8601")
+
+    db_path = getattr(request.app.state, "db_path", "")
+    outcome = schedule_time_confirm(flight.id, pack_dir, cand_time, db_path=db_path)
+    if outcome == "busy":
+        # One confirm at a time per pack — each costs a briefing-equivalent
+        # of GFS+ICON fetch; don't let a tap-happy user stack them.
+        raise HTTPException(
+            status_code=429,
+            detail="A model check is already running for this briefing — wait for it to finish",
+        )
+    if outcome == "invalid":
+        raise HTTPException(
+            status_code=409,
+            detail="No such candidate, or it is already confirmed",
+        )
+    return {"status": "queued"}
 
 
 @router.post("/{timestamp}/advisories/alt/compute")
