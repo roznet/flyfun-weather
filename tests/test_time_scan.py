@@ -366,6 +366,79 @@ class TestProvisionalTier:
 
 
 # ---------------------------------------------------------------------------
+# Confirm scheduling: one-at-a-time guard + stale-flag recovery (slice 3)
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmScheduling:
+    def _seed_scan(self, tmp_path: Path) -> None:
+        from weatherbrief.tasks.artifacts import save_time_options
+
+        scan = TimeWindowScan(
+            flexibility="same_day",
+            baseline=TimeScanBaseline(departure_time=DEP, assessment="RED"),
+            candidates=[
+                TimeCandidate(
+                    departure_time=DEP + timedelta(hours=h),
+                    departure_shift_hours=float(h),
+                    assessment="AMBER",
+                    confidence="ecmwf_only",
+                )
+                for h in (3, 4)
+            ],
+            generated_at=DEP,
+        )
+        save_time_options(tmp_path, scan)
+
+    def test_one_confirm_at_a_time_per_pack(self, tmp_path, monkeypatch):
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        self._seed_scan(tmp_path)
+        # Queue but never run — the worker must not consume the inflight key.
+        monkeypatch.setattr(runner._executor, "submit", lambda *a, **k: None)
+
+        first = runner.schedule_time_confirm("f1", tmp_path, DEP + timedelta(hours=3))
+        assert first == "queued"
+        # Same candidate re-tapped: already on it.
+        again = runner.schedule_time_confirm("f1", tmp_path, DEP + timedelta(hours=3))
+        assert again == "queued"
+        # A DIFFERENT candidate while one runs: rejected (server-side mirror
+        # of the disabled buttons — each confirm costs a briefing-equivalent
+        # of GFS+ICON fetch).
+        other = runner.schedule_time_confirm("f1", tmp_path, DEP + timedelta(hours=4))
+        assert other == "busy"
+
+        # Cleanup the module-global inflight set for other tests.
+        with runner._inflight_lock:
+            runner._inflight.clear()
+
+    def test_unknown_candidate_is_invalid(self, tmp_path, monkeypatch):
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        self._seed_scan(tmp_path)
+        monkeypatch.setattr(runner._executor, "submit", lambda *a, **k: None)
+        assert runner.schedule_time_confirm("f1", tmp_path, DEP + timedelta(hours=9)) == "invalid"
+
+    def test_reconcile_clears_orphaned_pending(self, tmp_path):
+        """A restart mid-confirm leaves confirm_pending with no live worker —
+        the polling GET reconciles it so the UI never shows an eternal
+        'checking all models…'."""
+        import weatherbrief.tasks.time_scan_runner as runner
+        from weatherbrief.tasks.artifacts import load_time_options, save_time_options
+
+        self._seed_scan(tmp_path)
+        scan = load_time_options(tmp_path)
+        scan.candidates[0].confirm_pending = True
+        save_time_options(tmp_path, scan)
+
+        assert runner.reconcile_stale_confirms(tmp_path) is True
+        reloaded = load_time_options(tmp_path)
+        assert not any(c.confirm_pending for c in reloaded.candidates)
+        # Idempotent: nothing left to clear.
+        assert runner.reconcile_stale_confirms(tmp_path) is False
+
+
+# ---------------------------------------------------------------------------
 # Declarative registry sets (locked mapping, decision C)
 # ---------------------------------------------------------------------------
 

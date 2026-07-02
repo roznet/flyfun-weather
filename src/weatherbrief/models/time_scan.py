@@ -74,6 +74,9 @@ class TimeCandidate(BaseModel):
     is_baseline: bool = False   # the planned departure, graded identically
     is_alternate: bool = False  # the pinned Alternate-time row (Flexibility)
     confirmed: TimeConfirmation | None = None  # slice-3 on-tap result
+    # True while an on-tap confirm is queued/running for this candidate —
+    # the polling client renders "checking all models…" off this flag.
+    confirm_pending: bool = False
 
 
 class TimeScanBaseline(BaseModel):

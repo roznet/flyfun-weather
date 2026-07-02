@@ -388,6 +388,134 @@ def current_ecmwf_run_ts(
 
 
 # ---------------------------------------------------------------------------
+# On-tap multi-model confirm (slice 3 — the deferred, user-gated cost)
+# ---------------------------------------------------------------------------
+
+
+def confirm_candidate(
+    pack_dir: Path,
+    route: RouteConfig,
+    candidate_time: datetime,
+    *,
+    data_dir: Path,
+    advisory_models: list[str] | None = None,
+    enabled_ids: set[str] | None = None,
+    advisory_enabled: dict[str, bool] | None = None,
+    user_params: dict | None = None,
+    aggregation: AdvisoryAggregation | None = None,
+    airports_db_path: str | None = None,
+    airport_conditions_recompute: Callable | None = None,
+    icing_method: str | None = None,
+    cloud_method: str | None = None,
+    convective_method: str | None = None,
+    locale: str | None = None,
+    cruise_speed_ias_kt: float | None = None,
+):
+    """Multi-model check of one provisional candidate — the honesty-ladder top.
+
+    Fetches + decodes GFS (S3 byte-range) and ICON (DWD download) for the
+    candidate's *shifted* flight window — roughly one briefing-equivalent of
+    fetch, which is why it's gated on a user tap — then grades the full
+    advisory model set and diffs against the planned time graded through the
+    same path on the same data. ``better_than_baseline=False`` (a tapped
+    suggestion that ICON/GFS reveal isn't better) is a designed outcome, not
+    an error: it shows the cross-check working.
+
+    Uses the **latest available** model runs (``as_of_time=None``): DWD
+    opendata only retains current runs, and "do the other models agree right
+    now" is the honest question a confirm answers. ``models_checked`` on the
+    returned :class:`TimeConfirmation` records what actually contributed.
+
+    Ephemeral throughout (decision G): enrichment mutates a freshly loaded
+    copy; the caller persists only the updated ``time_options.json``.
+    Returns ``None`` when grading fails outright.
+    """
+    from weatherbrief.fetch.grib import DecodePriority, enrich_forecasts
+    from weatherbrief.models import TimeConfirmation
+    from weatherbrief.tasks.advise import (
+        derive_assessment_from_advisories,
+        run_alt_from_pack,
+    )
+    from weatherbrief.tasks.artifacts import load_cross_sections, load_route_points
+
+    from weatherbrief.analysis.advisories.registry import get_scan_class_ids
+
+    cand = _aware(candidate_time)
+    cross_sections = load_cross_sections(pack_dir)
+    route_points = load_route_points(pack_dir)
+    if not cross_sections or not route_points:
+        return None
+
+    try:
+        enrich_forecasts(
+            cross_sections, [], route_points, cand,
+            data_dir=data_dir,
+            flight_duration_hours=route.flight_duration_hours,
+            priority=DecodePriority.BACKGROUND,
+        )
+    except Exception:
+        # A failed multi-model enrichment must not degrade into a quiet
+        # OM-clamped grade presented as "all models checked".
+        logger.warning("time-scan confirm: enrichment failed", exc_info=True)
+        return None
+
+    def _grade(t: datetime):
+        res = run_alt_from_pack(
+            pack_dir, t, route,
+            advisory_models=advisory_models,
+            enabled_ids=enabled_ids,
+            advisory_enabled=advisory_enabled,
+            user_params=user_params,
+            aggregation=aggregation,
+            airports_db_path=airports_db_path,
+            airport_conditions_recompute=airport_conditions_recompute,
+            icing_method=icing_method,
+            cloud_method=cloud_method,
+            convective_method=convective_method,
+            locale=locale,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            cross_sections=cross_sections,
+            persist=False,
+            detect_fronts=False,
+        )
+        return res.manifest
+
+    # Baseline through the same path on the same (candidate-window-enriched)
+    # sections — like vs like. The planned window's own enrichment is intact
+    # (the candidate-window fetch only adds hours).
+    baseline_manifest = _grade(_aware_pack_departure(pack_dir) or cand)
+    candidate_manifest = _grade(cand)
+    if baseline_manifest is None or candidate_manifest is None:
+        return None
+
+    improves, worsens, margin = _diff_manifests(
+        baseline_manifest, candidate_manifest, get_scan_class_ids(),
+    )
+    assess, reason = derive_assessment_from_advisories(candidate_manifest)
+    return TimeConfirmation(
+        models_checked=candidate_manifest.models,
+        assessment=assess,
+        assessment_reason=reason,
+        better_than_baseline=margin >= _MIN_MARGIN and not worsens,
+        improves=improves,
+        worsens=worsens,
+        confirmed_at=datetime.now(timezone.utc),
+    )
+
+
+def _aware_pack_departure(pack_dir: Path) -> datetime | None:
+    """The pack's planned departure (from briefing.json), for the confirm diff."""
+    import json
+
+    try:
+        b = json.loads((pack_dir / "briefing.json").read_text())
+        raw = b.get("departure_time")
+        return _aware(datetime.fromisoformat(raw.replace("Z", "+00:00"))) if raw else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Daylight window
 # ---------------------------------------------------------------------------
 

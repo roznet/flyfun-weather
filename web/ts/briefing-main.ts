@@ -525,26 +525,54 @@ async function init(): Promise<void> {
       return `<span class="assessment-chip ${cls}">${escapeHtml(assessment)}</span>`;
     };
 
+    // One confirm at a time (server enforces with 429; mirror it in the UI):
+    // while any candidate is checking, the other check buttons are disabled.
+    const anyConfirmPending = scan.candidates.some((c) => c.confirm_pending);
+
     const rows = scan.candidates.map((c) => {
       const time = formatDepartureTime(c.departure_time);
       const shift = c.is_baseline
         ? 'as planned'
         : `${c.departure_shift_hours >= 0 ? '+' : ''}${c.departure_shift_hours}h`;
       const tag = c.is_baseline ? '' : c.is_alternate ? ' ★ your alternate' : '';
+      // Once confirmed, the multi-model diff replaces the provisional one —
+      // showing ECMWF-only "improves" next to a "not better after all"
+      // verdict would contradict itself.
+      const improves = c.confirmed ? c.confirmed.improves : c.improves;
+      const worsens = c.confirmed ? c.confirmed.worsens : c.worsens;
       const diffs: string[] = [];
-      if (c.improves.length) diffs.push(`improves: ${c.improves.map(nameOf).join(', ')}`);
-      if (c.worsens.length) diffs.push(`worsens: ${c.worsens.map(nameOf).join(', ')}`);
-      const conf = c.confidence === 'confirmed_in_window' || c.confidence === 'confirmed'
-        ? 'all models checked'
-        : 'ECMWF only — not yet confirmed by other models';
+      if (improves.length) diffs.push(`improves: ${improves.map(nameOf).join(', ')}`);
+      if (worsens.length) diffs.push(`worsens: ${worsens.map(nameOf).join(', ')}`);
+
+      // Confidence line + the slice-3 confirm affordance for provisional rows.
+      let confLine: string;
+      let effectiveChip = chip(c.assessment);
+      if (c.confirmed) {
+        // Multi-model verdict replaces the provisional one. A downgrade
+        // ("actually not better") is a designed outcome — say it plainly.
+        effectiveChip = chip(c.confirmed.assessment);
+        const models = c.confirmed.models_checked.map((m) => m.toUpperCase()).join(', ');
+        confLine = c.confirmed.better_than_baseline
+          ? `checked with ${escapeHtml(models)} — still looks smoother`
+          : `checked with ${escapeHtml(models)} — not clearly better after all`;
+      } else if (c.confirm_pending) {
+        confLine = 'checking all models…';
+      } else if (c.confidence === 'ecmwf_only') {
+        confLine = anyConfirmPending
+          ? `ECMWF only · <button type="button" class="btn btn-outline btn-sm time-confirm-btn" disabled title="One model check at a time — another is running">Check all models</button>`
+          : `ECMWF only · <button type="button" class="btn btn-outline btn-sm time-confirm-btn" data-departure="${escapeHtml(c.departure_time)}">Check all models</button>`;
+      } else {
+        confLine = 'all models checked';
+      }
+
       return `
         <div class="info-row">
           <span class="info-label">${escapeHtml(time)}</span>
           <span class="info-value">
-            ${chip(c.assessment)}
+            ${effectiveChip}
             <span class="muted">${escapeHtml(shift)}${escapeHtml(tag)}</span>
             ${diffs.length ? `<div>${escapeHtml(diffs.join(' · '))}</div>` : ''}
-            <div class="muted" style="font-size:0.8em;">${escapeHtml(conf)}</div>
+            <div class="muted" style="font-size:0.8em;">${confLine}</div>
           </span>
         </div>`;
     }).join('');
@@ -558,6 +586,14 @@ async function init(): Promise<void> {
       : '';
 
     section.innerHTML = `<p>${escapeHtml(headline)}</p>${rows}${refusedNote}`;
+
+    // Wire the confirm taps (fresh nodes on every render — no stale handlers).
+    section.querySelectorAll<HTMLButtonElement>('.time-confirm-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const dep = btn.dataset.departure;
+        if (dep) void store.getState().confirmTimeOption(dep);
+      });
+    });
   }
 
   /** Build alt time toggle config if alt advisories are available. */

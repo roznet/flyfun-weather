@@ -168,6 +168,9 @@ export interface BriefingState {
   /** Poll the timing-scenario scan for the current pack (backoff, stops on
    * terminal status or pack change). Safe to call unconditionally. */
   loadTimeOptions: () => Promise<void>;
+  /** Queue the multi-model check of one provisional candidate (slice 3);
+   * the result arrives via the loadTimeOptions poll. */
+  confirmTimeOption: (departureTime: string) => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
   subscribe: () => Promise<void>;
@@ -825,7 +828,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ timeOptions: resp });
 
       const status = resp.status?.status;
-      if (status === 'pending' || status === 'running' || (!status && !resp.scan)) {
+      const confirmPending = (resp.scan?.candidates ?? []).some((c) => c.confirm_pending);
+      if (status === 'pending' || status === 'running' || confirmPending || (!status && !resp.scan)) {
         // Background job still working — poll with a gentle backoff. The
         // refresh SSE stream is already closed by the time the scan runs, so
         // polling is the delivery channel (see timing-scenario-plan.md).
@@ -848,6 +852,32 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       if (get().currentPack?.fetch_timestamp === packTs) {
         set({ timeOptions: null });
       }
+    }
+  },
+
+  confirmTimeOption: async (departureTime: string) => {
+    const { flight, currentPack, timeOptions } = get();
+    if (!flight || !currentPack) return;
+    // One confirm at a time per pack (mirrors the server's 429 guard).
+    if (timeOptions?.scan?.candidates.some((c) => c.confirm_pending)) return;
+    try {
+      await api.confirmTimeOption(flight.id, currentPack.fetch_timestamp, departureTime);
+      // Optimistically flag the candidate so the UI shows "checking…"
+      // immediately; the poll takes over from the server's copy.
+      const to = get().timeOptions;
+      if (to?.scan) {
+        const scan = {
+          ...to.scan,
+          candidates: to.scan.candidates.map((c) =>
+            c.departure_time === departureTime ? { ...c, confirm_pending: true } : c,
+          ),
+        };
+        set({ timeOptions: { ...to, scan } });
+      }
+      timeOptionsPollDelay = 3_000;
+      window.setTimeout(() => void get().loadTimeOptions(), 3_000);
+    } catch (err) {
+      set({ error: `Confirm failed: ${err}` });
     }
   },
 
