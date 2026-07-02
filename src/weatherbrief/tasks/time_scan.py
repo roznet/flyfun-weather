@@ -80,6 +80,21 @@ _MAX_IMPROVING_KEPT = 5
 #: GRIB-enriched models — coverage is windowed; everything else is uniform OM.
 _GRIB_MODELS = {ModelSource.ECMWF, ModelSource.GFS, ModelSource.ICON}
 
+_ECMWF_MODEL = ModelSource.ECMWF.value
+
+
+def _pack_fetched_at(pack_dir: Path) -> datetime | None:
+    """The pack's fetch time — pins the extension to the run the briefing used."""
+    from weatherbrief.tasks.artifacts import load_fetch_meta
+
+    meta = load_fetch_meta(pack_dir)
+    if not meta or not meta.get("fetched_at"):
+        return None
+    try:
+        return datetime.fromisoformat(meta["fetched_at"])
+    except ValueError:
+        return None
+
 
 def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -263,6 +278,116 @@ def covers(
 
 
 # ---------------------------------------------------------------------------
+# ECMWF daylight enrichment extension (slice 2 — the plan's v1 primitive)
+# ---------------------------------------------------------------------------
+
+
+def extend_ecmwf_daylight(
+    cross_sections: list[RouteCrossSection],
+    route_points,
+    window_start: datetime,
+    window_end: datetime,
+    flight_duration_hours: float,
+    *,
+    as_of_time: datetime | None = None,
+) -> tuple[int | None, list[tuple[datetime, datetime] | None]]:
+    """Decode the daylight ECMWF fhours onto the loaded cross-sections.
+
+    Decode-only (local ECPDS disk, no download) at BACKGROUND priority so a
+    live briefing is never starved. Reuses the production enrichment machinery
+    by fabricating a wide "flight window": ``_enrich_ecmwf`` filters steps to
+    ``[departure − 3h, departure + duration + 3h]``, so passing the window
+    span as the duration decodes every step across daylight **contiguously**
+    (required — accumulated fields tp/sf/cp are step-differenced across
+    consecutive processed steps; cherry-picked hours would corrupt them).
+
+    Mutates only the ECMWF section of the **in-memory** list — decision G:
+    nothing here is ever persisted; ``time_options.json`` is the only artifact
+    the scan writes.
+
+    ``as_of_time`` should be the pack's ``fetched_at`` so the extension picks
+    the SAME run the briefing used — otherwise a run that landed between the
+    briefing and the scan would silently mix runs inside one grade.
+
+    Returns ``(run_ts, per_point_spans)`` — the ECMWF init unix timestamp (the
+    decision-H staleness key) and the recomputed honest per-point coverage.
+    ``(None, [])`` when ECMWF is absent or no run covers the window.
+    """
+    from weatherbrief.fetch.grib import (
+        DecodePriority,
+        _enrich_ecmwf,
+        set_decode_priority,
+    )
+    from weatherbrief.fetch.grib.fill import propagate_all
+
+    ecmwf_sections = [cs for cs in cross_sections if cs.model == ModelSource.ECMWF]
+    if not ecmwf_sections:
+        return None, []
+
+    w_lo = _aware(window_start)
+    dep_end = _aware(window_end) + timedelta(hours=max(flight_duration_hours, 1.0))
+    span_h = max((dep_end - w_lo).total_seconds() / 3600.0, 1.0)
+
+    set_decode_priority(DecodePriority.BACKGROUND)
+    run_ts = _enrich_ecmwf(
+        cross_sections, [], route_points, w_lo,
+        flight_duration_hours=span_h,
+        as_of_time=as_of_time,
+    )
+    if run_ts is None:
+        return None, []
+    # Interpolate any between-anchor gap hours (only matters past the 1h
+    # cadence horizon, where ECMWF steps at 3h/6h). ECMWF-only — the other
+    # models' sections were already propagated at pack time.
+    propagate_all(ecmwf_sections, [], gfs_init=None)
+
+    # Recompute the honest ECMWF coverage from the now-extended data, using
+    # the extended rule window (the fabricated flight window above).
+    rule_lo = w_lo - _ECMWF_ENRICH_MARGIN
+    rule_hi = dep_end + _ECMWF_ENRICH_MARGIN
+    spans: list[tuple[datetime, datetime] | None] = []
+    for wf in ecmwf_sections[0].point_forecasts:
+        hours = sorted(wf.hourly, key=_hour_time)
+        if not hours:
+            spans.append(None)
+            continue
+        counts = [len(h.pressure_levels) for h in hours]
+        baseline = min(counts)
+        marked = [_hour_time(h) for h, c in zip(hours, counts) if c > baseline]
+        if not marked:
+            spans.append((_hour_time(hours[0]), _hour_time(hours[-1])))
+            continue
+        lo = max(marked[0], rule_lo)
+        hi = min(marked[-1], rule_hi)
+        spans.append((lo, hi) if lo <= hi else None)
+    return run_ts, spans
+
+
+def current_ecmwf_run_ts(
+    cover_until: datetime, *, as_of_time: datetime | None = None,
+) -> int | None:
+    """The init timestamp of the run the extension would use — the decision-H
+    reuse key. Cheap (directory scan, no decode)."""
+    try:
+        from weatherbrief.fetch.grib.ecmwf_fetch import (
+            ecmwf_grib_dir,
+            find_best_ecmwf_run,
+            scan_ecmwf_files,
+        )
+
+        files = scan_ecmwf_files(ecmwf_grib_dir())
+        if as_of_time is not None:
+            files = [f for f in files if f.base_time <= as_of_time]
+        if not files:
+            return None
+        run = find_best_ecmwf_run(files, cover_until=cover_until, data_dir=ecmwf_grib_dir())
+        return int(run[0].base_time.timestamp()) if run else None
+    except Exception:
+        logger.debug("time-scan: current run lookup failed", exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Daylight window
 # ---------------------------------------------------------------------------
 
@@ -383,11 +508,18 @@ def run_time_scan(
     data). Never raises for data problems — refused candidates are recorded on
     the scan, and hard failures return ``None`` after logging.
 
-    Slice-1 scope: every graded candidate is ``confirmed_in_window``
-    (multi-model, free). Hours outside coverage land in ``refused_times`` —
-    slice 2's ECMWF daylight extension will graduate them to ``ecmwf_only``.
-    ``ecmwf_run_ts`` stays ``None`` until slice 2 reads the run off disk (the
-    decision-H reuse key matters only once scans cost decode time).
+    Two tiers (the honesty ladder):
+
+    1. **Free tier** — candidates whose whole shifted flight fits every
+       fetched model's enriched coverage grade multi-model
+       (``confirmed_in_window``), pure re-analysis.
+    2. **Provisional tier (slice 2)** — the rest get the daylight ECMWF
+       extension (decode-only, ephemeral) and grade ECMWF-only against an
+       ECMWF-only baseline (``ecmwf_only``). Hours even ECMWF can't cover
+       (horizon/daylight edges) land in ``refused_times``.
+
+    ``ecmwf_run_ts`` records the run the extension decoded — the decision-H
+    staleness key (a refresh on the same run may reuse this scan).
     """
     from weatherbrief.analysis.advisories.registry import get_scan_class_ids
     from weatherbrief.tasks.advise import (
@@ -432,12 +564,23 @@ def run_time_scan(
         cross_sections=cross_sections,
     )
 
-    def _grade(t: datetime, *, persist: bool, detect_fronts: bool):
+    def _grade(t: datetime, *, persist: bool, detect_fronts: bool,
+               models_override: list[str] | None = None):
+        kwargs = dict(grade_kwargs)
+        if models_override is not None:
+            kwargs["advisory_models"] = models_override
+            # Analyze only the graded models' cross-sections — the analysis
+            # stage is the per-candidate cost, and re-analyzing the other
+            # models just to discard them roughly 4x-es the provisional tier.
+            wanted = {m.lower() for m in models_override}
+            kwargs["cross_sections"] = [
+                cs for cs in cross_sections if cs.model.value in wanted
+            ]
         res = run_alt_from_pack(
             pack_dir, t, route,
             persist=persist,
             detect_fronts=detect_fronts,
-            **grade_kwargs,
+            **kwargs,
         )
         return res.manifest
 
@@ -494,6 +637,9 @@ def run_time_scan(
 
     improving: list[TimeCandidate] = []
     alternate_row: TimeCandidate | None = None
+    # (time, is_alternate) pairs the free tier couldn't grade — the daylight
+    # ECMWF extension (below) gives them a second, provisional chance.
+    deferred: list[tuple[datetime, bool, list[datetime]]] = []
 
     for t, is_alt in considered:
         if abs((t - dep).total_seconds()) < 60:
@@ -504,8 +650,9 @@ def run_time_scan(
         if not covers(per_point, graded_models, vts):
             # The honesty invariant: never grade an hour whose enriched fields
             # aren't actually there — at_time() would silently clamp to the
-            # window edge and label OM values as the GRIB model.
-            refused.append(t)
+            # window edge and label OM values as the GRIB model. Deferred to
+            # the ECMWF-only tier rather than refused outright.
+            deferred.append((t, is_alt, vts))
             continue
         # The pinned alternate keeps feeding route_advisories_alt.json (the
         # existing planned↔alt web UI) and re-runs alt front detection like the
@@ -533,11 +680,86 @@ def run_time_scan(
         elif margin >= _MIN_MARGIN and not worsens:
             improving.append(row)
 
-    # Rank: best margin first, ties broken by proximity to the alternate time
-    # (the pilot's stated preference) or else the planned time.
+    # --- Slice 2: ECMWF-only provisional tier for the deferred hours.
+    # Decode the daylight ECMWF fhours (local disk, BACKGROUND priority,
+    # ephemeral) and grade the deferred candidates ECMWF-only against an
+    # ECMWF-only baseline — like against like, labelled provisional.
+    ecmwf_run_ts: int | None = None
+    base_e_assess: str | None = None
+    base_e_reason: str | None = None
+    horizon_clipped = False
+    if deferred and _ECMWF_MODEL in [m.lower() for m in model_names]:
+        ext_lo = min(t for t, _, _ in deferred)
+        ext_hi = max(t for t, _, _ in deferred)
+        as_of = _pack_fetched_at(pack_dir)
+        ecmwf_run_ts, ecmwf_spans = extend_ecmwf_daylight(
+            cross_sections, route_points, ext_lo, ext_hi, duration,
+            as_of_time=as_of,
+        )
+        if ecmwf_run_ts is not None:
+            ecmwf_per_point = {_ECMWF_MODEL: ecmwf_spans}
+            base_e_manifest = _grade(
+                dep, persist=False, detect_fronts=False,
+                models_override=[_ECMWF_MODEL],
+            )
+            if base_e_manifest is not None:
+                base_e_assess, base_e_reason = derive_assessment_from_advisories(base_e_manifest)
+                span_his = [s[1] for s in ecmwf_spans if s]
+                horizon = min(span_his) if span_his else None
+                for t, is_alt, vts in deferred:
+                    if not covers(ecmwf_per_point, [_ECMWF_MODEL], vts):
+                        refused.append(t)
+                        if horizon and vts and vts[-1] > horizon:
+                            horizon_clipped = True
+                        continue
+                    manifest = _grade(
+                        t, persist=is_alt, detect_fronts=False,
+                        models_override=[_ECMWF_MODEL],
+                    )
+                    if manifest is None:
+                        continue
+                    improves, worsens, margin = _diff_manifests(
+                        base_e_manifest, manifest, scan_ids,
+                    )
+                    assess, reason = derive_assessment_from_advisories(manifest)
+                    row = TimeCandidate(
+                        departure_time=t,
+                        departure_shift_hours=round((t - dep).total_seconds() / 3600.0, 2),
+                        valid_times=vts,
+                        assessment=assess,
+                        assessment_reason=reason,
+                        models_used=[_ECMWF_MODEL],
+                        improves=improves,
+                        worsens=worsens,
+                        margin=float(margin),
+                        confidence="ecmwf_only",
+                        is_alternate=is_alt,
+                    )
+                    if is_alt:
+                        # Provisional alternate: route_advisories_alt.json was
+                        # persisted from the ECMWF-only manifest (its `models`
+                        # field carries the honest coverage).
+                        alternate_row = row
+                    elif margin >= _MIN_MARGIN and not worsens:
+                        improving.append(row)
+            else:
+                refused.extend(t for t, _, _ in deferred)
+        else:
+            logger.info("time-scan: no ECMWF run for the extension — deferred hours refused")
+            refused.extend(t for t, _, _ in deferred)
+    else:
+        refused.extend(t for t, _, _ in deferred)
+
+    # Rank: best margin first, then confirmed over provisional, ties broken by
+    # proximity to the alternate time (the pilot's stated preference) or else
+    # the planned time.
     anchor = _aware(alt_departure_time) if alt_departure_time else dep
     improving.sort(
-        key=lambda r: (-r.margin, abs((r.departure_time - anchor).total_seconds())),
+        key=lambda r: (
+            -r.margin,
+            0 if r.confidence == "confirmed_in_window" else 1,
+            abs((r.departure_time - anchor).total_seconds()),
+        ),
     )
     improving = improving[:_MAX_IMPROVING_KEPT]
 
@@ -546,6 +768,9 @@ def run_time_scan(
         out_candidates.append(alternate_row)
     out_candidates.extend(improving)
 
+    if window_model is not None:
+        window_model.horizon_clipped = horizon_clipped
+
     scan = TimeWindowScan(
         flexibility=flexibility,  # type: ignore[arg-type]
         baseline=TimeScanBaseline(
@@ -553,13 +778,15 @@ def run_time_scan(
             assessment=base_assess,
             assessment_reason=base_reason,
             models_used=graded_models,
+            ecmwf_assessment=base_e_assess,
+            ecmwf_assessment_reason=base_e_reason,
         ),
         window=window_model,
         candidates=out_candidates,
-        refused_times=refused,
+        refused_times=sorted(refused),
         coverage=coverage_summary,
         models=model_names,
-        ecmwf_run_ts=None,
+        ecmwf_run_ts=ecmwf_run_ts,
         generated_at=datetime.now(timezone.utc),
     )
     logger.info(

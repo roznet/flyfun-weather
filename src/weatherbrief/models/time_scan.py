@@ -79,12 +79,19 @@ class TimeCandidate(BaseModel):
 class TimeScanBaseline(BaseModel):
     """The planned departure graded through the same path as the candidates —
     the diff denominator (never compared against the multi-model headline of a
-    different model set)."""
+    different model set).
+
+    ``ecmwf_assessment`` is the ECMWF-only view of the planned time — the diff
+    denominator for ``ecmwf_only`` provisional candidates (slice 2), so their
+    improves/worsens compare like with like. None when no daylight extension
+    ran (pure in-window scan)."""
 
     departure_time: datetime
     assessment: str
     assessment_reason: str = ""
     models_used: list[str] = Field(default_factory=list)
+    ecmwf_assessment: str | None = None
+    ecmwf_assessment_reason: str | None = None
 
 
 class ModelCoverage(BaseModel):

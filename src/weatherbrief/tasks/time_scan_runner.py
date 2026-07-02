@@ -119,6 +119,17 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
                 )
                 return
 
+            # Decision-H reuse: a scan for the same flexibility mode, planned
+            # departure, and ECMWF run is still valid — skip the re-decode.
+            existing = _reusable_scan(pack_dir, flight)
+            if existing is not None:
+                logger.info(
+                    "time-scan: reusing existing scan for %s (same ECMWF run %s)",
+                    flight_id, existing.ecmwf_run_ts,
+                )
+                _write_status(pack_dir, "done", flight.flexibility)
+                return
+
             _write_status(pack_dir, "running", flight.flexibility)
 
             route = _build_route_config(flight, db_path)
@@ -172,6 +183,39 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
     finally:
         with _inflight_lock:
             _inflight.discard(str(pack_dir))
+
+
+def _reusable_scan(pack_dir: Path, flight):
+    """Return the existing scan when it's still valid (decision H), else None.
+
+    Valid = same flexibility mode, same planned departure, and — when the scan
+    used the ECMWF extension — the run on disk hasn't moved. A scan with no
+    ``ecmwf_run_ts`` (pure free-tier) is cheap to redo, so it is NOT reused —
+    a fresher grade wins.
+    """
+    from weatherbrief.tasks.artifacts import load_time_options
+    from weatherbrief.tasks.time_scan import _pack_fetched_at, current_ecmwf_run_ts
+
+    scan = load_time_options(pack_dir)
+    if scan is None or scan.ecmwf_run_ts is None:
+        return None
+    if scan.flexibility != flight.flexibility:
+        return None
+    dep = flight.departure_time
+    if abs((scan.baseline.departure_time - dep).total_seconds()) > 60:
+        return None
+    cover_until = dep
+    if scan.window is not None:
+        cover_until = max(cover_until, scan.window.end)
+    # Compare against the run a re-scan would actually pick: the extension
+    # pins run selection to the pack's fetched_at, so use the same pin here —
+    # a newer run on disk doesn't invalidate this pack's scan.
+    would_use = current_ecmwf_run_ts(
+        cover_until, as_of_time=_pack_fetched_at(pack_dir),
+    )
+    if would_use != scan.ecmwf_run_ts:
+        return None
+    return scan
 
 
 def _update_pack_alt_fields(
