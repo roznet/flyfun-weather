@@ -77,7 +77,19 @@ def main() -> None:
     now = datetime.now(timezone.utc)
     exp = now + timedelta(days=args.days)
     token = jwt.encode(
-        {"sub": user_id, "email": email, "name": name, "iat": now, "exp": exp},
+        # scope:"review" is what lets the hardened app accept this as a
+        # bare-token deep link (the App Store reviewer carve-out). It is a
+        # routing hint only — the server verifies the signature on every call,
+        # so the claim confers no authority on its own. See
+        # designs/oauth-deeplink-hardening.md.
+        {
+            "sub": user_id,
+            "email": email,
+            "name": name,
+            "scope": "review",
+            "iat": now,
+            "exp": exp,
+        },
         secret,
         algorithm=JWT_ALGORITHM,
     )
