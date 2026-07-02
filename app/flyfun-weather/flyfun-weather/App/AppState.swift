@@ -140,14 +140,41 @@ final class AppState {
         setupClient()
     }
 
-    /// Handle a deep-link auth callback (`flyfunweather://auth?token=…` or
-    /// `https://weather.flyfun.aero/auth/callback?token=…`).
+    /// Handle a deep-link auth callback.
+    ///
+    /// The normal Google/Apple sign-in is captured *inside*
+    /// `ASWebAuthenticationSession` and never reaches `onOpenURL`, so the only
+    /// legitimate inbound deep link here is the **App Store reviewer** token
+    /// (`flyfunweather://auth?token=<jwt>`), which carries a `scope:"review"`
+    /// claim. Any other bare-token deep link is a login-CSRF attempt and is
+    /// ignored. The claim is read only to *route* — the server still verifies
+    /// the signature on every API call, so a forged review token is inert
+    /// (401s on first use) and never reaches a real account.
     func handleAuthCallback(url: URL) {
         guard let token = callbackParser.token(from: url) else {
             Self.logger.warning("Invalid auth callback URL: \(url)")
             return
         }
+        guard Self.unverifiedScope(of: token) == "review" else {
+            Self.logger.warning("Ignoring non-review bare-token deep link")
+            return
+        }
         signIn(token: token)
+    }
+
+    /// Reads the (unverified) `scope` claim from a JWT payload for routing only.
+    /// Never used for authorization — that stays with the server signature.
+    static func unverifiedScope(of jwt: String) -> String? {
+        let parts = jwt.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return obj["scope"] as? String
     }
 
     func logout() {
