@@ -146,13 +146,29 @@ final class AppState {
     /// `ASWebAuthenticationSession` and never reaches `onOpenURL`, so the only
     /// legitimate inbound deep link here is the **App Store reviewer** token
     /// (`flyfunweather://auth?token=<jwt>`), which carries a `scope:"review"`
-    /// claim. Any other bare-token deep link is a login-CSRF attempt and is
-    /// ignored. The claim is read only to *route* — the server still verifies
-    /// the signature on every API call, so a forged review token is inert
-    /// (401s on first use) and never reaches a real account.
+    /// claim.
+    ///
+    /// Two guards, in order:
+    /// 1. **Never overwrite an existing session.** The reviewer path is only for
+    ///    a fresh (signed-out) device. Bailing when already authenticated closes
+    ///    the residual forced-logout vector: the `scope` claim is read
+    ///    *unverified* (we can't check the signature client-side), so a spoofed
+    ///    `scope:"review"` token could otherwise be persisted over a logged-in
+    ///    user's real token and 401 them out on the next request.
+    /// 2. **Require `scope:"review"`.** Any other bare-token deep link is a
+    ///    login-CSRF attempt and is ignored.
+    ///
+    /// Account-takeover / session-fixation is closed regardless: the claim is a
+    /// routing hint only — the server verifies the signature on every API call,
+    /// so a forged review token is inert (401s on first use) and only a
+    /// genuinely server-signed reviewer token authenticates end-to-end.
     func handleAuthCallback(url: URL) {
         guard let token = callbackParser.token(from: url) else {
             Self.logger.warning("Invalid auth callback URL: \(url)")
+            return
+        }
+        guard jwt == nil else {
+            Self.logger.warning("Ignoring auth deep link while already authenticated")
             return
         }
         guard Self.unverifiedScope(of: token) == "review" else {
@@ -164,7 +180,7 @@ final class AppState {
 
     /// Reads the (unverified) `scope` claim from a JWT payload for routing only.
     /// Never used for authorization — that stays with the server signature.
-    static func unverifiedScope(of jwt: String) -> String? {
+    nonisolated static func unverifiedScope(of jwt: String) -> String? {
         let parts = jwt.split(separator: ".")
         guard parts.count == 3 else { return nil }
         var b64 = String(parts[1])

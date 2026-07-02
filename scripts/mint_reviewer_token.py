@@ -80,8 +80,8 @@ def main() -> None:
         # scope:"review" is what lets the hardened app accept this as a
         # bare-token deep link (the App Store reviewer carve-out). It is a
         # routing hint only — the server verifies the signature on every call,
-        # so the claim confers no authority on its own. See
-        # designs/oauth-deeplink-hardening.md.
+        # so the claim confers no authority on its own. See the design doc in
+        # the companion repo: flyfun-common/designs/oauth-deeplink-hardening.md.
         {
             "sub": user_id,
             "email": email,
