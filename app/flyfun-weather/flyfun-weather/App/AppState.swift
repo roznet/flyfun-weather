@@ -167,15 +167,23 @@ final class AppState {
             Self.logger.warning("Invalid auth callback URL: \(url)")
             return
         }
-        guard jwt == nil else {
-            Self.logger.warning("Ignoring auth deep link while already authenticated")
-            return
-        }
-        guard Self.unverifiedScope(of: token) == "review" else {
-            Self.logger.warning("Ignoring non-review bare-token deep link")
+        guard Self.shouldAcceptDeepLinkToken(token, alreadyAuthenticated: jwt != nil) else {
+            Self.logger.warning("Ignoring deep-link token (already authenticated or non-review scope)")
             return
         }
         signIn(token: token)
+    }
+
+    /// The two-guard decision for an inbound bare-token deep link, extracted as a
+    /// pure function so the ordering/logic is unit-testable off the MainActor
+    /// (and can't silently regress). Accept only when the app is **signed out**
+    /// AND the token carries `scope:"review"`. See `handleAuthCallback` for why.
+    nonisolated static func shouldAcceptDeepLinkToken(
+        _ token: String,
+        alreadyAuthenticated: Bool
+    ) -> Bool {
+        guard !alreadyAuthenticated else { return false }
+        return unverifiedScope(of: token) == "review"
     }
 
     /// Reads the (unverified) `scope` claim from a JWT payload for routing only.

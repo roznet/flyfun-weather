@@ -69,3 +69,28 @@ struct ReviewTokenScopeTests {
         #expect(AppState.unverifiedScope(of: token) == nil)
     }
 }
+
+@Suite("shouldAcceptDeepLinkToken")
+struct DeepLinkTokenGateTests {
+
+    private let reviewToken = makeJWT(payload: ["sub": "u1", "scope": "review"])
+    private let realToken = makeJWT(payload: ["sub": "u1", "email": "a@b.com"])
+
+    @Test func acceptsReviewTokenWhenSignedOut() {
+        #expect(AppState.shouldAcceptDeepLinkToken(reviewToken, alreadyAuthenticated: false) == true)
+    }
+
+    @Test func rejectsReviewTokenWhenAlreadyAuthenticated() {
+        // The forced-logout guard: never overwrite an existing session.
+        #expect(AppState.shouldAcceptDeepLinkToken(reviewToken, alreadyAuthenticated: true) == false)
+    }
+
+    @Test func rejectsNonReviewTokenWhenSignedOut() {
+        // A real (attacker's own) token has no review scope → login-CSRF blocked.
+        #expect(AppState.shouldAcceptDeepLinkToken(realToken, alreadyAuthenticated: false) == false)
+    }
+
+    @Test func rejectsNonReviewTokenWhenAuthenticated() {
+        #expect(AppState.shouldAcceptDeepLinkToken(realToken, alreadyAuthenticated: true) == false)
+    }
+}

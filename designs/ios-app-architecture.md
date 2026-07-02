@@ -91,7 +91,7 @@ final class CachingBriefingRepository: BriefingRepository { ... }
 
 App-side auth is driven by `FlyFunAuthService` (FlyFunCommon), constructed in `LoginView` with `callbackScheme: "flyfunweather"`. The view calls `authService.exchangeAppleCredential(...)` / `authService.signIn(provider: "google")`, gets a JWT back, and hands it to `appState.signIn(token:)`. Two methods:
 1. **Sign in with Apple** — native `SignInWithAppleButton` → identity token exchanged with server via `POST /auth/apple/token` (flyfun-common). Bundle ID must be in `APPLE_APP_IDS` env var.
-2. **Google OAuth** — `ASWebAuthenticationSession` → server redirects to `flyfunweather://auth/callback?token=<jwt>`.
+2. **Google OAuth** — `ASWebAuthenticationSession` → **native authorization-code flow** (H8 hardening, see `flyfun-common/designs/oauth-deeplink-hardening.md`): the server callback returns a short-TTL one-time **`code`** bound to a client-generated **`state`** nonce (never the JWT), which `FlyFunAuthService` verifies (`state` match) and exchanges for the session JWT over `POST /auth/exchange`. The bearer token is never in a URL.
 
 (There is also a debug-only `/auth/dev-token` path in `LoginView` for simulator/dev sign-in.)
 
@@ -101,8 +101,8 @@ App-side auth is driven by `FlyFunAuthService` (FlyFunCommon), constructed in `L
 │  App    │                │   Server    │            │ OAuth  │
 └────┬────┘                └──────┬──────┘            └───┬────┘
      │  ASWebAuthSession          │                       │
-     │  opens /auth/login/google  │                       │
-     │  ?platform=ios             │                       │
+     │  /auth/login/google        │                       │
+     │  ?platform=ios&state=<n>   │                       │
      ├───────────────────────────▶│                       │
      │                            │ redirect to Google    │
      │                            ├──────────────────────▶│
@@ -110,21 +110,23 @@ App-side auth is driven by `FlyFunAuthService` (FlyFunCommon), constructed in `L
      │◀──────────────────────────────────────────────────▶│
      │                            │ auth code callback    │
      │                            │◀──────────────────────┤
-     │                            │ exchange code → JWT   │
-     │  redirect to flyfunweather:│                       │
-     │  //auth?token=...           │                       │
+     │  redirect flyfunweather:// │                       │
+     │  auth/callback?code=&state=│                       │
+     │◀───────────────────────────┤                       │
+     │  verify state, then        │                       │
+     │  POST /auth/exchange       │                       │
+     │  {code,state} ───────────▶ │ → { token } (body)    │
      │◀───────────────────────────┤                       │
      │  Store JWT in Keychain     │                       │
-     │  (KeychainBearerTokenStore)│                       │
-     │                            │                       │
-     │  All API calls:            │                       │
-     │  Authorization: Bearer ... │                       │
+     │  All API calls: Bearer ... │                       │
      ├───────────────────────────▶│                       │
 ```
 
-**Server-side change for iOS**: `?platform=ios` param on `/auth/login/google` — callback redirects to `flyfunweather://auth?token=<jwt>` instead of the web UI. Same JWT; just delivered via URL scheme instead of cookie. The app's callback parser also accepts the `https://weather.flyfun.aero/auth/callback?token=…` form.
+**Server-side for iOS**: `?platform=ios` + `state` on `/auth/login/google`. The callback emits `code`+`state` for state-sending (migrated) clients, falling back to the legacy `?token=` param for not-yet-updated clients (shared multi-app compat). The app also accepts the `https://weather.flyfun.aero/auth/callback?...` universal-link form.
 
-**Token refresh**: JWT has 7-day expiry. App stores expiry and proactively re-auths when nearing expiration. On 401, shows login screen.
+**`onOpenURL` deep links**: the normal Google/Apple sign-in is captured *inside* `ASWebAuthenticationSession` and never reaches `onOpenURL`. `AppState.handleAuthCallback` therefore accepts a bare-token deep link **only** for the App Store reviewer link, gated by `shouldAcceptDeepLinkToken` (signed-out **and** the token carries `scope:"review"`). Any other inbound token is ignored — this is the H8 login-CSRF carve-out. The `scope` claim is read unverified for *routing only*; server signature verification is still the actual authorization.
+
+**Token refresh**: rolling session (flyfun-common `SlidingSessionMiddleware`) — JWT default 30-day expiry, refreshed when within the threshold; native Bearer clients pick up the renewed token from the `X-Renewed-Token` response header. On 401, shows the login screen.
 
 ## Existing Library Reuse
 
