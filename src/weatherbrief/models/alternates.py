@@ -14,6 +14,7 @@ See ``designs/future/alternates.md`` for the full design.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -44,7 +45,7 @@ class OperationalFlag(BaseModel):
     code: str  # stable machine key, e.g. "cross_border"
     label: str  # short chip text, e.g. "Cross-border"
     detail: str  # expandable explanation
-    severity: str  # "amber" | "red" (traffic-light palette; never green)
+    severity: Literal["amber", "red"]  # traffic-light palette; never green
 
 
 class AlternateAirport(BaseModel):

@@ -279,14 +279,34 @@ own design: **[alternate-requirement.md](./alternate-requirement.md)**. Keep the
 two docs in their lanes: weather-divert-candidate geometry/assessment here,
 regulatory minima there.
 
+### Operational-friction flags (#344)
+A weather-better, close divert candidate can still carry **non-weather** friction
+— chiefly an unplanned international arrival (customs, immigration, GAR, PPR).
+`AlternateAirport.operational_flags: list[OperationalFlag]` is a single
+**extensible channel** for this: the cross-border flag is the first consumer;
+future signals (water crossing #345, military/joint-use, drive-time) reuse the
+same shape with no new rendering plumbing.
+
+The cross-border flag is built by the pure `analysis/operational_flags.py::cross_border_flag(dest_country, alt_country, alt_is_poe)`,
+called from `_build_alternate`. It **anchors on the destination's country** (the
+surprise is "planned to land in FR, cleared instead into GB") and reads severity
+**purely from the country-pair** via `euro_aip.borders.crossing_requirements`
+(membership rules live in the library, not re-encoded here): both formalities →
+`red`, exactly one → `amber`, neither / same country / unresolved country → no
+flag. `point_of_entry` modulates the detail **wording only** (reassurance vs
+"could not verify entry facilities"), **never** the severity. `OperationalFlag`
+carries `code` / `label` / `detail` / `severity` (`amber`|`red`, never green).
+
 ## Output data model (`models/alternates.py`)
 `AlternateAirport` (geometry: `distance_from_dest_nm`, `enroute_distance_nm`,
 `segment_distance_nm`, `position`, `detour_early_nm`, `detour_late_nm`;
 assessment: `flight_category`, `wind_speed_kt`, `crosswind_kt`, `headwind_kt`,
 `best_runway_id`, `ceiling_ft`, `visibility_m`, `agreement`, `per_model`;
 suitability: `has_instrument_approach`, `best_approach_type`, `longest_runway_ft`,
-`has_hard_runway`, `point_of_entry`, `is_major` (== `large_airport`; hidden by
-default in the UI list controls); vs-dest flags: `better_category`,
+`has_hard_runway`, `point_of_entry`, `iso_country` (ISO-3166-1 alpha-2, from the
+euro_aip model — drives the cross-border flag), `is_major` (== `large_airport`;
+hidden by default in the UI list controls); operational-friction:
+`operational_flags` (see below); vs-dest flags: `better_category`,
 `better_wind`, `better_crosswind`, `dominates_destination`; regulatory:
 `faa`, `easa` — per-candidate alternate-minima qualification, filled by the
 **alternate-requirement post-step**, NOT by `run_alternates` — see below).
@@ -306,7 +326,11 @@ all three populated by the post-step, see "Regulatory layer").
   the section only appears D-2 inward. Columns: alternate (ICAO + info button) ·
   from-dest dist · before/after (+ detour pair) · category (+ agreement badge) ·
   wind · best-runway crosswind · approach type · vs-dest Δ tags incl. **"Better"**.
-  Warns when `approach_filter_relaxed`.
+  Warns when `approach_filter_relaxed`. Each `operational_flags` entry renders as a
+  severity-colored **⚠ chip** next to the ICAO (click → detail popup, reusing the
+  per-row popup pattern); the flag detail also appears under "Operational notes" in
+  the row's info popup. Call sites guard `operational_flags ?? []` because
+  `briefing.json` is a raw passthrough — pre-#344 cached packs omit the key.
 - **Plain-text digest**: `digest/text.py:_format_route_alternates` →
   `--- Weather Alternates ---` block with the nearest-improving picks (labelled
   via `ALT_AXIS_LABELS`) + ranked table (top 8). When the post-step populated
@@ -342,6 +366,8 @@ all three populated by the post-step, see "Regulatory layer").
   `tasks/map_queries.py`
 - Pipeline / prefs: `pipeline.py`, `api/profiles.py`, `api/packs.py`
 - UI: `web/ts/managers/briefing-ui.ts:renderRouteAlternates`
+- Operational-friction flags (#344): `analysis/operational_flags.py:cross_border_flag`,
+  `euro_aip.borders.crossing_requirements`; water crossing follow-up = #345
 - Regulatory post-step: `tasks/alternate_requirement.py`,
   `analysis/alternate_requirement.py` →
   [alternate-requirement.md](./alternate-requirement.md)

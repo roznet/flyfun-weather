@@ -1480,8 +1480,12 @@ function renderAltPopup(apt: AlternateAirport): string {
   // FAA/EASA alternate-minima detail lives in the dedicated badge popups
   // (click the FAA/EASA badge in the row) so the wording stays consistent.
   const meta = metaRows.join('\n');
-  const flagsHtml = apt.operational_flags.length
-    ? `<h4>Operational notes</h4>` + apt.operational_flags.map((f) =>
+  // Guard against pre-PR cached packs: briefing.json is served as a raw
+  // passthrough (not re-validated through Pydantic), so old packs have no
+  // operational_flags key. Mirror the taf_applicable_lines guard above.
+  const flags = apt.operational_flags ?? [];
+  const flagsHtml = flags.length
+    ? `<h4>Operational notes</h4>` + flags.map((f) =>
         `<p class="alt-flag-detail alt-flag-detail-${escapeHtml(f.severity)}"><strong>${escapeHtml(f.label)}:</strong> ${escapeHtml(f.detail)}</p>`).join('')
     : '';
   return `
@@ -1554,7 +1558,7 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
       ? ` <span class="alt-tag alt-tag-major" title="Major airport (airline hub) — hidden by default">MAJOR</span>` : '';
     // Operational-friction chips (#344): a ⚠ triangle per flag, colored by
     // severity, opening the detail on click (reuses the per-row popup pattern).
-    const flagChips = apt.operational_flags.map((f) =>
+    const flagChips = (apt.operational_flags ?? []).map((f) =>
       ` <button class="alt-flag-chip alt-flag-${escapeHtml(f.severity)}" data-flag-icao="${escapeHtml(apt.icao)}" data-flag-code="${escapeHtml(f.code)}" title="${escapeHtml(f.label)} — click for detail" aria-label="${escapeHtml(f.label)}">⚠</button>`,
     ).join('');
     return `
@@ -1709,7 +1713,7 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
       const icao = flagBtn.dataset.flagIcao;
       const code = flagBtn.dataset.flagCode;
       const apt = alt.alternates.find((a) => a.icao === icao);
-      const flag = apt?.operational_flags.find((f) => f.code === code);
+      const flag = (apt?.operational_flags ?? []).find((f) => f.code === code);
       if (apt && flag) showPopupContent(renderOperationalFlagPopup(apt, flag));
       return;
     }
