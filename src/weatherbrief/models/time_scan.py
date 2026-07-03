@@ -38,6 +38,10 @@ class TimeConfirmation(BaseModel):
     models_checked: list[str]
     assessment: str  # GREEN / AMBER / RED
     assessment_reason: str = ""
+    # Per-model RED/AMBER breakdown, same "id=STATUS, ..." format as
+    # assessment_reason ({"gfs": "airport_weather=RED", ...}); a model with
+    # nothing flagged is simply absent. Feeds the detail-table dot tooltips.
+    per_model_reasons: dict[str, str] = Field(default_factory=dict)
     better_than_baseline: bool
     improves: list[str] = Field(default_factory=list)
     worsens: list[str] = Field(default_factory=list)

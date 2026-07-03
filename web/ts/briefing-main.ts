@@ -577,14 +577,37 @@ async function init(): Promise<void> {
         }
         return map;
       };
-      const dot = (status: string, col: string, advisory: string) => {
+      // A column may carry a per-model breakdown (model → advisory-status
+      // map) — rendered as extra tooltip lines on its dots.
+      type DetailCol = {
+        label: string;
+        map: Map<string, string>;
+        perModel?: { model: string; map: Map<string, string> }[];
+      };
+      const dot = (status: string, col: DetailCol, id: string) => {
         const cls = status === 'RED' ? 'assessment-red-text'
           : status === 'AMBER' ? 'assessment-amber-text' : 'assessment-green-text';
-        return `<span class="${cls}" title="${escapeHtml(`${advisory} — ${col}: ${status}`)}">●</span>`;
+        const lines = [`${nameOf(id)} — ${col.label}: ${status}`];
+        for (const pm of col.perModel ?? []) {
+          lines.push(`${pm.model.toUpperCase()}: ${pm.map.get(id) ?? 'GREEN'}`);
+        }
+        return `<span class="${cls}" title="${escapeHtml(lines.join('\n'))}">●</span>`;
       };
+      // Current column: per-model split straight from the briefing's own
+      // advisories manifest (red/amber per model; absent = clear).
+      const currentPerModel = (state.routeAdvisories?.models ?? []).map((model) => {
+        const map = new Map<string, string>();
+        for (const adv of state.routeAdvisories?.advisories ?? []) {
+          const pm = adv.per_model.find((m) => m.model === model);
+          if (pm && (pm.status === 'red' || pm.status === 'amber')) {
+            map.set(adv.advisory_id, pm.status.toUpperCase());
+          }
+        }
+        return { model, map };
+      });
       const baselineReason = scan.candidates.find((b) => b.is_baseline)?.assessment_reason ?? '';
-      const cols: { label: string; map: Map<string, string> }[] = [
-        { label: 'Current', map: parseReason(baselineReason) },
+      const cols: DetailCol[] = [
+        { label: 'Current', map: parseReason(baselineReason), perModel: currentPerModel },
       ];
       if (!c.is_baseline) {
         // The provisional grade is the ECMWF-extension view unless the free
@@ -594,7 +617,14 @@ async function init(): Promise<void> {
           map: parseReason(c.assessment_reason),
         });
         if (c.confirmed) {
-          cols.push({ label: 'All models', map: parseReason(c.confirmed.assessment_reason) });
+          cols.push({
+            label: 'All models',
+            map: parseReason(c.confirmed.assessment_reason),
+            perModel: c.confirmed.models_checked.map((model) => ({
+              model,
+              map: parseReason(c.confirmed?.per_model_reasons?.[model] ?? ''),
+            })),
+          });
         }
       }
       const rank = (s: string | undefined) => (s === 'RED' ? 2 : s === 'AMBER' ? 1 : 0);
@@ -606,7 +636,7 @@ async function init(): Promise<void> {
             <thead><tr><th></th>${cols.map((col) => `<th>${escapeHtml(col.label)}</th>`).join('')}</tr></thead>
             <tbody>${rowIds.map((id) => `<tr>
               <td>${escapeHtml(nameOf(id))}</td>
-              ${cols.map((col) => `<td>${dot(col.map.get(id) ?? 'GREEN', col.label, nameOf(id))}</td>`).join('')}
+              ${cols.map((col) => `<td>${dot(col.map.get(id) ?? 'GREEN', col, id)}</td>`).join('')}
             </tr>`).join('')}</tbody>
           </table>`
         : '<div class="muted">All advisories clear at every checked view.</div>';
