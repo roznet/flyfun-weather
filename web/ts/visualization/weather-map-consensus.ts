@@ -47,7 +47,10 @@ export const NUMERIC_CONSENSUS: Record<
 > = {
   wind_speed_kt:   { worst: _max, majority: median },
   crosswind_kt:    { worst: _max, majority: median },
-  headwind_kt:     { worst: _max, majority: median },
+  // Headwind is favourable, so the "worst" case is the WEAKEST headwind /
+  // strongest tailwind (min) — not the strongest headwind. Mirrors Python
+  // airport_consensus._WORST_IS_MIN (a positive headwind helps).
+  headwind_kt:     { worst: _min, majority: median },
   ceiling_ft:      { worst: _min, majority: median },
   cape_jkg:        { worst: _max, majority: median },
   visibility_m:    { worst: _min, majority: median },

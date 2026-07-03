@@ -18,6 +18,8 @@ interface VectorFields {
   ceiling_ft: number;
   visibility_m: number;
   wind_speed_kt: number;
+  crosswind_kt: number;
+  headwind_kt: number;
 }
 
 function makeModel(f: VectorFields): ModelForecast {
@@ -27,8 +29,8 @@ function makeModel(f: VectorFields): ModelForecast {
     wind_speed_kt: f.wind_speed_kt,
     wind_dir_deg: null,
     wind_gust_kt: null,
-    crosswind_kt: null,
-    headwind_kt: null,
+    crosswind_kt: f.crosswind_kt,
+    headwind_kt: f.headwind_kt,
     best_runway_id: null,
     gust_crosswind_kt: null,
     gust_headwind_kt: null,
@@ -58,6 +60,8 @@ describe('computeConsensus — shared-vector parity with Python', () => {
         expect(result.ceiling_ft).toBeCloseTo(expected.ceiling_ft, 4);
         expect(result.visibility_m).toBeCloseTo(expected.visibility_m, 4);
         expect(result.wind_speed_kt).toBeCloseTo(expected.wind_speed_kt, 4);
+        expect(result.crosswind_kt).toBeCloseTo(expected.crosswind_kt, 4);
+        expect(result.headwind_kt).toBeCloseTo(expected.headwind_kt, 4);
       });
     }
   }

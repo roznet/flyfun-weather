@@ -1,39 +1,39 @@
 {
-  "_comment": "Shared consensus test vectors: one source of truth pinning the Python airport_consensus.consensus and the TypeScript weather-map-consensus.computeConsensus to identical output. Consumed by tests/test_consensus_parity.py and web/tests/unit/consensus-parity.test.ts. Each case's `models` maps model name -> {flight_category, ceiling_ft, visibility_m, wind_speed_kt}; `expected` gives the reduced values per mode. Keep the two consumers in lockstep with this file.",
+  "_comment": "Shared consensus test vectors: one source of truth pinning the Python airport_consensus.consensus and the TypeScript weather-map-consensus.computeConsensus to identical output. Consumed by tests/test_consensus_parity.py and web/tests/unit/consensus-parity.test.ts. Each case's `models` maps model name -> {flight_category, ceiling_ft, visibility_m, wind_speed_kt, crosswind_kt, headwind_kt}; `expected` gives the reduced values per mode. crosswind: worst=max (higher is worse). headwind: worst=min (a positive headwind is favourable, so the weakest headwind / strongest tailwind is the conservative pick). majority=median within the winning-category pool for every numeric. Keep the two consumers in lockstep with this file.",
   "cases": [
     {
       "name": "all agree VFR",
       "models": {
-        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10},
-        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14},
-        "ecmwf": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12}
+        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5, "headwind_kt": 12},
+        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8},
+        "ecmwf": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12, "crosswind_kt": 7, "headwind_kt": 10}
       },
       "expected": {
-        "worst":    {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14},
-        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12}
+        "worst":    {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8},
+        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12, "crosswind_kt": 7, "headwind_kt": 10}
       }
     },
     {
       "name": "2 VFR + 1 IFR -> majority VFR from the pool",
       "models": {
-        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10},
-        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14},
-        "ecmwf": {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000, "wind_speed_kt": 30}
+        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5, "headwind_kt": 12},
+        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8},
+        "ecmwf": {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000, "wind_speed_kt": 30, "crosswind_kt": 20, "headwind_kt": -5}
       },
       "expected": {
-        "worst":    {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000,   "wind_speed_kt": 30},
-        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9499.5, "wind_speed_kt": 12}
+        "worst":    {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000,   "wind_speed_kt": 30, "crosswind_kt": 20, "headwind_kt": -5},
+        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9499.5, "wind_speed_kt": 12, "crosswind_kt": 7,  "headwind_kt": 10}
       }
     },
     {
       "name": "1 VFR + 1 IFR tie -> majority breaks to worse (IFR)",
       "models": {
-        "gfs":  {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10},
-        "icon": {"flight_category": "IFR", "ceiling_ft": 900,  "visibility_m": 3000, "wind_speed_kt": 20}
+        "gfs":  {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5,  "headwind_kt": 12},
+        "icon": {"flight_category": "IFR", "ceiling_ft": 900,  "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3}
       },
       "expected": {
-        "worst":    {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20},
-        "majority": {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20}
+        "worst":    {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3},
+        "majority": {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3}
       }
     }
   ]
