@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from weatherbrief.analysis.airport_consensus import consensus, enrich_wind, snap_to_dict
+from weatherbrief.analysis.operational_flags import cross_border_flag
 from weatherbrief.models.alternates import (
     AlternateAirport,
     AlternateAxisPick,
@@ -235,6 +236,7 @@ class _DestContext:
     cat_idx: int  # destination flight-category severity index
     wind_kt: float | None
     crosswind_kt: float | None
+    iso_country: str | None  # destination ISO-3166-1 alpha-2 (anchors cross-border flag)
 
 
 def _build_alternate(
@@ -310,6 +312,15 @@ def _build_alternate(
         and (better_category or better_wind or better_crosswind)
     )
 
+    # Operational-friction flags (#344): non-weather friction on this candidate.
+    # Cross-border is the only signal today; the list is the extensible channel.
+    operational_flags = []
+    xborder = cross_border_flag(
+        dest_ctx.iso_country, ap.iso_country, bool(ap.point_of_entry)
+    )
+    if xborder is not None:
+        operational_flags.append(xborder)
+
     return AlternateAirport(
         icao=ap.ident,
         name=ap.name,
@@ -338,7 +349,9 @@ def _build_alternate(
         longest_runway_ft=ap.longest_runway_length_ft,
         has_hard_runway=bool(ap.has_hard_runway),
         point_of_entry=bool(ap.point_of_entry),
+        iso_country=ap.iso_country,
         is_major=ap.type == "large_airport",
+        operational_flags=operational_flags,
         better_category=better_category,
         better_wind=better_wind,
         better_crosswind=better_crosswind,
@@ -416,6 +429,12 @@ def run_alternates(
     route_icaos = [wp.icao for wp in route.waypoints]
     dest = route.destination
     origin = route.origin
+
+    # Destination country anchors the cross-border operational flag (#344): the
+    # friction is "planned to land in <dest country>, cleared instead into
+    # <alternate country>". Resolved once here from the euro_aip model.
+    dest_ap = model.get_airport(dest.icao)
+    dest_iso_country = dest_ap.iso_country if dest_ap is not None else None
 
     route_distances = compute_route_distances(route)
     dest_enroute_nm = route_distances[-1] if route_distances else 0.0
@@ -573,6 +592,7 @@ def run_alternates(
                 cat_idx=_cat_idx(dest_category),
                 wind_kt=dest_cons.get("wind_speed_kt"),
                 crosswind_kt=dest_crosswind,
+                iso_country=dest_iso_country,
             )
             # Informational only: is the destination itself MVFR/IFR/LIFR (i.e.
             # you'd need an instrument approach to get into the *destination*).

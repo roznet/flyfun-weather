@@ -31,6 +31,22 @@ ALT_AXIS_LABELS = {
 }
 
 
+class OperationalFlag(BaseModel):
+    """A non-weather operational-friction signal on a divert candidate.
+
+    A single, extensible channel: the cross-border flag (#344) is the first
+    consumer; future signals (water crossing #345, military/joint-use,
+    drive-time) reuse the same shape with no new rendering plumbing. Severity
+    reuses the traffic-light palette but is deliberately never green — an
+    operational flag only ever raises friction, it never clears it.
+    """
+
+    code: str  # stable machine key, e.g. "cross_border"
+    label: str  # short chip text, e.g. "Cross-border"
+    detail: str  # expandable explanation
+    severity: str  # "amber" | "red" (traffic-light palette; never green)
+
+
 class AlternateAirport(BaseModel):
     """One candidate divert airport with geometry, assessment and suitability."""
 
@@ -64,7 +80,13 @@ class AlternateAirport(BaseModel):
     longest_runway_ft: int | None = None
     has_hard_runway: bool = False
     point_of_entry: bool = False  # customs/border crossing
+    iso_country: str | None = None  # ISO-3166-1 alpha-2, from euro_aip (drives cross-border flag)
     is_major: bool = False  # type == large_airport — hidden by default in the UI
+
+    # --- operational-friction flags (#344) ---
+    # Non-weather friction (cross-border customs/immigration today; water
+    # crossing, military, drive-time later) surfaced on one extensible channel.
+    operational_flags: list[OperationalFlag] = Field(default_factory=list)
 
     # --- vs-destination flags ---
     better_category: bool = False

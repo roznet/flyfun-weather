@@ -18,6 +18,7 @@ import type {
   IcingRisk,
   ModelSourceDetail,
   ObservationComparison,
+  OperationalFlag,
   PackMeta,
   RouteAlternates,
   RouteAnalysesManifest,
@@ -1451,6 +1452,14 @@ function renderAltReqPopup(req: AlternateRequirement): string {
     </div>`;
 }
 
+function renderOperationalFlagPopup(apt: AlternateAirport, flag: OperationalFlag): string {
+  return `
+    <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' — ' + escapeHtml(apt.name) : ''}</h3></div>
+    <p class="alt-flag-detail alt-flag-detail-${escapeHtml(flag.severity)}"><strong>${escapeHtml(flag.label)}</strong></p>
+    <p class="alt-flag-detail-body">${escapeHtml(flag.detail)}</p>
+  `;
+}
+
 function renderAltPopup(apt: AlternateAirport): string {
   const rows = Object.entries(apt.per_model).map(([model, d]) => {
     const cat = (d['flight_category'] as string) ?? '—';
@@ -1471,9 +1480,14 @@ function renderAltPopup(apt: AlternateAirport): string {
   // FAA/EASA alternate-minima detail lives in the dedicated badge popups
   // (click the FAA/EASA badge in the row) so the wording stays consistent.
   const meta = metaRows.join('\n');
+  const flagsHtml = apt.operational_flags.length
+    ? `<h4>Operational notes</h4>` + apt.operational_flags.map((f) =>
+        `<p class="alt-flag-detail alt-flag-detail-${escapeHtml(f.severity)}"><strong>${escapeHtml(f.label)}:</strong> ${escapeHtml(f.detail)}</p>`).join('')
+    : '';
   return `
     <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' — ' + escapeHtml(apt.name) : ''}</h3></div>
     <pre class="obs-wind-summary">${meta}</pre>
+    ${flagsHtml}
     <h4>Per-model</h4>
     <table class="band-table"><thead><tr><th>Model</th><th>Cat</th><th>Wind</th><th>Xwind</th></tr></thead><tbody>${rows}</tbody></table>
   `;
@@ -1538,9 +1552,14 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
     const agreeBadge = agreeCat ? ` <span class="alt-agree alt-agree-${agreeCat}">${escapeHtml(agreeCat)}</span>` : '';
     const majorChip = apt.is_major
       ? ` <span class="alt-tag alt-tag-major" title="Major airport (airline hub) — hidden by default">MAJOR</span>` : '';
+    // Operational-friction chips (#344): a ⚠ triangle per flag, colored by
+    // severity, opening the detail on click (reuses the per-row popup pattern).
+    const flagChips = apt.operational_flags.map((f) =>
+      ` <button class="alt-flag-chip alt-flag-${escapeHtml(f.severity)}" data-flag-icao="${escapeHtml(apt.icao)}" data-flag-code="${escapeHtml(f.code)}" title="${escapeHtml(f.label)} — click for detail" aria-label="${escapeHtml(f.label)}">⚠</button>`,
+    ).join('');
     return `
       <tr>
-        <td class="obs-icao">${escapeHtml(apt.icao)}${majorChip} <button class="alt-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Details" aria-label="info">i</button></td>
+        <td class="obs-icao">${escapeHtml(apt.icao)}${majorChip}${flagChips} <button class="alt-info-btn" data-icao="${escapeHtml(apt.icao)}" title="Details" aria-label="info">i</button></td>
         <td>${Math.round(apt.distance_from_dest_nm)}nm</td>
         <td>${escapeHtml(apt.position)} <span class="muted">(${detourLabel(apt)})</span></td>
         <td>${flightCatBadge(apt.flight_category)}${agreeBadge}</td>
@@ -1682,6 +1701,16 @@ export function renderRouteAlternates(snapshot: ForecastSnapshot | null): void {
       const regime = qualBtn.dataset.qualRegime as 'faa' | 'easa' | undefined;
       const apt = alt.alternates.find((a) => a.icao === icao);
       if (apt && regime) showPopupContent(renderQualPopup(apt, regime));
+      return;
+    }
+    // Operational-friction chip (⚠) → focused flag-detail popup.
+    const flagBtn = target.closest('.alt-flag-chip') as HTMLElement | null;
+    if (flagBtn) {
+      const icao = flagBtn.dataset.flagIcao;
+      const code = flagBtn.dataset.flagCode;
+      const apt = alt.alternates.find((a) => a.icao === icao);
+      const flag = apt?.operational_flags.find((f) => f.code === code);
+      if (apt && flag) showPopupContent(renderOperationalFlagPopup(apt, flag));
       return;
     }
     const infoBtn = target.closest('.alt-info-btn') as HTMLElement | null;

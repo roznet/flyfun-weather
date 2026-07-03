@@ -4327,6 +4327,45 @@ label {
   letter-spacing: 0.02em;
 }
 
+/* Operational-friction chip (#344): a ⚠ triangle next to the ICAO, colored by
+   severity (amber/red — never green). Click opens the flag detail popup. */
+.alt-flag-chip {
+  margin-left: 0.2rem;
+  padding: 0 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.alt-flag-amber {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.alt-flag-red {
+  background: var(--red-bg);
+  color: var(--red);
+  border-color: var(--red);
+}
+
+/* Flag detail (in the popup): a left border in the flag's severity color. */
+.alt-flag-detail {
+  margin: 0.35rem 0 0.15rem;
+  padding-left: 0.5rem;
+  border-left: 3px solid var(--border);
+}
+
+.alt-flag-detail-amber { border-left-color: var(--amber); }
+.alt-flag-detail-red { border-left-color: var(--red); }
+
+.alt-flag-detail-body {
+  margin: 0.15rem 0 0.35rem;
+  color: var(--text-secondary);
+}
+
 /* List-view controls: hide-major + max-distance, above the candidate table. */
 .alt-controls {
   display: flex;
