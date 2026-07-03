@@ -53,6 +53,10 @@ def get_scan_class_ids() -> set[str]:
 def get_timing_hint_ids() -> set[str]:
     """IDs whose RED/AMBER triggers the Flexibility hint on unscanned flights.
 
+    TODO(timing-scenario-plan.md, decision A): not yet consumed — the soft
+    "set Flexibility to scan for a better window" lightbulb on
+    Flexibility=None flights is a planned follow-up; this is its trigger set.
+
     The scan-class set plus explicitly ``timing_hint=True`` entries (e.g.
     ``flight_category`` — OM/TAF-graded, so never scan-class, but airport
     fog/ceiling burn-off is a classic timing case worth hinting on).

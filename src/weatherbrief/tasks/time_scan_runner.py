@@ -161,6 +161,11 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
                 _write_status(pack_dir, "skipped", flight.flexibility, reason="no_data")
                 return
 
+            # Preserve paid confirm verdicts across a same-run rescan (e.g.
+            # the "Set as alternate" flow rebuilding the candidate list).
+            from weatherbrief.tasks.artifacts import load_time_options
+
+            merge_confirmed(load_time_options(pack_dir), scan)
             save_time_options(pack_dir, scan)
 
             # The pinned alternate row keeps the legacy pack-row alt fields
@@ -294,6 +299,14 @@ def _run_confirm_job(
             scan = load_time_options(pack_dir)
             cand = scan.candidate_at(candidate_time) if scan else None
             if cand is None:
+                # A rescan replaced the candidate list while we fetched — the
+                # paid result has nowhere to land. merge_confirmed prevents
+                # the reverse ordering; this direction we can only surface.
+                logger.warning(
+                    "time-scan: confirm result for %s @ %s dropped — candidate "
+                    "list changed while the check ran (rescan?)",
+                    flight_id, candidate_time,
+                )
                 return
             cand.confirm_pending = False
             if confirmation is not None:
@@ -332,6 +345,50 @@ def _run_confirm_job(
     finally:
         with _inflight_lock:
             _inflight.discard(key)
+
+
+def reconcile_stale_scan(pack_dir: Path) -> bool:
+    """Mark an orphaned ``pending``/``running`` scan status as failed.
+
+    A restart (deploy, dev reload) mid-scan leaves the sidecar at "running"
+    with no worker behind it — without this, the panel shows "Scenarios
+    running…" forever and the lazy-schedule never fires again (it only acts
+    on a missing status). Mirrors :func:`reconcile_stale_confirms`; the
+    caller (the polling GET) re-schedules for the owner after this flips the
+    status. Returns True when a stale status was cleared.
+    """
+    from weatherbrief.tasks.artifacts import load_time_scan_status
+
+    status = load_time_scan_status(pack_dir)
+    if status is None or status.status not in ("pending", "running"):
+        return False
+    with _inflight_lock:
+        if str(pack_dir) in _inflight:
+            return False  # a live worker really is on it
+    _write_status(pack_dir, "failed", status.flexibility, reason="interrupted")
+    logger.info("time-scan: cleared orphaned %s status in %s", status.status, pack_dir)
+    return True
+
+
+def merge_confirmed(old: "TimeWindowScan | None", new: "TimeWindowScan") -> None:
+    """Carry confirmed verdicts from a previous scan onto a fresh one.
+
+    A rescan (e.g. the "Set as alternate" flow) rebuilds the candidate list;
+    without this, a confirm that landed earlier — a paid briefing-equivalent
+    of GFS+ICON fetch — would silently vanish, and one queued *behind* the
+    rescan would find its candidate gone. Only merges when the new scan is
+    graded on the same ECMWF run and planned departure (a new run genuinely
+    invalidates old confirms — decision H).
+    """
+    if old is None or new.ecmwf_run_ts != old.ecmwf_run_ts:
+        return
+    if abs((new.baseline.departure_time - old.baseline.departure_time).total_seconds()) > 60:
+        return
+    for cand in new.candidates:
+        prev = old.candidate_at(cand.departure_time)
+        if prev is not None and prev.confirmed is not None and cand.confirmed is None:
+            cand.confirmed = prev.confirmed
+            cand.confidence = "confirmed"
 
 
 def reconcile_stale_confirms(pack_dir: Path) -> bool:
