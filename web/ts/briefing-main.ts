@@ -565,29 +565,59 @@ async function init(): Promise<void> {
         confLine = 'all models checked';
       }
 
-      // Progressive depth: an expander with everything already saved for
-      // this hour — the full red/amber breakdown, models, graded ETA span.
-      const reasonList = (reason: string) => {
-        const parts = reason.split(',').map((p) => p.trim()).filter((p) => p.includes('='));
-        if (!parts.length) return `<div class="muted">${escapeHtml(reason || 'All clear')}</div>`;
-        return parts.map((p) => {
-          const [id, status] = p.split('=');
-          const cls = status === 'RED' ? 'assessment-red-text'
-            : status === 'AMBER' ? 'assessment-amber-text' : '';
-          return `<div><span class="${cls}">●</span> ${escapeHtml(nameOf(id))}: ${escapeHtml(status)}</div>`;
-        }).join('');
+      // Progressive depth: an expander with a per-advisory dot table —
+      // Current (planned time) vs this hour's ECMWF view vs the all-model
+      // check when one has been run. Absent from a reason string = clear
+      // (every candidate is graded on the full advisory set).
+      const parseReason = (reason: string): Map<string, string> => {
+        const map = new Map<string, string>();
+        for (const part of reason.split(',')) {
+          const [id, st] = part.trim().split('=');
+          if (id && st) map.set(id.trim(), st.trim());
+        }
+        return map;
       };
+      const dot = (status: string, col: string, advisory: string) => {
+        const cls = status === 'RED' ? 'assessment-red-text'
+          : status === 'AMBER' ? 'assessment-amber-text' : 'assessment-green-text';
+        return `<span class="${cls}" title="${escapeHtml(`${advisory} — ${col}: ${status}`)}">●</span>`;
+      };
+      const baselineReason = scan.candidates.find((b) => b.is_baseline)?.assessment_reason ?? '';
+      const cols: { label: string; map: Map<string, string> }[] = [
+        { label: 'Current', map: parseReason(baselineReason) },
+      ];
+      if (!c.is_baseline) {
+        // The provisional grade is the ECMWF-extension view unless the free
+        // tier already covered this hour with every model in-window.
+        cols.push({
+          label: c.confirmed || c.confidence === 'ecmwf_only' ? 'ECMWF only' : 'All models',
+          map: parseReason(c.assessment_reason),
+        });
+        if (c.confirmed) {
+          cols.push({ label: 'All models', map: parseReason(c.confirmed.assessment_reason) });
+        }
+      }
+      const rank = (s: string | undefined) => (s === 'RED' ? 2 : s === 'AMBER' ? 1 : 0);
+      const worstOf = (id: string) => Math.max(...cols.map((col) => rank(col.map.get(id))));
+      const rowIds = [...new Set(cols.flatMap((col) => [...col.map.keys()]))]
+        .sort((a, b) => worstOf(b) - worstOf(a) || nameOf(a).localeCompare(nameOf(b)));
+      const tableHtml = rowIds.length
+        ? `<table class="time-detail-table">
+            <thead><tr><th></th>${cols.map((col) => `<th>${escapeHtml(col.label)}</th>`).join('')}</tr></thead>
+            <tbody>${rowIds.map((id) => `<tr>
+              <td>${escapeHtml(nameOf(id))}</td>
+              ${cols.map((col) => `<td>${dot(col.map.get(id) ?? 'GREEN', col.label, nameOf(id))}</td>`).join('')}
+            </tr>`).join('')}</tbody>
+          </table>`
+        : '<div class="muted">All advisories clear at every checked view.</div>';
       const etaSpan = c.valid_times.length
         ? `${formatDepartureTime(c.valid_times[0])} → ${formatDepartureTime(c.valid_times[c.valid_times.length - 1])}`
         : '';
-      let detailHtml = `
-        <div style="margin:0.25rem 0;"><strong>${c.confirmed ? 'ECMWF view' : 'At this hour'}</strong>${reasonList(c.assessment_reason)}</div>`;
-      if (c.confirmed) {
-        detailHtml += `
-        <div style="margin:0.25rem 0;"><strong>All-model check (${escapeHtml(c.confirmed.models_checked.map((m) => m.toUpperCase()).join(', '))})</strong>${reasonList(c.confirmed.assessment_reason)}</div>`;
-      }
-      detailHtml += `
-        <div class="muted" style="font-size:0.85em;">Graded with ${escapeHtml(c.models_used.map((m) => m.toUpperCase()).join(', '))}${etaSpan ? ` · route ETAs ${escapeHtml(etaSpan)}` : ''}</div>`;
+      const detailHtml = `
+        <div class="time-detail-box">
+          ${tableHtml}
+          <div class="muted" style="font-size:0.85em; margin-top:0.35rem;">Graded with ${escapeHtml(c.models_used.map((m) => m.toUpperCase()).join(', '))}${etaSpan ? ` · route ETAs ${escapeHtml(etaSpan)}` : ''}</div>
+        </div>`;
 
       // "Set as alternate time" — pins this scenario so the full per-advisory
       // detail flows through the existing planned↔alt view. Same-day only
@@ -598,14 +628,14 @@ async function init(): Promise<void> {
         : '';
 
       return `
-        <div class="info-row">
+        <div class="info-row time-scenario-row">
           <span class="info-label">${escapeHtml(time)}</span>
           <span class="info-value">
             ${effectiveChip}
             <span class="muted">${escapeHtml(shift)}${escapeHtml(tag)}</span>
-            ${diffs.length ? `<div>${escapeHtml(diffs.join(' · '))}</div>` : ''}
-            <div class="muted" style="font-size:0.8em;">${confLine}${setAltBtn}</div>
-            <details style="font-size:0.85em; margin-top:0.2rem;">
+            ${diffs.length ? `<span>${escapeHtml(diffs.join(' · '))}</span>` : ''}
+            <span class="muted" style="font-size:0.8em;">${confLine}${setAltBtn}</span>
+            <details style="font-size:0.85em;">
               <summary class="muted" style="cursor:pointer;">details</summary>
               ${detailHtml}
             </details>

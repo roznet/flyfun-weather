@@ -2206,9 +2206,67 @@ label {
   transition: background 0.15s, border-color 0.15s;
 }
 
-.btn-outline:hover {
+.btn-outline:hover:not(:disabled) {
   background: var(--border);
   border-color: var(--text-muted);
+}
+
+.btn-outline:disabled {
+  color: var(--text-muted);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* --- Timing scenarios --- */
+/* Keep the time label pinned to the candidate's first line even when the
+   details expander grows the row. */
+.time-scenario-row {
+  align-items: flex-start;
+}
+.time-scenario-row .info-label {
+  padding-top: 0.15rem;
+}
+/* Collapsed: one wrapping line per scenario (chip · shift · diff · status ·
+   details link). Opened: the expander drops to a full-width row below. */
+.time-scenario-row .info-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.45rem;
+  row-gap: 0.15rem;
+}
+.time-scenario-row details[open] {
+  flex-basis: 100%;
+}
+
+/* Expanded details: boxed so it visually belongs to its candidate row. */
+.time-detail-box {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: 0.5rem 0.75rem;
+  margin: 0.3rem 0 0.5rem;
+}
+
+.time-detail-table {
+  border-collapse: collapse;
+}
+.time-detail-table th {
+  font-weight: 500;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  text-align: center;
+  padding: 0.1rem 0.7rem;
+}
+.time-detail-table td {
+  text-align: center;
+  padding: 0.1rem 0.7rem;
+}
+.time-detail-table th:first-child,
+.time-detail-table td:first-child {
+  text-align: left;
+  padding-left: 0;
 }
 
 /* --- Image lightbox --- */
