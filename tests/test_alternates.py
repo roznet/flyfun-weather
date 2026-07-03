@@ -57,6 +57,7 @@ class _FakeAirport:
         type="small_airport", scheduled_service="no",
         has_hard_runway=True, longest_runway_length_ft=4000,
         point_of_entry=False, has_approach=True, best_approach="ILS", name=None,
+        iso_country=None,
     ):
         self.ident = ident
         self.latitude_deg = lat
@@ -66,6 +67,7 @@ class _FakeAirport:
         self.has_hard_runway = has_hard_runway
         self.longest_runway_length_ft = longest_runway_length_ft
         self.point_of_entry = point_of_entry
+        self.iso_country = iso_country
         self.name = name or ident
         self._pq = _FakeProceduresQuery(has_approach, best_approach)
 
@@ -92,6 +94,9 @@ class _FakeModel:
 
     def find_airports_near_route(self, route_icaos, distance_nm=50.0):
         return self._near
+
+    def get_airport(self, icao):
+        return self.airports.get(icao)
 
 
 def _route():
@@ -645,3 +650,62 @@ def test_assess_threads_aggregation_mode():
     assert maj["ceiling_ft"] == 4500.0
     assert wor["flight_category"] == "IFR"
     assert wor["ceiling_ft"] == 800.0
+
+
+# ---------------------------------------------------------------------------
+# Cross-border operational-friction flag (#344)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_border_flag_red_for_gb_alternate_from_fr_dest():
+    # Canonical case: a flight to LFAT (FR) offered EGMD (GB) as an alternate —
+    # close + weather-better, but an unplanned international arrival (customs +
+    # immigration) → red. EGMD is a point of entry → reassurance wording.
+    route = RouteConfig(
+        name="EGKA-LFAT",
+        waypoints=[
+            Waypoint(icao="EGKA", name="Shoreham", lat=50.84, lon=-0.30),
+            Waypoint(icao="LFAT", name="Le Touquet", lat=50.52, lon=1.62),
+        ],
+        flight_duration_hours=1.0,
+    )
+    lfat = _FakeAirport("LFAT", 50.52, 1.62, iso_country="FR")
+    egmd = _FakeAirport("EGMD", 50.96, 0.94, iso_country="GB", point_of_entry=True)
+    near = [
+        {"airport": egmd, "enroute_distance_nm": None, "segment_distance_nm": 10.0},
+    ]
+    snaps = {"LFAT": _all_models("LFAT"), "EGMD": _all_models("EGMD")}
+    result = _run(route, near, snaps, all_airports=[lfat, egmd])
+
+    assert result is not None
+    egmd_alt = next(a for a in result.alternates if a.icao == "EGMD")
+    assert egmd_alt.iso_country == "GB"
+    flags = [f for f in egmd_alt.operational_flags if f.code == "cross_border"]
+    assert len(flags) == 1
+    assert flags[0].severity == "red"
+    assert "customs and immigration" in flags[0].detail
+    assert "point of entry" in flags[0].detail  # POE reassurance, not "could not verify"
+
+
+def test_no_cross_border_flag_when_dest_country_unknown():
+    # If the destination country can't be resolved, we can't anchor the flag —
+    # no flag rather than a wrong one.
+    route = RouteConfig(
+        name="EGKA-LFAT",
+        waypoints=[
+            Waypoint(icao="EGKA", name="Shoreham", lat=50.84, lon=-0.30),
+            Waypoint(icao="LFAT", name="Le Touquet", lat=50.52, lon=1.62),
+        ],
+        flight_duration_hours=1.0,
+    )
+    # LFAT deliberately absent from all_airports → get_airport returns None.
+    egmd = _FakeAirport("EGMD", 50.96, 0.94, iso_country="GB", point_of_entry=True)
+    near = [
+        {"airport": egmd, "enroute_distance_nm": None, "segment_distance_nm": 10.0},
+    ]
+    snaps = {"LFAT": _all_models("LFAT"), "EGMD": _all_models("EGMD")}
+    result = _run(route, near, snaps, all_airports=[egmd])
+
+    assert result is not None
+    egmd_alt = next(a for a in result.alternates if a.icao == "EGMD")
+    assert egmd_alt.operational_flags == []

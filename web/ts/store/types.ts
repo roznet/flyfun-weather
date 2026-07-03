@@ -667,6 +667,13 @@ export interface AlternateRequirement {
   computed_at: string | null;
 }
 
+export interface OperationalFlag {
+  code: string;
+  label: string;
+  detail: string;
+  severity: 'amber' | 'red';
+}
+
 export interface AlternateAirport {
   icao: string;
   name: string | null;
@@ -692,7 +699,9 @@ export interface AlternateAirport {
   longest_runway_ft: number | null;
   has_hard_runway: boolean;
   point_of_entry: boolean;
+  iso_country: string | null;
   is_major: boolean;
+  operational_flags: OperationalFlag[];
   better_category: boolean;
   better_wind: boolean;
   better_crosswind: boolean;
