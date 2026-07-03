@@ -49,6 +49,14 @@ struct AlternateAirport: Codable, Identifiable, Sendable {
     let bestApproachType: String?   // ILS/RNP/RNAV/... precision tier (minima proxy)
     let isMajor: Bool?              // type == large_airport — hidden by default
 
+    // Operational-friction (#344). Decoded for cross-platform parity so the
+    // data (notably the safety-relevant cross-border customs/immigration
+    // warning) is available on iOS; the ⚠ chip / detail UI is a deferred
+    // fast-follow (web-only for now). Optional so pre-#344 packs — which omit
+    // these keys and are served as a raw passthrough — still decode.
+    let isoCountry: String?          // ISO-3166-1 alpha-2 (drives cross-border flag)
+    let operationalFlags: [OperationalFlag]?
+
     // vs-destination flags.
     let betterCategory: Bool?
     let betterWind: Bool?
@@ -69,6 +77,18 @@ struct AlternateAirport: Codable, Identifiable, Sendable {
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " / ")
     }
+}
+
+/// A non-weather operational-friction signal on a divert candidate (#344).
+/// Swift mirror of `models/alternates.py:OperationalFlag`. Decoded for
+/// cross-platform parity; the ⚠ chip / detail UI is a deferred fast-follow.
+struct OperationalFlag: Codable, Identifiable, Sendable {
+    let code: String              // stable machine key, e.g. "cross_border"
+    let label: String             // short chip text, e.g. "Cross-border"
+    let detail: String            // expandable explanation
+    let severity: String          // "amber" | "red" (traffic-light palette; never green)
+
+    var id: String { code }
 }
 
 /// The nearest improving alternate for one deficient axis.
