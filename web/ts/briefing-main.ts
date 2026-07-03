@@ -498,7 +498,7 @@ async function init(): Promise<void> {
 
     const status = to.status?.status;
     if (status === 'pending' || status === 'running' || (!status && !to.scan)) {
-      section.innerHTML = '<p class="muted">Scenarios running… checking other departure times against this briefing.</p>';
+      section.innerHTML = '<p class="muted">Scenarios running — checking other departure times against this briefing<span class="dots-spinner"></span></p>';
       return;
     }
     if (status === 'failed') {
@@ -556,7 +556,7 @@ async function init(): Promise<void> {
           ? `checked with ${escapeHtml(models)} — still looks smoother`
           : `checked with ${escapeHtml(models)} — not clearly better after all`;
       } else if (c.confirm_pending) {
-        confLine = 'checking all models…';
+        confLine = 'checking all models<span class="dots-spinner"></span>';
       } else if (c.confidence === 'ecmwf_only') {
         confLine = anyConfirmPending
           ? `ECMWF only · <button type="button" class="btn btn-outline btn-sm time-confirm-btn" disabled title="One model check at a time — another is running">Check all models</button>`
@@ -623,8 +623,12 @@ async function init(): Promise<void> {
       // detail flows through the existing planned↔alt view. Same-day only
       // (the alternate-time validation) and not for the plan/alternate rows.
       const sameDay = c.departure_time.slice(0, 10) === scan.baseline.departure_time.slice(0, 10);
+      // Disabled while any model check runs — pinning an alternate queues a
+      // rescan, which isn't a natural thing to do mid-check.
       const setAltBtn = (!c.is_baseline && !c.is_alternate && sameDay)
-        ? ` <button type="button" class="btn btn-outline btn-sm time-setalt-btn" data-departure="${escapeHtml(c.departure_time)}" title="Pin this time as your alternate — full advisory detail appears in the planned/alt view">Set as alternate</button>`
+        ? (anyConfirmPending
+          ? ` <button type="button" class="btn btn-outline btn-sm time-setalt-btn" disabled title="Wait for the model check to finish">Set as alternate</button>`
+          : ` <button type="button" class="btn btn-outline btn-sm time-setalt-btn" data-departure="${escapeHtml(c.departure_time)}" title="Pin this time as your alternate — full advisory detail appears in the planned/alt view">Set as alternate</button>`)
         : '';
 
       return `
