@@ -1513,6 +1513,11 @@ def _persist_pack_finalize(
     # persisted so it never delays or fails a refresh. All three refresh paths
     # (streaming, sync, scheduler) converge here — one wire. The runner itself
     # skips (with a terminal "skipped" status) when flexibility is "none".
+    # Known-benign race: the caller commits `db` just after we return, while
+    # the job (own session) needs the pack row only at its END — seconds of
+    # grading vs microseconds to commit. If the row were ever missed, the
+    # job's pack_row-is-None guard skips the alt-field update and the web
+    # poll's loadAltAdvisories path still surfaces the artifact.
     try:
         from weatherbrief.tasks.time_scan_runner import schedule_time_scan
 
@@ -2587,6 +2592,36 @@ def get_time_options(
         "status": status.model_dump(mode="json") if status else None,
         "scan": scan.model_dump(mode="json") if scan else None,
     }
+
+
+@router.post("/{timestamp}/time-options/rescan", status_code=202)
+def rescan_time_options(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Re-queue the timing scan for a pack (owner only).
+
+    Used by the "Set as alternate time" flow after a flight PATCH: the changed
+    alternate must be re-graded and ``route_advisories_alt.json`` re-persisted.
+    Cheap when nothing changed — the runner's decision-H reuse check skips the
+    decode for a scan that is still valid.
+    """
+    from weatherbrief.tasks.time_scan_runner import schedule_time_scan
+
+    flight = _load_owned_flight(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    if flight.flexibility == "none":
+        raise HTTPException(status_code=409, detail="Flight has Flexibility 'none'")
+    try:
+        fetch_ts = datetime.fromisoformat(timestamp)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid pack timestamp")
+    db_path = getattr(request.app.state, "db_path", "")
+    schedule_time_scan(flight_id, pack_dir, fetch_ts, db_path=db_path)
+    return {"status": "queued"}
 
 
 class TimeConfirmRequest(BaseModel):

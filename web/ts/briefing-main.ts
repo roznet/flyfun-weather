@@ -565,6 +565,38 @@ async function init(): Promise<void> {
         confLine = 'all models checked';
       }
 
+      // Progressive depth: an expander with everything already saved for
+      // this hour — the full red/amber breakdown, models, graded ETA span.
+      const reasonList = (reason: string) => {
+        const parts = reason.split(',').map((p) => p.trim()).filter((p) => p.includes('='));
+        if (!parts.length) return `<div class="muted">${escapeHtml(reason || 'All clear')}</div>`;
+        return parts.map((p) => {
+          const [id, status] = p.split('=');
+          const cls = status === 'RED' ? 'assessment-red-text'
+            : status === 'AMBER' ? 'assessment-amber-text' : '';
+          return `<div><span class="${cls}">●</span> ${escapeHtml(nameOf(id))}: ${escapeHtml(status)}</div>`;
+        }).join('');
+      };
+      const etaSpan = c.valid_times.length
+        ? `${formatDepartureTime(c.valid_times[0])} → ${formatDepartureTime(c.valid_times[c.valid_times.length - 1])}`
+        : '';
+      let detailHtml = `
+        <div style="margin:0.25rem 0;"><strong>${c.confirmed ? 'ECMWF view' : 'At this hour'}</strong>${reasonList(c.assessment_reason)}</div>`;
+      if (c.confirmed) {
+        detailHtml += `
+        <div style="margin:0.25rem 0;"><strong>All-model check (${escapeHtml(c.confirmed.models_checked.map((m) => m.toUpperCase()).join(', '))})</strong>${reasonList(c.confirmed.assessment_reason)}</div>`;
+      }
+      detailHtml += `
+        <div class="muted" style="font-size:0.85em;">Graded with ${escapeHtml(c.models_used.map((m) => m.toUpperCase()).join(', '))}${etaSpan ? ` · route ETAs ${escapeHtml(etaSpan)}` : ''}</div>`;
+
+      // "Set as alternate time" — pins this scenario so the full per-advisory
+      // detail flows through the existing planned↔alt view. Same-day only
+      // (the alternate-time validation) and not for the plan/alternate rows.
+      const sameDay = c.departure_time.slice(0, 10) === scan.baseline.departure_time.slice(0, 10);
+      const setAltBtn = (!c.is_baseline && !c.is_alternate && sameDay)
+        ? ` <button type="button" class="btn btn-outline btn-sm time-setalt-btn" data-departure="${escapeHtml(c.departure_time)}" title="Pin this time as your alternate — full advisory detail appears in the planned/alt view">Set as alternate</button>`
+        : '';
+
       return `
         <div class="info-row">
           <span class="info-label">${escapeHtml(time)}</span>
@@ -572,7 +604,11 @@ async function init(): Promise<void> {
             ${effectiveChip}
             <span class="muted">${escapeHtml(shift)}${escapeHtml(tag)}</span>
             ${diffs.length ? `<div>${escapeHtml(diffs.join(' · '))}</div>` : ''}
-            <div class="muted" style="font-size:0.8em;">${confLine}</div>
+            <div class="muted" style="font-size:0.8em;">${confLine}${setAltBtn}</div>
+            <details style="font-size:0.85em; margin-top:0.2rem;">
+              <summary class="muted" style="cursor:pointer;">details</summary>
+              ${detailHtml}
+            </details>
           </span>
         </div>`;
     }).join('');
@@ -587,11 +623,17 @@ async function init(): Promise<void> {
 
     section.innerHTML = `<p>${escapeHtml(headline)}</p>${rows}${refusedNote}`;
 
-    // Wire the confirm taps (fresh nodes on every render — no stale handlers).
+    // Wire the taps (fresh nodes on every render — no stale handlers).
     section.querySelectorAll<HTMLButtonElement>('.time-confirm-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const dep = btn.dataset.departure;
         if (dep) void store.getState().confirmTimeOption(dep);
+      });
+    });
+    section.querySelectorAll<HTMLButtonElement>('.time-setalt-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const dep = btn.dataset.departure;
+        if (dep) void store.getState().setScenarioAsAlternate(dep);
       });
     });
   }

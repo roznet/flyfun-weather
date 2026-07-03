@@ -385,6 +385,16 @@ def _reusable_scan(pack_dir: Path, flight):
     dep = flight.departure_time
     if abs((scan.baseline.departure_time - dep).total_seconds()) > 60:
         return None
+    # A changed/new alternate time invalidates the scan — its pinned row (and
+    # route_advisories_alt.json) must be re-graded ("Set as alternate" flow).
+    if flight.alt_departure_time is not None:
+        alt = flight.alt_departure_time
+        has_alt_row = any(
+            c.is_alternate and abs((c.departure_time - alt).total_seconds()) < 60
+            for c in scan.candidates
+        )
+        if not has_alt_row:
+            return None
     cover_until = dep
     if scan.window is not None:
         cover_until = max(cover_until, scan.window.end)

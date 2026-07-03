@@ -85,7 +85,7 @@ a **Flexibility** setting:
 |---|---|
 | A | Flexibility is opt-in, default None; soft hint on None flights when a hint-class advisory fires |
 | B | The toggle gates *whether* to run scenarios; a cheap "day pinned bad" early-exit inside the scan job may still gate *how much* — kept as a benchmarked optimization (OM variance vs coarse-ECMWF-first, see flow section), not a v1 blocker. `timing_class` only drives the hint + ranking emphasis |
-| C | Hint-class set = the 8 `scan` advisories + `freezing_precip` + `flight_category`; `fronts` excluded (experimental, default-off). Low-stakes and declarative (`timing_class` config) — since every candidate is graded on the full set, the lightbulb trigger can be re-tuned anytime without rework |
+| C | `freezing_precip` is a full `scan`-class member (9 scan rows total — severe, and the diurnal T-crossing IS the timing mechanism, so it counts toward the ranking margin, not just the hint; as-built, confirmed at review). Hint set = the 9 scan rows + `flight_category` (`timing_hint=True`); `fronts` excluded (experimental, default-off). Low-stakes and declarative (`timing_class` config) — since every candidate is graded on the full set, the lightbulb trigger can be re-tuned anytime without rework |
 | D | Margin/presentation confirmed: surface a candidate only if it improves ≥1 grade and doesn't materially worsen anything; ranked, cap ~3, alternate time pinned (exact thresholds tuned at build time) |
 | E | On-tap multi-model confirm is **in v1** |
 | F | Previous/Next day modes are **in v1** |
@@ -227,10 +227,11 @@ grep for literal `id="..."`.
 
 ### Mapping (all 21 evaluators — verified complete against the registry)
 
-**Hint-class** (triggers the None-flight hint; decision C): the 8 `scan` rows +
-`freezing_precip` + `flight_category`.
+**Hint-class** (triggers the None-flight hint; decision C): the 9 `scan` rows +
+`flight_category` (via `timing_hint=True` — the hint set is
+`get_scan_class_ids() | {timing_hint}` in the registry).
 
-#### `scan` — the timing-sensitive, GRIB-dependent core
+#### `scan` — the timing-sensitive core (9 rows, as-built)
 | Advisory | Cat | Why |
 |---|---|---|
 | `convective` | convective | Diurnal CAPE/firing, GRIB cross-check — canonical case |
@@ -241,12 +242,13 @@ grep for literal `id="..."`.
 | `vmc_cruise` | cloud | BKN/OVC at cruise burns off/builds; GRIB cloud |
 | `vfr_feasibility` | feasibility | RED is usually enroute IMC / corridor decks — the burn-off case |
 | `ifr_feasibility` | feasibility | Gated by icing + convective, both scan-class |
+| `freezing_precip` | icing | Severe, and the diurnal T-crossing-zero IS the timing mechanism — ranking-worthy, not hint-only |
 
 #### resolved `scan?` rows (decision C)
 | Advisory | Disposition |
 |---|---|
-| `flight_category` | **hint-class** (fog/ceiling burn-off is the classic timing case) but OM/TAF-driven — improvements surface via full-set grading, no GRIB work needed for it |
-| `freezing_precip` | **hint-class** — severe + the diurnal T-crossing-zero is the whole point |
+| `flight_category` | **hint-only** (`timing_class="cheap"`, `timing_hint=True`) — fog/ceiling burn-off is the classic timing case but OM/TAF-driven; improvements surface via full-set grading |
+| `freezing_precip` | **scan-class** (see table above) |
 | `fronts` | **excluded** until the advisory matures (experimental, default-off) |
 
 #### `cheap` — OM-sufficient, never drives the hint

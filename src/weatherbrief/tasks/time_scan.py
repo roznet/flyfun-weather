@@ -840,8 +840,15 @@ def run_time_scan(
                         if horizon and vts and vts[-1] > horizon:
                             horizon_clipped = True
                         continue
+                    # detect_fronts=is_alt mirrors the free tier: the pinned
+                    # alternate keeps route_fronts_alt.json fresh (like the
+                    # retired in-pipeline stage), even when it grades
+                    # provisionally — an off-window alternate is the COMMON
+                    # case, and a stale planned-time fronts artifact under a
+                    # fresh alt manifest would lie. The tight-loop concern
+                    # only applies to the swept candidates.
                     manifest = _grade(
-                        t, persist=is_alt, detect_fronts=False,
+                        t, persist=is_alt, detect_fronts=is_alt,
                         models_override=[_ECMWF_MODEL],
                     )
                     if manifest is None:
