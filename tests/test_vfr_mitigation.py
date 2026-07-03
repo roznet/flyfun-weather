@@ -316,6 +316,10 @@ def test_along_route_single_point_terminal_deck_suppressed():
         _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
     )
 
+    # A lone field cloud is not a RED-worthy deck — the grade stays GREEN (10% minor
+    # clearance). Pinned explicitly so a future grading-threshold change can't silently
+    # alter what this test exercises (per PR #343 review).
+    assert result.aggregate_status == AdvisoryStatus.GREEN
     # The profile is forced below cruise at nm 0 and climbs after — absent the real-deck
     # gate this would emit a spurious "climb to cruise after ~20nm". It must not.
     assert not any(m.addresses == "climb_deck" for m in _mitigations(result))
@@ -458,6 +462,33 @@ def test_interior_deck_suppresses_corridor_mitigation():
     addresses = {m.addresses for m in _mitigations(result)}
     assert "climb_deck" not in addresses      # departure at cruise → no climb candidate
     assert "descent_deck" not in addresses    # suppressed — interior dip, must descend twice
+
+
+def test_interior_deck_suppresses_climb_deck():
+    """Climb-side companion to the descent case above: keep BOTH directions of the
+    interior-dip guard (#338) covered (per PR #343 review).
+
+    A GENUINE 2-point departure deck yields a real ``climb_deck`` candidate (the departure
+    happy-path emits it), and an interior at-cruise deck must still suppress it. The interior
+    dip is the ONLY difference from that happy-path fixture, so the assertion is non-vacuous —
+    unlike the departure-at-cruise case above where no climb transition ever exists.
+    """
+    # Real 2-point departure deck below cruise → the profile flies under it and climbs to
+    # cruise: a climb_deck candidate that passes the real-deck gate.
+    dep_deck = EnhancedCloudLayer(base_ft=4000, top_ft=5500, coverage=CloudCoverage.OVC)
+    # Thin at-cruise interior deck → forces a dip below cruise mid-route → clean_terminal False.
+    interior = EnhancedCloudLayer(base_ft=8000, top_ft=8500, coverage=CloudCoverage.OVC)
+    analyses = [
+        _rpa(i, i * 20.0, {"gfs": [dep_deck] if i in (0, 1) else ([interior] if i in (5, 6) else [])})
+        for i in range(10)
+    ]
+    result = VFRFeasibilityEvaluator.evaluate(
+        _ctx(analyses), {**_VFR_DEFAULTS, "terminal_corridor_nm": 60, **_NO_REPOSITION_CAP}
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.RED  # departure OVC deck
+    # climb_deck candidate exists (happy-path fixture emits it); the interior dip suppresses it.
+    assert "climb_deck" not in {m.addresses for m in _mitigations(result)}
 
 
 # ---------------------------------------------------------------------------
