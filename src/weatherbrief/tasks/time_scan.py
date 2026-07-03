@@ -434,6 +434,7 @@ def confirm_candidate(
     from weatherbrief.models import TimeConfirmation
     from weatherbrief.tasks.advise import (
         derive_assessment_from_advisories,
+        per_model_reasons_from_manifest,
         run_alt_from_pack,
     )
     from weatherbrief.tasks.artifacts import load_cross_sections, load_route_points
@@ -496,6 +497,7 @@ def confirm_candidate(
         models_checked=candidate_manifest.models,
         assessment=assess,
         assessment_reason=reason,
+        per_model_reasons=per_model_reasons_from_manifest(candidate_manifest),
         better_than_baseline=margin >= _MIN_MARGIN and not worsens,
         improves=improves,
         worsens=worsens,

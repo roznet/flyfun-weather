@@ -152,6 +152,62 @@ class TestDiffManifests:
         assert improves == [] and worsens == [] and margin == 0
 
 
+class TestPerModelReasons:
+    """per_model_reasons_from_manifest — the confirm's dot-table breakdown."""
+
+    def test_split_by_model_red_amber_only(self):
+        from weatherbrief.models import ModelAdvisoryResult
+        from weatherbrief.tasks.advise import per_model_reasons_from_manifest
+
+        manifest = RouteAdvisoriesManifest(advisories=[
+            RouteAdvisoryResult(
+                advisory_id="turbulence",
+                aggregate_status=AdvisoryStatus.RED,
+                per_model=[
+                    ModelAdvisoryResult(model="ecmwf", status=AdvisoryStatus.AMBER),
+                    ModelAdvisoryResult(model="gfs", status=AdvisoryStatus.RED),
+                    ModelAdvisoryResult(model="icon", status=AdvisoryStatus.GREEN),
+                ],
+            ),
+            RouteAdvisoryResult(
+                advisory_id="icing",
+                aggregate_status=AdvisoryStatus.AMBER,
+                per_model=[
+                    ModelAdvisoryResult(model="gfs", status=AdvisoryStatus.AMBER),
+                ],
+            ),
+        ])
+        out = per_model_reasons_from_manifest(manifest)
+        assert out == {
+            "ecmwf": "turbulence=AMBER",
+            "gfs": "turbulence=RED, icing=AMBER",
+        }
+        # All-green model is absent — the client treats absence as clear.
+        assert "icon" not in out
+
+    def test_empty_manifest(self):
+        from weatherbrief.tasks.advise import per_model_reasons_from_manifest
+
+        assert per_model_reasons_from_manifest(RouteAdvisoriesManifest()) == {}
+
+    def test_confirmation_round_trips_field(self):
+        from weatherbrief.models import TimeConfirmation
+
+        conf = TimeConfirmation(
+            models_checked=["ecmwf", "gfs"],
+            assessment="RED",
+            per_model_reasons={"gfs": "turbulence=RED"},
+            better_than_baseline=False,
+            confirmed_at=DEP,
+        )
+        again = TimeConfirmation.model_validate(conf.model_dump(mode="json"))
+        assert again.per_model_reasons == {"gfs": "turbulence=RED"}
+        # Old artifacts (pre-field) still validate.
+        legacy = conf.model_dump(mode="json")
+        legacy.pop("per_model_reasons")
+        assert TimeConfirmation.model_validate(legacy).per_model_reasons == {}
+
+
 # ---------------------------------------------------------------------------
 # Coverage: rule ∩ marker, smear bounding, fidelity parity
 # ---------------------------------------------------------------------------

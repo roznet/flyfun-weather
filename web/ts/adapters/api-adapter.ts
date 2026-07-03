@@ -559,6 +559,8 @@ export interface TimeConfirmationDTO {
   models_checked: string[];
   assessment: string;
   assessment_reason: string;
+  /** Per-model "id=STATUS, ..." breakdown; a model with nothing flagged is absent. */
+  per_model_reasons?: Record<string, string>;
   better_than_baseline: boolean;
   improves: string[];
   worsens: string[];

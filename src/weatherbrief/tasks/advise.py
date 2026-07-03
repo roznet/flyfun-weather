@@ -660,6 +660,25 @@ def derive_assessment_from_advisories(
     return (assessment, reason)
 
 
+def per_model_reasons_from_manifest(
+    manifest: RouteAdvisoriesManifest,
+) -> dict[str, str]:
+    """Per-model RED/AMBER reason strings from an advisories manifest.
+
+    Same ``"id=STATUS, ..."`` format as :func:`derive_assessment_from_advisories`
+    builds for the aggregate, split by contributing model. A model with nothing
+    flagged is absent from the result — callers treat absence as all-clear.
+    """
+    per_model: dict[str, list[str]] = {}
+    for adv in manifest.advisories:
+        for m in adv.per_model:
+            if m.status.value in ("red", "amber"):
+                per_model.setdefault(m.model, []).append(
+                    f"{adv.advisory_id}={m.status.value.upper()}"
+                )
+    return {model: ", ".join(parts) for model, parts in per_model.items()}
+
+
 # Cap on the number of named category chips surfaced on the flights-list card.
 # Mirrors the briefing-page glance summary's intent: a few "what to look at"
 # cues, not an exhaustive list.
