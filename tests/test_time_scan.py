@@ -342,6 +342,39 @@ class TestProvisionalTier:
             for c in provisional:
                 assert c.models_used == ["ecmwf"]
 
+    def test_shift_zero_reproduces_independent_grade(self, tmp_path, monkeypatch):
+        """Plan Validation #1: the scan's baseline row must equal a grade of
+        the planned time computed independently through run_alt_from_pack —
+        not just a self-consistent zero diff."""
+        import weatherbrief.tasks.time_scan as ts
+        from weatherbrief.models import RouteConfig, Waypoint
+        from weatherbrief.tasks.advise import (
+            derive_assessment_from_advisories,
+            run_alt_from_pack,
+        )
+
+        self._write_pack(tmp_path)
+        monkeypatch.setattr(ts, "extend_ecmwf_daylight", lambda *a, **k: (None, []))
+        route = RouteConfig(
+            name="t",
+            waypoints=[
+                Waypoint(icao="AAAA", name="A", lat=51.0, lon=0.0),
+                Waypoint(icao="BBBB", name="B", lat=51.0, lon=1.0),
+            ],
+            flight_duration_hours=1.0,
+        )
+        scan = ts.run_time_scan(tmp_path, route, DEP, flexibility="same_day")
+        base_row = next(c for c in scan.candidates if c.is_baseline)
+
+        independent = run_alt_from_pack(
+            tmp_path, DEP, route, persist=False, detect_fronts=False,
+        )
+        ind_assess, _ = derive_assessment_from_advisories(independent.manifest)
+
+        assert base_row.assessment == ind_assess
+        assert base_row.margin == 0
+        assert not base_row.improves and not base_row.worsens
+
     def test_no_ecmwf_run_refuses_deferred(self, tmp_path, monkeypatch):
         import weatherbrief.tasks.time_scan as ts
         from weatherbrief.models import RouteConfig, Waypoint
@@ -436,6 +469,173 @@ class TestConfirmScheduling:
         assert not any(c.confirm_pending for c in reloaded.candidates)
         # Idempotent: nothing left to clear.
         assert runner.reconcile_stale_confirms(tmp_path) is False
+
+
+# ---------------------------------------------------------------------------
+# Runner: decision-H reuse, stale-status reconcile, confirm-merge (round 2)
+# ---------------------------------------------------------------------------
+
+
+def _flight_stub(**overrides):
+    from types import SimpleNamespace
+
+    base = dict(
+        flexibility="same_day",
+        departure_time=DEP,
+        alt_departure_time=None,
+        user_id="u1",
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _scan_artifact(
+    tmp_path: Path,
+    *,
+    run_ts: int | None = 111,
+    candidates: list[TimeCandidate] | None = None,
+) -> TimeWindowScan:
+    from weatherbrief.tasks.artifacts import save_time_options
+
+    scan = TimeWindowScan(
+        flexibility="same_day",
+        baseline=TimeScanBaseline(departure_time=DEP, assessment="RED"),
+        candidates=candidates if candidates is not None else [],
+        ecmwf_run_ts=run_ts,
+        generated_at=DEP,
+    )
+    save_time_options(tmp_path, scan)
+    return scan
+
+
+class TestReusableScan:
+    """Decision-H: a scan for the same run/departure/mode skips the re-decode."""
+
+    def _patch_run(self, monkeypatch, ts):
+        import weatherbrief.tasks.time_scan as ts_mod
+
+        monkeypatch.setattr(ts_mod, "current_ecmwf_run_ts", lambda *a, **k: ts)
+        monkeypatch.setattr(ts_mod, "_pack_fetched_at", lambda p: DEP)
+
+    def test_reuses_same_run(self, tmp_path, monkeypatch):
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        _scan_artifact(tmp_path, run_ts=111)
+        self._patch_run(monkeypatch, 111)
+        assert runner._reusable_scan(tmp_path, _flight_stub()) is not None
+
+    def test_new_run_invalidates(self, tmp_path, monkeypatch):
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        _scan_artifact(tmp_path, run_ts=111)
+        self._patch_run(monkeypatch, 222)
+        assert runner._reusable_scan(tmp_path, _flight_stub()) is None
+
+    def test_changed_mode_or_departure_invalidates(self, tmp_path, monkeypatch):
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        _scan_artifact(tmp_path, run_ts=111)
+        self._patch_run(monkeypatch, 111)
+        assert runner._reusable_scan(tmp_path, _flight_stub(flexibility="next_day")) is None
+        assert runner._reusable_scan(
+            tmp_path, _flight_stub(departure_time=DEP + timedelta(hours=2)),
+        ) is None
+
+    def test_new_alternate_invalidates(self, tmp_path, monkeypatch):
+        # "Set as alternate" must force a re-grade of the pinned row.
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        _scan_artifact(tmp_path, run_ts=111)
+        self._patch_run(monkeypatch, 111)
+        assert runner._reusable_scan(
+            tmp_path, _flight_stub(alt_departure_time=DEP + timedelta(hours=3)),
+        ) is None
+
+    def test_free_tier_only_scan_not_reused(self, tmp_path, monkeypatch):
+        # No run_ts = no decode was spent; a fresh grade wins.
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        _scan_artifact(tmp_path, run_ts=None)
+        self._patch_run(monkeypatch, 111)
+        assert runner._reusable_scan(tmp_path, _flight_stub()) is None
+
+
+class TestStaleScanReconcile:
+    def test_orphaned_running_status_flips_to_failed(self, tmp_path):
+        import weatherbrief.tasks.time_scan_runner as runner
+        from weatherbrief.tasks.artifacts import load_time_scan_status
+
+        runner._write_status(tmp_path, "running", "same_day")
+        assert runner.reconcile_stale_scan(tmp_path) is True
+        status = load_time_scan_status(tmp_path)
+        assert status.status == "failed" and status.reason == "interrupted"
+
+    def test_live_worker_is_left_alone(self, tmp_path):
+        import weatherbrief.tasks.time_scan_runner as runner
+
+        runner._write_status(tmp_path, "running", "same_day")
+        with runner._inflight_lock:
+            runner._inflight.add(str(tmp_path))
+        try:
+            assert runner.reconcile_stale_scan(tmp_path) is False
+        finally:
+            with runner._inflight_lock:
+                runner._inflight.discard(str(tmp_path))
+
+    def test_terminal_status_untouched(self, tmp_path):
+        import weatherbrief.tasks.time_scan_runner as runner
+        from weatherbrief.tasks.artifacts import load_time_scan_status
+
+        runner._write_status(tmp_path, "done", "same_day")
+        assert runner.reconcile_stale_scan(tmp_path) is False
+        assert load_time_scan_status(tmp_path).status == "done"
+
+
+class TestMergeConfirmed:
+    def _cand(self, hours: float, confirmed: bool = False) -> TimeCandidate:
+        from weatherbrief.models import TimeConfirmation
+
+        return TimeCandidate(
+            departure_time=DEP + timedelta(hours=hours),
+            departure_shift_hours=hours,
+            assessment="AMBER",
+            confidence="ecmwf_only",
+            confirmed=TimeConfirmation(
+                models_checked=["ecmwf", "gfs", "icon"],
+                assessment="RED",
+                better_than_baseline=False,
+                confirmed_at=DEP,
+            ) if confirmed else None,
+        )
+
+    def test_confirm_survives_same_run_rescan(self, tmp_path):
+        from weatherbrief.tasks.time_scan_runner import merge_confirmed
+
+        old = _scan_artifact(tmp_path, run_ts=111, candidates=[self._cand(3, confirmed=True)])
+        new = TimeWindowScan(
+            flexibility="same_day",
+            baseline=TimeScanBaseline(departure_time=DEP, assessment="RED"),
+            candidates=[self._cand(3)],
+            ecmwf_run_ts=111,
+            generated_at=DEP,
+        )
+        merge_confirmed(old, new)
+        assert new.candidates[0].confirmed is not None
+        assert new.candidates[0].confidence == "confirmed"
+
+    def test_new_run_drops_stale_confirms(self, tmp_path):
+        from weatherbrief.tasks.time_scan_runner import merge_confirmed
+
+        old = _scan_artifact(tmp_path, run_ts=111, candidates=[self._cand(3, confirmed=True)])
+        new = TimeWindowScan(
+            flexibility="same_day",
+            baseline=TimeScanBaseline(departure_time=DEP, assessment="RED"),
+            candidates=[self._cand(3)],
+            ecmwf_run_ts=222,
+            generated_at=DEP,
+        )
+        merge_confirmed(old, new)
+        assert new.candidates[0].confirmed is None
 
 
 # ---------------------------------------------------------------------------

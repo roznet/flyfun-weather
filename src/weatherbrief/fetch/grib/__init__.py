@@ -751,6 +751,13 @@ def _decode_timeout_s() -> float:
         return _DECODE_TIMEOUT_DEFAULT_S
 
 
+# ECMWF enrichment decodes steps within the flight window ± this margin (see
+# the step filter in ``_enrich_ecmwf_inner``). Module-level so the timing-scan
+# coverage detector (``tasks/time_scan.py``) reads the SAME value instead of
+# mirroring a magic number that could drift.
+ECMWF_FLIGHT_WINDOW_MARGIN = timedelta(hours=3)
+
+
 # ---------------------------------------------------------------------------
 # Priority signal + dispatcher configuration (issue #171).
 # ---------------------------------------------------------------------------
@@ -2068,7 +2075,7 @@ def _enrich_ecmwf_inner(
 
     # Filter steps to the flight window (with margin) up-front so we can
     # fan out all decodes in parallel before merging.
-    margin = timedelta(hours=3)
+    margin = ECMWF_FLIGHT_WINDOW_MARGIN
     window_steps: list[tuple[int, dict[str, Path], datetime]] = []
     for step_hours, parts in sorted(files_by_step.items()):
         valid_time = latest_bt + timedelta(hours=step_hours)

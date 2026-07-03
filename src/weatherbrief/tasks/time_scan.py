@@ -42,6 +42,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Callable
 
+from weatherbrief.fetch.grib import ECMWF_FLIGHT_WINDOW_MARGIN
 from weatherbrief.models import (
     AdvisoryAggregation,
     ModelCoverage,
@@ -57,11 +58,10 @@ from weatherbrief.models import (
 
 logger = logging.getLogger(__name__)
 
-# ECMWF enrichment margin around the flight window — mirrors ``margin`` in
-# ``fetch/grib/__init__.py`` (``_enrich_ecmwf_inner`` step filter). If that
-# constant changes, coverage here goes conservative/stale rather than wrong
-# (the data marker still bounds what we actually grade).
-_ECMWF_ENRICH_MARGIN = timedelta(hours=3)
+# ECMWF enrichment margin around the flight window — the same constant the
+# enrichment step filter uses, so the coverage rule window can't drift from
+# what was actually decoded (imported at the top with the other deps).
+_ECMWF_ENRICH_MARGIN = ECMWF_FLIGHT_WINDOW_MARGIN
 
 # Candidate grid cap per scan — a fleet of flights can't stampede the
 # analysis stage. Daylight rarely exceeds this at hourly cadence.

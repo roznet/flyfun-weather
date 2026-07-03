@@ -295,10 +295,20 @@ export function renderFlightInfo(
         prev_day: 'Previous day',
         next_day: 'Next day',
       };
+      // A day-scan mode can also carry a pinned alternate ("Set as alternate"
+      // from the scenarios panel) — show it, or the card would hide a time
+      // that the planned↔alt view is actively grading.
+      let pinned = '';
+      if (altDt) {
+        const deltaH = (altDt.getTime() - dt.getTime()) / 3600_000;
+        const sign = deltaH >= 0 ? '+' : '';
+        const deltaStr = Number.isInteger(deltaH) ? `${sign}${deltaH}h` : `${sign}${deltaH.toFixed(1)}h`;
+        pinned = ` · alternate ${formatDepartureTime(flight.alt_departure_time!)} <span class="muted">(${deltaStr})</span>`;
+      }
       altTimeHtml = `
         <div class="info-row">
           <span class="info-label">Flexibility</span>
-          <span class="info-value">${escapeHtml(flexLabels[flexibility] || flexibility)}</span>
+          <span class="info-value">${escapeHtml(flexLabels[flexibility] || flexibility)}${pinned}</span>
         </div>`;
     }
 

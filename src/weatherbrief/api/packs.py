@@ -2564,20 +2564,28 @@ def get_time_options(
     from weatherbrief.tasks.artifacts import load_time_options, load_time_scan_status
     from weatherbrief.tasks.time_scan_runner import (
         reconcile_stale_confirms,
+        reconcile_stale_scan,
         schedule_time_scan,
     )
 
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
-    # A restart mid-confirm orphans confirm_pending flags — clear them here
-    # so pollers don't see an eternal "checking all models…".
+    # A restart mid-scan / mid-confirm orphans "running" statuses and
+    # confirm_pending flags — clear them here so pollers don't see an eternal
+    # "Scenarios running…" / "checking all models…".
+    scan_was_stale = reconcile_stale_scan(pack_dir)
     reconcile_stale_confirms(pack_dir)
     status = load_time_scan_status(pack_dir)
     scan = load_time_options(pack_dir)
 
-    if status is None and scan is None:
-        if flight.flexibility != "none":
+    # Lazy/recovery scheduling is OWNER-only — scans are accounted against the
+    # owner's usage, and every other scan-triggering endpoint (rescan, confirm)
+    # is owner-gated; a shared-flight viewer must not spend the owner's quota.
+    is_owner = flight.user_id == user_id
+    never_scanned = status is None and scan is None
+    if never_scanned or scan_was_stale:
+        if is_owner and flight.flexibility != "none":
             try:
                 fetch_ts = datetime.fromisoformat(timestamp)
             except ValueError:
@@ -2585,7 +2593,7 @@ def get_time_options(
             db_path = getattr(request.app.state, "db_path", "")
             schedule_time_scan(flight_id, pack_dir, fetch_ts, db_path=db_path)
             status = load_time_scan_status(pack_dir)
-        else:
+        elif never_scanned:
             raise HTTPException(status_code=404, detail="Timing options not available")
 
     return {
