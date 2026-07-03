@@ -1,0 +1,40 @@
+{
+  "_comment": "Shared consensus test vectors: one source of truth pinning the Python airport_consensus.consensus and the TypeScript weather-map-consensus.computeConsensus to identical output. Consumed by tests/test_consensus_parity.py and web/tests/unit/consensus-parity.test.ts. Each case's `models` maps model name -> {flight_category, ceiling_ft, visibility_m, wind_speed_kt}; `expected` gives the reduced values per mode. Keep the two consumers in lockstep with this file.",
+  "cases": [
+    {
+      "name": "all agree VFR",
+      "models": {
+        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10},
+        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14},
+        "ecmwf": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12}
+      },
+      "expected": {
+        "worst":    {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14},
+        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12}
+      }
+    },
+    {
+      "name": "2 VFR + 1 IFR -> majority VFR from the pool",
+      "models": {
+        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10},
+        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14},
+        "ecmwf": {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000, "wind_speed_kt": 30}
+      },
+      "expected": {
+        "worst":    {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000,   "wind_speed_kt": 30},
+        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9499.5, "wind_speed_kt": 12}
+      }
+    },
+    {
+      "name": "1 VFR + 1 IFR tie -> majority breaks to worse (IFR)",
+      "models": {
+        "gfs":  {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10},
+        "icon": {"flight_category": "IFR", "ceiling_ft": 900,  "visibility_m": 3000, "wind_speed_kt": 20}
+      },
+      "expected": {
+        "worst":    {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20},
+        "majority": {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20}
+      }
+    }
+  ]
+}

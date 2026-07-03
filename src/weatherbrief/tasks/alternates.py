@@ -202,8 +202,13 @@ def _assess(
     icao: str,
     by_icao: dict[str, dict[str, dict]],
     runways: dict,
+    aggregation: str = "majority",
 ) -> tuple[dict[str, dict], dict] | None:
     """Build (per_model, consensus) for one airport via the shared assembly.
+
+    ``aggregation`` ("majority"/"worst") is the user's aggregation preference,
+    passed straight to :func:`consensus` so the alternate card and the airport
+    arrival card reduce the same per-model data the same way.
 
     Returns None when no model produced a snapshot for the airport.
     """
@@ -214,7 +219,7 @@ def _assess(
     rwy_ends = runways.get(icao, [])
     for d in per_model.values():
         enrich_wind(d, rwy_ends)
-    return per_model, consensus(per_model, mode="worst")
+    return per_model, consensus(per_model, mode=aggregation)
 
 
 @dataclass(frozen=True)
@@ -238,6 +243,7 @@ def _build_alternate(
     runways: dict,
     origin,
     dest_ctx: _DestContext,
+    aggregation: str = "majority",
 ) -> AlternateAirport | None:
     """Assemble one ``AlternateAirport`` from a candidate's fetched snapshots.
 
@@ -248,7 +254,7 @@ def _build_alternate(
     """
     ap = c["airport"]
     try:
-        assessed = _assess(ap.ident, by_icao, runways)
+        assessed = _assess(ap.ident, by_icao, runways, aggregation)
     except Exception:
         logger.debug("Alternates: assessment failed for %s", ap.ident, exc_info=True)
         return None
@@ -376,6 +382,7 @@ def run_alternates(
     max_candidates: int = ALT_MAX_CANDIDATES,
     require_hard_runway: bool = True,
     min_runway_ft: int | None = ALT_DEFAULT_MIN_RUNWAY_FT,
+    aggregation: str = "majority",
     now: datetime | None = None,
 ) -> RouteAlternates | None:
     """Compute weather-based divert candidates for a route's destination.
@@ -389,6 +396,10 @@ def run_alternates(
         max_candidates: Cap on fetched candidates (nearest-to-destination first).
         require_hard_runway: Drop airports without a hard runway.
         min_runway_ft: Drop airports whose longest runway is shorter (when known).
+        aggregation: Model-consensus mode ("majority"/"worst"), the user's
+            advisory aggregation preference. Passed to ``consensus`` so the
+            alternate card and the airport arrival card agree on the same
+            airport's category / ceiling / crosswind.
         now: Override for "now" (testing); defaults to current UTC time.
 
     Returns:
@@ -543,15 +554,17 @@ def run_alternates(
 
         # Destination assessment (drives axes + the instrument-approach gate).
         if batch_idx == 0:
-            dest_assessed = _assess(dest.icao, by_icao, runways)
+            dest_assessed = _assess(dest.icao, by_icao, runways, aggregation)
             if dest_assessed is None:
                 logger.info("Alternates: no destination snapshot at ETA; skipping stage")
                 return None
             _, dest_cons = dest_assessed
             dest_category = dest_cons["flight_category"]
             dest_crosswind = dest_cons.get("crosswind_kt")
-            # Destination NWP-consensus ceiling/vis at ETA (worst across models) —
-            # the regulatory-trigger NWP fallback (#249) when no dest TAF exists.
+            # Destination NWP-consensus ceiling/vis at ETA (reduced under the
+            # user's aggregation mode — median-of-winning-pool in majority mode,
+            # worst-across-models in worst mode) — the regulatory-trigger NWP
+            # fallback (#249) when no dest TAF exists.
             dest_ceiling_ft = dest_cons.get("ceiling_ft")
             dest_visibility_m = dest_cons.get("visibility_m")
             dest_ctx = _DestContext(
@@ -572,7 +585,7 @@ def run_alternates(
         # Build this batch's alternates (a single malformed airport skips only
         # itself, not the stage — _build_alternate returns None for it).
         for c in batch:
-            alt = _build_alternate(c, by_icao, runways, origin, dest_ctx)
+            alt = _build_alternate(c, by_icao, runways, origin, dest_ctx, aggregation)
             if alt is not None:
                 alternates.append(alt)
         evaluated_count += len(batch)

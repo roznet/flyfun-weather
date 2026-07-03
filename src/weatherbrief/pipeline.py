@@ -572,6 +572,10 @@ def execute_briefing(
                 route=route,
                 target_time=target_dt,
                 airports_db_path=options.airports_db_path,
+                # Reduce per-model data the same way the airport arrival card
+                # does, so the same airport shows one category everywhere.
+                # Default matches the advisory default (majority).
+                aggregation=(options.advisory_aggregation or "majority"),
             )
         except Exception:
             logger.warning("Alternates stage failed", exc_info=True)

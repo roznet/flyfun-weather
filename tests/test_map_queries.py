@@ -313,14 +313,18 @@ class TestConsensus:
             "icon": {"flight_category": "VFR", "wind_speed_kt": 11, "ceiling_ft": 4800, "cape_jkg": 55},
             "ecmwf": {"flight_category": "VFR", "wind_speed_kt": 12, "ceiling_ft": 5200, "cape_jkg": 45},
         }
-        result = _consensus(per_model)
+        result = _consensus(per_model)  # default mode = worst
         assert result["flight_category"] == "VFR"
         # Ceiling spread 400ft < 500ft good threshold; wind 2kt < 5kt; CAPE 10 < 200
         assert result["agreement"]["flight_category"] == "consistent"
         assert result["agreement"]["wind_speed_kt"] == "consistent"
         assert result["agreement"]["ceiling_ft"] == "consistent"
         assert result["agreement"]["cape_jkg"] == "consistent"
-        assert result["wind_speed_kt"] == pytest.approx(11.0)
+        # Worst mode: least-favourable value per field (max wind, min ceiling,
+        # max CAPE) — not the mean. All three models are VFR, so the pool is all.
+        assert result["wind_speed_kt"] == pytest.approx(12.0)
+        assert result["ceiling_ft"] == pytest.approx(4800.0)
+        assert result["cape_jkg"] == pytest.approx(55.0)
 
     def test_worst_mode_picks_most_restrictive(self):
         from weatherbrief.tasks.map_queries import _consensus
@@ -352,6 +356,38 @@ class TestConsensus:
         # 1 IFR, 1 VFR — tie, tiebreaker picks worst (IFR)
         result = _consensus(per_model, mode="majority")
         assert result["flight_category"] == "IFR"
+
+    def test_majority_numeric_is_median_of_winning_pool(self):
+        """Majority mode: numeric fields = median of ONLY the winning-category
+        models, so the numbers can't contradict the shown category badge."""
+        from weatherbrief.tasks.map_queries import _consensus
+        per_model = {
+            "gfs":   {"flight_category": "VFR", "wind_speed_kt": 10, "ceiling_ft": 5000, "visibility_m": 9999},
+            "icon":  {"flight_category": "VFR", "wind_speed_kt": 14, "ceiling_ft": 4000, "visibility_m": 9000},
+            "ecmwf": {"flight_category": "IFR", "wind_speed_kt": 30, "ceiling_ft": 800, "visibility_m": 3000},
+        }
+        result = _consensus(per_model, mode="majority")
+        # 2 of 3 say VFR → category VFR, and the numbers come only from the two
+        # VFR models (the IFR model's 800 ft ceiling / 30 kt wind are excluded).
+        assert result["flight_category"] == "VFR"
+        assert result["ceiling_ft"] == pytest.approx(4500.0)   # median(5000, 4000)
+        assert result["wind_speed_kt"] == pytest.approx(12.0)  # median(10, 14)
+        assert result["visibility_m"] == pytest.approx(9499.5)  # median(9999, 9000)
+
+    def test_worst_numeric_is_worst_across_all(self):
+        """Worst mode: least-favourable value across ALL models (min ceiling/vis,
+        max wind), regardless of category."""
+        from weatherbrief.tasks.map_queries import _consensus
+        per_model = {
+            "gfs":   {"flight_category": "VFR", "wind_speed_kt": 10, "ceiling_ft": 5000, "visibility_m": 9999},
+            "icon":  {"flight_category": "VFR", "wind_speed_kt": 14, "ceiling_ft": 4000, "visibility_m": 9000},
+            "ecmwf": {"flight_category": "IFR", "wind_speed_kt": 30, "ceiling_ft": 800, "visibility_m": 3000},
+        }
+        result = _consensus(per_model, mode="worst")
+        assert result["flight_category"] == "IFR"
+        assert result["ceiling_ft"] == pytest.approx(800.0)     # min
+        assert result["wind_speed_kt"] == pytest.approx(30.0)   # max
+        assert result["visibility_m"] == pytest.approx(3000.0)  # min
 
     def test_empty_models(self):
         from weatherbrief.tasks.map_queries import _consensus

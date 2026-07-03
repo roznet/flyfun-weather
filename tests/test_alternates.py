@@ -373,9 +373,11 @@ def test_shared_assembly_matches_map_queries():
     assert d_shared == d_row
     assert d_shared["crosswind_kt"] == pytest.approx(d_row["crosswind_kt"])
 
-    # consensus: identical category + worst crosswind across models.
+    # consensus: the shared function and the map_queries wrapper reduce the
+    # same per-model data identically, under either aggregation mode.
     per_model = {"gfs": d_shared, "icon": dict(d_shared)}
-    assert ac.consensus(per_model) == mq._consensus(per_model)
+    assert ac.consensus(per_model, mode="worst") == mq._consensus(per_model, mode="worst")
+    assert ac.consensus(per_model, mode="majority") == mq._consensus(per_model, mode="majority")
 
 
 # ---------------------------------------------------------------------------
