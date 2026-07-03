@@ -82,12 +82,15 @@ export function computeSummaryCondition(
     // Median within the winning pool for each scalar. Wind dir/gust/runway must
     // stay a coherent vector, so they come from the pool model whose wind speed
     // is the median (not an independent median of each component).
+    // Round to 1 decimal like the forecast map and Python consensus, so all
+    // three surfaces are bit-for-bit identical on the shared parity vectors
+    // (an even-pool median of whole values can be X.5).
     const ceils = pick(c => c.ceiling_ft);
     const visSm = pick(c => c.visibility_sm);
     const visM = pick(c => c.visibility_m);
-    if (ceils.length) summary.ceiling_ft = Math.round(median(ceils));
+    if (ceils.length) summary.ceiling_ft = Math.round(median(ceils) * 10) / 10;
     if (visSm.length) summary.visibility_sm = Math.round(median(visSm) * 10) / 10;
-    if (visM.length) summary.visibility_m = Math.round(median(visM));
+    if (visM.length) summary.visibility_m = Math.round(median(visM) * 10) / 10;
 
     // Wind speed is the median of the pool (matching every other numeric). The
     // direction/gust/runway can't be independently reduced without desyncing

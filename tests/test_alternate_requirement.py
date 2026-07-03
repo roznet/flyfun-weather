@@ -714,3 +714,52 @@ class TestConditionalExtraction:
         assert len(conds) == 3                      # FM + out-of-window excluded
         tempo = next(c for c in conds if c.kind == "TEMPO")
         assert tempo.validity == "1411/1413"
+
+
+# --- Consensus mode → regulatory-trigger interaction (PR #346 review) --------
+
+
+class TestAggregationModeAffectsTrigger:
+    """The destination NWP fallback feeding the FAA/EASA 'is an alternate
+    required?' trigger follows the user's aggregation preference (an intentional
+    coupling). A TAF, when present, supersedes this path entirely — the mode is
+    only consulted on the no-TAF (D-1/D-2) NWP fallback. This pins the safety-
+    relevant interaction: with disagreeing models, majority vs worst can flip the
+    verdict, so the coupling stays visible and tested.
+    """
+
+    def test_majority_vs_worst_destination_flips_faa_trigger(self):
+        from weatherbrief.analysis.airport_consensus import consensus
+
+        # 2 VFR models (high ceiling) + 1 IFR model (low ceiling); vis stays good
+        # so the ceiling drives the verdict.
+        per_model = {
+            "gfs":   {"flight_category": "VFR", "ceiling_ft": 3000.0, "visibility_m": 9999.0},
+            "icon":  {"flight_category": "VFR", "ceiling_ft": 4000.0, "visibility_m": 9999.0},
+            "ecmwf": {"flight_category": "IFR", "ceiling_ft": 900.0, "visibility_m": 9999.0},
+        }
+        maj = consensus(per_model, mode="majority")
+        wor = consensus(per_model, mode="worst")
+        # majority = median of the VFR pool (3500 ft); worst = min across all (900 ft)
+        assert maj["ceiling_ft"] == 3500.0
+        assert wor["ceiling_ft"] == 900.0
+
+        maj_trigger = compute_faa_trigger(nwp_window(maj["ceiling_ft"], maj["visibility_m"]))
+        wor_trigger = compute_faa_trigger(nwp_window(wor["ceiling_ft"], wor["visibility_m"]))
+        # 3500 ft clears the FAA 2000 ft bar; 900 ft does not — the verdict flips.
+        assert maj_trigger.status == TriggerVerdict.NOT_REQUIRED
+        assert wor_trigger.status == TriggerVerdict.REQUIRED
+
+    def test_taf_supersedes_nwp_consensus_regardless_of_mode(self):
+        """A TAF covering the ETA is authoritative — the NWP consensus (and thus
+        the aggregation mode) is not consulted at all when a usable TAF exists."""
+        from weatherbrief.tasks.alternate_requirement import _build_destination_window
+
+        eta = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)
+        # A solid VFR TAF at the ETA; pass an absurd low NWP ceiling that must be
+        # ignored because the TAF supersedes.
+        taf = "TAF LFAT 050600Z 0506/0612 27010KT CAVOK"
+        window, _ = _build_destination_window(taf, eta, nwp_ceiling=200.0, nwp_vis=800.0)
+        assert window.source == "taf"
+        # The 200 ft / 800 m NWP fallback was NOT used (CAVOK → clear/high vis).
+        assert window.ceiling_ft is None or window.ceiling_ft > 200.0

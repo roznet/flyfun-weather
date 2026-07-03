@@ -5,7 +5,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from weatherbrief.models import AdvisoryAggregation, AdvisoryCatalogEntry, RouteAdvisoryResult
+from weatherbrief.models import (
+    AdvisoryAggregation,
+    AdvisoryCatalogEntry,
+    AdvisoryStatus,
+    RouteAdvisoryResult,
+)
 
 if TYPE_CHECKING:
     from weatherbrief.analysis.advisories import AdvisoryEvaluator, RouteContext
@@ -100,14 +105,23 @@ def evaluate_all(
         try:
             result = evaluator_cls.evaluate(ctx, params)
             # Canonicalize the aggregate under the requested mode. Evaluators
-            # build per-model results and aggregate with ``from_per_model``'s
-            # own default (MAJORITY), so re-aggregate unconditionally here —
-            # trusting that default silently kept a majority-built result under
-            # a WORST preference (the bug this replaces).
-            result = RouteAdvisoryResult.from_per_model(
-                result.advisory_id, result.per_model, result.parameters_used,
-                aggregation=aggregation,
-            )
+            # build their aggregate with ``from_per_model``'s own default
+            # (MAJORITY) and some then customize it — convective synthesizes a
+            # cross-model ``aggregate_detail``; fronts builds an explicit
+            # all-UNAVAILABLE result to stay hidden. So only re-aggregate when the
+            # requested mode actually DIFFERS from that majority default (else we
+            # would discard those customizations), and never re-run an
+            # all-UNAVAILABLE set through ``from_per_model`` (it collapses to
+            # GREEN — resurrecting a deliberately-hidden advisory). Re-aggregating
+            # only for non-majority modes is what fixes the prior bug where a
+            # WORST preference silently kept a majority-built aggregate.
+            if aggregation != AdvisoryAggregation.MAJORITY and not all(
+                m.status == AdvisoryStatus.UNAVAILABLE for m in result.per_model
+            ):
+                result = RouteAdvisoryResult.from_per_model(
+                    result.advisory_id, result.per_model, result.parameters_used,
+                    aggregation=aggregation,
+                )
             results.append(result)
         except Exception:
             logger.warning("Advisory %s evaluation failed", adv_id, exc_info=True)
