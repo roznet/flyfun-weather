@@ -124,3 +124,50 @@ class TestEvaluateAllAggregation:
         assert len(results_default) == len(results_worst)
         for rd, rw in zip(results_default, results_worst):
             assert rd.aggregate_status == rw.aggregate_status
+
+    def test_worst_preference_overrides_evaluator_majority_default(self, clear_context):
+        """Regression: a WORST preference must re-aggregate even though evaluators
+        build their aggregate with ``from_per_model``'s MAJORITY default.
+
+        Previously the registry skipped re-aggregation whenever the requested
+        mode was WORST, silently keeping a majority-built aggregate — so a
+        divergent advisory (2 GREEN + 1 RED) read GREEN under a WORST preference.
+        """
+        from weatherbrief.analysis.advisories import registry
+        from weatherbrief.models import AdvisoryCatalogEntry
+
+        class _DivergentEvaluator:
+            @classmethod
+            def catalog_entry(cls):
+                return AdvisoryCatalogEntry(
+                    id="_test_divergent", name="Test Divergent",
+                    short_description="", description="", category="model",
+                )
+
+            @staticmethod
+            def evaluate(ctx, params):
+                # 2 GREEN + 1 RED, aggregated with the evaluator default (MAJORITY
+                # → GREEN), exactly like the real evaluators.
+                per_model = [
+                    ModelAdvisoryResult(model="gfs", status=AdvisoryStatus.GREEN, detail="g"),
+                    ModelAdvisoryResult(model="icon", status=AdvisoryStatus.GREEN, detail="g"),
+                    ModelAdvisoryResult(model="ecmwf", status=AdvisoryStatus.RED, detail="r"),
+                ]
+                return RouteAdvisoryResult.from_per_model("_test_divergent", per_model, {})
+
+        registry._ensure_loaded()
+        registry._EVALUATORS["_test_divergent"] = _DivergentEvaluator
+        try:
+            worst = evaluate_all(
+                clear_context, enabled_ids={"_test_divergent"},
+                aggregation=AdvisoryAggregation.WORST,
+            )
+            majority = evaluate_all(
+                clear_context, enabled_ids={"_test_divergent"},
+                aggregation=AdvisoryAggregation.MAJORITY,
+            )
+        finally:
+            registry._EVALUATORS.pop("_test_divergent", None)
+
+        assert worst[0].aggregate_status == AdvisoryStatus.RED
+        assert majority[0].aggregate_status == AdvisoryStatus.GREEN

@@ -99,12 +99,15 @@ def evaluate_all(
 
         try:
             result = evaluator_cls.evaluate(ctx, params)
-            # Re-aggregate with the requested mode (evaluators always use WORST)
-            if aggregation != AdvisoryAggregation.WORST:
-                result = RouteAdvisoryResult.from_per_model(
-                    result.advisory_id, result.per_model, result.parameters_used,
-                    aggregation=aggregation,
-                )
+            # Canonicalize the aggregate under the requested mode. Evaluators
+            # build per-model results and aggregate with ``from_per_model``'s
+            # own default (MAJORITY), so re-aggregate unconditionally here —
+            # trusting that default silently kept a majority-built result under
+            # a WORST preference (the bug this replaces).
+            result = RouteAdvisoryResult.from_per_model(
+                result.advisory_id, result.per_model, result.parameters_used,
+                aggregation=aggregation,
+            )
             results.append(result)
         except Exception:
             logger.warning("Advisory %s evaluation failed", adv_id, exc_info=True)

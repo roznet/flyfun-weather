@@ -17,6 +17,7 @@ both callers can share one code path. See ``designs/future/alternates.md``
 
 from __future__ import annotations
 
+import statistics
 from collections import Counter
 from typing import Any
 
@@ -33,16 +34,28 @@ from weatherbrief.models.airport_conditions import FlightCategory, RunwayEnd
 
 _M_PER_SM = 1609.34
 
-# Ceiling estimate priority — read from the snapshot dict's column-name keys.
-_CEILING_FIELDS = ("sounding_ceiling_ft", "nwp_ceiling_ft", "cloud_base_ft", "lcl_ft")
+# Two independent primary ceiling estimates — the LOWER (more conservative) is
+# used when both exist, matching ``analysis.airport_conditions.reconcile_ceiling``
+# so the airport-conditions pipeline and this snapshot pipeline derive the same
+# per-model ceiling. ``cloud_base_ft`` / ``lcl_ft`` are lower-priority fallbacks
+# used only when neither primary estimate is present.
+_CEILING_PRIMARY = ("sounding_ceiling_ft", "nwp_ceiling_ft")
+_CEILING_FALLBACK = ("cloud_base_ft", "lcl_ft")
 
 
 def best_ceiling(snap: dict[str, Any]) -> float | None:
-    """Pick the best ceiling estimate from a snapshot dict.
+    """Pick the per-model ceiling estimate from a snapshot dict.
 
-    ``snap`` keys are the ``AirportForecastSnapshotRow`` column names.
+    Takes ``min(sounding_ceiling_ft, nwp_ceiling_ft)`` when either primary
+    estimate is present (the conservative reconciliation shared with
+    ``reconcile_ceiling``), otherwise falls back to ``cloud_base_ft`` then
+    ``lcl_ft``. ``snap`` keys are the ``AirportForecastSnapshotRow`` column names.
     """
-    for field in _CEILING_FIELDS:
+    primary = [snap.get(f) for f in _CEILING_PRIMARY]
+    primary = [v for v in primary if v is not None]
+    if primary:
+        return min(primary)
+    for field in _CEILING_FALLBACK:
         val = snap.get(field)
         if val is not None:
             return val
@@ -109,10 +122,46 @@ def agreement_label(level: str) -> str:
     return _AGREEMENT_LABELS.get(level, level)
 
 
-def consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any]:
+# Numeric consensus fields and their "worse" direction. In worst mode the
+# consensus takes the least-favourable value; in majority mode it takes the
+# median within the winning-category pool (see ``consensus``). Wind direction is
+# NOT here — it is not a more/less quantity and is always a circular mean.
+#   * lower is worse → ``min`` in worst mode (ceiling, visibility, headwind —
+#     a positive headwind helps, so the weakest headwind / strongest tailwind
+#     is the conservative pick).
+#   * higher is worse → ``max`` in worst mode (wind speed, crosswind, CAPE).
+_WORST_IS_MIN = frozenset({"ceiling_ft", "visibility_m", "headwind_kt"})
+_NUMERIC_FIELDS = (
+    "wind_speed_kt", "ceiling_ft", "cape_jkg", "visibility_m", "crosswind_kt", "headwind_kt",
+)
+
+
+def _reduce_numeric(field: str, vals: list[float], mode: str) -> float:
+    """Reduce per-model values for one field under the active consensus mode.
+
+    ``majority`` → median (a robust "typical" value); ``worst`` → the
+    least-favourable value per ``_WORST_IS_MIN``.
+    """
+    if mode == "majority":
+        return statistics.median(vals)
+    return min(vals) if field in _WORST_IS_MIN else max(vals)
+
+
+def consensus(per_model: dict[str, dict], mode: str = "majority") -> dict[str, Any]:
     """Compute consensus across models for key variables.
 
-    mode: "worst" = most restrictive category, "majority" = most common (worst as tiebreaker)
+    ``mode``:
+      * ``"worst"`` — most restrictive category; every numeric field is the
+        least-favourable value across ALL models.
+      * ``"majority"`` — most common category (worst as tiebreaker); every
+        numeric field is the MEDIAN within the *winning-category pool* (the
+        models that voted for the shown category). Restricting the median to
+        that pool guarantees the numbers can never contradict the category
+        badge, while median (vs. worst) gives the typical reading that matches
+        majority's intent. Wind direction is a circular mean of the pool.
+
+    The same rule applies uniformly to every numeric field (ceiling, visibility,
+    wind speed, crosswind, headwind, CAPE); only wind direction is special-cased.
     Returns per-variable agreement labels alongside consensus values.
     """
     models_with_data = list(per_model.keys())
@@ -129,9 +178,17 @@ def consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any]
     else:
         consensus_cat = FlightCategory.worst(cats).value
 
-    # Per-variable agreement
+    # Numeric reductions draw from the winning-category pool in majority mode
+    # (so a shown VFR ceiling comes only from the VFR models), and from all
+    # models in worst mode (the reduction is worst-across-all regardless).
+    if mode == "majority":
+        pool = [m for m in models_with_data if per_model[m].get("flight_category") == consensus_cat]
+    else:
+        pool = models_with_data
+
+    # Per-variable agreement is about divergence across ALL models, independent
+    # of the winning pool.
     agreement: dict[str, str] = {}
-    # Flight category agreement: based on whether models agree on the category
     unique_cats = set(c.value for c in cats)
     if len(unique_cats) == 1:
         agreement["flight_category"] = agreement_label("good")
@@ -147,32 +204,22 @@ def consensus(per_model: dict[str, dict], mode: str = "worst") -> dict[str, Any]
             div = compare_models(var, vals)
             agreement[var] = agreement_label(div.agreement.value)
 
-    # Means for numeric fields
     result: dict[str, Any] = {
         "flight_category": consensus_cat,
         "agreement": agreement,
     }
-    for field in ("wind_speed_kt", "wind_dir_deg", "ceiling_ft", "cape_jkg", "visibility_m"):
-        vals = [per_model[m].get(field) for m in models_with_data]
+    for field in _NUMERIC_FIELDS:
+        vals = [per_model[m].get(field) for m in pool]
         vals = [v for v in vals if v is not None]
         if vals:
-            if field == "wind_dir_deg":
-                mean, _ = circular_spread(vals)
-                result[field] = round(mean, 1)
-            else:
-                result[field] = round(sum(vals) / len(vals), 1)
+            result[field] = round(_reduce_numeric(field, vals, mode), 1)
 
-    # Crosswind/headwind consensus: worst-case across models. For crosswind the
-    # worst case is the largest value (max). For headwind it's the *least*
-    # favourable, i.e. the weakest headwind / strongest tailwind (min) — a
-    # positive headwind helps, so the conservative pick is the smallest.
-    xw_vals = [per_model[m].get("crosswind_kt") for m in models_with_data]
-    xw_vals = [v for v in xw_vals if v is not None]
-    if xw_vals:
-        result["crosswind_kt"] = round(max(xw_vals), 1)
-    hw_vals = [per_model[m].get("headwind_kt") for m in models_with_data]
-    hw_vals = [v for v in hw_vals if v is not None]
-    if hw_vals:
-        result["headwind_kt"] = round(min(hw_vals), 1)
+    # Wind direction: circular mean over the winning pool (not a worse/less
+    # quantity, so it never takes a min/max/median).
+    dir_vals = [per_model[m].get("wind_dir_deg") for m in pool]
+    dir_vals = [v for v in dir_vals if v is not None]
+    if dir_vals:
+        mean, _ = circular_spread(dir_vals)
+        result["wind_dir_deg"] = round(mean, 1)
 
     return result

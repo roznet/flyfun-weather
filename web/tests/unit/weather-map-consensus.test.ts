@@ -173,6 +173,20 @@ describe('computeConsensus', () => {
     expect(c.wind_speed_kt).toBe(20);
   });
 
+  it('majority takes the median of ONLY the winning-category pool', () => {
+    // 2 VFR + 1 IFR → category VFR; numbers come only from the two VFR models,
+    // so the IFR model's low ceiling / high wind never leak into the badge.
+    const a = makeAirport({
+      gfs:   { flight_category: 'VFR', wind_speed_kt: 10, ceiling_ft: 5000 },
+      icon:  { flight_category: 'VFR', wind_speed_kt: 14, ceiling_ft: 4000 },
+      ecmwf: { flight_category: 'IFR', wind_speed_kt: 30, ceiling_ft: 800 },
+    });
+    const c = computeConsensus(a, 'majority');
+    expect(c.flight_category).toBe('VFR');
+    expect(c.ceiling_ft).toBe(4500);   // median(5000, 4000)
+    expect(c.wind_speed_kt).toBe(12);  // median(10, 14)
+  });
+
   it('skips numeric fields when no model has data', () => {
     const a = makeAirport({
       gfs:  { wind_speed_kt: 10 },

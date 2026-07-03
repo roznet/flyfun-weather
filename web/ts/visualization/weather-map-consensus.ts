@@ -79,7 +79,15 @@ export function ordinalConsensus(
   return tied.reduce((a, b) => rank(a) >= rank(b) ? a : b);
 }
 
-/** Compute a single consensus forecast across all an airport's models. */
+/** Compute a single consensus forecast across all an airport's models.
+ *
+ * Numeric fields follow the category so they can never contradict the badge:
+ *  - worst mode:    worst value across ALL models (min ceiling/vis, max wind…).
+ *  - majority mode: MEDIAN within the winning-category pool (the models that
+ *                   voted for the shown category). Mirrors the Python
+ *                   `airport_consensus.consensus` exactly.
+ * Wind direction is a circular mean of the same pool (never a min/max/median).
+ */
 export function computeConsensus(airport: ForecastAirport, mode: ConsensusMode): ConsensusForecast {
   const models = Object.values(airport.models);
   if (models.length === 0) return { flight_category: 'VFR', agreement: {} };
@@ -87,22 +95,29 @@ export function computeConsensus(airport: ForecastAirport, mode: ConsensusMode):
   const cats = models.map((m) => m.flight_category);
   const risks = models.map((m) => m.convective_risk || 'none');
 
+  const flightCategory = ordinalConsensus(cats, CAT_ORDER, mode);
   const result: ConsensusForecast = {
-    flight_category: ordinalConsensus(cats, CAT_ORDER, mode),
+    flight_category: flightCategory,
     convective_risk: ordinalConsensus(risks, RISK_ORDER, mode),
     agreement: airport.consensus.agreement,
   };
 
+  // In majority mode restrict numeric reductions to the winning-category pool;
+  // in worst mode the pool is all models (the reduction is worst-across-all).
+  const pool = mode === 'majority'
+    ? models.filter((m) => m.flight_category === flightCategory)
+    : models;
+
   for (const [field, fns] of Object.entries(NUMERIC_CONSENSUS) as Array<
     [keyof typeof NUMERIC_CONSENSUS, (typeof NUMERIC_CONSENSUS)[keyof typeof NUMERIC_CONSENSUS]]
   >) {
-    const vals = models.map((m) => m[field]).filter((v): v is number => v != null);
+    const vals = pool.map((m) => m[field]).filter((v): v is number => v != null);
     if (!vals.length) continue;
-    const fn = mode === 'worst' ? fns.worst : fns.majority;
+    const fn = mode === 'worst' ? fns.worst : fns.majority; // majority => median
     (result as unknown as Record<string, unknown>)[field] = Math.round(fn(vals) * 10) / 10;
   }
 
-  const dirs = models.map((m) => m.wind_dir_deg).filter((v): v is number => v != null);
+  const dirs = pool.map((m) => m.wind_dir_deg).filter((v): v is number => v != null);
   // Wind direction is reported in whole degrees by METAR/TAF — sub-degree
   // precision is false, and serializing the raw float yields strings like
   // "359.9999999999996". Round to the same convention as the source data.
