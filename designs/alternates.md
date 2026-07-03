@@ -64,12 +64,22 @@ with a `dominates_destination` flag (Pareto: better-or-equal on all axes). The U
 renders that flag as a **"Better"** badge.
 
 ### Consensus ("consistently better")
-`airport_consensus.consensus(per_model, mode="worst")`:
-- **flight category** — `FlightCategory.worst(...)` (matches map default).
-- **crosswind** — `max` across models (worst = largest).
-- **headwind** — `min` across models (worst = weakest headwind / strongest
-  tailwind; a positive headwind helps, so the conservative pick is the smallest).
+`airport_consensus.consensus(per_model, mode=<aggregation>)` — since PR #346 the
+mode is the **user's advisory aggregation preference** (`majority` app-default, or
+`worst`), threaded through `run_alternates(aggregation=...)`, NOT a hardcoded
+`worst`. One canonical rule per numeric field:
+- **flight category** — `worst` mode → `FlightCategory.worst(...)`; `majority`
+  mode → modal category, worst as tiebreak.
+- **numeric fields** (ceiling, visibility, wind speed, crosswind, headwind, CAPE)
+  — `worst` mode → least-favourable across all models (min ceiling/vis, max
+  crosswind, min headwind); `majority` mode → **median within the winning-category
+  pool** (so the numbers can't contradict the category badge).
+- **wind direction** — circular mean of the pool (never a min/max/median).
 - agreement via `compare_models`.
+
+This is what makes the alternate card agree with the airport arrival card and the
+forecast map for the same airport (all three share this reduction — the Python and
+TS implementations are pinned identical by `tests/fixtures/consensus_vectors.json`).
 
 ## Architecture
 
@@ -292,8 +302,15 @@ all three populated by the post-step, see "Regulatory layer").
   bloat until the feature settles.
 
 ## Gotchas
-- Always `mode="worst"` for the headline category — matches the map default. A
-  different mode silently desyncs alternates from the forecast map.
+- Consensus `mode` follows the **user's advisory aggregation preference**
+  (`run_alternates(aggregation=...)`, threaded from the pipeline) — `majority`
+  by default. This is deliberate: it keeps the alternate card in sync with the
+  airport arrival card (both honor the same preference). The forecast map's
+  own default remains `worst`, but its client recomputes per the user's toggle;
+  all three share the one reduction in `airport_consensus.consensus`. Note the
+  destination NWP consensus also feeds the regulatory alternate-required trigger
+  on the no-TAF path — see `designs/alternate-requirement.md` ("Aggregation mode
+  & TAF precedence").
 - Fresh-fetch is *method-identical* to the map, not byte-identical (init time /
   hour can drift); the *recipe* matches, which is the guarantee we make.
 - Doglegged routes: ambiguous CPA on sharp turns — `find_airports_near_route`

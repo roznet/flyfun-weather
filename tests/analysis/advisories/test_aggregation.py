@@ -171,3 +171,66 @@ class TestEvaluateAllAggregation:
 
         assert worst[0].aggregate_status == AdvisoryStatus.RED
         assert majority[0].aggregate_status == AdvisoryStatus.GREEN
+
+    def test_reaggregation_preserves_custom_detail_and_unavailable(self, clear_context):
+        """Re-aggregation must not clobber an evaluator's synthesized aggregate
+        detail (convective), nor resurrect an explicit all-UNAVAILABLE result
+        (fronts) into GREEN.
+        """
+        from weatherbrief.analysis.advisories import registry
+        from weatherbrief.models import AdvisoryCatalogEntry
+
+        class _CustomDetailEvaluator:
+            @classmethod
+            def catalog_entry(cls):
+                return AdvisoryCatalogEntry(
+                    id="_test_custom_detail", name="Custom", short_description="",
+                    description="", category="model",
+                )
+
+            @staticmethod
+            def evaluate(ctx, params):
+                per_model = [
+                    ModelAdvisoryResult(model="gfs", status=AdvisoryStatus.AMBER, detail="raw gfs"),
+                    ModelAdvisoryResult(model="icon", status=AdvisoryStatus.AMBER, detail="raw icon"),
+                ]
+                r = RouteAdvisoryResult.from_per_model("_test_custom_detail", per_model, {})
+                r.aggregate_detail = "SYNTHESIZED cross-model summary"  # convective-style override
+                return r
+
+        class _UnavailableEvaluator:
+            @classmethod
+            def catalog_entry(cls):
+                return AdvisoryCatalogEntry(
+                    id="_test_unavailable", name="Unavail", short_description="",
+                    description="", category="model",
+                )
+
+            @staticmethod
+            def evaluate(ctx, params):
+                # fronts-style: explicit UNAVAILABLE that must stay hidden, not
+                # collapse to GREEN when re-aggregated.
+                return RouteAdvisoryResult(
+                    advisory_id="_test_unavailable",
+                    aggregate_status=AdvisoryStatus.UNAVAILABLE,
+                    aggregate_detail="no data",
+                    per_model=[ModelAdvisoryResult(
+                        model="all", status=AdvisoryStatus.UNAVAILABLE, detail="no data")],
+                    parameters_used={},
+                )
+
+        registry._ensure_loaded()
+        registry._EVALUATORS["_test_custom_detail"] = _CustomDetailEvaluator
+        registry._EVALUATORS["_test_unavailable"] = _UnavailableEvaluator
+        try:
+            for mode in (AdvisoryAggregation.MAJORITY, AdvisoryAggregation.WORST):
+                cd = evaluate_all(clear_context, enabled_ids={"_test_custom_detail"}, aggregation=mode)
+                un = evaluate_all(clear_context, enabled_ids={"_test_unavailable"}, aggregation=mode)
+                # Custom detail survives under the default (majority); the
+                # all-UNAVAILABLE result stays UNAVAILABLE under BOTH modes.
+                if mode == AdvisoryAggregation.MAJORITY:
+                    assert cd[0].aggregate_detail == "SYNTHESIZED cross-model summary"
+                assert un[0].aggregate_status == AdvisoryStatus.UNAVAILABLE
+        finally:
+            registry._EVALUATORS.pop("_test_custom_detail", None)
+            registry._EVALUATORS.pop("_test_unavailable", None)

@@ -389,6 +389,23 @@ class TestConsensus:
         assert result["wind_speed_kt"] == pytest.approx(30.0)   # max
         assert result["visibility_m"] == pytest.approx(3000.0)  # min
 
+    def test_crosswind_headwind_follow_mode(self):
+        """crosswind/headwind: worst = max xwind / min headwind across all;
+        majority = median within the winning-category pool."""
+        from weatherbrief.tasks.map_queries import _consensus
+        per_model = {
+            "gfs":   {"flight_category": "VFR", "crosswind_kt": 6,  "headwind_kt": 10},
+            "icon":  {"flight_category": "VFR", "crosswind_kt": 10, "headwind_kt": 4},
+            "ecmwf": {"flight_category": "IFR", "crosswind_kt": 20, "headwind_kt": -8},
+        }
+        worst = _consensus(per_model, mode="worst")
+        assert worst["crosswind_kt"] == pytest.approx(20.0)   # max across all
+        assert worst["headwind_kt"] == pytest.approx(-8.0)    # min across all (worst)
+        maj = _consensus(per_model, mode="majority")
+        # Winning pool = the two VFR models only.
+        assert maj["crosswind_kt"] == pytest.approx(8.0)      # median(6, 10)
+        assert maj["headwind_kt"] == pytest.approx(7.0)       # median(10, 4)
+
     def test_empty_models(self):
         from weatherbrief.tasks.map_queries import _consensus
         result = _consensus({})

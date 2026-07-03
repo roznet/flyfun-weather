@@ -70,9 +70,9 @@ without euro_aip installed.
 | Input | Source |
 |---|---|
 | Destination raw TAF (D-0 only) | `snapshot.route_observations.airports[*].taf_raw` (matched on `obs.icao == destination`) |
-| Destination NWP fallback (D-2/D-1) | `RouteAlternates.destination_ceiling_ft` / `destination_visibility_m` — the destination's NWP-consensus assessment at ETA, stored by `run_alternates` (worst across models) |
+| Destination NWP fallback (D-2/D-1) | `RouteAlternates.destination_ceiling_ft` / `destination_visibility_m` — the destination's NWP-consensus assessment at ETA, stored by `run_alternates` under the user's advisory aggregation mode (majority = median of the winning-category pool; worst = worst across models). See "Aggregation mode & conservative bias" below. |
 | Destination ETA | `RouteAlternates.eta` (rounded ETA hour) |
-| Candidate ceiling/vis | A candidate TAF covering its ETA when available (D-0; reused from `route_observations` or gap-fetched), else `AlternateAirport.ceiling_ft` / `.visibility_m` (NWP-consensus, `mode="worst"`). `AlternateQual.source` records which. |
+| Candidate ceiling/vis | A candidate TAF covering its ETA when available (D-0; reused from `route_observations` or gap-fetched), else `AlternateAirport.ceiling_ft` / `.visibility_m` (NWP-consensus under the same aggregation mode). `AlternateQual.source` records which. |
 | Candidate / destination approach class | `best_approach_type` (candidates) / `procedures_query.approaches().most_precise()` (destination) |
 
 The NWP fallback deliberately reuses the alternates stage's own destination
@@ -156,12 +156,37 @@ Per criterion, forecast `F` vs band `[lo, hi]`:
 - Proxy ranges bracket reality; `hi` end at/above the class maximum.
 - Ambiguous/unmapped `approach_type` → most-demanding non-precision range.
 - No procedure data (`approach_filter_relaxed`) → VFR-only treatment + surfaced caveat.
-- Forecast side already worst-case (lowest ceiling/vis across models + window) — kept.
+- TAF side (D-0) already worst-case over the ETA window (lowest ceiling/vis across
+  prevailing + TEMPO/PROB) — kept. See "Aggregation mode" below for the NWP side.
 - **Missing/unparseable forecast value → fail.** Exception: genuine clear sky
   (CAVOK/NSC/SKC) → good. A ceiling of `None` from a *present* forecast means
   "no BKN/OVC layer" (good); the only "no forecast" path is no TAF **and** no NWP
   (`has_forecast=False` → both triggers Required, `source="none"`).
 - Hard gates count Marginal conservatively.
+
+### Aggregation mode & TAF precedence
+
+The forecast **source precedence** is fixed and TAF-first: when a destination TAF
+covers the ETA it is authoritative, and `_build_destination_window` returns the
+TAF's own worst-case window **without consulting the NWP consensus at all**
+(`alternate_requirement.py` — the `nwp_ceiling`/`nwp_vis` args are only read on
+the `else` branch). TAFs are present only at D-0, so:
+
+- **D-0 with a covering TAF** → TAF worst-case window (aggregation mode irrelevant).
+- **D-1 / D-2 (no TAF)** → NWP consensus fallback.
+
+On that NWP fallback the consensus is reduced under the **user's advisory
+aggregation preference** (PR #346), not a fixed `mode="worst"`: `majority`
+(app default) → median of the winning-category pool; `worst` → worst across
+models. This is an **intentional coupling** so the alternate card and the airport
+arrival card show the same category for the same airport. The consequence — a
+noise-reduction display preference can, at a borderline destination where models
+disagree, soften the NWP-fallback trigger toward "no alternate required." This is
+accepted because (a) the whole per-candidate/destination assessment is explicitly
+planning-grade (no published minima — the DH is a proxy), and (b) at D-0, when the
+determination matters most, a real TAF supersedes the NWP path entirely. The
+majority-vs-worst interaction is pinned by
+`test_alternate_requirement.py::TestAggregationModeAffectsTrigger`.
 
 ## Window builder
 

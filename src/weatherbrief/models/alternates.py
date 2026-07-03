@@ -93,8 +93,12 @@ class RouteAlternates(BaseModel):
     destination_icao: str
     destination_category: str
     destination_crosswind_kt: float | None = None
-    # Destination NWP-consensus ceiling/visibility at ETA (worst across models).
-    # The regulatory-trigger NWP fallback (#249) when no destination TAF exists.
+    # Destination NWP-consensus ceiling/visibility at ETA, reduced under the
+    # user's advisory aggregation preference (majority = median of the winning-
+    # category pool; worst = worst across models) — an intentional coupling so
+    # the alternate card and the airport arrival card agree (PR #346). This is
+    # the regulatory-trigger NWP fallback (#249) used ONLY when no destination
+    # TAF covers the ETA; a TAF, when present, supersedes it entirely.
     destination_ceiling_ft: float | None = None
     destination_visibility_m: float | None = None
     eta: datetime | None = None

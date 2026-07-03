@@ -8,7 +8,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { computeConsensus, type ConsensusMode } from '../../ts/visualization/weather-map-consensus';
+import { computeSummaryCondition } from '../../ts/helpers/airport-summary';
 import type { ForecastAirport, ModelForecast } from '../../ts/adapters/maps-adapter';
+import type { AirportModelCondition, FlightCategory } from '../../ts/types/advisories';
 import vectors from '../../../tests/fixtures/consensus_vectors.json';
 
 interface VectorFields {
@@ -56,6 +58,39 @@ describe('computeConsensus — shared-vector parity with Python', () => {
         expect(result.ceiling_ft).toBeCloseTo(expected.ceiling_ft, 4);
         expect(result.visibility_m).toBeCloseTo(expected.visibility_m, 4);
         expect(result.wind_speed_kt).toBeCloseTo(expected.wind_speed_kt, 4);
+      });
+    }
+  }
+});
+
+function makeCondition(model: string, f: VectorFields): AirportModelCondition {
+  return {
+    model,
+    flight_category: f.flight_category as FlightCategory,
+    ceiling_ft: f.ceiling_ft,
+    visibility_m: f.visibility_m,
+    visibility_sm: null,
+    wind_speed_kt: f.wind_speed_kt,
+    wind_direction_deg: null,
+    wind_gust_kt: null,
+    best_runway: null,
+    all_runways: [],
+  };
+}
+
+describe('computeSummaryCondition (arrival card) — shared-vector parity with Python', () => {
+  for (const mode of ['worst', 'majority'] as ConsensusMode[]) {
+    for (const c of vectors.cases) {
+      it(`${mode}: ${c.name}`, () => {
+        const conds = Object.entries(c.models).map(([name, f]) =>
+          makeCondition(name, f as VectorFields));
+        const summary = computeSummaryCondition(conds, mode);
+        const expected = (c.expected as Record<string, VectorFields>)[mode];
+        expect(summary).not.toBeNull();
+        expect(summary!.flight_category).toBe(expected.flight_category);
+        expect(summary!.ceiling_ft).toBeCloseTo(expected.ceiling_ft, 4);
+        expect(summary!.visibility_m).toBeCloseTo(expected.visibility_m, 4);
+        expect(summary!.wind_speed_kt).toBeCloseTo(expected.wind_speed_kt, 4);
       });
     }
   }
