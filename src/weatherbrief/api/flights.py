@@ -1832,9 +1832,8 @@ def update_flight(
             row.alt_departure_time = alt_dt
 
     if req.flexibility is not None:
-        if req.flexibility == "alternate" and row.alt_departure_time is None and (
-            req.alt_departure_time in (None, "")
-        ):
+        # row.alt_departure_time already reflects this request (applied above).
+        if req.flexibility == "alternate" and row.alt_departure_time is None:
             raise HTTPException(
                 status_code=422,
                 detail="Flexibility 'alternate' requires an alt departure time.",

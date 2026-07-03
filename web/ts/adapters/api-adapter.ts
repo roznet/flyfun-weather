@@ -568,6 +568,7 @@ export interface TimeConfirmationDTO {
 export interface TimeCandidateDTO {
   departure_time: string;
   departure_shift_hours: number;
+  valid_times: string[];  // per-route-point ETAs the grade actually read
   assessment: string;            // GREEN / AMBER / RED
   assessment_reason: string;
   models_used: string[];
@@ -605,6 +606,18 @@ export async function fetchTimeOptions(
 ): Promise<TimeOptionsResponse> {
   return apiFetch<TimeOptionsResponse>(
     `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/time-options`
+  );
+}
+
+/** Re-queue the timing scan for a pack — used after "Set as alternate time"
+ *  so the changed alternate gets graded and the alt artifacts re-persist. */
+export async function rescanTimeOptions(
+  flightId: string,
+  timestamp: string,
+): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/time-options/rescan`,
+    { method: 'POST' },
   );
 }
 

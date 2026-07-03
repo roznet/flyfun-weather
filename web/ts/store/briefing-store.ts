@@ -171,6 +171,10 @@ export interface BriefingState {
   /** Queue the multi-model check of one provisional candidate (slice 3);
    * the result arrives via the loadTimeOptions poll. */
   confirmTimeOption: (departureTime: string) => Promise<void>;
+  /** "Set as alternate time": pin a discovered scenario as the flight's
+   * alternate — full advisory detail then flows through the existing
+   * planned↔alt view once the re-queued scan persists the alt artifacts. */
+  setScenarioAsAlternate: (departureTime: string) => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
   subscribe: () => Promise<void>;
@@ -261,6 +265,9 @@ let _windOverlayTimer: number | null = null;
 let _windOverlaySeq = 0;
 // Timing-scenario poll backoff (3s → ×1.5 → cap 15s); reset on pack change.
 let timeOptionsPollDelay = 3_000;
+// Consecutive transient poll failures; only give up after a few (404 is the
+// sole immediate-terminal answer). Reset on any successful poll / pack change.
+let timeOptionsErrorStreak = 0;
 
 export const briefingStore = createStore<BriefingState>((set, get) => ({
   flight: null,
@@ -396,6 +403,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       // endpoint lazy-schedules the scan if Flexibility was enabled after
       // this pack was generated.
       timeOptionsPollDelay = 3_000;
+      timeOptionsErrorStreak = 0;
       if (get().flight?.flexibility && get().flight!.flexibility !== 'none') {
         void get().loadTimeOptions();
       }
@@ -826,6 +834,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       // Stale-guard: the user may have switched packs while we were fetching.
       if (get().currentPack?.fetch_timestamp !== packTs) return;
       set({ timeOptions: resp });
+      timeOptionsErrorStreak = 0;
 
       const status = resp.status?.status;
       const confirmPending = (resp.scan?.candidates ?? []).some((c) => c.confirm_pending);
@@ -847,11 +856,49 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       if (status === 'done' && !get().altAdvisories) {
         void get().loadAltAdvisories();
       }
-    } catch {
-      // 404 (flexibility none / legacy pack) or transient error — hide section.
-      if (get().currentPack?.fetch_timestamp === packTs) {
+    } catch (err) {
+      if (get().currentPack?.fetch_timestamp !== packTs) return;
+      // 404 is a real answer (flexibility none / legacy pack) — hide the
+      // section. Anything else (network blip, 5xx) is transient: keep the
+      // poll cadence alive for a few retries so a single failed request
+      // can't make a mid-scan "Scenarios running…" silently vanish.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('API 404')) {
+        set({ timeOptions: null });
+        return;
+      }
+      timeOptionsErrorStreak += 1;
+      if (timeOptionsErrorStreak <= 3) {
+        timeOptionsPollDelay = Math.min(timeOptionsPollDelay * 1.5, 15_000);
+        window.setTimeout(() => {
+          if (get().currentPack?.fetch_timestamp === packTs) {
+            void get().loadTimeOptions();
+          }
+        }, timeOptionsPollDelay);
+      } else {
         set({ timeOptions: null });
       }
+    }
+  },
+
+  setScenarioAsAlternate: async (departureTime: string) => {
+    const { flight, currentPack } = get();
+    if (!flight || !currentPack) return;
+    try {
+      const updated = await api.updateFlight(flight.id, {
+        alt_departure_time: departureTime,
+      });
+      set({ flight: updated });
+      // Re-queue the scan: the changed alternate invalidates the reuse check,
+      // so the pinned row re-grades and route_advisories_alt.json persists —
+      // full per-advisory detail then appears in the planned↔alt view.
+      await api.rescanTimeOptions(flight.id, currentPack.fetch_timestamp);
+      timeOptionsPollDelay = 3_000;
+      timeOptionsErrorStreak = 0;
+      window.setTimeout(() => void get().loadTimeOptions(), 2_000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ error: msg.replace(/^API \d+:\s*/, '') });
     }
   },
 
