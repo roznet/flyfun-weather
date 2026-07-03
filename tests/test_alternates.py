@@ -626,3 +626,22 @@ def test_batched_fetch_exhausts_when_nothing_qualifies():
 
     assert len(calls) == 3                        # 8 + 8 + 4
     assert result.candidates_evaluated == 20
+
+
+def test_assess_threads_aggregation_mode():
+    """_assess honors the aggregation mode so run_alternates' preference actually
+    changes the destination consensus (PR #346 review — guards the threading)."""
+    by_icao = {
+        "EGKB": {
+            "gfs": _snap("EGKB", "gfs", ceiling=5000.0),
+            "icon": _snap("EGKB", "icon", ceiling=4000.0),
+            "ecmwf": _snap("EGKB", "ecmwf", ceiling=800.0),  # IFR outlier
+        }
+    }
+    _, maj = alt_mod._assess("EGKB", by_icao, {}, "majority")
+    _, wor = alt_mod._assess("EGKB", by_icao, {}, "worst")
+    # majority = winning VFR pool (median 4500 ft); worst = IFR (min 800 ft).
+    assert maj["flight_category"] == "VFR"
+    assert maj["ceiling_ft"] == 4500.0
+    assert wor["flight_category"] == "IFR"
+    assert wor["ceiling_ft"] == 800.0

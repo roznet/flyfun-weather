@@ -70,7 +70,7 @@ without euro_aip installed.
 | Input | Source |
 |---|---|
 | Destination raw TAF (D-0 only) | `snapshot.route_observations.airports[*].taf_raw` (matched on `obs.icao == destination`) |
-| Destination NWP fallback (D-2/D-1) | `RouteAlternates.destination_ceiling_ft` / `destination_visibility_m` — the destination's NWP-consensus assessment at ETA, stored by `run_alternates` under the user's advisory aggregation mode (majority = median of the winning-category pool; worst = worst across models). See "Aggregation mode & conservative bias" below. |
+| Destination NWP fallback (D-2/D-1) | `RouteAlternates.destination_ceiling_ft` / `destination_visibility_m` — the destination's NWP-consensus assessment at ETA, stored by `run_alternates` under the user's advisory aggregation mode (majority = median of the winning-category pool; worst = worst across models). See "Aggregation mode & TAF precedence" below. |
 | Destination ETA | `RouteAlternates.eta` (rounded ETA hour) |
 | Candidate ceiling/vis | A candidate TAF covering its ETA when available (D-0; reused from `route_observations` or gap-fetched), else `AlternateAirport.ceiling_ft` / `.visibility_m` (NWP-consensus under the same aggregation mode). `AlternateQual.source` records which. |
 | Candidate / destination approach class | `best_approach_type` (candidates) / `procedures_query.approaches().most_precise()` (destination) |

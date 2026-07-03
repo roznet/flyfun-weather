@@ -81,6 +81,18 @@ This is what makes the alternate card agree with the airport arrival card and th
 forecast map for the same airport (all three share this reduction — the Python and
 TS implementations are pinned identical by `tests/fixtures/consensus_vectors.json`).
 
+> **Accepted cross-surface differences (PR #346).** Two residual differences are
+> deliberate, not bugs: (1) the alternates stage fetches the `gfs/icon/ecmwf`
+> trio while the arrival card uses the full pack model set, so the *inputs* can
+> differ slightly; (2) the arrival card's summary **wind vector**
+> (direction/gust/best-runway) is taken from the representative pool model
+> nearest the median wind speed, whereas the map and Python reduce wind
+> *direction* via a circular mean — so on a pool that disagrees on heading the
+> arrival card can show a slightly different runway/heading than the map for the
+> same airport. The parity fixture deliberately excludes `wind_dir_deg` for this
+> reason. Category / ceiling / visibility / wind speed / crosswind / headwind are
+> pinned identical across all three surfaces.
+
 ## Architecture
 
 ### Shared assembly — the consistency guarantee
@@ -88,12 +100,15 @@ TS implementations are pinned identical by `tests/fixtures/consensus_vectors.jso
 operating on a **plain snapshot dict** whose keys equal `AirportForecastSnapshotRow`
 column names (NOT the ORM row):
 
-- `best_ceiling(snap)` — priority `sounding_ceiling_ft → nwp_ceiling_ft →
-  cloud_base_ft → lcl_ft`
+- `best_ceiling(snap)` — `min(sounding_ceiling_ft, nwp_ceiling_ft)` when either
+  primary estimate is present (the conservative reconciliation shared with
+  `analysis.airport_conditions.reconcile_ceiling`), else falls back to
+  `cloud_base_ft` then `lcl_ft`
 - `flight_category(snap)` — `classify_flight_category(ceiling, visibility_mi)`
 - `snap_to_dict(snap)` — column-keyed → lightweight per-model dict
 - `enrich_wind(d, runway_ends)` — `compute_runway_winds`, best runway, gusts
-- `consensus(per_model, mode="worst")` — see above
+- `consensus(per_model, mode=<aggregation>)` — default `"majority"`; the mode is
+  the user's advisory aggregation preference (see "Consensus" above)
 
 `tasks/map_queries.py` imports these (aliased `_shared_*`) and wraps them with
 row→dict adapters, so the forecast map and alternates run identical math. This is
