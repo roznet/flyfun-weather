@@ -31,3 +31,5 @@ def test_consensus_matches_shared_vector(case, mode):
     assert result["ceiling_ft"] == pytest.approx(expected["ceiling_ft"])
     assert result["visibility_m"] == pytest.approx(expected["visibility_m"])
     assert result["wind_speed_kt"] == pytest.approx(expected["wind_speed_kt"])
+    assert result["crosswind_kt"] == pytest.approx(expected["crosswind_kt"])
+    assert result["headwind_kt"] == pytest.approx(expected["headwind_kt"])

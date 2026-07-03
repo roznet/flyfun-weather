@@ -14,12 +14,9 @@
  */
 
 import type { AirportModelCondition, FlightCategory } from '../types/advisories';
-import { median } from '../visualization/weather-map-consensus';
-
-/** Severity rank for flight categories — higher = worse. */
-export const FLIGHT_CAT_SEVERITY: Record<FlightCategory, number> = {
-  VFR: 0, MVFR: 1, IFR: 2, LIFR: 3,
-};
+// Single source of truth for flight-category severity — shared with the forecast
+// map consensus so a future category reorder can't drift between the two.
+import { median, CAT_ORDER } from '../visualization/weather-map-consensus';
 
 export function computeSummaryCondition(
   conditions: AirportModelCondition[],
@@ -41,7 +38,7 @@ export function computeSummaryCondition(
     let bestSeverity = -1;
     winningCat = conditions[0].flight_category;
     for (const [cat, count] of counts) {
-      const sev = FLIGHT_CAT_SEVERITY[cat];
+      const sev = CAT_ORDER[cat];
       if (count > bestCount || (count === bestCount && sev > bestSeverity)) {
         bestCount = count;
         bestSeverity = sev;
@@ -53,7 +50,7 @@ export function computeSummaryCondition(
     // Worst: pick the worst category across all
     winningCat = conditions[0].flight_category;
     for (const c of conditions) {
-      if (FLIGHT_CAT_SEVERITY[c.flight_category] > FLIGHT_CAT_SEVERITY[winningCat]) {
+      if (CAT_ORDER[c.flight_category] > CAT_ORDER[winningCat]) {
         winningCat = c.flight_category;
       }
     }
