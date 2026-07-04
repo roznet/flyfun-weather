@@ -314,12 +314,19 @@ def _build_alternate(
 
     # Operational-friction flags (#344): non-weather friction on this candidate.
     # Cross-border is the only signal today; the list is the extensible channel.
+    # Never let a flag failure abort the candidate: this must honour the batch
+    # loop's "one bad airport skips only itself" contract, same as _assess above.
     operational_flags = []
-    xborder = cross_border_flag(
-        dest_ctx.iso_country, ap.iso_country, bool(ap.point_of_entry)
-    )
-    if xborder is not None:
-        operational_flags.append(xborder)
+    try:
+        xborder = cross_border_flag(
+            dest_ctx.iso_country, ap.iso_country, bool(ap.point_of_entry)
+        )
+        if xborder is not None:
+            operational_flags.append(xborder)
+    except Exception:
+        logger.debug(
+            "Alternates: cross-border flag failed for %s", ap.ident, exc_info=True
+        )
 
     return AlternateAirport(
         icao=ap.ident,
@@ -432,9 +439,15 @@ def run_alternates(
 
     # Destination country anchors the cross-border operational flag (#344): the
     # friction is "planned to land in <dest country>, cleared instead into
-    # <alternate country>". Resolved once here from the euro_aip model.
-    dest_ap = model.get_airport(dest.icao)
-    dest_iso_country = dest_ap.iso_country if dest_ap is not None else None
+    # <alternate country>". Resolved once here from the euro_aip model. Wrapped
+    # like every other model access in this function — a lookup failure degrades
+    # to "no country" (→ no flag), it must never abort the whole stage.
+    dest_iso_country = None
+    try:
+        dest_ap = model.get_airport(dest.icao)
+        dest_iso_country = dest_ap.iso_country if dest_ap is not None else None
+    except Exception:
+        logger.warning("Alternates: destination country lookup failed", exc_info=True)
 
     route_distances = compute_route_distances(route)
     dest_enroute_nm = route_distances[-1] if route_distances else 0.0

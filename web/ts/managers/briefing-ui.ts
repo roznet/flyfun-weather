@@ -1452,11 +1452,16 @@ function renderAltReqPopup(req: AlternateRequirement): string {
     </div>`;
 }
 
+// Single rendering of one operational flag's detail, shared by the chip-click
+// popup and the info-button popup so the two presentations can't drift.
+function operationalFlagDetailHtml(flag: OperationalFlag): string {
+  return `<p class="alt-flag-detail alt-flag-detail-${escapeHtml(flag.severity)}"><strong>${escapeHtml(flag.label)}:</strong> ${escapeHtml(flag.detail)}</p>`;
+}
+
 function renderOperationalFlagPopup(apt: AlternateAirport, flag: OperationalFlag): string {
   return `
     <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' — ' + escapeHtml(apt.name) : ''}</h3></div>
-    <p class="alt-flag-detail alt-flag-detail-${escapeHtml(flag.severity)}"><strong>${escapeHtml(flag.label)}</strong></p>
-    <p class="alt-flag-detail-body">${escapeHtml(flag.detail)}</p>
+    ${operationalFlagDetailHtml(flag)}
   `;
 }
 
@@ -1485,8 +1490,7 @@ function renderAltPopup(apt: AlternateAirport): string {
   // operational_flags key. Mirror the taf_applicable_lines guard above.
   const flags = apt.operational_flags ?? [];
   const flagsHtml = flags.length
-    ? `<h4>Operational notes</h4>` + flags.map((f) =>
-        `<p class="alt-flag-detail alt-flag-detail-${escapeHtml(f.severity)}"><strong>${escapeHtml(f.label)}:</strong> ${escapeHtml(f.detail)}</p>`).join('')
+    ? `<h4>Operational notes</h4>` + flags.map(operationalFlagDetailHtml).join('')
     : '';
   return `
     <div class="popup-header"><h3>${escapeHtml(apt.icao)}${apt.name ? ' — ' + escapeHtml(apt.name) : ''}</h3></div>
