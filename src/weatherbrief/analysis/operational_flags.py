@@ -12,9 +12,13 @@ re-encoded and drifted here.
 
 Design notes:
 
-- **Anchor on the destination's country.** The surprise the flag warns about is
-  "planned to land in FR, instead cleared into GB", so severity is read from the
-  destination→alternate pair.
+- **Anchor on the origin's country, not the destination's.** The formalities you
+  actually face on landing at the alternate are governed by the country you
+  *departed from* (the origin), because that is the border the flight crosses.
+  Anchoring on the destination is wrong whenever origin and destination differ:
+  e.g. a France→Switzerland flight diverting to an Italian field is FR→IT (both
+  EU — no formalities), even though the destination→alternate pair CH→IT would
+  wrongly read as customs-required.
 - **Severity is purely the country-pair**, never the point-of-entry status:
   both formalities → red, exactly one → amber, neither → no flag.
 - **Point-of-entry modulates the *message only*.** ``point_of_entry`` means the
@@ -27,10 +31,22 @@ Design notes:
 from __future__ import annotations
 
 from euro_aip.borders import crossing_requirements
+from euro_aip.utils.country_mapper import CountryMapper
 
 from weatherbrief.models.alternates import OperationalFlag
 
 CROSS_BORDER_CODE = "cross_border"
+
+# ISO-code → human country name, reusing the library's reference table so we
+# don't re-encode it here. Built once (it only assembles a couple of dicts).
+_COUNTRY_NAMES = CountryMapper()
+
+
+def _country_name(cc: str) -> str:
+    """Human country name for an ISO-3166-1 alpha-2 code (e.g. "IT" → "Italy"),
+    falling back to the upper-cased code when the library doesn't know it."""
+    name = _COUNTRY_NAMES.get_country_name(cc)
+    return name.title() if name else cc.strip().upper()
 
 
 def _formalities_phrase(immigration: bool, customs: bool) -> str:
@@ -61,22 +77,26 @@ def _poe_note(alt_is_poe: bool) -> str:
 
 
 def cross_border_flag(
-    dest_country: str | None,
+    origin_country: str | None,
     alt_country: str | None,
     alt_is_poe: bool,
 ) -> OperationalFlag | None:
-    """Cross-border operational flag for diverting from ``dest_country`` to an
-    alternate in ``alt_country``, or ``None`` when no border friction applies.
+    """Cross-border operational flag for diverting from a flight that departed
+    ``origin_country`` to an alternate in ``alt_country``, or ``None`` when no
+    border friction applies.
+
+    Anchored on the **origin** country because that is the border the flight
+    actually crosses on arrival at the alternate (see module docstring).
 
     Returns ``None`` when either country is unknown (nothing to compare), when
     the two are the same country, or when neither customs nor immigration is
     required. Otherwise a ``red`` flag (both formalities) or ``amber`` flag
     (exactly one). ``alt_is_poe`` only affects the ``detail`` wording.
     """
-    if not dest_country or not alt_country:
+    if not origin_country or not alt_country:
         return None
 
-    req = crossing_requirements(dest_country, alt_country)
+    req = crossing_requirements(origin_country, alt_country)
     if not req.immigration_required and not req.customs_required:
         # Same country, or both blocs shared → no border friction.
         return None
@@ -87,11 +107,12 @@ def cross_border_flag(
     severity = "red" if both else "amber"
     label = "Cross-border"
 
-    dest_cc = dest_country.strip().upper()
-    alt_cc = alt_country.strip().upper()
+    origin_name = _country_name(origin_country)
+    alt_name = _country_name(alt_country)
     detail = (
-        f"You planned to land in {dest_cc}; diverting to this {alt_cc} field is "
-        f"an unplanned international arrival — {_formalities_phrase(req.immigration_required, req.customs_required)}."
+        f"Diverting to this field in {alt_name} is an unplanned international "
+        f"arrival from {origin_name} — "
+        f"{_formalities_phrase(req.immigration_required, req.customs_required)}."
         f"{_poe_note(alt_is_poe)}"
     )
 
