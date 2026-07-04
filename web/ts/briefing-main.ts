@@ -518,19 +518,36 @@ async function init(): Promise<void> {
       (state.routeAdvisories?.catalog ?? []).map((c) => [c.id, c.name]),
     );
     const nameOf = (id: string) => names.get(id) ?? id;
+    // Reuse the advisory pill style (`.badge`) so the scenario assessment
+    // reads as the same soft filled RED/AMBER/GREEN pill as the advisory
+    // dashboard, not a hard-bordered box.
     const chip = (assessment: string) => {
-      const cls = assessment === 'GREEN' ? 'assessment-green'
-        : assessment === 'AMBER' ? 'assessment-amber'
-        : assessment === 'RED' ? 'assessment-red' : 'assessment-none';
-      return `<span class="assessment-chip ${cls}">${escapeHtml(assessment)}</span>`;
+      const cls = assessment === 'GREEN' ? 'badge-green'
+        : assessment === 'AMBER' ? 'badge-amber'
+        : assessment === 'RED' ? 'badge-red' : 'badge-none';
+      return `<span class="badge ${cls}">${escapeHtml(assessment)}</span>`;
     };
 
     // One confirm at a time (server enforces with 429; mirror it in the UI):
     // while any candidate is checking, the other check buttons are disabled.
     const anyConfirmPending = scan.candidates.some((c) => c.confirm_pending);
 
+    // Planned (baseline) UTC day — candidates on a different day (prev/next-day
+    // scans, or an off-day alternate) must say so, or "09:00" reads as today.
+    const baselineC = scan.candidates.find((c) => c.is_baseline);
+    const plannedDay = baselineC
+      ? new Date(baselineC.departure_time).toISOString().slice(0, 10) : '';
+    const dayLabelFor = (iso: string): string => {
+      const candDay = new Date(iso).toISOString().slice(0, 10);
+      if (!plannedDay || candDay === plannedDay) return '';
+      const diff = Math.round((Date.parse(candDay) - Date.parse(plannedDay)) / 86400000);
+      if (diff === 1) return ' · next day';
+      if (diff === -1) return ' · previous day';
+      return ` · ${diff > 0 ? '+' : ''}${diff} days`;
+    };
+
     const rows = scan.candidates.map((c) => {
-      const time = formatDepartureTime(c.departure_time);
+      const time = formatDepartureTime(c.departure_time) + dayLabelFor(c.departure_time);
       const shift = c.is_baseline
         ? 'as planned'
         : `${c.departure_shift_hours >= 0 ? '+' : ''}${c.departure_shift_hours}h`;
@@ -684,8 +701,17 @@ async function init(): Promise<void> {
     const refusedNote = scan.refused_times.length
       ? `<p class="muted" style="font-size:0.85em;">${scan.refused_times.length} daylight hour${scan.refused_times.length > 1 ? 's' : ''} couldn’t be checked from this briefing’s data (outside the fetched forecast window).</p>`
       : '';
+    // ±day edges (slice 4): explain why the window stops where it does, so a
+    // clipped prev/next-day scan doesn't read as a data gap.
+    const win = scan.window;
+    const pastNote = win?.past_clipped
+      ? `<p class="muted" style="font-size:0.85em;">Hours that have already passed were left out — only upcoming departure times are shown.</p>`
+      : '';
+    const horizonNote = win?.horizon_clipped
+      ? `<p class="muted" style="font-size:0.85em;">The window stops where ECMWF forecast fidelity ends — later hours aren’t checkable yet.</p>`
+      : '';
 
-    section.innerHTML = `<p>${escapeHtml(headline)}</p>${rows}${refusedNote}`;
+    section.innerHTML = `<p>${escapeHtml(headline)}</p>${rows}${refusedNote}${pastNote}${horizonNote}`;
 
     // Wire the taps (fresh nodes on every render — no stale handlers).
     section.querySelectorAll<HTMLButtonElement>('.time-confirm-btn').forEach((btn) => {

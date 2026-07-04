@@ -398,14 +398,22 @@ user to the app rather than exposing half a workflow.
 
 ## Implementation slices (all in v1, in order)
 
-1. **Toggle + unified Alternate time + in-window free tier.** Flexibility
+1. ✅ **Toggle + unified Alternate time + in-window free tier.** Flexibility
    column/UI; alt grading moves to the scenario job; candidates within the
    existing enrichment window surface confirmed-for-free. No new data layer —
    validates the job wiring, polling, UX, and ranking margin cheaply.
-2. **ECMWF daylight extension + Same-day scan.** The decode benchmark (above)
+2. ✅ **ECMWF daylight extension + Same-day scan.** The decode benchmark (above)
    gates this slice. Ephemeral enrichment, coverage metadata, honesty ladder.
-3. **On-tap confirm** (ICON+GFS across the shifted window, async, cached).
-4. **Previous/Next day** (extra OM fetch, past-day clamp, horizon edge UX).
+3. ✅ **On-tap confirm** (ICON+GFS across the shifted window, async, cached).
+4. ✅ **Previous/Next day** (extra OM fetch, past-day clamp, horizon edge UX).
+   As-built: prev/next-day already ride the slice-2 ECMWF-only tier where the
+   GRIB horizon reaches; slice 4 adds (a) `extend_openmeteo_adjacent_day` — an
+   ephemeral OM base re-fetch spliced in at **confirm** time so the multi-model
+   check isn't OM-clamped across the day boundary (`tasks/time_scan.py`); (b) a
+   forward-planning **past-day clamp** (`_clamp_past_grid`, gated on `dep >
+   now` so eval/replay packs are untouched) surfaced as
+   `TimeScanWindow.past_clipped`; (c) web copy for the past/horizon window
+   edges. The scan itself needs no OM (its provisional tier is ECMWF-only).
 
 ## Out of scope (v1)
 

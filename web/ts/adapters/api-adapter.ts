@@ -587,7 +587,7 @@ export interface TimeCandidateDTO {
 export interface TimeWindowScanDTO {
   flexibility: FlexibilityMode;
   baseline: { departure_time: string; assessment: string; assessment_reason: string };
-  window: { start: string; end: string; daylight_clipped: boolean; horizon_clipped: boolean } | null;
+  window: { start: string; end: string; daylight_clipped: boolean; horizon_clipped: boolean; past_clipped?: boolean } | null;
   candidates: TimeCandidateDTO[];
   refused_times: string[];
   generated_at: string;
