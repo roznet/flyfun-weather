@@ -287,19 +287,35 @@ A weather-better, close divert candidate can still carry **non-weather** frictio
 future signals (water crossing #345, military/joint-use, drive-time) reuse the
 same shape with no new rendering plumbing.
 
-The cross-border flag is built by the pure `analysis/operational_flags.py::cross_border_flag(origin_country, alt_country, alt_is_poe)`,
-called from `_build_alternate`. It **anchors on the origin (departure) country,
-not the destination** — the formalities you face on landing at an alternate are
-set by the country you departed from, since that is the border the flight
-actually crosses. Destination-anchoring is wrong whenever origin ≠ destination
-(e.g. an FR→CH flight diverting to an Italian field is FR→IT — both EU, no
-formalities — even though CH→IT would read customs-required). Severity comes
-**purely from the country-pair** via `euro_aip.borders.crossing_requirements`
-(membership rules live in the library, not re-encoded here): both formalities →
-`red`, exactly one → `amber`, neither / same country / unresolved country → no
-flag. `point_of_entry` modulates the detail **wording only** (reassurance vs
-"could not verify entry facilities"), **never** the severity. `OperationalFlag`
-carries `code` / `label` / `detail` / `severity` (`amber`|`red`, never green).
+The cross-border flag (`analysis/operational_flags.py::cross_border_flag(origin_country, destination_country, alt_country, alt_is_poe)`,
+called from `_build_alternate`) models **what the pilot is not prepared for**, not
+merely "is there a border." Preparedness is the flight you *filed*
+(`origin → destination`): if you filed an international arrival you already carry
+the documents and made the arrangements, so diverting across a border you planned
+for isn't the friction. Membership rules come from
+`euro_aip.borders.crossing_requirements` (origin→destination = "planned",
+origin→alternate = "alt"); the anchor is the **origin (departure) country** —
+strictly the last departure airport, `route.origin` for single-leg briefings.
+
+Three derived reasons, severity = worst that fires (none → no flag):
+
+| Reason | Fires when | Severity |
+|---|---|---|
+| **Unprepared formality** | alt needs an axis (customs/immigration) that the filed flight didn't | **red** if alt needs *both* axes, else **amber** (absolute grade) |
+| **Different country than filed** | alt is a different country than the destination **and** needs a formality, but adds no *new* axis (you're prepared, just wrong country) | **amber** |
+| **Facility gap** | alt needs a formality but is **not** a POE | **amber** ("could not verify") |
+
+Consequences worth knowing: a France-departed flight diverting to an EU field
+(FR→IT) is silent (no formality); the same flight diverting to the UK is red;
+UK→FR diverting to a German POE is **amber** (prepared, different country), not
+red. `point_of_entry` only ever *adds* the facility note, never changes severity.
+`OperationalFlag` carries `code` / `label` / `detail` / `severity`
+(`amber`|`red`, never green).
+
+**Known limitation:** `euro_aip.borders` models Schengen + EU-customs only, so the
+**IE↔GB Common Travel Area** is not represented — an Ireland↔UK pair reads as a
+full customs+immigration border (red) and over-flags (CTA removes immigration in
+practice). Accepted as a conservative over-warn.
 
 ## Output data model (`models/alternates.py`)
 `AlternateAirport` (geometry: `distance_from_dest_nm`, `enroute_distance_nm`,

@@ -657,26 +657,26 @@ def test_assess_threads_aggregation_mode():
 # ---------------------------------------------------------------------------
 
 
-def test_cross_border_flag_red_for_gb_alternate_from_fr_origin():
-    # A flight departing France (LFAT) toward the UK, offered EGMD (Lydd, GB) as
-    # an alternate: landing there from a French departure is a customs +
-    # immigration arrival → red. Anchored on the ORIGIN country. EGMD is a point
-    # of entry → reassurance wording.
+def test_cross_border_red_domestic_fr_diverting_to_uk():
+    # A domestic French flight LFAT→LFAC (both FR) offered EGMD (Lydd, GB) as an
+    # alternate: an unplanned customs + immigration arrival you didn't prepare
+    # for → red. EGMD is a POE → reassurance wording.
     route = RouteConfig(
-        name="LFAT-EGMH",
+        name="LFAT-LFAC",
         waypoints=[
             Waypoint(icao="LFAT", name="Le Touquet", lat=50.52, lon=1.62),  # origin FR
-            Waypoint(icao="EGMH", name="Manston", lat=51.34, lon=1.35),     # dest GB
+            Waypoint(icao="LFAC", name="Calais", lat=50.96, lon=1.95),      # dest FR
         ],
         flight_duration_hours=1.0,
     )
     lfat = _FakeAirport("LFAT", 50.52, 1.62, iso_country="FR")  # origin, for get_airport
+    lfac = _FakeAirport("LFAC", 50.96, 1.95, iso_country="FR")  # dest, for get_airport
     egmd = _FakeAirport("EGMD", 50.96, 0.94, iso_country="GB", point_of_entry=True)
     near = [
         {"airport": egmd, "enroute_distance_nm": None, "segment_distance_nm": 10.0},
     ]
-    snaps = {"EGMH": _all_models("EGMH"), "EGMD": _all_models("EGMD")}
-    result = _run(route, near, snaps, all_airports=[lfat, egmd])
+    snaps = {"LFAC": _all_models("LFAC"), "EGMD": _all_models("EGMD")}
+    result = _run(route, near, snaps, all_airports=[lfat, lfac, egmd])
 
     assert result is not None
     egmd_alt = next(a for a in result.alternates if a.icao == "EGMD")
@@ -689,11 +689,11 @@ def test_cross_border_flag_red_for_gb_alternate_from_fr_origin():
     assert "point of entry" in flags[0].detail  # POE reassurance, not "could not verify"
 
 
-def test_cross_border_anchors_on_origin_not_destination():
+def test_cross_border_no_flag_when_diversion_stays_intra_eu():
     # Regression (user-reported): a France-departed flight LFQA(FR) → LSGS(CH),
-    # diverting to LIMW(IT). Origin→alt is FR→IT — both in the EU, no
-    # formalities. The dest→alt pair CH→IT would WRONGLY read customs-required;
-    # assert we anchor on the origin and produce NO flag.
+    # diverting to LIMW(IT). Origin→alt is FR→IT — both in the EU, zero
+    # formalities — so NO flag, even though the alternate is a third country
+    # relative to the (CH) destination.
     route = RouteConfig(
         name="LFQA-LSGS",
         waypoints=[
@@ -703,36 +703,69 @@ def test_cross_border_anchors_on_origin_not_destination():
         flight_duration_hours=1.5,
     )
     lfqa = _FakeAirport("LFQA", 49.31, 4.05, iso_country="FR")
+    lsgs = _FakeAirport("LSGS", 46.22, 7.33, iso_country="CH")
     limw = _FakeAirport("LIMW", 45.72, 7.42, iso_country="IT")  # Aosta, IT alt near LSGS
     near = [
         {"airport": limw, "enroute_distance_nm": None, "segment_distance_nm": 15.0},
     ]
     snaps = {"LSGS": _all_models("LSGS"), "LIMW": _all_models("LIMW")}
-    result = _run(route, near, snaps, all_airports=[lfqa, limw])
+    result = _run(route, near, snaps, all_airports=[lfqa, lsgs, limw])
 
     assert result is not None
     limw_alt = next(a for a in result.alternates if a.icao == "LIMW")
     assert limw_alt.operational_flags == []
 
 
-def test_no_cross_border_flag_when_origin_country_unknown():
-    # If the origin (departure) country can't be resolved, we can't anchor the
-    # flag — no flag rather than a wrong one.
+def test_cross_border_amber_prepared_but_different_country_than_filed():
+    # UK→FR filed (prepared for the EU-entry border); divert to a German POE
+    # (EDDK). No NEW formality → amber "different country", NOT red. This also
+    # proves the DESTINATION country is threaded: origin-only logic would grade
+    # GB→DE as a full border → red.
     route = RouteConfig(
-        name="LFAT-EGMH",
+        name="EGKB-LFAT",
+        waypoints=[
+            Waypoint(icao="EGKB", name="Biggin Hill", lat=51.33, lon=0.03),  # origin GB
+            Waypoint(icao="LFAT", name="Le Touquet", lat=50.52, lon=1.62),   # dest FR
+        ],
+        flight_duration_hours=1.0,
+    )
+    egkb = _FakeAirport("EGKB", 51.33, 0.03, iso_country="GB")
+    lfat = _FakeAirport("LFAT", 50.52, 1.62, iso_country="FR")
+    eddk = _FakeAirport("EDDK", 50.87, 7.14, iso_country="DE", point_of_entry=True)
+    near = [
+        {"airport": eddk, "enroute_distance_nm": None, "segment_distance_nm": 15.0},
+    ]
+    snaps = {"LFAT": _all_models("LFAT"), "EDDK": _all_models("EDDK")}
+    result = _run(route, near, snaps, all_airports=[egkb, lfat, eddk])
+
+    assert result is not None
+    eddk_alt = next(a for a in result.alternates if a.icao == "EDDK")
+    flags = [f for f in eddk_alt.operational_flags if f.code == "cross_border"]
+    assert len(flags) == 1
+    assert flags[0].severity == "amber"  # softened — not red
+    assert "different country" in flags[0].detail
+    assert "Germany" in flags[0].detail
+
+
+def test_no_cross_border_flag_when_country_unknown():
+    # If origin or destination country can't be resolved, we can't build the
+    # "prepared" baseline — no flag rather than a wrong one.
+    route = RouteConfig(
+        name="LFAT-LFAC",
         waypoints=[
             Waypoint(icao="LFAT", name="Le Touquet", lat=50.52, lon=1.62),  # origin FR
-            Waypoint(icao="EGMH", name="Manston", lat=51.34, lon=1.35),     # dest GB
+            Waypoint(icao="LFAC", name="Calais", lat=50.96, lon=1.95),      # dest FR
         ],
         flight_duration_hours=1.0,
     )
     # LFAT (origin) deliberately absent from all_airports → get_airport → None.
+    lfac = _FakeAirport("LFAC", 50.96, 1.95, iso_country="FR")
     egmd = _FakeAirport("EGMD", 50.96, 0.94, iso_country="GB", point_of_entry=True)
     near = [
         {"airport": egmd, "enroute_distance_nm": None, "segment_distance_nm": 10.0},
     ]
-    snaps = {"EGMH": _all_models("EGMH"), "EGMD": _all_models("EGMD")}
-    result = _run(route, near, snaps, all_airports=[egmd])
+    snaps = {"LFAC": _all_models("LFAC"), "EGMD": _all_models("EGMD")}
+    result = _run(route, near, snaps, all_airports=[lfac, egmd])
 
     assert result is not None
     egmd_alt = next(a for a in result.alternates if a.icao == "EGMD")
