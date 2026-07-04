@@ -237,6 +237,7 @@ class _DestContext:
     wind_kt: float | None
     crosswind_kt: float | None
     origin_iso_country: str | None  # departure ISO-3166-1 alpha-2 (anchors cross-border flag)
+    dest_iso_country: str | None  # filed-destination ISO-3166-1 alpha-2 (the "prepared" baseline)
 
 
 def _build_alternate(
@@ -319,7 +320,10 @@ def _build_alternate(
     operational_flags = []
     try:
         xborder = cross_border_flag(
-            dest_ctx.origin_iso_country, ap.iso_country, bool(ap.point_of_entry)
+            dest_ctx.origin_iso_country,
+            dest_ctx.dest_iso_country,
+            ap.iso_country,
+            bool(ap.point_of_entry),
         )
         if xborder is not None:
             operational_flags.append(xborder)
@@ -437,22 +441,24 @@ def run_alternates(
     dest = route.destination
     origin = route.origin
 
-    # Origin (departure) country anchors the cross-border operational flag (#344):
-    # the formalities you face on landing at an alternate are set by the country
-    # you departed from, since that is the border the flight crosses — NOT the
-    # planned destination (which is wrong whenever origin ≠ destination). Resolved
+    # Cross-border operational flag (#344) needs both the departure country (the
+    # border a diversion actually crosses) and the filed-destination country (the
+    # "prepared" baseline — what formalities you already signed up for). Resolved
     # once here from the euro_aip model. Wrapped like every other model access in
     # this function — a lookup failure degrades to "no country" (→ no flag), it
     # must never abort the whole stage.
-    # NB: strictly this should be the country of the *last departure airport*; for
-    # these single-leg briefings that is route.origin. If multi-leg trips with
+    # NB: the departure anchor is strictly the *last departure airport*; for these
+    # single-leg briefings that is route.origin. If multi-leg trips with
     # intermediate landings ever enter scope, anchor on the last landing instead.
     origin_iso_country = None
+    dest_iso_country = None
     try:
         origin_ap = model.get_airport(origin.icao)
         origin_iso_country = origin_ap.iso_country if origin_ap is not None else None
+        dest_ap_meta = model.get_airport(dest.icao)
+        dest_iso_country = dest_ap_meta.iso_country if dest_ap_meta is not None else None
     except Exception:
-        logger.warning("Alternates: origin country lookup failed", exc_info=True)
+        logger.warning("Alternates: origin/destination country lookup failed", exc_info=True)
 
     route_distances = compute_route_distances(route)
     dest_enroute_nm = route_distances[-1] if route_distances else 0.0
@@ -611,6 +617,7 @@ def run_alternates(
                 wind_kt=dest_cons.get("wind_speed_kt"),
                 crosswind_kt=dest_crosswind,
                 origin_iso_country=origin_iso_country,
+                dest_iso_country=dest_iso_country,
             )
             # Informational only: is the destination itself MVFR/IFR/LIFR (i.e.
             # you'd need an instrument approach to get into the *destination*).

@@ -1,8 +1,10 @@
 """Tests for the cross-border operational-friction flag (#344).
 
-Severity comes purely from the country-pair (Schengen / EU-customs-union
-membership, owned by ``euro_aip.borders``); point-of-entry status modulates
-only the wording. These tests pin the acceptance criteria from the issue.
+The flag models what the pilot is *not prepared for*: a formality the filed
+``origin → destination`` didn't carry (graded by the alternate's absolute
+formalities), clearing into a different country than filed, or a field that
+can't process the arrival (not a POE). Membership rules live in
+``euro_aip.borders``; POE only ever adds the facility note, never a downgrade.
 """
 
 from weatherbrief.analysis.operational_flags import (
@@ -11,96 +13,135 @@ from weatherbrief.analysis.operational_flags import (
 )
 
 
-class TestSeverityFromCountryPair:
-    def test_fr_to_gb_is_red(self):
-        # LFAT (FR) dest + EGMD (GB) alt: customs + immigration → red.
-        flag = cross_border_flag("FR", "GB", alt_is_poe=True)
+class TestUnpreparedFormality:
+    """Reason 1: the alternate needs an axis the filed flight didn't. Absolute
+    grade — both axes red, one amber."""
+
+    def test_domestic_to_uk_is_red(self):
+        # FR→FR filed, divert to the UK: customs + immigration, unplanned → red.
+        flag = cross_border_flag("FR", "FR", "GB", alt_is_poe=True)
         assert flag is not None
         assert flag.code == CROSS_BORDER_CODE
         assert flag.severity == "red"
         assert "customs and immigration" in flag.detail
+        assert "from France" in flag.detail
 
-    def test_fr_to_ch_customs_only_is_amber(self):
-        # Switzerland: Schengen (no immigration) but outside EU customs → amber.
-        flag = cross_border_flag("FR", "CH", alt_is_poe=False)
-        assert flag is not None
+    def test_switzerland_bound_diverting_to_uk_is_red(self):
+        # CH→FR filed (customs-only prep); divert to UK adds immigration AND it's
+        # a full third-country border → red by absolute grade (decision: red even
+        # though only one axis is newly required).
+        flag = cross_border_flag("CH", "FR", "GB", alt_is_poe=True)
+        assert flag.severity == "red"
+        assert "from Switzerland" in flag.detail
+
+    def test_domestic_ch_to_france_customs_only_is_amber(self):
+        # CH→CH filed, divert to France: customs only (both Schengen) → amber.
+        flag = cross_border_flag("CH", "CH", "FR", alt_is_poe=False)
         assert flag.severity == "amber"
         assert "customs applies" in flag.detail
 
-    def test_fr_to_ie_immigration_only_is_amber(self):
-        # Ireland: EU customs (no customs) but outside Schengen → amber.
-        flag = cross_border_flag("FR", "IE", alt_is_poe=False)
-        assert flag is not None
+    def test_domestic_fr_to_ireland_immigration_only_is_amber(self):
+        # FR→FR filed, divert to Ireland: immigration only (both EU customs) → amber.
+        flag = cross_border_flag("FR", "FR", "IE", alt_is_poe=False)
         assert flag.severity == "amber"
         assert "immigration/passport control applies" in flag.detail
 
-    def test_fr_to_de_no_flag(self):
-        # Both blocs shared → no friction, no flag.
-        assert cross_border_flag("FR", "DE", alt_is_poe=False) is None
 
-    def test_same_country_no_flag(self):
-        assert cross_border_flag("FR", "FR", alt_is_poe=False) is None
+class TestPreparedButDifferentCountry:
+    """Reason 2: prepared for the border, but the alternate is a different
+    country than filed → amber (Q1 soften)."""
 
-    def test_channel_islands_is_red(self):
-        # Jersey is outside both blocs → full customs + immigration border.
-        flag = cross_border_flag("FR", "JE", alt_is_poe=False)
+    def test_prepared_intl_but_different_country_is_amber_not_red(self):
+        # UK→FR filed (prepared for the full EU-entry border); divert to a German
+        # POE. No NEW axis, so it softens to amber even though UK→DE is a full
+        # border — the friction is "wrong country", not "unprepared".
+        flag = cross_border_flag("GB", "FR", "DE", alt_is_poe=True)
+        assert flag.severity == "amber"  # NOT red
+        assert "Germany" in flag.detail
+        assert "France" in flag.detail
+        assert "different country" in flag.detail
+
+    def test_same_country_as_filed_poe_no_flag(self):
+        # UK→FR filed, divert to a French POE: prepared, same country, can clear → no flag.
+        assert cross_border_flag("GB", "FR", "FR", alt_is_poe=True) is None
+
+
+class TestFacilityGap:
+    """Reason 3: the alternate needs a formality but isn't a listed POE → amber
+    uncertainty (never an assertion that customs is unavailable)."""
+
+    def test_prepared_intl_but_alt_not_poe_is_amber(self):
+        # UK→FR filed, divert to a French field that is NOT a POE → amber "verify".
+        flag = cross_border_flag("GB", "FR", "FR", alt_is_poe=False)
+        assert flag.severity == "amber"
+        assert "not listed as a point of entry" in flag.detail
+        assert "could not be verified" in flag.detail
+
+
+class TestNoFlag:
+    def test_domestic_same_country_no_flag(self):
+        assert cross_border_flag("FR", "FR", "FR", alt_is_poe=True) is None
+
+    def test_intra_eu_different_country_no_formality_no_flag(self):
+        # Q2: FR→DE filed, divert to Belgium — all Schengen + EU customs, zero
+        # formalities. "Different country" alone (no obligation) must NOT flag.
+        assert cross_border_flag("FR", "DE", "BE", alt_is_poe=True) is None
+
+
+class TestKnownLimitations:
+    def test_cta_ie_gb_over_flags(self):
+        # euro_aip models Schengen + EU-customs only, not the IE↔GB Common Travel
+        # Area, so IE→GB reads as a full border → red. Accepted over-warn (#344).
+        flag = cross_border_flag("IE", "IE", "GB", alt_is_poe=True)
         assert flag is not None
         assert flag.severity == "red"
 
-    def test_case_insensitive(self):
-        assert cross_border_flag("fr", "gb", alt_is_poe=True).severity == "red"
 
-    def test_detail_expands_iso_codes_to_country_names(self):
-        # Wording uses full country names ("this field in Italy" / "from
-        # Switzerland"), not raw ISO codes. First arg is the ORIGIN country.
-        flag = cross_border_flag("CH", "IT", alt_is_poe=False)
+class TestMissingCountry:
+    def test_missing_origin_no_flag(self):
+        assert cross_border_flag(None, "FR", "GB", alt_is_poe=False) is None
+
+    def test_missing_destination_no_flag(self):
+        assert cross_border_flag("FR", None, "GB", alt_is_poe=False) is None
+
+    def test_missing_alt_no_flag(self):
+        assert cross_border_flag("FR", "FR", None, alt_is_poe=False) is None
+
+    def test_empty_string_no_flag(self):
+        assert cross_border_flag("FR", "FR", "", alt_is_poe=False) is None
+
+
+class TestWording:
+    def test_case_insensitive(self):
+        assert cross_border_flag("fr", "fr", "gb", alt_is_poe=True).severity == "red"
+
+    def test_expands_iso_codes_to_country_names(self):
+        flag = cross_border_flag("CH", "CH", "IT", alt_is_poe=False)
         assert "field in Italy" in flag.detail
         assert "from Switzerland" in flag.detail
         assert "this IT field" not in flag.detail
 
-    def test_detail_expands_multiword_country_name(self):
-        flag = cross_border_flag("FR", "GB", alt_is_poe=True)
+    def test_expands_multiword_country_name(self):
+        flag = cross_border_flag("FR", "FR", "GB", alt_is_poe=True)
         assert "field in United Kingdom" in flag.detail
-        assert "from France" in flag.detail
-
-    def test_fr_origin_to_it_alt_no_flag(self):
-        # Both in the EU (Schengen + customs union) → no border friction. This
-        # is the alt-country half of the origin-anchoring fix: a France-departed
-        # flight diverting to Italy has no formalities, regardless of where it
-        # was headed.
-        assert cross_border_flag("FR", "IT", alt_is_poe=False) is None
-
-
-class TestMissingCountry:
-    def test_missing_alt_country_no_flag(self):
-        assert cross_border_flag("FR", None, alt_is_poe=False) is None
-
-    def test_missing_origin_country_no_flag(self):
-        assert cross_border_flag(None, "GB", alt_is_poe=False) is None
-
-    def test_empty_string_no_flag(self):
-        assert cross_border_flag("FR", "", alt_is_poe=False) is None
 
 
 class TestPoeOverlayModulatesMessageNotSeverity:
     def test_poe_gives_reassurance_wording(self):
-        flag = cross_border_flag("FR", "GB", alt_is_poe=True)
+        flag = cross_border_flag("FR", "FR", "GB", alt_is_poe=True)
         assert flag.severity == "red"  # severity unchanged by POE
         assert "point of entry" in flag.detail
         assert "could not be verified" not in flag.detail
 
-    def test_non_poe_gives_uncertainty_note_not_downgrade(self):
-        # Requested behaviour: CH↔FR amber + non-POE → "could not verify
-        # customs requirement", NOT an assertion that it's unavailable.
-        flag = cross_border_flag("FR", "CH", alt_is_poe=False)
-        assert flag.severity == "amber"  # NOT downgraded
+    def test_non_poe_gives_uncertainty_note(self):
+        flag = cross_border_flag("FR", "FR", "GB", alt_is_poe=False)
+        assert flag.severity == "red"  # NOT downgraded / upgraded by POE
         assert "could not be verified" in flag.detail
-        assert "not listed as a point of entry" in flag.detail
 
     def test_poe_status_never_changes_severity(self):
         assert (
-            cross_border_flag("FR", "GB", alt_is_poe=True).severity
-            == cross_border_flag("FR", "GB", alt_is_poe=False).severity
+            cross_border_flag("FR", "FR", "GB", alt_is_poe=True).severity
+            == cross_border_flag("FR", "FR", "GB", alt_is_poe=False).severity
         )
 
 
@@ -109,11 +150,10 @@ class TestTextDigestRendering:
     (PR #349 review — the tag loop had no direct coverage)."""
 
     def test_cross_border_tag_rendered_with_severity(self):
-        from weatherbrief.analysis.operational_flags import cross_border_flag
         from weatherbrief.digest.text import _format_route_alternates
         from weatherbrief.models.alternates import AlternateAirport, RouteAlternates
 
-        flag = cross_border_flag("FR", "GB", alt_is_poe=True)  # red
+        flag = cross_border_flag("FR", "FR", "GB", alt_is_poe=True)  # red
         assert flag is not None
         alt = RouteAlternates(
             destination_icao="LFAT",

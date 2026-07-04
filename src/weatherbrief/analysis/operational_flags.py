@@ -1,31 +1,42 @@
 """Operational-friction flags for divert candidates (issue #344).
 
 Pure logic that turns *non-weather* friction into an :class:`OperationalFlag`.
-The first (and currently only) signal is **cross-border**: a divert field that
-is weather-better and close can still carry an unplanned international arrival
-(customs, immigration, GAR, PPR). "Different country" is too blunt — FR→BE is a
-different country with essentially none of that friction, while FR→GB is a hard
-customs + immigration border. Grading comes from the country-pair's membership
-of the Schengen area (immigration) and the EU customs union (customs), which is
-reference data owned by the library (``euro_aip.borders``) so it is not
-re-encoded and drifted here.
+The first (and currently only) signal is **cross-border**.
 
-Design notes:
+The flag models **what the pilot is not prepared for**, not merely "is there a
+border." Preparedness is set by the flight actually filed (origin → destination):
+if you filed an international arrival you already carry the documents and made the
+customs/immigration arrangements, so diverting across a border you had planned
+for is *not* the friction. The friction is one of three derived reasons:
 
-- **Anchor on the origin's country, not the destination's.** The formalities you
-  actually face on landing at the alternate are governed by the country you
-  *departed from* (the origin), because that is the border the flight crosses.
-  Anchoring on the destination is wrong whenever origin and destination differ:
-  e.g. a France→Switzerland flight diverting to an Italian field is FR→IT (both
-  EU — no formalities), even though the destination→alternate pair CH→IT would
-  wrongly read as customs-required.
-- **Severity is purely the country-pair**, never the point-of-entry status:
-  both formalities → red, exactly one → amber, neither → no flag.
-- **Point-of-entry modulates the *message only*.** ``point_of_entry`` means the
-  field handles both customs and immigration, but it is a *subset* of
-  customs-capable fields — many airports clear customs without being flagged
-  POE. So a non-POE field is an *uncertainty note* ("could not verify"), never a
-  severity downgrade.
+- **Unprepared formality** — the alternate needs customs or immigration that the
+  filed ``origin → destination`` did not. Graded by the alternate's **absolute**
+  formalities: both → ``red``, exactly one → ``amber``. (A domestic French flight
+  diverting to the UK; or a Switzerland-bound flight diverting to the UK, where
+  immigration is newly required and it is a full third-country border → red.)
+- **Different country than filed** — you *are* prepared for the border, but the
+  alternate is in a different country than your destination, so your flight plan
+  / customs notification points at the wrong authority. ``amber``. (A UK→France
+  flight diverting to a German point of entry: prepared for EU entry, just not
+  into Germany.)
+- **Facility gap** — the alternate needs a formality but is not a listed point of
+  entry, so entry facilities cannot be verified. ``amber``, phrased as
+  uncertainty (never an assertion that customs is unavailable).
+
+Severity is the worst reason that fires; the wording lists what applies. If none
+fire, there is no flag (same country you filed for with the facilities you
+planned; or a diversion that stays inside the same bloc as your departure).
+Membership rules live in :mod:`euro_aip.borders`, not re-encoded here;
+``point_of_entry`` only ever adds the facility note, never a downgrade.
+
+Anchoring is on the **origin (departure) country**, because that is the border a
+diversion actually crosses — strictly the *last departure airport*, which for
+these single-leg briefings is ``route.origin``.
+
+Known limitation: :mod:`euro_aip.borders` models Schengen + EU-customs only, so
+the **IE↔GB Common Travel Area** is not represented — an Ireland↔UK pair reads as
+a full customs+immigration border and will over-flag (CTA removes immigration in
+practice). Accepted as a conservative over-warn (issue #344).
 """
 
 from __future__ import annotations
@@ -50,7 +61,7 @@ def _country_name(cc: str) -> str:
 
 
 def _formalities_phrase(immigration: bool, customs: bool) -> str:
-    """Plain-language description of which formalities the country-pair triggers."""
+    """Plain-language description of which formalities a country-pair triggers."""
     if immigration and customs:
         return "customs and immigration both apply"
     if customs:
@@ -78,47 +89,69 @@ def _poe_note(alt_is_poe: bool) -> str:
 
 def cross_border_flag(
     origin_country: str | None,
+    destination_country: str | None,
     alt_country: str | None,
     alt_is_poe: bool,
 ) -> OperationalFlag | None:
-    """Cross-border operational flag for diverting from a flight that departed
-    ``origin_country`` to an alternate in ``alt_country``, or ``None`` when no
-    border friction applies.
+    """Cross-border operational flag for diverting a flight filed
+    ``origin_country → destination_country`` to an alternate in ``alt_country``,
+    or ``None`` when no border friction applies.
 
-    Anchored on the **origin** country because that is the border the flight
-    actually crosses on arrival at the alternate (see module docstring).
-
-    Returns ``None`` when either country is unknown (nothing to compare), when
-    the two are the same country, or when neither customs nor immigration is
-    required. Otherwise a ``red`` flag (both formalities) or ``amber`` flag
-    (exactly one). ``alt_is_poe`` only affects the ``detail`` wording.
+    See the module docstring for the model. Returns ``None`` when any country is
+    unknown (nothing to compare) or when none of the three reasons fires.
+    ``alt_is_poe`` never changes severity — it only adds the facility note.
     """
-    if not origin_country or not alt_country:
+    if not origin_country or not destination_country or not alt_country:
         return None
 
-    req = crossing_requirements(origin_country, alt_country)
-    if not req.immigration_required and not req.customs_required:
-        # Same country, or both blocs shared → no border friction.
-        return None
+    planned = crossing_requirements(origin_country, destination_country)
+    alt = crossing_requirements(origin_country, alt_country)
 
-    both = req.immigration_required and req.customs_required
-    # Severity is the single carrier of the amber/red distinction (web colours the
-    # chip by it; the digest prints it as a word), so the label stays constant.
-    severity = "red" if both else "amber"
-    label = "Cross-border"
+    has_formality = alt.customs_required or alt.immigration_required
+    # Unprepared: the alternate needs an axis the filed flight did not.
+    new_customs = alt.customs_required and not planned.customs_required
+    new_immigration = alt.immigration_required and not planned.immigration_required
+    unprepared = new_customs or new_immigration
+    diff_country = alt_country.strip().upper() != destination_country.strip().upper()
+    facility_gap = has_formality and not alt_is_poe
+
+    # Reasons, all derived. Severity is the worst that fires.
+    severities: list[str] = []
+    if unprepared:
+        # Absolute grade of the alternate's own formalities (decision: a full
+        # third-country border is red even if only one axis is newly required).
+        severities.append("red" if (alt.customs_required and alt.immigration_required) else "amber")
+    if diff_country and has_formality and not unprepared:
+        # Prepared for the border, but clearing into a different country than filed.
+        severities.append("amber")
+    if facility_gap:
+        severities.append("amber")
+    if not severities:
+        return None
+    severity = "red" if "red" in severities else "amber"
 
     origin_name = _country_name(origin_country)
+    dest_name = _country_name(destination_country)
     alt_name = _country_name(alt_country)
-    detail = (
-        f"Diverting to this field in {alt_name} is an unplanned international "
-        f"arrival from {origin_name} — "
-        f"{_formalities_phrase(req.immigration_required, req.customs_required)}."
-        f"{_poe_note(alt_is_poe)}"
-    )
+    formalities = _formalities_phrase(alt.immigration_required, alt.customs_required)
+
+    if unprepared:
+        lead = (
+            f"Diverting to this field in {alt_name} is an unplanned international "
+            f"arrival from {origin_name} — {formalities}."
+        )
+    elif diff_country:
+        lead = (
+            f"Diverting here clears you into {alt_name}, not {dest_name} as filed — "
+            f"{formalities}, but into a different country than your flight plan "
+            f"named (notify the authorities in {alt_name})."
+        )
+    else:  # facility gap only: same country you filed for, but not a listed POE
+        lead = f"Arriving here from {origin_name} requires border clearance — {formalities}."
 
     return OperationalFlag(
         code=CROSS_BORDER_CODE,
-        label=label,
-        detail=detail,
+        label="Cross-border",
+        detail=f"{lead}{_poe_note(alt_is_poe)}",
         severity=severity,
     )
