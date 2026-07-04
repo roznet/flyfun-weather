@@ -12,8 +12,9 @@ for is *not* the friction. The friction is one of three derived reasons:
 - **Unprepared formality** — the alternate needs customs or immigration that the
   filed ``origin → destination`` did not. Graded by the alternate's **absolute**
   formalities: both → ``red``, exactly one → ``amber``. (A domestic French flight
-  diverting to the UK; or a Switzerland-bound flight diverting to the UK, where
-  immigration is newly required and it is a full third-country border → red.)
+  diverting to the UK; or a Switzerland-*departed* flight bound for France that
+  diverts to the UK, where immigration is newly required and it is a full
+  third-country border → red.)
 - **Different country than filed** — you *are* prepared for the border, but the
   alternate is in a different country than your destination, so your flight plan
   / customs notification points at the wrong authority. ``amber``. (A UK→France
@@ -53,11 +54,23 @@ CROSS_BORDER_CODE = "cross_border"
 _COUNTRY_NAMES = CountryMapper()
 
 
+# Connector words kept lower-case in a title (unless they lead) — so
+# "ISLE OF MAN" → "Isle of Man", "BOSNIA AND HERZEGOVINA" → "Bosnia and
+# Herzegovina", not a naive ``.title()`` that upper-cases every word.
+_TITLE_MINOR_WORDS = frozenset({"and", "of", "the", "da", "di", "e"})
+
+
 def _country_name(cc: str) -> str:
     """Human country name for an ISO-3166-1 alpha-2 code (e.g. "IT" → "Italy"),
     falling back to the upper-cased code when the library doesn't know it."""
     name = _COUNTRY_NAMES.get_country_name(cc)
-    return name.title() if name else cc.strip().upper()
+    if not name:
+        return cc.strip().upper()
+    words = name.split()
+    return " ".join(
+        w.capitalize() if (i == 0 or w.lower() not in _TITLE_MINOR_WORDS) else w.lower()
+        for i, w in enumerate(words)
+    )
 
 
 def _formalities_phrase(immigration: bool, customs: bool) -> str:

@@ -26,10 +26,11 @@ class TestUnpreparedFormality:
         assert "customs and immigration" in flag.detail
         assert "from France" in flag.detail
 
-    def test_switzerland_bound_diverting_to_uk_is_red(self):
-        # CH→FR filed (customs-only prep); divert to UK adds immigration AND it's
-        # a full third-country border → red by absolute grade (decision: red even
-        # though only one axis is newly required).
+    def test_switzerland_departed_diverting_to_uk_is_red(self):
+        # CH→FR filed = Switzerland-departed, bound for France (customs-only prep);
+        # divert to UK adds immigration AND it's a full third-country border → red
+        # by absolute grade (decision: red even though only one axis is newly
+        # required).
         flag = cross_border_flag("CH", "FR", "GB", alt_is_poe=True)
         assert flag.severity == "red"
         assert "from Switzerland" in flag.detail
