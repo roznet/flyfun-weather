@@ -388,6 +388,94 @@ def current_ecmwf_run_ts(
 
 
 # ---------------------------------------------------------------------------
+# Open-Meteo adjacent-day extension (slice 4 — the ±day base fetch)
+# ---------------------------------------------------------------------------
+
+
+def _pack_hourly_bounds(
+    cross_sections: list[RouteCrossSection],
+) -> tuple[datetime, datetime] | None:
+    """Overall ``(earliest, latest)`` OM hourly time present across the pack —
+    the fetched-day span. Used to decide whether a candidate window needs the
+    adjacent-day OM fetch (any ETA past this span would grade OM-clamped)."""
+    times: list[datetime] = []
+    for cs in cross_sections:
+        for wf in cs.point_forecasts:
+            if wf.hourly:
+                times.append(_hour_time(wf.hourly[0]))
+                times.append(_hour_time(wf.hourly[-1]))
+    return (min(times), max(times)) if times else None
+
+
+def extend_openmeteo_adjacent_day(
+    cross_sections: list[RouteCrossSection],
+    route_points,
+    start_date: date,
+    end_date: date,
+    *,
+    historical: bool = False,
+) -> int:
+    """Re-fetch the Open-Meteo base for ``[start_date, end_date]`` and splice it
+    onto the in-memory cross-sections (ephemeral — decision G).
+
+    The pack's OM base spans only the target day: the fetch stage windows the
+    request with ``start_date = end_date = target day``
+    (``tasks/fetch.py``). So a ±day candidate's per-point ETAs fall past the
+    last stored OM hour, and ``at_time()`` would silently clamp **every** model's
+    OM layer (and the OM-only models MétéoFr/UKMO/GEM outright) to the day edge
+    — the exact confident-but-wrong grade the honesty posture forbids. This
+    fills the OM layer for the candidate day(s) so the multi-model confirm
+    grades on real values; ``enrich_forecasts`` overlays GRIB fidelity
+    (ECMWF/GFS/ICON) afterwards, exactly as the target day was built.
+
+    Fetches each fetched model over the same date window; a model whose range
+    doesn't reach the day (raises / returns empty) is skipped, not faked.
+    Mutates ``cross_sections`` in place; returns the number of sections that
+    gained hours.
+    """
+    from weatherbrief.fetch.open_meteo import EmptyForecastError, OpenMeteoClient
+
+    client = OpenMeteoClient(historical=historical)
+    s = start_date.strftime("%Y-%m-%d")
+    e = end_date.strftime("%Y-%m-%d")
+    extended = 0
+    for cs in cross_sections:
+        try:
+            new_pfs = client.fetch_multi_point(
+                route_points, cs.model, start_date=s, end_date=e,
+            )
+        except EmptyForecastError:
+            logger.info(
+                "time-scan: %s has no OM data for %s–%s (out of range) — skipped",
+                cs.model.value, s, e,
+            )
+            continue
+        except Exception:
+            logger.debug(
+                "time-scan: OM adjacent-day fetch failed for %s",
+                cs.model.value, exc_info=True,
+            )
+            continue
+        if not new_pfs or len(new_pfs) != len(cs.point_forecasts):
+            continue
+        added = False
+        for existing_wf, new_wf in zip(cs.point_forecasts, new_pfs):
+            have = {_hour_time(h) for h in existing_wf.hourly}
+            for h in new_wf.hourly:
+                if _hour_time(h) not in have:
+                    existing_wf.hourly.append(h)
+                    added = True
+            existing_wf.hourly.sort(key=_hour_time)
+        if added:
+            extended += 1
+    logger.info(
+        "time-scan: OM adjacent-day extension %s–%s → %d/%d sections extended",
+        s, e, extended, len(cross_sections),
+    )
+    return extended
+
+
+# ---------------------------------------------------------------------------
 # On-tap multi-model confirm (slice 3 — the deferred, user-gated cost)
 # ---------------------------------------------------------------------------
 
@@ -446,6 +534,20 @@ def confirm_candidate(
     route_points = load_route_points(pack_dir)
     if not cross_sections or not route_points:
         return None
+
+    # ±day confirm: the pack's OM base covers only the target day, so a
+    # candidate on an adjacent day would grade every model's OM layer clamped to
+    # the day edge (and the OM-only models outright). Re-fetch the OM base for
+    # the candidate's day(s) FIRST, so enrich_forecasts overlays GRIB onto real
+    # OM values and the multi-model grade below is honest across the day
+    # boundary. Same-day candidates already have their OM base — the bounds
+    # check skips the fetch for them.
+    cand_end = cand + timedelta(hours=max(route.flight_duration_hours, 1.0))
+    bounds = _pack_hourly_bounds(cross_sections)
+    if bounds is None or cand < bounds[0] or cand_end > bounds[1]:
+        extend_openmeteo_adjacent_day(
+            cross_sections, route_points, cand.date(), cand_end.date(),
+        )
 
     try:
         enrich_forecasts(
@@ -563,6 +665,22 @@ def compute_daylight_window(
         # Flight barely fits daylight — window collapses toward the planned time.
         return min(start, dep), max(start, dep), True
     return start, latest, True
+
+
+def _clamp_past_grid(
+    grid: list[datetime], departure: datetime, now: datetime,
+) -> tuple[list[datetime], bool]:
+    """Drop already-elapsed candidate hours (slice 4's past-day clamp).
+
+    Only clamps when the planned ``departure`` is itself still in the future —
+    i.e. we're doing forward planning. An eval/replay of an already-flown pack
+    (``departure`` in the past) must grade its whole window unchanged, so those
+    packs are left alone. Returns ``(kept_grid, past_clipped)``.
+    """
+    if _aware(departure) <= now:
+        return grid, False
+    kept = [t for t in grid if t > now]
+    return kept, len(kept) != len(grid)
 
 
 # ---------------------------------------------------------------------------
@@ -742,6 +860,32 @@ def run_time_scan(
         while t <= w_hi and len(grid) < _MAX_GRID:
             grid.append(t)
             t += timedelta(hours=1)
+
+        # Past-day clamp (slice 4): drop already-elapsed hours up front —
+        # prev_day's window is largely behind "now", and a late-in-day scan
+        # trims same_day's morning too. Dropping beats a coverage refusal
+        # (which reads as "data gap", not "already flown"). An empty grid is
+        # the honest "the previous day is already behind you".
+        grid, window_model.past_clipped = _clamp_past_grid(
+            grid, dep, datetime.now(timezone.utc),
+        )
+
+        # ±day (slice 4): the pack's OM base only covers the target day, so the
+        # adjacent-day grid hours have NO hourly rows at all. That breaks the
+        # ECMWF daylight extension — `_enrich_ecmwf` *attaches* decoded GRIB to
+        # existing hourly rows (it never creates them), so with no adjacent-day
+        # rows it decodes the next-day steps, matches nothing, and bails with
+        # "no matching steps" → the whole day refuses. Lay down the adjacent-day
+        # OM skeleton first (all models), then recompute coverage so the ECMWF
+        # extension has rows to enrich and OM-only models span the new day.
+        if flexibility in ("prev_day", "next_day") and grid:
+            flight_end = w_hi + timedelta(hours=max(duration, 1.0))
+            extend_openmeteo_adjacent_day(
+                cross_sections, route_points, w_lo.date(), flight_end.date(),
+            )
+            per_point, coverage_summary = compute_model_coverage(
+                cross_sections, dep, duration,
+            )
 
     # Consideration order: alternate first (pinned), then the grid.
     considered: list[tuple[datetime, bool]] = []  # (time, is_alternate)

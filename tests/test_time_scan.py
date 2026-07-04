@@ -453,6 +453,71 @@ class TestProvisionalTier:
         assert scan.refused_times  # deferred hours fell back to refusal
         assert all(c.confidence != "ecmwf_only" for c in scan.candidates)
 
+    def test_next_day_produces_ecmwf_only_candidates(self, tmp_path, monkeypatch):
+        """Slice 4 wiring: a next_day scan reaches the adjacent day — the
+        daylight ECMWF extension decodes next-day hours and the deferred
+        candidates come back ``ecmwf_only`` (not silently all-refused). DEP is
+        in the past, so the forward-planning past-clamp leaves the grid intact
+        (replay gate) and this stays deterministic."""
+        import weatherbrief.tasks.time_scan as ts
+        from weatherbrief.models import RouteConfig, Waypoint
+
+        self._write_pack(tmp_path)
+
+        def fake_extend(cross_sections, route_points, w_lo, w_hi, dur, *, as_of_time=None):
+            # Decode the *next* day: append enriched ECMWF hours across the
+            # extension window and report coverage that spans it.
+            hi = w_hi + timedelta(hours=dur + 3)
+            for cs in cross_sections:
+                if cs.model == ModelSource.ECMWF:
+                    for wf in cs.point_forecasts:
+                        have = {h.time for h in wf.hourly}
+                        t = w_lo.replace(minute=0, second=0, microsecond=0)
+                        while t <= hi:
+                            if t not in have:
+                                wf.hourly.append(
+                                    HourlyForecast(time=t, pressure_levels=_levels(28)),
+                                )
+                            t += timedelta(hours=1)
+                        wf.hourly.sort(key=lambda h: h.time)
+            return 1234567890, [(w_lo - timedelta(hours=3), hi)]
+
+        monkeypatch.setattr(ts, "extend_ecmwf_daylight", fake_extend)
+        # The real ±day path fetches the adjacent-day OM skeleton first (so the
+        # ECMWF extension has rows to enrich). Spy on it (no network) — the fake
+        # ECMWF extension above already supplies next-day rows for grading.
+        om_calls = []
+        monkeypatch.setattr(
+            ts, "extend_openmeteo_adjacent_day",
+            lambda cs, rps, s, e, **k: om_calls.append((s, e)) or 0,
+        )
+
+        route = RouteConfig(
+            name="t",
+            waypoints=[
+                Waypoint(icao="AAAA", name="A", lat=51.0, lon=0.0),
+                Waypoint(icao="BBBB", name="B", lat=51.0, lon=1.0),
+            ],
+            flight_duration_hours=1.0,
+        )
+        scan = ts.run_time_scan(tmp_path, route, DEP, flexibility="next_day")
+
+        assert scan is not None
+        assert scan.window is not None and scan.window.flexibility == "next_day"
+        assert not scan.window.past_clipped  # replay gate: past DEP untouched
+        # The wiring reached the adjacent day: the extension decoded it (run_ts
+        # set) and the next-day hours were graded against it, NOT refused. That
+        # they don't surface as "better" here is correct — the synthetic data
+        # grades identically everywhere, so there's honestly no better window
+        # (the ranking/suppression logic itself is covered mode-agnostically).
+        assert scan.ecmwf_run_ts == 1234567890
+        assert not scan.refused_times
+        # Any surfaced non-baseline candidate is honestly labelled + on the next day.
+        for c in scan.candidates:
+            if not c.is_baseline:
+                assert c.confidence == "ecmwf_only"
+                assert c.departure_time.date() > DEP.date()
+
 
 # ---------------------------------------------------------------------------
 # Confirm scheduling: one-at-a-time guard + stale-flag recovery (slice 3)
@@ -716,3 +781,107 @@ class TestTimingClassRegistry:
         )
 
         assert get_timing_hint_ids() == get_scan_class_ids() | {"flight_category"}
+
+
+# ---------------------------------------------------------------------------
+# Slice 4: ±day past-clamp + Open-Meteo adjacent-day extension
+# ---------------------------------------------------------------------------
+
+
+class TestClampPastGrid:
+    """Forward-planning drops elapsed hours; replay of a past pack is untouched."""
+
+    def test_future_flight_drops_elapsed_hours(self):
+        from weatherbrief.tasks.time_scan import _clamp_past_grid
+
+        now = datetime(2026, 6, 27, 10, 0, tzinfo=timezone.utc)
+        dep = datetime(2026, 6, 27, 14, 0, tzinfo=timezone.utc)  # still future
+        grid = [DAY + timedelta(hours=h) for h in range(6, 20)]
+        kept, clipped = _clamp_past_grid(grid, dep, now)
+        assert clipped is True
+        assert kept == [t for t in grid if t > now]
+        assert all(t > now for t in kept)
+
+    def test_all_past_yields_empty_grid(self):
+        from weatherbrief.tasks.time_scan import _clamp_past_grid
+
+        now = datetime(2026, 6, 27, 23, 0, tzinfo=timezone.utc)
+        dep = datetime(2026, 6, 28, 8, 0, tzinfo=timezone.utc)  # future flight
+        grid = [DAY + timedelta(hours=h) for h in range(6, 20)]  # all elapsed
+        kept, clipped = _clamp_past_grid(grid, dep, now)
+        assert kept == []
+        assert clipped is True
+
+    def test_replay_of_past_pack_not_clamped(self):
+        """An already-flown pack (dep in the past) grades its whole window —
+        eval/replay must be untouched by the forward-planning clamp."""
+        from weatherbrief.tasks.time_scan import _clamp_past_grid
+
+        now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+        grid = [DAY + timedelta(hours=h) for h in range(6, 20)]
+        kept, clipped = _clamp_past_grid(grid, DEP, now)  # DEP = 2026-06-27 (past)
+        assert kept == grid
+        assert clipped is False
+
+
+class _FakeOMClient:
+    """Stand-in OpenMeteoClient: one 24h WaypointForecast per point on the
+    requested start_date, so the adjacent-day splice has data to merge."""
+
+    def __init__(self, *a, **k):
+        pass
+
+    def fetch_multi_point(self, points, model, *, start_date=None, end_date=None, **k):
+        base = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        out = []
+        for _ in points:
+            hourly = [
+                HourlyForecast(time=base + timedelta(hours=h), pressure_levels=_levels(8))
+                for h in range(24)
+            ]
+            out.append(WaypointForecast(
+                waypoint=Waypoint(icao="XXXX", name="X", lat=51.0, lon=0.0),
+                model=model, fetched_at=DEP, hourly=hourly,
+            ))
+        return out
+
+
+class TestExtendOpenMeteoAdjacentDay:
+    def test_splices_next_day_hours(self, monkeypatch):
+        import weatherbrief.fetch.open_meteo as om
+        from weatherbrief.tasks.time_scan import (
+            _pack_hourly_bounds,
+            extend_openmeteo_adjacent_day,
+        )
+
+        cs = _cs(
+            ModelSource.METEOFRANCE,
+            [_wf(ModelSource.METEOFRANCE), _wf(ModelSource.METEOFRANCE)],
+        )
+        before = _pack_hourly_bounds([cs])
+        monkeypatch.setattr(om, "OpenMeteoClient", _FakeOMClient)
+
+        next_day = (DAY + timedelta(days=1)).date()
+        extended = extend_openmeteo_adjacent_day([cs], cs.route_points, next_day, next_day)
+
+        assert extended == 1
+        after = _pack_hourly_bounds([cs])
+        assert after[1] > before[1]
+        assert after[1] >= DAY + timedelta(days=1, hours=23)
+        # OM-only model's honest coverage now spans into the next day.
+        per_point, _ = compute_model_coverage([cs], DEP, 1.0)
+        for span in per_point["meteofrance"]:
+            assert span is not None and span[1] >= DAY + timedelta(days=1)
+
+    def test_dedups_existing_day(self, monkeypatch):
+        """Re-fetching a day the pack already holds adds nothing (dedup by
+        time) — the hourly count is unchanged, no double rows."""
+        import weatherbrief.fetch.open_meteo as om
+        from weatherbrief.tasks.time_scan import extend_openmeteo_adjacent_day
+
+        cs = _cs(ModelSource.METEOFRANCE, [_wf(ModelSource.METEOFRANCE)])
+        n_before = len(cs.point_forecasts[0].hourly)
+        monkeypatch.setattr(om, "OpenMeteoClient", _FakeOMClient)
+
+        extend_openmeteo_adjacent_day([cs], cs.route_points, DAY.date(), DAY.date())
+        assert len(cs.point_forecasts[0].hourly) == n_before

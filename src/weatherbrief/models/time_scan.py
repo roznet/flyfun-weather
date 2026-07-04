@@ -126,6 +126,10 @@ class TimeScanWindow(BaseModel):
     flexibility: FlexibilityMode
     daylight_clipped: bool = False
     horizon_clipped: bool = False
+    # Previous-day mode where part (or all) of the daylight window has already
+    # elapsed — those hours can't be forecast, so they're dropped up front
+    # rather than refused. True when at least one grid hour was clamped away.
+    past_clipped: bool = False
 
 
 class TimeWindowScan(BaseModel):
