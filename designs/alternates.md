@@ -287,9 +287,13 @@ A weather-better, close divert candidate can still carry **non-weather** frictio
 future signals (water crossing #345, military/joint-use, drive-time) reuse the
 same shape with no new rendering plumbing.
 
-The cross-border flag is built by the pure `analysis/operational_flags.py::cross_border_flag(dest_country, alt_country, alt_is_poe)`,
-called from `_build_alternate`. It **anchors on the destination's country** (the
-surprise is "planned to land in FR, cleared instead into GB") and reads severity
+The cross-border flag is built by the pure `analysis/operational_flags.py::cross_border_flag(origin_country, alt_country, alt_is_poe)`,
+called from `_build_alternate`. It **anchors on the origin (departure) country,
+not the destination** — the formalities you face on landing at an alternate are
+set by the country you departed from, since that is the border the flight
+actually crosses. Destination-anchoring is wrong whenever origin ≠ destination
+(e.g. an FR→CH flight diverting to an Italian field is FR→IT — both EU, no
+formalities — even though CH→IT would read customs-required). Severity comes
 **purely from the country-pair** via `euro_aip.borders.crossing_requirements`
 (membership rules live in the library, not re-encoded here): both formalities →
 `red`, exactly one → `amber`, neither / same country / unresolved country → no

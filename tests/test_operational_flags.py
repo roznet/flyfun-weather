@@ -50,12 +50,32 @@ class TestSeverityFromCountryPair:
     def test_case_insensitive(self):
         assert cross_border_flag("fr", "gb", alt_is_poe=True).severity == "red"
 
+    def test_detail_expands_iso_codes_to_country_names(self):
+        # Wording uses full country names ("this field in Italy" / "from
+        # Switzerland"), not raw ISO codes. First arg is the ORIGIN country.
+        flag = cross_border_flag("CH", "IT", alt_is_poe=False)
+        assert "field in Italy" in flag.detail
+        assert "from Switzerland" in flag.detail
+        assert "this IT field" not in flag.detail
+
+    def test_detail_expands_multiword_country_name(self):
+        flag = cross_border_flag("FR", "GB", alt_is_poe=True)
+        assert "field in United Kingdom" in flag.detail
+        assert "from France" in flag.detail
+
+    def test_fr_origin_to_it_alt_no_flag(self):
+        # Both in the EU (Schengen + customs union) → no border friction. This
+        # is the alt-country half of the origin-anchoring fix: a France-departed
+        # flight diverting to Italy has no formalities, regardless of where it
+        # was headed.
+        assert cross_border_flag("FR", "IT", alt_is_poe=False) is None
+
 
 class TestMissingCountry:
     def test_missing_alt_country_no_flag(self):
         assert cross_border_flag("FR", None, alt_is_poe=False) is None
 
-    def test_missing_dest_country_no_flag(self):
+    def test_missing_origin_country_no_flag(self):
         assert cross_border_flag(None, "GB", alt_is_poe=False) is None
 
     def test_empty_string_no_flag(self):
