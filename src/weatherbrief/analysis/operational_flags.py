@@ -82,8 +82,10 @@ def cross_border_flag(
         return None
 
     both = req.immigration_required and req.customs_required
+    # Severity is the single carrier of the amber/red distinction (web colours the
+    # chip by it; the digest prints it as a word), so the label stays constant.
     severity = "red" if both else "amber"
-    label = "Cross-border" if both else "Cross-border (partial)"
+    label = "Cross-border"
 
     dest_cc = dest_country.strip().upper()
     alt_cc = alt_country.strip().upper()

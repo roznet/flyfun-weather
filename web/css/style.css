@@ -4361,11 +4361,6 @@ label {
 .alt-flag-detail-amber { border-left-color: var(--amber); }
 .alt-flag-detail-red { border-left-color: var(--red); }
 
-.alt-flag-detail-body {
-  margin: 0.15rem 0 0.35rem;
-  color: var(--text-secondary);
-}
-
 /* List-view controls: hide-major + max-distance, above the candidate table. */
 .alt-controls {
   display: flex;

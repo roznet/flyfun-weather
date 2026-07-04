@@ -476,9 +476,10 @@ def _format_route_alternates(alt: RouteAlternates) -> list[str]:
         elif qual_src == "nwp":
             bits.append("via model")
         # Operational-friction tags (#344): mirror the FAA/EASA tags — a short
-        # per-row marker, the full detail lives on the web.
+        # per-row marker with an explicit severity word (the plain-text reader
+        # has no colour to lean on), full detail lives on the web.
         for flag in a.operational_flags:
-            bits.append(flag.label.lower())
+            bits.append(f"{flag.label.lower()} ({flag.severity})")
         lines.append(f"  {a.icao}: " + ", ".join(str(b) for b in bits if b))
 
     overflow = hidden + truncated
