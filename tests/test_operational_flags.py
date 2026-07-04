@@ -82,3 +82,53 @@ class TestPoeOverlayModulatesMessageNotSeverity:
             cross_border_flag("FR", "GB", alt_is_poe=True).severity
             == cross_border_flag("FR", "GB", alt_is_poe=False).severity
         )
+
+
+class TestTextDigestRendering:
+    """The plain-text digest surfaces the flag with an explicit severity word
+    (PR #349 review — the tag loop had no direct coverage)."""
+
+    def test_cross_border_tag_rendered_with_severity(self):
+        from weatherbrief.analysis.operational_flags import cross_border_flag
+        from weatherbrief.digest.text import _format_route_alternates
+        from weatherbrief.models.alternates import AlternateAirport, RouteAlternates
+
+        flag = cross_border_flag("FR", "GB", alt_is_poe=True)  # red
+        assert flag is not None
+        alt = RouteAlternates(
+            destination_icao="LFAT",
+            destination_category="VFR",
+            corridor_nm=40.0,
+            radius_nm=50.0,
+            candidates_evaluated=1,
+            alternates=[
+                AlternateAirport(
+                    icao="EGMD", lat=50.96, lon=0.94,
+                    distance_from_dest_nm=40.0, position="before",
+                    flight_category="VFR",
+                    operational_flags=[flag],
+                )
+            ],
+        )
+        lines = _format_route_alternates(alt)
+        egmd_line = next(ln for ln in lines if ln.strip().startswith("EGMD:"))
+        # Constant label + explicit severity word for the colour-less reader.
+        assert "cross-border (red)" in egmd_line
+
+    def test_no_tag_when_no_flags(self):
+        from weatherbrief.digest.text import _format_route_alternates
+        from weatherbrief.models.alternates import AlternateAirport, RouteAlternates
+
+        alt = RouteAlternates(
+            destination_icao="LFAT", destination_category="VFR",
+            corridor_nm=40.0, radius_nm=50.0, candidates_evaluated=1,
+            alternates=[
+                AlternateAirport(
+                    icao="LFAC", lat=50.9, lon=1.9,
+                    distance_from_dest_nm=30.0, position="after",
+                    flight_category="VFR",
+                )
+            ],
+        )
+        lines = _format_route_alternates(alt)
+        assert not any("cross-border" in ln.lower() for ln in lines)
