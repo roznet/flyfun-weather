@@ -232,6 +232,12 @@ def _build_fetch_diagnostics(
                             code=FetchCode.GRIB_SKIPPED_OUT_OF_RANGE,
                             message=f"{m.upper()} GRIB skipped — flight exceeds forecast range",
                         ))
+                    elif skip_reason == "out_of_domain":
+                        diags.append(Diagnostic.create(
+                            level="info", stage="fetch",
+                            code=FetchCode.GRIB_SKIPPED_OUT_OF_DOMAIN,
+                            message=f"{m.upper()} GRIB skipped — route outside model coverage area",
+                        ))
                     else:
                         diags.append(Diagnostic.create(
                             level="warn", stage="fetch",

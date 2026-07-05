@@ -44,6 +44,43 @@ def icon_eu_model_level_max_hour(init_hour: int) -> int:
         return ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN
     return ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT
 
+
+def icon_eu_window_out_of_range(
+    target_time: datetime,
+    flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
+) -> bool:
+    """True when no publishable ICON-EU run has enough horizon for the flight.
+
+    Deterministic (no network): walks the same cycles and publication-delay
+    logic as :func:`find_latest_icon_eu_run_with_response` and checks whether
+    any run available as-of *as_of_time* reaches ``target_time +
+    flight_duration_hours``. ICON-EU's model-level horizon is only 120h (5
+    days), so any flight departing >~5 days out is beyond it.
+
+    Used to distinguish the *expected* "flight beyond ICON-EU horizon" skip
+    (an info-level condition, common for flights 5–9 days out) from a genuine
+    upstream/probe failure — the run-finder returns ``None`` for both.
+    """
+    reference_time = as_of_time or datetime.now(timezone.utc)
+    need_until = target_time + timedelta(hours=flight_duration_hours)
+    for days_back in range(2):
+        check_date = reference_time - timedelta(days=days_back)
+        for cycle in ICON_EU_CYCLES:
+            init_time = check_date.replace(
+                hour=cycle, minute=0, second=0, microsecond=0,
+            )
+            if init_time > reference_time:
+                continue
+            hours_since_init = (reference_time - init_time).total_seconds() / 3600
+            if hours_since_init < ICON_EU_PUBLISH_DELAY_HOURS:
+                continue
+            horizon = init_time + timedelta(hours=icon_eu_model_level_max_hour(cycle))
+            if horizon >= need_until:
+                # At least one publishable run reaches the flight window.
+                return False
+    return True
+
 # ICON-EU domain bounds (regular lat-lon grid)
 ICON_EU_LAT_MIN = 29.5
 ICON_EU_LAT_MAX = 70.5

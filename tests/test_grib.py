@@ -1575,3 +1575,87 @@ class TestFracGridIndices:
         frac, ok = _frac_grid_indices(coord, [42.0, 43.0])
         assert ok.tolist() == [False, False]
         assert np.all(np.isnan(frac))
+
+
+class TestIconEuWindowOutOfRange:
+    """Deterministic (no-network) horizon classifier used to distinguish an
+    expected 'flight beyond ICON-EU horizon' skip from a genuine failure.
+    ICON-EU model-level horizon is 120h (5 days) for main runs."""
+
+    def test_within_horizon_is_not_out_of_range(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_window_out_of_range
+
+        as_of = datetime(2026, 7, 5, 22, 0, tzinfo=timezone.utc)
+        # Departs ~2 days out — well inside the 120h horizon.
+        target = datetime(2026, 7, 7, 9, 0, tzinfo=timezone.utc)
+        assert icon_eu_window_out_of_range(target, 2.25, as_of) is False
+
+    def test_beyond_horizon_is_out_of_range(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_window_out_of_range
+
+        # Reproduces the reported egtf_egei-2026-07-11 flight: pack built
+        # 2026-07-05 22:23Z, departs 2026-07-11 07:00Z (~129h out). The latest
+        # publishable run (18z 07-05) reaches only 07-10 18:00Z — short of the
+        # flight — so no run covers the window.
+        as_of = datetime(2026, 7, 5, 22, 23, tzinfo=timezone.utc)
+        target = datetime(2026, 7, 11, 7, 0, tzinfo=timezone.utc)
+        assert icon_eu_window_out_of_range(target, 2.25, as_of) is True
+
+    def test_boundary_just_inside_120h(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_window_out_of_range
+
+        # 00z run on the reference day, published (>3h old). Its 120h horizon
+        # reaches exactly ref_day 00:00 + 120h. A flight ending an hour before
+        # that is still covered.
+        as_of = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)
+        target = datetime(2026, 7, 9, 23, 0, tzinfo=timezone.utc)  # 00z+119h
+        assert icon_eu_window_out_of_range(target, 0.0, as_of) is False
+
+
+class TestGribSkipDiagnostics:
+    """`_build_fetch_diagnostics` must render an accurate message for each
+    ICON GRIB skip reason instead of the generic 'unavailable' warning."""
+
+    def _diags(self, skip_reasons):
+        from weatherbrief.tasks.fetch import _build_fetch_diagnostics
+
+        return _build_fetch_diagnostics(
+            requested_models=["gfs", "icon"],
+            models_fetched=["gfs", "icon"],
+            models_skipped_region=[],
+            enrich_grib=True,
+            grib_enriched=True,
+            grib_enrichment_failed=False,
+            grib_init_times={"gfs": 1},  # gfs enriched, icon not
+            grib_skip_reasons=skip_reasons,
+        )
+
+    def test_out_of_range_message(self):
+        from weatherbrief.models.diagnostic_codes import FetchCode
+
+        icon = [d for d in self._diags({"icon": "out_of_range"})
+                if d.code == FetchCode.GRIB_SKIPPED_OUT_OF_RANGE]
+        assert len(icon) == 1
+        assert icon[0].level == "info"
+        assert "exceeds forecast range" in icon[0].message
+
+    def test_out_of_domain_message(self):
+        from weatherbrief.models.diagnostic_codes import FetchCode
+
+        icon = [d for d in self._diags({"icon": "out_of_domain"})
+                if d.code == FetchCode.GRIB_SKIPPED_OUT_OF_DOMAIN]
+        assert len(icon) == 1
+        assert icon[0].level == "info"
+        assert "coverage area" in icon[0].message
+
+    def test_unknown_reason_falls_back_to_generic_warning(self):
+        from weatherbrief.models.diagnostic_codes import FetchCode
+
+        # No skip reason recorded (genuine failure) → generic warn message.
+        diags = self._diags({})
+        generic = [d for d in diags if d.code == FetchCode.GRIB_UNAVAILABLE_FOR_MODEL]
+        assert len(generic) == 1
+        assert generic[0].level == "warn"

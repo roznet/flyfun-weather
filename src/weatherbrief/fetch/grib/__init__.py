@@ -1882,9 +1882,11 @@ def _enrich_forecasts_inner(
     icon_ts: int | None = None
     icon_skip: str | None = None
 
-    # Prepare ICON-EU context (run discovery, domain check, etc.)
+    # Prepare ICON-EU context (run discovery, domain check, etc.). When the
+    # context is None, icon_prepare_skip classifies why (out_of_domain /
+    # out_of_range / None) so the fetch stage can emit an accurate diagnostic.
     with _grib_time("icon_prepare"):
-        icon_ctx = _prepare_icon_eu(
+        icon_ctx, icon_prepare_skip = _prepare_icon_eu(
             cross_sections, route_points, departure_time,
             data_dir=data_dir,
             flight_duration_hours=flight_duration_hours,
@@ -1935,7 +1937,7 @@ def _enrich_forecasts_inner(
                 icon_ctx, cross_sections, all_forecasts, route_points,
             )
         else:
-            icon_skip = icon_ctx  # None
+            icon_ts, icon_skip = None, icon_prepare_skip
     timer.rss_mark("after_phase2")
 
     if gfs_ts is not None:
@@ -2808,24 +2810,38 @@ def _prepare_icon_eu(
     data_dir: Path,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
-) -> _IconEuContext | None:
-    """Resolve ICON-EU run info and check eligibility. Returns None to skip."""
+) -> tuple[_IconEuContext | None, str | None]:
+    """Resolve ICON-EU run info and check eligibility.
+
+    Returns ``(context, skip_reason)``. When the context is None the enrichment
+    is skipped; ``skip_reason`` classifies *why* so the fetch stage can emit an
+    accurate diagnostic instead of the generic "unavailable for this model"
+    warning:
+
+    - ``"out_of_domain"`` — route lies outside the ICON-EU grid (expected for
+      non-European routes).
+    - ``"out_of_range"`` — flight window is beyond ICON-EU's 120h horizon
+      (expected for flights >~5 days out).
+    - ``None`` — no ICON sections, or a genuine failure (run-finder raised, or
+      a run should exist but couldn't be probed); the generic warning stands.
+    """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
         ICON_EU_MODEL_LEVEL_MIN,
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
+        icon_eu_window_out_of_range,
         route_in_icon_eu_domain,
     )
 
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
     if not icon_sections:
         logger.debug("No ICON cross-sections to enrich")
-        return None
+        return None, None
 
     if not route_in_icon_eu_domain(route_points):
         logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
-        return None
+        return None, "out_of_domain"
 
     session = _grib_session()
 
@@ -2837,11 +2853,19 @@ def _prepare_icon_eu(
         )
     except Exception:
         logger.warning("Failed to find ICON-EU model run", exc_info=True)
-        return None
+        return None, None
 
     if run_info is None:
+        # The run-finder returns None both when the window is past ICON-EU's
+        # horizon and when a run should exist but the probe failed. Only the
+        # former is an expected "out of range" skip — classify deterministically.
+        if icon_eu_window_out_of_range(
+            departure_time, flight_duration_hours, as_of_time,
+        ):
+            logger.info("Flight window beyond ICON-EU horizon, skipping ICON-EU enrichment")
+            return None, "out_of_range"
         logger.info("No ICON-EU run found that covers the flight window")
-        return None
+        return None, None
 
     init_date, init_hour = run_info
 
@@ -2859,7 +2883,7 @@ def _prepare_icon_eu(
         point_lats=[rp.lat for rp in route_points],
         point_lons=[rp.lon for rp in route_points],
         session=session,
-    )
+    ), None
 
 
 def _prefetch_icon_eu_data(ctx: _IconEuContext) -> None:

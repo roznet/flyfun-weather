@@ -23,6 +23,9 @@ class FetchCode(StrEnum):
     GRIB_ENRICHMENT_FAILED = "grib_enrichment_failed"
     GRIB_ENRICHMENT_APPLIED = "grib_enrichment_applied"
     GRIB_SKIPPED_OUT_OF_RANGE = "grib_skipped_out_of_range"
+    # Route lies outside the model's GRIB grid (e.g. ICON-EU covers only
+    # Europe). The model itself may still be fetched via another source.
+    GRIB_SKIPPED_OUT_OF_DOMAIN = "grib_skipped_out_of_domain"
     GRIB_UNAVAILABLE_FOR_MODEL = "grib_unavailable_for_model"
 
 
