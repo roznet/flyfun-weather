@@ -350,7 +350,7 @@ def get_usage_summary(db: Session, user_id: str) -> UsageSummary:
             llm_digest=int(month_row.llm_digest),
             total_tokens=int(month_row.input_tokens) + int(month_row.output_tokens),
         ),
-        time_scan_used=time_scan_count > 0,
+        time_scan_used=user_has_used_time_scan(db, user_id),
         time_scan_count=time_scan_count,
     )
 
