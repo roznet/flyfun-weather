@@ -216,6 +216,13 @@ fileprivate func alternateVerdictColor(_ status: String) -> Color {
     }
 }
 
+/// Severity→color for operational-friction flags (#344). Mirrors the web
+/// `.alt-flag-{severity}` palette: amber/red only, deliberately never green —
+/// an operational flag only ever raises friction, it never clears it.
+fileprivate func operationalFlagColor(_ severity: String) -> Color {
+    severity == "red" ? Theme.red : Theme.amber
+}
+
 /// One divert candidate as a collapsible card. Collapsed (default) shows only
 /// the identity + at-a-glance signals: ICAO, consensus flight category, and the
 /// FAA/EASA alternate-minima tags. Expanding reveals the rest — name, MAJOR /
@@ -262,6 +269,16 @@ private struct AlternateCard: View {
                     .foregroundStyle(Theme.textMuted)
             }
 
+            // Operational-friction flags (#344) — always-visible severity ⚠ chips
+            // (e.g. Cross-border). The full `detail` lives in "Operational notes"
+            // under the expanded card; expand to read why. Never green.
+            if let flags = apt.operationalFlags, !flags.isEmpty {
+                HStack(spacing: Theme.spacingXS) {
+                    ForEach(flags) { flag in flagChip(flag) }
+                    Spacer(minLength: 0)
+                }
+            }
+
             // Regulatory qual chips — the FAA/EASA alternate tags.
             if apt.faa != nil || apt.easa != nil {
                 HStack(spacing: Theme.spacingS) {
@@ -279,6 +296,24 @@ private struct AlternateCard: View {
     @ViewBuilder
     private var expandedDetail: some View {
         VStack(alignment: .leading, spacing: Theme.spacingS) {
+            // Operational notes (#344) — the detail behind the collapsed ⚠ chips.
+            if let flags = apt.operationalFlags, !flags.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.spacingXS) {
+                    ForEach(flags) { flag in
+                        HStack(alignment: .top, spacing: Theme.spacingXS) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(operationalFlagColor(flag.severity))
+                            (
+                                Text("\(flag.label): ").font(.caption.weight(.semibold)).foregroundStyle(Theme.text)
+                                + Text(flag.detail).font(.caption).foregroundStyle(Theme.textMuted)
+                            )
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
             if (apt.name != nil && !(apt.name ?? "").isEmpty) || apt.isMajor == true || apt.dominatesDestination == true {
                 HStack(spacing: Theme.spacingS) {
                     if let name = apt.name, !name.isEmpty {
@@ -358,5 +393,19 @@ private struct AlternateCard: View {
             .foregroundStyle(color)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(color.opacity(0.12), in: Capsule())
+    }
+
+    /// Operational-friction chip (#344) — ⚠ + label in the flag's severity color.
+    /// Web analogue: `.alt-flag-chip` (glyph-only there; iOS shows the label too
+    /// since there's no hover tooltip). Detail is read by expanding the card.
+    private func flagChip(_ flag: OperationalFlag) -> some View {
+        let color = operationalFlagColor(flag.severity)
+        return HStack(spacing: 3) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.caption2)
+            Text(flag.label).font(.caption2.weight(.semibold))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(color.opacity(0.12), in: Capsule())
     }
 }

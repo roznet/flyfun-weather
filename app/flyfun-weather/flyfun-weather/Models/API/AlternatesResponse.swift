@@ -80,8 +80,8 @@ struct AlternateAirport: Codable, Identifiable, Sendable {
 }
 
 /// A non-weather operational-friction signal on a divert candidate (#344).
-/// Swift mirror of `models/alternates.py:OperationalFlag`. Decoded for
-/// cross-platform parity; the ⚠ chip / detail UI is a deferred fast-follow.
+/// Swift mirror of `models/alternates.py:OperationalFlag`. Rendered as a
+/// severity ⚠ chip + "Operational notes" detail in `AlternatesView`.
 struct OperationalFlag: Codable, Identifiable, Sendable {
     let code: String              // stable machine key, e.g. "cross_border"
     let label: String             // short chip text, e.g. "Cross-border"
