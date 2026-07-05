@@ -277,21 +277,13 @@ final class BriefingViewModel {
         return dayKeyUTC.string(from: date)
     }
 
-    /// Parse an ISO-8601 timestamp. The server sends `datetime.isoformat()`,
-    /// which includes microseconds (e.g. `2026-06-28T08:46:00.123456+00:00`),
-    /// so try the fractional-seconds parser first, then plain. (Default
-    /// `ISO8601DateFormatter` rejects fractional seconds — that was why the time
-    /// never appeared.)
+    /// Parse an ISO-8601 timestamp, tolerating the server's fractional seconds.
+    /// Delegates to the shared `Date.parseISO8601` helper (was a bespoke
+    /// fractional-then-plain parser duplicated here and in the cache layer).
     private static func parseISO(_ s: String) -> Date? {
-        isoParserFrac.date(from: s) ?? isoParserPlain.date(from: s)
+        Date.parseISO8601(s)
     }
 
-    private static let isoParserFrac: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-    private static let isoParserPlain = ISO8601DateFormatter()
     private static let dayTimeUTC: DateFormatter = utcFormatter("MMM d HH:mm")
     private static let timeUTC: DateFormatter = utcFormatter("HH:mm")
     private static let dayKeyUTC: DateFormatter = utcFormatter("yyyy-MM-dd")
@@ -515,6 +507,12 @@ final class BriefingViewModel {
                     updateModels(from: pack)
                     await loadPackHistory()
                     await loadPackData(timestamp: pack.fetchTimestamp)
+                    // A refresh started elsewhere (web/another device) still
+                    // produces a new pack here — mirror refresh()'s completion
+                    // path so an opted-in pilot gets it auto-downloaded for
+                    // offline use, instead of only on the next screen entry.
+                    await checkCacheStatus()
+                    await maybeAutoDownloadLatest()
                     try? await Task.sleep(for: .seconds(10))
                     if case .completed = refreshState {
                         refreshState = .idle

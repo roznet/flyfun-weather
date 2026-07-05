@@ -319,12 +319,26 @@ final class CachingBriefingRepository: BriefingRepository {
     func pruneStalePacks(olderThanDays days: Int) async -> Int {
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         var removed = 0
+        var touchedFlights: Set<String> = []
         for entry in await cache.cachedPacks() {
-            guard let departure = await departureDate(for: entry) else { continue }
-            if departure < cutoff {
-                await cache.deletePack(flightId: entry.flightId, timestamp: entry.timestamp)
-                removed += 1
-            }
+            let fallback = await cachedFlightDeparture(for: entry)
+            guard let stale = Self.isPackStale(
+                entryDepartureTime: entry.departureTime,
+                fallbackDeparture: fallback,
+                cutoff: cutoff
+            ), stale else { continue }
+            await cache.deletePack(flightId: entry.flightId, timestamp: entry.timestamp)
+            touchedFlights.insert(entry.flightId)
+            removed += 1
+        }
+        // A flight's departure is shared across all its packs, so evicting any
+        // one aged-out pack evicts them all in the same run. Once none remain,
+        // the flight-level sidecar metadata (flight.json, packs.json,
+        // latest-pack.json, pack-meta.json) is orphaned — offline recovery only
+        // walks index entries, so nothing references it — so drop the directory
+        // instead of leaking it forever.
+        for flightId in touchedFlights where await !cache.hasCachedPacks(flightId: flightId) {
+            await cache.removeFlightDirectory(flightId: flightId)
         }
         if removed > 0 {
             Self.logger.info("Pruned \(removed) stale cached pack(s) older than \(days)d")
@@ -332,23 +346,30 @@ final class CachingBriefingRepository: BriefingRepository {
         return removed
     }
 
-    /// Best-effort departure date for a cached pack: the value stored at download
-    /// time, else the cached flight metadata (for entries predating that field).
-    private func departureDate(for entry: CachedPackEntry) async -> Date? {
-        if let ts = entry.departureTime, let date = Self.parseISO(ts) { return date }
-        if let data = await cache.readFlightMetadata(flightId: entry.flightId, name: "flight"),
-           let flight = try? JSONDecoder.weatherBrief.decode(FlightResponse.self, from: data) {
-            return flight.departureDate
+    /// Resolve a cached pack's departure and decide whether it's older than the
+    /// cutoff. Pure (no I/O) so the cutoff comparison and the legacy fallback
+    /// from `entry.departureTime` to the cached flight record are unit-testable.
+    /// Returns nil when no departure can be determined — the caller keeps the
+    /// pack (conservative: never delete data we can't prove is stale).
+    static func isPackStale(entryDepartureTime: String?, fallbackDeparture: Date?, cutoff: Date) -> Bool? {
+        let departure: Date?
+        if let ts = entryDepartureTime, let parsed = Date.parseISO8601(ts) {
+            departure = parsed
+        } else {
+            departure = fallbackDeparture
         }
-        return nil
+        guard let departure else { return nil }
+        return departure < cutoff
     }
 
-    /// Parse an ISO-8601 timestamp, tolerating the optional fractional seconds
-    /// the server sometimes includes.
-    private static func parseISO(_ s: String) -> Date? {
-        let frac = ISO8601DateFormatter()
-        frac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return frac.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    /// The cached flight record's departure, for legacy entries written before
+    /// `CachedPackEntry.departureTime` existed.
+    private func cachedFlightDeparture(for entry: CachedPackEntry) async -> Date? {
+        guard let data = await cache.readFlightMetadata(flightId: entry.flightId, name: "flight"),
+              let flight = try? JSONDecoder.weatherBrief.decode(FlightResponse.self, from: data) else {
+            return nil
+        }
+        return flight.departureDate
     }
 
     // MARK: - Private

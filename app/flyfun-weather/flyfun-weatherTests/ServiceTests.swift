@@ -158,6 +158,92 @@ import Foundation
         await store.clearAll()
         #expect(await store.cachedPacks().isEmpty)
     }
+
+    /// `hasCachedPacks` tracks per-flight index membership (with the trailing-slash
+    /// guard so `f1` doesn't match `f10`), and `removeFlightDirectory` clears the
+    /// flight-level sidecar metadata that pack eviction would otherwise orphan.
+    @Test func flightDirectoryCleanupRemovesOrphanedSidecars() async throws {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+
+        // A flight with one downloaded pack plus its offline-recovery sidecar.
+        await store.registerDownload(flightId: "f1", timestamp: "t1", flightTitle: "T",
+                                     assessment: nil, endpoints: all, totalBytes: 1)
+        try await store.writeFlightMetadata(Data("{}".utf8), flightId: "f1", name: "flight")
+        // A second flight whose id has "f1" as a prefix — must not be confused.
+        await store.registerDownload(flightId: "f10", timestamp: "t2", flightTitle: "T",
+                                     assessment: nil, endpoints: all, totalBytes: 1)
+
+        #expect(await store.hasCachedPacks(flightId: "f1"))
+        #expect(await store.hasCachedPacks(flightId: "f10"))
+        #expect(await store.hasCachedPacks(flightId: "f2") == false)
+
+        // Evict f1's only pack → no index entry references f1 any more.
+        await store.deletePack(flightId: "f1", timestamp: "t1")
+        #expect(await store.hasCachedPacks(flightId: "f1") == false)
+        #expect(await store.hasCachedPacks(flightId: "f10"))  // prefix flight untouched
+
+        // The sidecar survives pack deletion (deletePack only removes the pack
+        // subdir) — removeFlightDirectory is what clears the orphan.
+        #expect(await store.readFlightMetadata(flightId: "f1", name: "flight") != nil)
+        await store.removeFlightDirectory(flightId: "f1")
+        #expect(await store.readFlightMetadata(flightId: "f1", name: "flight") == nil)
+    }
+}
+
+// MARK: - Cache eviction staleness (pure cutoff + legacy fallback)
+
+@Suite struct PackStalenessTests {
+
+    private let cutoff = Date(timeIntervalSince1970: 1_000_000)          // reference "now - N days"
+    private func iso(_ t: TimeInterval) -> String {
+        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: t))
+    }
+
+    @Test func departureBeforeCutoffIsStale() {
+        let stale = CachingBriefingRepository.isPackStale(
+            entryDepartureTime: iso(500_000), fallbackDeparture: nil, cutoff: cutoff)
+        #expect(stale == true)
+    }
+
+    @Test func departureAfterCutoffSurvives() {
+        let stale = CachingBriefingRepository.isPackStale(
+            entryDepartureTime: iso(2_000_000), fallbackDeparture: nil, cutoff: cutoff)
+        #expect(stale == false)
+    }
+
+    /// Legacy entries lacking `departureTime` fall back to the cached flight record.
+    @Test func legacyEntryUsesFallbackDeparture() {
+        let stale = CachingBriefingRepository.isPackStale(
+            entryDepartureTime: nil,
+            fallbackDeparture: Date(timeIntervalSince1970: 500_000),
+            cutoff: cutoff)
+        #expect(stale == true)
+
+        let fresh = CachingBriefingRepository.isPackStale(
+            entryDepartureTime: nil,
+            fallbackDeparture: Date(timeIntervalSince1970: 2_000_000),
+            cutoff: cutoff)
+        #expect(fresh == false)
+    }
+
+    /// No departure anywhere → nil (caller keeps the pack; never delete blind).
+    @Test func unknownDepartureIsKept() {
+        #expect(CachingBriefingRepository.isPackStale(
+            entryDepartureTime: nil, fallbackDeparture: nil, cutoff: cutoff) == nil)
+        // An unparseable timestamp with no fallback is likewise indeterminate.
+        #expect(CachingBriefingRepository.isPackStale(
+            entryDepartureTime: "not-a-date", fallbackDeparture: nil, cutoff: cutoff) == nil)
+    }
+
+    /// A present-but-unparseable `departureTime` falls through to the fallback.
+    @Test func unparseableDepartureFallsBackToFlightRecord() {
+        let stale = CachingBriefingRepository.isPackStale(
+            entryDepartureTime: "garbage",
+            fallbackDeparture: Date(timeIntervalSince1970: 500_000),
+            cutoff: cutoff)
+        #expect(stale == true)
+    }
 }
 
 // MARK: - PirepOfflineStore (offline queue, temp file)

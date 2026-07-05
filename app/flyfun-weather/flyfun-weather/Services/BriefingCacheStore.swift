@@ -154,6 +154,25 @@ actor BriefingCacheStore {
         Self.logger.info("Deleted cached pack \(key)")
     }
 
+    /// Whether any pack for this flight still has an index entry. The trailing
+    /// slash keeps `f1` from matching `f10` when testing the `flightId/timestamp` key.
+    func hasCachedPacks(flightId: String) -> Bool {
+        ensureLoaded()
+        let prefix = "\(flightId)/"
+        return index.keys.contains { $0.hasPrefix(prefix) }
+    }
+
+    /// Remove a flight's entire cache directory, including flight-level sidecar
+    /// metadata (flight.json, packs.json, latest-pack.json, pack-meta.json).
+    /// Only safe once every pack for the flight has been deleted from the index
+    /// — offline recovery walks index entries, so nothing reads these files once
+    /// no entry points at the flight. No-op on the index itself (already clear).
+    func removeFlightDirectory(flightId: String) {
+        let dir = cacheDir.appendingPathComponent(flightId, isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        Self.logger.info("Removed orphaned flight cache dir \(flightId)")
+    }
+
     func totalCacheSize() -> Int64 {
         ensureLoaded()
         return index.values.reduce(0) { $0 + $1.totalBytes }
