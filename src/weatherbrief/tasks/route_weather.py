@@ -12,6 +12,7 @@ from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig, WaypointForecast
 from weatherbrief.models.airport_conditions import RunwayEnd
+from weatherbrief.units import M_PER_SM as _M_PER_SM
 from weatherbrief.models.observations import (
     AirportObservation,
     ObservationComparison,
@@ -385,8 +386,6 @@ def run_observation_comparison(
         reconcile_ceiling,
         classify_flight_category,
     )
-
-    _M_PER_SM = 1609.34
 
     # Build lookup: waypoint_icao -> RoutePointAnalysis (for sounding ceiling)
     rpa_by_icao: dict = {}

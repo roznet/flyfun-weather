@@ -25,10 +25,9 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.units import M_PER_SM as _M_PER_SM
 
 logger = logging.getLogger(__name__)
-
-_M_PER_SM = 1609.34
 
 # METAR weather phenomena indicating precipitation
 _PRECIP_PHENOMENA = frozenset({

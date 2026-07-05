@@ -31,8 +31,7 @@ from weatherbrief.analysis.comparison import (
 )
 from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.models.airport_conditions import FlightCategory, RunwayEnd
-
-_M_PER_SM = 1609.34
+from weatherbrief.units import M_PER_SM as _M_PER_SM
 
 # Two independent primary ceiling estimates — the LOWER (more conservative) is
 # used when both exist, matching ``analysis.airport_conditions.reconcile_ceiling``

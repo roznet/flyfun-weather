@@ -295,6 +295,13 @@ analytic fields or round-trip the code's own output.
     the same `"tfp"` key — a 10⁴ trap for any future threshold; and
     `tracking._apply_persistence_filter` is dead code (parameterised, documented, never
     called). Experimental/default-off, so contained.
+18. **Visibility statute-mile conversion is still duplicated despite `units.py` claiming one
+    source of truth** — `tasks/scoring.py`, `tasks/route_weather.py`, and
+    `analysis/airport_consensus.py` redeclare `_M_PER_SM = 1609.34` instead of importing
+    `weatherbrief.units.M_PER_SM`. Low numerical risk (same value today), but a verification
+    maintenance trap because scoring, D-0 comparison, airport consensus, and display can drift
+    separately if one copy changes. **FIXED** — all three now
+    `from weatherbrief.units import M_PER_SM as _M_PER_SM`.
 
 ---
 
@@ -334,6 +341,8 @@ analytic fields or round-trip the code's own output.
   melting convention, exact boundaries pinned (Bug #9, decisions §17). *(2026-07-01)*
 - [ ] `fetch/grib/decode.py:1413` — replace truncated `1.94384` with exact `3600/1852` (Bug #8); consolidate the 4 hand-rolled Magnus copies while there.
 - [ ] Turbulence test bogus key + `dd_nwp_agreement` Jaccard overlap-merge (Bugs #10/#11) — small, mechanical.
+- [x] Consolidate remaining `_M_PER_SM = 1609.34` copies to `weatherbrief.units.M_PER_SM`
+  (Bug #18).
 
 **Tier 2 — reproduce published reference cases:**
 - [ ] `sfip.py` — Belo-Pereira 2015 / Morcrette 2019 reference soundings.
