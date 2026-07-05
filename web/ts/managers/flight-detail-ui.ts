@@ -8,6 +8,7 @@ import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle,
 import { getDateLocale, t } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
 import { splitDurationCeil, combineDuration, buildDurationHourOptions, buildDurationMinuteOptions, formatDurationHM } from '../utils/duration';
+import { maybeShowFlexibilityExplainer } from '../components/flexibility-explainer';
 import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefSummary } from '../components/debrief-summary';
 import { showRoutePopup } from '../components/route-interpret';
@@ -257,6 +258,9 @@ export function renderFlightInfo(
     const altTimeGroup = document.getElementById('edit-alt-time-group');
     flexSelect?.addEventListener('change', () => {
       if (altTimeGroup) altTimeGroup.style.display = flexSelect.value === 'alternate' ? '' : 'none';
+      // First-time flexibility explainer (#352): show the modal the first time
+      // a user picks a scan mode, gated by durable usage + session ack flag.
+      if (flexSelect.value !== 'none') void maybeShowFlexibilityExplainer();
     });
 
     // When profile changes, update altitude/ceiling to match the selected profile

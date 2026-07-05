@@ -26,6 +26,8 @@ export const EVENTS = {
   COMPARE_OPENED: 'compare.opened',
   COMPARE_AIRPORT_ADDED: 'compare.airport_added',
   ALTITUDE_TABLE_OPENED: 'altitude_table.opened',
+  // Flexibility / timing-scenarios feature (props: {mode}).
+  TIMING_SCENARIOS_USED: 'timing_scenarios.used',
 
   // Onboarding
   TOUR_STARTED: 'tour.started',

@@ -49,6 +49,9 @@ class Event(StrEnum):
     COMPARE_OPENED = "compare.opened"
     COMPARE_AIRPORT_ADDED = "compare.airport_added"
     ALTITUDE_TABLE_OPENED = "altitude_table.opened"
+    # Flexibility / timing-scenarios feature. Emitted once per briefing when
+    # scan results actually render (props: {mode}).
+    TIMING_SCENARIOS_USED = "timing_scenarios.used"
 
     # Onboarding -------------------------------------------------------------
     TOUR_STARTED = "tour.started"
@@ -79,6 +82,7 @@ FEATURE_OF: dict[str, str] = {
     Event.COMPARE_OPENED.value: "compare",
     Event.COMPARE_AIRPORT_ADDED.value: "compare",
     Event.ALTITUDE_TABLE_OPENED.value: "altitude_table",
+    Event.TIMING_SCENARIOS_USED.value: "timing_scenarios",
     Event.AUTO_REFRESH_ENABLED.value: "auto_refresh",
     Event.BRIEFING_REFRESH_REQUESTED.value: "manual_refresh",
 }
@@ -92,6 +96,7 @@ KNOWN_FEATURES: tuple[str, ...] = (
     "skewt",
     "compare",
     "altitude_table",
+    "timing_scenarios",
     "auto_refresh",
     "manual_refresh",
     "detailed_mode",
