@@ -37,6 +37,25 @@ extension DateFormatter {
     }()
 }
 
+extension Date {
+    /// Parse an ISO-8601 timestamp, tolerating the optional fractional seconds
+    /// the server includes. The server sends `datetime.isoformat()`, which
+    /// carries microseconds (e.g. `2026-06-28T08:46:00.123456+00:00`), and the
+    /// default `ISO8601DateFormatter` rejects fractional seconds — so try the
+    /// fractional parser first, then plain. Shared so callers don't reimplement
+    /// the fractional-then-plain fallback (BriefingViewModel, CachingBriefingRepository).
+    static func parseISO8601(_ s: String) -> Date? {
+        isoParserFractional.date(from: s) ?? isoParserPlain.date(from: s)
+    }
+
+    private static let isoParserFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoParserPlain = ISO8601DateFormatter()
+}
+
 extension String {
     /// Short display name for weather models — used in compact badges where space is tight.
     var shortModelName: String {
