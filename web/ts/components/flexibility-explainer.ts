@@ -47,8 +47,8 @@ export const flexibilityExplainerHtml = `
     <p>
       &#128591; <strong>Thanks for using it thoughtfully.</strong> Flexibility
       is compute- and data-heavy, so it's best saved for flights where a
-      different time is genuinely on the table. For a simple yes/no flight, our
-      servers will thank you for leaving it off.
+      different time is genuinely on the table. If your flight is on a fixed
+      schedule, leave it off — our servers will thank you for it.
     </p>
     <div class="flex-explainer-actions">
       <button type="button" class="btn btn-primary flex-explainer-gotit">Got it</button>
