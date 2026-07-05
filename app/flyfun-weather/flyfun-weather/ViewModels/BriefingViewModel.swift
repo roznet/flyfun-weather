@@ -101,6 +101,13 @@ final class BriefingViewModel {
     private(set) var elevationState: LoadingState<ElevationResponse> = .idle
     private(set) var pirepsState: LoadingState<[PirepResponse]> = .idle
 
+    // Timing scenarios (#357) — the latest poll result, or nil when the flight
+    // has Flexibility `none` / the pack predates the feature (404). Online-only:
+    // `timeOptionsOffline` is set instead when there's no connectivity.
+    private(set) var timeOptions: TimeOptionsResponse?
+    private(set) var timeOptionsOffline = false
+    @ObservationIgnored private var timeOptionsPollTask: Task<Void, Never>?
+
     // Refresh state
     private(set) var refreshState: RefreshState = .idle
 
@@ -540,6 +547,128 @@ final class BriefingViewModel {
             group.addTask { await self.loadRouteAnalyses(timestamp: timestamp) }
             group.addTask { await self.loadElevation(timestamp: timestamp) }
         }
+        // Kick the timing-scenario poll for this pack (no-op when Flexibility is
+        // `none`). Runs after the briefing loads — the scan is a background job
+        // reached only by polling, not the refresh SSE stream.
+        startTimeOptionsPolling(timestamp: timestamp)
+    }
+
+    // MARK: - Timing scenarios (#357)
+
+    /// Whether the Timing Scenarios panel should be shown at all — the flight has
+    /// a Flexibility mode set (the panel then renders its own state ladder).
+    var showsTimingScenarios: Bool {
+        flight.effectiveFlexibility != .none
+    }
+
+    /// (Re)start the poll loop for a pack. Cancels any in-flight poll first, so a
+    /// pack switch or a post-confirm re-poll never runs two loops at once.
+    func startTimeOptionsPolling(timestamp: String) {
+        timeOptionsPollTask?.cancel()
+        guard flight.effectiveFlexibility != .none else {
+            timeOptions = nil
+            timeOptionsOffline = false
+            return
+        }
+        timeOptionsPollTask = Task { [weak self] in
+            await self?.pollTimeOptions(timestamp: timestamp)
+        }
+    }
+
+    /// Poll `GET …/time-options` until a terminal status, mirroring the web
+    /// backoff (3s → ×1.5 → cap 15s): keep polling while `pending`/`running` or
+    /// any candidate is `confirm_pending`; stop on `done`/`failed`/`skipped`. A
+    /// 404 means "no data" (Flexibility none / legacy pack) — hide the panel. Up
+    /// to 3 transient errors are tolerated so a single blip can't blank a live
+    /// "Scenarios running…". Online-only: bail to a placeholder when offline.
+    private func pollTimeOptions(timestamp: String) async {
+        if let networkMonitor, !networkMonitor.isConnected {
+            timeOptionsOffline = true
+            return
+        }
+        timeOptionsOffline = false
+        var delay: Double = 3
+        var errorStreak = 0
+        while !Task.isCancelled {
+            guard pack?.fetchTimestamp == timestamp else { return }
+            do {
+                let resp = try await repository.timeOptions(flightId: flight.id, timestamp: timestamp)
+                guard !Task.isCancelled, pack?.fetchTimestamp == timestamp else { return }
+                timeOptions = resp
+                timeOptionsOffline = false
+                errorStreak = 0
+                let status = resp.status?.status
+                let confirmPending = resp.scan?.candidates.contains { $0.confirmPending } ?? false
+                let nonTerminal = status == .pending || status == .running || confirmPending
+                    || (status == nil && resp.scan == nil)
+                if !nonTerminal { return }
+                delay = min(delay * 1.5, 15)
+            } catch let error as APIError {
+                guard !Task.isCancelled, pack?.fetchTimestamp == timestamp else { return }
+                if error.isCancellation { return }
+                if case .notFound = error {
+                    timeOptions = nil   // Flexibility none / legacy pack — hide it.
+                    return
+                }
+                errorStreak += 1
+                if errorStreak > 3 { return }
+                delay = min(delay * 1.5, 15)
+            } catch {
+                errorStreak += 1
+                if errorStreak > 3 { return }
+                delay = min(delay * 1.5, 15)
+            }
+            try? await Task.sleep(for: .seconds(delay))
+        }
+    }
+
+    /// Whether any candidate currently has a multi-model confirm in flight. The
+    /// server allows only one confirm at a time per pack (429s the rest), so the
+    /// panel disables every "Check all models" button while this is true.
+    var anyConfirmPending: Bool {
+        timeOptions?.scan?.candidates.contains { $0.confirmPending } ?? false
+    }
+
+    /// Queue the on-tap multi-model check of one provisional candidate. Mirrors
+    /// the server's one-at-a-time rule client-side (skip if another confirm is
+    /// already running), then restarts the poll at a fresh cadence so the
+    /// "checking all models…" state appears promptly. A `429` (a confirm slipped
+    /// in) is swallowed — the poll surfaces the real state.
+    func confirmTimeOption(departureTime: String) async {
+        guard let pack, !anyConfirmPending else { return }
+        do {
+            try await repository.confirmTimeOption(
+                flightId: flight.id,
+                timestamp: pack.fetchTimestamp,
+                departureTime: departureTime
+            )
+        } catch let APIError.serverError(code, _) where code == 429 {
+            // Another confirm is already running — the poll will show it.
+        } catch {
+            Self.logger.error("Confirm time option failed: \(error)")
+            return
+        }
+        startTimeOptionsPolling(timestamp: pack.fetchTimestamp)
+    }
+
+    /// Pin a scenario as the flight's alternate departure: PATCH the alt time
+    /// (keeping the current day-scan Flexibility), re-queue the scan so the
+    /// pinned row re-grades and the alt artifacts persist, then re-poll. Only the
+    /// `alt_departure_time` is sent — the day mode is preserved (a day scan can
+    /// carry a pinned alternate).
+    func setScenarioAsAlternate(departureTime: String) async {
+        guard let pack else { return }
+        do {
+            _ = try await repository.updateFlight(
+                flightId: flight.id,
+                request: UpdateFlightRequest(altDepartureTime: departureTime)
+            )
+            try await repository.rescanTimeOptions(flightId: flight.id, timestamp: pack.fetchTimestamp)
+        } catch {
+            Self.logger.error("Set-as-alternate failed: \(error)")
+            return
+        }
+        startTimeOptionsPolling(timestamp: pack.fetchTimestamp)
     }
 
     private func updateModels(from pack: PackMetaResponse) {

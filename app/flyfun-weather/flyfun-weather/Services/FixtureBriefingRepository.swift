@@ -67,13 +67,18 @@ actor FixtureBriefingRepository: BriefingRepository {
             flightCeilingFt: request.flightCeilingFt ?? 13000,
             flightDurationHours: request.flightDurationHours ?? 2.0,
             private: false, autoRefresh: false, autoRefreshHour: nil,
-            createdAt: "2099-06-25T09:00:00Z", latestBriefing: nil, role: nil
+            createdAt: "2099-06-25T09:00:00Z", latestBriefing: nil, role: nil,
+            flexibility: request.flexibility, altDepartureTime: nil
         )
         createdFlights.append(flight)
         return flight
     }
     func aircraft() async throws -> [AircraftResponse] { [] }
     func profiles() async throws -> [ProfileResponse] { [] }
+    func usageSummary() async throws -> UsageSummaryResponse {
+        // No usage in fixtures — report "never scanned" so the explainer shows.
+        try JSONDecoder.weatherBrief.decode(UsageSummaryResponse.self, from: Data("{}".utf8))
+    }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
     func packs(flightId: String) async throws -> [PackMetaResponse] { [] }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { PirepListResponse(items: [], count: 0) }
@@ -93,6 +98,9 @@ actor FixtureBriefingRepository: BriefingRepository {
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse { throw FixtureError.notProvided("advisories") }
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse { throw FixtureError.notProvided("advisoryDetail") }
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw FixtureError.notProvided("recalculateAdvisories") }
+    func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse { throw FixtureError.notProvided("timeOptions") }
+    func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws { throw FixtureError.notProvided("confirmTimeOption") }
+    func rescanTimeOptions(flightId: String, timestamp: String) async throws { throw FixtureError.notProvided("rescanTimeOptions") }
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse { throw FixtureError.notProvided("digest") }
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse { throw FixtureError.notProvided("snapshot") }
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse { throw FixtureError.notProvided("routeAnalyses") }

@@ -7,6 +7,9 @@ protocol BriefingRepository: Sendable {
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse
     func aircraft() async throws -> [AircraftResponse]
     func profiles() async throws -> [ProfileResponse]
+    /// Account usage summary — the iOS app reads only the durable timing-scan
+    /// flags (`timeScanUsed`) that gate the first-time Flexibility explainer.
+    func usageSummary() async throws -> UsageSummaryResponse
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse]
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse
     func parseFpl(_ text: String) async throws -> ParseFplResponse
@@ -18,6 +21,16 @@ protocol BriefingRepository: Sendable {
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
+    // Timing scenarios (#357) — all online-only, poll-driven.
+    /// Poll status + scan result for a pack. Throws `APIError.notFound` (404)
+    /// when Flexibility is `none` and no scan ever ran.
+    func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse
+    /// Queue the on-tap multi-model check of one provisional candidate (202).
+    /// Surfaces the server's `429` as `APIError.serverError(429, …)` when a
+    /// confirm already runs for this pack.
+    func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws
+    /// Re-queue the timing scan for a pack (used after "Set as alternate time").
+    func rescanTimeOptions(flightId: String, timestamp: String) async throws
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse
@@ -64,6 +77,10 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func profiles() async throws -> [ProfileResponse] {
         try await client.request("/api/user/profiles")
+    }
+
+    func usageSummary() async throws -> UsageSummaryResponse {
+        try await client.request("/api/user/usage")
     }
 
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] {
@@ -122,6 +139,29 @@ final class OnlineBriefingRepository: BriefingRepository {
             path += "?cruise_altitude_ft=\(cruiseAltitudeFt)"
         }
         _ = try await client.requestDataURL(path, method: "POST")
+    }
+
+    func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse {
+        let ts = Self.encodedTimestamp(timestamp)
+        return try await client.request("/api/flights/\(flightId)/packs/\(ts)/time-options")
+    }
+
+    func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws {
+        let ts = Self.encodedTimestamp(timestamp)
+        let body = try JSONEncoder.weatherBrief.encode(ConfirmTimeOptionRequest(departureTime: departureTime))
+        _ = try await client.requestData("/api/flights/\(flightId)/packs/\(ts)/time-options/confirm",
+                                         method: "POST", body: body)
+    }
+
+    func rescanTimeOptions(flightId: String, timestamp: String) async throws {
+        let ts = Self.encodedTimestamp(timestamp)
+        _ = try await client.requestData("/api/flights/\(flightId)/packs/\(ts)/time-options/rescan",
+                                         method: "POST")
+    }
+
+    /// Percent-encode a timestamp path segment (matches `advisoryDetail`).
+    private static func encodedTimestamp(_ timestamp: String) -> String {
+        timestamp.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? timestamp
     }
 
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse {

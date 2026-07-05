@@ -14,6 +14,35 @@ final class AddFlightViewModel {
     var flightDurationHours: Double = 2.0
     var selectedAircraftId: Int?
 
+    // MARK: Flexibility (timing scenarios, #357)
+
+    /// Selected Flexibility mode. Seeded from the flight when editing. The view's
+    /// picker calls `flexibilityPicked(_:)` on a user change so the explainer
+    /// gate never fires from init-time seeding.
+    var flexibility: FlexibilityMode = .none
+    /// TZ-aware editor for the pinned alternate departure, shown only for
+    /// `.alternate` mode (net-new on iOS). Shares the route's timezone options
+    /// with the primary departure picker.
+    let altDepartureTime: DepartureTimeModel
+    /// Durable "has this pilot ever run a timing scan?" flag from `/usage` —
+    /// gates the first-time explainer. Defaults to `false` so we err toward
+    /// gently informing when it hasn't loaded.
+    private(set) var timeScanUsed = false
+    /// The view observes this to present the explainer sheet, then clears it.
+    var showFlexibilityExplainer = false
+
+    /// Session-scoped ack: once the explainer has fired (or we've learned the
+    /// pilot already uses the feature) this app run, subsequent mode toggles and
+    /// re-opened editors don't re-fire it. The durable `timeScanUsed` flag still
+    /// governs across app launches. Mirrors the web `sessionStorage` ack.
+    @MainActor private static var explainerAckedThisSession = false
+
+    /// Flexibility options for the picker. `.alternate` needs an alt time set via
+    /// PATCH, so it is offered only when editing (the server rejects it on create).
+    var flexibilityOptions: [FlexibilityMode] {
+        isEditing ? FlexibilityMode.allCases : FlexibilityMode.allCases.filter { $0 != .alternate }
+    }
+
     /// Absolute departure instant — the single source of truth lives in
     /// `departureTime`; this is the bridge the existing create/edit code uses.
     var departureDate: Date {
@@ -66,13 +95,19 @@ final class AddFlightViewModel {
         self.repository = repository
         self.editingFlight = flight
         let defaultInstant = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
-        self.departureTime = DepartureTimeModel(instant: flight?.departureDate ?? defaultInstant)
+        let departureInstant = flight?.departureDate ?? defaultInstant
+        self.departureTime = DepartureTimeModel(instant: departureInstant)
+        // Seed the alt-departure editor from the flight's stored alt time when
+        // present, else from the primary departure (a sensible starting point).
+        let altInstant = flight?.altDepartureTime.flatMap { Date.parseISO8601($0) } ?? departureInstant
+        self.altDepartureTime = DepartureTimeModel(instant: altInstant)
         if let flight {
             waypointsText = flight.waypoints.joined(separator: " ")
             cruiseAltitudeFt = flight.cruiseAltitudeFt
             flightDurationHours = flight.flightDurationHours
             selectedAircraftId = flight.aircraftId
             selectedProfileId = flight.profileId
+            flexibility = flight.effectiveFlexibility
         }
     }
 
@@ -116,8 +151,20 @@ final class AddFlightViewModel {
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         if selectedAircraftId != original.aircraftId { return true }
         if selectedProfileId != original.profileId { return true }
+        if flexibility != original.effectiveFlexibility { return true }
+        // An alternate-time change (in `.alternate` mode) is a real edit too.
+        if flexibility == .alternate, altDepartureChanged(from: original) { return true }
         guard let originalDate = original.departureDate else { return true }
         return abs(departureDate.timeIntervalSince(originalDate)) > 1
+    }
+
+    /// Whether the edited alt-departure instant differs from the flight's stored
+    /// one (or newly sets one). Used only in `.alternate` mode.
+    private func altDepartureChanged(from original: FlightResponse) -> Bool {
+        guard let originalAlt = original.altDepartureTime.flatMap({ Date.parseISO8601($0) }) else {
+            return true   // no stored alt time yet → setting one is a change
+        }
+        return abs(altDepartureTime.instant.timeIntervalSince(originalAlt)) > 1
     }
 
     /// Whether the edit changes a forecast-affecting field (route/time/FL/duration).
@@ -172,6 +219,43 @@ final class AddFlightViewModel {
     private func applyRouteTimeZones(from waypoints: [RouteWaypointInfo]) {
         let zones = waypoints.compactMap(\.timezone)
         departureTime.setRouteTimeZones(zones, preferred: waypoints.first?.timezone)
+        // The alt-departure picker shares the same route timezone options.
+        altDepartureTime.setRouteTimeZones(zones, preferred: waypoints.first?.timezone)
+    }
+
+    // MARK: - Flexibility explainer gate (#357)
+
+    /// Load the durable timing-scan usage flag that gates the first-time
+    /// explainer. Non-fatal on failure — we keep `timeScanUsed = false` so the
+    /// explainer still shows (erring toward informing).
+    func loadUsage() async {
+        do {
+            timeScanUsed = try await repository.usageSummary().timeScanUsed
+        } catch {
+            Self.logger.debug("Usage summary unavailable: \(error)")
+        }
+    }
+
+    /// Called by the view when the pilot changes the Flexibility picker. Fires
+    /// the first-time explainer gate on any non-`none` selection.
+    func flexibilityPicked(_ mode: FlexibilityMode) {
+        guard mode != .none else { return }
+        Task { await maybeShowFlexibilityExplainer() }
+    }
+
+    /// Resolve the first-time explainer gate exactly once per session. Set the
+    /// session ack up front (before any await) so rapid re-entry short-circuits;
+    /// then show the sheet only when the pilot has never run a scan.
+    private func maybeShowFlexibilityExplainer() async {
+        guard !Self.explainerAckedThisSession else { return }
+        Self.explainerAckedThisSession = true
+        if timeScanUsed { return }   // already loaded and used → never show
+        // The gate may fire before `/usage` has loaded; fetch it now so an
+        // established user isn't shown the first-time modal.
+        await loadUsage()
+        if !timeScanUsed {
+            showFlexibilityExplainer = true
+        }
     }
 
     // MARK: - Autorouter import + recent routes
@@ -482,7 +566,10 @@ final class AddFlightViewModel {
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightDurationHours: flightDurationHours,
             aircraftId: selectedAircraftId,
-            profileId: selectedProfileId
+            profileId: selectedProfileId,
+            // `.alternate` is edit-only (needs an alt time via PATCH); the create
+            // picker never offers it, so only the day modes reach here.
+            flexibility: flexibility == .none ? nil : flexibility
         )
 
         do {
@@ -521,7 +608,13 @@ final class AddFlightViewModel {
             departureTime: formatter.string(from: departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightDurationHours: flightDurationHours,
-            profileId: selectedProfileId
+            profileId: selectedProfileId,
+            flexibility: flexibility,
+            // Send the alt time only in `.alternate` mode (the server 422s on
+            // `.alternate` without one, and ignores it for the day modes).
+            altDepartureTime: flexibility == .alternate
+                ? formatter.string(from: altDepartureTime.instant)
+                : nil
         )
 
         do {

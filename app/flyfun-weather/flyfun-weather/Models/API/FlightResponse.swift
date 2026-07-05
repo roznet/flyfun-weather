@@ -25,6 +25,14 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     let latestBriefing: BriefingStatusInfo?
     /// Owner vs subscriber. Absent on older servers — treated as owner.
     let role: FlightRole?
+    /// Timing-scenario Flexibility mode. Absent on older servers → treated as
+    /// `.none`. `.alternate` grades the single `altDepartureTime`; the day modes
+    /// run the departure-window scan. See `TimeOptionsResponse`. Placed last so
+    /// the memberwise initializer's existing call sites only append two args.
+    let flexibility: FlexibilityMode?
+    /// The pinned alternate departure (ISO 8601), used when `flexibility` is
+    /// `.alternate` or as the "★ your alternate" row of a day scan. nil = none set.
+    let altDepartureTime: String?
 
     /// Parsed departure date for display.
     var departureDate: Date? {
@@ -44,12 +52,41 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     var isEditable: Bool {
         role != .subscriber
     }
+
+    /// `flexibility` with the absent/legacy case folded to `.none`, so callers
+    /// never juggle the optional.
+    var effectiveFlexibility: FlexibilityMode {
+        flexibility ?? .none
+    }
 }
 
 /// Whether the signed-in user owns this flight or is a read-only subscriber.
 enum FlightRole: String, Codable, Sendable {
     case owner
     case subscriber
+}
+
+/// Timing-scenario Flexibility mode (mirrors the server `Flight.flexibility` and
+/// the web `FlexibilityMode`). Raw values match the wire format verbatim — they
+/// decode from string *values*, which the decoder's snake-case key strategy does
+/// not touch, so `sameDay` must carry the explicit `"same_day"` raw value.
+enum FlexibilityMode: String, Codable, Sendable, CaseIterable {
+    case none
+    case alternate
+    case sameDay = "same_day"
+    case prevDay = "prev_day"
+    case nextDay = "next_day"
+
+    /// Human label for the flight-editor picker.
+    var label: String {
+        switch self {
+        case .none: "None — just this flight"
+        case .alternate: "Alternate time — grade one other departure"
+        case .sameDay: "Same day — scan for better windows"
+        case .prevDay: "Previous day"
+        case .nextDay: "Next day"
+        }
+    }
 }
 
 /// Aircraft summary embedded in a flight, used for the list card label.

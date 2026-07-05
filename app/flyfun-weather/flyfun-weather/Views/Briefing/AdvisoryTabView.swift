@@ -21,6 +21,10 @@ struct AdvisoryTabView: View {
                     AlternatesView(viewModel: viewModel)
                         .spyAnchor("alternates")
                 }
+                if hasTimingScenarios {
+                    TimingScenariosView(viewModel: viewModel)
+                        .spyAnchor("timing")
+                }
                 // Watch reads as the "keep an eye on this" close, so it sits at
                 // the very end (#4); anchored internally.
                 watchSection
@@ -42,11 +46,19 @@ struct AdvisoryTabView: View {
         return false
     }
 
+    /// The Timing Scenarios panel appears only once it has something to render —
+    /// live data (`timeOptions`) or the offline placeholder — so the scroll-spy
+    /// doesn't jump to an empty anchor while the first poll is in flight.
+    private var hasTimingScenarios: Bool {
+        viewModel.showsTimingScenarios && (viewModel.timeOptions != nil || viewModel.timeOptionsOffline)
+    }
+
     private var spySections: [SpySection] {
         var sections = [SpySection("hero", "Summary")]
         sections.append(SpySection("advisories", "Advisories"))
         sections.append(SpySection("conditions", "Conditions"))
         if hasAlternates { sections.append(SpySection("alternates", "Alternates")) }
+        if hasTimingScenarios { sections.append(SpySection("timing", "Timing")) }
         if hasWatchItems { sections.append(SpySection("watch", "Watch")) }
         return sections
     }
