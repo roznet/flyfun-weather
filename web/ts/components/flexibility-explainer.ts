@@ -102,6 +102,19 @@ export function openFlexibilityExplainer(): void {
  * Called on a non-``none`` flexibility selection. Session-acked short-circuits
  * before the network call; the durable "used" flag comes from ``GET /usage``.
  * On fetch failure we fall back to "not used" so we still gently inform.
+ *
+ * The gate is resolved exactly once per session: right after evaluating it we
+ * set the session-ack flag unconditionally, so subsequent dropdown toggles
+ * short-circuit at ``flexExplainerAcked()`` above. This gives two properties
+ * the "set only on Got it" approach lacked:
+ *   - closing the modal via ×/Esc/backdrop (not just "Got it") still suppresses
+ *     re-firing for the rest of the sitting;
+ *   - an established user (``time_scan_used`` true) never re-hits ``/usage`` on
+ *     every toggle — the gate becomes O(1) per session, not O(toggles).
+ * Setting it is safe in every post-fetch branch: we either just showed the
+ * modal (don't re-show this sitting) or the user has already used the feature
+ * (durable, won't change this session). A new session still re-evaluates,
+ * driven by the durable count.
  */
 export async function maybeShowFlexibilityExplainer(): Promise<void> {
   if (flexExplainerAcked()) return;
@@ -111,8 +124,10 @@ export async function maybeShowFlexibilityExplainer(): Promise<void> {
   } catch {
     timeScanUsed = false;
   }
-  if (!shouldShowFlexibilityExplainer({ timeScanUsed, sessionAcked: flexExplainerAcked() })) {
-    return;
-  }
-  openFlexibilityExplainer();
+  const show = shouldShowFlexibilityExplainer({
+    timeScanUsed,
+    sessionAcked: flexExplainerAcked(),
+  });
+  ackFlexExplainer();
+  if (show) openFlexibilityExplainer();
 }
