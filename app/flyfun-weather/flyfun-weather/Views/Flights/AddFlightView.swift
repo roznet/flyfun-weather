@@ -33,6 +33,7 @@ struct AddFlightView: View {
                 aircraftSection
                 waypointsSection
                 departureSection
+                flexibilitySection
                 altitudeSection
                 durationSection
                 statusSection
@@ -75,6 +76,11 @@ struct AddFlightView: View {
                 await viewModel.loadProfiles()
             }
             .task {
+                // Pre-load the durable timing-scan flag so the first-time
+                // Flexibility explainer gate resolves without a fetch-time race.
+                await viewModel.loadUsage()
+            }
+            .task {
                 await viewModel.loadRecentRoutes()
             }
             .task {
@@ -103,6 +109,9 @@ struct AddFlightView: View {
                 } onCancel: {
                     showAutorouterSheet = false
                 }
+            }
+            .sheet(isPresented: $viewModel.showFlexibilityExplainer) {
+                FlexibilityExplainer()
             }
             .sheet(isPresented: $showInterpretSheet) {
                 RouteInterpretSheet(
@@ -400,6 +409,87 @@ struct AddFlightView: View {
         } footer: {
             Text("The time is interpreted in the selected timezone. Enter a route to offer each airport's local time.")
         }
+    }
+
+    private var flexibilitySection: some View {
+        Section {
+            Picker("Flexibility", selection: $viewModel.flexibility) {
+                ForEach(viewModel.flexibilityOptions, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: viewModel.flexibility) { _, newValue in
+                viewModel.flexibilityPicked(newValue)
+            }
+
+            // Net-new alt-departure editor — shown only for the single-alternate
+            // mode (the day modes scan a window server-side, no pinned time).
+            if viewModel.flexibility == .alternate {
+                altDepartureControls
+            }
+
+            Button {
+                viewModel.showFlexibilityExplainer = true
+            } label: {
+                Label("How Flexibility scanning works", systemImage: "info.circle")
+                    .font(.caption)
+            }
+        } header: {
+            Text("Flexibility")
+        } footer: {
+            Text("Grade other departure times against this flight and surface any that come out calmer. Runs in the background — leave it off for fixed-schedule flights.")
+        }
+    }
+
+    /// Date + time + timezone controls for the pinned alternate departure,
+    /// mirroring the primary departure picker.
+    @ViewBuilder
+    private var altDepartureControls: some View {
+        DatePicker(
+            "Alt date",
+            selection: Binding(
+                get: { viewModel.altDepartureTime.dateProxy },
+                set: { viewModel.altDepartureTime.dateProxy = $0 }
+            ),
+            displayedComponents: .date
+        )
+
+        HStack {
+            Text("Alt time")
+            Spacer()
+            Picker("Alt hour", selection: Binding(
+                get: { viewModel.altDepartureTime.hour },
+                set: { viewModel.altDepartureTime.setHour($0) }
+            )) {
+                ForEach(0..<24, id: \.self) { h in
+                    Text(String(format: "%02d", h)).tag(h)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            Text(":").foregroundStyle(.secondary)
+            Picker("Alt minute", selection: Binding(
+                get: { viewModel.altDepartureTime.minuteOption },
+                set: { viewModel.altDepartureTime.setMinute($0) }
+            )) {
+                ForEach(DepartureTimeModel.minuteOptions, id: \.self) { m in
+                    Text(String(format: "%02d", m)).tag(m)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+        }
+
+        Picker("Alt timezone", selection: Binding(
+            get: { viewModel.altDepartureTime.timeZoneId },
+            set: { viewModel.altDepartureTime.timeZoneId = $0 }
+        )) {
+            ForEach(viewModel.altDepartureTime.options) { option in
+                Text(option.label).tag(option.identifier)
+            }
+        }
+        .pickerStyle(.menu)
     }
 
     private var altitudeSection: some View {

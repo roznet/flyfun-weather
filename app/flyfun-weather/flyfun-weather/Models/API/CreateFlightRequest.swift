@@ -12,6 +12,11 @@ struct CreateFlightRequest: Encodable {
     /// Flight profile to associate; the server fills any unspecified flight
     /// fields (ceiling, speed, model choices) from this profile's settings.
     var profileId: Int? = nil
+    /// Timing-scenario Flexibility mode. `.alternate` is rejected on create
+    /// (it needs `altDepartureTime`, set via PATCH after creation — mirrors the
+    /// web create-then-patch flow), so the create picker only offers the day
+    /// modes. Omit for no scan.
+    var flexibility: FlexibilityMode? = nil
 }
 
 /// Request body for editing an existing flight via PATCH /api/flights/{id}.
@@ -26,6 +31,12 @@ struct UpdateFlightRequest: Encodable {
     var flightCeilingFt: Int? = nil
     var flightDurationHours: Double? = nil
     var profileId: Int? = nil
+    /// Timing-scenario Flexibility mode; omit for no change. `.alternate`
+    /// requires `altDepartureTime` (server 422s otherwise).
+    var flexibility: FlexibilityMode? = nil
+    /// Pinned alternate departure (ISO 8601), or `""` to clear it. Omit for no
+    /// change. Paired with `flexibility == .alternate`.
+    var altDepartureTime: String? = nil
 }
 
 /// How much of the briefing an edit invalidated, returned alongside the updated

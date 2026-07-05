@@ -56,6 +56,11 @@ final class CachingBriefingRepository: BriefingRepository {
         try await online.profiles()
     }
 
+    func usageSummary() async throws -> UsageSummaryResponse {
+        // Online-only — usage is a live account query, never cached.
+        try await online.usageSummary()
+    }
+
     func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse {
         try await online.interpretRoute(rawRoute: rawRoute)
     }
@@ -193,6 +198,20 @@ final class CachingBriefingRepository: BriefingRepository {
             timestamp: timestamp,
             cruiseAltitudeFt: cruiseAltitudeFt
         )
+    }
+
+    // Timing scenarios (#357) are online-only (v1): the timing artifact is not
+    // part of the offline bundle, so these always hit the network.
+    func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse {
+        try await online.timeOptions(flightId: flightId, timestamp: timestamp)
+    }
+
+    func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws {
+        try await online.confirmTimeOption(flightId: flightId, timestamp: timestamp, departureTime: departureTime)
+    }
+
+    func rescanTimeOptions(flightId: String, timestamp: String) async throws {
+        try await online.rescanTimeOptions(flightId: flightId, timestamp: timestamp)
     }
 
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse {

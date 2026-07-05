@@ -1,7 +1,12 @@
 # Timing scenario — iOS client port
 
-> **Status (2026-07-05): scoped, decisions locked — ready to implement
-> slice-by-slice.** The feature is fully built on backend + web (see
+> **Status (2026-07-05): IMPLEMENTED (all 4 slices, iOS #357).** Client port
+> landed — Flexibility control in the flight editor, DTO decode + poll loop on
+> `BriefingViewModel`, the Timing Scenarios panel in the Advisory tab, and the
+> confirm / "Check all models" / "Set as alternate" actions. Per-model dot
+> *tooltips* (a hover-only web affordance) were intentionally dropped for v1 —
+> the three-column dot table (Current / ECMWF-only / All-models) is rendered.
+> The feature is fully built on backend + web (see
 > `timing-scenario-plan.md`, all 4 slices MERGED in PR #341). iOS has **zero**
 > timing code today. This is a pure client port: **no backend work** — every
 > endpoint and DTO already exists and is stable. Do NOT add to

@@ -52,6 +52,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw MockError.notStubbed("updateFlight") }
     func aircraft() async throws -> [AircraftResponse] { try aircraftResult.get() }
     func profiles() async throws -> [ProfileResponse] { [] }
+    func usageSummary() async throws -> UsageSummaryResponse {
+        try JSONDecoder.weatherBrief.decode(UsageSummaryResponse.self, from: Data("{}".utf8))
+    }
     func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse { throw MockError.notStubbed("interpretRoute") }
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw MockError.notStubbed("routeDistance") }
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
@@ -63,6 +66,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse { throw MockError.notStubbed("advisories") }
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse { throw MockError.notStubbed("advisoryDetail") }
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw MockError.notStubbed("recalculateAdvisories") }
+    func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse { throw MockError.notStubbed("timeOptions") }
+    func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws { throw MockError.notStubbed("confirmTimeOption") }
+    func rescanTimeOptions(flightId: String, timestamp: String) async throws { throw MockError.notStubbed("rescanTimeOptions") }
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse { throw MockError.notStubbed("digest") }
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse { throw MockError.notStubbed("snapshot") }
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse { throw MockError.notStubbed("routeAnalyses") }
@@ -112,7 +118,9 @@ func makeFlight(
         autoRefreshHour: nil,
         createdAt: "2026-06-20T09:00:00Z",
         latestBriefing: nil,
-        role: role
+        role: role,
+        flexibility: nil,
+        altDepartureTime: nil
     )
 }
 
