@@ -118,16 +118,23 @@ export function openFlexibilityExplainer(): void {
  */
 export async function maybeShowFlexibilityExplainer(): Promise<void> {
   if (flexExplainerAcked()) return;
+  // Set the ack flag BEFORE the await, not after. Beyond resolving the gate
+  // once per session, this guards re-entrancy: native `change` on a <select>
+  // fires synchronously per keyboard step, so the trigger can fire again
+  // before this call's fetch resolves. Writing the flag up front makes any
+  // concurrent second call bail at the sync check above instead of racing a
+  // duplicate /usage fetch and a modal teardown/reopen.
+  ackFlexExplainer();
   let timeScanUsed = false;
   try {
     timeScanUsed = (await fetchUsageSummary()).time_scan_used;
   } catch {
     timeScanUsed = false;
   }
-  const show = shouldShowFlexibilityExplainer({
-    timeScanUsed,
-    sessionAcked: flexExplainerAcked(),
-  });
-  ackFlexExplainer();
-  if (show) openFlexibilityExplainer();
+  // sessionAcked is definitionally false for the gate decision here: we
+  // returned early above if it was already set, and we are the call that just
+  // set it — so the gate reduces to "has the user already used the feature?".
+  if (shouldShowFlexibilityExplainer({ timeScanUsed, sessionAcked: false })) {
+    openFlexibilityExplainer();
+  }
 }
