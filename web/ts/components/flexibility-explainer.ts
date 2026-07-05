@@ -45,9 +45,10 @@ export const flexibilityExplainerHtml = `
       when the scan finishes.
     </p>
     <p>
-      &#9888;&#65039; <strong>It's computationally and data-intensive.</strong>
-      Please use Flexibility only when you're genuinely weighing a different
-      time, not out of curiosity — a local yes/no flight doesn't need it.
+      &#128591; <strong>Thanks for using it thoughtfully.</strong> Flexibility
+      is compute- and data-heavy, so it's best saved for flights where a
+      different time is genuinely on the table. For a simple yes/no flight, our
+      servers will thank you for leaving it off.
     </p>
     <div class="flex-explainer-actions">
       <button type="button" class="btn btn-primary flex-explainer-gotit">Got it</button>
