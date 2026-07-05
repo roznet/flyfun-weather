@@ -25,6 +25,7 @@ import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup } from './components/info-popup';
+import { maybeShowFlexibilityExplainer } from './components/flexibility-explainer';
 import { iasToTasISA, resolveCruiseSpeedIAS } from './utils/atmo';
 import {
   splitDurationCeil, combineDuration,
@@ -703,6 +704,13 @@ async function init(): Promise<void> {
       console.error('Welcome wizard error:', err);
     }
   }
+
+  // First-time flexibility explainer (#352): show the modal the first time a
+  // user picks a scan mode, gated by durable usage + a session ack flag.
+  const createFlex = document.getElementById('input-flexibility') as HTMLSelectElement | null;
+  createFlex?.addEventListener('change', () => {
+    if (createFlex.value !== 'none') void maybeShowFlexibilityExplainer();
+  });
 
   // --- Wire create flight form ---
   const form = document.getElementById('create-flight-form') as HTMLFormElement;

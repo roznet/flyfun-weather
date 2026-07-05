@@ -53,6 +53,12 @@ class MonthUsage(BaseModel):
 class UsageSummary(BaseModel):
     today: TodayUsage
     month: MonthUsage
+    # Durable, all-time "has this user ever run a timing scan?" flag. Backs the
+    # web flexibility-explainer gate (show the first-time modal only until the
+    # user has genuinely run ≥1 scan). Count is surfaced too for future
+    # heavy-user / rate-limit triggers (not enforced here).
+    time_scan_used: bool = False
+    time_scan_count: int = 0
 
 
 # --- Core functions ---
@@ -92,6 +98,43 @@ def _query_today_usage(db: Session, user_id: str) -> dict:
         "gramet": int(row.gramet),
         "llm_digest": int(row.llm_digest),
     }
+
+
+def user_has_used_time_scan(db: Session, user_id: str) -> bool:
+    """Return True if the user has ever executed a timing scan.
+
+    Existence check, not a COUNT: one ``api_usage_log`` row is written per
+    executed ``time_scan`` (see ``tasks/time_scan_runner.py``). The
+    ``ix_api_usage_service`` index narrows to the small ``time_scan`` slice and
+    the ``LIMIT 1`` short-circuits, so this stays instant even for heavy users.
+    """
+    row = (
+        db.query(ApiUsageRow.id)
+        .filter(
+            ApiUsageRow.user_id == user_id,
+            ApiUsageRow.service == "time_scan",
+        )
+        .first()
+    )
+    return row is not None
+
+
+def count_user_time_scans(
+    db: Session, user_id: str, since: datetime | None = None
+) -> int:
+    """Count executed timing scans for a user (optionally since a timestamp).
+
+    Substrate for future triggers (heavy-user message, daily ``time_scan``
+    rate limit) — neither enforced yet. Cheap over the ``time_scan`` slice;
+    no dedicated ``user_id`` index needed at current volumes.
+    """
+    q = db.query(func.count()).filter(
+        ApiUsageRow.user_id == user_id,
+        ApiUsageRow.service == "time_scan",
+    )
+    if since is not None:
+        q = q.filter(ApiUsageRow.timestamp >= since)
+    return int(q.scalar() or 0)
 
 
 def check_rate_limits(db: Session, user_id: str, *, bypass: bool = False) -> None:
@@ -283,6 +326,8 @@ def get_usage_summary(db: Session, user_id: str) -> UsageSummary:
         .one()
     )
 
+    time_scan_count = count_user_time_scans(db, user_id)
+
     return UsageSummary(
         today=TodayUsage(
             briefings=today_data["briefings"],
@@ -305,6 +350,8 @@ def get_usage_summary(db: Session, user_id: str) -> UsageSummary:
             llm_digest=int(month_row.llm_digest),
             total_tokens=int(month_row.input_tokens) + int(month_row.output_tokens),
         ),
+        time_scan_used=time_scan_count > 0,
+        time_scan_count=time_scan_count,
     )
 
 

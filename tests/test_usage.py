@@ -14,12 +14,15 @@ from weatherbrief.api.usage import (
     _clip_flight_id,
     check_rate_limits,
     check_service_limits,
+    count_user_time_scans,
     get_usage_summary,
+    log_api_usage,
     log_briefing_usage,
+    user_has_used_time_scan,
 )
 from flyfun_common.db import current_user_id, get_db, DEV_USER_ID
 from flyfun_common.db.models import UserPreferencesRow, UserRow
-from weatherbrief.db.models import BriefingUsageRow
+from weatherbrief.db.models import ApiUsageRow, BriefingUsageRow
 from weatherbrief.pipeline import BriefingUsage
 
 
@@ -291,6 +294,69 @@ class TestUsageSummary:
         assert summary.today.briefings == 0
         assert summary.month.briefings == 1
         assert summary.month.total_tokens == 2500
+
+
+class TestTimeScanUsage:
+    """Durable per-user ``time_scan`` count helpers (flexibility gate substrate)."""
+
+    OTHER_USER = "other-user-123"
+
+    def _log_scan(self, db, user_id, *, pipeline="same_day"):
+        log_api_usage(
+            db, service="time_scan", pipeline=pipeline,
+            api_calls=1, user_id=user_id, flight_id="f-1",
+        )
+
+    def test_no_rows_returns_false(self, db_session):
+        assert user_has_used_time_scan(db_session, DEV_USER_ID) is False
+        assert count_user_time_scans(db_session, DEV_USER_ID) == 0
+
+    def test_other_service_does_not_count(self, db_session):
+        log_api_usage(
+            db_session, service="open_meteo", pipeline="briefing",
+            api_calls=5, user_id=DEV_USER_ID, flight_id="f-1",
+        )
+        db_session.commit()
+        assert user_has_used_time_scan(db_session, DEV_USER_ID) is False
+        assert count_user_time_scans(db_session, DEV_USER_ID) == 0
+
+    def test_other_user_does_not_count(self, db_session):
+        self._log_scan(db_session, self.OTHER_USER)
+        db_session.commit()
+        assert user_has_used_time_scan(db_session, DEV_USER_ID) is False
+        assert count_user_time_scans(db_session, DEV_USER_ID) == 0
+
+    def test_own_time_scan_row_counts(self, db_session):
+        self._log_scan(db_session, DEV_USER_ID)
+        self._log_scan(db_session, DEV_USER_ID, pipeline="next_day")
+        db_session.commit()
+        assert user_has_used_time_scan(db_session, DEV_USER_ID) is True
+        assert count_user_time_scans(db_session, DEV_USER_ID) == 2
+
+    def test_count_respects_since(self, db_session):
+        old = datetime.now(timezone.utc) - timedelta(days=3)
+        db_session.add(ApiUsageRow(
+            service="time_scan", pipeline="same_day", api_calls=1,
+            user_id=DEV_USER_ID, flight_id="f-old", timestamp=old,
+        ))
+        self._log_scan(db_session, DEV_USER_ID)  # now
+        db_session.commit()
+
+        one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
+        assert count_user_time_scans(db_session, DEV_USER_ID) == 2
+        assert count_user_time_scans(db_session, DEV_USER_ID, since=one_day_ago) == 1
+
+    def test_summary_surfaces_time_scan_flag(self, db_session):
+        summary = get_usage_summary(db_session, DEV_USER_ID)
+        assert summary.time_scan_used is False
+        assert summary.time_scan_count == 0
+
+        self._log_scan(db_session, DEV_USER_ID)
+        db_session.commit()
+
+        summary = get_usage_summary(db_session, DEV_USER_ID)
+        assert summary.time_scan_used is True
+        assert summary.time_scan_count == 1
 
 
 class TestUsageAPI:

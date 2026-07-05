@@ -124,6 +124,10 @@ export interface MonthUsage {
 export interface UsageSummary {
   today: TodayUsage;
   month: MonthUsage;
+  // Durable, all-time flag: has this user ever run a timing scan? Backs the
+  // flexibility-explainer first-time gate. Count is surfaced for future use.
+  time_scan_used: boolean;
+  time_scan_count: number;
 }
 
 export async function fetchUsageSummary(): Promise<UsageSummary> {

@@ -17,6 +17,7 @@ import { SKEWT_OVERLAYS } from './visualization/skewt/overlay-bands';
 import { getVariableById } from './visualization/skewt/variable-panel';
 import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
+import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
@@ -222,9 +223,17 @@ async function init(): Promise<void> {
   initSkewtViewTracking();
   document.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.metric-info-btn') as HTMLElement | null;
+    if (!btn) return;
+    // The Timing Scenarios (i) button reuses .metric-info-btn styling but opens
+    // the shared flexibility explainer instead of a metric card (#352).
+    if (btn.classList.contains('flex-explainer-btn')) {
+      e.preventDefault();
+      openFlexibilityExplainer();
+      return;
+    }
     // advisory-info-btn and advisory-view-btn reuse .metric-info-btn styling but
     // have their own delegated handlers (in advisories-ui.ts) — skip them here.
-    if (btn && !btn.classList.contains('advisory-info-btn') && !btn.classList.contains('advisory-view-btn')) {
+    if (!btn.classList.contains('advisory-info-btn') && !btn.classList.contains('advisory-view-btn')) {
       e.preventDefault();
       showMetricInfo(btn.dataset.metric!, btn.dataset.value);
     }
@@ -712,6 +721,11 @@ async function init(): Promise<void> {
       : '';
 
     section.innerHTML = `<p>${escapeHtml(headline)}</p>${rows}${refusedNote}${pastNote}${horizonNote}`;
+
+    // Product-analytics signal (#352): flexibility used, counted once per
+    // briefing and only when actual scan results render (the pending / failed /
+    // skipped branches all return above). Mode is a low-cardinality prop.
+    trackOncePerBriefing(EVENTS.TIMING_SCENARIOS_USED, { mode: flex });
 
     // Wire the taps (fresh nodes on every render — no stale handlers).
     section.querySelectorAll<HTMLButtonElement>('.time-confirm-btn').forEach((btn) => {
