@@ -49,3 +49,6 @@ tests/data/ecmwf_samples/
 AGENTS.md
 .agents
 .codex
+
+# Local scratch memos — untracked by design
+scratch/
