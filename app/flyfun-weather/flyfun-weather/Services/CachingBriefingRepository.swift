@@ -369,7 +369,11 @@ final class CachingBriefingRepository: BriefingRepository {
               let flight = try? JSONDecoder.weatherBrief.decode(FlightResponse.self, from: data) else {
             return nil
         }
-        return flight.departureDate
+        // Parse via the shared fractional-tolerant helper rather than
+        // FlightResponse.departureDate (plain ISO8601DateFormatter, rejects
+        // fractional seconds) so this legacy fallback stays consistent with
+        // every other timestamp parse in the eviction path.
+        return Date.parseISO8601(flight.departureTime)
     }
 
     // MARK: - Private
