@@ -195,6 +195,13 @@ final class BriefingViewModel {
     // MARK: - Initial load
 
     func loadBriefing() async {
+        // Saved beyond the forecast horizon — no model reaches the date yet.
+        // Don't fetch or auto-generate a briefing; the container shows the
+        // pending-coverage card. It briefs automatically once it crosses into
+        // range (a fresh flight fetch then carries coverage == nil).
+        if flight.coverage != nil {
+            return
+        }
         do {
             let pack = try await repository.latestPack(flightId: flight.id)
             self.pack = pack
