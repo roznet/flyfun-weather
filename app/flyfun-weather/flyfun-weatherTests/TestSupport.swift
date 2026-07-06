@@ -46,8 +46,14 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var submitPirepsBatchCallCount = 0
     private(set) var lastUpdateRequest: UpdateFlightRequest?
 
+    /// Optional hook awaited *inside* `flights()` before it returns — lets a test
+    /// gate the network so it can observe intermediate ViewModel state (e.g. the
+    /// cache-seeded list painted before a slow fetch resolves, #359).
+    var beforeFlightsReturn: (@Sendable () async -> Void)?
+
     func flights() async throws -> [FlightResponse] {
         flightsCallCount += 1
+        if let hook = beforeFlightsReturn { await hook() }
         return try flightsResult.get()
     }
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse { try createFlightResult.get() }
@@ -153,6 +159,26 @@ func makePirepRequest(remarks: String = "test") -> SubmitPirepRequest {
     var request = try! JSONDecoder.weatherBrief.decode(SubmitPirepRequest.self, from: Data(json.utf8))
     request.remarks = remarks
     return request
+}
+
+/// A one-shot async gate: `wait()` suspends until another task calls `open()`.
+/// Lets a test hold a mocked network call suspended while it inspects the
+/// ViewModel state that was painted before the call resolved.
+actor TestGate {
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuations.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = continuations
+        continuations.removeAll()
+        for c in pending { c.resume() }
+    }
 }
 
 /// A unique temp directory for a test, auto-created. Caller removes it.

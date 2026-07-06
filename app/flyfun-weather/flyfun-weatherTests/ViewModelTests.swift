@@ -172,6 +172,100 @@ import MapKit
             return
         }
     }
+
+    // MARK: Cache-first cold start (#359)
+
+    /// Seed `flights.json` into a temp-dir cache, then drive a real
+    /// `CachingBriefingRepository` whose online layer is a mock we can gate.
+    private func seededCache(_ flights: [FlightResponse]) async throws -> BriefingCacheStore {
+        let cache = BriefingCacheStore(cacheDir: makeTempDir())
+        try await cache.writeMetadata(JSONEncoder.weatherBrief.encode(flights), name: "flights")
+        return cache
+    }
+
+    /// Cold start with a cached list + a slow-but-successful fetch: paints the
+    /// cached list immediately (never a full-screen spinner) and swaps in the
+    /// fresh list once the network resolves.
+    @Test func coldStartSeedsCachedListThenSwapsFresh() async throws {
+        let cache = try await seededCache([makeFlight(id: "cached")])
+        let online = MockBriefingRepository()
+        online.flightsResult = .success([makeFlight(id: "fresh")])
+        let gate = TestGate()
+        online.beforeFlightsReturn = { await gate.wait() }
+        let vm = FlightListViewModel(repository: CachingBriefingRepository.makeForTesting(online: online, cache: cache))
+
+        let task = Task { await vm.loadFlights() }
+
+        // Spin the main actor until the seed has painted the cached list. The
+        // gated fetch keeps loadFlights suspended, so we observe the seed.
+        var seeded = false
+        for _ in 0..<200 where !seeded {
+            await Task.yield()
+            if case .loaded(let f) = vm.state, f.first?.id == "cached" { seeded = true }
+        }
+        #expect(seeded)                       // instant paint from cache…
+        #expect(vm.isRefreshing)              // …with the subtle indicator, not a wheel
+        if case .loading = vm.state { Issue.record("entered .loading despite cached list") }
+
+        gate.open()
+        await task.value
+
+        guard case .loaded(let fresh) = vm.state else {
+            Issue.record("expected .loaded(fresh), got \(vm.state)")
+            return
+        }
+        #expect(fresh.first?.id == "fresh")   // server stayed authoritative
+        #expect(vm.isRefreshing == false)
+        #expect(vm.isOffline == false)
+    }
+
+    /// True first run (no cached list): the full-screen spinner still shows.
+    @Test func coldStartWithoutCacheShowsSpinnerThenLoads() async throws {
+        let cache = BriefingCacheStore(cacheDir: makeTempDir())   // empty — no flights.json
+        let online = MockBriefingRepository()
+        online.flightsResult = .success([makeFlight(id: "fresh")])
+        let gate = TestGate()
+        online.beforeFlightsReturn = { await gate.wait() }
+        let vm = FlightListViewModel(repository: CachingBriefingRepository.makeForTesting(online: online, cache: cache))
+
+        let task = Task { await vm.loadFlights() }
+
+        var sawLoading = false
+        for _ in 0..<200 where !sawLoading {
+            await Task.yield()
+            if case .loading = vm.state { sawLoading = true }
+        }
+        #expect(sawLoading)                   // spinner on genuine first run
+        #expect(vm.isRefreshing == false)
+
+        gate.open()
+        await task.value
+
+        guard case .loaded(let fresh) = vm.state else {
+            Issue.record("expected .loaded(fresh), got \(vm.state)")
+            return
+        }
+        #expect(fresh.first?.id == "fresh")
+    }
+
+    /// Cached list present but the network throws: the cached list stays on
+    /// screen and the view model reports offline — never `.error`, never empty.
+    @Test func coldStartCachePresentNetworkThrowsStaysOffline() async throws {
+        let cache = try await seededCache([makeFlight(id: "cached")])
+        let online = MockBriefingRepository()
+        online.flightsResult = .failure(MockError.injected("offline"))
+        let vm = FlightListViewModel(repository: CachingBriefingRepository.makeForTesting(online: online, cache: cache))
+
+        await vm.loadFlights()
+
+        guard case .loaded(let flights) = vm.state else {
+            Issue.record("expected .loaded (cached), got \(vm.state)")
+            return
+        }
+        #expect(flights.first?.id == "cached")   // offline fallback served the cache
+        #expect(vm.isOffline == true)
+        #expect(vm.isRefreshing == false)
+    }
 }
 
 // MARK: - RouteMapViewModel (waypoint extraction + fit-region math)
