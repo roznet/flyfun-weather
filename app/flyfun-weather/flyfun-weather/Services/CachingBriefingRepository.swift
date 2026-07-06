@@ -126,8 +126,7 @@ final class CachingBriefingRepository: BriefingRepository {
             Self.logger.warning("Online flights() failed: \(error)")
             isServingCachedFlights = true
             // Fallback 1: cached flights.json
-            if let data = await cache.readMetadata(name: "flights"),
-               let cached = try? JSONDecoder.weatherBrief.decode([FlightResponse].self, from: data) {
+            if let cached = await readCachedFlightsFromDisk() {
                 Self.logger.info("Serving \(cached.count) flights from cache (offline)")
                 return cached
             }
@@ -145,6 +144,13 @@ final class CachingBriefingRepository: BriefingRepository {
     /// flight list paint instantly on cold start and revalidate in the
     /// background (#359), instead of only serving as an offline fallback.
     func cachedFlights() async -> [FlightResponse]? {
+        await readCachedFlightsFromDisk()
+    }
+
+    /// Read + decode `flights.json` from disk. No network. Shared by the
+    /// cold-start seed (`cachedFlights()`) and the offline fallback in
+    /// `flights()`. Returns nil when absent or undecodable.
+    private func readCachedFlightsFromDisk() async -> [FlightResponse]? {
         guard let data = await cache.readMetadata(name: "flights"),
               let cached = try? JSONDecoder.weatherBrief.decode([FlightResponse].self, from: data)
         else { return nil }

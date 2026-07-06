@@ -207,7 +207,7 @@ import MapKit
         #expect(vm.isRefreshing)              // …with the subtle indicator, not a wheel
         if case .loading = vm.state { Issue.record("entered .loading despite cached list") }
 
-        gate.open()
+        await gate.open()
         await task.value
 
         guard case .loaded(let fresh) = vm.state else {
@@ -238,7 +238,7 @@ import MapKit
         #expect(sawLoading)                   // spinner on genuine first run
         #expect(vm.isRefreshing == false)
 
-        gate.open()
+        await gate.open()
         await task.value
 
         guard case .loaded(let fresh) = vm.state else {

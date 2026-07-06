@@ -41,15 +41,20 @@ final class FlightListViewModel {
         // screen behind the subtle indicator while fresh data swaps in. The
         // server stays authoritative: the network result always replaces the
         // seed (or the offline fallback keeps it, with `isOffline` set).
+        var seededCaching: CachingBriefingRepository?
         if case .idle = state,
            let caching = repository as? CachingBriefingRepository,
            let cached = await caching.cachedFlights(), !cached.isEmpty {
             state = .loaded(cached)
+            seededCaching = caching
         }
         // Only show the full-screen spinner on the very first load. A refresh
         // (scene re-activation, pull-to-refresh, post-edit) keeps the current
         // list on screen and swaps in fresh data when it arrives, so reopening
         // the app no longer flashes the list to empty (#1, iOS feedback).
+        // NOTE: no `await` may sit between the seed paint above and setting
+        // `isRefreshing` — a seeded list must always paint *with* the subtle
+        // indicator, never briefly as a bare `.loaded`.
         let hadList: Bool
         if case .loaded = state {
             hadList = true
@@ -59,13 +64,19 @@ final class FlightListViewModel {
             state = .loading
         }
         defer { isRefreshing = false }
+        // Now that the refresh indicator is set, seed the offline badges from
+        // disk so cached flights don't briefly flash as not-available-offline
+        // before the network fetch lands (#359 review). `cachedPacks()` is
+        // disk-only (no network).
+        if let seededCaching {
+            await refreshCachedFlightIds(seededCaching)
+        }
         do {
             let flights = try await repository.flights()
             // Check offline/cache status
             if let caching = repository as? CachingBriefingRepository {
                 isOffline = caching.isServingCachedFlights
-                let packs = await caching.cachedPacks()
-                cachedFlightIds = Set(packs.map(\.flightId))
+                await refreshCachedFlightIds(caching)
             }
             state = .loaded(flights)
             Self.logger.info("Loaded \(flights.count) flights (offline=\(self.isOffline), cached=\(self.cachedFlightIds.count))")
@@ -80,5 +91,13 @@ final class FlightListViewModel {
                 Self.logger.error("Failed to load flights: \(error)")
             }
         }
+    }
+
+    /// Refresh the "available offline" badge set from the on-disk pack cache.
+    /// Disk-only (no network); shared by the cold-start seed and the post-fetch
+    /// update so both paint a consistent set of offline badges.
+    private func refreshCachedFlightIds(_ caching: CachingBriefingRepository) async {
+        let packs = await caching.cachedPacks()
+        cachedFlightIds = Set(packs.map(\.flightId))
     }
 }
