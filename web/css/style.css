@@ -558,6 +558,10 @@ label {
 .badge-outlook-mixed { background: var(--bg); color: var(--text-muted); border: 1px dashed var(--border); }
 .badge-outlook-unsettled { background: var(--bg); color: var(--amber); border: 1px dashed var(--amber); }
 .badge-past { background: var(--bg); color: var(--text-muted); font-weight: normal; }
+/* Pending coverage — flight saved beyond the forecast horizon (no model data
+   yet). Neutral dashed chip like an outlook, but distinctly informational: it
+   is a "check back later", not a tendency or a verdict. */
+.badge-pending { background: var(--bg); color: var(--text-muted); border: 1px dashed var(--border); font-weight: 600; }
 .badge-shared {
   background: #ede9fe;
   color: #6d28d9;
@@ -882,6 +886,9 @@ label {
 .assessment-amber { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
 .assessment-red { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
 .assessment-none { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+/* Pending coverage — flight saved beyond the forecast horizon. Neutral, dashed,
+   informational: it's a "check back on <date>", never a verdict or a failure. */
+.assessment-coverage { background: var(--bg); color: var(--text-muted); border: 1px dashed var(--border); }
 
 /* Long-range outlook banner — deliberately distinct from the solid GREEN/AMBER/RED
    traffic light: a muted fill + dashed border + an "early outlook" tag so it reads

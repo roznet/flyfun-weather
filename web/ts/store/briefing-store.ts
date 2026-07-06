@@ -135,6 +135,10 @@ export interface BriefingState {
   loadPacks: () => Promise<void>;
   selectPack: (timestamp: string) => Promise<void>;
   selectLatest: () => Promise<void>;
+  /** One-shot on-open auto-generate: if the flight has no pack yet and is within
+   *  the forecast horizon (not pending coverage), start its first briefing —
+   *  unless one is already running. Called once from loadFlight. */
+  maybeAutoRefreshOnOpen: () => Promise<void>;
   refresh: (asOfDate?: string) => Promise<void>;
   forceRefresh: () => Promise<void>;
   checkActiveRefresh: () => Promise<void>;
@@ -313,6 +317,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ flight, loading: false });
       await get().loadPacks();
       await get().selectLatest();
+      await get().maybeAutoRefreshOnOpen();
     } catch (err) {
       set({ loading: false, error: `Failed to load flight: ${err}` });
     }
@@ -417,6 +422,29 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     if (packs.length > 0) {
       await get().selectPack(packs[0].fetch_timestamp);
     }
+  },
+
+  maybeAutoRefreshOnOpen: async () => {
+    const { flight, packs } = get();
+    if (!flight) return;
+    // Already has a briefing — selectLatest handled it.
+    if (packs.length > 0) return;
+    // Beyond the forecast horizon: no model reaches the date yet, so there is
+    // nothing to generate. The pending-coverage card renders instead; the
+    // flight briefs automatically once it crosses into range.
+    if (flight.coverage) return;
+    // In range with no pack: generate the first briefing on open — but only if
+    // one isn't already running (e.g. triggered from the flights list). The
+    // server also dedupes concurrent triggers, so this is belt-and-braces.
+    // Fire-and-forget: the refresh streams for ~2 min, so it must NOT block
+    // loadFlight (which the page awaits before its first render). The store
+    // subscription renders the progress spinner and the resulting pack.
+    const status = await api.fetchRefreshStatus(flight.id).catch(() => null);
+    if (status?.active) {
+      void get().checkActiveRefresh();
+      return;
+    }
+    void get().refresh();
   },
 
   refresh: async (asOfDate?: string) => {

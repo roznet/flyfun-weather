@@ -162,11 +162,34 @@ class TestFlightsAPI:
         assert data["target_date"] == _FUTURE_DEPARTURE_DATE
         assert data["departure_time"].startswith(f"{_FUTURE_DEPARTURE_DATE}T09:00:00")
 
-    def test_create_flight_beyond_forecast_horizon_rejected(self, client):
-        """A flight past the dual-model horizon (ECMWF+GFS) is rejected with 422."""
+    def test_create_flight_beyond_horizon_saves_pending_coverage(self, client):
+        """A flight past the dual-model horizon (but within the booking cap) is
+        now allowed and comes back with a ``coverage`` block."""
         from weatherbrief.fetch.variables import dual_model_horizon_days
 
-        too_far = (_NOW + timedelta(days=dual_model_horizon_days() + 2)).replace(
+        horizon = dual_model_horizon_days()
+        days_out = horizon + 20
+        dep = (_NOW + timedelta(days=days_out)).replace(
+            hour=9, minute=0, second=0, microsecond=0,
+        )
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "route_name": "egtk_lsgs",
+            "departure_time": dep.isoformat(),
+        })
+        assert resp.status_code == 201
+        coverage = resp.json()["coverage"]
+        assert coverage is not None
+        # Coverage begins departure − horizon (the first day both global models reach).
+        expected_available = (dep.date() - timedelta(days=horizon)).isoformat()
+        assert coverage["available_date"] == expected_available
+        assert coverage["days_until_available"] == days_out - horizon
+
+    def test_create_flight_beyond_booking_cap_rejected(self, client):
+        """A flight past the maximum booking lead time is rejected with 422."""
+        from weatherbrief.api.flights import MAX_BOOKING_LEAD_DAYS
+
+        too_far = (_NOW + timedelta(days=MAX_BOOKING_LEAD_DAYS + 2)).replace(
             hour=9, minute=0, second=0, microsecond=0,
         ).isoformat()
         resp = client.post("/api/flights", json={
@@ -175,10 +198,10 @@ class TestFlightsAPI:
             "departure_time": too_far,
         })
         assert resp.status_code == 422
-        assert "forecast horizon" in resp.json()["detail"]
+        assert str(MAX_BOOKING_LEAD_DAYS) in resp.json()["detail"]
 
-    def test_create_flight_at_horizon_boundary_allowed(self, client):
-        """A flight exactly at the horizon boundary is still allowed."""
+    def test_create_flight_at_horizon_boundary_no_coverage(self, client):
+        """A flight exactly at the horizon boundary is allowed and NOT pending."""
         from weatherbrief.fetch.variables import dual_model_horizon_days
 
         boundary = (_NOW + timedelta(days=dual_model_horizon_days())).replace(
@@ -190,6 +213,7 @@ class TestFlightsAPI:
             "departure_time": boundary,
         })
         assert resp.status_code == 201
+        assert resp.json()["coverage"] is None
 
     def test_create_flight_with_raw_route(self, client):
         """raw_route flows through and gets stamped with parser_version."""
@@ -393,11 +417,27 @@ class TestFlightsAPI:
         assert data["cruise_altitude_ft"] == sample_flight.cruise_altitude_ft
         assert client.get(f"/api/flights/{sample_flight.id}").status_code == 404
 
-    def test_move_flight_beyond_horizon_rejected(self, client, sample_flight):
-        """A move that pushes a flight past the forecast horizon is rejected."""
+    def test_move_flight_beyond_horizon_allowed_pending(self, client, sample_flight):
+        """A move past the forecast horizon (within the cap) is allowed and the
+        moved flight comes back pending-coverage."""
         from weatherbrief.fetch.variables import dual_model_horizon_days
 
-        too_far = (_NOW + timedelta(days=dual_model_horizon_days() + 3)).replace(
+        horizon = dual_model_horizon_days()
+        dep = (_NOW + timedelta(days=horizon + 15)).replace(
+            hour=9, minute=0, second=0, microsecond=0,
+        )
+        resp = client.post(
+            f"/api/flights/{sample_flight.id}/move",
+            json={"departure_time": dep.isoformat()},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["coverage"] is not None
+
+    def test_move_flight_beyond_booking_cap_rejected(self, client, sample_flight):
+        """A move past the maximum booking lead time is rejected."""
+        from weatherbrief.api.flights import MAX_BOOKING_LEAD_DAYS
+
+        too_far = (_NOW + timedelta(days=MAX_BOOKING_LEAD_DAYS + 3)).replace(
             hour=9, minute=0, second=0, microsecond=0,
         ).isoformat()
         resp = client.post(
@@ -405,7 +445,7 @@ class TestFlightsAPI:
             json={"departure_time": too_far},
         )
         assert resp.status_code == 422
-        assert "forecast horizon" in resp.json()["detail"]
+        assert str(MAX_BOOKING_LEAD_DAYS) in resp.json()["detail"]
         # The original flight is untouched.
         assert client.get(f"/api/flights/{sample_flight.id}").status_code == 200
 
