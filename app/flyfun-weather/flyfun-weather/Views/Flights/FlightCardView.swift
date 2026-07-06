@@ -66,16 +66,45 @@ struct FlightCardView: View {
         .accessibilityIdentifier("flightCard-\(flight.id)")
     }
 
-    /// Trailing status tag: the GREEN/AMBER/RED traffic light when a short-range
-    /// assessment exists, otherwise the soft long-range outlook badge (matches
-    /// the web flights card). Nothing when the flight hasn't been briefed.
+    /// Trailing status tag: a neutral "Pending" chip when the flight is saved
+    /// beyond the forecast horizon (no data yet), else the GREEN/AMBER/RED
+    /// traffic light when a short-range assessment exists, else the soft
+    /// long-range outlook badge (matches the web flights card). Nothing when the
+    /// flight hasn't been briefed.
     @ViewBuilder
     private var statusBadge: some View {
-        if let assessment = flight.latestBriefing?.assessment {
+        if let coverage = flight.coverage {
+            PendingCoverageBadge(coverage: coverage)
+        } else if let assessment = flight.latestBriefing?.assessment {
             AssessmentStringBadge(status: assessment)
         } else if let outlook = flight.latestBriefing?.outlook {
             OutlookBadge(outlook: outlook)
         }
+    }
+}
+
+/// Neutral pending-coverage chip for a flight saved beyond the forecast horizon.
+/// Reads "Pending · dd MMM" (the date coverage begins). Deliberately grey — it
+/// is a "check back later", not a verdict or a tendency.
+private struct PendingCoverageBadge: View {
+    let coverage: CoveragePending
+
+    private var label: String {
+        if let day = coverage.availableDay {
+            return "Pending · \(DateFormatter.shortDate.string(from: day))"
+        }
+        return "Pending"
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12), in: Capsule())
+            .overlay(Capsule().stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
+            .accessibilityLabel("Pending, available \(label)")
     }
 }
 

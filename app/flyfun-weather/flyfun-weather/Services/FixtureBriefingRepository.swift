@@ -67,7 +67,7 @@ actor FixtureBriefingRepository: BriefingRepository {
             flightCeilingFt: request.flightCeilingFt ?? 13000,
             flightDurationHours: request.flightDurationHours ?? 2.0,
             private: false, autoRefresh: false, autoRefreshHour: nil,
-            createdAt: "2099-06-25T09:00:00Z", latestBriefing: nil, role: nil,
+            createdAt: "2099-06-25T09:00:00Z", latestBriefing: nil, coverage: nil, role: nil,
             flexibility: request.flexibility, altDepartureTime: nil
         )
         createdFlights.append(flight)

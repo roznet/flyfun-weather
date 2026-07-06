@@ -374,19 +374,25 @@ export interface RefreshStreamEvent {
   detail?: string | null;
   label?: string;
   progress?: number;
-  pack?: PackMeta;
+  // Null on a `complete` event that produced no pack — the pending-coverage
+  // no-op (beyond-horizon flight). Present with a pack on a normal completion.
+  pack?: PackMeta | null;
   message?: string;
   elapsed_seconds?: number;
-  // Present on the `complete` event when the tiered refresh gate
-  // returned a no-op or a real-time-only refresh instead of a full pipeline run.
+  // Present on the `complete` event when the refresh was gated instead of
+  // running a full pipeline. Two shapes share this field: the tiered gate emits
+  // a full `RefreshDecision` (needed/n_eligible/…); the pending-coverage no-op
+  // emits only mode/reason + `available_date`. Hence the tiered fields and
+  // `available_date` are both optional.
   refresh_decision?: {
     mode: 'full' | 'realtime' | 'none';
     reason: string;
-    needed: number;
-    n_eligible: number;
-    n_updated: number;
-    days_out: number;
+    needed?: number;
+    n_eligible?: number;
+    n_updated?: number;
+    days_out?: number;
     eta_useful?: string | null;
+    available_date?: string;  // pending-coverage no-op only
   };
   // Freshly fetched observations on the realtime gate path — mirrors the
   // non-streaming RefreshAccepted.observations so SSE consumers don't need a

@@ -23,6 +23,10 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// without a per-flight round-trip — same payload the web card reads. nil
     /// for a flight that has never been briefed.
     let latestBriefing: BriefingStatusInfo?
+    /// Present only when the flight is saved beyond the forecast horizon (no
+    /// model data yet). Drives the pending "available dd/mm" list chip and the
+    /// pending-coverage card; nil once the flight is within range.
+    let coverage: CoveragePending?
     /// Owner vs subscriber. Absent on older servers — treated as owner.
     let role: FlightRole?
     /// Timing-scenario Flexibility mode. Absent on older servers → treated as
@@ -100,6 +104,34 @@ enum FlexibilityMode: String, Codable, Sendable, CaseIterable {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = FlexibilityMode(rawValue: raw) ?? .none
     }
+}
+
+/// Weather-coverage status for a flight saved beyond the forecast horizon.
+/// Present on `FlightResponse.coverage` only while no model reaches the flight
+/// date yet; the UI shows a neutral pending state instead of an assessment.
+struct CoveragePending: Codable, Sendable {
+    /// ISO date (yyyy-MM-dd) — first (early-outlook) briefing appears.
+    let availableDate: String
+    /// ISO date — full GRIB briefing, if resolved. nil when unresolved.
+    let fullBriefingDate: String?
+    /// Whole days from today until `availableDate`.
+    let daysUntilAvailable: Int
+
+    /// Parsed `availableDate` for display (date-only, UTC).
+    var availableDay: Date? { Self.isoDate.date(from: availableDate) }
+
+    /// Parsed `fullBriefingDate` for display (date-only, UTC); nil if unresolved.
+    var fullBriefingDay: Date? {
+        fullBriefingDate.flatMap { Self.isoDate.date(from: $0) }
+    }
+
+    private static let isoDate: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 }
 
 /// Aircraft summary embedded in a flight, used for the list card label.

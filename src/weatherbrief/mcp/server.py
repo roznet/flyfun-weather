@@ -375,23 +375,41 @@ def create_flight(
             return _error_result(f"Failed to create flight: {e.response.text}", e.response.status_code)
 
         flight_id = flight["id"]
+        coverage = flight.get("coverage")
 
-        # Auto-trigger briefing refresh
-        refresh_status: dict[str, Any] = {"status": "not_triggered"}
-        try:
-            client.refresh_briefing(flight_id)
-            refresh_status = {
-                "status": "processing",
-                "estimated_seconds": 120,
-                "message": "Briefing is being generated. Call get_briefing in ~2 minutes.",
+        if coverage:
+            # Saved beyond the forecast horizon — no model reaches the date yet.
+            # Don't trigger a briefing (it would be a no-op); report when weather
+            # coverage begins so the agent knows when to call get_briefing.
+            available = coverage.get("available_date")
+            refresh_status: dict[str, Any] = {
+                "status": "pending_coverage",
+                "available_date": available,
+                "full_briefing_date": coverage.get("full_briefing_date"),
+                "message": (
+                    f"Flight saved. No weather model reaches the departure date yet — "
+                    f"forecast coverage begins {available}. The briefing generates "
+                    f"automatically once the flight is within range; call get_briefing "
+                    f"on or after {available}."
+                ),
             }
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 409:
-                refresh_status = {"status": "already_in_progress"}
-            elif e.response.status_code == 429:
-                refresh_status = {"status": "rate_limited", "message": e.response.text}
-            else:
-                refresh_status = {"status": "failed", "message": e.response.text}
+        else:
+            # Auto-trigger briefing refresh
+            refresh_status = {"status": "not_triggered"}
+            try:
+                client.refresh_briefing(flight_id)
+                refresh_status = {
+                    "status": "processing",
+                    "estimated_seconds": 120,
+                    "message": "Briefing is being generated. Call get_briefing in ~2 minutes.",
+                }
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 409:
+                    refresh_status = {"status": "already_in_progress"}
+                elif e.response.status_code == 429:
+                    refresh_status = {"status": "rate_limited", "message": e.response.text}
+                else:
+                    refresh_status = {"status": "failed", "message": e.response.text}
 
     return {
         "flight": {
@@ -401,6 +419,7 @@ def create_flight(
             "departure_time": flight.get("departure_time"),
             "cruise_altitude_ft": flight.get("cruise_altitude_ft"),
             "flight_duration_hours": flight.get("flight_duration_hours"),
+            "coverage": coverage,
             "web_url": _flight_web_url(flight_id),
         },
         "briefing": refresh_status,

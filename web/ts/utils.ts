@@ -207,19 +207,6 @@ export function getModelCatalog(): ModelCatalogEntry[] {
   return _catalog;
 }
 
-/** Largest lead time (days from today) at which BOTH ECMWF and GFS are still
- *  available — the bookable forecast horizon that bounds the flight date picker.
- *  Derived from the model catalog so it tracks the backend's
- *  `dual_model_horizon_days()`; falls back to `fallback` if the catalog (or the
- *  `max_days` field from an older backend) isn't available. */
-export function dualModelHorizonDays(fallback = 9): number {
-  const maxDays = (k: string) => _catalog.find(m => m.key === k)?.max_days;
-  const ecmwf = maxDays('ecmwf');
-  const gfs = maxDays('gfs');
-  if (ecmwf == null || gfs == null) return fallback;
-  return Math.min(ecmwf, gfs) - 1;
-}
-
 /** Booking limits served by `/api/models/config` (see api/models.py) so the
  *  date picker shares one source with the backend gate instead of hardcoding. */
 export interface BookingConfig {

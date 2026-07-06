@@ -1854,6 +1854,12 @@ async def refresh_briefing_stream(
                 flight_id, coverage_date,
             )
             available_iso = coverage_date.isoformat()
+            # `reason` is a human sentence (clients that surface a no-op banner
+            # show it verbatim); `available_date` is the machine-readable field.
+            pending_reason = (
+                f"No weather model reaches {flight.departure_time.strftime('%d/%m/%Y')} "
+                f"yet — coverage begins {coverage_date.strftime('%d/%m/%Y')}."
+            )
 
             async def pending_generator() -> AsyncGenerator[str, None]:
                 event = {
@@ -1861,7 +1867,7 @@ async def refresh_briefing_stream(
                     "pack": None,
                     "refresh_decision": {
                         "mode": "none",
-                        "reason": "pending_coverage",
+                        "reason": pending_reason,
                         "available_date": available_iso,
                     },
                 }

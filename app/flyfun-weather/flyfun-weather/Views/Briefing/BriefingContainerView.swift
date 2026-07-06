@@ -46,7 +46,13 @@ struct BriefingContainerView: View {
                 VStack(spacing: 0) {
                     RefreshBannerView(state: viewModel.refreshState)
                     DownloadBannerView(state: viewModel.downloadState)
-                    BriefingContentView(viewModel: viewModel, trackingService: trackingService)
+                    // Saved beyond the forecast horizon → no pack yet; show the
+                    // pending-coverage card instead of the (empty) tabs.
+                    if let coverage = flight.coverage {
+                        PendingCoverageView(flight: flight, coverage: coverage)
+                    } else {
+                        BriefingContentView(viewModel: viewModel, trackingService: trackingService)
+                    }
                 }
             } else {
                 ProgressView("Loading briefing...")

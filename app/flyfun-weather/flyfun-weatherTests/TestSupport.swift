@@ -131,6 +131,7 @@ func makeFlight(
         autoRefreshHour: nil,
         createdAt: "2026-06-20T09:00:00Z",
         latestBriefing: nil,
+        coverage: nil,
         role: role,
         flexibility: flexibility,
         altDepartureTime: altDepartureTime
