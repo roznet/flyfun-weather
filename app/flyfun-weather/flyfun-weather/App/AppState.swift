@@ -1,3 +1,4 @@
+import CryptoKit
 import FlyFunCommon
 import Foundation
 import OSLog
@@ -48,7 +49,11 @@ final class AppState {
 
     private(set) var apiClient: APIClient?
     private(set) var repository: (any BriefingRepository)?
-    let pirepOfflineStore = PirepOfflineStore()
+    /// Offline PIREP queue, scoped to the signed-in user (reassigned in
+    /// `setupClient`). Same cross-user leak as the briefing cache: a single
+    /// unscoped `pending_pireps.json` would sync user A's queued reports under
+    /// user B. `private(set) var` so only sign-in reshapes it.
+    private(set) var pirepOfflineStore = PirepOfflineStore()
     let userPreferences = UserPreferencesStore()
     /// Local device settings (e.g. offline auto-download mode). Server-side flags
     /// live in `userPreferences`; this is the on-device counterpart.
@@ -89,6 +94,10 @@ final class AppState {
     /// are deterministic and offline. Stub at the app boundary — XCUITest can't
     /// intercept network the way Playwright can.
     static var isUITestMockMode: Bool { ProcessInfo.processInfo.environment["FLYFUN_MOCK"] == "1" }
+    /// Present the fixtures as a cached/offline list (`FLYFUN_MOCK_OFFLINE=1`) so
+    /// the offline journey (#318) sees the offline banner + read-only rows. Only
+    /// meaningful together with `FLYFUN_MOCK`.
+    static var isUITestOfflineMode: Bool { ProcessInfo.processInfo.environment["FLYFUN_MOCK_OFFLINE"] == "1" }
     #endif
 
     // MARK: - Lifecycle
@@ -126,7 +135,7 @@ final class AppState {
             // Fixtures need no real auth — a fake gate token is enough to render
             // past LoginView, and it lives on the observable mirror only.
             jwt = "uitest-token"
-            repository = FixtureBriefingRepository()
+            repository = FixtureBriefingRepository(offline: Self.isUITestOfflineMode)
         } else {
             // Live-dev mode: mirror the real keychain token so the auth gate
             // matches what the API will actually use (nil → LoginView, as normal).
@@ -194,6 +203,24 @@ final class AppState {
     /// Reads the (unverified) `scope` claim from a JWT payload for routing only.
     /// Never used for authorization — that stays with the server signature.
     nonisolated static func unverifiedScope(of jwt: String) -> String? {
+        unverifiedPayload(of: jwt)?["scope"] as? String
+    }
+
+    /// The (unverified) `sub` claim as a String — the stable per-user identity the
+    /// on-disk caches are scoped by. Coerces a numeric `sub` (some issuers encode
+    /// the user id as an integer) to its decimal string. Scoping only, never
+    /// authorization — the server verifies the signature on every API call.
+    nonisolated static func unverifiedSubject(of jwt: String) -> String? {
+        guard let sub = unverifiedPayload(of: jwt)?["sub"] else { return nil }
+        if let s = sub as? String { return s.isEmpty ? nil : s }
+        if let n = sub as? NSNumber { return n.stringValue }
+        return nil
+    }
+
+    /// Decode a JWT payload segment without verifying the signature. Shared by the
+    /// `scope` (deep-link routing) and `sub` (cache scoping) readers — both
+    /// non-authoritative.
+    nonisolated static func unverifiedPayload(of jwt: String) -> [String: Any]? {
         let parts = jwt.split(separator: ".")
         guard parts.count == 3 else { return nil }
         var b64 = String(parts[1])
@@ -203,7 +230,18 @@ final class AppState {
         guard let data = Data(base64Encoded: b64),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        return obj["scope"] as? String
+        return obj
+    }
+
+    /// Filesystem-safe, non-reversible cache-scope key for a token's subject.
+    /// SHA-256 → 16 hex chars: keeps PII / odd characters off disk and is
+    /// collision-safe for per-device user counts. Falls back to `"anon"` when
+    /// there's no usable `sub` — which shouldn't happen for a server-issued token;
+    /// the bucket just stays isolated from real users if it ever is used.
+    nonisolated static func cacheScope(forToken token: String) -> String {
+        guard let sub = unverifiedSubject(of: token) else { return "anon" }
+        let digest = SHA256.hash(data: Data(sub.utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     func logout() {
@@ -232,6 +270,13 @@ final class AppState {
         }
         try await apiClient.requestVoid("/auth/account", method: "DELETE")
         Self.logger.info("Account deleted")
+        // Account is gone — leave nothing on disk. Wipe this user's scoped cache
+        // and offline PIREP queue (otherwise the 30-day janitor would be the only
+        // thing to remove them).
+        if let caching = cachingRepository {
+            await caching.cache.clearAll()
+        }
+        await pirepOfflineStore.clear()
         logout()
     }
 
@@ -268,10 +313,26 @@ final class AppState {
     func pruneStaleCache() async {
         guard let caching = cachingRepository else { return }
         await caching.pruneStalePacks(olderThanDays: Self.cacheRetentionDays)
+        // Coarse cross-user janitor: per-user scoping means other users' dirs are
+        // never touched above, so age out abandoned accounts' caches wholesale.
+        // Run off the main actor — it's filesystem I/O.
+        let scope = Self.cacheScope(forToken: tokenStore.token ?? "")
+        let retention = Self.inactiveUserRetentionDays
+        await Task.detached {
+            BriefingCacheStore.evictInactiveUsers(
+                base: BriefingCacheStore.defaultBase(),
+                keeping: scope,
+                olderThanDays: retention
+            )
+        }.value
     }
 
     /// Cached packs are kept until their flight is this many days in the past.
     static let cacheRetentionDays = 7
+
+    /// A signed-out user's whole scoped cache dir is removed after this many days
+    /// of inactivity (no `flights()` load rewriting its `flights.json` marker).
+    static let inactiveUserRetentionDays = 30
 
     /// Pull the latest (i)-popup help content. Non-blocking; safe to call on
     /// launch, sign-in, and foreground — a `304` is a cheap no-op.
@@ -287,6 +348,27 @@ final class AppState {
         repository as? CachingBriefingRepository
     }
 
+    /// Per-user offline PIREP queue: `<Documents>/PendingPireps/<scope>/pending_pireps.json`.
+    private static func scopedPirepURL(scope: String) -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("PendingPireps", isDirectory: true)
+            .appendingPathComponent(scope, isDirectory: true)
+            .appendingPathComponent("pending_pireps.json")
+    }
+
+    /// Discard a pre-scoping `Documents/pending_pireps.json`. We deliberately do
+    /// NOT migrate it into a scope: the legacy file carries no owner, so on a
+    /// shared device (previous user logged out before the update, a different user
+    /// signs in first) moving it would submit user A's queued reports — with their
+    /// position and notes — under user B. A wrongly-attributed PIREP is worse than
+    /// losing a rare unsynced draft (the queue is only non-empty if a report was
+    /// submitted offline and never synced before the update), so drop it.
+    private static func discardLegacyPireps() {
+        let legacy = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("pending_pireps.json")
+        try? FileManager.default.removeItem(at: legacy)
+    }
+
     private func applyToken(_ token: String?) {
         tokenStore.token = token
         jwt = token
@@ -300,8 +382,15 @@ final class AppState {
         )
         apiClient = client
         let online = OnlineBriefingRepository(client: client)
-        let cache = BriefingCacheStore()
+        // Scope the on-disk caches to the signed-in user so no user ever reads
+        // another's flight list / briefings / queued PIREPs (see cacheScope).
+        let scope = Self.cacheScope(forToken: tokenStore.token ?? "")
+        let base = BriefingCacheStore.defaultBase()
+        BriefingCacheStore.migrateLegacyLayout(base: base)
+        let cache = BriefingCacheStore(cacheDir: BriefingCacheStore.scopedCacheDir(base: base, scope: scope))
         repository = CachingBriefingRepository(client: client, online: online, cache: cache)
+        Self.discardLegacyPireps()
+        pirepOfflineStore = PirepOfflineStore(fileURL: Self.scopedPirepURL(scope: scope))
         Task { await userPreferences.refresh(using: client) }
         Task { await helpCatalog.refresh(using: client) }
         // Open any cached airports DB immediately (offline-safe), then refresh it

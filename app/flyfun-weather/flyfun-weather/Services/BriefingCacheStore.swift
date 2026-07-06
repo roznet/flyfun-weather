@@ -238,3 +238,67 @@ actor BriefingCacheStore {
         }
     }
 }
+
+// MARK: - Per-user scoping (paths, migration, cross-user eviction)
+
+/// The on-disk tree is scoped per signed-in user: `<base>/BriefingCache/users/<scope>/`.
+/// Without this the cache dir was shared, so after user A logged out and user B
+/// logged in, B's cold-start seed would read A's `flights.json` (and A's cached
+/// briefings sat readable on disk). Scoping gives physical isolation instead of
+/// relying on a clear-on-logout wipe, and lets a returning user keep their offline
+/// downloads. These are pure filesystem helpers (no actor state), taking an
+/// explicit `base` so tests drive them against a temp directory.
+extension BriefingCacheStore {
+    /// Application Support base that holds the whole cache tree.
+    static func defaultBase() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    }
+
+    /// Per-user cache directory handed to `init(cacheDir:)`.
+    static func scopedCacheDir(base: URL, scope: String) -> URL {
+        base.appendingPathComponent("BriefingCache", isDirectory: true)
+            .appendingPathComponent("users", isDirectory: true)
+            .appendingPathComponent(scope, isDirectory: true)
+    }
+
+    /// One-time migration off the pre-scoping layout, where `flights.json`,
+    /// `index.json`, and `<flightId>/` dirs sat directly under `BriefingCache/`.
+    /// Those are unreachable once reads are user-scoped, and eviction only walks
+    /// the active scope — so they'd leak forever. Remove every root child except
+    /// the new `users/` subtree. Idempotent (a no-op once only `users/` remains),
+    /// so it's safe to call on every sign-in.
+    static func migrateLegacyLayout(base: URL) {
+        let root = base.appendingPathComponent("BriefingCache", isDirectory: true)
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return }
+        for child in children where child.lastPathComponent != "users" {
+            try? FileManager.default.removeItem(at: child)
+        }
+    }
+
+    /// Coarse cross-user janitor. Per-user scoping means an abandoned account's dir
+    /// is never swept by `pruneStalePacks` (which only runs on the active user), so
+    /// it would accumulate stale packs forever. Delete any *other* user's scoped
+    /// dir whose `flights.json` — rewritten on every logged-in `flights()` load, so
+    /// a good "last active" marker — is older than the cutoff, falling back to the
+    /// dir's own mtime when the marker is absent. The active scope is always kept
+    /// (and swept precisely elsewhere); a dir with no determinable timestamp is
+    /// kept (never delete blind).
+    static func evictInactiveUsers(base: URL, keeping scope: String, olderThanDays days: Int) {
+        let usersRoot = base.appendingPathComponent("BriefingCache", isDirectory: true)
+            .appendingPathComponent("users", isDirectory: true)
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        guard let dirs = try? FileManager.default.contentsOfDirectory(
+            at: usersRoot, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
+        ) else { return }
+        for dir in dirs where dir.lastPathComponent != scope {
+            let marker = dir.appendingPathComponent("flights.json")
+            let mtime = (try? marker.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                ?? (try? dir.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            guard let mtime, mtime < cutoff else { continue }
+            try? FileManager.default.removeItem(at: dir)
+            Self.logger.info("Evicted inactive user cache dir \(dir.lastPathComponent)")
+        }
+    }
+}

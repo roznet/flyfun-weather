@@ -40,6 +40,14 @@ actor PirepOfflineStore {
     /// Get all pending PIREPs.
     var pendingCount: Int { pending.count }
 
+    /// Drop the queue and remove its file. Used on account deletion so nothing
+    /// the user authored is left on disk.
+    func clear() {
+        pending.removeAll()
+        loaded = true
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
     /// Sync all pending PIREPs to the server.
     /// Returns the number successfully synced.
     func sync(using repository: any BriefingRepository) async -> Int {
