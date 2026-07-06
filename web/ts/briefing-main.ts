@@ -1680,6 +1680,7 @@ async function init(): Promise<void> {
       state.windOverlay !== prev.windOverlay
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
+      ui.togglePackSections(!!state.currentPack);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip);
       ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
@@ -2195,6 +2196,7 @@ async function init(): Promise<void> {
       track(EVENTS.XSECTION_VIEWED, buildXsectionSnapshotProps(s));
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories, s.digestPending, () => store.getState().generateDigest());
+    ui.togglePackSections(!!s.currentPack);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip);
     ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);

@@ -317,6 +317,28 @@ class TestFindDueFlights:
             due = _find_due_flights(db_session)
         assert len(due) == 1
 
+    def test_beyond_horizon_not_due_even_at_preferred_hour(self, db_session, dev_user):
+        """A flight beyond the forecast horizon is skipped until it crosses in —
+        otherwise auto-refresh would build an empty pack weeks early."""
+        # departure 2026-03-01; ~4 weeks out (well past the 9-day horizon).
+        self._insert(db_session, dev_user, auto_refresh_hour=6)
+        now = _utc(2026, 2, 1, 7, 0)  # past the preferred hour, but 28 days out
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            due = _find_due_flights(db_session)
+        assert len(due) == 0
+
+    def test_becomes_due_once_within_horizon(self, db_session, dev_user):
+        """Same flight is picked up (first briefing) once inside the horizon."""
+        self._insert(db_session, dev_user, auto_refresh_hour=6)
+        now = _utc(2026, 2, 25, 7, 0)  # 4 days out, past the preferred hour
+        with patch("weatherbrief.scheduler.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            due = _find_due_flights(db_session)
+        assert len(due) == 1
+
     def test_not_due_before_preferred_hour(self, db_session, dev_user):
         self._insert(db_session, dev_user, auto_refresh_hour=14)
         now = _utc(2026, 2, 27, 6, 0)

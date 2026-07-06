@@ -135,6 +135,20 @@ class BriefingStatusInfo(BaseModel):
     advisory_summary: AdvisorySummary | None = None
 
 
+class CoveragePending(BaseModel):
+    """Weather-coverage status for a flight saved beyond the forecast horizon.
+
+    Present on ``FlightResponse.coverage`` only while no model reaches the
+    flight date yet. Clients render a neutral "pending · available dd/mm" state
+    instead of a traffic-light assessment, and suppress refresh until the flight
+    crosses into range. ``None`` once the flight is bookable.
+    """
+
+    available_date: str  # ISO date — first (early-outlook) briefing appears
+    full_briefing_date: str | None = None  # ISO date — full GRIB briefing, if resolved
+    days_until_available: int  # whole days from today until available_date
+
+
 class FlightResponse(BaseModel):
     """Flight data in API responses."""
 
@@ -160,6 +174,10 @@ class FlightResponse(BaseModel):
     auto_refresh_hour: int | None = None
     created_at: str
     latest_briefing: BriefingStatusInfo | None = None
+    # Set only when the flight is saved beyond the forecast horizon (no model
+    # data yet). Drives the "pending · available dd/mm" list chip and the
+    # pending-coverage summary card. None once the flight is within range.
+    coverage: CoveragePending | None = None
     role: Literal["owner", "subscriber"] = "owner"
     owner_display_name: str | None = None  # set when role == "subscriber"
     is_subscribed: bool = False  # True when the viewer has subscribed to this flight
@@ -240,25 +258,73 @@ def _is_admin_or_dev(request: Request, db: Session) -> bool:
         return False
 
 
-def _reject_if_beyond_horizon(departure_time: datetime) -> None:
-    """Reject a flight whose date is past the forecast horizon.
+# How far ahead a flight may be saved. This is deliberately NOT the forecast
+# horizon: pilots asked to book trips early and let the briefing fill in once
+# the models reach the date. Flights between the forecast horizon
+# (``dual_model_horizon_days``) and this cap are saved in a "pending coverage"
+# state (see ``_compute_coverage``) rather than rejected. The cap only guards
+# against absurd input — a mistyped year creating a flight decades out.
+MAX_BOOKING_LEAD_DAYS = 180
 
-    Beyond the dual-model horizon (the last lead day both ECMWF and GFS still
-    deliver) no weather model reaches the date, so there is nothing to brief.
-    Shared by create and move so the gate and its message stay identical.
+
+def _reject_if_beyond_booking_cap(departure_time: datetime) -> None:
+    """Reject a flight whose date is past the maximum booking lead time.
+
+    Note: this is not the forecast horizon. Flights beyond the horizon but
+    within ``MAX_BOOKING_LEAD_DAYS`` are allowed — they save in a pending state
+    and brief automatically once a model run reaches the date. Only genuinely
+    far-out dates are refused. Shared by create and move so the gate stays
+    identical.
     """
-    max_lead_days = dual_model_horizon_days()
     now_utc = datetime.now(timezone.utc)
-    if (departure_time.date() - now_utc.date()).days > max_lead_days:
-        latest = (now_utc + timedelta(days=max_lead_days)).strftime("%Y-%m-%d")
+    if (departure_time.date() - now_utc.date()).days > MAX_BOOKING_LEAD_DAYS:
+        latest = (now_utc + timedelta(days=MAX_BOOKING_LEAD_DAYS)).strftime("%Y-%m-%d")
         raise HTTPException(
             status_code=422,
             detail=(
-                f"That date is beyond the {max_lead_days}-day forecast horizon — "
-                f"no weather model reaches that far yet, so a briefing isn't "
-                f"available. Please choose a departure date on or before {latest}."
+                f"That date is more than {MAX_BOOKING_LEAD_DAYS} days out — beyond "
+                f"how far ahead a flight can be saved. Please choose a departure "
+                f"date on or before {latest}."
             ),
         )
+
+
+def _compute_coverage(departure_time: datetime) -> "CoveragePending | None":
+    """Coverage status for a flight saved beyond the forecast horizon.
+
+    Returns ``None`` when the flight is already within (or past) the dual-model
+    booking horizon — i.e. a briefing can be generated now, so there is nothing
+    pending. Otherwise returns the dates on which weather coverage begins:
+
+    - ``available_date`` = departure − ``dual_model_horizon_days`` (the first
+      day both global models reach the flight; the early-outlook briefing).
+    - ``full_briefing_date`` = the expected delivery of the first full-horizon
+      ECMWF GRIB run that reaches the flight (the full traffic-light briefing),
+      or ``None`` if it can't be resolved (display degrades to just the former).
+    """
+    horizon = dual_model_horizon_days()
+    now = datetime.now(timezone.utc)
+    days_out = (departure_time.date() - now.date()).days
+    if days_out <= horizon:
+        return None
+
+    available = departure_time.date() - timedelta(days=horizon)
+    full_date: str | None = None
+    try:
+        from weatherbrief.fetch.freshness.registry import first_full_coverage
+
+        # "ecmwf:direct" mirrors llm_digest._ECMWF_GRIB_SOURCE — the full-res
+        # GRIB feed whose 168h horizon marks the full-briefing boundary.
+        _, delivery = first_full_coverage("ecmwf:direct", departure_time)
+        full_date = delivery.date().isoformat()
+    except Exception:
+        logger.debug("coverage: could not resolve full-briefing date", exc_info=True)
+
+    return CoveragePending(
+        available_date=available.isoformat(),
+        full_briefing_date=full_date,
+        days_until_available=(available - now.date()).days,
+    )
 
 
 def _resolve_aircraft_info(
@@ -421,6 +487,7 @@ def _flight_to_response(
         auto_refresh_hour=flight.auto_refresh_hour,
         created_at=flight.created_at.isoformat(),
         latest_briefing=latest_briefing,
+        coverage=_compute_coverage(flight.departure_time),
         role=effective_role,
         owner_display_name=owner_display_name,
         is_subscribed=subscribed,
@@ -657,8 +724,10 @@ def create_flight(
                 detail="Only admins can create flights with past departure times",
             )
 
-    # Reject flights beyond the forecast horizon (no model reaches that far).
-    _reject_if_beyond_horizon(departure_time)
+    # Reject only flights beyond the booking cap. Flights past the forecast
+    # horizon but within the cap are allowed and save in a pending-coverage
+    # state (they brief automatically once a model run reaches the date).
+    _reject_if_beyond_booking_cap(departure_time)
 
     # Derive date string and hour for flight ID and hash (backward compat)
     target_date_str = departure_time.strftime("%Y-%m-%d")
@@ -1381,8 +1450,9 @@ def move_flight(
                 detail="Only admins can move a flight into the past",
             )
 
-    # And, like create, a move cannot push a flight past the forecast horizon.
-    _reject_if_beyond_horizon(new_departure_time)
+    # And, like create, a move cannot push a flight past the booking cap
+    # (beyond-horizon but within the cap is allowed → pending coverage).
+    _reject_if_beyond_booking_cap(new_departure_time)
 
     # Re-derive route_name only when waypoints actually changed; otherwise keep
     # the source's stored name (which may be non-derived, e.g. set explicitly

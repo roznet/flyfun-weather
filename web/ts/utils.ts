@@ -220,6 +220,13 @@ export function dualModelHorizonDays(fallback = 9): number {
   return Math.min(ecmwf, gfs) - 1;
 }
 
+/** How far ahead a flight may be saved. Mirrors the backend
+ *  `flights.MAX_BOOKING_LEAD_DAYS`. Beyond the forecast horizon (but within
+ *  this cap) a flight saves in a "pending coverage" state and briefs
+ *  automatically once a model run reaches the date; past the cap the backend
+ *  rejects the save. Bounds the flight-date picker. */
+export const MAX_BOOKING_LEAD_DAYS = 180;
+
 export function allModelKeys(): string[] {
   return _catalog.map(m => m.key);
 }

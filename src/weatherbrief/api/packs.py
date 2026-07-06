@@ -736,6 +736,24 @@ def _days_out_now(flight: Flight) -> int:
     return (flight.departure_time.date() - now.date()).days
 
 
+def pending_coverage_date(flight: Flight) -> date | None:
+    """Coverage-start date if the flight is beyond the booking horizon, else None.
+
+    Beyond the dual-model horizon no model run reaches the flight date, so a
+    refresh can only produce an empty pack. Callers use this to short-circuit
+    the pipeline (returning a benign "pending coverage" no-op) until the flight
+    crosses into range, at which point it rejoins the normal refresh paths.
+    The returned date is when the first briefing becomes available
+    (departure − horizon). Shared by both refresh endpoints and the scheduler.
+    """
+    from weatherbrief.fetch.variables import dual_model_horizon_days
+
+    horizon = dual_model_horizon_days()
+    if _days_out_now(flight) <= horizon:
+        return None
+    return flight.departure_time.date() - timedelta(days=horizon)
+
+
 def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
     """Decide whether a manual refresh runs the full pipeline, a cheap
     real-time observations refresh, or nothing.
@@ -1557,7 +1575,7 @@ def _finalize_refresh(
 class RefreshAccepted(BaseModel):
     """Response for accepted (queued) or gated refresh requests."""
 
-    status: Literal["queued", "already_fresh", "realtime"]
+    status: Literal["queued", "already_fresh", "realtime", "pending_coverage"]
     flight_id: str
     message: str
     # Tiered refresh gate detail — present when the request was gated to a
@@ -1627,6 +1645,28 @@ async def refresh_briefing(
     db_path = request.app.state.db_path
     if not db_path:
         raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
+
+    # Beyond the booking horizon: no model reaches the date yet, so running the
+    # pipeline would only produce an empty pack. Return a benign pending-coverage
+    # no-op; the flight briefs automatically once it crosses into range.
+    coverage_date = pending_coverage_date(flight)
+    if coverage_date is not None:
+        logger.info("Refresh gate for %s: pending_coverage (available %s)", flight_id, coverage_date)
+        return Response(
+            content=RefreshAccepted(
+                status="pending_coverage",
+                flight_id=flight_id,
+                message=(
+                    f"No weather model reaches {flight.departure_time.strftime('%d/%m/%Y')} "
+                    f"yet — coverage begins {coverage_date.strftime('%d/%m/%Y')}."
+                ),
+                mode="none",
+                reason="pending_coverage",
+                eta_useful=coverage_date.isoformat(),
+            ).model_dump_json(),
+            status_code=200,
+            media_type="application/json",
+        )
 
     # Tiered refresh gate: full -> pipeline, realtime -> cheap
     # METAR/TAF refresh, none -> 200 no-op (skip for historical flights).
@@ -1803,6 +1843,35 @@ async def refresh_briefing_stream(
         db_path = request.app.state.db_path
         if not db_path:
             raise HTTPException(status_code=503, detail="AIRPORTS_DB not configured")
+
+        # Beyond the booking horizon: no model reaches the date yet. Emit a
+        # complete event with no pack and a pending-coverage decision so the
+        # client can render its pending state without treating it as an error.
+        coverage_date = pending_coverage_date(flight)
+        if coverage_date is not None:
+            logger.info(
+                "Refresh gate for %s (stream): pending_coverage (available %s)",
+                flight_id, coverage_date,
+            )
+            available_iso = coverage_date.isoformat()
+
+            async def pending_generator() -> AsyncGenerator[str, None]:
+                event = {
+                    "type": "complete",
+                    "pack": None,
+                    "refresh_decision": {
+                        "mode": "none",
+                        "reason": "pending_coverage",
+                        "available_date": available_iso,
+                    },
+                }
+                yield f"event: complete\ndata: {json_mod.dumps(event, default=str)}\n\n"
+
+            return StreamingResponse(
+                pending_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         # Tiered refresh gate: full -> pipeline, realtime -> cheap
         # METAR/TAF refresh, none -> complete no-op (skip for historical).

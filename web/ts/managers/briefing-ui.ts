@@ -11,6 +11,7 @@ import type {
   AlternateRequirement,
   AltitudeAdvisories,
   ConvectiveAssessment,
+  CoveragePending,
   CriterionAssessment,
   DataStatus,
   FlightResponse,
@@ -273,6 +274,42 @@ const OUTLOOK_CLASS: Record<string, string> = {
   TRENDING_UNSETTLED: 'outlook-unsettled',
 };
 
+// These four sections render an inline "not available" placeholder when empty
+// rather than self-hiding like the others (advisories/observations/…). When
+// there is NO pack at all, that produces four half-empty headed sections; we
+// hide them so the page shows a single message (the top assessment banner)
+// instead. When a pack exists they're restored — their own render fns then show
+// data or a section-specific note (e.g. "GRAMET needs credentials").
+const PACK_DEPENDENT_SECTIONS = ['synopsis', 'gramet', 'sounding', 'comparison'];
+
+/** Hide the placeholder-style sections when there's no pack; restore them when
+ *  one exists. Consolidates the empty-briefing view to a single message. */
+export function togglePackSections(hasPack: boolean): void {
+  for (const name of PACK_DEPENDENT_SECTIONS) {
+    const el = document.querySelector<HTMLElement>(`.section[data-section="${name}"]`);
+    if (el) el.style.display = hasPack ? '' : 'none';
+  }
+}
+
+/** Neutral pending-coverage banner for a flight saved beyond the forecast
+ *  horizon. States what's happening and when weather coverage begins, so the
+ *  briefing page never looks broken/empty for a legitimately-future flight. */
+function renderCoverageBanner(el: HTMLElement, flight: FlightResponse): void {
+  const cov = flight.coverage as CoveragePending;
+  const day = (iso: string) =>
+    new Date(iso + 'T00:00:00Z').toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const departStr = new Date(flight.departure_time).toLocaleDateString(
+    getDateLocale(), { day: 'numeric', month: 'long', timeZone: 'UTC' });
+  const body = t('briefing.coverageBody', { depart: departStr, available: day(cov.available_date) });
+  const full = cov.full_briefing_date
+    ? ' ' + t('briefing.coverageFull', { full: day(cov.full_briefing_date) })
+    : '';
+  el.className = 'assessment-banner assessment-coverage';
+  el.innerHTML =
+    `<strong>${escapeHtml(t('briefing.coverageHeadline'))}</strong> ` +
+    `${escapeHtml(body + full)}`;
+}
+
 export function renderAssessment(
   pack: PackMeta | null,
   flight?: FlightResponse | null,
@@ -283,7 +320,12 @@ export function renderAssessment(
 ): void {
   const el = $('assessment-banner');
   if (el) {
-    if (pack && pack.outlook) {
+    if (!pack && flight?.coverage) {
+      // Saved beyond the forecast horizon — no model data yet. Show a neutral
+      // "check back on <date>" banner in place of the traffic light; the
+      // alt-banner block below hides itself because there is no pack.
+      renderCoverageBanner(el, flight);
+    } else if (pack && pack.outlook) {
       // Long-range early outlook — distinct badge, never the traffic light.
       const key = pack.outlook.toUpperCase();
       el.className = `assessment-banner ${OUTLOOK_CLASS[key] ?? 'outlook-mixed'}`;
@@ -297,7 +339,12 @@ export function renderAssessment(
       el.innerHTML =
         `<span class="outlook-tag">${escapeHtml(t('outlook.early'))}</span> ` +
         `<strong>${escapeHtml(label)}</strong>${suffixHtml}`;
-    } else if (!pack || !pack.assessment) {
+    } else if (!pack) {
+      // No pack at all (generating, failed, or declined) — the single
+      // empty-briefing message; the placeholder sections are hidden alongside.
+      el.className = 'assessment-banner assessment-none';
+      el.textContent = t('briefing.noBriefingYet');
+    } else if (!pack.assessment) {
       el.className = 'assessment-banner assessment-none';
       el.textContent = t('briefing.noAssessment');
     } else {

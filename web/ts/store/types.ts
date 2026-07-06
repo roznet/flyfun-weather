@@ -41,6 +41,15 @@ export interface BriefingStatusInfo {
   advisory_summary?: AdvisorySummary | null;
 }
 
+/** Weather-coverage status for a flight saved beyond the forecast horizon.
+ *  Present on {@link FlightResponse.coverage} only while no model reaches the
+ *  flight date yet. */
+export interface CoveragePending {
+  available_date: string;            // ISO date — first (early-outlook) briefing appears
+  full_briefing_date?: string | null; // ISO date — full GRIB briefing, if resolved
+  days_until_available: number;      // whole days from today until available_date
+}
+
 export interface FlightResponse {
   id: string;
   user_id: string;
@@ -64,6 +73,10 @@ export interface FlightResponse {
   auto_refresh_hour: number | null;
   created_at: string;
   latest_briefing?: BriefingStatusInfo | null;
+  // Present only when the flight is saved beyond the forecast horizon (no
+  // model data yet). Drives the pending "available dd/mm" list chip and the
+  // pending-coverage summary card. Null/absent once the flight is in range.
+  coverage?: CoveragePending | null;
   role: 'owner' | 'subscriber';
   owner_display_name: string | null;
   is_subscribed: boolean;

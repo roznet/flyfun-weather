@@ -1,6 +1,6 @@
 /** DOM management for the Flights list page. */
 
-import type { BriefingStatusInfo, DebriefStats, FlightResponse } from '../store/types';
+import type { BriefingStatusInfo, CoveragePending, DebriefStats, FlightResponse } from '../store/types';
 import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
@@ -39,6 +39,17 @@ function statusBadge(lb: BriefingStatusInfo): string {
     return `<span class="badge badge-outlook ${cls}" title="${escapeHtml(t('outlook.early'))}">${escapeHtml(label)}</span>`;
   }
   return `<span class="badge ${assessmentClass(lb.assessment)}">${escapeHtml(lb.assessment || '—')}</span>`;
+}
+
+/** Neutral "pending · available dd/mm" chip for a flight saved beyond the
+ *  forecast horizon. Replaces the traffic-light/outlook badge and the
+ *  "no briefings" text — there is no assessment to show yet, only the date
+ *  weather coverage begins. */
+function pendingCoverageChip(cov: CoveragePending): string {
+  const d = new Date(cov.available_date + 'T00:00:00Z');
+  const dateStr = d.toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const label = t('flights.pendingAvailable', { date: dateStr });
+  return `<span class="badge badge-pending" title="${escapeHtml(t('flights.pendingTitle'))}">${escapeHtml(label)}</span>`;
 }
 
 // Severity → badge color class + single-letter badge, matching the briefing
@@ -128,11 +139,18 @@ function renderFlightCard(
 
   // Card status reads from the flight's inline latest_briefing \u2014 same three
   // fields the old per-flight /packs/latest call surfaced, with no extra round-trip.
+  // A flight saved beyond the forecast horizon has no pack yet: show the neutral
+  // pending-coverage chip instead of an assessment or "no briefings".
   const lb = f.latest_briefing;
-  const packInfo = lb && lb.fetch_timestamp
-    ? `<span class="pack-info">D-${lb.days_out} (${new Date(lb.fetch_timestamp).toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
-       ${statusBadge(lb)}`
-    : `<span class="pack-info">${t('flights.noBriefings')}</span>`;
+  let packInfo: string;
+  if (f.coverage) {
+    packInfo = pendingCoverageChip(f.coverage);
+  } else if (lb && lb.fetch_timestamp) {
+    packInfo = `<span class="pack-info">D-${lb.days_out} (${new Date(lb.fetch_timestamp).toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })} UTC)</span>
+       ${statusBadge(lb)}`;
+  } else {
+    packInfo = `<span class="pack-info">${t('flights.noBriefings')}</span>`;
+  }
 
   const routeLine = compactRoute
     ? `<div class="flight-route-detail">

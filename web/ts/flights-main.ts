@@ -19,7 +19,7 @@ import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
 import {
   escapeHtml, redirectToLogin, renderUserInfo,
-  initModelCatalog, getModelCatalog, dualModelHorizonDays,
+  initModelCatalog, getModelCatalog, MAX_BOOKING_LEAD_DAYS,
 } from './utils';
 import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
@@ -575,12 +575,12 @@ async function init(): Promise<void> {
   renderUserInfo(user, 'flights');
   initInfoPopup();
 
-  // Load the model catalog up front so the date-picker horizon (and the welcome
-  // wizard) can derive from it. Cheap static endpoint; best-effort.
+  // Load the model catalog up front so the welcome wizard (and any
+  // horizon-derived UI) can read it. Cheap static endpoint; best-effort.
   try {
     initModelCatalog(await fetchModelCatalog());
   } catch {
-    // Non-fatal — dualModelHorizonDays() falls back to its default.
+    // Non-fatal — catalog-derived helpers fall back to their defaults.
   }
 
   const store = flightsStore;
@@ -835,10 +835,11 @@ async function init(): Promise<void> {
   // --- Re-compute TZ offset labels when date changes (DST may differ) ---
   const dateInput = document.getElementById('input-date') as HTMLInputElement;
   if (dateInput) {
-    // Bound the picker to the forecast horizon (today + dual-model horizon),
-    // derived from the model catalog so it tracks the backend gate.
+    // Bound the picker to the booking cap, not the forecast horizon: flights
+    // beyond the horizon save in a pending-coverage state and brief once a
+    // model reaches the date. Only truly far-out dates are refused.
     const maxDate = new Date();
-    maxDate.setUTCDate(maxDate.getUTCDate() + dualModelHorizonDays());
+    maxDate.setUTCDate(maxDate.getUTCDate() + MAX_BOOKING_LEAD_DAYS);
     dateInput.max = maxDate.toISOString().slice(0, 10);
   }
   dateInput?.addEventListener('change', () => {

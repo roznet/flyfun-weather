@@ -226,6 +226,27 @@ class TestDaysOutNow:
         assert _days_out_now(flight) == 0
 
 
+class TestPendingCoverageDate:
+    """pending_coverage_date: None within horizon, coverage-start date beyond it."""
+
+    def test_within_horizon_is_none(self):
+        from weatherbrief.api.packs import pending_coverage_date
+
+        depart = (datetime.now(timezone.utc) + timedelta(days=3)).replace(hour=12)
+        flight = SimpleNamespace(departure_time=depart)
+        assert pending_coverage_date(flight) is None
+
+    def test_beyond_horizon_returns_available_date(self):
+        from weatherbrief.api.packs import pending_coverage_date
+        from weatherbrief.fetch.variables import dual_model_horizon_days
+
+        horizon = dual_model_horizon_days()
+        depart = (datetime.now(timezone.utc) + timedelta(days=horizon + 10)).replace(hour=12)
+        flight = SimpleNamespace(departure_time=depart)
+        got = pending_coverage_date(flight)
+        assert got == depart.date() - timedelta(days=horizon)
+
+
 class TestDecideRefresh:
     """Matrix from issue #167 acceptance criteria.
 
