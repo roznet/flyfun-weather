@@ -136,6 +136,22 @@ class TestHealth:
         assert resp.json() == {"status": "ok"}
 
 
+class TestModelsConfig:
+    def test_config_serves_booking_cap_and_horizon(self, client):
+        """/api/models/config serves the booking cap + forecast horizon so the
+        frontend shares one source with the backend gate (no hardcoded dup)."""
+        from weatherbrief.fetch.variables import (
+            MAX_BOOKING_LEAD_DAYS,
+            dual_model_horizon_days,
+        )
+
+        resp = client.get("/api/models/config")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["max_booking_lead_days"] == MAX_BOOKING_LEAD_DAYS
+        assert body["forecast_horizon_days"] == dual_model_horizon_days()
+
+
 
 # --- Flights ---
 

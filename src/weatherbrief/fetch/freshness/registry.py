@@ -182,8 +182,15 @@ _OM_UKMO_OFFSET = timedelta(hours=8, minutes=30)     # observed 8h19m
 _OM_GEM_OFFSET = timedelta(hours=8)
 
 
+# The full-resolution ECMWF GRIB feed. Its 168h horizon marks the boundary
+# beyond which only global (Open-Meteo) models remain — used for the long-range
+# digest regime and the "full briefing from <date>" coverage milestone. Shared
+# so callers don't duplicate the registry key string.
+ECMWF_GRIB_SOURCE = "ecmwf:direct"
+
+
 SOURCE_REGISTRY: dict[str, SourceConfig] = {
-    "ecmwf:direct": SourceConfig(
+    ECMWF_GRIB_SOURCE: SourceConfig(
         key="ecmwf:direct",
         cycles=(0, 6, 12, 18),
         delivery_offset=_ECMWF_OFFSET,

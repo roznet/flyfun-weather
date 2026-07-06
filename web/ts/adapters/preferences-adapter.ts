@@ -1,6 +1,6 @@
 /** Preferences adapter — fetch, save, and clear autorouter credentials. */
 
-import { apiFetch, type ModelCatalogEntry } from '../utils';
+import { apiFetch, type BookingConfig, type ModelCatalogEntry } from '../utils';
 import type { AdvisoryParameterDef, AdvisoryCatalogEntry } from '../types/advisories';
 
 export type { AdvisoryParameterDef, AdvisoryCatalogEntry };
@@ -98,6 +98,10 @@ export async function fetchAdvisoryCatalog(): Promise<AdvisoryCatalogEntry[]> {
 
 export async function fetchModelCatalog(): Promise<ModelCatalogEntry[]> {
   return apiFetch<ModelCatalogEntry[]>('/models');
+}
+
+export async function fetchBookingConfig(): Promise<BookingConfig> {
+  return apiFetch<BookingConfig>('/models/config');
 }
 
 // --- Usage ---

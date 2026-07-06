@@ -13,13 +13,13 @@ import type { FlightResponse } from './store/types';
 import { fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
 import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
 import { confirmZeroDuration } from './components/duration-confirm';
-import { fetchModelCatalog, fetchPreferences } from './adapters/preferences-adapter';
+import { fetchModelCatalog, fetchBookingConfig, fetchPreferences } from './adapters/preferences-adapter';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { flightsStore } from './store/flights-store';
 import * as ui from './managers/flights-ui';
 import {
   escapeHtml, redirectToLogin, renderUserInfo,
-  initModelCatalog, getModelCatalog, MAX_BOOKING_LEAD_DAYS,
+  initModelCatalog, getModelCatalog, initBookingConfig, maxBookingLeadDays,
 } from './utils';
 import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
@@ -575,12 +575,17 @@ async function init(): Promise<void> {
   renderUserInfo(user, 'flights');
   initInfoPopup();
 
-  // Load the model catalog up front so the welcome wizard (and any
-  // horizon-derived UI) can read it. Cheap static endpoint; best-effort.
+  // Load the model catalog + booking config up front so the welcome wizard and
+  // the date picker can read them. Cheap static endpoints; best-effort.
   try {
-    initModelCatalog(await fetchModelCatalog());
+    const [catalog, bookingCfg] = await Promise.all([
+      fetchModelCatalog(),
+      fetchBookingConfig(),
+    ]);
+    initModelCatalog(catalog);
+    initBookingConfig(bookingCfg);
   } catch {
-    // Non-fatal — catalog-derived helpers fall back to their defaults.
+    // Non-fatal — catalog/config-derived helpers fall back to their defaults.
   }
 
   const store = flightsStore;
@@ -839,7 +844,7 @@ async function init(): Promise<void> {
     // beyond the horizon save in a pending-coverage state and brief once a
     // model reaches the date. Only truly far-out dates are refused.
     const maxDate = new Date();
-    maxDate.setUTCDate(maxDate.getUTCDate() + MAX_BOOKING_LEAD_DAYS);
+    maxDate.setUTCDate(maxDate.getUTCDate() + maxBookingLeadDays());
     dateInput.max = maxDate.toISOString().slice(0, 10);
   }
   dateInput?.addEventListener('change', () => {

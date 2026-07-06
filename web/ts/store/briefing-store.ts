@@ -462,6 +462,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       const newPack = await api.refreshBriefingStream(
         flight.id, handleEvent, false, asOfDate, notifyEmail,
       );
+      // Null = gated no-op with no pack (pending coverage — no model reaches
+      // the date yet). Nothing new to render; clear the spinner and keep the
+      // current pending view (the coverage banner is already shown).
+      if (!newPack) {
+        set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false });
+        return;
+      }
       // If the server returned a data_status (fresh skip), update freshness
       if (newPack.data_status) {
         set({ freshness: newPack.data_status });
@@ -500,6 +507,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       const tracker: { elapsed: number | null } = { elapsed: null };
       const handleEvent = makeRefreshEventHandler(set, get, tracker);
       const newPack = await api.refreshBriefingStream(flight.id, handleEvent, true);
+      // Null = gated no-op with no pack (pending coverage) even under force —
+      // no model reaches the date. Clear the spinner; nothing to select.
+      if (!newPack) {
+        set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: null, digestPending: false });
+        return;
+      }
       await get().loadPacks();
       await get().selectPack(newPack.fetch_timestamp);
       set({ refreshing: false, refreshStatus: null, refreshStage: null, refreshDetail: null, refreshProgress: 0, refreshElapsed: tracker.elapsed, digestPending: false });

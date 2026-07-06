@@ -19,7 +19,7 @@ from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
 from weatherbrief.db.models import BriefingPackRow
-from weatherbrief.fetch.variables import dual_model_horizon_days
+from weatherbrief.fetch.variables import MAX_BOOKING_LEAD_DAYS, dual_model_horizon_days
 from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
@@ -258,15 +258,6 @@ def _is_admin_or_dev(request: Request, db: Session) -> bool:
         return False
 
 
-# How far ahead a flight may be saved. This is deliberately NOT the forecast
-# horizon: pilots asked to book trips early and let the briefing fill in once
-# the models reach the date. Flights between the forecast horizon
-# (``dual_model_horizon_days``) and this cap are saved in a "pending coverage"
-# state (see ``_compute_coverage``) rather than rejected. The cap only guards
-# against absurd input — a mistyped year creating a flight decades out.
-MAX_BOOKING_LEAD_DAYS = 180
-
-
 def _reject_if_beyond_booking_cap(departure_time: datetime) -> None:
     """Reject a flight whose date is past the maximum booking lead time.
 
@@ -311,11 +302,14 @@ def _compute_coverage(departure_time: datetime) -> "CoveragePending | None":
     available = departure_time.date() - timedelta(days=horizon)
     full_date: str | None = None
     try:
-        from weatherbrief.fetch.freshness.registry import first_full_coverage
+        from weatherbrief.fetch.freshness.registry import (
+            ECMWF_GRIB_SOURCE,
+            first_full_coverage,
+        )
 
-        # "ecmwf:direct" mirrors llm_digest._ECMWF_GRIB_SOURCE — the full-res
-        # GRIB feed whose 168h horizon marks the full-briefing boundary.
-        _, delivery = first_full_coverage("ecmwf:direct", departure_time)
+        # The full-res GRIB feed whose 168h horizon marks the full-briefing
+        # boundary (shared registry constant — no duplicated key string).
+        _, delivery = first_full_coverage(ECMWF_GRIB_SOURCE, departure_time)
         full_date = delivery.date().isoformat()
     except Exception:
         logger.debug("coverage: could not resolve full-briefing date", exc_info=True)
