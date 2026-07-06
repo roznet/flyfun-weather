@@ -398,7 +398,10 @@ export interface RefreshStreamEvent {
 
 /**
  * Stream a briefing refresh via SSE, calling onEvent for each progress update.
- * Returns the final PackMeta on completion.
+ * Returns the final PackMeta on completion, or `null` when the server completed
+ * with a gated no-op that produced no pack (e.g. a pending-coverage flight whose
+ * date no model reaches yet — the `complete` event carries `pack: null`).
+ * Throws only on an error event or a genuinely dropped stream (no `complete`).
  */
 export async function refreshBriefingStream(
   flightId: string,
@@ -406,7 +409,7 @@ export async function refreshBriefingStream(
   force?: boolean,
   asOfDate?: string,
   notifyEmail?: boolean,
-): Promise<PackMeta> {
+): Promise<PackMeta | null> {
   const params = new URLSearchParams();
   if (force) params.set('force', 'true');
   if (asOfDate) params.set('as_of_date', asOfDate);
@@ -437,6 +440,7 @@ export async function refreshBriefingStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let finalPack: PackMeta | null = null;
+  let sawComplete = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -464,8 +468,13 @@ export async function refreshBriefingStream(
         const event: RefreshStreamEvent = JSON.parse(data);
         onEvent(event);
 
-        if (event.type === 'complete' && event.pack) {
-          finalPack = event.pack;
+        if (event.type === 'complete') {
+          // `complete` is the terminal event whether or not it carries a pack.
+          // Gated no-ops (pending coverage) send `pack: null`; a normal refresh
+          // sends the final pack. Record completion either way so a null-pack
+          // completion is a defined terminal state, not mistaken for a drop.
+          finalPack = event.pack ?? null;
+          sawComplete = true;
         } else if (event.type === 'error') {
           throw new RefreshStreamError(event.message || 'Refresh stream error');
         }
@@ -476,7 +485,9 @@ export async function refreshBriefingStream(
     }
   }
 
-  if (!finalPack) {
+  // No `complete` event at all → the stream genuinely dropped. (A completion
+  // that carried no pack still set sawComplete and returns null below.)
+  if (!sawComplete) {
     throw new Error('Refresh stream ended without completion');
   }
 

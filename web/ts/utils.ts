@@ -220,12 +220,27 @@ export function dualModelHorizonDays(fallback = 9): number {
   return Math.min(ecmwf, gfs) - 1;
 }
 
-/** How far ahead a flight may be saved. Mirrors the backend
- *  `flights.MAX_BOOKING_LEAD_DAYS`. Beyond the forecast horizon (but within
- *  this cap) a flight saves in a "pending coverage" state and briefs
- *  automatically once a model run reaches the date; past the cap the backend
- *  rejects the save. Bounds the flight-date picker. */
-export const MAX_BOOKING_LEAD_DAYS = 180;
+/** Booking limits served by `/api/models/config` (see api/models.py) so the
+ *  date picker shares one source with the backend gate instead of hardcoding. */
+export interface BookingConfig {
+  max_booking_lead_days: number;
+  forecast_horizon_days: number;
+}
+
+let _bookingConfig: BookingConfig | null = null;
+
+export function initBookingConfig(cfg: BookingConfig): void {
+  _bookingConfig = cfg;
+}
+
+/** How far ahead a flight may be saved (backend-served via `/api/models/config`).
+ *  Beyond the forecast horizon but within this cap, a flight saves in a "pending
+ *  coverage" state and briefs once a model run reaches the date; past the cap the
+ *  backend rejects the save. Bounds the flight-date picker. Falls back to
+ *  `fallback` only if the config endpoint hasn't loaded (network failure). */
+export function maxBookingLeadDays(fallback = 180): number {
+  return _bookingConfig?.max_booking_lead_days ?? fallback;
+}
 
 export function allModelKeys(): string[] {
   return _catalog.map(m => m.key);

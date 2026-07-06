@@ -24,16 +24,19 @@ from weatherbrief.digest.exceptions import classify_llm_exception
 from weatherbrief.digest.llm_config import DigestConfig, create_llm
 from weatherbrief.digest.outlook import OUTLOOK_ICONS, OUTLOOK_LABELS
 from weatherbrief.digest.prompt_builder import build_digest_context
-from weatherbrief.fetch.freshness.registry import first_full_coverage, max_horizon
+from weatherbrief.fetch.freshness.registry import (
+    ECMWF_GRIB_SOURCE as _ECMWF_GRIB_SOURCE,
+    first_full_coverage,
+    max_horizon,
+)
 from weatherbrief.fetch.text_forecasts import fetch_text_forecasts
 from weatherbrief.models import Diagnostic, ForecastSnapshot
 
 logger = logging.getLogger(__name__)
 
-# Source key for the high-resolution ECMWF GRIB feed — its horizon (168h on the
-# 00/12Z full-horizon cycles) is the boundary between the full short-range
-# briefing and the trimmed long-range outlook.
-_ECMWF_GRIB_SOURCE = "ecmwf:direct"
+# `_ECMWF_GRIB_SOURCE` is imported from the registry (see above): its horizon
+# (168h on the 00/12Z full-horizon cycles) is the boundary between the full
+# short-range briefing and the trimmed long-range outlook.
 
 
 # --- Structured output models ---
