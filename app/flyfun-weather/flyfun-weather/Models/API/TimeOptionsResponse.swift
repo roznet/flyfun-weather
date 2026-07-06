@@ -28,6 +28,23 @@ struct TimeScanStatusDTO: Codable, Sendable {
     let flexibility: FlexibilityMode
     let reason: String
     let updatedAt: String
+
+    private enum CodingKeys: String, CodingKey {
+        case status, flexibility, reason, updatedAt
+    }
+
+    /// Tolerant decode, matching every other DTO in this file: a missing or
+    /// renamed key degrades that one field instead of failing the whole
+    /// `TimeOptionsResponse` decode (which would blank the panel via the poll's
+    /// error path). `status` drives the state ladder, so an absent/unknown value
+    /// defaults to the terminal `.done` — never spin forever on schema drift.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = (try? c.decode(TimeScanJobStatus.self, forKey: .status)) ?? .done
+        flexibility = (try? c.decode(FlexibilityMode.self, forKey: .flexibility)) ?? .none
+        reason = (try? c.decode(String.self, forKey: .reason)) ?? ""
+        updatedAt = (try? c.decode(String.self, forKey: .updatedAt)) ?? ""
+    }
 }
 
 /// Job lifecycle. `.pending`/`.running` are non-terminal (keep polling);
