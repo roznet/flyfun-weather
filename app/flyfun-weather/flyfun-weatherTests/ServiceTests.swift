@@ -409,4 +409,46 @@ import Foundation
         await s2.load()
         #expect(await s2.pendingCount == 1)
     }
+
+    /// Per-user scoping (751f34be): two users' queues live at distinct scoped
+    /// paths (`PendingPireps/<scope>/pending_pireps.json`), so user B never syncs
+    /// user A's queued report — the mis-attribution the scoping fix prevents.
+    /// Mirrors `BriefingCacheStore`'s `perScopeDirsAreIsolated` on the PIREP side.
+    @Test func perScopeQueuesAreIsolated() async {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        func scoped(_ scope: String) -> URL {
+            dir.appendingPathComponent("PendingPireps", isDirectory: true)
+                .appendingPathComponent(scope, isDirectory: true)
+                .appendingPathComponent("pending_pireps.json")
+        }
+        let a = PirepOfflineStore(fileURL: scoped("aaaa"))
+        let b = PirepOfflineStore(fileURL: scoped("bbbb"))
+
+        await a.enqueue(makePirepRequest(remarks: "A's position + notes"))
+
+        // B loads its own (empty) scoped queue; A's report is invisible to it.
+        await b.load()
+        #expect(await b.pendingCount == 0)
+        #expect(await a.pendingCount == 1)
+    }
+
+    /// `clear()` (account deletion) drops the in-memory queue and removes the
+    /// on-disk file, so nothing the user authored is left behind.
+    @Test func clearWipesQueueAndFile() async {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("pending.json")
+        let s = PirepOfflineStore(fileURL: file)
+        await s.enqueue(makePirepRequest())
+        #expect(await s.pendingCount == 1)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+
+        await s.clear()
+        #expect(await s.pendingCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        // A fresh store on the same path loads nothing.
+        let reopened = PirepOfflineStore(fileURL: file)
+        await reopened.load()
+        #expect(await reopened.pendingCount == 0)
+    }
 }
