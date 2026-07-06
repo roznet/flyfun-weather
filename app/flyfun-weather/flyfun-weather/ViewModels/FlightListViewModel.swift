@@ -34,6 +34,18 @@ final class FlightListViewModel {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
+        // Cache-first cold start: if a cached list is on disk, paint it before
+        // touching the network so a fresh open never blocks on `/api/flights`
+        // behind a full-screen spinner (#359). Seeding from `.idle` turns the
+        // load below into the #1 warm-refresh path — the seeded list stays on
+        // screen behind the subtle indicator while fresh data swaps in. The
+        // server stays authoritative: the network result always replaces the
+        // seed (or the offline fallback keeps it, with `isOffline` set).
+        if case .idle = state,
+           let caching = repository as? CachingBriefingRepository,
+           let cached = await caching.cachedFlights(), !cached.isEmpty {
+            state = .loaded(cached)
+        }
         // Only show the full-screen spinner on the very first load. A refresh
         // (scene re-activation, pull-to-refresh, post-edit) keeps the current
         // list on screen and swaps in fresh data when it arrives, so reopening

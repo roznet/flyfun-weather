@@ -14,7 +14,10 @@ enum DownloadState: Equatable {
 /// Caching is explicit — only packs downloaded via `downloadPack()` are cached.
 final class CachingBriefingRepository: BriefingRepository {
     private let client: APIClient
-    private let online: OnlineBriefingRepository
+    // Protocol type (not the concrete `OnlineBriefingRepository`) so the online
+    // layer can be faulted with a test double — the seam ServiceTests flagged as
+    // a follow-up. Production still injects `OnlineBriefingRepository`.
+    private let online: any BriefingRepository
     let cache: BriefingCacheStore
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "CachingRepo")
@@ -31,7 +34,7 @@ final class CachingBriefingRepository: BriefingRepository {
     /// Whether the last `flights()` call was served from cache (offline).
     private(set) var isServingCachedFlights = false
 
-    init(client: APIClient, online: OnlineBriefingRepository, cache: BriefingCacheStore) {
+    init(client: APIClient, online: any BriefingRepository, cache: BriefingCacheStore) {
         self.client = client
         self.online = online
         self.cache = cache
@@ -108,6 +111,16 @@ final class CachingBriefingRepository: BriefingRepository {
             }
             throw error
         }
+    }
+
+    /// Cached flight list from `flights.json`, if present. No network — lets the
+    /// flight list paint instantly on cold start and revalidate in the
+    /// background (#359), instead of only serving as an offline fallback.
+    func cachedFlights() async -> [FlightResponse]? {
+        guard let data = await cache.readMetadata(name: "flights"),
+              let cached = try? JSONDecoder.weatherBrief.decode([FlightResponse].self, from: data)
+        else { return nil }
+        return cached
     }
 
     func packs(flightId: String) async throws -> [PackMetaResponse] {
