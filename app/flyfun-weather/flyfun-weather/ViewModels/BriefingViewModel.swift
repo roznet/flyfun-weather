@@ -549,8 +549,10 @@ final class BriefingViewModel {
         }
         // Kick the timing-scenario poll for this pack (no-op when Flexibility is
         // `none`). Runs after the briefing loads — the scan is a background job
-        // reached only by polling, not the refresh SSE stream.
-        startTimeOptionsPolling(timestamp: timestamp)
+        // reached only by polling, not the refresh SSE stream. `resetExisting`
+        // drops any prior pack's scan so a pack switch can't briefly render
+        // another run's candidates until the new poll lands.
+        startTimeOptionsPolling(timestamp: timestamp, resetExisting: true)
     }
 
     // MARK: - Timing scenarios (#357)
@@ -563,8 +565,18 @@ final class BriefingViewModel {
 
     /// (Re)start the poll loop for a pack. Cancels any in-flight poll first, so a
     /// pack switch or a post-confirm re-poll never runs two loops at once.
-    func startTimeOptionsPolling(timestamp: String) {
+    ///
+    /// Pass `resetExisting: true` when the pack changed (a fresh load / switch /
+    /// refresh) so the previous pack's scan is dropped up front — mirroring the
+    /// web, which nulls `timeOptions` as it installs a new pack. Same-pack
+    /// re-polls (confirm / set-as-alternate) keep the current panel so its
+    /// pending state doesn't flash away.
+    func startTimeOptionsPolling(timestamp: String, resetExisting: Bool = false) {
         timeOptionsPollTask?.cancel()
+        if resetExisting {
+            timeOptions = nil
+            timeOptionsOffline = false
+        }
         guard flight.effectiveFlexibility != .none else {
             timeOptions = nil
             timeOptionsOffline = false

@@ -188,6 +188,17 @@ struct TimeBaselineDTO: Codable, Sendable {
         assessment = (try? c.decode(String.self, forKey: .assessment)) ?? ""
         assessmentReason = (try? c.decode(String.self, forKey: .assessmentReason)) ?? ""
     }
+
+    init(departureTime: String, assessment: String, assessmentReason: String) {
+        self.departureTime = departureTime
+        self.assessment = assessment
+        self.assessmentReason = assessmentReason
+    }
+
+    /// Safe default when a scan is missing its `baseline` key — keeps the whole
+    /// `TimeOptionsResponse` decode alive (an empty baseline just suppresses the
+    /// same-day "Set as alternate" affordance, which reads `baseline`).
+    static let empty = TimeBaselineDTO(departureTime: "", assessment: "", assessmentReason: "")
 }
 
 /// The `time_options.json` artifact — everything the scenario panel renders.
@@ -207,10 +218,25 @@ struct TimeWindowScanDTO: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         flexibility = (try? c.decode(FlexibilityMode.self, forKey: .flexibility)) ?? .none
-        baseline = try c.decode(TimeBaselineDTO.self, forKey: .baseline)
+        // Tolerant like every other field — a missing `baseline` degrades to an
+        // empty one instead of failing the entire TimeOptionsResponse decode.
+        baseline = (try? c.decode(TimeBaselineDTO.self, forKey: .baseline)) ?? .empty
         window = try? c.decodeIfPresent(TimeWindowDTO.self, forKey: .window)
-        candidates = (try? c.decode([TimeCandidateDTO].self, forKey: .candidates)) ?? []
+        // Lenient element decode: a single malformed candidate drops only itself,
+        // not the whole list (a plain `[TimeCandidateDTO]` decode aborts the
+        // entire array on the first throwing element → a false "no windows").
+        candidates = (try? c.decode([LenientCandidate].self, forKey: .candidates))?
+            .compactMap(\.value) ?? []
         refusedTimes = (try? c.decode([String].self, forKey: .refusedTimes)) ?? []
         generatedAt = (try? c.decode(String.self, forKey: .generatedAt)) ?? ""
+    }
+}
+
+/// Wrapper whose decode never throws, so decoding `[LenientCandidate]` survives a
+/// malformed element (it becomes `nil`) instead of aborting the whole array.
+private struct LenientCandidate: Decodable {
+    let value: TimeCandidateDTO?
+    init(from decoder: Decoder) throws {
+        value = try? TimeCandidateDTO(from: decoder)
     }
 }
