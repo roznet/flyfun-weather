@@ -225,6 +225,14 @@ struct CrossSectionView: View {
                         .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
                 })
                 .gesture(scrubGesture)
+                // A Canvas has no intrinsic a11y children, so expose it as a
+                // single element with a stable id. The XCUITest cross-section
+                // journey (#318) asserts this renders (only present once the
+                // canvas draws — vs. the loading/error placeholder below, which
+                // has no such id). Kept on this leaf, not a wrapping container,
+                // so no parent identifier can propagate over and clobber it.
+                .accessibilityElement()
+                .accessibilityIdentifier("crossSectionCanvas")
         } else {
             switch viewModel.routeAnalysesState {
             case .idle, .loading:

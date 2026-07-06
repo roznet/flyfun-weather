@@ -9,9 +9,11 @@
 //  seams added for testability), so they never touch the shared app container
 //  and can't pollute each other.
 //
-//  Deferred: CachingBriefingRepository's online→cache fallback chain wraps a
-//  *concrete* OnlineBriefingRepository(APIClient), so faulting the online layer
-//  needs a protocol-injection refactor — tracked as a follow-up, not done here.
+//  CachingBriefingRepository's online→cache fallback chain is exercised in
+//  ViewModelTests' "cache-first cold start" suite: the #359 refactor made the
+//  repo wrap `any BriefingRepository`, so `makeForTesting(online:cache:)` faults
+//  the online layer with a `MockBriefingRepository`. This file keeps the on-disk
+//  cache/eviction coverage that never needs the network.
 //
 
 import Testing

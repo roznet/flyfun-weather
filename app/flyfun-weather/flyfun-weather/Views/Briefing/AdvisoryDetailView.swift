@@ -65,6 +65,7 @@ struct AdvisoryDetailView: View {
             }
             .padding(Theme.cardPadding)
         }
+        .accessibilityIdentifier("advisoryDetail")
     }
 
     private func header(_ detail: AdvisoryDetailResponse) -> some View {
@@ -116,6 +117,8 @@ struct AdvisoryDetailView: View {
             }
         }
         .padding(.vertical, Theme.spacingXS)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("advisoryDetailModel-\(m.model)")
     }
 
     /// Convective reconciliation: the "RED under blue sky" story with peak + ETA.

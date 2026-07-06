@@ -73,10 +73,11 @@ final class FlightListViewModel {
         }
         do {
             let flights = try await repository.flights()
-            // Check offline/cache status
-            if let caching = repository as? CachingBriefingRepository {
-                isOffline = caching.isServingCachedFlights
-                await refreshCachedFlightIds(caching)
+            // Check offline/cache status (via `CacheStatusReporting` so the DEBUG
+            // fixture repo can present offline without a real cache, #318).
+            if let reporter = repository as? CacheStatusReporting {
+                isOffline = reporter.isServingCachedFlights
+                await refreshCachedFlightIds(reporter)
             }
             state = .loaded(flights)
             Self.logger.info("Loaded \(flights.count) flights (offline=\(self.isOffline), cached=\(self.cachedFlightIds.count))")
@@ -93,11 +94,10 @@ final class FlightListViewModel {
         }
     }
 
-    /// Refresh the "available offline" badge set from the on-disk pack cache.
-    /// Disk-only (no network); shared by the cold-start seed and the post-fetch
-    /// update so both paint a consistent set of offline badges.
-    private func refreshCachedFlightIds(_ caching: CachingBriefingRepository) async {
-        let packs = await caching.cachedPacks()
-        cachedFlightIds = Set(packs.map(\.flightId))
+    /// Refresh the "available offline" badge set from the offline-ready flights.
+    /// Disk-only (no network) for the caching repo; shared by the cold-start seed
+    /// and the post-fetch update so both paint a consistent set of offline badges.
+    private func refreshCachedFlightIds(_ reporter: any CacheStatusReporting) async {
+        cachedFlightIds = await reporter.offlineReadyFlightIds()
     }
 }

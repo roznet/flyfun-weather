@@ -11,14 +11,37 @@ import Foundation
 /// Flights use far-future departures so they land in the list's "Future" group
 /// regardless of when the test runs.
 ///
-/// An `actor` (like `BriefingCacheStore` / `PirepOfflineStore`) so the
-/// `createdFlights` mutation is properly isolated — every call already arrives
-/// via `await` through the `BriefingRepository` protocol.
-actor FixtureBriefingRepository: BriefingRepository {
+/// A `@MainActor final class` (like the real `CachingBriefingRepository`, and
+/// matching this project's default main-actor isolation) — the `createdFlights`
+/// mutation is serialized by the main actor, and reads of the main-actor
+/// `FixtureBriefingData` statics stay in-isolation. Every call arrives via
+/// `await` through the `BriefingRepository` protocol.
+///
+/// `fixture-1` serves a full, coherent briefing (`FixtureBriefingData`) so the
+/// advisory drill-down + cross-section journeys have real data; other flights'
+/// briefing endpoints throw `notFound`/`notProvided` (they aren't opened by a
+/// journey). In `offline` mode (`FLYFUN_MOCK_OFFLINE=1`) the repo reports itself
+/// as serving a cached list (`CacheStatusReporting`), so the flight list shows
+/// the offline banner + read-only behaviour without a real cache or network.
+final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting {
 
     enum FixtureError: Error, CustomStringConvertible {
         case notProvided(String)
         var description: String { if case .notProvided(let m) = self { "fixture not provided: \(m)" } else { "" } }
+    }
+
+    /// Simulated offline state (`CacheStatusReporting`). `nonisolated let` so the
+    /// flight list can read it synchronously, like `CachingBriefingRepository`.
+    nonisolated let isServingCachedFlights: Bool
+
+    init(offline: Bool = false) {
+        self.isServingCachedFlights = offline
+    }
+
+    /// Offline, `fixture-1` is the one flight with a "downloaded" pack, so it
+    /// stays tappable while the rest of the list is read-only. Empty when online.
+    func offlineReadyFlightIds() async -> Set<String> {
+        isServingCachedFlights ? [FixtureBriefingData.flightId] : []
     }
 
     private static func decodeFlights() -> [FlightResponse] {
@@ -80,10 +103,49 @@ actor FixtureBriefingRepository: BriefingRepository {
         try JSONDecoder.weatherBrief.decode(UsageSummaryResponse.self, from: Data("{}".utf8))
     }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
-    func packs(flightId: String) async throws -> [PackMetaResponse] { [] }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { PirepListResponse(items: [], count: 0) }
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
         AsyncThrowingStream { $0.finish() }
+    }
+
+    // MARK: Briefing pack — served for `fixture-1` (#318)
+
+    /// The one fixture flight that carries a full briefing. Endpoints below serve
+    /// `FixtureBriefingData` for it and throw `notFound` for anything else — a
+    /// created/other flight then follows the normal "no pack yet" path rather
+    /// than rendering fixture-1's data under the wrong route.
+    private func isBriefed(_ flightId: String) -> Bool { flightId == FixtureBriefingData.flightId }
+
+    func latestPack(flightId: String) async throws -> PackMetaResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return FixtureBriefingData.pack
+    }
+    func packs(flightId: String) async throws -> [PackMetaResponse] {
+        isBriefed(flightId) ? FixtureBriefingData.packs : []
+    }
+    func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return FixtureBriefingData.advisories
+    }
+    func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse {
+        guard isBriefed(flightId), advisoryId == "convective" else { throw FixtureError.notProvided("advisoryDetail(\(advisoryId))") }
+        return FixtureBriefingData.convectiveDetail
+    }
+    func digest(flightId: String, timestamp: String) async throws -> DigestResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return FixtureBriefingData.digest
+    }
+    func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return FixtureBriefingData.snapshot
+    }
+    func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return FixtureBriefingData.routeAnalyses
+    }
+    func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse {
+        guard isBriefed(flightId) else { throw APIError.notFound }
+        return FixtureBriefingData.elevation
     }
 
     // MARK: Not yet needed by a journey
@@ -94,17 +156,10 @@ actor FixtureBriefingRepository: BriefingRepository {
     func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse { throw FixtureError.notProvided("interpretRoute") }
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw FixtureError.notProvided("routeDistance") }
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
-    func latestPack(flightId: String) async throws -> PackMetaResponse { throw FixtureError.notProvided("latestPack") }
-    func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse { throw FixtureError.notProvided("advisories") }
-    func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse { throw FixtureError.notProvided("advisoryDetail") }
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw FixtureError.notProvided("recalculateAdvisories") }
     func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse { throw FixtureError.notProvided("timeOptions") }
     func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws { throw FixtureError.notProvided("confirmTimeOption") }
     func rescanTimeOptions(flightId: String, timestamp: String) async throws { throw FixtureError.notProvided("rescanTimeOptions") }
-    func digest(flightId: String, timestamp: String) async throws -> DigestResponse { throw FixtureError.notProvided("digest") }
-    func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse { throw FixtureError.notProvided("snapshot") }
-    func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse { throw FixtureError.notProvided("routeAnalyses") }
-    func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse { throw FixtureError.notProvided("elevation") }
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data { throw FixtureError.notProvided("skewtImage") }
     func grametImage(flightId: String, timestamp: String) async throws -> Data { throw FixtureError.notProvided("grametImage") }
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse { throw FixtureError.notProvided("soundingProfile") }

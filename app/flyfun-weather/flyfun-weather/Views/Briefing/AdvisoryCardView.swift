@@ -70,6 +70,7 @@ struct AdvisoryCardView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
+                    .accessibilityIdentifier("advisoryWhy-\(advisory.advisoryId)")
                 }
                 if let viewModel, let preset = lensPreset {
                     Button {
@@ -107,6 +108,11 @@ struct AdvisoryCardView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                // Row id on this leaf, NOT the card container: a container-level
+                // accessibilityIdentifier propagates onto (and overrides) every
+                // descendant leaf's own id in SwiftUI, which would clobber the
+                // `advisoryWhy-*` button below (#318).
+                .accessibilityIdentifier("advisory-\(advisory.advisoryId)")
                 // (i) help popup — content from the cached help catalog (#311).
                 // Gated on cache presence so first-run (pre-sync, before any
                 // advisory help has been fetched) shows no dead button — mirrors

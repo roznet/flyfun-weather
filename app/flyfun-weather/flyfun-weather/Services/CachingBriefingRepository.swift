@@ -15,7 +15,7 @@ enum DownloadState: Equatable {
 
 /// Repository that serves cached data when available, falls back to network.
 /// Caching is explicit — only packs downloaded via `downloadPack()` are cached.
-final class CachingBriefingRepository: BriefingRepository {
+final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting {
     private let client: APIClient
     // Protocol type (not the concrete `OnlineBriefingRepository`) so the online
     // layer can be faulted with a test double — the seam ServiceTests flagged as
@@ -366,6 +366,12 @@ final class CachingBriefingRepository: BriefingRepository {
 
     func cachedPacks() async -> [CachedPackEntry] {
         await cache.cachedPacks()
+    }
+
+    /// `CacheStatusReporting`: a flight is offline-ready once it has a downloaded
+    /// pack in the on-disk index.
+    func offlineReadyFlightIds() async -> Set<String> {
+        Set(await cachedPacks().map(\.flightId))
     }
 
     // MARK: - Cache eviction

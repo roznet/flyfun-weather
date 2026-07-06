@@ -24,6 +24,14 @@ struct FlightListView: View {
                         if flights.isEmpty {
                             emptyStateView
                         } else {
+                            VStack(spacing: 0) {
+                            // Offline banner (#304/#318): the list is being served
+                            // from the on-disk cache. Rows without a downloaded
+                            // pack are dimmed + non-tappable (read-only), so the
+                            // banner explains why. Only shown when actually offline.
+                            if viewModel.isOffline {
+                                OfflineListBanner()
+                            }
                             // Utility logbook (§4.4): Future · Recent · Past.
                             // Past is collapsible (collapsed by default).
                             List(selection: $selectedFlight) {
@@ -64,6 +72,7 @@ struct FlightListView: View {
                                 await viewModel.loadFlights()
                             }
                             .accessibilityIdentifier("flightList")
+                            }
                         }
                     }
                 } else {
@@ -282,6 +291,28 @@ struct FlightListView: View {
                 .buttonStyle(.bordered)
             }
         }
+    }
+}
+
+/// Thin banner shown atop the flight list when it's served from cache (offline).
+/// Communicates the read-only state that would otherwise only show as dimmed
+/// rows (#304 "showing cached"). Carries a stable identifier for the XCUITest
+/// offline journey (#318).
+private struct OfflineListBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wifi.slash")
+                .foregroundStyle(.secondary)
+            Text("Offline — showing saved flights")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, Theme.cardPadding)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial)
+        .accessibilityIdentifier("offlineBanner")
     }
 }
 
