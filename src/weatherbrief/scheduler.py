@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.db import SessionLocal
 from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FlightRow
-from weatherbrief.fetch.variables import dual_model_horizon_days
+from weatherbrief.fetch.variables import is_beyond_forecast_horizon
 from weatherbrief.privacy import mask_email
 
 if TYPE_CHECKING:
@@ -207,7 +207,7 @@ def _find_due_flights(db: Session) -> list[FlightRow]:
         # Beyond the forecast horizon — no model reaches the date yet, so a
         # refresh would only build an empty pack. Skip until the flight crosses
         # into range; the next due slot after that generates the first briefing.
-        if (flight_start.date() - now_utc.date()).days > dual_model_horizon_days():
+        if is_beyond_forecast_horizon(flight_start.date(), now_utc.date()):
             continue
 
         # Model-update-aware timing (issue #192) applies to the silent

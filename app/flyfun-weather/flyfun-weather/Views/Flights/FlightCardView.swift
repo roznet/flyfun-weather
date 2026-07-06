@@ -89,10 +89,17 @@ struct FlightCardView: View {
 private struct PendingCoverageBadge: View {
     let coverage: CoveragePending
 
+    private var dateText: String? {
+        coverage.availableDay.map { DateFormatter.shortDate.string(from: $0) }
+    }
+
     private var label: String {
-        if let day = coverage.availableDay {
-            return "Pending · \(DateFormatter.shortDate.string(from: day))"
-        }
+        if let dateText { return "Pending · \(dateText)" }
+        return "Pending"
+    }
+
+    private var accessibilityText: String {
+        if let dateText { return "Pending, available \(dateText)" }
         return "Pending"
     }
 
@@ -104,7 +111,7 @@ private struct PendingCoverageBadge: View {
             .padding(.vertical, 3)
             .background(Color.secondary.opacity(0.12), in: Capsule())
             .overlay(Capsule().stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
-            .accessibilityLabel("Pending, available \(label)")
+            .accessibilityLabel(accessibilityText)
     }
 }
 

@@ -736,22 +736,30 @@ def _days_out_now(flight: Flight) -> int:
     return (flight.departure_time.date() - now.date()).days
 
 
-def pending_coverage_date(flight: Flight) -> date | None:
+def pending_coverage_date(flight: Flight, as_of: datetime | None = None) -> date | None:
     """Coverage-start date if the flight is beyond the booking horizon, else None.
 
     Beyond the dual-model horizon no model run reaches the flight date, so a
     refresh can only produce an empty pack. Callers use this to short-circuit
     the pipeline (returning a benign "pending coverage" no-op) until the flight
-    crosses into range, at which point it rejoins the normal refresh paths.
-    The returned date is when the first briefing becomes available
-    (departure − horizon). Shared by both refresh endpoints and the scheduler.
-    """
-    from weatherbrief.fetch.variables import dual_model_horizon_days
+    crosses into range. The returned date is when the first briefing becomes
+    available (departure − horizon).
 
-    horizon = dual_model_horizon_days()
-    if _days_out_now(flight) <= horizon:
+    ``as_of`` pins the reference date: pass the refresh's ``as_of_date`` so a
+    caller backtesting a still-future flight (e.g. the ``investigateflight``
+    skill, simulating the coverage that would exist at that pinned date) is
+    evaluated as of that date rather than being unconditionally shunted into the
+    no-op by wall-clock "now". Defaults to now.
+    """
+    from weatherbrief.fetch.variables import (
+        coverage_start_date,
+        is_beyond_forecast_horizon,
+    )
+
+    ref = (as_of or datetime.now(timezone.utc)).date()
+    if not is_beyond_forecast_horizon(flight.departure_time.date(), ref):
         return None
-    return flight.departure_time.date() - timedelta(days=horizon)
+    return coverage_start_date(flight.departure_time.date())
 
 
 def decide_refresh(status: DataStatus, days_out: int) -> RefreshDecision:
@@ -1648,8 +1656,9 @@ async def refresh_briefing(
 
     # Beyond the booking horizon: no model reaches the date yet, so running the
     # pipeline would only produce an empty pack. Return a benign pending-coverage
-    # no-op; the flight briefs automatically once it crosses into range.
-    coverage_date = pending_coverage_date(flight)
+    # no-op; the flight briefs automatically once it crosses into range. A pinned
+    # as_of_date is honored (backtest of coverage as it would stand then).
+    coverage_date = pending_coverage_date(flight, as_of=as_of_time)
     if coverage_date is not None:
         logger.info("Refresh gate for %s: pending_coverage (available %s)", flight_id, coverage_date)
         return Response(
@@ -1847,7 +1856,8 @@ async def refresh_briefing_stream(
         # Beyond the booking horizon: no model reaches the date yet. Emit a
         # complete event with no pack and a pending-coverage decision so the
         # client can render its pending state without treating it as an error.
-        coverage_date = pending_coverage_date(flight)
+        # A pinned as_of_date is honored (backtest of coverage as it would stand).
+        coverage_date = pending_coverage_date(flight, as_of=as_of_time)
         if coverage_date is not None:
             logger.info(
                 "Refresh gate for %s (stream): pending_coverage (available %s)",
