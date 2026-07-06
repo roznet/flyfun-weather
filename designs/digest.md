@@ -175,7 +175,21 @@ Beyond the **ECMWF GRIB horizon** (`ecmwf_grib_horizon_days()` — 168h → 7 da
 
 **Pack persistence:** migration `068` adds nullable `outlook` / `outlook_reason` columns to `briefing_packs`, **mutually exclusive with `assessment`** — NULL for short-range packs (which use the traffic light) and legacy packs. The flight list and briefing page show the outlook tendency in place of a verdict.
 
-> The GRIB-horizon outlook boundary is one of two long-range horizons — keep it distinct from the separate booking-gate horizon. See the project memory note "Long-range outlook + dual horizons".
+> **Three distinct horizons — keep them separate.** Since the pending-coverage
+> feature (PR #362) the old "booking gate == dual-model horizon" equivalence no
+> longer holds. There are now three boundaries:
+> 1. **Booking cap = `MAX_BOOKING_LEAD_DAYS` (180 days)** — the only save-time
+>    gate (`api/flights.py:_reject_if_beyond_booking_cap`); an absurdity guard,
+>    not a forecast boundary.
+> 2. **Forecast-coverage horizon = `dual_model_horizon_days()` (~9 days)** — last
+>    lead day both global models reach. A flight saved beyond this is allowed but
+>    **pending coverage** (`is_beyond_forecast_horizon` / `coverage_start_date`
+>    in `fetch/variables.py`); it briefs automatically once it crosses in.
+> 3. **Full-GRIB-briefing horizon = `ecmwf_grib_horizon_days()` (~7 days)** — the
+>    outlook-regime boundary described in this section (168h ECMWF GRIB).
+>
+> This section's outlook boundary is #3. See the project memory note
+> "Long-range outlook + dual horizons" and "Pending-coverage future flights".
 
 ### Deterministic Guardrails (`digest/guardrails.py`)
 

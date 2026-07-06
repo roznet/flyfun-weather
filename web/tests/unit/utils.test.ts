@@ -5,6 +5,7 @@ import {
   escapeHtml, formatTime, formatDepartureTime, formatAlt,
   isFlightPast, flightTitle, flightRouteCompact,
   buildWindyUrl, errorToMessage, flightShareUrl,
+  initBookingConfig, maxBookingLeadDays,
 } from '../../ts/utils';
 
 describe('escapeHtml', () => {
@@ -227,5 +228,19 @@ describe('flightShareUrl', () => {
     const url = flightShareUrl(longId, null, '');
     expect(url).toContain('/flight.html?id=');
     expect(url).not.toContain('/s/');
+  });
+});
+
+describe('maxBookingLeadDays', () => {
+  it('returns the fallback (180) before config loads', () => {
+    expect(maxBookingLeadDays()).toBe(180);
+    expect(maxBookingLeadDays(90)).toBe(90);
+  });
+
+  it('returns the backend-served cap once config is initialised', () => {
+    initBookingConfig({ max_booking_lead_days: 200, forecast_horizon_days: 9 });
+    expect(maxBookingLeadDays()).toBe(200);
+    // Restore the default so test ordering can't leak the override.
+    initBookingConfig({ max_booking_lead_days: 180, forecast_horizon_days: 9 });
   });
 });

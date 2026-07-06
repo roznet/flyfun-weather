@@ -62,7 +62,9 @@ struct BriefingContainerView: View {
         .navigationSubtitle(identitySubtitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let viewModel {
+            // A pending-coverage flight has no pack: hide the pack picker and the
+            // refresh/download/track actions — none apply until it's in range.
+            if let viewModel, flight.coverage == nil {
                 ToolbarItem(placement: .topBarLeading) {
                     BriefingPackToolbar(viewModel: viewModel)
                 }
