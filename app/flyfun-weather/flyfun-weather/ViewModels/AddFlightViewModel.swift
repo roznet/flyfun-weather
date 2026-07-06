@@ -610,15 +610,15 @@ final class AddFlightViewModel {
             flightDurationHours: flightDurationHours,
             profileId: selectedProfileId,
             flexibility: flexibility,
-            // In `.alternate` mode send the pinned time; in every other mode send
-            // "" to *clear* any stored alt time (mirrors web `flight-main.ts`).
-            // Omitting it (`nil`) would be a server no-op — the backend only
-            // clears `alt_departure_time` on an explicit "" — so a mode switched
-            // away from `.alternate` would keep a stale alt that later resurfaces
-            // as a "★ your alternate" tag on an unrelated day-scan candidate.
-            altDepartureTime: flexibility == .alternate
-                ? formatter.string(from: altDepartureTime.instant)
-                : ""
+            // Alt time, three cases (the backend only clears `alt_departure_time`
+            // on an explicit "" — omitting `nil` is a no-op):
+            //  • `.alternate` mode          → send the pinned time.
+            //  • *leaving* `.alternate`     → send "" to clear the stale alt.
+            //  • already a day/`none` mode  → omit (`nil`). A day-scan flight can
+            //    carry a pinned "★ your alternate" set via "Set as alternate"
+            //    while its mode stays a day mode, so an unrelated edit (e.g.
+            //    cruise altitude) must NOT wipe it by unconditionally sending "".
+            altDepartureTime: altDepartureTimePayload
         )
 
         do {
@@ -633,6 +633,21 @@ final class AddFlightViewModel {
             Self.logger.error("Edit flight failed: \(error)")
             return nil
         }
+    }
+
+    /// The `alt_departure_time` value a PATCH should send — see the three cases
+    /// documented at the call site in `saveEditedFlight`. `nil` means "omit the
+    /// key" (leave the server's stored value untouched), which is what protects a
+    /// day-scan flight's pinned "★ your alternate" from an unrelated edit.
+    private var altDepartureTimePayload: String? {
+        if flexibility == .alternate {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.string(from: altDepartureTime.instant)
+        }
+        // Only clear when the edit is actually *leaving* `.alternate` mode.
+        if editingFlight?.effectiveFlexibility == .alternate { return "" }
+        return nil
     }
 
     /// Regenerate the briefing according to the invalidation hint:

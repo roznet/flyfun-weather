@@ -87,6 +87,19 @@ enum FlexibilityMode: String, Codable, Sendable, CaseIterable {
         case .nextDay: "Next day"
         }
     }
+
+    /// Tolerant decode: an unrecognized wire value (e.g. a mode added
+    /// server-side before this client knows it) degrades to `.none` instead of
+    /// throwing — matching the tolerant-decode contract the rest of the timing
+    /// DTOs follow. `FlightResponse` relies on synthesized `Codable` and the
+    /// live list decode (`APIClient.request`) is non-tolerant, so without this a
+    /// single unknown `flexibility` value would fail the *entire* flights-list
+    /// decode, not just that one field. (`effectiveFlexibility` already folds
+    /// `.none` to "no scan", so this is a no-op for callers.)
+    init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = FlexibilityMode(rawValue: raw) ?? .none
+    }
 }
 
 /// Aircraft summary embedded in a flight, used for the list card label.

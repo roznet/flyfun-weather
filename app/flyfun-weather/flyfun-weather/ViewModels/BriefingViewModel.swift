@@ -587,6 +587,22 @@ final class BriefingViewModel {
         }
     }
 
+    /// Cancel the timing-scenario poll loop. Called from the briefing view's
+    /// `.onDisappear` so a still-`running` scan can't keep the view model alive
+    /// and hitting the network after the pilot has left the briefing. (The loop
+    /// also has its own iteration cap as a backstop.)
+    func stopTimeOptionsPolling() {
+        timeOptionsPollTask?.cancel()
+        timeOptionsPollTask = nil
+    }
+
+    /// Hard cap on `pollTimeOptions` iterations — a safety backstop so the loop
+    /// is bounded even if the server never reports a terminal status. With the
+    /// 3s→×1.5→15s backoff this is ~18 min worst case; a real scan reaches a
+    /// terminal state well before then. Mirrors `pollRefreshStatus`'s 100-iter
+    /// bound. Terminal status remains the primary exit.
+    private static let maxTimeOptionsPollIterations = 80
+
     /// Poll `GET …/time-options` until a terminal status, mirroring the web
     /// backoff (3s → ×1.5 → cap 15s): keep polling while `pending`/`running` or
     /// any candidate is `confirm_pending`; stop on `done`/`failed`/`skipped`. A
@@ -601,7 +617,10 @@ final class BriefingViewModel {
         timeOptionsOffline = false
         var delay: Double = 3
         var errorStreak = 0
+        var iterations = 0
         while !Task.isCancelled {
+            iterations += 1
+            if iterations > Self.maxTimeOptionsPollIterations { return }
             guard pack?.fetchTimestamp == timestamp else { return }
             do {
                 let resp = try await repository.timeOptions(flightId: flight.id, timestamp: timestamp)

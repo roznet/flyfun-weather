@@ -133,6 +133,33 @@ import Foundation
         #expect(TimeConfidence.ecmwfOnly.rawValue == "ecmwf_only")
     }
 
+    // #358 round-3 fix: `FlightResponse` decodes off the non-tolerant live list
+    // path, so an unrecognized `flexibility` value (a mode added server-side
+    // before this client knows it) must degrade to `.none` rather than throw and
+    // fail the decode of *every* flight in the list.
+    private func flightJSON(flexibility: String) -> String {
+        """
+        {"id":"f1","user_id":"u1","route_name":"LFMD LFML","waypoints":["LFMD","LFML"],
+         "departure_time":"2026-07-05T09:00:00+00:00","target_date":"2026-07-05","target_time_utc":900,
+         "cruise_altitude_ft":8000,"flight_ceiling_ft":13000,"flight_duration_hours":2.0,
+         "private":false,"auto_refresh":false,"created_at":"2026-07-01T00:00:00+00:00",
+         "flexibility":"\(flexibility)"}
+        """
+    }
+
+    @Test func flightResponseDegradesUnknownFlexibilityToNone() throws {
+        let flight = try decode(FlightResponse.self, flightJSON(flexibility: "quantum_day"))
+        #expect(flight.flexibility == FlexibilityMode.none)
+        #expect(flight.effectiveFlexibility == .none)
+        // A whole list still decodes even if a row carries the unknown value.
+        let list = try decode([FlightResponse].self, "[\(flightJSON(flexibility: "quantum_day"))]")
+        #expect(list.count == 1)
+    }
+
+    @Test func flightResponseDecodesKnownFlexibility() throws {
+        #expect(try decode(FlightResponse.self, flightJSON(flexibility: "same_day")).flexibility == .sameDay)
+    }
+
     // MARK: Usage-summary gate
 
     @Test func usageSummaryDefaultsToNeverScanned() throws {

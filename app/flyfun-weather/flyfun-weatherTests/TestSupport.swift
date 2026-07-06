@@ -38,18 +38,23 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var flightsResult: Result<[FlightResponse], Error> = .success([])
     var aircraftResult: Result<[AircraftResponse], Error> = .success([])
     var createFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("createFlight"))
+    var updateFlightResult: Result<UpdateFlightResponse, Error> = .failure(MockError.notStubbed("updateFlight"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
 
-    // Call counters for behaviour assertions.
+    // Call counters + captured args for behaviour assertions.
     private(set) var flightsCallCount = 0
     private(set) var submitPirepsBatchCallCount = 0
+    private(set) var lastUpdateRequest: UpdateFlightRequest?
 
     func flights() async throws -> [FlightResponse] {
         flightsCallCount += 1
         return try flightsResult.get()
     }
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse { try createFlightResult.get() }
-    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw MockError.notStubbed("updateFlight") }
+    func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse {
+        lastUpdateRequest = request
+        return try updateFlightResult.get()
+    }
     func aircraft() async throws -> [AircraftResponse] { try aircraftResult.get() }
     func profiles() async throws -> [ProfileResponse] { [] }
     func usageSummary() async throws -> UsageSummaryResponse {
@@ -97,7 +102,9 @@ func makeFlight(
     departureTime: String = "2026-06-24T12:00:00Z",
     cruiseAltitudeFt: Int = 8000,
     flightDurationHours: Double = 2.0,
-    role: FlightRole? = nil
+    role: FlightRole? = nil,
+    flexibility: FlexibilityMode? = nil,
+    altDepartureTime: String? = nil
 ) -> FlightResponse {
     FlightResponse(
         id: id,
@@ -119,9 +126,22 @@ func makeFlight(
         createdAt: "2026-06-20T09:00:00Z",
         latestBriefing: nil,
         role: role,
-        flexibility: nil,
-        altDepartureTime: nil
+        flexibility: flexibility,
+        altDepartureTime: altDepartureTime
     )
+}
+
+/// Build an `UpdateFlightResponse` fixture (Decodable-only, so assembled via
+/// JSON) for stubbing `MockBriefingRepository.updateFlightResult`.
+func makeUpdateResponse(
+    flight: FlightResponse = makeFlight(),
+    invalidation: FlightInvalidation = .none
+) throws -> UpdateFlightResponse {
+    let flightData = try JSONEncoder.weatherBrief.encode(flight)
+    var obj = try JSONSerialization.jsonObject(with: flightData) as! [String: Any]
+    obj["invalidation"] = invalidation.rawValue
+    let data = try JSONSerialization.data(withJSONObject: obj)
+    return try JSONDecoder.weatherBrief.decode(UpdateFlightResponse.self, from: data)
 }
 
 func makePirepRequest(remarks: String = "test") -> SubmitPirepRequest {

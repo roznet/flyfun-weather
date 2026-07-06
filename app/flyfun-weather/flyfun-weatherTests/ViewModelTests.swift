@@ -27,6 +27,37 @@ import MapKit
         #expect(vm.waypoints == ["LFMD", "LFML", "LFAT", "EGTF"])
     }
 
+    // #358 round-3 fix: editing an unrelated field on a day-scan flight that
+    // carries a pinned "★ your alternate" must NOT clear that alt time. The PATCH
+    // omits `altDepartureTime` (nil) rather than sending "".
+    @Test func editingDayScanFlightPreservesPinnedAlternate() async throws {
+        let flight = makeFlight(cruiseAltitudeFt: 8000, flexibility: .sameDay,
+                                altDepartureTime: "2026-06-24T15:00:00Z")
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.cruiseAltitudeFt = 9000            // unrelated edit
+        #expect(vm.canSubmit)
+        _ = await vm.saveEditedFlight(regenerate: false)
+        let req = try #require(repo.lastUpdateRequest)
+        #expect(req.altDepartureTime == nil) // omitted → server keeps the pin
+        #expect(req.flexibility == .sameDay)
+    }
+
+    // Leaving `.alternate` mode still clears the stored alt time (explicit "").
+    @Test func leavingAlternateModeClearsAltTime() async throws {
+        let flight = makeFlight(flexibility: .alternate,
+                                altDepartureTime: "2026-06-24T15:00:00Z")
+        let repo = MockBriefingRepository()
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        vm.flexibility = .none                // switch away from alternate
+        #expect(vm.canSubmit)
+        _ = await vm.saveEditedFlight(regenerate: false)
+        let req = try #require(repo.lastUpdateRequest)
+        #expect(req.altDepartureTime == "")   // explicit clear
+    }
+
     @Test func waypointsDropsEmptyTokens() {
         let vm = makeVM()
         vm.waypointsText = "  ,, lfmd  -  lfml , "

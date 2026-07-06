@@ -103,6 +103,14 @@ struct BriefingContainerView: View {
             await vm.checkActiveRefresh()
             await vm.loadPireps()
         }
+        .onDisappear {
+            // Stop the timing-scenario poll when the briefing leaves the screen —
+            // it runs in a detached Task (not the `.task` above), so it would
+            // otherwise keep the view model alive and polling in the background
+            // until the scan reaches a terminal state. Re-entry recreates the VM
+            // via `.task` and restarts polling.
+            viewModel?.stopTimeOptionsPolling()
+        }
     }
 
     private func startTracking() {
