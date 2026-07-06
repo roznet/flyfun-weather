@@ -611,14 +611,28 @@ final class BriefingViewModel {
                     return
                 }
                 errorStreak += 1
-                if errorStreak > 3 { return }
+                if errorStreak > 3 { abandonTimeOptionsPolling(); return }
                 delay = min(delay * 1.5, 15)
             } catch {
                 errorStreak += 1
-                if errorStreak > 3 { return }
+                if errorStreak > 3 { abandonTimeOptionsPolling(); return }
                 delay = min(delay * 1.5, 15)
             }
             try? await Task.sleep(for: .seconds(delay))
+        }
+    }
+
+    /// Give up polling after the transient-error budget is exhausted. Mirror the
+    /// web (`briefing-store.ts`): clear the scan so a stale "this window looks
+    /// smoother" panel can't linger with no signal that it stopped refreshing —
+    /// a real hazard for an attention-director feature. If the failures are a
+    /// mid-poll connectivity drop (the initial online check only runs once,
+    /// before the loop), show the offline placeholder instead of hiding outright.
+    private func abandonTimeOptionsPolling() {
+        if let networkMonitor, !networkMonitor.isConnected {
+            timeOptionsOffline = true
+        } else {
+            timeOptions = nil
         }
     }
 
