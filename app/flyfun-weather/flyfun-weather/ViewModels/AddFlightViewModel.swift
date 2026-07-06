@@ -610,11 +610,15 @@ final class AddFlightViewModel {
             flightDurationHours: flightDurationHours,
             profileId: selectedProfileId,
             flexibility: flexibility,
-            // Send the alt time only in `.alternate` mode (the server 422s on
-            // `.alternate` without one, and ignores it for the day modes).
+            // In `.alternate` mode send the pinned time; in every other mode send
+            // "" to *clear* any stored alt time (mirrors web `flight-main.ts`).
+            // Omitting it (`nil`) would be a server no-op — the backend only
+            // clears `alt_departure_time` on an explicit "" — so a mode switched
+            // away from `.alternate` would keep a stale alt that later resurfaces
+            // as a "★ your alternate" tag on an unrelated day-scan candidate.
             altDepartureTime: flexibility == .alternate
                 ? formatter.string(from: altDepartureTime.instant)
-                : nil
+                : ""
         )
 
         do {

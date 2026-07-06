@@ -88,6 +88,27 @@ import Foundation
         #expect(status.reason.isEmpty)
     }
 
+    @Test func scanTolerantOfMissingBaselineAndMalformedCandidate() throws {
+        // `baseline` absent + one candidate missing its required `assessment`:
+        // the scan must still decode, defaulting baseline to empty and dropping
+        // only the malformed candidate (not the whole list).
+        let scan = try decode(TimeWindowScanDTO.self, """
+        {
+          "flexibility": "same_day",
+          "window": null,
+          "candidates": [
+            {"departure_time": "2026-07-05T09:00:00+00:00", "assessment": "GREEN"},
+            {"departure_time": "2026-07-05T11:00:00+00:00"}
+          ],
+          "refused_times": [],
+          "generated_at": "2026-07-05T10:00:00+00:00"
+        }
+        """)
+        #expect(scan.baseline.departureTime.isEmpty)   // defaulted to .empty
+        #expect(scan.candidates.count == 1)            // malformed row dropped, not all
+        #expect(scan.candidates[0].assessment == "GREEN")
+    }
+
     @Test func confirmationDecodesFullAndDegrades() throws {
         let confirmed = try decode(TimeConfirmationDTO.self, """
         {"models_checked": ["ecmwf", "gfs"], "assessment": "GREEN", "better_than_baseline": true,
