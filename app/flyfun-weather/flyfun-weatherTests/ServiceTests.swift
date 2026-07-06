@@ -189,6 +189,30 @@ import Foundation
         await store.removeFlightDirectory(flightId: "f1")
         #expect(await store.readFlightMetadata(flightId: "f1", name: "flight") == nil)
     }
+
+    /// `flightDirectoryIDs` enumerates only the top-level flight subdirectories,
+    /// skipping the root-level metadata files (index.json / flights.json) that
+    /// sit beside them — this is the seam the viewed-only eviction sweep walks.
+    @Test func flightDirectoryIDsListsOnlyFlightSubdirs() async throws {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+
+        // Root-level metadata file (flights.json) — not a flight directory.
+        try await store.writeMetadata(Data("[]".utf8), name: "flights")
+        // A downloaded pack: creates f1/<timestamp>/… plus the root index.json.
+        await store.registerDownload(flightId: "f1", timestamp: "2026-06-24T09:00:00Z",
+                                     flightTitle: "T", assessment: nil, endpoints: all, totalBytes: 1)
+        try await store.writeData(Data("{}".utf8), flightId: "f1",
+                                  timestamp: "2026-06-24T09:00:00Z", endpoint: "advisories")
+        // A viewed-only flight: sidecar directory, no index entry.
+        try await store.writeFlightMetadata(Data("{}".utf8), flightId: "f2", name: "flight")
+
+        let ids = Set(await store.flightDirectoryIDs())
+        #expect(ids == ["f1", "f2"])            // both flight dirs are listed…
+        #expect(!ids.contains("flights"))       // …but the root-level files are not
+        #expect(!ids.contains("index"))
+        #expect(!ids.contains("flights.json"))
+    }
 }
 
 // MARK: - Cache eviction staleness (pure cutoff + legacy fallback)
@@ -243,6 +267,85 @@ import Foundation
             fallbackDeparture: Date(timeIntervalSince1970: 500_000),
             cutoff: cutoff)
         #expect(stale == true)
+    }
+}
+
+// MARK: - Cache eviction sweep (viewed-but-never-downloaded flights, temp dir)
+
+/// End-to-end `pruneStalePacks` coverage for the on-disk directory sweep that
+/// reclaims flight-level sidecars (`flight.json`, `packs.json`, …) written just
+/// by *viewing* a flight — those flights never enter the pack index, so the
+/// index-driven pack loop can't reach them. The repository is built with the
+/// DEBUG cache-testing factory (its network layer is never touched here).
+@Suite struct CacheEvictionSweepTests {
+
+    private let all = CachedPackEntry.requiredEndpoints
+
+    private func iso(daysFromNow days: Double) -> String {
+        ISO8601DateFormatter().string(from: Date().addingTimeInterval(days * 86_400))
+    }
+
+    /// Viewed-only flight with an old departure → its directory is swept.
+    @Test func viewedOnlyFlightWithOldDepartureIsSwept() async {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+        let repo = CachingBriefingRepository.makeForCacheTesting(cache: store)
+
+        await repo.cacheFlightData(makeFlight(id: "old", departureTime: iso(daysFromNow: -30)))
+        #expect(await store.readFlightMetadata(flightId: "old", name: "flight") != nil)
+
+        await repo.pruneStalePacks(olderThanDays: 7)
+
+        #expect(await store.readFlightMetadata(flightId: "old", name: "flight") == nil)
+        #expect(await store.flightDirectoryIDs().contains("old") == false)
+    }
+
+    /// Today/future flights are never removed (departure >= cutoff).
+    @Test func viewedOnlyFlightWithFutureDepartureIsKept() async {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+        let repo = CachingBriefingRepository.makeForCacheTesting(cache: store)
+
+        await repo.cacheFlightData(makeFlight(id: "soon", departureTime: iso(daysFromNow: 3)))
+
+        await repo.pruneStalePacks(olderThanDays: 7)
+
+        #expect(await store.readFlightMetadata(flightId: "soon", name: "flight") != nil)
+    }
+
+    /// A flight with a live (recent) downloaded pack keeps its sidecars — the
+    /// sweep skips any flight that still has index-tracked packs.
+    @Test func flightWithLivePackKeepsSidecars() async {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+        let repo = CachingBriefingRepository.makeForCacheTesting(cache: store)
+
+        // Recent departure so neither the pack nor the sidecar is stale.
+        await store.registerDownload(flightId: "live", timestamp: "t1", flightTitle: "T",
+                                     assessment: nil, endpoints: all, totalBytes: 1,
+                                     departureTime: iso(daysFromNow: 1))
+        await repo.cacheFlightData(makeFlight(id: "live", departureTime: iso(daysFromNow: 1)))
+
+        await repo.pruneStalePacks(olderThanDays: 7)
+
+        #expect(await store.readFlightMetadata(flightId: "live", name: "flight") != nil)
+        #expect(await store.hasCachedPacks(flightId: "live"))
+    }
+
+    /// Indeterminate departure (a sidecar directory with no readable
+    /// `flight.json`) is kept — never delete blind.
+    @Test func indeterminateDepartureIsKept() async throws {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+        let repo = CachingBriefingRepository.makeForCacheTesting(cache: store)
+
+        // A packs.json sidecar but no flight.json → no departure to read.
+        try await store.writeFlightMetadata(Data("[]".utf8), flightId: "mystery", name: "packs")
+
+        await repo.pruneStalePacks(olderThanDays: 7)
+
+        #expect(await store.readFlightMetadata(flightId: "mystery", name: "packs") != nil)
+        #expect(await store.flightDirectoryIDs().contains("mystery"))
     }
 }
 
