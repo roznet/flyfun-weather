@@ -19,7 +19,11 @@ from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
 from weatherbrief.db.models import BriefingPackRow
-from weatherbrief.fetch.variables import MAX_BOOKING_LEAD_DAYS, dual_model_horizon_days
+from weatherbrief.fetch.variables import (
+    MAX_BOOKING_LEAD_DAYS,
+    coverage_start_date,
+    is_beyond_forecast_horizon,
+)
 from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
@@ -293,13 +297,11 @@ def _compute_coverage(departure_time: datetime) -> "CoveragePending | None":
       ECMWF GRIB run that reaches the flight (the full traffic-light briefing),
       or ``None`` if it can't be resolved (display degrades to just the former).
     """
-    horizon = dual_model_horizon_days()
     now = datetime.now(timezone.utc)
-    days_out = (departure_time.date() - now.date()).days
-    if days_out <= horizon:
+    if not is_beyond_forecast_horizon(departure_time.date(), now.date()):
         return None
 
-    available = departure_time.date() - timedelta(days=horizon)
+    available = coverage_start_date(departure_time.date())
     full_date: str | None = None
     try:
         from weatherbrief.fetch.freshness.registry import (

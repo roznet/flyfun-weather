@@ -246,6 +246,21 @@ class TestPendingCoverageDate:
         got = pending_coverage_date(flight)
         assert got == depart.date() - timedelta(days=horizon)
 
+    def test_as_of_pins_reference_date(self):
+        """A pinned as_of near the departure evaluates coverage as of that date,
+        so a far-out flight is no longer treated as pending (honors as_of_date)."""
+        from weatherbrief.api.packs import pending_coverage_date
+        from weatherbrief.fetch.variables import dual_model_horizon_days
+
+        horizon = dual_model_horizon_days()
+        depart = (datetime.now(timezone.utc) + timedelta(days=horizon + 30)).replace(hour=12)
+        flight = SimpleNamespace(departure_time=depart)
+        # Real "now" → beyond horizon → pending.
+        assert pending_coverage_date(flight) is not None
+        # Pinned to 2 days before departure → within horizon → not pending.
+        as_of = depart - timedelta(days=2)
+        assert pending_coverage_date(flight, as_of=as_of) is None
+
 
 class TestDecideRefresh:
     """Matrix from issue #167 acceptance criteria.

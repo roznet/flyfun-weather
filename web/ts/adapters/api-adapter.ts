@@ -331,7 +331,7 @@ export async function fetchPack(flightId: string, timestamp: string): Promise<Pa
 }
 
 export interface RefreshAccepted {
-  status: 'queued' | 'already_fresh' | 'realtime';
+  status: 'queued' | 'already_fresh' | 'realtime' | 'pending_coverage';
   flight_id: string;
   message: string;
   // Tiered refresh gate detail — present when the request was gated to a

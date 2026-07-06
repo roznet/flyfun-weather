@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from enum import Enum
 
 BASE_PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300]
@@ -224,6 +225,24 @@ def dual_model_horizon_days() -> int:
     ECMWF ``max_days=10`` → available for ``days_out`` 0..9).
     """
     return min(MODEL_ENDPOINTS[k].max_days for k in DUAL_MODEL_KEYS) - 1
+
+
+def is_beyond_forecast_horizon(departure_date: date, ref_date: date) -> bool:
+    """True when a flight departing ``departure_date`` is past the dual-model
+    forecast horizon as of ``ref_date`` — i.e. no full two-model briefing is
+    available yet and the flight is "pending coverage".
+
+    Single source of truth for the boundary check, shared by the coverage field
+    (`api/flights.py`), both refresh gates (`api/packs.py`), and the auto-refresh
+    scheduler (`scheduler.py`) so they can't drift.
+    """
+    return (departure_date - ref_date).days > dual_model_horizon_days()
+
+
+def coverage_start_date(departure_date: date) -> date:
+    """Date on which ``departure_date`` first enters the forecast horizon — when
+    the first (early-outlook) briefing becomes available (departure − horizon)."""
+    return departure_date - timedelta(days=dual_model_horizon_days())
 
 
 def build_hourly_params(endpoint: ModelEndpoint) -> str:
