@@ -162,6 +162,24 @@ actor BriefingCacheStore {
         return index.keys.contains { $0.hasPrefix(prefix) }
     }
 
+    /// Top-level `<flightId>/` subdirectories present on disk (each may hold
+    /// pack subdirs and/or flight-level sidecar metadata). Enumerates `cacheDir`'s
+    /// immediate children and keeps only directories, so the root-level metadata
+    /// files (`index.json`, `flights.json`) are skipped. Pack data lives nested at
+    /// `<flightId>/<timestamp>/`, so the top level is only flight-id dirs. Lets
+    /// eviction sweep viewed-but-never-downloaded flights that the index never saw.
+    func flightDirectoryIDs() -> [String] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: cacheDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries.compactMap { url in
+            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            return isDir ? url.lastPathComponent : nil
+        }
+    }
+
     /// Remove a flight's entire cache directory, including flight-level sidecar
     /// metadata (flight.json, packs.json, latest-pack.json, pack-meta.json).
     /// Only safe once every pack for the flight has been deleted from the index

@@ -1,5 +1,8 @@
 import Foundation
 import OSLog
+#if DEBUG
+import FlyFunCommon  // only the DEBUG cache-testing factory below needs it
+#endif
 
 /// Download state for a pack.
 /// `totalBytes <= 0` means the size is unknown (server didn't send the length header).
@@ -36,6 +39,26 @@ final class CachingBriefingRepository: BriefingRepository {
         self.online = online
         self.cache = cache
     }
+
+    #if DEBUG
+    /// Test-only factory: build a repository over an injected cache directory
+    /// whose network layer is never exercised (the base URL is intentionally
+    /// unreachable). Cache/eviction unit tests drive only the on-disk path
+    /// (`pruneStalePacks`, download bookkeeping) and never make a request. This
+    /// lives here rather than the test target because the `APIClient` auth types
+    /// come from `FlyFunCommon`, which the test target doesn't link.
+    static func makeForCacheTesting(cache: BriefingCacheStore) -> CachingBriefingRepository {
+        let tokenStore = KeychainBearerTokenStore(service: "aero.flyfun.weather.tests")
+        let rollingSession = RollingBearerSession(store: tokenStore, onUnauthorized: {})
+        let client = APIClient(
+            baseURL: URL(string: "https://tests.invalid")!,
+            tokenStore: tokenStore,
+            rollingSession: rollingSession
+        )
+        let online = OnlineBriefingRepository(client: client)
+        return CachingBriefingRepository(client: client, online: online, cache: cache)
+    }
+    #endif
 
     // MARK: - Flight creation (pass-through, no caching)
 
@@ -309,19 +332,23 @@ final class CachingBriefingRepository: BriefingRepository {
 
     // MARK: - Cache eviction
 
-    /// Evict cached packs whose flight departed more than `days` ago.
+    /// Evict cached packs whose flight departed more than `days` ago, then sweep
+    /// any leftover flight-level sidecar directories on the same cutoff.
     ///
     /// Departure date comes from the value captured at download time, falling
     /// back to the cached flight record for legacy entries. Packs whose
     /// departure can't be determined are kept (conservative — we never delete
-    /// data we can't prove is stale). Returns the number of packs removed.
+    /// data we can't prove is stale). The trailing directory sweep reclaims
+    /// sidecars written by *viewing* a flight (which never enter the pack index),
+    /// applying the identical departure-based cutoff and safety invariants.
+    /// Returns the number of packs removed (the sidecar sweep is logged separately).
     @discardableResult
     func pruneStalePacks(olderThanDays days: Int) async -> Int {
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         var removed = 0
         var touchedFlights: Set<String> = []
         for entry in await cache.cachedPacks() {
-            let fallback = await cachedFlightDeparture(for: entry)
+            let fallback = await cachedFlightDeparture(forFlightId: entry.flightId)
             guard let stale = Self.isPackStale(
                 entryDepartureTime: entry.departureTime,
                 fallbackDeparture: fallback,
@@ -340,8 +367,25 @@ final class CachingBriefingRepository: BriefingRepository {
         for flightId in touchedFlights where await !cache.hasCachedPacks(flightId: flightId) {
             await cache.removeFlightDirectory(flightId: flightId)
         }
-        if removed > 0 {
-            Self.logger.info("Pruned \(removed) stale cached pack(s) older than \(days)d")
+        // Second sweep: flight-level sidecars are written just by *viewing* a
+        // flight online (flight.json, packs.json, latest-pack.json), independent
+        // of any download. Those flights never enter the index, so the pack loop
+        // above never reaches them and their directories would leak forever. Walk
+        // the cache directory on disk and age out any flight with no live packs on
+        // the same departure-based cutoff. Same safety invariants as pack eviction:
+        // today/future flights survive; an indeterminate departure (no readable
+        // flight.json) is kept — never delete blind.
+        var sweptDirs = 0
+        for flightId in await cache.flightDirectoryIDs() {
+            if await cache.hasCachedPacks(flightId: flightId) { continue }
+            guard let departure = await cachedFlightDeparture(forFlightId: flightId) else { continue }
+            if departure < cutoff {
+                await cache.removeFlightDirectory(flightId: flightId)
+                sweptDirs += 1
+            }
+        }
+        if removed > 0 || sweptDirs > 0 {
+            Self.logger.info("Pruned \(removed) stale pack(s) and \(sweptDirs) viewed-only flight dir(s) older than \(days)d")
         }
         return removed
     }
@@ -362,10 +406,12 @@ final class CachingBriefingRepository: BriefingRepository {
         return departure < cutoff
     }
 
-    /// The cached flight record's departure, for legacy entries written before
-    /// `CachedPackEntry.departureTime` existed.
-    private func cachedFlightDeparture(for entry: CachedPackEntry) async -> Date? {
-        guard let data = await cache.readFlightMetadata(flightId: entry.flightId, name: "flight"),
+    /// The cached flight record's departure, read from `flight.json`. Used both
+    /// as the legacy fallback for index entries written before
+    /// `CachedPackEntry.departureTime` existed, and to age out viewed-only flights
+    /// that have a `flight.json` sidecar but no index entry at all.
+    private func cachedFlightDeparture(forFlightId flightId: String) async -> Date? {
+        guard let data = await cache.readFlightMetadata(flightId: flightId, name: "flight"),
               let flight = try? JSONDecoder.weatherBrief.decode(FlightResponse.self, from: data) else {
             return nil
         }
