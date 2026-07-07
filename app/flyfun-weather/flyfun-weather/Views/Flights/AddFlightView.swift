@@ -15,6 +15,13 @@ struct AddFlightView: View {
     /// True when the interpret sheet is shown as a pre-create confirmation
     /// (because the route dropped tokens), so "Accept" proceeds to create.
     @State private var confirmingInterpretBeforeCreate = false
+    /// Set when the pilot taps "Accept & Create" so the create runs from the
+    /// interpret sheet's `onDismiss` — i.e. only once that sheet is fully gone.
+    /// Dismissing the sheet and calling the parent `dismiss()` in the same turn
+    /// collides (SwiftUI drops the second transition), which left the form up
+    /// with the flight never appearing to be created. Sequencing via onDismiss
+    /// mirrors the web, which awaits the confirm modal's close before creating.
+    @State private var createAfterInterpretDismiss = false
 
     /// Called with the created OR updated flight.
     let onCreated: (FlightResponse) -> Void
@@ -113,15 +120,27 @@ struct AddFlightView: View {
             .sheet(isPresented: $viewModel.showFlexibilityExplainer) {
                 FlexibilityExplainer()
             }
-            .sheet(isPresented: $showInterpretSheet) {
+            .sheet(isPresented: $showInterpretSheet, onDismiss: {
+                // Run the create only after the interpret sheet is fully gone, so
+                // the parent `dismiss()` on success isn't competing with the
+                // sheet's own dismissal (which would otherwise be dropped).
+                guard createAfterInterpretDismiss else { return }
+                createAfterInterpretDismiss = false
+                Task { await performCreate() }
+            }) {
                 RouteInterpretSheet(
                     interpretation: viewModel.routeInterpretation,
                     rawRoute: viewModel.waypointsText,
                     isResolving: viewModel.isInterpreting,
                     acceptTitle: confirmingInterpretBeforeCreate ? "Accept & Create" : nil,
                     onAccept: {
+                        // Adopt the server's understood route (airways/SIDs/speed
+                        // tokens dropped) before creating, matching the web — the
+                        // create request then carries the resolved waypoints the
+                        // pilot just confirmed, not the raw typed tokens.
+                        viewModel.applyInterpretedRoute()
+                        createAfterInterpretDismiss = true
                         showInterpretSheet = false
-                        Task { await performCreate() }
                     },
                     onResolve: { await viewModel.resolveRoute() }
                 )

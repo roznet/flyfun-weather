@@ -39,20 +39,23 @@ struct BriefingContainerView: View {
 
     var body: some View {
         Group {
-            if let viewModel {
+            // Saved beyond the forecast horizon → no pack to load. The pending
+            // card is a pure function of `flight.coverage`, so render it up front
+            // without waiting on the briefing view model. Otherwise a freshly
+            // created future flight sticks on the "Loading briefing…" spinner
+            // while `.task` spins up a view model it never needs (the create→open
+            // transition can leave that task uncompleted). Mirrors the web, which
+            // shows the pending banner straight from the flight, no briefing load.
+            if let coverage = flight.coverage {
+                PendingCoverageView(flight: flight, coverage: coverage)
+            } else if let viewModel {
                 // #310: the standalone header band is gone — identity moved into
                 // the nav bar (title + subtitle), freshness + pack picker into
                 // the toolbar. Tabs render at the top (iPad) / bottom (iPhone).
                 VStack(spacing: 0) {
                     RefreshBannerView(state: viewModel.refreshState)
                     DownloadBannerView(state: viewModel.downloadState)
-                    // Saved beyond the forecast horizon → no pack yet; show the
-                    // pending-coverage card instead of the (empty) tabs.
-                    if let coverage = flight.coverage {
-                        PendingCoverageView(flight: flight, coverage: coverage)
-                    } else {
-                        BriefingContentView(viewModel: viewModel, trackingService: trackingService)
-                    }
+                    BriefingContentView(viewModel: viewModel, trackingService: trackingService)
                 }
             } else {
                 ProgressView("Loading briefing...")

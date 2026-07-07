@@ -191,6 +191,19 @@ final class AddFlightViewModel {
         return !interpretation.isClean
     }
 
+    /// Replace the typed route with the server's *understood* waypoints, so the
+    /// create request carries the same resolved list the interpret popup showed —
+    /// airways (Q230), SIDs (BEBEX7W) and speed/level tokens (WRB/N0174F090) are
+    /// dropped rather than sent verbatim. Mirrors the web, which writes the
+    /// interpreted route back into the field before saving. Without this the raw
+    /// Field-15 tokens are submitted, which both carries garbage waypoints and
+    /// can trip the server's 20-waypoint cap on routes that actually resolve to
+    /// far fewer. No-op unless the interpretation resolved at least two points.
+    func applyInterpretedRoute() {
+        guard let interpreted = routeInterpretation?.interpreted, interpreted.count >= 2 else { return }
+        waypointsText = interpreted.joined(separator: " ")
+    }
+
     /// Resolve the typed route on the server: validates/normalises waypoints,
     /// returns what was understood / skipped / off-route, and per-waypoint
     /// timezones. Feeds both the interpret popup (#5) and the TZ dropdown (#4).

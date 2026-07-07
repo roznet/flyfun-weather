@@ -51,6 +51,13 @@ from weatherbrief.api.validation import WAYPOINT_RE, is_valid_waypoint
 if TYPE_CHECKING:
     from euro_aip.briefing.models.flight_exchange import FlightExchange
 
+# Upper bound on the number of resolved waypoints a flight route may carry.
+# Airways/SIDs/speed-level tokens are stripped by route interpretation before a
+# route reaches here, so a well-formed GA cross-country resolves well under this;
+# the cap only guards against pathological input. Shared by the create and
+# update request models so the two paths stay in lock-step.
+MAX_ROUTE_WAYPOINTS = 32
+
 
 class CreateFlightRequest(BaseModel):
     """Request body for creating a new flight.
@@ -59,7 +66,7 @@ class CreateFlightRequest(BaseModel):
     """
 
     route_name: str = Field("", max_length=256)  # optional preset name
-    waypoints: list[str] = Field(default_factory=list, max_length=20)  # ICAO codes, navaids, or fixes
+    waypoints: list[str] = Field(default_factory=list, max_length=MAX_ROUTE_WAYPOINTS)  # ICAO codes, navaids, or fixes
     # Original Field-15 input the pilot typed, when the client captured one
     # (web Save flow). The server stores it verbatim alongside ``waypoints``
     # so future parser improvements can re-derive the route. Optional —
@@ -1696,7 +1703,7 @@ class UpdateFlightRequest(BaseModel):
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
-    waypoints: list[str] | None = None  # updated route (origin+destination must match)
+    waypoints: list[str] | None = Field(default=None, max_length=MAX_ROUTE_WAYPOINTS)  # updated route (origin+destination must match)
     # Optional original Field-15 input. When supplied alongside ``waypoints``
     # (web Save flow), both are stored and ``parser_version`` is re-stamped.
     # When ``waypoints`` change but ``raw_route`` is omitted, the stored
