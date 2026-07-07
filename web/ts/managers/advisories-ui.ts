@@ -355,13 +355,16 @@ export interface ProfileSelectorConfig {
  */
 export function renderAdvisories(
   manifest: RouteAdvisoriesManifest | null,
-  onRecalculate?: () => void,
+  onRecalculate?: () => void | Promise<void>,
   displayMode: DisplayMode = 'full',
   altitudeOverride?: AltitudeOverrideConfig,
   onAltitudeTable?: () => Promise<void>,
   altTimeToggle?: AltTimeToggleConfig,
   profileSelector?: ProfileSelectorConfig,
   onAdvisoryChip?: (advisoryId: string) => void,
+  // Owner-only: renders the explicit "Recalculate" button. The recalculate
+  // endpoint is owner-gated (403 otherwise), so non-owners never see it.
+  canRecalculate = false,
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -424,6 +427,14 @@ export function renderAdvisories(
 
   const altTableBtn = onAltitudeTable
     ? `<button class="btn btn-secondary btn-sm" id="alt-table-btn">${t('advisories.altitudeTable')}</button>`
+    : '';
+
+  // Explicit, always-visible recalculate button (owner-only). Re-grades the
+  // stored pack against the current profile + altitude — no data fetch, no
+  // digest regeneration. Scoped to the advisory section so its effect is
+  // unambiguous (it does NOT refresh the rest of the briefing).
+  const recalcBtn = (canRecalculate && onRecalculate)
+    ? `<button class="btn btn-secondary btn-sm" id="advisory-recalc-btn">${t('advisories.recalculate')}</button>`
     : '';
 
   // Profile selector dropdown
@@ -507,6 +518,7 @@ export function renderAdvisories(
       ${profileHtml}
       ${sliderHtml}
       ${altTableBtn}
+      ${recalcBtn}
     </div>
     ${deltaNoteHtml}
     ${airportHtml}
@@ -523,6 +535,27 @@ export function renderAdvisories(
         if (!isNaN(newId)) {
           selectEl.setAttribute('disabled', 'true');
           profileSelector.onChange(newId);
+        }
+      });
+    }
+  }
+
+  // Wire the explicit recalculate button (owner-only). Reuses the same store
+  // action as the profile/altitude controls; the digest-profile-mismatch banner
+  // continues to flag that the AI summary predates the recompute.
+  if (canRecalculate && onRecalculate) {
+    const recalcButton = $('advisory-recalc-btn');
+    if (recalcButton) {
+      recalcButton.addEventListener('click', async () => {
+        recalcButton.setAttribute('disabled', 'true');
+        recalcButton.textContent = t('advisories.loading');
+        try {
+          await onRecalculate();
+        } finally {
+          // The store re-renders this section on success (replacing the button);
+          // this restore matters on failure so it doesn't stay stuck disabled.
+          recalcButton.removeAttribute('disabled');
+          recalcButton.textContent = t('advisories.recalculate');
         }
       });
     }
