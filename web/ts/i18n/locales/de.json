@@ -429,6 +429,8 @@
   "settings.profileRenamed": "Profil umbenannt in „{name}“.",
   "settings.profileDeleted": "Profil gelöscht.",
   "settings.cannotDeleteDefault": "Das Standardprofil kann nicht gelöscht werden.",
+  "settings.defaultProfile": "Standardprofil",
+  "settings.defaultProfileSet": "„{name}“ ist jetzt Ihr Standardprofil.",
   "settings.deleteProfileConfirm": "Profil „{name}“ löschen?",
   "settings.enterProfileName": "Profilnamen eingeben:",
   "settings.enterDuplicateName": "Namen für das Duplikat eingeben:",

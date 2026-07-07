@@ -517,6 +517,8 @@
   "settings.profileRenamed": "Profile renamed to \"{name}\".",
   "settings.profileDeleted": "Profile deleted.",
   "settings.cannotDeleteDefault": "Cannot delete the default profile.",
+  "settings.defaultProfile": "Default profile",
+  "settings.defaultProfileSet": "\"{name}\" is now your default profile.",
   "settings.deleteProfileConfirm": "Delete profile \"{name}\"?",
   "settings.enterProfileName": "Enter profile name:",
   "settings.enterDuplicateName": "Enter name for the duplicate:",

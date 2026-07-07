@@ -181,6 +181,15 @@ function renderProfileSelector(): void {
     deleteBtn.disabled = !!activeProfile?.is_default;
   }
 
+  // Update the "Default profile" checkbox. Exactly one profile is always the
+  // default, so the box is disabled (and stays checked) on the current default —
+  // you promote a different profile by checking its box instead.
+  const defaultToggle = document.getElementById('toggle-default-profile') as HTMLInputElement;
+  if (defaultToggle) {
+    defaultToggle.checked = !!activeProfile?.is_default;
+    defaultToggle.disabled = !!activeProfile?.is_default;
+  }
+
   // Show/hide reset-to-template button
   const resetBtn = document.getElementById('btn-reset-profile') as HTMLButtonElement;
   if (resetBtn) {
@@ -347,6 +356,30 @@ async function handleDeleteProfile(): Promise<void> {
   }
 }
 
+async function handleToggleDefault(): Promise<void> {
+  const toggle = document.getElementById('toggle-default-profile') as HTMLInputElement;
+  if (!activeProfileId || !toggle) return;
+
+  const current = profiles.find(p => p.id === activeProfileId);
+  // Only promoting is meaningful — a profile can't un-default itself since one
+  // profile is always the default. Unchecking the current default is a no-op.
+  if (!toggle.checked || current?.is_default) {
+    renderProfileSelector();
+    return;
+  }
+
+  try {
+    await updateProfile(activeProfileId, { is_default: true });
+    // The server clears is_default on all other profiles; mirror that locally.
+    profiles = profiles.map(p => ({ ...p, is_default: p.id === activeProfileId }));
+    renderProfileSelector();
+    showStatus(t('settings.defaultProfileSet', { name: current?.name ?? '' }));
+  } catch (err) {
+    renderProfileSelector();
+    showStatus(`Failed to set default profile: ${err}`, true);
+  }
+}
+
 // --- Init ---
 
 /** Translate static HTML elements on the settings page. */
@@ -383,6 +416,7 @@ function translateStaticElements(): void {
   set('.profile-section h3', 'page.settings.flightProfiles');
   set('.profile-section .section-hint', 'page.settings.profilesHint');
   set('label[for="profile-select"]', 'page.settings.activeProfile');
+  set('#label-default-profile', 'settings.defaultProfile');
   set('#btn-new-profile', 'page.settings.new');
   set('#btn-duplicate-profile', 'page.settings.duplicate');
   set('#btn-rename-profile', 'page.settings.rename');
@@ -542,6 +576,7 @@ async function init(): Promise<void> {
     const id = parseInt(profileSelect.value, 10);
     if (!isNaN(id)) switchProfile(id);
   });
+  document.getElementById('toggle-default-profile')?.addEventListener('change', handleToggleDefault);
   document.getElementById('btn-new-profile')?.addEventListener('click', handleNewProfile);
   document.getElementById('btn-duplicate-profile')?.addEventListener('click', handleDuplicateProfile);
   document.getElementById('btn-rename-profile')?.addEventListener('click', handleRenameProfile);

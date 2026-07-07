@@ -429,6 +429,8 @@
   "settings.profileRenamed": "Perfil renombrado a \"{name}\".",
   "settings.profileDeleted": "Perfil eliminado.",
   "settings.cannotDeleteDefault": "No se puede eliminar el perfil por defecto.",
+  "settings.defaultProfile": "Perfil por defecto",
+  "settings.defaultProfileSet": "«{name}» es ahora tu perfil por defecto.",
   "settings.deleteProfileConfirm": "¿Eliminar el perfil \"{name}\"?",
   "settings.enterProfileName": "Introduzca el nombre del perfil:",
   "settings.enterDuplicateName": "Introduzca el nombre para el duplicado:",

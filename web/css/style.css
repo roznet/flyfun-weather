@@ -2679,7 +2679,19 @@ label {
 }
 
 .profile-controls {
-  align-items: flex-end;
+  /* Top-align so the button group's spacer label lines up with "Active Profile"
+     and the buttons sit on the same row as the dropdown; the default-profile
+     checkbox then flows below the dropdown without pushing the buttons down. */
+  align-items: flex-start;
+}
+
+/* "Active Profile" label on the left, the default-profile checkbox pushed to
+   the right, both sharing the line directly above the profile dropdown. */
+.profile-select-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .profile-actions {

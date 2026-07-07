@@ -306,7 +306,12 @@
           <p class="muted section-hint">Create profiles for different aircraft or flight types (e.g., VFR, IFR). Each profile has its own parameters and advisory settings.</p>
           <div class="form-row profile-controls">
             <div class="form-group grow">
-              <label for="profile-select">Active Profile</label>
+              <div class="profile-select-header">
+                <label for="profile-select">Active Profile</label>
+                <label class="checkbox-label profile-default-label">
+                  <input type="checkbox" id="toggle-default-profile"> <span id="label-default-profile">Default profile</span>
+                </label>
+              </div>
               <select id="profile-select" class="input-select"></select>
             </div>
             <div class="form-group profile-actions">
