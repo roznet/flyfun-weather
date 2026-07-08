@@ -57,15 +57,17 @@ seams. Push notifications are the outstanding item in Phase 2 M2 of the
   email's scheduler-only placement (email fires only for auto-refresh; push must be broader).
 - **Payload**: `alert` title/body from route + new assessment + `compute_refresh_delta`
   ("EGTF → LFAT: now AMBER, ceiling worsened"); custom data `{ flight_id, timestamp }`;
-  optional badge.
+  `aps.badge` = server-computed unseen count (see Badge section).
 - **Send gating** — only on a *new* pack whose assessment changed or worsened (avoid
   "still green" spam). Configurable; default to meaningful-change-only.
-- **In-app suppression** — a user watching the SSE progress bar in-app shouldn't also get
-  a push. But an in-app manual refresh and a Siri/background refresh are **both**
-  `triggered_by="user"` today (`refresh_registry` only knows `user | scheduler`), so the
-  server can't yet tell them apart. See the decision in Open Questions — baseline is
-  client-side foreground suppression; optional server signal (`triggered_by="intent"` /
-  `notify_on_complete`) for precise targeting.
+- **In-app suppression** — a user watching the SSE progress bar in-app shouldn't also get a
+  banner. This is largely **natural on iOS**: the app's `UNUserNotificationCenterDelegate.
+  willPresent` decides whether to show a banner while foregrounded (default: don't — just
+  update the badge / an in-app indicator). The remaining nuance is that an in-app manual
+  refresh and a Siri/background refresh are **both** `triggered_by="user"` today
+  (`refresh_registry` only knows `user | scheduler`), so the server can't distinguish "I'm
+  watching this" from "tell me when done". Baseline: client-side foreground suppression;
+  optional later server signal (`triggered_by="intent"` / `notify_on_complete`) for precision.
 - **Endpoint** `POST /api/devices` (register/upsert) + `DELETE /api/devices/{token}`.
 
 ### Notification preferences
@@ -147,11 +149,19 @@ is missed. There is already a precedent to mirror — system-message unseen coun
 (`api/messages.py`: `messages_last_seen_id` in prefs, server-computed `unseen_count`,
 `POST /messages/seen`). We do the same, per-flight.
 
-**State (per user × flight):**
-- `last_notified_pack_ts` — timestamp of the most recent notify-qualifying update.
-- `last_seen_pack_ts` — advanced when the user opens that flight's briefing on **web or app**.
+**State (per user × flight) — a flight counts at most once:**
+- `latest_pack_ts` — the flight's newest pack (already known server-side).
+- `last_notified_pack_ts` — pack ts of the most recent notify-qualifying update.
+- `last_seen_pack_ts` — set to the flight's **current `latest_pack_ts`** when the user opens
+  that flight's briefing (web or app).
 - Flight is **unseen** iff `last_notified_pack_ts > last_seen_pack_ts`.
-- **Badge = count of unseen flights**, computed server-side on demand (like `unseen_count`).
+- **Badge = count of unseen flights** (each flight 0 or 1), computed server-side on demand
+  (like `unseen_count`).
+
+This is exactly the intended semantics: if a flight refreshes **twice** and neither is
+opened it still counts **once** (we compare the *latest* notified pack, not each pack);
+opening the briefing marks the current latest pack seen and clears the flight no matter how
+many packs piled up; older unopened packs never add to the count.
 
 Storage: mirror messages (a `briefing_seen` map in `app_prefs_json`) or a small
 `flight_briefing_seen(user_id, flight_id, ts)` table. Flights per user are few; either
@@ -177,14 +187,17 @@ annoying-badge failure mode is the opposite — incrementing/decrementing on the
 trusting push delivery. The worry is well-founded; the ordering above is the fix.
 
 **Definitions to lock:**
-- **What clears "unseen"?** Opening the flight's **briefing detail** (web or app) — not
-  merely seeing it in the list. Per-flight watermark (any newer pack read clears it), not per-pack.
+- **Count once per flight** — the badge counts *flights with an unseen latest update*,
+  never packs. Two unopened refreshes on one flight = 1.
+- **What clears "unseen"?** Opening that flight's **briefing detail** (web or app) — not
+  merely seeing it in the list. Opening sets `last_seen_pack_ts = latest_pack_ts`, so the
+  flight clears even if several packs accumulated and only the newest was viewed.
 - **What counts toward the badge?** Only **notify-qualifying** updates (same gate as the
   notification: scope + change-filter + not muted) — mirroring "only highlighted messages
-  light the dot".
+  light the dot". A later non-qualifying refresh (e.g. unchanged) does **not** re-light a
+  flight you already cleared.
 - **Badge vs push-channel toggle** — reconcile keeps the badge correct even if *alert* push
-  is off; decide whether to show a badge when the push channel is disabled (recommend:
-  badge follows "a device is registered", independent of alert on/off).
+  is off; recommend the badge follows "a device is registered", independent of alert on/off.
 
 **New surface area:** `POST /api/flights/{id}/seen` (or fold into the existing briefing
 GET), `GET /api/flights/badge`, the silent-push path, and the app's foreground reconcile +
@@ -198,7 +211,7 @@ Notification work (this doc)                 App Intents (sibling doc)
 ──────────────────────────                   ─────────────────────────
 device_tokens endpoint + client reg   ┐
 notify/push.py + APNs key             ├─►    RefreshBriefingIntent
-emit at both refresh-complete seams   ┘      ("…I'll let you know when it's ready")
+emit from shared _persist_pack_finalize ┘    ("…I'll let you know when it's ready")
 ```
 
 `OpenBriefingIntent` / `OpenFlightListIntent` / `CheckBriefingIntent` do **not**
@@ -211,7 +224,6 @@ Resolved by the preferences model above: *notify-when-done vs watching-live* (a 
 **delivery rule** — foreground suppression — plus the `all`/`auto` scope), and *dedup with
 email* (channels are independent user choices). Remaining:
 
-- **Per-flight notify ⇒ auto-refresh coupling** — see "Other choices" above.
 - **APNs provider library** — hand-rolled HTTP/2 + `.p8` JWT, or a small dep that fits the
   async FastAPI stack?
 - **APNs key management** — `.p8` key + key id + team id as deployment secrets
