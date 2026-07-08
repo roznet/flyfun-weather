@@ -168,9 +168,12 @@ Reuse:
 - **`CachingBriefingRepository`** for `flights()` / `latestPack()` / `refreshBriefing`
   so intents work from cache in the cockpit.
 
-**Scope:** all three tiers ship in v1 (decided). Tier 1 is the mandatory floor; tier 2 is
-gated on `SystemLanguageModel.default.availability`, so devices without Apple Intelligence
-degrade to tier 1 + Siri disambiguation with no loss of the core paths. *(see Decisions)*
+**Scope:** the whole resolver is part of the **Tier-1 / today** issue — the Foundation
+Models fallback is iOS 26, not a next-release feature. Resolver tier 1 is the mandatory
+floor; the LLM tier is gated on `SystemLanguageModel.default.availability`, so devices
+without Apple Intelligence degrade to deterministic + Siri disambiguation with no loss of
+core paths. (Naming note: *resolver* tiers 1–3 above are internal to this algorithm and
+distinct from the product **Tier 1 / Tier 2** issue split.) *(see Decisions)*
 
 ### Navigation from an intent
 
@@ -201,9 +204,12 @@ Donate on flight-list load and on create; remove on delete.
 
 ---
 
-## Phase 2 — View Annotations + Foundation Models (WWDC26 / iOS 27)
+## Phase 2 — On-screen context (iOS 27 / WWDC26)
 
-Goal: act on **what's on screen** conversationally, and narrate cached data offline.
+Goal: act on **what's on screen** conversationally. Phase 2 is scoped strictly to what
+genuinely needs the next iOS release — the **View Annotations API** and the **App Intents
+Testing framework**. (Foundation Models is *not* here: it ships in iOS 26 and lives in
+Phase 1 — the resolver fallback, and the optional on-device narration below.)
 
 ### View Annotations ("explain this", "show me the cross-section")
 
@@ -221,16 +227,24 @@ knows the referent. Surface, smallest-first:
 → speaks/shows the "why" (the same per-model, cross-check reasoning the MCP
 `get_advisory_detail` returns).
 
-### Foundation Models (on-device narration)
+### On-device narration (Foundation Models — iOS 26, so Tier-1-capable)
 
-The on-device model narrates our **cached** `AdvisoryDetailResponse` into a natural
-sentence for "explain this" — working **fully offline in the cockpit**. Split of
-authority:
+This capability is **iOS 26** and therefore not gated on the next release: the on-device
+model narrates our **cached** `AdvisoryDetailResponse` into a natural sentence for
+"explain this", **fully offline in the cockpit**. It can ship in the Tier-1 issue via a
+*parameterized* `ExplainAdvisoryIntent(advisory:)` (pick the flight+advisory in Shortcuts).
+What Phase 2 adds is only the **on-screen trigger** — View Annotations let the user say
+"explain **this**" while looking at the row, instead of naming it. Split of authority:
 
 - **On-device / offline** — phrase cached advisory data ("convective is amber because
   CAPE peaks near waypoint 4 while cloud cover stays low").
 - **Server / online** — the authoritative digest stays server-side (LangGraph); the
   on-device narration never replaces it, only fills the offline gap.
+
+Recommendation: build `ExplainAdvisoryIntent` + narration **alongside** the View
+Annotations in the Tier-2 issue, since the on-screen "explain this" is its natural UX —
+but note this is a *packaging choice*, not an OS constraint (the intent + narration are
+iOS-26-capable and could land in Tier 1 if wanted).
 
 Optional: use the model to improve voice-PIREP parsing beyond the regex `PIREPParser`
 (cross-ref Phase 3a in the roadmap).
@@ -263,16 +277,21 @@ shape changes, check the mirroring intent. Current mapping:
 
 This doc breaks into three **independently-shippable** GitHub issues:
 
-1. **Tier 1 — App Intents (iOS 26, ships today).** Entities (`FlightEntity` +
+Tiering is by **OS availability**: Tier 1 = everything implementable on **today's iOS 26**
+(including Foundation Models); Tier 2 = only what needs the **next release (iOS 27)**.
+
+1. **Tier 1 — App Intents, iOS 26 (everything doable today).** Entities (`FlightEntity` +
    `IndexedEntity`, `AirportEntity`), the open / check / overview / refresh / airport
-   intents, `FlyFunShortcuts`, the **deterministic** resolver + Siri disambiguation
-   (tiers 1 & 3), the `PendingNavigation` seam, Spotlight donation, App Group
-   provisioning (Decision 1), and the expired-token fallback (Decision 4). Functional on
-   every device.
-2. **Tier 2 — Apple Intelligence (WWDC26 / iOS 27).** The Foundation Models resolver
-   fallback (resolver tier 2), View Annotations ("explain this" / "show the
-   cross-section"), on-device narration of cached advisories, and the App Intents Testing
-   framework. Purely additive on top of Issue 1; gated on model availability.
+   intents, `FlyFunShortcuts`, the **full tiered resolver** — deterministic + **Foundation
+   Models `{place, when}` fallback** (iOS 26) + Siri disambiguation — the `PendingNavigation`
+   seam, Spotlight donation, App Group provisioning (Decision 1), and the expired-token
+   fallback (Decision 4). Core paths work on every device; the LLM tier lights up on
+   Apple-Intelligence-capable devices.
+2. **Tier 2 — iOS 27 / WWDC26 only.** The **View Annotations API** (on-screen "explain
+   this" / "show the cross-section") and the **App Intents Testing framework**. By
+   packaging choice, `ExplainAdvisoryIntent` + on-device advisory narration ride along
+   here (their natural UX is the on-screen trigger) — though both are iOS-26-capable and
+   could move to Tier 1 (see Phase 2 note).
 3. **Notification — briefing-refresh push.** See
    [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md).
 
@@ -297,12 +316,14 @@ Locked (★) decisions first, then defaults still open to revision.
    gate prevents redundant spend and it is rate-limited (409/429). No extra Siri
    confirmation step (friction in a hands-busy flow). *Task: define spoken responses for
    `queued` / `already_fresh` / `already_in_progress` / `rate_limited`.*
-3. **★ DECIDED — On-device LLM resolver fallback is committed, delivered in the Tier-2
-   Apple-Intelligence issue.** The full tiered resolver is the target: deterministic
-   (Tier-1 issue, mandatory floor) → Foundation Models `{place, when}` → Siri
-   disambiguation. The LLM fallback is gated on `SystemLanguageModel.default.availability`,
-   so the Tier-1 intent ships and works fully without it and tier 2 is purely additive.
-   *Task (Tier-2 issue): `@Generable FlightQuery` + availability gate + guided-generation call.*
+3. **★ DECIDED — Full tiered resolver ships in Tier 1 (today).** The Foundation Models
+   framework is available on **iOS 26**, so the on-device LLM fallback is implementable
+   now and belongs in the Tier-1 issue — Tier 2 is reserved for what genuinely needs the
+   next iOS release (View Annotations, App Intents Testing). Resolver = deterministic
+   (mandatory floor) → Foundation Models `{place, when}` fallback → Siri disambiguation,
+   with the LLM step gated on `SystemLanguageModel.default.availability` so non-AI devices
+   degrade to deterministic + disambiguation. *Task (Tier-1 issue): `@Generable FlightQuery`
+   + availability gate + guided-generation call.*
 4. **★ DECIDED — Signed-out / expired-token behaviour.** Attempt a silent token refresh
    (`RollingBearerSession`) first; if it fails, foreground intents throw
    `needsToContinueInForegroundError` ("Open FlyFun to sign in") and background intents
