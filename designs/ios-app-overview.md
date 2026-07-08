@@ -11,6 +11,8 @@
 - [UI](./ios-app-ui.md) — cockpit constraints, screen layouts, report cards
 - [Sync & Prompting](./ios-app-sync-prompting.md) — offline queue, WebSocket, forecast-driven prompts
 - [Roadmap](./ios-app-roadmap.md) — phases, decisions, open questions
+- [App Intents](./ios-app-intents.md) — Siri / Shortcuts / Apple Intelligence surface (proposed)
+- [Briefing Refresh Notifications](./ios-app-briefing-notifications.md) — APNs push on refresh-complete (proposed)
 
 ## Current Implementation Status (2026-05-30)
 
