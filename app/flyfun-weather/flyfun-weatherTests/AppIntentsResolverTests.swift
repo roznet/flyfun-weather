@@ -125,3 +125,79 @@ struct PlaceNameMatchingTests {
         #expect(!FlightResolver.nameMatches(name: "London Heathrow", query: "paris"))
     }
 }
+
+@Suite("Resolver — upcoming candidate filter")
+struct UpcomingFilterTests {
+    let now = iso("2026-07-08T10:00:00Z")
+
+    @Test("includes today (even earlier today) and future, excludes past, soonest first")
+    func filter() {
+        let flights = [
+            makeFlight(id: "future", departureTime: "2026-07-15T12:00:00Z"),
+            makeFlight(id: "yesterday", departureTime: "2026-07-07T12:00:00Z"),
+            makeFlight(id: "today-early", departureTime: "2026-07-08T06:00:00Z"),
+        ]
+        let ids = FlightResolver.upcoming(flights, now: now, calendar: utcCalendar).map(\.id)
+        #expect(ids == ["today-early", "future"])
+    }
+}
+
+/// Records the candidates it was offered and returns a canned id — stands in for
+/// the on-device model so the grounded-selection tier is testable without a device.
+private final class FakePhraseResolver: FlightPhraseResolving, @unchecked Sendable {
+    let idToReturn: String?
+    private(set) var receivedCandidates: [FlightCandidate] = []
+    init(idToReturn: String?) { self.idToReturn = idToReturn }
+    func pick(phrase: String, today: String, candidates: [FlightCandidate]) async -> String? {
+        receivedCandidates = candidates
+        return idToReturn
+    }
+}
+
+@MainActor
+@Suite("Resolver — grounded selection (tier 2)")
+struct GroundedSelectionTests {
+    let now = iso("2026-07-08T10:00:00Z")
+
+    // A phrase with no ICAO / airport-name / date keyword, so tier 1 finds nothing
+    // and tier 2 (the injected fake) runs.
+    let phrase = "the one you were telling me about"
+
+    private func flights() -> [FlightResponse] {
+        [
+            makeFlight(id: "past", waypoints: ["EGKA", "EGKB"], departureTime: "2026-07-01T12:00:00Z"),
+            makeFlight(id: "soon", waypoints: ["EGKB", "EGTF"], departureTime: "2026-07-09T12:00:00Z"),
+            makeFlight(id: "later", waypoints: ["LFMD", "LFMN"], departureTime: "2026-07-20T12:00:00Z"),
+        ]
+    }
+
+    @Test("returns the flight the model selects")
+    func selects() async {
+        let fake = FakePhraseResolver(idToReturn: "later")
+        let result = await FlightResolver.resolve(phrase, in: flights(), now: now, parser: fake)
+        #expect(result.map(\.id) == ["later"])
+    }
+
+    @Test("only today-and-future flights are offered to the model")
+    func candidatesUpcomingOnly() async {
+        let fake = FakePhraseResolver(idToReturn: nil)
+        _ = await FlightResolver.resolve(phrase, in: flights(), now: now, parser: fake)
+        #expect(Set(fake.receivedCandidates.map(\.id)) == ["soon", "later"])
+    }
+
+    @Test("a fabricated id is rejected — never invents a flight")
+    func rejectsFabricated() async {
+        let fake = FakePhraseResolver(idToReturn: "does-not-exist")
+        let result = await FlightResolver.resolve(phrase, in: flights(), now: now, parser: fake)
+        #expect(result.isEmpty)
+    }
+
+    @Test("no upcoming flights → model isn't consulted, empty result")
+    func noUpcoming() async {
+        let pastOnly = [makeFlight(id: "past", departureTime: "2026-07-01T12:00:00Z")]
+        let fake = FakePhraseResolver(idToReturn: "past")
+        let result = await FlightResolver.resolve(phrase, in: pastOnly, now: now, parser: fake)
+        #expect(result.isEmpty)
+        #expect(fake.receivedCandidates.isEmpty)
+    }
+}
