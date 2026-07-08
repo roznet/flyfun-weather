@@ -198,6 +198,11 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         }
     }
 
+    func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {
+        // Online-only — airport weather isn't part of the offline pack bundle.
+        try await online.airportWeather(icao: icao, day: day, hour: hour)
+    }
+
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
         await online.refreshStream(flightId: flightId)
     }

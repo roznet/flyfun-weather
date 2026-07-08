@@ -18,6 +18,10 @@ protocol BriefingRepository: Sendable {
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute]
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
+    /// Quick forecast + observation for one airport (mirrors the MCP
+    /// `get_airport_weather` tool). Online-only — not part of the offline bundle.
+    /// `day`: 0=today…3, `hour`: forecast hour UTC (snapped server-side).
+    func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
@@ -120,6 +124,11 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func latestPack(flightId: String) async throws -> PackMetaResponse {
         try await client.request("/api/flights/\(flightId)/packs/latest")
+    }
+
+    func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {
+        let code = Self.queryValueEncoded(icao)
+        return try await client.requestURL("/api/maps/airport-weather?icao=\(code)&day=\(day)&hour=\(hour)")
     }
 
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {

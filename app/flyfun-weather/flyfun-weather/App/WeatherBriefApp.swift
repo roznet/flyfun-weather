@@ -40,6 +40,10 @@ struct WeatherBriefApp: App {
             }
             .onChange(of: scenePhase) {
                 if scenePhase == .active {
+                    // Route any App Intent (Siri / Shortcuts / Spotlight) target
+                    // first — same seam as `onOpenURL`. Synchronous so the flight
+                    // list sees it before its own `.task` load runs.
+                    appState.consumePendingNavigation()
                     Task { await appState.syncPendingPireps() }
                     Task { await appState.refreshUserPreferences() }
                     Task { await appState.refreshHelpCatalog() }

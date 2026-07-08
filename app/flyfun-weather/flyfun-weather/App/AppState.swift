@@ -60,9 +60,23 @@ final class AppState {
     let settings = AppSettingsStore()
     /// Live network reachability — gates Wi-Fi-only auto-download.
     let networkMonitor = NetworkMonitor()
+
+    /// Navigation target requested by an App Intent (Siri / Shortcuts /
+    /// Spotlight), consumed by the UI on the next `.active` scene phase. Reuses
+    /// the same seam `onOpenURL` relies on. Observable so `FlightListView` routes
+    /// when it changes.
+    var pendingNavigation: PendingNavigation?
     /// (i)-popup help content (metrics + advisories). Seeded from disk cache or
     /// the bundled baseline at init; refreshed opportunistically when online.
     let helpCatalog = HelpCatalogStore()
+
+    /// Weak handle to the live instance so a foregrounding App Intent can trigger
+    /// `consumePendingNavigation()` immediately when the app process is already
+    /// alive (warm foreground / already-active). Nil on a cold launch — the scene
+    /// `.active` hook then consumes the target instead. Single source of truth is
+    /// `PendingNavigationStore` (consumed exactly once via `take()`), so this only
+    /// *prompts* a consume; it never double-routes.
+    static weak var current: AppState?
 
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AppState")
 
@@ -106,6 +120,7 @@ final class AppState {
         let store = KeychainBearerTokenStore(service: "aero.flyfun.weather")
         self.tokenStore = store
         self.jwt = store.token
+        Self.current = self
 
         self.rollingSession = RollingBearerSession(
             store: store,
@@ -290,6 +305,23 @@ final class AppState {
         }
     }
     #endif
+
+    // MARK: - Intent navigation
+
+    /// Pull any intent-requested navigation target from the cold-launch-safe
+    /// store into the observable property so the UI can route to it. Called on
+    /// every scene activation, which fires on both cold launch and warm
+    /// foreground — one path covers both.
+    func consumePendingNavigation() {
+        if let nav = PendingNavigationStore.take() {
+            pendingNavigation = nav
+        }
+    }
+
+    /// Clear the pending target once the UI has routed to it.
+    func clearPendingNavigation() {
+        pendingNavigation = nil
+    }
 
     // MARK: - Offline sync
 
