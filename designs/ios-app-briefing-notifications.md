@@ -68,11 +68,75 @@ seams. Push notifications are the outstanding item in Phase 2 M2 of the
   `notify_on_complete`) for precise targeting.
 - **Endpoint** `POST /api/devices` (register/upsert) + `DELETE /api/devices/{token}`.
 
-### User preference
+### Notification preferences
 
-Add a push on/off toggle, alongside the existing email preference
-(`defer_email_for_model_update` / `UserPreferencesStore`). Respect it at send time.
-Consider quiet-hours later.
+Today email-on-completion is **implicit** — it fires whenever a flight's `auto_refresh`
+runs (when SMTP is configured), with one timing refinement (`defer_email_for_model_update`).
+There is no separate per-flight email flag; "email me when done" ≈ `auto_refresh` on.
+This generalizes into an explicit, channel-aware model with a per-flight override.
+
+**Two orthogonal axes + a per-flight override.**
+
+**Global** (Settings → Notifications), stored in `app_prefs_json`:
+
+- **Channels** (*where* — independent, either/both/neither):
+  - Email → `notify_email` (default **on** if the account has an email).
+  - iOS push → `notify_push` (default **off**; conditional UI — show device state
+    ("2 devices") or an install hint; requires ≥1 `device_tokens` row).
+- **Scope** (*which refreshes* — single choice) → `notify_scope`:
+  - `auto` — only the scheduled near-departure auto-refresh (**default**; reproduces today).
+  - `all` — every completion, incl. manual / Siri / MCP.
+  - `off` — never, unless enabled per-flight.
+- **Content filter** → `notify_change_only` (default **on**): only when the assessment
+  changed/worsened (`compute_refresh_delta`), vs every completion.
+- **Timing** → migrate the existing `defer_email_for_model_update` into this group,
+  channel-agnostic ("wait for an imminent model run before notifying" — applies to push too).
+- *(Advanced, optional)* **Quiet hours** — suppress **push** overnight (local); email unaffected.
+
+**Per-flight override** (flight settings — generalizes today's "email me when done"), on `FlightRow`:
+
+- `notify_override`: `default` (follow global) | `on` (notify for **any** completion of this
+  flight, even if global is `off`/`auto`) | `mute` (never for this flight). Channels always
+  follow the global channel selection.
+
+**Effective decision** (evaluated at `_persist_pack_finalize`):
+
+```
+if flight.notify_override == "mute":  stop
+elif flight.notify_override == "on":  send            # any completion
+else:                                                  # default → global scope
+    scope == "all"  → send
+    scope == "auto" → send only if triggered_by == "scheduler"
+    scope == "off"  → stop
+if notify_change_only and not delta.changed:  stop
+for each ON channel (email, push):  deliver
+    # push additionally suppressed if the app is foregrounded on this flight —
+    # a DELIVERY RULE, not a user setting (resolves the earlier ★ question)
+```
+
+### UX principles
+
+- **Orthogonal controls, not a matrix.** Pick channels (multi-select) and one scope —
+  avoid a combinatorial email-auto / email-all / push-auto / push-all grid. One scope
+  applies to all selected channels.
+- **Per-flight is an override, not a second settings screen** — a 3-way segmented control
+  (Default / Notify / Mute) so the common case (follow global) is zero-thought.
+- **Push is conditional UI** — only actionable with a registered device; otherwise show a
+  gentle "install the app / enable notifications" hint.
+- **Migration preserves today's behavior** — existing users default to Email **on**,
+  scope `auto`, change-only **on**, push **off** until a device registers. No surprise.
+
+### Other choices worth offering / deciding
+
+- **Per-flight notify ⇒ auto-refresh?** A per-flight "notify me when done" is most useful
+  for manual/Siri refreshes on a flight whose `auto_refresh` is off (it's the Siri-loop
+  case). Decide whether that control also surfaces/toggles `auto_refresh`, or stays purely
+  a notification override.
+- **Batching/digest** — the scheduler can finish several flights close together; a future
+  digest could replace N separate pushes.
+- **Badge semantics** — define what the app-icon badge counts (flights with unseen updates?).
+- **Per-channel scope** — deliberately NOT in v1 (one scope for all channels); revisit only
+  if users ask for "email everything, push only auto".
 
 ## Sequencing vs App Intents
 
@@ -90,22 +154,20 @@ close-the-loop UX needs the push.
 
 ## Open Questions / Decisions needed
 
-- **★ Notify-when-done vs watching-live** — avoid a redundant push when the user triggered
-  the refresh from inside the app. `triggered_by` is only `user | scheduler` today, so a
-  Siri refresh is indistinguishable from an in-app one. **Recommend:** client-side
-  foreground suppression as the baseline (robust, no server change); optionally add a
-  `triggered_by="intent"` / `notify_on_complete` signal later for server-side precision.
-- **APNs provider library** — hand-rolled HTTP/2 + `.p8` JWT, or a small dep? Note the
-  server is Python/FastAPI; pick something that fits the async stack.
+Resolved by the preferences model above: *notify-when-done vs watching-live* (a push
+**delivery rule** — foreground suppression — plus the `all`/`auto` scope), and *dedup with
+email* (channels are independent user choices). Remaining:
+
+- **Per-flight notify ⇒ auto-refresh coupling** — see "Other choices" above.
+- **APNs provider library** — hand-rolled HTTP/2 + `.p8` JWT, or a small dep that fits the
+  async FastAPI stack?
 - **APNs key management** — `.p8` key + key id + team id as deployment secrets
   (see [multi-user-deployment](./multi-user-deployment.md) secret handling).
-- **Environment routing** — sandbox vs production host per stored `environment`; how to
-  set it at build/runtime and keep straight across TestFlight vs App Store.
-- **Dedup with email** — users who get both email and push on the same refresh: fine,
-  or offer "one or the other"?
-- **Manual-refresh scope** — notify only the triggering device, or all the user's
+- **Environment routing** — sandbox vs production host per stored `environment`; how to set
+  it at build/runtime and keep straight across TestFlight vs App Store.
+- **Manual-refresh device scope** — notify only the triggering device, or all the user's
   devices? (All is simpler and consistent with auto-refresh.)
-- **Throttling / quiet hours** — cap sends per flight per day; suppress overnight?
+- **Badge semantics & quiet hours** — define the badge count; whether quiet-hours ships v1.
 
 ## References
 
