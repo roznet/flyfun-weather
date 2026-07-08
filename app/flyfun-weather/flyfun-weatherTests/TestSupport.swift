@@ -111,7 +111,8 @@ func makeFlight(
     flightDurationHours: Double = 2.0,
     role: FlightRole? = nil,
     flexibility: FlexibilityMode? = nil,
-    altDepartureTime: String? = nil
+    altDepartureTime: String? = nil,
+    latestBriefing: BriefingStatusInfo? = nil
 ) -> FlightResponse {
     FlightResponse(
         id: id,
@@ -131,7 +132,7 @@ func makeFlight(
         autoRefresh: false,
         autoRefreshHour: nil,
         createdAt: "2026-06-20T09:00:00Z",
-        latestBriefing: nil,
+        latestBriefing: latestBriefing,
         coverage: nil,
         role: role,
         flexibility: flexibility,
