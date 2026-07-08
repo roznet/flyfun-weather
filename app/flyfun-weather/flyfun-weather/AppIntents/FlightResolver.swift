@@ -1,4 +1,5 @@
 import Foundation
+import RZFlight
 
 /// Tiered natural-language resolution of a flight from the user's small, closed
 /// set of flights (see `designs/ios-app-intents.md` → Resolver Design):

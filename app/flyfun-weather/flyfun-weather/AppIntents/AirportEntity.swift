@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import RZFlight
 
 /// An App Intents representation of an airport (ICAO + name), backed by the local
 /// `AirportDatabase` (RZFlight `KnownAirports`). Used by `AirportWeatherIntent`
