@@ -44,8 +44,16 @@ enum FlightResolver {
     /// Resolve a free string to the matching flights. Empty result → the intent
     /// speaks its "couldn't find a flight to X" line; multiple → Siri
     /// disambiguates.
+    ///
+    /// `parser` is injectable so the on-device selection tier is unit-testable
+    /// with a fake; production uses the Foundation Models resolver.
     @MainActor
-    static func resolve(_ raw: String, in flights: [FlightResponse], now: Date = Date()) async -> [FlightResponse] {
+    static func resolve(
+        _ raw: String,
+        in flights: [FlightResponse],
+        now: Date = Date(),
+        parser: FlightPhraseResolving = FoundationModelsPhraseResolver()
+    ) async -> [FlightResponse] {
         await IntentSupport.ensureAirportDatabase()
         let calendar = Calendar.current
         let query = raw.lowercased()
@@ -61,27 +69,65 @@ enum FlightResolver {
         }
         if !either.isEmpty { return either }
 
-        // Tier 2 — Foundation Models fallback (only when tier 1 found nothing and
-        // an on-device model is available), then re-run the deterministic match.
-        if let parsed = await FlightQueryModel.parse(raw) {
-            let placed = parsed.place.map { place in
-                flights.filter { matchesPlace($0, query: place.lowercased()) }
-            } ?? []
-            let timed = parsed.when.map { when in
-                flights.filter { matchesRelativeDate($0, query: when.lowercased(), now: now, calendar: calendar) }
-            } ?? []
-            // Intersection when both are present; otherwise whichever signal fired.
-            if !placed.isEmpty && !timed.isEmpty {
-                let timedIds = Set(timed.map(\.id))
-                let intersection = placed.filter { timedIds.contains($0.id) }
-                if !intersection.isEmpty { return intersection }
+        // Tier 2 — grounded on-device selection over the user's today-and-future
+        // flights. The model sees the real candidates (route + airport names +
+        // date) and picks one; we validate the returned id against the set, so it
+        // can never surface a flight that doesn't exist. Skipped (nil) when the
+        // model is unavailable.
+        let candidates = upcoming(flights, now: now, calendar: calendar).map {
+            FlightCandidate(id: $0.id, line: candidateLine($0))
+        }
+        if !candidates.isEmpty {
+            let pickedId = await parser.pick(phrase: raw, today: mediumDate(now), candidates: candidates)
+            if let pickedId, let picked = flights.first(where: { $0.id == pickedId }) {
+                return [picked]
             }
-            let merged = placed + timed.filter { t in !placed.contains(where: { $0.id == t.id }) }
-            if !merged.isEmpty { return merged }
         }
 
         // Tier 3 — nothing matched; let the intent handle the empty result.
         return []
+    }
+
+    // MARK: - Grounded-selection candidates
+
+    /// Today-or-later flights, soonest first — the closed set handed to the
+    /// on-device model (tier 2). "Today" is by calendar day, so a flight earlier
+    /// today is still offered.
+    nonisolated static func upcoming(
+        _ flights: [FlightResponse], now: Date = Date(), calendar: Calendar = .current
+    ) -> [FlightResponse] {
+        let todayStart = calendar.startOfDay(for: now)
+        return flights
+            .filter { ($0.departureDate ?? .distantPast) >= todayStart }
+            .sorted { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) }
+    }
+
+    /// One model-facing candidate line, e.g. "EGKB (Biggin Hill) → EGTF (Fairoaks),
+    /// 9 Jul 2026". Airport names come from the local DB (which already embeds the
+    /// city, e.g. "Nice Côte d'Azur"); city/country as separate fields can be added
+    /// here once the airport model surfaces them.
+    @MainActor
+    static func candidateLine(_ flight: FlightResponse) -> String {
+        let origin = flight.waypoints.first?.uppercased() ?? "?"
+        let dest = flight.waypoints.last?.uppercased() ?? "?"
+        let route = "\(airportLabel(origin)) → \(airportLabel(dest))"
+        if let date = flight.departureDate { return "\(route), \(mediumDate(date))" }
+        return route
+    }
+
+    @MainActor
+    private static func airportLabel(_ icao: String) -> String {
+        if let name = AirportDatabase.shared.airport(icao: icao)?.name, !name.isEmpty {
+            return "\(icao) (\(name))"
+        }
+        return icao
+    }
+
+    nonisolated private static func mediumDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 
     // MARK: - Place matching (needs AirportDatabase, so MainActor)

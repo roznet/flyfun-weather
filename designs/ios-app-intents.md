@@ -126,15 +126,16 @@ matter here:
   phrase and, with `IndexedEntity`'s semantic index, does more matching before it even
   calls our query. We benefit passively; it improves each OS release.
 - **Foundation Models framework** (a model *we* call): the on-device ~3B Apple
-  Intelligence LLM, available since iOS 26. With **guided generation** it turns a free
-  string into a typed `{place, when}` — ideal for messy phrasing.
+  Intelligence LLM, available since iOS 26. With **guided generation** it selects, from a
+  provided candidate list, *which* upcoming flight the phrase means — ideal for messy or
+  world-knowledge phrasing ("my beach trip").
 
 **Tiered resolution:**
 
 | Tier | Handles | Cost / availability |
 |---|---|---|
 | 1. Deterministic — `AirportDatabase`/`RZFlight` place↔ICAO + relative-date keywords | "Fairoaks", "EGTF", "Le Touquet", "tomorrow", weekday names | free, instant, offline, **every device** |
-| 2. Foundation Models guided generation → `{place, when}`, then re-run tier-1 match | loose phrasing: "my trip to the coast next weekend" | on-device, needs Apple-Intelligence-capable device + enabled |
+| 2. Foundation Models **grounded selection** over the today-and-future flights (route + airport names + date) → a validated flight index | vague/world-knowledge phrasing: "my beach trip", "the France run", "my Geneva flight" | on-device, needs Apple-Intelligence-capable device + enabled |
 | 3. Siri disambiguation UI | still ≥2 matches after tiers 1–2 | system-provided |
 
 Tier 1 is the **floor** and must always exist: Foundation Models requires an
@@ -142,40 +143,33 @@ Apple-Intelligence-capable device (iPhone 15 Pro / M-series+), the feature enabl
 the model present — so it can never be a hard dependency. Gate tier 2 on
 `SystemLanguageModel.default.availability`; if unavailable, fall straight to tier 3.
 
+**Tier 2 = grounded selection, not blind extraction.** Rather than extracting `{place,
+when}` from the phrase in isolation (which can't bridge "the coast" → *Nice*), the resolver
+hands the model the actual candidate flights — **today-and-future only** — each as a line
+of ICAO + airport name + date, and asks which number matches. The model returns a **1-based
+index** (0 = none); the resolver range-checks it and maps back to a real flight id.
+
 ```swift
-struct FlightEntityQuery: EntityStringQuery {
-    func entities(matching string: String) async throws -> [FlightEntity] {
-        let flights = try await repository.flights()             // cache-first
-        // Tier 1 — deterministic (authoritative)
-        var hits = flights.filter {
-            matchesDestination($0, string) ||                   // AirportDatabase place↔ICAO
-            matchesRelativeDate($0, string)                     // "tomorrow", weekday — parsed in-app
-        }
-        // Tier 2 — on-device LLM fallback, only when tier 1 is empty AND the model is available
-        if hits.isEmpty, case .available = SystemLanguageModel.default.availability {
-            let q = try await LanguageModelSession()
-                .respond(to: string, generating: FlightQuery.self)
-            hits = flights.filter { matches($0, place: q.place, when: q.when) }
-        }
-        return hits.map(FlightEntity.init)                      // Siri disambiguates if >1
-    }
-    func suggestedEntities() async throws -> [FlightEntity] { /* upcoming flights */ }
-    func entities(for ids: [String]) async throws -> [FlightEntity] { /* by id */ }
+// FlightResolver.resolve, tier 2 (parser is injectable for tests)
+let candidates = upcoming(flights, now: now).map {          // today-and-future, soonest first
+    FlightCandidate(id: $0.id, line: candidateLine($0))     // "EGKB (Biggin Hill) → EGTF (Fairoaks), 9 Jul 2026"
+}
+if let id = await parser.pick(phrase: raw, today: today, candidates: candidates),
+   let picked = flights.first(where: { $0.id == id }) {     // validate: id ∈ real flights
+    return [picked]
 }
 
-@Generable struct FlightQuery {
-    @Guide(description: "airport or city name mentioned, e.g. Fairoaks")
-    var place: String?
-    @Guide(description: "when: tomorrow, Saturday, next week")
-    var when: String?
+@Generable struct FlightChoice {
+    @Guide(description: "The number of the matching flight from the list, or 0 if none match.")
+    var choice: Int
 }
 ```
 
-**Division of authority:** the LLM only flattens *language* into `{place, when}`; the
-deterministic matcher against real flights stays the authority — so the model can never
-invent a flight that doesn't exist. This keeps correctness in well-tested code and uses
-the LLM only for input variety (per the CLAUDE.md "push complexity into well-tested
-code" principle).
+**Division of authority:** the model only *selects from a closed set we provide*; the
+returned index is range-checked and the id re-validated against the real flights — so the
+model can never surface a flight that doesn't exist (a *safer* guarantee than token
+re-matching, and a task on-device models are more reliable at). Selection sits behind a
+`FlightPhraseResolving` protocol so the tier is unit-testable with an injected fake.
 
 Reuse:
 - **`Services/AirportDatabase.swift`** + `RZFlight` `KnownAirports` for place↔ICAO — do
