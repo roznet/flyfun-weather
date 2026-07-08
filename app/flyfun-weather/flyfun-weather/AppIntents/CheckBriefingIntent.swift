@@ -20,10 +20,17 @@ struct CheckBriefingIntent: AppIntent {
             return .result(dialog: "\(IntentSupport.signedOutSpokenLine)")
         }
         let repo = IntentSupport.makeRepository()
-        let flights = try await repo.flights()
-        guard let match = flights.first(where: { $0.id == flight.id }) else {
-            return .result(dialog: "I couldn't find that flight.")
+        do {
+            let flights = try await repo.flights()
+            guard let match = flights.first(where: { $0.id == flight.id }) else {
+                return .result(dialog: "I couldn't find that flight.")
+            }
+            return .result(dialog: "\(IntentDialogs.checkSummary(match))")
+        } catch APIError.unauthorized {
+            // Token expired and the silent refresh failed (Decision 4).
+            return .result(dialog: "\(IntentSupport.signedOutSpokenLine)")
+        } catch {
+            return .result(dialog: "Sorry, I couldn't load your briefing right now.")
         }
-        return .result(dialog: "\(IntentDialogs.checkSummary(match))")
     }
 }

@@ -80,7 +80,7 @@ enum RefreshDriver {
             switch apiError {
             case .serverError(429, _): return .rateLimited
             case .serverError(409, _): return .alreadyInProgress
-            case .unauthorized: return .failed("Please open FlyFun to sign in first.")
+            case .unauthorized: return .failed(IntentSupport.signedOutSpokenLine)
             default: break
             }
         }

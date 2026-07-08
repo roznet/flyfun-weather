@@ -12,7 +12,14 @@ struct FlightsOverviewIntent: AppIntent {
             return .result(dialog: "\(IntentSupport.signedOutSpokenLine)")
         }
         let repo = IntentSupport.makeRepository()
-        let flights = try await repo.flights()
-        return .result(dialog: "\(IntentDialogs.overviewSummary(flights))")
+        do {
+            let flights = try await repo.flights()
+            return .result(dialog: "\(IntentDialogs.overviewSummary(flights))")
+        } catch APIError.unauthorized {
+            // Token expired and the silent refresh failed (Decision 4).
+            return .result(dialog: "\(IntentSupport.signedOutSpokenLine)")
+        } catch {
+            return .result(dialog: "Sorry, I couldn't load your flights right now.")
+        }
     }
 }

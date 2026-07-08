@@ -222,15 +222,16 @@ struct FlightListView: View {
             appState.clearPendingNavigation()
         case .briefing(let flightId):
             guard let vm = viewModel, case .loaded(let flights) = vm.state else { return }
-            guard let match = flights.first(where: { $0.id == flightId }) else {
-                // Not in the list — either not loaded yet (retry after load) or
-                // the flight is gone. Clear only once we actually have a list so
-                // a stale target doesn't linger forever.
+            if let match = flights.first(where: { $0.id == flightId }) {
+                selectedFlight = match
                 appState.clearPendingNavigation()
-                return
+            } else if !vm.isOffline {
+                // Authoritative (online) list loaded and the flight isn't in it —
+                // it's gone; drop the target. When the list is offline/stale, keep
+                // the target: a later successful fetch may include a just-created
+                // flight the cache didn't have yet, so we retry after the next load.
+                appState.clearPendingNavigation()
             }
-            selectedFlight = match
-            appState.clearPendingNavigation()
         }
     }
 
