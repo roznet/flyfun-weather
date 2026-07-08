@@ -62,8 +62,12 @@ enum RefreshDriver {
                             break
                         }
                     }
-                    // Stream ended without a terminal event — a run was underway.
-                    report(.started)
+                    // Stream ended without any progress or terminal event: nothing
+                    // actually started (the sibling `BriefingViewModel.refresh()`
+                    // treats this same case as anomalous). Don't tell the pilot a
+                    // refresh is in progress. If a progress event *had* arrived,
+                    // `.started` was already reported and this is a no-op.
+                    report(.failed("I couldn't start the refresh. Please try again from FlyFun."))
                 } catch {
                     report(classify(error))
                 }

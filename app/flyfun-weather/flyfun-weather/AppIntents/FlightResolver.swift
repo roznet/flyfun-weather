@@ -46,7 +46,7 @@ enum FlightResolver {
     /// disambiguates.
     @MainActor
     static func resolve(_ raw: String, in flights: [FlightResponse], now: Date = Date()) async -> [FlightResponse] {
-        IntentSupport.ensureAirportDatabase()
+        await IntentSupport.ensureAirportDatabase()
         let calendar = Calendar.current
         let query = raw.lowercased()
 

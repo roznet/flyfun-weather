@@ -104,6 +104,17 @@ final class AirportDatabase {
         }
     }
 
+    /// Open the cached DB and **await** the load, so a caller that searches
+    /// immediately afterward doesn't race the detached `loadCached()` task. This
+    /// matters for App Intents: a background Siri intent is often served by a
+    /// freshly-spawned process where `loadCached()` + `search()` run back-to-back
+    /// with no scheduling gap, leaving `knownAirports` nil on that first call.
+    /// No-op once loaded; a no-cache-yet device still returns quickly (empty DB).
+    func ensureLoaded() async {
+        loadCached()
+        await loadTask?.value
+    }
+
     /// Ranked ICAO/name search. Empty until a DB is loaded.
     func search(needle: String, limit: Int = 12) -> [Airport] {
         guard let knownAirports, !needle.isEmpty else { return [] }
