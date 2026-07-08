@@ -126,6 +126,33 @@ struct PlaceNameMatchingTests {
     }
 }
 
+@Suite("Resolver — airport label formatting")
+struct AirportLabelTests {
+    @Test("name + city + country")
+    func full() {
+        #expect(FlightResolver.airportLabel(
+            icao: "EGKB", name: "London Biggin Hill Airport", city: "London", country: "GB")
+            == "EGKB (London Biggin Hill Airport, London, GB)")
+    }
+
+    @Test("skips empty city and country")
+    func minimal() {
+        #expect(FlightResolver.airportLabel(icao: "EGTF", name: "Fairoaks", city: "", country: "")
+            == "EGTF (Fairoaks)")
+    }
+
+    @Test("drops a city that just repeats the name")
+    func cityEqualsName() {
+        #expect(FlightResolver.airportLabel(icao: "LFMN", name: "Nice", city: "Nice", country: "FR")
+            == "LFMN (Nice, FR)")
+    }
+
+    @Test("bare ICAO when nothing else is known")
+    func bare() {
+        #expect(FlightResolver.airportLabel(icao: "ZZZZ", name: "", city: "", country: "") == "ZZZZ")
+    }
+}
+
 @Suite("Resolver — upcoming candidate filter")
 struct UpcomingFilterTests {
     let now = iso("2026-07-08T10:00:00Z")
