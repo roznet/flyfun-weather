@@ -2,6 +2,8 @@ import CryptoKit
 import FlyFunCommon
 import Foundation
 import OSLog
+import UIKit
+import UserNotifications
 
 #if DEBUG
 /// Server environment toggle, available only in simulator builds.
@@ -261,6 +263,9 @@ final class AppState {
 
     func logout() {
         Self.logger.info("Logging out")
+        // Unregister this device first — a signed-out device must stop receiving
+        // this user's briefings. Uses the live client before it's cleared below.
+        unregisterPushDevice()
         applyToken(nil)
         apiClient = nil
         repository = nil
@@ -321,6 +326,87 @@ final class AppState {
     /// Clear the pending target once the UI has routed to it.
     func clearPendingNavigation() {
         pendingNavigation = nil
+    }
+
+    // MARK: - Push notifications & badge
+
+    /// UserDefaults key for the last-uploaded APNs token hex, so sign-out can
+    /// unregister the exact device row even after the token is no longer live.
+    private static let apnsTokenKey = "apnsDeviceToken"
+
+    /// Ask for notification authorization and, if granted, register for remote
+    /// notifications. Returns whether authorization was granted. Called when the
+    /// user turns push on in Settings — the system prompt appears at most once.
+    func requestPushAuthorizationAndRegister() async -> Bool {
+        let center = UNUserNotificationCenter.current()
+        let granted = (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+        if granted {
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+        return granted
+    }
+
+    /// Re-register for remote notifications on foreground when already authorized,
+    /// so a rotated APNs token is re-uploaded. No-op (and no prompt) when the user
+    /// hasn't authorized notifications. Safe to call on every `.active`.
+    func refreshPushRegistrationIfAuthorized() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .authorized ||
+              settings.authorizationStatus == .provisional else { return }
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    /// Upload (upsert) this device's APNs token to the server. Called by the app
+    /// delegate once APNs hands back a token.
+    func uploadDeviceToken(_ hex: String) async {
+        guard let apiClient else { return }
+        UserDefaults.standard.set(hex, forKey: Self.apnsTokenKey)
+        do {
+            let body = try JSONEncoder.weatherBrief.encode(
+                DeviceRegistrationRequest(token: hex, environment: PushSupport.environment)
+            )
+            _ = try await apiClient.requestData("/api/devices", method: "POST", body: body)
+            Self.logger.info("Device token uploaded")
+        } catch {
+            Self.logger.warning("Device token upload failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Unregister this device on the server (sign-out). Captures the live client
+    /// synchronously so it still fires after `logout()` clears `apiClient`.
+    func unregisterPushDevice() {
+        guard let apiClient,
+              let token = UserDefaults.standard.string(forKey: Self.apnsTokenKey) else { return }
+        UserDefaults.standard.removeObject(forKey: Self.apnsTokenKey)
+        Task { try? await apiClient.requestVoid("/api/devices/\(token)", method: "DELETE") }
+    }
+
+    /// Authoritative badge reconcile: read the server-derived unseen count and set
+    /// the app icon badge. The correctness backstop for coalesced/missed pushes —
+    /// call on every `.active` and after handling a silent push.
+    func reconcileBadge() async {
+        guard let apiClient else { return }
+        do {
+            let status: BadgeStatus = try await apiClient.request("/api/flights/badge")
+            try? await UNUserNotificationCenter.current().setBadgeCount(status.count)
+        } catch {
+            Self.logger.debug("Badge reconcile skipped: \(error.localizedDescription)")
+        }
+    }
+
+    /// Mark a flight's briefing seen (opened) and update the badge from the
+    /// server's fresh count. The server also fires a silent badge-sync push to
+    /// the user's other devices so they update too.
+    func markBriefingSeen(flightId: String) async {
+        guard let apiClient else { return }
+        do {
+            let status: BadgeStatus = try await apiClient.request(
+                "/api/flights/\(flightId)/seen", method: "POST"
+            )
+            try? await UNUserNotificationCenter.current().setBadgeCount(status.count)
+        } catch {
+            Self.logger.debug("Mark-seen failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Offline sync

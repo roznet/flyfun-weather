@@ -5,6 +5,9 @@ import TipKit
 struct WeatherBriefApp: App {
     @State private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
+    // Bridges APNs (device token, taps, silent badge-sync) into the app. Runs
+    // in-process; the delegate reaches state via `AppState.current`.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
         // Under UI tests (`FLYFUN_UITEST=1`) leave TipKit unconfigured so no
@@ -48,6 +51,11 @@ struct WeatherBriefApp: App {
                     Task { await appState.refreshUserPreferences() }
                     Task { await appState.refreshHelpCatalog() }
                     Task { await appState.pruneStaleCache() }
+                    // Badge is server-authoritative: reconcile on every activation
+                    // (the correctness backstop for coalesced/missed silent pushes),
+                    // and re-upload a rotated APNs token when already authorized.
+                    Task { await appState.reconcileBadge() }
+                    Task { await appState.refreshPushRegistrationIfAuthorized() }
                 }
             }
         }

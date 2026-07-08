@@ -4,7 +4,7 @@
 > knows to look — and so a Siri-triggered refresh can truthfully say "I'll let you
 > know when it's ready."
 
-**Status: SERVER HALF IMPLEMENTED (#366); iOS client pending #364.** The full
+**Status: IMPLEMENTED (#366) — server + iOS client.** The full
 server side is built and tested (`tests/test_briefing_notifications.py`):
 
 - `notify/push.py` — token-based APNs sender (httpx HTTP/2 + PyJWT ES256,
@@ -19,10 +19,27 @@ server side is built and tested (`tests/test_briefing_notifications.py`):
 - Preferences (`app_prefs_json`): `notify_email` / `notify_push` / `notify_scope`
   / `notify_change_only`; per-flight `FlightRow.notify_override`. Migration `075`.
 
-**Still to build (iOS, needs #364's app-shell):** client registration for remote
-notifications, deep-link on tap via the `PendingNavigation` seam, foreground
-badge reconcile on `scenePhase == .active`, and the settings/per-flight UI.
+**iOS client (built on #364's app-shell):**
+
+- `Services/PushNotifications.swift` — `AppDelegate` (`@UIApplicationDelegateAdaptor`)
+  + `UNUserNotificationCenterDelegate`: registers the APNs token, uploads it via
+  `POST /api/devices`, foreground-suppresses banners, handles the silent
+  badge-sync push, and deep-links a tapped push through the **existing
+  `PendingNavigation` seam** (same path as `onOpenURL` / App Intents). Pure
+  `PushSupport` helpers (hex, payload→nav) are unit-tested
+  (`PushNotificationsTests.swift`).
+- `AppState` — `uploadDeviceToken` / `unregisterPushDevice` (on sign-out) /
+  `reconcileBadge` / `markBriefingSeen` / `requestPushAuthorizationAndRegister`.
+  Badge reconcile + token refresh run in the existing `scenePhase == .active`
+  block; mark-seen fires when a briefing opens (`BriefingContainerView`).
+- Settings → a "Briefing Push Alerts" toggle (`SettingsView`) that requests iOS
+  authorization, registers, and writes `notify_push` via
+  `PUT /api/user/preferences`. Entitlement `aps-environment` + the
+  `remote-notification` background mode are added.
+
 Deployment must set the APNs secrets (see "APNs key management" below).
+Deferred: the per-flight `notify_override` control in the iOS UI (settable on the
+web today; the server + API support it).
 
 ## Related Docs
 

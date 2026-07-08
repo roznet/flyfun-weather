@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var showFinalConfirmation = false
     @State private var isDeleting = false
     @State private var errorMessage: String?
+    @State private var pushBusy = false
+    @State private var showPushDeniedAlert = false
     #if DEBUG
     @State private var tipsResetConfirmation: String?
     #endif
@@ -33,6 +35,18 @@ struct SettingsView: View {
                     Link(destination: URL(string: "https://weather.flyfun.aero/privacy")!) {
                         Label("Privacy Policy", systemImage: "hand.raised")
                     }
+                }
+
+                Section {
+                    Toggle("Briefing Push Alerts", isOn: Binding(
+                        get: { appState.userPreferences.preferences.pushEnabled },
+                        set: { setPush($0) }
+                    ))
+                    .disabled(pushBusy || appState.apiClient == nil)
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Get a push when a briefing finishes refreshing with changed conditions. Email delivery and per-flight overrides are managed on the website.")
                 }
 
                 Section {
@@ -163,6 +177,31 @@ struct SettingsView: View {
             } message: {
                 Text("You have downloaded packs. They won't be accessible until you sign in again.")
             }
+            .alert("Notifications Disabled", isPresented: $showPushDeniedAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Enable notifications for FlyFun Weather in the iOS Settings app to receive briefing alerts.")
+            }
+        }
+    }
+
+    /// Toggle the push channel: on turn-on request iOS authorization + register,
+    /// and only persist `notify_push=true` once granted; on turn-off just persist
+    /// the flag (the device stays registered so the badge keeps syncing).
+    private func setPush(_ enabled: Bool) {
+        guard let client = appState.apiClient else { return }
+        pushBusy = true
+        Task {
+            if enabled {
+                let granted = await appState.requestPushAuthorizationAndRegister()
+                if !granted {
+                    showPushDeniedAlert = true
+                    pushBusy = false
+                    return
+                }
+            }
+            await appState.userPreferences.updateNotifyPush(enabled, using: client)
+            pushBusy = false
         }
     }
 
