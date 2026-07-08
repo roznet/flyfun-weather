@@ -175,6 +175,8 @@ class FlightResponse(BaseModel):
     # Timing-scenario Flexibility mode (timing-scenario-plan.md): what the
     # scenario job grades for this flight. "alternate" uses alt_departure_time.
     flexibility: Literal["none", "alternate", "same_day", "prev_day", "next_day"] = "none"
+    # Per-flight briefing-notification override: follow global | notify any | mute.
+    notify_override: Literal["default", "notify", "mute"] = "default"
     target_date: str  # backward compat (computed from departure_time)
     target_time_utc: int  # backward compat (computed from departure_time)
     cruise_altitude_ft: int
@@ -480,6 +482,7 @@ def _flight_to_response(
         departure_time=flight.departure_time.isoformat(),
         alt_departure_time=flight.alt_departure_time.isoformat() if flight.alt_departure_time else None,
         flexibility=flight.flexibility,
+        notify_override=flight.notify_override,
         target_date=flight.target_date,
         target_time_utc=flight.target_time_utc,
         cruise_altitude_ft=flight.cruise_altitude_ft,
@@ -1700,6 +1703,8 @@ class UpdateFlightRequest(BaseModel):
     # Timing-scenario Flexibility mode; None = no change. "alternate" grades
     # alt_departure_time; day modes run the departure-window scan.
     flexibility: Literal["none", "alternate", "same_day", "prev_day", "next_day"] | None = None
+    # Per-flight briefing-notification override; None = no change.
+    notify_override: Literal["default", "notify", "mute"] | None = None
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
@@ -1912,6 +1917,9 @@ def update_flight(
                 detail="Flexibility 'alternate' requires an alt departure time.",
             )
         row.flexibility = req.flexibility
+
+    if req.notify_override is not None:
+        row.notify_override = req.notify_override
 
     db.flush()
     updated = load_flight(db, flight_id)

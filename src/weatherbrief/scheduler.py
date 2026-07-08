@@ -27,10 +27,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import SessionLocal
-from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FlightRow
 from weatherbrief.fetch.variables import is_beyond_forecast_horizon
-from weatherbrief.privacy import mask_email
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.freshness.markers import MarkerStore
@@ -442,45 +440,21 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
         result.usage.queue_wait_seconds = queue_wait
         result.usage.triggered_by = "scheduler"
 
-        meta = _finalize_refresh(
+        # Briefing-refresh notifications (email + APNs push) now fire from the
+        # shared refresh-finalize sink (``_persist_pack_finalize``) so the same
+        # hook covers auto / in-app / Siri / MCP refreshes. The scheduler no
+        # longer sends email directly — it would double-send. ``triggered_by``
+        # was set to "scheduler" above, so the auto/all scope gate treats this
+        # as the scheduled auto-refresh.
+        _finalize_refresh(
             flight_row.id, flight, fetch_ts, pack_path, result, db,
             user_id=user_id, model_metadata=model_metadata,
             as_of_time=resolved_as_of,
         )
         db.commit()
 
-        # Send email notification
-        _try_send_email(db, flight, meta, pack_path, user_id)
-
     finally:
         db.close()
-
-
-def _try_send_email(
-    db: Session, flight, meta, pack_path, user_id: str,
-) -> None:
-    """Attempt to send a briefing email, logging and skipping on any failure."""
-    try:
-        from weatherbrief.notify.email import SmtpConfig, send_briefing_email
-
-        SmtpConfig.from_env()  # validate config exists
-    except (ValueError, ImportError):
-        logger.debug("Auto-refresh: SMTP not configured, skipping email for %s", flight.id)
-        return
-
-    user = db.query(UserRow).filter(UserRow.id == user_id).first()
-    if not user or not user.email:
-        logger.debug("Auto-refresh: no email for user %s, skipping", user_id)
-        return
-
-    base_url = os.environ.get("WEATHERBRIEF_BASE_URL", "https://weather.flyfun.aero")
-    try:
-        from weatherbrief.notify.email import send_briefing_email
-
-        send_briefing_email([user.email], flight, meta, pack_path, base_url=base_url)
-        logger.info("Auto-refresh email sent for %s to %s", flight.id, mask_email(user.email))
-    except Exception:
-        logger.warning("Auto-refresh email failed for %s", flight.id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,8 @@ from weatherbrief.api.help import router as help_router
 from weatherbrief.api.debriefs import router as debriefs_router
 from weatherbrief.api.pireps import router as pireps_router
 from weatherbrief.api.flights import router as flights_router
+from weatherbrief.api.notifications import router as notifications_router
+from weatherbrief.api.devices import router as devices_router
 from weatherbrief.api.packs import refresh_router, router as packs_router
 from weatherbrief.api.preferences import router as preferences_router
 from weatherbrief.api.profiles import admin_router as profiles_admin_router, router as profiles_router
@@ -75,8 +77,8 @@ def _on_delete_user(user_id: str, db):
     """Callback for account deletion: clean up all weatherbrief-specific data."""
     from pathlib import Path
     from weatherbrief.db.models import (
-        BriefingUsageRow, DeviceTokenRow, FeedbackRow, FlightProfileRow,
-        FlightRow, PirepRow, UserAircraftRow,
+        BriefingUsageRow, DeviceTokenRow, FeedbackRow, FlightBriefingSeenRow,
+        FlightProfileRow, FlightRow, PirepRow, UserAircraftRow,
     )
     from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
 
@@ -113,6 +115,11 @@ def _on_delete_user(user_id: str, db):
     # Delete device tokens entirely
     db.query(DeviceTokenRow).filter(
         DeviceTokenRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    # Delete cross-surface badge/seen state (explicit — the FlightRow bulk
+    # delete above doesn't emit per-row ORM cascades).
+    db.query(FlightBriefingSeenRow).filter(
+        FlightBriefingSeenRow.user_id == user_id
     ).delete(synchronize_session=False)
     db.flush()
 
@@ -526,7 +533,11 @@ def create_app() -> FastAPI:
     app.include_router(aircraft_router, prefix="/api")
     app.include_router(debriefs_router, prefix="/api")
     app.include_router(pireps_router, prefix="/api")
+    # Registered before flights_router so the literal /flights/badge route wins
+    # over the /flights/{flight_id} catch-all.
+    app.include_router(notifications_router, prefix="/api")
     app.include_router(flights_router, prefix="/api")
+    app.include_router(devices_router, prefix="/api")
     app.include_router(packs_router, prefix="/api")
     app.include_router(preferences_router, prefix="/api")
     app.include_router(account_export_router, prefix="/api")

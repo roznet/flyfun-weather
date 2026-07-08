@@ -1551,6 +1551,22 @@ def _persist_pack_finalize(
     except Exception:
         logger.warning("time-scan: post-refresh scheduling failed", exc_info=True)
 
+    # Briefing-refresh notifications (email + APNs push) + cross-surface badge.
+    # This single sink covers every refresh path — auto (scheduler), in-app, and
+    # Siri/MCP — so one hook closes the RefreshBriefingIntent loop. Best-effort:
+    # notify_briefing_refresh never raises. ``triggered_by`` distinguishes the
+    # scheduled auto-refresh ("scheduler") from user/Siri/MCP refreshes ("user")
+    # for the auto/all scope gate.
+    notify_user_id = user_id or flight.user_id
+    if notify_user_id:
+        from weatherbrief.notify.dispatch import notify_briefing_refresh
+
+        notify_briefing_refresh(
+            db, flight, meta, Path(pack_path),
+            user_id=notify_user_id,
+            triggered_by=getattr(result.usage, "triggered_by", "user") or "user",
+        )
+
     logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
     return meta
 
