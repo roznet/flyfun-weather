@@ -183,12 +183,15 @@ the pattern already established for `onOpenURL`:
   `onOpenURL` already uses. Alternatively an intent can emit the existing
   `flyfunweather://` deep link, but a typed `PendingNavigation` avoids URL parsing.
 
-### Auth & process model (Phase 1 has a low bar)
+### Auth & process model
 
 - Intents run **in-process**, reusing the Keychain JWT via `APIClient` /
-  FlyFunCommon `RollingBearerSession` — no extra auth work.
-- **No App Group needed** for these intents (that's only for Widgets / Live Activities
-  / a separate extension process — out of scope here, tracked under Tier 2).
+  FlyFunCommon `RollingBearerSession` — no OAuth in the intent path (see Decision 4
+  for the expired-token fallback).
+- **App Group is provisioned in Phase 1** (Decision 1). The intents themselves don't
+  strictly require it, but we move the Keychain access-group + `BriefingCacheStore`
+  into the shared container now, so the later Widgets / Live Activities / Control Center
+  work needs no Keychain/cache migration.
 
 ### Spotlight
 
@@ -256,6 +259,28 @@ shape changes, check the mirroring intent. Current mapping:
 | `create_flight` | *(kept in-app / Shortcuts-only — route+time too complex for voice)* |
 | `get_alternates`, `get_digest_context` | *(not surfaced initially — deep/niche)* |
 
+## Implementation issues
+
+This doc breaks into three **independently-shippable** GitHub issues:
+
+1. **Tier 1 — App Intents (iOS 26, ships today).** Entities (`FlightEntity` +
+   `IndexedEntity`, `AirportEntity`), the open / check / overview / refresh / airport
+   intents, `FlyFunShortcuts`, the **deterministic** resolver + Siri disambiguation
+   (tiers 1 & 3), the `PendingNavigation` seam, Spotlight donation, App Group
+   provisioning (Decision 1), and the expired-token fallback (Decision 4). Functional on
+   every device.
+2. **Tier 2 — Apple Intelligence (WWDC26 / iOS 27).** The Foundation Models resolver
+   fallback (resolver tier 2), View Annotations ("explain this" / "show the
+   cross-section"), on-device narration of cached advisories, and the App Intents Testing
+   framework. Purely additive on top of Issue 1; gated on model availability.
+3. **Notification — briefing-refresh push.** See
+   [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md).
+
+Independence: all three can proceed in parallel. The only soft coupling is that
+`RefreshBriefingIntent` (Issue 1) gives its best "…I'll let you know when it's ready" UX
+once Issue 3 lands; until then it speaks the interim "started — open FlyFun shortly"
+(Open Questions → refresh feedback without push). Issue 1 does not *block* on Issue 3.
+
 ## Decisions
 
 Locked (★) decisions first, then defaults still open to revision.
@@ -272,15 +297,16 @@ Locked (★) decisions first, then defaults still open to revision.
    gate prevents redundant spend and it is rate-limited (409/429). No extra Siri
    confirmation step (friction in a hands-busy flow). *Task: define spoken responses for
    `queued` / `already_fresh` / `already_in_progress` / `rate_limited`.*
-3. **★ DECIDED — Tier-2 on-device LLM fallback ships in v1.** Build the full tiered
-   resolver (deterministic → Foundation Models `{place, when}` → Siri disambiguation)
-   from the first release. Tier 1 remains the mandatory floor; tier 2 is gated on
-   `SystemLanguageModel.default.availability` so devices without Apple Intelligence fall
-   straight to tier 1/3. *Task: `@Generable FlightQuery` + availability gate + guided-generation call.*
-4. **Signed-out / expired-token behaviour.** Background intents can't run OAuth.
-   **Recommend:** attempt silent token refresh (`RollingBearerSession`) first; else
-   foreground intents throw `needsToContinueInForegroundError` ("Open FlyFun to sign in"),
-   background intents speak "Please open FlyFun to sign in first."
+3. **★ DECIDED — On-device LLM resolver fallback is committed, delivered in the Tier-2
+   Apple-Intelligence issue.** The full tiered resolver is the target: deterministic
+   (Tier-1 issue, mandatory floor) → Foundation Models `{place, when}` → Siri
+   disambiguation. The LLM fallback is gated on `SystemLanguageModel.default.availability`,
+   so the Tier-1 intent ships and works fully without it and tier 2 is purely additive.
+   *Task (Tier-2 issue): `@Generable FlightQuery` + availability gate + guided-generation call.*
+4. **★ DECIDED — Signed-out / expired-token behaviour.** Attempt a silent token refresh
+   (`RollingBearerSession`) first; if it fails, foreground intents throw
+   `needsToContinueInForegroundError` ("Open FlyFun to sign in") and background intents
+   speak "Please open FlyFun to sign in first."
 5. **Empty-state / no-match dialog per intent.** "No upcoming flights", "I couldn't find a
    flight to X", "You're offline and that briefing isn't downloaded." These spoken lines
    *are* the voice UX — decide them explicitly.
@@ -292,8 +318,9 @@ Locked (★) decisions first, then defaults still open to revision.
    is already language-agnostic via ICAO).
 8. **Spotlight donation lifecycle.** Donate `FlightEntity` on list-load + create, remove on
    delete; avoid stale donations for server-deleted flights.
-9. **Privacy / prediction surfacing.** Routes are private. **Recommend: discoverable in
-   Shortcuts/Spotlight**, but review whether Siri may predict these on the Lock Screen.
+9. **★ DECIDED — Privacy / prediction surfacing: discoverable.** Flight routes are not
+   especially sensitive and surfacing requires the user's own unlocked device, so intents
+   and `FlightEntity` are discoverable in Shortcuts/Spotlight and Siri may predict them.
 
 ## Open Questions
 
@@ -304,7 +331,10 @@ Locked (★) decisions first, then defaults still open to revision.
 - **"Next flight" definition** — soonest by departure, or soonest that is today-or-later
   and has a briefing? Align with `FlightListViewModel` ordering.
 - **iPhone vs iPad** — intents are universal; confirm navigation targets exist on both size classes.
-- **Spotlight donation lifecycle** — where to hook create/update/delete donations cleanly.
+- **`AirportWeatherIntent` day parameter** — `Int` (0–3) is unfriendly for voice; make it
+  an `@AppEnum` ("today"/"tomorrow"/…) so Siri and Shortcuts read naturally.
+- **Siri output shape** — which intents use `ProvidesDialog` (spoken) vs `ShowsSnippetView`
+  (a small result card); e.g. `CheckBriefingIntent` likely wants both.
 
 ## References
 
