@@ -8,11 +8,18 @@ import Foundation
 /// on-device Foundation Models fallback — lives in `FlightResolver`. This type is
 /// just the App Intents surface: load the flights (cache-first, so it works
 /// offline) and hand them to the resolver.
+///
+/// Resolution runs *before* an intent's `perform()`, so a load failure here must
+/// degrade to an empty match (→ Siri's own "couldn't find it" / disambiguation),
+/// never a thrown error — otherwise the intent's own signed-out / error dialog
+/// (Decision 4) would be pre-empted by a raw resolution failure. When the user is
+/// signed out but has a cached flight list, resolution still succeeds from cache,
+/// so `perform()` runs and speaks the sign-in line.
 struct FlightEntityQuery: EntityStringQuery {
     /// Natural-language match: "the flight tomorrow to Fairoaks", "my Cannes
     /// trip". Siri disambiguates when more than one survives.
     func entities(matching string: String) async throws -> [FlightEntity] {
-        let flights = try await Self.loadFlights()
+        guard let flights = try? await Self.loadFlights() else { return [] }
         let matched = await FlightResolver.resolve(string, in: flights)
         return matched.map(FlightEntity.init)
     }
@@ -20,22 +27,23 @@ struct FlightEntityQuery: EntityStringQuery {
     /// Resolve concrete ids (Shortcuts stores a chosen entity by id).
     func entities(for identifiers: [FlightEntity.ID]) async throws -> [FlightEntity] {
         let wanted = Set(identifiers)
-        let flights = try await Self.loadFlights()
+        guard let flights = try? await Self.loadFlights() else { return [] }
         return flights.filter { wanted.contains($0.id) }.map(FlightEntity.init)
     }
 
     /// Suggestions shown in the Shortcuts parameter picker — upcoming flights
     /// first (soonest at top), then the rest most-recent-first.
     func suggestedEntities() async throws -> [FlightEntity] {
-        let flights = try await Self.loadFlights()
+        guard let flights = try? await Self.loadFlights() else { return [] }
         return FlightResolver.orderedForSuggestions(flights).map(FlightEntity.init)
     }
 
-    /// Cache-first flight load, shared by every query path. Throws
-    /// `IntentAuthError.signedOut` when there's no JWT so the calling intent can
-    /// surface the sign-in prompt (Decision 4).
+    /// Cache-first flight load, shared by every query path. Does *not* gate on
+    /// sign-in: a signed-out user with a cached list still resolves flights (so
+    /// the intent's own Decision-4 guard can speak the sign-in line), and a hard
+    /// failure (signed out, no cache) throws — callers translate that to an empty
+    /// match rather than propagating it out of resolution.
     static func loadFlights() async throws -> [FlightResponse] {
-        guard await IntentSupport.isSignedIn else { throw IntentAuthError.signedOut }
         let repo = await IntentSupport.makeRepository()
         return try await repo.flights()
     }

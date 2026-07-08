@@ -46,16 +46,21 @@ enum IntentDialogs {
     /// Consensus category + wind for an airport, plus a resolution note when the
     /// requested airport was snapped to the nearest monitored one and the latest
     /// observation for D-0.
-    static func airportWeather(_ entry: AirportWeatherEntry, airportIcao: String, dayLabel: String) -> String {
+    ///
+    /// The main sentence keys off `entry.icao` — the airport the forecast data is
+    /// actually *for* — not the originally-requested ICAO, so a snapped result
+    /// never attributes the nearest airport's numbers back to the unmonitored one.
+    static func airportWeather(_ entry: AirportWeatherEntry, dayLabel: String) -> String {
+        let location = entry.icao.uppercased()
         let category = entry.consensus?.flightCategory ?? "unavailable"
-        var sentence = "\(dayLabel), \(airportIcao) is forecast \(category)"
+        var sentence = "\(dayLabel), \(location) is forecast \(category)"
         if let wind = windPhrase(speed: entry.consensus?.windSpeedKt, direction: entry.consensus?.windDirDeg) {
             sentence += " with \(wind)"
         }
         sentence += "."
         if let requested = entry.requestedIcao,
-           requested.uppercased() != entry.icao.uppercased() {
-            sentence = "\(requested.uppercased()) isn't monitored, so here's the nearest, \(entry.icao.uppercased()). " + sentence
+           requested.uppercased() != location {
+            sentence = "\(requested.uppercased()) isn't monitored, so here's the nearest, \(location). " + sentence
         }
         if let observation = entry.observation, let observed = observation.flightCategory {
             sentence += " The latest report is \(observed)."

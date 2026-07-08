@@ -30,7 +30,7 @@ struct AirportWeatherIntent: AppIntent {
                 }
                 return .result(dialog: "No forecast is available for \(airport.id) yet.")
             }
-            let line = IntentDialogs.airportWeather(entry, airportIcao: airport.id, dayLabel: day.spokenLabel)
+            let line = IntentDialogs.airportWeather(entry, dayLabel: day.spokenLabel)
             return .result(dialog: "\(line)")
         } catch APIError.unauthorized {
             return .result(dialog: "\(IntentSupport.signedOutSpokenLine)")

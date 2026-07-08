@@ -29,7 +29,9 @@ enum IntentSupport {
     }
 
     /// Spoken line for a signed-out / expired-token background intent (Decision 4).
-    static let signedOutSpokenLine = "Please open FlyFun to sign in first."
+    /// `nonisolated` so non-MainActor helpers (e.g. `RefreshDriver.classify`) can
+    /// reference it instead of duplicating the literal.
+    nonisolated static let signedOutSpokenLine = "Please open FlyFun to sign in first."
 
     /// Build a cache-first repository scoped to the signed-in user, mirroring
     /// `AppState.setupClient` (reusing its static helpers so the scoping/layout
@@ -64,9 +66,3 @@ enum IntentSupport {
     }
 }
 
-/// Auth outcome an intent hit while talking to the server. Foreground intents map
-/// `.signedOut` to `needsToContinueInForegroundError`; background (spoken) intents
-/// speak the sign-in line. See Decision 4 in `designs/ios-app-intents.md`.
-enum IntentAuthError: Error {
-    case signedOut
-}
