@@ -128,15 +128,68 @@ for each ON channel (email, push):  deliver
 
 ### Other choices worth offering / deciding
 
-- **Per-flight notify ⇒ auto-refresh?** A per-flight "notify me when done" is most useful
-  for manual/Siri refreshes on a flight whose `auto_refresh` is off (it's the Siri-loop
-  case). Decide whether that control also surfaces/toggles `auto_refresh`, or stays purely
-  a notification override.
+- **★ DECIDED — per-flight notify is independent of auto-refresh.** They are two separate
+  controls today and stay separate: the notify override never enables or schedules
+  auto-refresh. (A per-flight "notify" is most useful precisely for manual/Siri refreshes
+  on a flight whose auto-refresh is off — the Siri-loop case.)
 - **Batching/digest** — the scheduler can finish several flights close together; a future
   digest could replace N separate pushes.
-- **Badge semantics** — define what the app-icon badge counts (flights with unseen updates?).
 - **Per-channel scope** — deliberately NOT in v1 (one scope for all channels); revisit only
   if users ask for "email everything, push only auto".
+
+*(Badge count / cross-surface sync has its own section below.)*
+
+## Badge count & cross-surface sync
+
+**Principle: the badge is a server-*derived* count, never a client-side increment.** Client
+counters drift the instant a second surface (web, another device) reads an update or a push
+is missed. There is already a precedent to mirror — system-message unseen count
+(`api/messages.py`: `messages_last_seen_id` in prefs, server-computed `unseen_count`,
+`POST /messages/seen`). We do the same, per-flight.
+
+**State (per user × flight):**
+- `last_notified_pack_ts` — timestamp of the most recent notify-qualifying update.
+- `last_seen_pack_ts` — advanced when the user opens that flight's briefing on **web or app**.
+- Flight is **unseen** iff `last_notified_pack_ts > last_seen_pack_ts`.
+- **Badge = count of unseen flights**, computed server-side on demand (like `unseen_count`).
+
+Storage: mirror messages (a `briefing_seen` map in `app_prefs_json`) or a small
+`flight_briefing_seen(user_id, flight_id, ts)` table. Flights per user are few; either
+works — lean to the table for cleanliness.
+
+**Three mechanisms keep web ↔ app ↔ multi-device in sync:**
+1. **Badge in every alert push** — when a notify-qualifying refresh completes, set
+   `aps.badge = <current server unseen count>` in the payload, so the visible notification
+   already carries the true number.
+2. **Silent badge-sync push on state change** — when unseen changes for a reason *other*
+   than a new alert (the user reads a flight on the **web**, or on another device), the
+   server sends a **silent** push (`content-available: 1`, no alert, `aps.badge: N`) to the
+   user's iOS devices so the badge drops to match. *This is what makes "read on web →
+   app badge 2 → 1" work.*
+3. **Authoritative reconcile on app foreground** — APNs (especially silent pushes) is
+   best-effort and coalesced by Apple, never guaranteed. So on `scenePhase == .active` the
+   app GETs the current count (`GET /api/flights/badge`, mirroring `/messages/status`) and
+   sets the badge directly. This is the correctness backstop.
+
+**Why this is accurate (and the naive version isn't):** the server count is the single
+source of truth, push is an optimization, foreground-reconcile is the guarantee. The
+annoying-badge failure mode is the opposite — incrementing/decrementing on the client and
+trusting push delivery. The worry is well-founded; the ordering above is the fix.
+
+**Definitions to lock:**
+- **What clears "unseen"?** Opening the flight's **briefing detail** (web or app) — not
+  merely seeing it in the list. Per-flight watermark (any newer pack read clears it), not per-pack.
+- **What counts toward the badge?** Only **notify-qualifying** updates (same gate as the
+  notification: scope + change-filter + not muted) — mirroring "only highlighted messages
+  light the dot".
+- **Badge vs push-channel toggle** — reconcile keeps the badge correct even if *alert* push
+  is off; decide whether to show a badge when the push channel is disabled (recommend:
+  badge follows "a device is registered", independent of alert on/off).
+
+**New surface area:** `POST /api/flights/{id}/seen` (or fold into the existing briefing
+GET), `GET /api/flights/badge`, the silent-push path, and the app's foreground reconcile +
+mark-seen on briefing open. The **web** calls the same `seen` endpoint on briefing view —
+that is what decrements the app badge.
 
 ## Sequencing vs App Intents
 
@@ -167,7 +220,9 @@ email* (channels are independent user choices). Remaining:
   it at build/runtime and keep straight across TestFlight vs App Store.
 - **Manual-refresh device scope** — notify only the triggering device, or all the user's
   devices? (All is simpler and consistent with auto-refresh.)
-- **Badge semantics & quiet hours** — define the badge count; whether quiet-hours ships v1.
+- **Quiet hours** — whether to suppress push overnight in v1 (badge sync is unaffected).
+- **Seen storage** — `briefing_seen` map in `app_prefs_json` (mirrors messages) vs a small
+  `flight_briefing_seen` table (see Badge section).
 
 ## References
 
