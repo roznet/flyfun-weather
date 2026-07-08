@@ -14,11 +14,28 @@ import OSLog
 enum SpotlightDonator {
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "Spotlight")
 
+    /// The in-flight reindex, so overlapping calls (repeated `.active` reloads
+    /// near launch) chain instead of interleaving a second delete-all with the
+    /// first call's still-running insert — which would transiently empty or
+    /// duplicate the index. `SpotlightDonator` is main-actor isolated, so the
+    /// read-then-write of `pending` below is atomic (no `await` between them).
+    private static var pending: Task<Void, Never>?
+
     static func reindex(_ flights: [FlightResponse]) async {
         #if DEBUG
         // Never donate UI-test fixtures to the real device index.
         if AppState.isUITesting { return }
         #endif
+        let previous = pending
+        let task = Task {
+            await previous?.value
+            await performReindex(flights)
+        }
+        pending = task
+        await task.value
+    }
+
+    private static func performReindex(_ flights: [FlightResponse]) async {
         let index = CSSearchableIndex.default()
         do {
             try await index.deleteAllSearchableItems()

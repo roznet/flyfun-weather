@@ -55,11 +55,12 @@ enum IntentSupport {
         return CachingBriefingRepository(client: client, online: online, cache: cache)
     }
 
-    /// Ensure the local airports DB is opened (offline-safe) so the deterministic
-    /// resolver can expand place names ↔ ICAO. No-op once loaded; the network
-    /// refresh is the app's job, not the intent's.
-    static func ensureAirportDatabase() {
-        AirportDatabase.shared.loadCached()
+    /// Ensure the local airports DB is opened **and loaded** (offline-safe) so the
+    /// deterministic resolver can expand place names ↔ ICAO. Awaits the load so a
+    /// freshly-spawned Siri process doesn't search before the DB opens. No-op once
+    /// loaded; the network refresh is the app's job, not the intent's.
+    static func ensureAirportDatabase() async {
+        await AirportDatabase.shared.ensureLoaded()
     }
 }
 

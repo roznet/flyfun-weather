@@ -206,10 +206,12 @@ the pattern already established for `onOpenURL`:
 - Intents run **in-process**, reusing the Keychain JWT via `APIClient` /
   FlyFunCommon `RollingBearerSession` — no OAuth in the intent path (see Decision 4
   for the expired-token fallback).
-- **App Group is provisioned in Phase 1** (Decision 1). The intents themselves don't
-  strictly require it, but we move the Keychain access-group + `BriefingCacheStore`
-  into the shared container now, so the later Widgets / Live Activities / Control Center
-  work needs no Keychain/cache migration.
+- **App Group: deferred, not provisioned in Phase 1** (revised — see the status
+  block at the top of this doc and Decision 1). Phase-1 intents run in-process and
+  share the Keychain JWT + `BriefingCacheStore` directly, so no shared container is
+  needed today; the `PendingNavigation` hand-off uses `UserDefaults.standard`.
+  Moving the Keychain access-group + cache into a shared App Group container lands
+  with the first out-of-process consumer (Widgets / Live Activities / Control Center).
 
 ### Spotlight
 
@@ -319,12 +321,16 @@ once Issue 3 lands; until then it speaks the interim "started — open FlyFun sh
 
 Locked (★) decisions first, then defaults still open to revision.
 
-1. **★ DECIDED — App Group provisioned now.** Even though Phase-1 intents run in-process
-   and don't consume it, we provision the shared App Group and place the Keychain
-   access-group + briefing cache in it from the start, so Widgets / Live Activities /
-   Control Center (broader-plan Tier 2) add no later Keychain/cache migration. *Task:
-   define the App Group id, move `KeychainBearerTokenStore` access-group + the
-   `BriefingCacheStore` / Application-Support path into the shared container in Phase 1.*
+1. **★ DECIDED (revised in #364) — App Group deferred to the first out-of-process
+   consumer, NOT provisioned in Phase 1.** The original plan was to provision it up
+   front. Implementation revised that: Phase-1 intents are defined in the **main app
+   target**, so they run in-process and share the Keychain JWT + `BriefingCacheStore`
+   directly — no shared container is needed for any Tier-1 path. Provisioning the
+   entitlement now would also require an Apple Developer-portal registration that
+   otherwise fails code-signing on every build, for zero Tier-1 benefit. *Task (when
+   Widgets / Live Activities / Control Center land): define the App Group id, move the
+   `KeychainBearerTokenStore` access-group + the `BriefingCacheStore` /
+   Application-Support path into the shared container, with a one-time migration.*
 2. **★ DECIDED — Refresh via Siri: freshness gate only, no confirmation.** A voice
    "refresh" triggers a real, **billed** pipeline run (see
    [cost-attribution](./cost-attribution-design.md)), but the server's `already_fresh`

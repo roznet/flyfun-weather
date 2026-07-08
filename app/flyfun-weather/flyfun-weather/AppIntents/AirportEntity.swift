@@ -32,17 +32,17 @@ struct AirportEntity: AppEntity {
 /// reuse note).
 struct AirportEntityQuery: EntityStringQuery {
     func entities(matching string: String) async throws -> [AirportEntity] {
-        await MainActor.run {
-            IntentSupport.ensureAirportDatabase()
-            return AirportDatabase.shared.search(needle: string, limit: 8)
+        await IntentSupport.ensureAirportDatabase()
+        return await MainActor.run {
+            AirportDatabase.shared.search(needle: string, limit: 8)
                 .map { AirportEntity(id: $0.icao.uppercased(), name: $0.name) }
         }
     }
 
     func entities(for identifiers: [AirportEntity.ID]) async throws -> [AirportEntity] {
-        await MainActor.run {
-            IntentSupport.ensureAirportDatabase()
-            return identifiers.compactMap { icao in
+        await IntentSupport.ensureAirportDatabase()
+        return await MainActor.run {
+            identifiers.compactMap { icao in
                 AirportDatabase.shared.airport(icao: icao)
                     .map { AirportEntity(id: $0.icao.uppercased(), name: $0.name) }
             }
@@ -58,9 +58,9 @@ struct AirportEntityQuery: EntityStringQuery {
             .compactMap { $0?.uppercased() }
         var seen = Set<String>()
         let unique = icaos.filter { seen.insert($0).inserted }
+        await IntentSupport.ensureAirportDatabase()
         return await MainActor.run {
-            IntentSupport.ensureAirportDatabase()
-            return unique.compactMap { icao in
+            unique.compactMap { icao in
                 let name = AirportDatabase.shared.airport(icao: icao)?.name ?? icao
                 return AirportEntity(id: icao, name: name)
             }
