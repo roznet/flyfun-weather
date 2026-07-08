@@ -102,31 +102,75 @@ struct FlyFunShortcuts: AppShortcutsProvider {
 
 ### Resolver Design — "the flight tomorrow to Fairoaks"
 
-`FlightEntity` is resolved by an `EntityStringQuery`. Siri hands the extracted
-string to our code; we match it against upcoming flights and let Siri disambiguate
-when >1 matches:
+`FlightEntity` is resolved by an `EntityStringQuery` over a **tiny, closed set** — the
+user's handful of upcoming flights. That makes a *deterministic* resolver the primary
+path and an on-device model a *fallback*, not the first resort. Two distinct "models"
+matter here:
+
+- **Siri's own resolution** (system-side, Gemini-backed at WWDC26): flattens/cleans the
+  phrase and, with `IndexedEntity`'s semantic index, does more matching before it even
+  calls our query. We benefit passively; it improves each OS release.
+- **Foundation Models framework** (a model *we* call): the on-device ~3B Apple
+  Intelligence LLM, available since iOS 26. With **guided generation** it turns a free
+  string into a typed `{place, when}` — ideal for messy phrasing.
+
+**Tiered resolution:**
+
+| Tier | Handles | Cost / availability |
+|---|---|---|
+| 1. Deterministic — `AirportDatabase`/`RZFlight` place↔ICAO + relative-date keywords | "Fairoaks", "EGTF", "Le Touquet", "tomorrow", weekday names | free, instant, offline, **every device** |
+| 2. Foundation Models guided generation → `{place, when}`, then re-run tier-1 match | loose phrasing: "my trip to the coast next weekend" | on-device, needs Apple-Intelligence-capable device + enabled |
+| 3. Siri disambiguation UI | still ≥2 matches after tiers 1–2 | system-provided |
+
+Tier 1 is the **floor** and must always exist: Foundation Models requires an
+Apple-Intelligence-capable device (iPhone 15 Pro / M-series+), the feature enabled, and
+the model present — so it can never be a hard dependency. Gate tier 2 on
+`SystemLanguageModel.default.availability`; if unavailable, fall straight to tier 3.
 
 ```swift
 struct FlightEntityQuery: EntityStringQuery {
     func entities(matching string: String) async throws -> [FlightEntity] {
-        let flights = try await repository.flights()          // cache-first
-        return flights.filter { flight in
-            // destination match: expand "fairoaks" ↔ EGTF via AirportDatabase
-            matchesDestination(flight, string) ||
-            // relative-date match: "tomorrow", "today", weekday — parsed in-app
-            matchesRelativeDate(flight, string)
-        }.map(FlightEntity.init)
+        let flights = try await repository.flights()             // cache-first
+        // Tier 1 — deterministic (authoritative)
+        var hits = flights.filter {
+            matchesDestination($0, string) ||                   // AirportDatabase place↔ICAO
+            matchesRelativeDate($0, string)                     // "tomorrow", weekday — parsed in-app
+        }
+        // Tier 2 — on-device LLM fallback, only when tier 1 is empty AND the model is available
+        if hits.isEmpty, case .available = SystemLanguageModel.default.availability {
+            let q = try await LanguageModelSession()
+                .respond(to: string, generating: FlightQuery.self)
+            hits = flights.filter { matches($0, place: q.place, when: q.when) }
+        }
+        return hits.map(FlightEntity.init)                      // Siri disambiguates if >1
     }
     func suggestedEntities() async throws -> [FlightEntity] { /* upcoming flights */ }
     func entities(for ids: [String]) async throws -> [FlightEntity] { /* by id */ }
 }
+
+@Generable struct FlightQuery {
+    @Guide(description: "airport or city name mentioned, e.g. Fairoaks")
+    var place: String?
+    @Guide(description: "when: tomorrow, Saturday, next week")
+    var when: String?
+}
 ```
 
-Reuse, per the CLAUDE.md "reuse the library" principle:
-- **`Services/AirportDatabase.swift`** (and `RZFlight` `KnownAirports`) to map spoken
-  place names ↔ ICAO — do not hand-roll name matching.
+**Division of authority:** the LLM only flattens *language* into `{place, when}`; the
+deterministic matcher against real flights stays the authority — so the model can never
+invent a flight that doesn't exist. This keeps correctness in well-tested code and uses
+the LLM only for input variety (per the CLAUDE.md "push complexity into well-tested
+code" principle).
+
+Reuse:
+- **`Services/AirportDatabase.swift`** + `RZFlight` `KnownAirports` for place↔ICAO — do
+  not hand-roll name matching.
 - **`CachingBriefingRepository`** for `flights()` / `latestPack()` / `refreshBriefing`
   so intents work from cache in the cockpit.
+
+**Scope:** all three tiers ship in v1 (decided). Tier 1 is the mandatory floor; tier 2 is
+gated on `SystemLanguageModel.default.availability`, so devices without Apple Intelligence
+degrade to tier 1 + Siri disambiguation with no loss of the core paths. *(see Decisions)*
 
 ### Navigation from an intent
 
@@ -211,6 +255,45 @@ shape changes, check the mirroring intent. Current mapping:
 | `get_advisory_detail` | `ExplainAdvisoryIntent` (Phase 2) |
 | `create_flight` | *(kept in-app / Shortcuts-only — route+time too complex for voice)* |
 | `get_alternates`, `get_digest_context` | *(not surfaced initially — deep/niche)* |
+
+## Decisions
+
+Locked (★) decisions first, then defaults still open to revision.
+
+1. **★ DECIDED — App Group provisioned now.** Even though Phase-1 intents run in-process
+   and don't consume it, we provision the shared App Group and place the Keychain
+   access-group + briefing cache in it from the start, so Widgets / Live Activities /
+   Control Center (broader-plan Tier 2) add no later Keychain/cache migration. *Task:
+   define the App Group id, move `KeychainBearerTokenStore` access-group + the
+   `BriefingCacheStore` / Application-Support path into the shared container in Phase 1.*
+2. **★ DECIDED — Refresh via Siri: freshness gate only, no confirmation.** A voice
+   "refresh" triggers a real, **billed** pipeline run (see
+   [cost-attribution](./cost-attribution-design.md)), but the server's `already_fresh`
+   gate prevents redundant spend and it is rate-limited (409/429). No extra Siri
+   confirmation step (friction in a hands-busy flow). *Task: define spoken responses for
+   `queued` / `already_fresh` / `already_in_progress` / `rate_limited`.*
+3. **★ DECIDED — Tier-2 on-device LLM fallback ships in v1.** Build the full tiered
+   resolver (deterministic → Foundation Models `{place, when}` → Siri disambiguation)
+   from the first release. Tier 1 remains the mandatory floor; tier 2 is gated on
+   `SystemLanguageModel.default.availability` so devices without Apple Intelligence fall
+   straight to tier 1/3. *Task: `@Generable FlightQuery` + availability gate + guided-generation call.*
+4. **Signed-out / expired-token behaviour.** Background intents can't run OAuth.
+   **Recommend:** attempt silent token refresh (`RollingBearerSession`) first; else
+   foreground intents throw `needsToContinueInForegroundError` ("Open FlyFun to sign in"),
+   background intents speak "Please open FlyFun to sign in first."
+5. **Empty-state / no-match dialog per intent.** "No upcoming flights", "I couldn't find a
+   flight to X", "You're offline and that briefing isn't downloaded." These spoken lines
+   *are* the voice UX — decide them explicitly.
+6. **Navigation seam.** Typed `PendingNavigation` on `AppState` (proposed) vs reuse
+   `flyfunweather://`. **Recommend: typed `PendingNavigation`**; must handle cold-launch
+   (set before window) and warm (`.active`).
+7. **AppShortcut phrase set.** ~10-shortcut soft limit, every phrase needs "FlyFun".
+   **Recommend: English phrases v1**, FR/DE localization as fast-follow (place resolution
+   is already language-agnostic via ICAO).
+8. **Spotlight donation lifecycle.** Donate `FlightEntity` on list-load + create, remove on
+   delete; avoid stale donations for server-deleted flights.
+9. **Privacy / prediction surfacing.** Routes are private. **Recommend: discoverable in
+   Shortcuts/Spotlight**, but review whether Siri may predict these on the Lock Screen.
 
 ## Open Questions
 
