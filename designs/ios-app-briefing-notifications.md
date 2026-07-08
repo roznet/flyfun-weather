@@ -224,12 +224,26 @@ Resolved by the preferences model above: *notify-when-done vs watching-live* (a 
 **delivery rule** — foreground suppression — plus the `all`/`auto` scope), and *dedup with
 email* (channels are independent user choices). Remaining:
 
-- **APNs provider library** — hand-rolled HTTP/2 + `.p8` JWT, or a small dep that fits the
-  async FastAPI stack?
-- **APNs key management** — `.p8` key + key id + team id as deployment secrets
-  (see [multi-user-deployment](./multi-user-deployment.md) secret handling).
-- **Environment routing** — sandbox vs production host per stored `environment`; how to set
-  it at build/runtime and keep straight across TestFlight vs App Store.
+- **APNs provider library** — APNs is just HTTP/2 + a token (ES256 JWT from the `.p8`, header
+  `{kid}`, claims `{iss: team_id, iat}`, cached ~50 min). Options: **(a) roll it on `httpx`**
+  (already a dep; add `httpx[http2]` + `PyJWT` — ~120 lines, full control over retries and
+  response→token-cleanup, no bit-rot risk); **(b) `aioapns`** (async, maintained, token auth,
+  handles HTTP/2). **Avoid `PyAPNs2`/`apns2`** (built on the unmaintained `hyper`). Recommend
+  (a). Send: `POST /3/device/<token>` with `apns-topic: <bundle id>` and `apns-push-type:
+  alert` (or `background` for silent badge syncs); on `BadDeviceToken`/`Unregistered` delete
+  the row.
+- **APNs key management** — a **single `.p8` token-auth key works for BOTH environments**
+  (unlike the old cert auth). Store key + key id + team id as deployment secrets (same
+  handling as the existing Resend key).
+- **Sandbox vs production routing** — per-**token**, decided by the *app build on the device*,
+  **not** by which server runs: an Xcode **debug** build → `aps-environment: development` →
+  **sandbox** token → sandbox host; **TestFlight and App Store** → `production` → production
+  host (note: **TestFlight is production**, a common trap). The token value doesn't reveal its
+  environment, so the client reports it at register time (`#if DEBUG` → `sandbox` else
+  `production`; or read `aps-environment` from the embedded profile for full precision) and the
+  server routes on `device_tokens.environment`. Wrong host → misleading `BadDeviceToken`. Local
+  dev: a debug build on a real device → sandbox token → the local dev server (with the `.p8`
+  configured) sends to the **sandbox** host — no separate prod credential needed for dev.
 - **Manual-refresh device scope** — notify only the triggering device, or all the user's
   devices? (All is simpler and consistent with auto-refresh.)
 - **Quiet hours** — whether to suppress push overnight in v1 (badge sync is unaffected).
