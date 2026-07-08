@@ -294,9 +294,10 @@ Tiering is by **OS availability**: Tier 1 = everything implementable on **today'
 1. **Tier 1 — App Intents, iOS 26 (everything doable today).** Entities (`FlightEntity` +
    `IndexedEntity`, `AirportEntity`), the open / check / overview / refresh / airport
    intents, `FlyFunShortcuts`, the **full tiered resolver** — deterministic + **Foundation
-   Models `{place, when}` fallback** (iOS 26) + Siri disambiguation — the `PendingNavigation`
-   seam, Spotlight donation, App Group provisioning (Decision 1), and the expired-token
-   fallback (Decision 4). Core paths work on every device; the LLM tier lights up on
+   Models grounded selection over the candidate flights** (iOS 26) + Siri disambiguation —
+   the `PendingNavigation` seam, Spotlight donation, and the expired-token fallback
+   (Decision 4). App Group provisioning (Decision 1) was **deferred** — see the status
+   block up top. Core paths work on every device; the LLM tier lights up on
    Apple-Intelligence-capable devices.
 2. **Tier 2 — iOS 27 / WWDC26 only.** The **View Annotations API** (on-screen "explain
    this" / "show the cross-section") and the **App Intents Testing framework**. By
@@ -332,13 +333,16 @@ Locked (★) decisions first, then defaults still open to revision.
    confirmation step (friction in a hands-busy flow). *Task: define spoken responses for
    `queued` / `already_fresh` / `already_in_progress` / `rate_limited`.*
 3. **★ DECIDED — Full tiered resolver ships in Tier 1 (today).** The Foundation Models
-   framework is available on **iOS 26**, so the on-device LLM fallback is implementable
-   now and belongs in the Tier-1 issue — Tier 2 is reserved for what genuinely needs the
-   next iOS release (View Annotations, App Intents Testing). Resolver = deterministic
-   (mandatory floor) → Foundation Models `{place, when}` fallback → Siri disambiguation,
-   with the LLM step gated on `SystemLanguageModel.default.availability` so non-AI devices
-   degrade to deterministic + disambiguation. *Task (Tier-1 issue): `@Generable FlightQuery`
-   + availability gate + guided-generation call.*
+   framework is available on **iOS 26**, so the on-device LLM tier is implementable now and
+   belongs in the Tier-1 issue — Tier 2 is reserved for what genuinely needs the next iOS
+   release (View Annotations, App Intents Testing). Resolver = deterministic (mandatory
+   floor) → Foundation Models **grounded selection** (the model picks from the provided
+   today-and-future candidates; the returned index is validated back to a real flight) →
+   Siri disambiguation, with the LLM step gated on `SystemLanguageModel.default.availability`
+   so non-AI devices degrade to deterministic + disambiguation. *(As built in #367 the LLM
+   tier does grounded selection over real candidates — see the Resolver Design section —
+   rather than the originally-sketched blind `{place, when}` extraction, which couldn't
+   bridge world-knowledge references and gave a weaker "never invent a flight" guarantee.)*
 4. **★ DECIDED — Signed-out / expired-token behaviour.** Attempt a silent token refresh
    (`RollingBearerSession`) first; if it fails, foreground intents throw
    `needsToContinueInForegroundError` ("Open FlyFun to sign in") and background intents

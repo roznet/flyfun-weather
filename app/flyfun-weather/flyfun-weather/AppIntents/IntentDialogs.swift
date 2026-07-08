@@ -9,7 +9,7 @@ enum IntentDialogs {
         let route = flight.shortTitle
         guard let briefing = flight.latestBriefing else {
             if let coverage = flight.coverage, let day = coverage.availableDay {
-                return "Your \(route) flight isn't in forecast range yet — a briefing is expected \(mediumDate(day))."
+                return "Your \(route) flight isn't in forecast range yet — a briefing is expected \(IntentSupport.mediumDate(day))."
             }
             return "Your \(route) flight hasn't been briefed yet."
         }
@@ -83,10 +83,4 @@ enum IntentDialogs {
         raw.replacingOccurrences(of: "_", with: " ").lowercased()
     }
 
-    private static func mediumDate(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .none
-        return f.string(from: date)
-    }
 }
