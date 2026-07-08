@@ -307,6 +307,17 @@ struct DialogTests {
         #expect(IntentDialogs.overviewSummary([past], now: now) == "You have no upcoming flights.")
     }
 
+    @Test("overview: more than five upcoming lists five and states the remainder")
+    func overviewTruncates() {
+        // 7 upcoming flights, soonest-first: 2026-07-09 … 2026-07-15.
+        let flights = (9...15).map { day in
+            makeFlight(id: "flt-\(day)", departureTime: "2026-07-\(day)T12:00:00Z")
+        }
+        let listed = Array(repeating: "LFMD → LFML, not yet briefed", count: 5).joined(separator: "; ")
+        #expect(IntentDialogs.overviewSummary(flights, now: now)
+            == "You have 7 upcoming flights: \(listed); and 2 more.")
+    }
+
     @Test("airport weather: snapped result keys off the data's airport, not the request")
     func airportWeather() {
         let entry = AirportWeatherEntry(

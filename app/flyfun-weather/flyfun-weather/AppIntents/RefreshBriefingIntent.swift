@@ -26,7 +26,11 @@ struct RefreshBriefingIntent: AppIntent {
         let line: String
         switch outcome {
         case .alreadyFresh(let reason):
-            line = (reason?.isEmpty == false) ? reason! : "Your \(name) briefing is already up to date."
+            if let reason, !reason.isEmpty {
+                line = reason
+            } else {
+                line = "Your \(name) briefing is already up to date."
+            }
         case .started:
             line = "Refreshing your \(name) briefing — open FlyFun shortly."
         case .completed:

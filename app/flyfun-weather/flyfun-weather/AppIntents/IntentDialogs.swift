@@ -32,14 +32,19 @@ enum IntentDialogs {
         let upcoming = FlightResolver.orderedForSuggestions(flights, now: now)
             .filter { ($0.departureDate ?? .distantPast) >= now }
         guard !upcoming.isEmpty else { return "You have no upcoming flights." }
-        let lines = upcoming.prefix(5).map { flight -> String in
+        let listLimit = 5
+        let lines = upcoming.prefix(listLimit).map { flight -> String in
             let status = flight.latestBriefing?.assessment?.lowercased()
                 ?? flight.latestBriefing?.outlook.map(humanize)
                 ?? "not yet briefed"
             return "\(flight.shortTitle), \(status)"
         }
-        let joined = lines.joined(separator: "; ")
+        var joined = lines.joined(separator: "; ")
         let count = upcoming.count
+        let remaining = count - lines.count
+        if remaining > 0 {
+            joined += "; and \(remaining) more"
+        }
         return "You have \(count) upcoming flight\(count == 1 ? "" : "s"): \(joined)."
     }
 
