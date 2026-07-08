@@ -58,28 +58,36 @@ enum FlightResolver {
         let calendar = Calendar.current
         let query = raw.lowercased()
 
+        // Resolution is scoped to today-and-future flights — the design's "closed
+        // set of *upcoming* flights". Both tiers match over this set, so a
+        // long-past flown trip never resolves a voice request (no stale briefing,
+        // no confusing old-vs-new disambiguation). Explicit id lookups
+        // (`entities(for:)`) and the Shortcuts picker (`suggestedEntities`) still
+        // see history — only free-phrase resolution is scoped here.
+        let candidates = upcoming(flights, now: now, calendar: calendar)
+
         // Tier 1 — deterministic. Prefer flights matching BOTH a place and a date
         // (narrows "the flight tomorrow to Fairoaks"); else either signal.
-        let both = flights.filter {
+        let both = candidates.filter {
             matchesPlace($0, query: query) && matchesRelativeDate($0, query: query, now: now, calendar: calendar)
         }
         if !both.isEmpty { return both }
-        let either = flights.filter {
+        let either = candidates.filter {
             matchesPlace($0, query: query) || matchesRelativeDate($0, query: query, now: now, calendar: calendar)
         }
         if !either.isEmpty { return either }
 
-        // Tier 2 — grounded on-device selection over the user's today-and-future
-        // flights. The model sees the real candidates (route + airport names +
-        // date) and picks one; we validate the returned id against the set, so it
-        // can never surface a flight that doesn't exist. Skipped (nil) when the
-        // model is unavailable.
-        let candidates = upcoming(flights, now: now, calendar: calendar).map {
+        // Tier 2 — grounded on-device selection over the same upcoming set. The
+        // model sees the real candidates (route + airport names + date) and picks
+        // one; we validate the returned id against the set, so it can never
+        // surface a flight that doesn't exist. Skipped (nil) when the model is
+        // unavailable.
+        let modelCandidates = candidates.map {
             FlightCandidate(id: $0.id, line: candidateLine($0))
         }
-        if !candidates.isEmpty {
-            let pickedId = await parser.pick(phrase: raw, today: IntentSupport.mediumDate(now), candidates: candidates)
-            if let pickedId, let picked = flights.first(where: { $0.id == pickedId }) {
+        if !modelCandidates.isEmpty {
+            let pickedId = await parser.pick(phrase: raw, today: IntentSupport.mediumDate(now), candidates: modelCandidates)
+            if let pickedId, let picked = candidates.first(where: { $0.id == pickedId }) {
                 return [picked]
             }
         }

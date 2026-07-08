@@ -227,4 +227,96 @@ struct GroundedSelectionTests {
         #expect(result.isEmpty)
         #expect(fake.receivedCandidates.isEmpty)
     }
+
+    @Test("resolution ignores a past flight even when its ICAO is named (tier 1 scoping)")
+    func ignoresPastPlaceMatch() async {
+        // A past flight to LFMN and no upcoming one: naming "lfmn" must NOT resolve
+        // it — tier 1 is scoped to upcoming flights, so it's not even a candidate.
+        let pastOnly = [makeFlight(id: "past", waypoints: ["LFMD", "LFMN"], departureTime: "2026-01-05T12:00:00Z")]
+        let fake = FakePhraseResolver(idToReturn: "past")
+        let result = await FlightResolver.resolve("weather at lfmn", in: pastOnly, now: now, parser: fake)
+        #expect(result.isEmpty)
+        #expect(fake.receivedCandidates.isEmpty)
+    }
+}
+
+@MainActor
+@Suite("Refresh outcome classification")
+struct RefreshOutcomeTests {
+    @Test("429 → rate limited")
+    func rateLimited() {
+        #expect(RefreshDriver.classify(APIError.serverError(429, nil)) == .rateLimited)
+    }
+
+    @Test("409 → already in progress")
+    func inProgress() {
+        #expect(RefreshDriver.classify(APIError.serverError(409, nil)) == .alreadyInProgress)
+    }
+
+    @Test("401 → the shared sign-in line")
+    func unauthorized() {
+        #expect(RefreshDriver.classify(APIError.unauthorized) == .failed(IntentSupport.signedOutSpokenLine))
+    }
+
+    @Test("other error → generic failure")
+    func other() {
+        if case .failed = RefreshDriver.classify(APIError.notFound) {} else {
+            Issue.record("expected .failed for a non-auth error")
+        }
+    }
+}
+
+@MainActor
+@Suite("Spoken dialog builders")
+struct DialogTests {
+    private let now = iso("2026-07-08T10:00:00Z")
+
+    @Test("check summary: assessment + top concerns")
+    func check() {
+        let briefing = BriefingStatusInfo(
+            assessment: "AMBER", assessmentReason: nil, outlook: nil, outlookReason: nil,
+            hasAdvisories: true,
+            advisorySummary: AdvisorySummary(red: 0, amber: 2, top: [
+                AdvisoryChip(status: "AMBER", name: "convective"),
+                AdvisoryChip(status: "AMBER", name: "icing"),
+            ]))
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"], latestBriefing: briefing)
+        #expect(IntentDialogs.checkSummary(flight)
+            == "Your LFMD → LFML flight is graded amber. Top concerns: convective and icing.")
+    }
+
+    @Test("check summary: never briefed")
+    func checkUnbriefed() {
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"], latestBriefing: nil)
+        #expect(IntentDialogs.checkSummary(flight) == "Your LFMD → LFML flight hasn't been briefed yet.")
+    }
+
+    @Test("overview: one upcoming flight")
+    func overview() {
+        let briefing = BriefingStatusInfo(
+            assessment: "GREEN", assessmentReason: nil, outlook: nil, outlookReason: nil,
+            hasAdvisories: false, advisorySummary: nil)
+        let flight = makeFlight(waypoints: ["EGKB", "EGTF"], departureTime: "2026-08-01T12:00:00Z", latestBriefing: briefing)
+        #expect(IntentDialogs.overviewSummary([flight], now: now)
+            == "You have 1 upcoming flight: EGKB → EGTF, green.")
+    }
+
+    @Test("overview: none upcoming")
+    func overviewEmpty() {
+        let past = makeFlight(departureTime: "2026-01-01T12:00:00Z")
+        #expect(IntentDialogs.overviewSummary([past], now: now) == "You have no upcoming flights.")
+    }
+
+    @Test("airport weather: snapped result keys off the data's airport, not the request")
+    func airportWeather() {
+        let entry = AirportWeatherEntry(
+            icao: "EGKB",
+            consensus: AirportWeatherConsensus(
+                flightCategory: "VFR", windSpeedKt: 10, windDirDeg: 240, ceilingFt: nil, visibilityM: nil),
+            observation: nil,
+            requestedIcao: "EGKA",
+            resolutionDistanceNm: 5)
+        #expect(IntentDialogs.airportWeather(entry, dayLabel: "Tomorrow")
+            == "EGKA isn't monitored, so here's the nearest, EGKB. Tomorrow, EGKB is forecast VFR with wind 10 knots from 240 degrees.")
+    }
 }

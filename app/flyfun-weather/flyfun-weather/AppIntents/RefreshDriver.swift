@@ -10,7 +10,7 @@ import Foundation
 /// briefing-ready push lands). A detached drain keeps the SSE channel open so a
 /// started server run isn't torn down by our early return.
 enum RefreshDriver {
-    enum Outcome: Sendable {
+    enum Outcome: Sendable, Equatable {
         /// Gate decided no refresh was needed; carries the server's reason.
         case alreadyFresh(reason: String?)
         /// A refresh started (real run underway) — best interim UX without push.
@@ -75,7 +75,9 @@ enum RefreshDriver {
         }
     }
 
-    private static func classify(_ error: Error) -> Outcome {
+    /// Map a thrown API error to a spoken outcome. `internal` (not `private`) so
+    /// the pure mapping is unit-testable.
+    static func classify(_ error: Error) -> Outcome {
         if let apiError = error as? APIError {
             switch apiError {
             case .serverError(429, _): return .rateLimited
