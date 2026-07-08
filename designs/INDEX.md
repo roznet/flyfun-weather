@@ -146,6 +146,15 @@ Sync engine + forecast-driven prompting engine — largely Phase 3a/3b design in
 3-phase roadmap: Phase 1 (online viewer — DONE), Phase 2 (offline + push — resilience done, push pending), Phase 3 (3a manual + sync, 3b prompting, 3c live sharing). Cross-section renderer layer waves. Decisions made and open questions.
 → Full doc: ios-app-roadmap.md
 
+### ios-app-intents [proposed]
+App Intents / Siri / Apple Intelligence surface for the iOS app — the on-device sibling of the MCP tool catalog. Phase 1 (current iOS 26): `FlightEntity`/`AirportEntity`, open/refresh/check intents, `AppShortcutsProvider` phrases, `EntityStringQuery` resolver for "the flight tomorrow to Fairoaks", Spotlight indexing. Phase 2 (WWDC26/iOS 27): View Annotations ("explain this", "show the cross-section"), on-device Foundation Models narration of cached advisories. No SiriKit to migrate. MCP⇆intent parity table. Nothing built yet.
+Key exports (planned): `FlightEntity`, `AirportEntity`, `OpenFlightListIntent`, `OpenBriefingIntent`, `CheckBriefingIntent`, `RefreshBriefingIntent`, `AirportWeatherIntent`, `ExplainAdvisoryIntent`, `FlyFunShortcuts`
+→ Full doc: ios-app-intents.md
+
+### ios-app-briefing-notifications [proposed]
+APNs push when a briefing finishes refreshing — closes the loop for the Siri refresh intent. Builds on the existing `DeviceTokenRow` table and the scheduler's email-on-completion seam: adds client registration (`POST /api/devices`), a `notify/push.py` APNs sender mirroring `notify/email.py`, and emits at both refresh-complete seams (auto-refresh scheduler + manual `api/packs.py`). Change-gated via `compute_refresh_delta`; inherits the #192 model-update defer. Partially foundationed, sender + registration not built.
+→ Full doc: ios-app-briefing-notifications.md
+
 ### rzskewt
 Swift package for Skew-T log-P diagrams. Extracted to own repo: `github.com/roznet/rztskew`. Full atmospheric thermodynamics, Canvas rendering, 47 unit tests. Design docs live in that repo's `designs/` directory.
 Key exports: `SkewTView`, `SkewTRenderer`, `SoundingProfile`, `Thermodynamics`
