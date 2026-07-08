@@ -64,5 +64,15 @@ enum IntentSupport {
     static func ensureAirportDatabase() async {
         await AirportDatabase.shared.ensureLoaded()
     }
+
+    /// Medium-style, time-less date string ("9 Jul 2026") shared by the resolver's
+    /// candidate lines and the spoken dialogs. `nonisolated` so both the
+    /// MainActor resolver and any dialog builder can use the one formatter.
+    nonisolated static func mediumDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
+    }
 }
 

@@ -78,7 +78,7 @@ enum FlightResolver {
             FlightCandidate(id: $0.id, line: candidateLine($0))
         }
         if !candidates.isEmpty {
-            let pickedId = await parser.pick(phrase: raw, today: mediumDate(now), candidates: candidates)
+            let pickedId = await parser.pick(phrase: raw, today: IntentSupport.mediumDate(now), candidates: candidates)
             if let pickedId, let picked = flights.first(where: { $0.id == pickedId }) {
                 return [picked]
             }
@@ -102,32 +102,29 @@ enum FlightResolver {
             .sorted { ($0.departureDate ?? .distantFuture) < ($1.departureDate ?? .distantFuture) }
     }
 
-    /// One model-facing candidate line, e.g. "EGKB (Biggin Hill) → EGTF (Fairoaks),
-    /// 9 Jul 2026". Airport names come from the local DB (which already embeds the
-    /// city, e.g. "Nice Côte d'Azur"); city/country as separate fields can be added
-    /// here once the airport model surfaces them.
+    /// One model-facing candidate line, e.g.
+    /// "EGKB (London Biggin Hill, London, GB) → EGTF (Fairoaks, GB), 9 Jul 2026".
+    /// The airport name + city + ISO country give the on-device model enough to
+    /// resolve world-knowledge references ("my France trip", "my beach flight").
     @MainActor
     static func candidateLine(_ flight: FlightResponse) -> String {
         let origin = flight.waypoints.first?.uppercased() ?? "?"
         let dest = flight.waypoints.last?.uppercased() ?? "?"
         let route = "\(airportLabel(origin)) → \(airportLabel(dest))"
-        if let date = flight.departureDate { return "\(route), \(mediumDate(date))" }
+        if let date = flight.departureDate { return "\(route), \(IntentSupport.mediumDate(date))" }
         return route
     }
 
+    /// "ICAO (Name, City, Country)" from the local DB, skipping any empty/duplicate
+    /// component (the slim DB may not carry every column).
     @MainActor
     private static func airportLabel(_ icao: String) -> String {
-        if let name = AirportDatabase.shared.airport(icao: icao)?.name, !name.isEmpty {
-            return "\(icao) (\(name))"
-        }
-        return icao
-    }
-
-    nonisolated private static func mediumDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter.string(from: date)
+        guard let airport = AirportDatabase.shared.airport(icao: icao) else { return icao }
+        var parts: [String] = []
+        if !airport.name.isEmpty { parts.append(airport.name) }
+        if !airport.city.isEmpty, airport.city != airport.name { parts.append(airport.city) }
+        if !airport.country.isEmpty { parts.append(airport.country) }
+        return parts.isEmpty ? icao : "\(icao) (\(parts.joined(separator: ", ")))"
     }
 
     // MARK: - Place matching (needs AirportDatabase, so MainActor)
