@@ -19,7 +19,7 @@ final class UserPreferencesStore {
            let cached = try? JSONDecoder().decode(PreferencesResponse.self, from: data) {
             self.preferences = cached
         } else {
-            self.preferences = PreferencesResponse(pirepCanView: false, pirepCanPublish: false)
+            self.preferences = .empty
         }
     }
 
@@ -39,9 +39,27 @@ final class UserPreferencesStore {
         }
     }
 
+    /// Enable/disable the push channel server-side, then refresh the cache.
+    /// Alert delivery is gated on this flag; the device stays registered either
+    /// way so the badge keeps syncing (badge follows "a device is registered").
+    func updateNotifyPush(_ enabled: Bool, using client: APIClient) async {
+        do {
+            let body = try JSONEncoder.weatherBrief.encode(NotifyPushUpdateRequest(notifyPush: enabled))
+            let fresh: PreferencesResponse = try await client.request(
+                "/api/user/preferences", method: "PUT", body: body
+            )
+            preferences = fresh
+            if let data = try? JSONEncoder().encode(fresh) {
+                UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+            }
+        } catch {
+            Self.logger.warning("Failed to update notify_push: \(error.localizedDescription)")
+        }
+    }
+
     /// Clear cached preferences (on logout).
     func clear() {
-        preferences = PreferencesResponse(pirepCanView: false, pirepCanPublish: false)
+        preferences = .empty
         UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
     }
 }

@@ -113,6 +113,9 @@ struct BriefingContainerView: View {
             await vm.loadBriefing()
             await vm.checkActiveRefresh()
             await vm.loadPireps()
+            // Opening the briefing clears this flight from the badge (web + app),
+            // and fires a silent badge-sync push to the user's other devices.
+            await appState.markBriefingSeen(flightId: flight.id)
         }
         .onDisappear {
             // Stop the timing-scenario poll when the briefing leaves the screen —
