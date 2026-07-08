@@ -80,6 +80,9 @@ final class FlightListViewModel {
                 await refreshCachedFlightIds(reporter)
             }
             state = .loaded(flights)
+            // Keep Spotlight / Siri's flight index in sync with the server truth.
+            // Fire-and-forget — never block the list on indexing (Decision 8).
+            Task { await SpotlightDonator.reindex(flights) }
             Self.logger.info("Loaded \(flights.count) flights (offline=\(self.isOffline), cached=\(self.cachedFlightIds.count))")
         } catch {
             // Keep an already-loaded list on screen if a refresh fails — the

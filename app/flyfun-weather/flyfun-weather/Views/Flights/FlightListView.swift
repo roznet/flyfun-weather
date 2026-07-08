@@ -192,11 +192,45 @@ struct FlightListView: View {
             let vm = FlightListViewModel(repository: repo)
             viewModel = vm
             await vm.loadFlights()
+            // A cold-launch intent may have set a target before the list existed;
+            // resolve it now that flights are loaded.
+            applyPendingNavigation()
         }
         .onChange(of: scenePhase) {
             if scenePhase == .active {
-                Task { await viewModel?.loadFlights() }
+                Task {
+                    await viewModel?.loadFlights()
+                    applyPendingNavigation()
+                }
             }
+        }
+        .onChange(of: appState.pendingNavigation) {
+            applyPendingNavigation()
+        }
+    }
+
+    /// Consume an App Intent's navigation target (set on `AppState`) and route to
+    /// it. Reuses the same `selectedFlight` seam a tap would drive. When the
+    /// target flight isn't in the loaded list yet (cold launch, list still
+    /// fetching), the pending value is left in place and re-tried after the next
+    /// load completes.
+    private func applyPendingNavigation() {
+        guard let nav = appState.pendingNavigation else { return }
+        switch nav {
+        case .flightList:
+            selectedFlight = nil
+            appState.clearPendingNavigation()
+        case .briefing(let flightId):
+            guard let vm = viewModel, case .loaded(let flights) = vm.state else { return }
+            guard let match = flights.first(where: { $0.id == flightId }) else {
+                // Not in the list — either not loaded yet (retry after load) or
+                // the flight is gone. Clear only once we actually have a list so
+                // a stale target doesn't linger forever.
+                appState.clearPendingNavigation()
+                return
+            }
+            selectedFlight = match
+            appState.clearPendingNavigation()
         }
     }
 

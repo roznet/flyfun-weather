@@ -123,6 +123,9 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func packs(flightId: String) async throws -> [PackMetaResponse] {
         isBriefed(flightId) ? FixtureBriefingData.packs : []
     }
+    func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {
+        throw FixtureError.notProvided("airportWeather")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.advisories

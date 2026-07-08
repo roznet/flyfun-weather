@@ -74,6 +74,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
     func packs(flightId: String) async throws -> [PackMetaResponse] { throw MockError.notStubbed("packs") }
     func latestPack(flightId: String) async throws -> PackMetaResponse { throw MockError.notStubbed("latestPack") }
+    func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse { throw MockError.notStubbed("airportWeather") }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse { throw MockError.notStubbed("advisories") }
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse { throw MockError.notStubbed("advisoryDetail") }
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw MockError.notStubbed("recalculateAdvisories") }

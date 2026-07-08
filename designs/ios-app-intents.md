@@ -4,11 +4,26 @@
 > The MCP tool catalog (`src/weatherbrief/mcp/server.py`) is the reference for
 > what capabilities to surface — this doc is its on-device sibling.
 
-**Status: PROPOSED — nothing built yet.** The app today has zero App Intents,
-zero App Shortcuts, no Widgets, and no Siri surface (grep for `AppIntent` /
-`AppShortcut` / `INIntent` returns nothing). It also has **no SiriKit**, so
-there is nothing to migrate — we start clean on the modern App Intents path
-(SiriKit was formally deprecated at WWDC 2026).
+**Status: PHASE 1 IMPLEMENTED (#364).** The Tier-1 App Intents surface now
+ships in `app/flyfun-weather/flyfun-weather/AppIntents/`: `FlightEntity`
+(`AppEntity` + `IndexedEntity`) + `AirportEntity`, the six intents
+(open-list / open-briefing / check / overview / refresh / airport-weather),
+`FlyFunShortcuts`, the full tiered resolver (deterministic + Foundation Models
+`{place, when}` fallback), the typed `PendingNavigation` seam on `AppState`, and
+Spotlight reconciliation on flight-list load. Phase 2 (View Annotations, App
+Intents Testing framework) remains proposed. It has **no SiriKit**, so there was
+nothing to migrate — a clean start on the modern App Intents path.
+
+> **Deviation from Decision 1 (App Group), deliberate.** Phase-1 intents are
+> defined in the **main app target**, so they run **in-process** and share the
+> Keychain JWT + `BriefingCacheStore` directly — no App Group is needed for any
+> Tier-1 path (the `PendingNavigation` hand-off uses `UserDefaults.standard`).
+> The entitlement was **not** provisioned here because it requires an Apple
+> Developer-portal registration that would otherwise fail code-signing on every
+> build, for zero Tier-1 benefit. Provisioning the App Group + moving the
+> Keychain access-group / cache into the shared container should land with the
+> first out-of-process consumer (Widgets / Live Activities / Control Center),
+> which is when the migration actually pays off.
 
 ## Related Docs
 
