@@ -151,8 +151,9 @@ App Intents / Siri / Apple Intelligence surface for the iOS app — the on-devic
 Key exports (planned): `FlightEntity`, `AirportEntity`, `OpenFlightListIntent`, `OpenBriefingIntent`, `CheckBriefingIntent`, `RefreshBriefingIntent`, `AirportWeatherIntent`, `ExplainAdvisoryIntent`, `FlyFunShortcuts`
 → Full doc: ios-app-intents.md
 
-### ios-app-briefing-notifications [proposed]
-APNs push when a briefing finishes refreshing — closes the loop for the Siri refresh intent. Builds on the existing `DeviceTokenRow` table and the scheduler's email-on-completion seam: adds client registration (`POST /api/devices`), a `notify/push.py` APNs sender mirroring `notify/email.py`, and emits at both refresh-complete seams (auto-refresh scheduler + manual `api/packs.py`). Change-gated via `compute_refresh_delta`; inherits the #192 model-update defer. Partially foundationed, sender + registration not built.
+### ios-app-briefing-notifications [server done; iOS pending]
+APNs push when a briefing finishes refreshing — closes the loop for the Siri refresh intent. **Server half implemented (#366):** `notify/push.py` (token-based APNs, httpx HTTP/2 + PyJWT), `notify/dispatch.py` (single notify gate emitted once from `api/packs.py::_persist_pack_finalize`, covering auto/in-app/Siri/MCP; email moved here from the scheduler), `notify/badge.py` + `api/notifications.py` (server-derived cross-surface badge, `flight_briefing_seen` table, `/flights/badge` + `/flights/{id}/seen`), `api/devices.py` (register/unregister). Channel + scope + change-only prefs in `app_prefs_json`; per-flight `notify_override`; migration `075`. **iOS client half pending #364** (registration, deep-link, foreground badge reconcile, settings UI).
+Key exports: `send_briefing_push`, `send_silent_badge_push`, `notify_briefing_refresh`, `notify_qualifies`, `compute_badge_count`, `mark_flight_seen`
 → Full doc: ios-app-briefing-notifications.md
 
 ### rzskewt

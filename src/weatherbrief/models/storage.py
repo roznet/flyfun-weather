@@ -51,6 +51,12 @@ class Flight(BaseModel):
     #   same_day  — scan the daylight window of the target date
     #   prev_day / next_day — scan the adjacent day as well (needs extra OM fetch)
     flexibility: Literal["none", "alternate", "same_day", "prev_day", "next_day"] = "none"
+    # Per-flight briefing-notification override (ios-app-briefing-notifications.md):
+    #   default — follow the global notify scope
+    #   notify  — notify on ANY completion of this flight (even if global is off/auto)
+    #   mute    — never notify for this flight
+    # Independent of auto_refresh (they are separate controls and stay separate).
+    notify_override: Literal["default", "notify", "mute"] = "default"
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     last_auto_refresh_at: datetime | None = None

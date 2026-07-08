@@ -4,12 +4,25 @@
 > knows to look — and so a Siri-triggered refresh can truthfully say "I'll let you
 > know when it's ready."
 
-**Status: PROPOSED — partially foundationed.** A `device_tokens` table already
-exists (`src/weatherbrief/db/models.py::DeviceTokenRow`), and the auto-refresh
-scheduler already sends an **email** on completion. What's missing: the client
-registration flow, the APNs sender, and wiring the send at the refresh-complete
-seams. Push notifications are the outstanding item in Phase 2 M2 of the
-[roadmap](./ios-app-roadmap.md).
+**Status: SERVER HALF IMPLEMENTED (#366); iOS client pending #364.** The full
+server side is built and tested (`tests/test_briefing_notifications.py`):
+
+- `notify/push.py` — token-based APNs sender (httpx HTTP/2 + PyJWT ES256,
+  cached ~50 min), per-token sandbox/production routing, dead-token pruning.
+- `notify/dispatch.py` — the single notification gate + channel dispatch, emitted
+  once from the shared finalize `api/packs.py::_persist_pack_finalize` so it
+  covers auto / in-app / Siri / MCP. Email moved here from the scheduler.
+- `notify/badge.py` + `api/notifications.py` — server-derived cross-surface badge
+  (`flight_briefing_seen` table), `GET /api/flights/badge`,
+  `POST /api/flights/{id}/seen` (+ silent badge-sync push on web read).
+- `api/devices.py` — `POST /api/devices` (upsert), `DELETE /api/devices/{token}`.
+- Preferences (`app_prefs_json`): `notify_email` / `notify_push` / `notify_scope`
+  / `notify_change_only`; per-flight `FlightRow.notify_override`. Migration `075`.
+
+**Still to build (iOS, needs #364's app-shell):** client registration for remote
+notifications, deep-link on tap via the `PendingNavigation` seam, foreground
+badge reconcile on `scenePhase == .active`, and the settings/per-flight UI.
+Deployment must set the APNs secrets (see "APNs key management" below).
 
 ## Related Docs
 
@@ -234,7 +247,16 @@ email* (channels are independent user choices). Remaining:
   the row.
 - **APNs key management** — a **single `.p8` token-auth key works for BOTH environments**
   (unlike the old cert auth). Store key + key id + team id as deployment secrets (same
-  handling as the existing Resend key).
+  handling as the existing Resend key). **As built**, `ApnsConfig.from_env()` reads:
+  `APNS_KEY_P8` (PEM contents; or `APNS_KEY_P8_PATH` for local dev), `APNS_KEY_ID`,
+  `APNS_TEAM_ID`, `APNS_BUNDLE_ID` (→ `apns-topic`). Missing config → log-and-skip.
+
+**Decisions locked during #366 (server half):** APNs library = **httpx-rolled**
+(chosen); seen storage = **`flight_briefing_seen` table** (not a prefs blob);
+device scope = **all of the user's devices** (simpler, consistent with
+auto-refresh); change detection = **assessment/outlook transition vs the prior
+pack** (a first briefing counts as changed; a GREEN→AMBER worsening also carries
+a short delta message for the push body); quiet hours = **deferred** (not in v1).
 - **Sandbox vs production routing** — per-**token**, decided by the *app build on the device*,
   **not** by which server runs: an Xcode **debug** build → `aps-environment: development` →
   **sandbox** token → sandbox host; **TestFlight and App Store** → `production` → production

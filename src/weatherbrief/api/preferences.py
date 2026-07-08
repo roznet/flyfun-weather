@@ -84,6 +84,13 @@ class PreferencesResponse(BaseModel):
     display_currency: str  # ISO 4217 or "auto" (cost/donation display only)
     synoptic_forecast_map_enabled: bool
     defer_email_for_model_update: bool
+    # Briefing-refresh notifications (ios-app-briefing-notifications.md).
+    # Channels are independent (either/both/neither); scope is a single choice
+    # applied to all selected channels; change-only gates on assessment change.
+    notify_email: bool = True
+    notify_push: bool = False
+    notify_scope: str = "auto"  # "auto" | "all" | "off"
+    notify_change_only: bool = True
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
     donations_enabled: bool = False  # global: Stripe configured (gates the donate UI)
@@ -108,6 +115,10 @@ class PreferencesUpdate(BaseModel):
     display_currency: str | None = None  # "auto" or an ISO 4217 code (e.g. "EUR")
     synoptic_forecast_map_enabled: bool | None = None
     defer_email_for_model_update: bool | None = None
+    notify_email: bool | None = None
+    notify_push: bool | None = None
+    notify_scope: Literal["auto", "all", "off"] | None = None
+    notify_change_only: bool | None = None
 
     @field_validator("display_currency")
     @classmethod
@@ -163,6 +174,33 @@ def _parse_service_toggles(raw: str) -> dict:
     }
 
 
+#: Notification scope — which refreshes notify (single choice).
+NotifyScope = Literal["auto", "all", "off"]
+
+
+def _parse_notify_prefs(raw: str) -> dict:
+    """Extract briefing-notification preferences from the app_prefs blob.
+
+    Defaults reproduce today's behaviour (ios-app-briefing-notifications.md →
+    "Migration preserves today's behavior"): email on, scope ``auto``
+    (scheduler-only — what the implicit email-on-completion does today),
+    change-only on, push off until a device registers.
+    """
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    scope = data.get("notify_scope", "auto")
+    if scope not in ("auto", "all", "off"):
+        scope = "auto"
+    return {
+        "notify_email": bool(data.get("notify_email", True)),
+        "notify_push": bool(data.get("notify_push", False)),
+        "notify_scope": scope,
+        "notify_change_only": bool(data.get("notify_change_only", True)),
+    }
+
+
 def _parse_advisory_prefs(raw: str) -> AdvisoryPreferences:
     try:
         data = json.loads(raw) if raw else {}
@@ -208,6 +246,7 @@ def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> Prefe
         defaults=_parse_defaults(row.app_prefs_json),
         digest_config=_parse_digest_config_from_prefs(row.app_prefs_json),
         advisories=_parse_advisory_prefs(row.app_prefs_json),
+        **_parse_notify_prefs(row.app_prefs_json),
         has_autorouter_creds=has_ar,
         autorouter_mode="password" if is_dev_mode() else "oauth",
         pirep_can_view=prefs_data.get("pirep_can_view", False),
@@ -287,6 +326,14 @@ def update_preferences(
         data["synoptic_forecast_map_enabled"] = body.synoptic_forecast_map_enabled
     if body.defer_email_for_model_update is not None:
         data["defer_email_for_model_update"] = body.defer_email_for_model_update
+    if body.notify_email is not None:
+        data["notify_email"] = body.notify_email
+    if body.notify_push is not None:
+        data["notify_push"] = body.notify_push
+    if body.notify_scope is not None:
+        data["notify_scope"] = body.notify_scope
+    if body.notify_change_only is not None:
+        data["notify_change_only"] = body.notify_change_only
 
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)
@@ -508,6 +555,18 @@ def load_defer_email_for_model_update(db: Session, user_id: str) -> bool:
     parsing stay in one place (the toggle is part of ``_parse_service_toggles``).
     """
     return bool(load_service_toggles(db, user_id).get("defer_email_for_model_update", False))
+
+
+def load_notify_prefs(db: Session, user_id: str) -> dict:
+    """Return the user's briefing-notification preferences.
+
+    Keys: ``notify_email``, ``notify_push`` (channels), ``notify_scope``
+    (auto | all | off), ``notify_change_only``. Defaults preserve today's
+    behaviour (email on, scope auto, change-only on, push off) on a missing row
+    or blob. Read by the refresh-finalize notification dispatch.
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    return _parse_notify_prefs(row.app_prefs_json if row else "")
 
 
 def can_view_pireps(db: Session, user_id: str) -> bool:

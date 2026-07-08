@@ -536,7 +536,6 @@ class TestAutoRefreshGate:
         mock_exec.assert_not_called()
         mock_prepare.assert_not_called()
 
-    @patch("weatherbrief.scheduler._try_send_email")
     @patch("weatherbrief.api.packs._finalize_refresh")
     @patch("weatherbrief.api.packs._prepare_refresh")
     @patch("weatherbrief.pipeline.execute_briefing")
@@ -547,7 +546,7 @@ class TestAutoRefreshGate:
     @patch("weatherbrief.scheduler.SessionLocal")
     def test_runs_pipeline_when_full(
         self, mock_session, mock_row_to_flight, mock_list,
-        mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize, mock_email,
+        mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize,
     ):
         from unittest.mock import MagicMock
 

@@ -115,6 +115,11 @@ class FlightRow(Base):
     # none | alternate | same_day | prev_day | next_day. "alternate" grades the
     # single alt_departure_time; the day modes run the departure-window scan.
     flexibility: Mapped[str] = mapped_column(String(16), default="none")
+    # Per-flight briefing-notification override (ios-app-briefing-notifications.md):
+    # default (follow the global scope) | notify (push/email on ANY completion of
+    # this flight) | mute (never notify for this flight). Independent of
+    # auto_refresh — a "notify" flight with auto_refresh off is the Siri-loop case.
+    notify_override: Mapped[str] = mapped_column(String(16), default="default")
     last_auto_refresh_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -433,6 +438,48 @@ class DeviceTokenRow(Base):
     environment: Mapped[str] = mapped_column(String(16))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    user: Mapped[UserRow] = relationship(UserRow)
+
+
+class FlightBriefingSeenRow(Base):
+    """Per-(user, flight) briefing seen/notified state for cross-surface badge sync.
+
+    Mirrors the system-message unseen pattern (``messages_last_seen_id``) but
+    per-flight and server-derived, so the app badge stays accurate across web ↔
+    app ↔ multiple devices (see ios-app-briefing-notifications.md → Badge).
+
+    A flight counts toward the badge at most once: it is **unseen** iff
+    ``last_notified_ts`` (the pack ts of the most recent notify-qualifying
+    refresh) is strictly newer than ``last_seen_ts`` (set to the flight's
+    current latest pack ts when the pilot opens the briefing, on web or app).
+    Opening clears the flight no matter how many packs piled up; an unchanged
+    later refresh never re-lights a flight already cleared.
+    """
+
+    __tablename__ = "flight_briefing_seen"
+    __table_args__ = (
+        UniqueConstraint("user_id", "flight_id", name="uq_flight_seen_user_flight"),
+        Index("ix_flight_seen_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    flight_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("flights.id", ondelete="CASCADE"), nullable=False
+    )
+    # Pack ts of the most recent notify-qualifying refresh (scope + change-filter
+    # + not muted). NULL until the flight first qualifies.
+    last_notified_ts: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Flight's latest pack ts at the moment the pilot last opened the briefing.
+    # NULL until first opened.
+    last_seen_ts: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     user: Mapped[UserRow] = relationship(UserRow)
