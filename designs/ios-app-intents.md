@@ -9,7 +9,7 @@ ships in `app/flyfun-weather/flyfun-weather/AppIntents/`: `FlightEntity`
 (`AppEntity` + `IndexedEntity`) + `AirportEntity`, the six intents
 (open-list / open-briefing / check / overview / refresh / airport-weather),
 `FlyFunShortcuts`, the full tiered resolver (deterministic + Foundation Models
-`{place, when}` fallback), the typed `PendingNavigation` seam on `AppState`, and
+grounded selection over the candidate flights), the typed `PendingNavigation` seam on `AppState`, and
 Spotlight reconciliation on flight-list load. Phase 2 (View Annotations, App
 Intents Testing framework) remains proposed. It has **no SiriKit**, so there was
 nothing to migrate — a clean start on the modern App Intents path.
@@ -152,7 +152,7 @@ index** (0 = none); the resolver range-checks it and maps back to a real flight 
 ```swift
 // FlightResolver.resolve, tier 2 (parser is injectable for tests)
 let candidates = upcoming(flights, now: now).map {          // today-and-future, soonest first
-    FlightCandidate(id: $0.id, line: candidateLine($0))     // "EGKB (Biggin Hill) → EGTF (Fairoaks), 9 Jul 2026"
+    FlightCandidate(id: $0.id, line: candidateLine($0))     // "EGKB (London Biggin Hill, London, GB) → EGTF (Fairoaks, GB), 9 Jul 2026"
 }
 if let id = await parser.pick(phrase: raw, today: today, candidates: candidates),
    let picked = flights.first(where: { $0.id == id }) {     // validate: id ∈ real flights

@@ -115,15 +115,23 @@ enum FlightResolver {
         return route
     }
 
-    /// "ICAO (Name, City, Country)" from the local DB, skipping any empty/duplicate
-    /// component (the slim DB may not carry every column).
+    /// "ICAO (Name, City, Country)" from the local DB. The DB read is `@MainActor`;
+    /// the formatting rules are the pure overload below (so they're unit-testable
+    /// without the `AirportDatabase.shared` singleton).
     @MainActor
     private static func airportLabel(_ icao: String) -> String {
         guard let airport = AirportDatabase.shared.airport(icao: icao) else { return icao }
+        return airportLabel(icao: icao, name: airport.name, city: airport.city, country: airport.country)
+    }
+
+    /// Pure "ICAO (Name, City, Country)" formatter — skips any empty component
+    /// (the slim DB may not carry every column) and a city that just repeats the
+    /// name. Falls back to the bare ICAO when nothing else is known.
+    nonisolated static func airportLabel(icao: String, name: String, city: String, country: String) -> String {
         var parts: [String] = []
-        if !airport.name.isEmpty { parts.append(airport.name) }
-        if !airport.city.isEmpty, airport.city != airport.name { parts.append(airport.city) }
-        if !airport.country.isEmpty { parts.append(airport.country) }
+        if !name.isEmpty { parts.append(name) }
+        if !city.isEmpty, city != name { parts.append(city) }
+        if !country.isEmpty { parts.append(country) }
         return parts.isEmpty ? icao : "\(icao) (\(parts.joined(separator: ", ")))"
     }
 
