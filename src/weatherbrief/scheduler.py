@@ -386,7 +386,8 @@ def _flight_start_dt(row: FlightRow) -> datetime | None:
 def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
     """Run the briefing pipeline for a single flight (called in a thread)."""
     from weatherbrief.api.packs import (
-        _build_data_status, _days_out_now, _finalize_refresh, _prepare_refresh,
+        _build_data_status, _days_out_now, _finalize_refresh,
+        _notify_refresh_complete, _prepare_refresh,
         decide_refresh, refresh_registry,
     )
     from weatherbrief.storage.flights import _row_to_flight, list_packs
@@ -440,18 +441,22 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
         result.usage.queue_wait_seconds = queue_wait
         result.usage.triggered_by = "scheduler"
 
-        # Briefing-refresh notifications (email + APNs push) now fire from the
-        # shared refresh-finalize sink (``_persist_pack_finalize``) so the same
-        # hook covers auto / in-app / Siri / MCP refreshes. The scheduler no
-        # longer sends email directly — it would double-send. ``triggered_by``
-        # was set to "scheduler" above, so the auto/all scope gate treats this
-        # as the scheduled auto-refresh.
-        _finalize_refresh(
+        meta = _finalize_refresh(
             flight_row.id, flight, fetch_ts, pack_path, result, db,
             user_id=user_id, model_metadata=model_metadata,
             as_of_time=resolved_as_of,
         )
         db.commit()
+
+        # Briefing-refresh notifications (email + APNs push) fire from the shared
+        # ``_notify_refresh_complete`` sink AFTER commit, so the same hook covers
+        # auto / in-app / Siri / MCP refreshes without notifying about a pack that
+        # could still roll back or holding the transaction open across network
+        # I/O. ``triggered_by`` was set to "scheduler" above, so the auto/all
+        # scope gate treats this as the scheduled auto-refresh.
+        _notify_refresh_complete(
+            db, flight, meta, pack_path, result, user_id=user_id,
+        )
 
     finally:
         db.close()
