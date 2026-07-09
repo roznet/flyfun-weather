@@ -10,8 +10,10 @@ server side is built and tested (`tests/test_briefing_notifications.py`):
 - `notify/push.py` — token-based APNs sender (httpx HTTP/2 + PyJWT ES256,
   cached ~50 min), per-token sandbox/production routing, dead-token pruning.
 - `notify/dispatch.py` — the single notification gate + channel dispatch, emitted
-  once from the shared finalize `api/packs.py::_persist_pack_finalize` so it
-  covers auto / in-app / Siri / MCP. Email moved here from the scheduler.
+  once from the shared post-commit sink `api/packs.py::_notify_refresh_complete`
+  (called by each refresh path *after* it commits the pack) so it covers
+  auto / in-app / Siri / MCP without notifying about a pack that could still roll
+  back. Email moved here from the scheduler.
 - `notify/badge.py` + `api/notifications.py` — server-derived cross-surface badge
   (`flight_briefing_seen` table), `GET /api/flights/badge`,
   `POST /api/flights/{id}/seen` (+ silent badge-sync push on web read).
@@ -55,7 +57,7 @@ web today; the server + API support it).
 |---|---|---|
 | Device token table + migration | `db/models.py::DeviceTokenRow` (`token`, `environment` `String(16)`, `user_id`); migration `032_pireps_and_device_tokens.py` | Table already created & migrated — just add the endpoint |
 | GDPR handling | `api/account_export.py` (token **excluded as a credential**, not exported) + `api/app.py` account-deletion purges rows | Delete/export already correct — nothing to add |
-| Single refresh-finalize sink | `api/packs.py::_persist_pack_finalize` — the shared function called by `_finalize_refresh` (scheduler + manual) **and** the streaming path | Emit the push **once** here → covers auto, in-app, and Siri/MCP refreshes in one place |
+| Single post-commit notify sink | `api/packs.py::_notify_refresh_complete` — called by each refresh path (scheduler, sync `_finalize_refresh`, streaming) *after* it commits the pack | Emit the push **once** here → covers auto, in-app, and Siri/MCP refreshes in one place, after commit so we never notify about a pack that rolls back |
 | Email precedent | `scheduler.py::_try_send_email` (auto-refresh only, ~L452) | Mirror as `notify/push.py`; but hook the shared finalize, since push must ALSO cover manual/Siri (email doesn't) |
 | Change detection | `compute_refresh_delta` / worsened-conditions banner (`metar-taf-route-weather`) | Craft the body ("now AMBER — conditions worsened") + gate noisy sends |
 | Model-update-aware defer | `scheduler.py` issue #192 email-timing logic | Push inherits the same defer window — do not notify before/twice |
@@ -80,7 +82,7 @@ web today; the server + API support it).
 - **`notify/push.py`** — token-based APNs (`.p8` key, HTTP/2, `apns-topic` = bundle id).
   One function `send_briefing_push(user_id, flight, meta, *, delta)` mirroring
   `send_briefing_email`. Route to the correct APNs host per stored `environment`.
-- **Emit once from the shared finalize** `api/packs.py::_persist_pack_finalize`, guarded
+- **Emit once from the shared post-commit sink** `api/packs.py::_notify_refresh_complete` (after each path commits its pack), guarded
   like `_try_send_email` (log-and-skip on any failure — a push must never break a refresh).
   Every refresh (auto, in-app, Siri/MCP) funnels through this one function, so a single
   hook covers them all — including the `RefreshBriefingIntent` loop. Do **not** copy the
@@ -131,7 +133,7 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
   flight, even if global is `off`/`auto`) | `mute` (never for this flight). Channels always
   follow the global channel selection.
 
-**Effective decision** (evaluated at `_persist_pack_finalize`):
+**Effective decision** (evaluated in `notify/dispatch.py`, driven from `_notify_refresh_complete`):
 
 ```
 if flight.notify_override == "mute":  stop
@@ -241,7 +243,7 @@ Notification work (this doc)                 App Intents (sibling doc)
 ──────────────────────────                   ─────────────────────────
 device_tokens endpoint + client reg   ┐
 notify/push.py + APNs key             ├─►    RefreshBriefingIntent
-emit from shared _persist_pack_finalize ┘    ("…I'll let you know when it's ready")
+emit from _notify_refresh_complete    ┘    ("…I'll let you know when it's ready")
 ```
 
 `OpenBriefingIntent` / `OpenFlightListIntent` / `CheckBriefingIntent` do **not**

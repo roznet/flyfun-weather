@@ -1,9 +1,12 @@
 """Unified briefing-refresh notification dispatch.
 
-Emitted **once** from the single refresh-finalize sink
-(``api/packs.py::_persist_pack_finalize``) so one hook covers every refresh
+Emitted **once** from the single post-commit sink
+(``api/packs.py::_notify_refresh_complete``), called by each refresh path
+*after* it commits the pack transaction, so one hook covers every refresh
 path — auto (scheduler), in-app, and Siri/MCP — including the
-``RefreshBriefingIntent`` loop (ios-app-briefing-notifications.md).
+``RefreshBriefingIntent`` loop (ios-app-briefing-notifications.md). Emitting
+after commit means we never notify about a pack that could still roll back and
+never hold the pack transaction open across SMTP/APNs I/O.
 
 The gate is channel-agnostic; channels (email, push) are independent user
 choices layered on top:
