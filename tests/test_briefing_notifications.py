@@ -372,6 +372,48 @@ def test_notify_per_flight_notify_override_fires_on_manual(db_session, dev_user,
     assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
 
 
+def test_notify_force_email_sends_when_not_qualifying(db_session, dev_user, monkeypatch):
+    # Legacy "email me when done" on a manual refresh under default prefs
+    # (scope=auto → gate says no): force_email still sends exactly one email,
+    # and the badge does NOT light (a manual refresh under auto isn't qualifying).
+    calls = _spy_channels(monkeypatch)
+    _add_flight(db_session)
+    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
+    _add_pack(db_session, "f1", ts, assessment="AMBER")
+    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
+                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
+                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+    dispatch_mod.notify_briefing_refresh(
+        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID,
+        triggered_by="user", force_email=True,
+    )
+    db_session.flush()
+    assert calls["email"] == 1
+    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 0
+
+
+def test_notify_force_email_no_double_when_gate_also_emails(db_session, dev_user, monkeypatch):
+    # When the gate already emails (per-flight notify override) AND the legacy
+    # checkbox is set, exactly ONE email goes out — not two.
+    calls = _spy_channels(monkeypatch)
+    _add_flight(db_session)
+    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
+    _add_pack(db_session, "f1", ts, assessment="AMBER")
+    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
+                    notify_override="notify",
+                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
+                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+    dispatch_mod.notify_briefing_refresh(
+        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID,
+        triggered_by="user", force_email=True,
+    )
+    db_session.flush()
+    assert calls["email"] == 1
+    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
+
+
 def test_notify_mute_blocks_even_scheduler(db_session, dev_user, monkeypatch):
     calls = _spy_channels(monkeypatch)
     _add_flight(db_session)

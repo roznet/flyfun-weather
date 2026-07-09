@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user/preferences", tags=["preferences"])
 
+#: Notification scope — which refreshes notify (single choice).
+NotifyScope = Literal["auto", "all", "off"]
+
 
 class FxBlock(BaseModel):
     """Display-currency block carried on USD-canonical cost/donation responses.
@@ -89,7 +92,7 @@ class PreferencesResponse(BaseModel):
     # applied to all selected channels; change-only gates on assessment change.
     notify_email: bool = True
     notify_push: bool = False
-    notify_scope: str = "auto"  # "auto" | "all" | "off"
+    notify_scope: NotifyScope = "auto"
     notify_change_only: bool = True
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
@@ -117,7 +120,7 @@ class PreferencesUpdate(BaseModel):
     defer_email_for_model_update: bool | None = None
     notify_email: bool | None = None
     notify_push: bool | None = None
-    notify_scope: Literal["auto", "all", "off"] | None = None
+    notify_scope: NotifyScope | None = None
     notify_change_only: bool | None = None
 
     @field_validator("display_currency")
@@ -172,10 +175,6 @@ def _parse_service_toggles(raw: str) -> dict:
         "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
         "defer_email_for_model_update": data.get("defer_email_for_model_update", False),
     }
-
-
-#: Notification scope — which refreshes notify (single choice).
-NotifyScope = Literal["auto", "all", "off"]
 
 
 def _parse_notify_prefs(raw: str) -> dict:

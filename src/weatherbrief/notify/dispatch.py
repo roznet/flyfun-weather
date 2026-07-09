@@ -75,7 +75,16 @@ def _prior_pack(
     db: Session, flight_id: str, current_ts: datetime
 ) -> BriefingPackRow | None:
     """The most recent pack strictly older than ``current_ts`` (the one this
-    refresh replaces), for assessment-change detection."""
+    refresh replaces), for assessment-change detection.
+
+    ``current_ts`` is ``meta.fetch_timestamp`` — a freshly-built *aware* UTC
+    datetime, not one round-tripped from the DB. SQLite stores this column as
+    naive text (no tz suffix), so an aware bound parameter won't match the stored
+    format; strip tzinfo to compare like-for-like, mirroring ``update_pack_meta``
+    and the other pack-timestamp comparisons in the codebase.
+    """
+    if current_ts.tzinfo is not None:
+        current_ts = current_ts.replace(tzinfo=None)
     return (
         db.query(BriefingPackRow)
         .filter(
@@ -174,11 +183,16 @@ def notify_briefing_refresh(
     *,
     user_id: str,
     triggered_by: str,
+    force_email: bool = False,
 ) -> None:
     """Evaluate the notification gate for a completed refresh and dispatch.
 
-    Called once from ``_persist_pack_finalize``. Never raises — wrapped so a
-    notification failure can't break a refresh.
+    Called once per refresh from ``_notify_refresh_complete`` (after commit).
+    Never raises — wrapped so a notification failure can't break a refresh.
+
+    ``force_email`` ensures exactly one email is sent for this refresh regardless
+    of the scope/change gate — the legacy "email me when done" checkbox routed
+    through this single gate so it can't double-send with the preference email.
     """
     try:
         from weatherbrief.api.preferences import load_notify_prefs
@@ -187,23 +201,28 @@ def notify_briefing_refresh(
         prefs = load_notify_prefs(db, user_id)
         changed, delta = detect_change(db, flight.id, meta)
 
-        if not notify_qualifies(
+        email_sent = False
+        if notify_qualifies(
             notify_override=flight.notify_override,
             scope=prefs["notify_scope"],
             change_only=prefs["notify_change_only"],
             changed=changed,
             triggered_by=triggered_by,
         ):
-            return
+            # Advance the badge state (independent of alert channel being on) and
+            # read the authoritative count for aps.badge.
+            record_notify_qualifying(db, user_id, flight.id, meta.fetch_timestamp)
+            badge = compute_badge_count(db, user_id)
 
-        # Advance the badge state (independent of alert channel being on) and
-        # read the authoritative count for aps.badge.
-        record_notify_qualifying(db, user_id, flight.id, meta.fetch_timestamp)
-        badge = compute_badge_count(db, user_id)
+            if prefs["notify_email"]:
+                _send_email(db, user_id, flight, meta, pack_dir)
+                email_sent = True
+            if prefs["notify_push"]:
+                _send_push(db, user_id, flight, meta, delta, badge)
 
-        if prefs["notify_email"]:
+        # Legacy per-refresh "email me when done" — send once if the gate above
+        # didn't already email for this refresh.
+        if force_email and not email_sent:
             _send_email(db, user_id, flight, meta, pack_dir)
-        if prefs["notify_push"]:
-            _send_push(db, user_id, flight, meta, delta, badge)
     except Exception:
         logger.warning("notify: dispatch failed for %s", getattr(flight, "id", "?"), exc_info=True)

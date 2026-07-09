@@ -23,7 +23,6 @@ from sqlalchemy.orm import Session
 from flyfun_common.auth import is_dev_mode
 from weatherbrief.api.security import audit_pack_access
 from weatherbrief.db.models import BriefingUsageRow
-from weatherbrief.privacy import mask_email
 from weatherbrief.connectors.views import (
     advisory_detail as _advisory_detail,
     convective_detail as _convective_detail,
@@ -1551,22 +1550,12 @@ def _persist_pack_finalize(
     except Exception:
         logger.warning("time-scan: post-refresh scheduling failed", exc_info=True)
 
-    # Briefing-refresh notifications (email + APNs push) + cross-surface badge.
-    # This single sink covers every refresh path — auto (scheduler), in-app, and
-    # Siri/MCP — so one hook closes the RefreshBriefingIntent loop. Best-effort:
-    # notify_briefing_refresh never raises. ``triggered_by`` distinguishes the
-    # scheduled auto-refresh ("scheduler") from user/Siri/MCP refreshes ("user")
-    # for the auto/all scope gate.
-    notify_user_id = user_id or flight.user_id
-    if notify_user_id:
-        from weatherbrief.notify.dispatch import notify_briefing_refresh
-
-        notify_briefing_refresh(
-            db, flight, meta, Path(pack_path),
-            user_id=notify_user_id,
-            triggered_by=getattr(result.usage, "triggered_by", "user") or "user",
-        )
-
+    # NOTE: briefing-refresh notifications are emitted by the callers via
+    # ``_notify_refresh_complete`` *after* they commit — never here. Sending
+    # (SMTP + per-device APNs) inside this pre-commit function would notify the
+    # user about a pack that could still roll back and would hold the DB
+    # transaction open across slow network I/O. The single-sink guarantee is
+    # preserved by routing all three refresh paths through that one helper.
     logger.info("Briefing refreshed for %s: %s", flight_id, fetch_ts)
     return meta
 
@@ -1594,6 +1583,47 @@ def _finalize_refresh(
         model_metadata=model_metadata,
         as_of_time=as_of_time,
     )
+
+
+def _notify_refresh_complete(
+    db: Session,
+    flight: Flight,
+    meta: BriefingPackMeta,
+    pack_path,
+    result: "BriefingResult",
+    *,
+    user_id: str | None = None,
+    force_email: bool = False,
+) -> None:
+    """Emit briefing-refresh notifications (email + APNs push) + badge, AFTER commit.
+
+    The single sink for all three refresh paths (scheduler, sync, streaming). Must
+    be called by the caller once the pack transaction has committed — so we never
+    notify about a pack that could still roll back, and never hold the pack
+    transaction open across SMTP/APNs I/O. Records its own badge write on ``db``
+    and commits it; fully best-effort (a notification must never break a refresh).
+
+    ``force_email`` reproduces the legacy "email me when done" checkbox
+    (streaming ``?notify_email=true``) through this one gate, so a manual refresh
+    with the checkbox never double-sends with the preference-driven email.
+    """
+    notify_user_id = user_id or flight.user_id
+    if not notify_user_id:
+        return
+    triggered_by = getattr(result.usage, "triggered_by", "user") or "user"
+    try:
+        from weatherbrief.notify.dispatch import notify_briefing_refresh
+
+        notify_briefing_refresh(
+            db, flight, meta, Path(pack_path),
+            user_id=notify_user_id,
+            triggered_by=triggered_by,
+            force_email=force_email,
+        )
+        db.commit()
+    except Exception:
+        logger.warning("post-commit notify failed for %s", flight.id, exc_info=True)
+        db.rollback()
 
 
 class RefreshAccepted(BaseModel):
@@ -1792,12 +1822,16 @@ async def refresh_briefing(
 
             thread_db = SessionLocal()
             try:
-                _finalize_refresh(
+                meta = _finalize_refresh(
                     flight_id, flight, fetch_ts, pack_path, result, thread_db,
                     user_id=user_id, model_metadata=model_metadata,
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
+                # Notify AFTER commit (single sink).
+                _notify_refresh_complete(
+                    thread_db, flight, meta, pack_path, result, user_id=user_id,
+                )
             finally:
                 thread_db.close()
             logger.info("Background refresh complete for %s", flight_id)
@@ -2004,9 +2038,6 @@ async def refresh_briefing_stream(
             is_privileged=_can_force_refresh(request, db),
             as_of_time=as_of_time,
         )
-
-        # Capture base_url for optional email notification (before db/request close)
-        base_url = str(request.base_url).rstrip("/") if notify_email else None
     except Exception:
         if registered:
             refresh_registry.unregister(flight_id)
@@ -2106,6 +2137,13 @@ async def refresh_briefing_stream(
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
+                # Notify AFTER commit (single sink). The legacy ?notify_email=true
+                # checkbox is folded in here via force_email so a manual refresh
+                # with the checkbox can't double-send with the preference email.
+                _notify_refresh_complete(
+                    thread_db, flight, meta, pack_path, result,
+                    user_id=user_id, force_email=notify_email,
+                )
             finally:
                 thread_db.close()
             complete_event = {
@@ -2114,24 +2152,6 @@ async def refresh_briefing_stream(
                 "elapsed_seconds": total_elapsed,
             }
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
-
-            # Send email notification if requested
-            if notify_email and base_url:
-                from weatherbrief.db.models import UserRow
-                from weatherbrief.notify.email import send_briefing_email
-
-                try:
-                    email_db = SessionLocal()
-                    try:
-                        user = email_db.get(UserRow, user_id)
-                        if user and user.email:
-                            pack_dir = Path(pack_path)
-                            send_briefing_email([user.email], flight, meta, pack_dir, base_url=base_url)
-                            logger.info("Refresh completion email sent to %s for %s", mask_email(user.email), flight_id)
-                    finally:
-                        email_db.close()
-                except Exception as email_exc:
-                    logger.warning("Failed to send refresh notification email: %s", email_exc)
         except Exception as exc:
             logger.error("Streaming refresh failed: %s", exc, exc_info=True)
             error_event = {"type": "error", "message": str(exc)}
