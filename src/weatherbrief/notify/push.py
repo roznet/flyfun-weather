@@ -24,6 +24,7 @@ high-level senders log-and-skip on any failure and the caller wraps them too.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -57,6 +58,32 @@ _TOKEN_TTL_SECONDS = 50 * 60
 _DEAD_TOKEN_REASONS = {"BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"}
 
 
+def _normalize_key_pem(raw: str) -> str:
+    """Coerce an ``APNS_KEY_P8`` env value into real PEM text.
+
+    Accepts three shapes so the same secret works whether it arrives via
+    docker-compose ``env_file`` (no ``\\n`` expansion), a dotenv parser, or a
+    file read:
+
+    - **base64** (recommended for prod, e.g. ``base64 -i AuthKey.p8``) — anything
+      without a ``-----BEGIN`` marker is decoded; single-line, parser-proof.
+    - **``\\n``-escaped** PEM — literal backslash-n restored to real newlines.
+    - **raw PEM** — already has newlines; passed through untouched.
+    """
+    raw = raw.strip()
+    if "-----BEGIN" not in raw:
+        try:
+            return base64.b64decode(raw).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as e:
+            raise ValueError(
+                "APNS_KEY_P8 is neither PEM nor valid base64 — expected the "
+                "raw .p8 contents or `base64 -i AuthKey.p8` output."
+            ) from e
+    if "\\n" in raw:
+        return raw.replace("\\n", "\n")
+    return raw
+
+
 @dataclass(frozen=True)
 class ApnsConfig:
     """APNs token-auth settings loaded from environment variables."""
@@ -70,9 +97,17 @@ class ApnsConfig:
     def from_env(cls) -> "ApnsConfig":
         """Load from environment variables. Raises ValueError if not configured.
 
-        ``APNS_KEY_P8`` carries the PEM contents directly (deployment secret,
-        same handling as ``RESEND_API_KEY``); ``APNS_KEY_P8_PATH`` is a local-dev
-        convenience pointing at the ``.p8`` file on disk.
+        ``APNS_KEY_P8`` carries the key directly (deployment secret, same handling
+        as ``RESEND_API_KEY``); ``APNS_KEY_P8_PATH`` is a local-dev convenience
+        pointing at the ``.p8`` file on disk.
+
+        The ``APNS_KEY_P8`` value may be **base64** (recommended for prod) or the
+        raw PEM. Prod injects env via docker-compose ``env_file``, which does NOT
+        expand ``\\n`` escapes into real newlines — a raw multi-line PEM can't be
+        represented on one env line, and a ``\\n``-escaped one would reach
+        ``cryptography`` with literal backslash-n and fail to parse (silently, as
+        push is best-effort). base64 is single-line and survives every env parser
+        intact. ``_normalize_key_pem`` handles base64, ``\\n``-escaped, and raw PEM.
         """
         key_p8 = os.environ.get("APNS_KEY_P8")
         key_path = os.environ.get("APNS_KEY_P8_PATH")
@@ -81,6 +116,8 @@ class ApnsConfig:
                 key_p8 = open(key_path, encoding="utf-8").read()
             except OSError as e:
                 raise ValueError(f"APNS_KEY_P8_PATH unreadable: {e}") from e
+        if key_p8:
+            key_p8 = _normalize_key_pem(key_p8)
 
         key_id = os.environ.get("APNS_KEY_ID")
         team_id = os.environ.get("APNS_TEAM_ID")

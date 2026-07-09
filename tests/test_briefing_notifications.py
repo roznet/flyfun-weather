@@ -5,6 +5,7 @@ Covers the server half of ios-app-briefing-notifications.md (issue #366).
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -252,6 +253,64 @@ def test_apns_config_missing_raises(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     with pytest.raises(ValueError):
         push_mod.ApnsConfig.from_env()
+
+
+def _throwaway_pem() -> str:
+    return (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
+
+
+def test_normalize_key_pem_passthrough_raw():
+    pem = _throwaway_pem()
+    assert push_mod._normalize_key_pem(pem) == pem.strip()
+
+
+def test_normalize_key_pem_restores_escaped_newlines():
+    pem = _throwaway_pem()
+    escaped = pem.replace("\n", "\\n")  # the \n-literal form a naive .env paste yields
+    assert "\\n" in escaped and "\n" not in escaped.replace("\\n", "")
+    assert push_mod._normalize_key_pem(escaped).strip() == pem.strip()
+
+
+def test_normalize_key_pem_decodes_base64():
+    pem = _throwaway_pem()
+    b64 = base64.b64encode(pem.encode()).decode()  # `base64 -i AuthKey.p8` output
+    assert "-----BEGIN" not in b64
+    assert push_mod._normalize_key_pem(b64).strip() == pem.strip()
+
+
+def test_normalize_key_pem_rejects_garbage():
+    with pytest.raises(ValueError):
+        push_mod._normalize_key_pem("not a pem and !!! not base64 %%%")
+
+
+def test_from_env_accepts_base64_key_and_signs(monkeypatch):
+    """The prod-recommended base64 form must round-trip to a key that actually
+    signs an ES256 JWT — the compose-``env_file`` path can't carry raw PEM."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    monkeypatch.setenv("APNS_KEY_P8", base64.b64encode(pem.encode()).decode())
+    monkeypatch.setenv("APNS_KEY_ID", "ABC1234567")
+    monkeypatch.setenv("APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("APNS_BUNDLE_ID", "aero.flyfun.weather")
+    push_mod._reset_token_cache()
+    try:
+        config = push_mod.ApnsConfig.from_env()
+        token = push_mod._provider_token(config)
+        jwt.decode(token, key.public_key(), algorithms=["ES256"])  # verifies signature
+    finally:
+        push_mod._reset_token_cache()
 
 
 def test_provider_token_is_valid_es256_jwt(apns_env):
