@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 from itertools import permutations
 
@@ -82,6 +83,73 @@ def test_regions_split_on_gap_reason_method_severity_and_altitude(route_points):
         (0, 1),
         (3, 3),
         (4, 4),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        pytest.param("reason_code", "reason_b", id="reason"),
+        pytest.param("metric_id", "metric_b", id="metric"),
+        pytest.param("method_id", "method_b", id="method"),
+        pytest.param("lower_altitude_ft", 1500, id="lower-altitude"),
+        pytest.param("upper_altitude_ft", 2500, id="upper-altitude"),
+    ],
+)
+def test_adjacent_regions_split_when_grouping_dimension_changes(
+    route_points,
+    field,
+    changed_value,
+):
+    first = EvidenceSample(
+        0,
+        AdvisoryStatus.AMBER,
+        "reason_a",
+        "metric_a",
+        "method_a",
+        1000,
+        2000,
+    )
+    second = replace(first, point_index=1, **{field: changed_value})
+
+    summary = summarize_evidence(
+        route_points=route_points([0, 10]),
+        total_distance_nm=10,
+        evaluated_point_indices={0, 1},
+        complete_point_indices={0, 1},
+        affected_point_indices={0, 1},
+        evidence_samples=[first, second],
+    )
+
+    assert [(r.start_point_index, r.end_point_index) for r in summary.evidence_regions] == [
+        (0, 0),
+        (1, 1),
+    ]
+
+
+def test_identical_adjacent_samples_coalesce_to_one_region(route_points):
+    first = EvidenceSample(
+        0,
+        AdvisoryStatus.AMBER,
+        "reason_a",
+        "metric_a",
+        "method_a",
+        1000,
+        2000,
+    )
+    second = replace(first, point_index=1)
+
+    summary = summarize_evidence(
+        route_points=route_points([0, 10]),
+        total_distance_nm=10,
+        evaluated_point_indices={0, 1},
+        complete_point_indices={0, 1},
+        affected_point_indices={0, 1},
+        evidence_samples=[first, second],
+    )
+
+    assert [(r.start_point_index, r.end_point_index) for r in summary.evidence_regions] == [
+        (0, 1),
     ]
 
 
