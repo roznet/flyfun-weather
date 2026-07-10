@@ -223,10 +223,12 @@ struct SettingsView: View {
     /// Push is a working channel only with a registered device and the flag on.
     private var pushAvailableAndOn: Bool { notifyPrefs.hasPushDevice && notifyPrefs.pushEnabled }
 
-    /// Email is locked on when it's the only *available* channel while updates
-    /// are active — the channel invariant (you can never disable the last
-    /// channel; the only way to silence is Briefing updates = Off).
-    private var emailLocked: Bool { notifyPrefs.briefingUpdates != .off && !pushAvailableAndOn }
+    /// Email is locked on only when there's no registered device at all — email
+    /// is then the sole *available* channel while updates are active, so it can't
+    /// be turned off (the only way to silence is Briefing updates = Off). When a
+    /// device exists, both toggles stay editable and turning off the last enabled
+    /// one reroutes to Off — mirroring the web model exactly (channel invariant).
+    private var emailLocked: Bool { notifyPrefs.briefingUpdates != .off && !notifyPrefs.hasPushDevice }
 
     /// Toggle the push channel: on turn-on request iOS authorization + register,
     /// and only persist `notify_push=true` once granted; on turn-off just persist
@@ -242,6 +244,12 @@ struct SettingsView: View {
                     pushBusy = false
                     return
                 }
+            } else if !notifyPrefs.emailEnabled && notifyPrefs.briefingUpdates != .off {
+                // Turning off push while email is already off would strand the
+                // user with no channel — "silence me" → reroute to Off (mirrors
+                // setEmail, and the web pushToggle reroute). Without this the
+                // channel invariant leaks into the silent dead-state.
+                await appState.userPreferences.updateBriefingUpdates(.off, using: client)
             }
             await appState.userPreferences.updateNotifyPush(enabled, using: client)
             pushBusy = false
