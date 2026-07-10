@@ -83,16 +83,6 @@ def test_gate_change_only_applies_even_under_notify_override():
              changed=True)
 
 
-def test_email_should_send_skips_only_user_present():
-    # The user's own in-app manual refresh self-suppresses email; every other
-    # trigger (scheduler / Siri / MCP / background) is non-user-present.
-    assert not dispatch_mod.email_should_send("user")
-    assert dispatch_mod.email_should_send("scheduler")
-    assert dispatch_mod.email_should_send("siri")
-    assert dispatch_mod.email_should_send("mcp")
-    assert dispatch_mod.email_should_send("background")
-
-
 # ---------------------------------------------------------------------------
 # Change detection
 # ---------------------------------------------------------------------------
@@ -425,18 +415,27 @@ def _spy_channels(monkeypatch):
     return calls
 
 
-def test_notify_scheduler_auto_qualifies_and_lights_badge(db_session, dev_user, monkeypatch):
-    calls = _spy_channels(monkeypatch)
-    _add_flight(db_session)
-    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
-    _add_pack(db_session, "f1", ts, assessment="AMBER")
-    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
-                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
-                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+def _mkflight(notify_override="default"):
+    return Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
+                  notify_override=notify_override,
+                  departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
+                  created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
 
+
+def _seed(db):
+    _add_flight(db)
+    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
+    _add_pack(db, "f1", ts, assessment="AMBER")
+    return BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+
+
+def test_notify_not_present_fires_per_prefs_and_lights_badge(db_session, dev_user, monkeypatch):
+    # WHEN qualifies and the user is NOT watching → deliver per HOW prefs
+    # (default: email on, push off) and light the badge.
+    calls = _spy_channels(monkeypatch)
+    meta = _seed(db_session)
     dispatch_mod.notify_briefing_refresh(
-        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID, triggered_by="scheduler",
+        db_session, _mkflight(), meta, pack_dir=None, user_id=DEV_USER_ID, present=False,
     )
     db_session.flush()
     assert calls["email"] == 1          # default prefs: email on
@@ -444,122 +443,116 @@ def test_notify_scheduler_auto_qualifies_and_lights_badge(db_session, dev_user, 
     assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
 
 
-def test_notify_manual_suppresses_email_but_lights_badge(db_session, dev_user, monkeypatch):
-    # A user's own in-app manual refresh (triggered_by="user") never emails —
-    # they're already looking — but it still qualifies, so the badge lights
-    # (push, if on, would fire too; foreground-suppression handles the banner).
+def test_notify_present_suppresses_all_channels_and_badge(db_session, dev_user, monkeypatch):
+    # The single WHEN decision: a user actively watching the refresh finish gets
+    # nothing on ANY channel, and the badge does not advance — they saw it live.
     calls = _spy_channels(monkeypatch)
-    _add_flight(db_session)
-    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
-    _add_pack(db_session, "f1", ts, assessment="AMBER")
-    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
-                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
-                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+    meta = _seed(db_session)
     dispatch_mod.notify_briefing_refresh(
-        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID, triggered_by="user",
+        db_session, _mkflight(), meta, pack_dir=None, user_id=DEV_USER_ID, present=True,
     )
     db_session.flush()
     assert calls["email"] == 0
-    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
+    assert calls["push"] == []
+    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 0
 
 
-def test_notify_siri_manual_still_emails(db_session, dev_user, monkeypatch):
-    # A Siri/MCP refresh is non-user-present, so it emails (closing the Siri
-    # refresh-intent loop) even though it is not a scheduler auto-refresh.
-    calls = _spy_channels(monkeypatch)
-    _add_flight(db_session)
-    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
-    _add_pack(db_session, "f1", ts, assessment="AMBER")
-    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
-                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
-                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
-    dispatch_mod.notify_briefing_refresh(
-        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID, triggered_by="siri",
-    )
-    db_session.flush()
-    assert calls["email"] == 1
-    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
-
-
-def test_notify_manual_push_fires_when_push_on(db_session, dev_user, monkeypatch):
-    # Push fires on the user's own manual refresh (email does not).
+def test_notify_push_only_pref_never_emails(db_session, dev_user, monkeypatch):
+    # HOW is pure preference: "push only" (email off) never emails, regardless of
+    # trigger/surface — the channel decision knows nothing about the source.
     calls = _spy_channels(monkeypatch)
     prefs = db_session.get(UserPreferencesRow, DEV_USER_ID)
-    prefs.app_prefs_json = '{"notify_push": true, "notify_scope": "all"}'
+    prefs.app_prefs_json = '{"notify_email": false, "notify_push": true}'
     db_session.flush()
-    _add_flight(db_session)
-    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
-    _add_pack(db_session, "f1", ts, assessment="AMBER")
-    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
-                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
-                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+    meta = _seed(db_session)
     dispatch_mod.notify_briefing_refresh(
-        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID, triggered_by="user",
+        db_session, _mkflight(), meta, pack_dir=None, user_id=DEV_USER_ID, present=False,
     )
     db_session.flush()
-    assert calls["email"] == 0          # suppressed for user-present manual
+    assert calls["email"] == 0
     assert calls["push"] == [1]         # push fired, badge=1
-    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
 
 
-def test_notify_per_flight_notify_override_fires_on_manual(db_session, dev_user, monkeypatch):
+def test_notify_present_suppresses_even_push_only(db_session, dev_user, monkeypatch):
+    # Presence gates every channel, including push — nothing fires while watching.
     calls = _spy_channels(monkeypatch)
-    _add_flight(db_session)
-    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
-    _add_pack(db_session, "f1", ts, assessment="AMBER")
-    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
-                    notify_override="notify",
-                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
-                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+    prefs = db_session.get(UserPreferencesRow, DEV_USER_ID)
+    prefs.app_prefs_json = '{"notify_email": false, "notify_push": true}'
+    db_session.flush()
+    meta = _seed(db_session)
     dispatch_mod.notify_briefing_refresh(
-        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID, triggered_by="user",
+        db_session, _mkflight(), meta, pack_dir=None, user_id=DEV_USER_ID, present=True,
+    )
+    db_session.flush()
+    assert calls["email"] == 0
+    assert calls["push"] == []
+
+
+def test_notify_override_notify_fires_even_when_scope_off(db_session, dev_user, monkeypatch):
+    # Per-flight "Always" qualifies even under global scope=off — delivered
+    # because the user is not present.
+    calls = _spy_channels(monkeypatch)
+    prefs = db_session.get(UserPreferencesRow, DEV_USER_ID)
+    prefs.app_prefs_json = '{"notify_scope": "off"}'
+    db_session.flush()
+    meta = _seed(db_session)
+    dispatch_mod.notify_briefing_refresh(
+        db_session, _mkflight("notify"), meta, pack_dir=None, user_id=DEV_USER_ID, present=False,
     )
     db_session.flush()
     assert calls["email"] == 1
     assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
 
 
-def test_notify_per_flight_notify_override_emails_only_when_non_user(db_session, dev_user, monkeypatch):
-    # A per-flight "notify" override qualifies for any completion, but the
-    # per-channel email rule still applies: a Siri refresh emails, the user's
-    # own in-app manual refresh does not (badge lights either way).
+def test_notify_override_notify_still_suppressed_when_present(db_session, dev_user, monkeypatch):
+    # Presence beats even "Always": watching the refresh finish needs no ping,
+    # whatever the per-flight override. (This is the clean resolution of the old
+    # override-vs-trigger ambiguity — presence decides uniformly.)
     calls = _spy_channels(monkeypatch)
-    _add_flight(db_session)
-    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
-    _add_pack(db_session, "f1", ts, assessment="AMBER")
-    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
-                    notify_override="notify",
-                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
-                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
+    meta = _seed(db_session)
     dispatch_mod.notify_briefing_refresh(
-        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID, triggered_by="user",
-    )
-    db_session.flush()
-    assert calls["email"] == 0   # user-present manual → email suppressed
-    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
-
-
-def test_notify_mute_blocks_even_scheduler(db_session, dev_user, monkeypatch):
-    calls = _spy_channels(monkeypatch)
-    _add_flight(db_session)
-    ts = datetime(2026, 7, 8, 10, tzinfo=timezone.utc)
-    _add_pack(db_session, "f1", ts, assessment="AMBER")
-    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
-                    notify_override="mute",
-                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
-                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
-    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=ts, days_out=2, assessment="AMBER")
-    dispatch_mod.notify_briefing_refresh(
-        db_session, flight, meta, pack_dir=None, user_id=DEV_USER_ID, triggered_by="scheduler",
+        db_session, _mkflight("notify"), meta, pack_dir=None, user_id=DEV_USER_ID, present=True,
     )
     db_session.flush()
     assert calls["email"] == 0
+    assert calls["push"] == []
     assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 0
+
+
+def test_notify_mute_blocks_even_when_not_present(db_session, dev_user, monkeypatch):
+    calls = _spy_channels(monkeypatch)
+    meta = _seed(db_session)
+    dispatch_mod.notify_briefing_refresh(
+        db_session, _mkflight("mute"), meta, pack_dir=None, user_id=DEV_USER_ID, present=False,
+    )
+    db_session.flush()
+    assert calls["email"] == 0
+    assert calls["push"] == []
+    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 0
+
+
+# ---------------------------------------------------------------------------
+# Presence: watch-contact registry (drives `present`)
+# ---------------------------------------------------------------------------
+
+def test_watch_registry_touch_ttl_and_clear(monkeypatch):
+    from weatherbrief.api import packs as packs_mod
+
+    reg = packs_mod._RefreshRegistry()
+    clock = [1000.0]
+    monkeypatch.setattr(packs_mod.time, "monotonic", lambda: clock[0])
+
+    assert reg.is_watched("f1") is False          # never touched
+    reg.touch_watch("f1")
+    assert reg.is_watched("f1", ttl=30) is True    # just now
+    clock[0] = 1029.0
+    assert reg.is_watched("f1", ttl=30) is True    # 29s < 30 (poll/keepalive kept it fresh)
+    clock[0] = 1031.0
+    assert reg.is_watched("f1", ttl=30) is False   # 31s > 30 → user left
+    reg.touch_watch("f1")
+    assert reg.is_watched("f1", ttl=30) is True
+    reg.unregister("f1")
+    assert reg.is_watched("f1", ttl=30) is False    # cleared on unregister
 
 
 # ---------------------------------------------------------------------------

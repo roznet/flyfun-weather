@@ -122,9 +122,36 @@ class _RefreshRegistry:
     MAX_QUEUE_DEPTH = 5
     MAX_PER_USER = 2
 
+    #: How long after the last "watch-contact" (SSE keepalive or per-flight
+    #: status poll) a flight still counts as actively watched. Must exceed the
+    #: 15s SSE keepalive so a user who stays on the briefing is never seen as
+    #: absent during a quiet pipeline phase; small enough that leaving well
+    #: before completion still notifies. Poll cadence is 3s, keepalive 15s.
+    WATCH_PRESENCE_TTL = 30.0
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._entries: dict[str, RefreshEntry] = {}
+        # flight_id -> monotonic ts of the last UI watch-contact for that flight
+        # (SSE keepalive or /packs/refresh/status poll). Drives notification
+        # presence: "was the user watching THIS refresh finish?" — the same
+        # signal for web and iOS, and robust to the stream->poll handoff on
+        # navigate-away-and-back (the poll keeps it fresh). The list poll
+        # (/refresh/active) deliberately does NOT touch this — being on the list
+        # is not the same as viewing the briefing.
+        self._watched: dict[str, float] = {}
+
+    def touch_watch(self, flight_id: str) -> None:
+        """Record a UI watch-contact for ``flight_id`` (stream keepalive/status poll)."""
+        with self._lock:
+            self._watched[flight_id] = time.monotonic()
+
+    def is_watched(self, flight_id: str, ttl: float | None = None) -> bool:
+        """Was this flight's refresh watched within ``ttl`` seconds (default TTL)?"""
+        ttl = self.WATCH_PRESENCE_TTL if ttl is None else ttl
+        with self._lock:
+            ts = self._watched.get(flight_id)
+            return ts is not None and (time.monotonic() - ts) < ttl
 
     def try_register(
         self, flight_id: str, triggered_by: str = "user",
@@ -195,6 +222,7 @@ class _RefreshRegistry:
     def unregister(self, flight_id: str) -> None:
         with self._lock:
             self._entries.pop(flight_id, None)
+            self._watched.pop(flight_id, None)
 
     def get(self, flight_id: str) -> RefreshEntry | None:
         with self._lock:
@@ -1593,7 +1621,9 @@ def _finalize_refresh(
 #: endpoints. ``scheduler`` is set internally (never accepted from a client, so
 #: a caller can't spoof the auto-refresh trigger); anything unrecognised falls
 #: back to ``user`` (a plain in-app manual refresh). The distinction only
-#: affects email delivery (see ``notify/dispatch.email_should_send``).
+#: affects *presence* eligibility: a ``user`` refresh whose UI stream is still
+#: connected at completion counts as "the user watched it finish" and suppresses
+#: the notification; ``siri``/``mcp`` are non-UI, so they always notify.
 _CLIENT_REFRESH_SOURCES = frozenset({"user", "siri", "mcp"})
 
 
@@ -1607,7 +1637,6 @@ def _notify_refresh_complete(
     flight: Flight,
     meta: BriefingPackMeta,
     pack_path,
-    result: "BriefingResult",
     *,
     user_id: str | None = None,
 ) -> None:
@@ -1619,25 +1648,31 @@ def _notify_refresh_complete(
     transaction open across SMTP/APNs I/O. Records its own badge write on ``db``
     and commits it; fully best-effort (a notification must never break a refresh).
 
-    The granular refresh source rides on ``result.usage.triggered_by`` (set by
-    each caller): the dispatch uses it to skip email for the user's own in-app
-    manual refresh while still emailing for scheduler / Siri / MCP.
+    Presence — "was the user actively watching this refresh finish?" — is read
+    uniformly here from the watch-contact registry: any surface (web or iOS)
+    holding the SSE stream or polling ``/packs/refresh/status`` within
+    ``WATCH_PRESENCE_TTL`` counts. When present, the single WHEN decision in
+    ``notify_briefing_refresh`` suppresses the notification on every channel —
+    the user already saw it. The entry is still registered here (``unregister``
+    runs in the caller's ``finally``, after this returns).
     """
     notify_user_id = user_id or flight.user_id
     if not notify_user_id:
         return
-    triggered_by = getattr(result.usage, "triggered_by", "user") or "user"
     try:
         from weatherbrief.notify.dispatch import notify_briefing_refresh
 
+        present = refresh_registry.is_watched(flight.id)
         notify_briefing_refresh(
             db, flight, meta, Path(pack_path),
             user_id=notify_user_id,
-            triggered_by=triggered_by,
+            present=present,
         )
         db.commit()
     except Exception:
-        logger.warning("post-commit notify failed for %s", flight.id, exc_info=True)
+        logger.warning(
+            "post-commit notify failed for %s", getattr(flight, "id", "?"), exc_info=True,
+        )
         db.rollback()
 
 
@@ -1848,9 +1883,11 @@ async def refresh_briefing(
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
-                # Notify AFTER commit (single sink).
+                # Notify AFTER commit (single sink). This non-streaming path has
+                # no UI stream, so presence comes only from a concurrent
+                # per-flight status poll (rare) — otherwise it notifies.
                 _notify_refresh_complete(
-                    thread_db, flight, meta, pack_path, result, user_id=user_id,
+                    thread_db, flight, meta, pack_path, user_id=user_id,
                 )
             finally:
                 thread_db.close()
@@ -2159,11 +2196,12 @@ async def refresh_briefing_stream(
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
-                # Notify AFTER commit (single sink). ``source`` (via
-                # usage.triggered_by) decides email suppression for the user's
-                # own in-app manual refresh.
+                # Notify AFTER commit (single sink). Presence (was the user
+                # watching this stream/poll finish?) is read from the watch
+                # registry inside — the entry is still registered until the
+                # finally below.
                 _notify_refresh_complete(
-                    thread_db, flight, meta, pack_path, result,
+                    thread_db, flight, meta, pack_path,
                     user_id=user_id,
                 )
             finally:
@@ -2191,6 +2229,11 @@ async def refresh_briefing_stream(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         while True:
+            # Each iteration = the client is still consuming the stream. Record
+            # a watch-contact so the completion notify knows the user is present
+            # (see _notify_refresh_complete). Bounded by HEARTBEAT_INTERVAL, so
+            # the last touch is at most ~15s old — well inside WATCH_PRESENCE_TTL.
+            refresh_registry.touch_watch(flight_id)
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
             except asyncio.TimeoutError:
@@ -2221,6 +2264,10 @@ def get_refresh_status(
     entry = refresh_registry.get(flight_id)
     if entry is None:
         return {"active": False}
+    # Polling this per-flight endpoint means the user is on THIS briefing
+    # watching the refresh — record a watch-contact for notification presence.
+    # (The list poll, /refresh/active, deliberately does not.)
+    refresh_registry.touch_watch(flight_id)
     label = _STAGE_LABELS.get(entry.stage, entry.stage) if entry.stage else None
     # Mirror the fraction the SSE stream emits (_STAGE_PROGRESS) so a client that
     # polls status (e.g. after navigating away and back) can drive the progress
