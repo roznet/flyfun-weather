@@ -143,6 +143,17 @@ def test_assessment_exposes_point_sets_summary_and_compatibility_tuple():
     assert model.evidence_regions == assessment.summary.evidence_regions
 
 
+def test_compatibility_wrapper_preserves_legacy_total_without_precip_signal():
+    ctx = _ctx([_sounding(with_precip=False) for _ in range(10)])
+
+    status, _, affected, total, has_signal = classify_enroute_precip(ctx, "gfs")
+
+    assert status == AdvisoryStatus.UNAVAILABLE
+    assert affected == 0
+    assert total == 10
+    assert has_signal is False
+
+
 def test_standalone_and_vfr_consumers_call_shared_assessment(monkeypatch):
     ctx = _ctx([_sounding() for _ in range(10)])
     shared = _shared_assessment_stub(ctx)

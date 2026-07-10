@@ -229,11 +229,14 @@ def classify_enroute_precip(
 ) -> tuple[AdvisoryStatus, str, int, int, bool]:
     """Compatibility wrapper returning the historical five-tuple."""
     assessment = assess_enroute_precip(ctx, model, params)
+    legacy_total = sum(
+        1 for rpa in ctx.analyses if rpa.sounding.get(model) is not None
+    )
     return (
         assessment.status,
         assessment.detail,
         assessment.summary.affected_points,
-        assessment.summary.total_points,
+        legacy_total,
         assessment.has_signal,
     )
 
