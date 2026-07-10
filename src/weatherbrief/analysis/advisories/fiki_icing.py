@@ -8,8 +8,16 @@ Evaluates three flight phases:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import min_icing_clearance
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    icing_method_id,
+    icing_method_is_available,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -23,6 +31,25 @@ from weatherbrief.models import (
 )
 
 _RISK_ORDER = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
+
+_ICING_METRIC_BY_METHOD = {
+    "ogimet_dd": "icing_risk",
+    "ogimet_nwp": "icing_ogimet_nwp_risk",
+    "sfip": "sfip_risk",
+    "ieng": "ieng_icing_risk",
+}
+
+
+@dataclass(frozen=True)
+class _FIKIPointAssessment:
+    point_index: int
+    distance_nm: float
+    available: bool
+    zones: tuple[IcingZone, ...]
+    transit_thickness_ft: float
+    transit_worst: IcingRisk
+    transit_sld: bool
+    cruise_clear: bool
 
 
 def _worst_risk(a: IcingRisk, b: IcingRisk) -> IcingRisk:
@@ -178,50 +205,169 @@ class FIKIIcingEvaluator:
 
         cruise_alt = ctx.cruise_altitude_ft
         total_dist = ctx.total_distance_nm
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            dep_max_thickness = 0.0
-            dep_worst = IcingRisk.NONE
-            dep_sld = False
+            method_id = icing_method_id(ctx.icing_method)
+            metric_id = _ICING_METRIC_BY_METHOD.get(method_id or "")
+            point_assessments: list[_FIKIPointAssessment] = []
 
-            arr_max_thickness = 0.0
-            arr_worst = IcingRisk.NONE
-            arr_sld = False
-
-            cruise_clear = 0
-            cruise_total = 0
-            total = 0
-
-            for rpa in ctx.analyses:
+            for rpa in ordered_analyses:
                 sounding = rpa.sounding.get(model)
-                if sounding is None:
+                if not icing_method_is_available(sounding, ctx.icing_method):
+                    point_assessments.append(
+                        _FIKIPointAssessment(
+                            point_index=rpa.point_index,
+                            distance_nm=rpa.distance_from_origin_nm,
+                            available=False,
+                            zones=(),
+                            transit_thickness_ft=0.0,
+                            transit_worst=IcingRisk.NONE,
+                            transit_sld=False,
+                            cruise_clear=False,
+                        )
+                    )
                     continue
-                total += 1
+                assert sounding is not None
+                zones = tuple(sounding.icing_zones)
+                thickness, worst, sld = _transit_icing(list(zones), cruise_alt)
+                point_assessments.append(
+                    _FIKIPointAssessment(
+                        point_index=rpa.point_index,
+                        distance_nm=rpa.distance_from_origin_nm,
+                        available=True,
+                        zones=zones,
+                        transit_thickness_ft=thickness,
+                        transit_worst=worst,
+                        transit_sld=sld,
+                        cruise_clear=(
+                            _min_icing_clearance(list(zones), cruise_alt)
+                            >= cruise_buffer_ft
+                        ),
+                    )
+                )
 
-                dist = rpa.distance_from_origin_nm
-                zones = sounding.icing_zones
+            available = [point for point in point_assessments if point.available]
+            departure = [
+                point for point in available if point.distance_nm <= proximity_nm
+            ]
+            arrival = [
+                point
+                for point in available
+                if point.distance_nm >= total_dist - proximity_nm
+            ]
 
-                # --- departure / arrival transit icing ---
-                if dist <= proximity_nm:
-                    t, sev, sld = _transit_icing(zones, cruise_alt)
-                    dep_max_thickness = max(dep_max_thickness, t)
-                    dep_worst = _worst_risk(dep_worst, sev)
-                    dep_sld = dep_sld or sld
+            dep_max_thickness = max(
+                (point.transit_thickness_ft for point in departure),
+                default=0.0,
+            )
+            dep_worst = IcingRisk.NONE
+            for point in departure:
+                dep_worst = _worst_risk(dep_worst, point.transit_worst)
+            dep_sld = any(point.transit_sld for point in departure)
 
-                if dist >= total_dist - proximity_nm:
-                    t, sev, sld = _transit_icing(zones, cruise_alt)
-                    arr_max_thickness = max(arr_max_thickness, t)
-                    arr_worst = _worst_risk(arr_worst, sev)
-                    arr_sld = arr_sld or sld
+            arr_max_thickness = max(
+                (point.transit_thickness_ft for point in arrival),
+                default=0.0,
+            )
+            arr_worst = IcingRisk.NONE
+            for point in arrival:
+                arr_worst = _worst_risk(arr_worst, point.transit_worst)
+            arr_sld = any(point.transit_sld for point in arrival)
 
-                # --- cruise clear-air check ---
-                cruise_total += 1
-                if not zones:
-                    cruise_clear += 1
-                elif _min_icing_clearance(zones, cruise_alt) >= cruise_buffer_ft:
-                    cruise_clear += 1
+            cruise_total = len(available)
+            cruise_clear = sum(point.cruise_clear for point in available)
+            cruise_affected = {
+                point.point_index for point in available if not point.cruise_clear
+            }
+            samples: list[EvidenceSample] = []
+
+            def transit_severity(point: _FIKIPointAssessment) -> AdvisoryStatus:
+                if point.transit_sld:
+                    return AdvisoryStatus.RED
+                if severe_is_red and point.transit_worst == IcingRisk.SEVERE:
+                    return AdvisoryStatus.RED
+                if point.transit_thickness_ft >= transit_red:
+                    return AdvisoryStatus.RED
+                if point.transit_thickness_ft >= transit_amber:
+                    return AdvisoryStatus.AMBER
+                return AdvisoryStatus.GREEN
+
+            for point in available:
+                transit_zones = [
+                    zone
+                    for zone in point.zones
+                    if min(zone.top_ft, cruise_alt) > max(zone.base_ft, 0)
+                ]
+                if point.distance_nm <= proximity_nm:
+                    local_severity = transit_severity(point)
+                    for zone in transit_zones:
+                        samples.append(
+                            EvidenceSample(
+                                point_index=point.point_index,
+                                severity=(
+                                    AdvisoryStatus.RED
+                                    if zone.sld_risk
+                                    else local_severity
+                                ),
+                                reason_code="fiki_departure_transit",
+                                metric_id=metric_id,
+                                method_id=method_id,
+                                lower_altitude_ft=round(zone.base_ft),
+                                upper_altitude_ft=round(zone.top_ft),
+                            )
+                        )
+                if point.distance_nm >= total_dist - proximity_nm:
+                    local_severity = transit_severity(point)
+                    for zone in transit_zones:
+                        samples.append(
+                            EvidenceSample(
+                                point_index=point.point_index,
+                                severity=(
+                                    AdvisoryStatus.RED
+                                    if zone.sld_risk
+                                    else local_severity
+                                ),
+                                reason_code="fiki_arrival_transit",
+                                metric_id=metric_id,
+                                method_id=method_id,
+                                lower_altitude_ft=round(zone.base_ft),
+                                upper_altitude_ft=round(zone.top_ft),
+                            )
+                        )
+                for zone in point.zones:
+                    if _min_icing_clearance([zone], cruise_alt) >= cruise_buffer_ft:
+                        continue
+                    samples.append(
+                        EvidenceSample(
+                            point_index=point.point_index,
+                            severity=(
+                                AdvisoryStatus.RED
+                                if zone.sld_risk
+                                else AdvisoryStatus.AMBER
+                            ),
+                            reason_code="fiki_cruise_icing",
+                            metric_id=metric_id,
+                            method_id=method_id,
+                            lower_altitude_ft=round(zone.base_ft),
+                            upper_altitude_ft=round(zone.top_ft),
+                        )
+                    )
+
+            evaluated_indices = {point.point_index for point in available}
+            summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=total_dist,
+                evaluated_point_indices=evaluated_indices,
+                complete_point_indices=evaluated_indices,
+                affected_point_indices=cruise_affected,
+                evidence_samples=samples,
+            )
 
             # --- derive severity from the three metrics ---
             clear_pct = (
@@ -229,92 +375,115 @@ class FIKIIcingEvaluator:
             )
 
             loc = ctx.locale
-            if total == 0:
-                per_model.append(
-                    ModelAdvisoryResult.build(
-                        model=model,
-                        status=AdvisoryStatus.UNAVAILABLE,
-                        detail=adv_t("no_data", loc),
-                        affected=0,
-                        total=0,
-                        total_distance_nm=total_dist,
-                    )
-                )
-                continue
-
             statuses: list[AdvisoryStatus] = []
             detail_parts: list[str] = []
 
-            # SLD — always RED
-            if dep_sld or arr_sld:
-                statuses.append(AdvisoryStatus.RED)
-                where = " & ".join(
-                    [x for x in ["dep" if dep_sld else "", "arr" if arr_sld else ""] if x]
-                )
-                detail_parts.append(adv_t("fiki.sld_risk", loc, where=where))
-
-            # Severe icing in transit
-            if severe_is_red and (
-                dep_worst == IcingRisk.SEVERE or arr_worst == IcingRisk.SEVERE
-            ):
-                statuses.append(AdvisoryStatus.RED)
-                where = " & ".join(
-                    [
-                        x
-                        for x in [
-                            "dep" if dep_worst == IcingRisk.SEVERE else "",
-                            "arr" if arr_worst == IcingRisk.SEVERE else "",
+            if summary.total_points == 0:
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
+            else:
+                # SLD — always RED
+                if dep_sld or arr_sld:
+                    statuses.append(AdvisoryStatus.RED)
+                    where = " & ".join(
+                        [
+                            x
+                            for x in [
+                                "dep" if dep_sld else "",
+                                "arr" if arr_sld else "",
+                            ]
+                            if x
                         ]
-                        if x
-                    ]
+                    )
+                    detail_parts.append(adv_t("fiki.sld_risk", loc, where=where))
+
+                # Severe icing in transit
+                if severe_is_red and (
+                    dep_worst == IcingRisk.SEVERE
+                    or arr_worst == IcingRisk.SEVERE
+                ):
+                    statuses.append(AdvisoryStatus.RED)
+                    where = " & ".join(
+                        [
+                            x
+                            for x in [
+                                "dep" if dep_worst == IcingRisk.SEVERE else "",
+                                "arr" if arr_worst == IcingRisk.SEVERE else "",
+                            ]
+                            if x
+                        ]
+                    )
+                    detail_parts.append(
+                        adv_t("fiki.severe_icing", loc, where=where)
+                    )
+
+                # Transit thickness (worst of departure / arrival)
+                worst_transit = max(dep_max_thickness, arr_max_thickness)
+                if worst_transit >= transit_red:
+                    statuses.append(AdvisoryStatus.RED)
+                elif worst_transit >= transit_amber:
+                    statuses.append(AdvisoryStatus.AMBER)
+                else:
+                    statuses.append(AdvisoryStatus.GREEN)
+
+                transit_parts = []
+                if dep_max_thickness > 0:
+                    transit_parts.append(
+                        adv_t(
+                            "fiki.dep_transit",
+                            loc,
+                            thickness=f"{dep_max_thickness:.0f}",
+                        )
+                    )
+                if arr_max_thickness > 0:
+                    transit_parts.append(
+                        adv_t(
+                            "fiki.arr_transit",
+                            loc,
+                            thickness=f"{arr_max_thickness:.0f}",
+                        )
+                    )
+                if transit_parts:
+                    detail_parts.append(
+                        adv_t(
+                            "fiki.transit",
+                            loc,
+                            parts=", ".join(transit_parts),
+                        )
+                    )
+
+                # Clear cruise
+                if clear_pct < clear_red:
+                    statuses.append(AdvisoryStatus.RED)
+                elif clear_pct < clear_amber:
+                    statuses.append(AdvisoryStatus.AMBER)
+                else:
+                    statuses.append(AdvisoryStatus.GREEN)
+                detail_parts.append(
+                    adv_t("fiki.cruise_clear", loc, pct=f"{clear_pct:.0f}")
                 )
-                detail_parts.append(adv_t("fiki.severe_icing", loc, where=where))
 
-            # Transit thickness (worst of departure / arrival)
-            worst_transit = max(dep_max_thickness, arr_max_thickness)
-            if worst_transit >= transit_red:
-                statuses.append(AdvisoryStatus.RED)
-            elif worst_transit >= transit_amber:
-                statuses.append(AdvisoryStatus.AMBER)
-            else:
-                statuses.append(AdvisoryStatus.GREEN)
+                status = AdvisoryStatus.worst(statuses)
+                if (
+                    status == AdvisoryStatus.GREEN
+                    and worst_transit == 0
+                    and clear_pct >= 100
+                ):
+                    detail = adv_t("fiki.no_icing", loc)
+                else:
+                    detail = " | ".join(detail_parts)
 
-            transit_parts = []
-            if dep_max_thickness > 0:
-                transit_parts.append(adv_t("fiki.dep_transit", loc, thickness=f"{dep_max_thickness:.0f}"))
-            if arr_max_thickness > 0:
-                transit_parts.append(adv_t("fiki.arr_transit", loc, thickness=f"{arr_max_thickness:.0f}"))
-            if transit_parts:
-                detail_parts.append(adv_t("fiki.transit", loc, parts=", ".join(transit_parts)))
-
-            # Clear cruise
-            if clear_pct < clear_red:
-                statuses.append(AdvisoryStatus.RED)
-            elif clear_pct < clear_amber:
-                statuses.append(AdvisoryStatus.AMBER)
-            else:
-                statuses.append(AdvisoryStatus.GREEN)
-            detail_parts.append(adv_t("fiki.cruise_clear", loc, pct=f"{clear_pct:.0f}"))
-
-            status = AdvisoryStatus.worst(statuses)
-            if (
-                status == AdvisoryStatus.GREEN
-                and worst_transit == 0
-                and clear_pct >= 100
-            ):
-                detail = adv_t("fiki.no_icing", loc)
-            else:
-                detail = " | ".join(detail_parts)
-
-            affected = cruise_total - cruise_clear
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                loc,
+            )
             per_model.append(
-                ModelAdvisoryResult.build(
+                summary.build_result(
                     model=model,
                     status=status,
                     detail=detail,
-                    affected=affected,
-                    total=cruise_total,
-                    total_distance_nm=total_dist,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=method_id,
                 )
             )
 

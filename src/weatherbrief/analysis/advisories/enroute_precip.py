@@ -18,16 +18,23 @@ of en-route visibility loss for VFR:
   precipitation for visibility extent, but their icing severity is owned by
   the dedicated freezing-precipitation advisory (which REDs independently).
 
-The classifier is shared with the VFR feasibility composite via
-:func:`enroute_precip_check` (capped at AMBER there — a pilot VMC-on-top is
+The assessment is shared with the VFR feasibility composite via
+:func:`assess_enroute_precip` (capped at AMBER there — a pilot VMC-on-top is
 not directly affected by surface rain below, but widespread snow degrades
 every divert/descent option, which is worth a composite caution).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    EvidenceSummary,
+    guard_status_for_data_state,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -43,6 +50,7 @@ from weatherbrief.models import (
 _SNOW_PHASES = (PrecipPhase.SNOW, PrecipPhase.MIXED)
 _FREEZING_PHASES = (PrecipPhase.FREEZING_RAIN, PrecipPhase.ICE_PELLETS)
 _SIGNIFICANT = (PrecipIntensity.MODERATE, PrecipIntensity.HEAVY)
+_METHOD_ID = "nwp_precipitation_profile"
 
 _DEFAULTS = {
     "snow_pct_amber": 5.0,
@@ -51,90 +59,183 @@ _DEFAULTS = {
 }
 
 
-def classify_enroute_precip(
+@dataclass(frozen=True)
+class EnroutePrecipAssessment:
+    status: AdvisoryStatus
+    detail: str
+    summary: EvidenceSummary
+    has_signal: bool
+    snow_point_indices: frozenset[int]
+    moderate_snow_point_indices: frozenset[int]
+    significant_rain_point_indices: frozenset[int]
+    light_point_indices: frozenset[int]
+
+
+def assess_enroute_precip(
     ctx: RouteContext,
     model: str,
     params: dict[str, float] | None = None,
-) -> tuple[AdvisoryStatus, str, int, int, bool]:
-    """Classify en-route precipitation for one model.
-
-    Returns ``(status, detail, affected, total, has_signal)``.
-    ``has_signal`` is False when no point carries a precipitation assessment
-    (old pack) — callers must treat that as UNAVAILABLE, not GREEN.
-    """
+) -> EnroutePrecipAssessment:
+    """Assess one model's precipitation grade, point sets, and evidence."""
     p = {**_DEFAULTS, **(params or {})}
     snow_pct_amber = p["snow_pct_amber"]
     snow_moderate_pct_red = p["snow_moderate_pct_red"]
     rain_pct_amber = p["rain_pct_amber"]
     loc = ctx.locale
 
-    total = 0
-    snow_pts = 0           # any snow/mixed, any intensity
-    snow_moderate_pts = 0  # snow/mixed at moderate+
-    sig_rain_pts = 0       # rain moderate+ — and FZRA/PL (vis extent only)
-    light_pts = 0          # light rain — comfort, not a hazard
-    has_signal = False
+    ordered_analyses = sorted(
+        ctx.analyses,
+        key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+    )
+    sounding_points: set[int] = set()
+    signal_points: set[int] = set()
+    snow_points: set[int] = set()
+    moderate_snow_points: set[int] = set()
+    significant_rain_points: set[int] = set()
+    light_points: set[int] = set()
+    samples: list[EvidenceSample] = []
 
-    for rpa in ctx.analyses:
+    for rpa in ordered_analyses:
         sounding = rpa.sounding.get(model)
         if sounding is None:
             continue
-        total += 1
+        point_index = rpa.point_index
+        sounding_points.add(point_index)
         precip = sounding.precipitation
         if precip is None:
             continue
-        has_signal = True
+        signal_points.add(point_index)
         phase = precip.surface_phase
         intensity = precip.surface_intensity
         if phase == PrecipPhase.DRY or intensity == PrecipIntensity.NONE:
             continue
         if phase in _SNOW_PHASES:
-            snow_pts += 1
+            snow_points.add(point_index)
             if intensity in _SIGNIFICANT:
-                snow_moderate_pts += 1
+                moderate_snow_points.add(point_index)
+                severity = AdvisoryStatus.RED
+            else:
+                severity = AdvisoryStatus.AMBER
         elif phase in _FREEZING_PHASES:
             # Visibility extent only — severity owned by freezing_precip.
-            sig_rain_pts += 1
+            significant_rain_points.add(point_index)
+            severity = AdvisoryStatus.AMBER
         elif intensity in _SIGNIFICANT:
-            sig_rain_pts += 1
+            significant_rain_points.add(point_index)
+            severity = AdvisoryStatus.AMBER
         else:
-            light_pts += 1
+            light_points.add(point_index)
+            severity = AdvisoryStatus.GREEN
+        samples.append(
+            EvidenceSample(
+                point_index=point_index,
+                severity=severity,
+                reason_code="precip_visibility",
+                metric_id="precipitation_mm",
+                method_id=_METHOD_ID,
+            )
+        )
 
-    if total == 0 or not has_signal:
-        return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), 0, total, has_signal
+    has_signal = bool(signal_points)
+    evaluated_points = sounding_points if has_signal else set()
+    affected_points = snow_points | significant_rain_points | light_points
+    summary = summarize_evidence(
+        route_points=ordered_analyses,
+        total_distance_nm=ctx.total_distance_nm,
+        evaluated_point_indices=evaluated_points,
+        complete_point_indices=signal_points,
+        affected_point_indices=affected_points,
+        evidence_samples=samples,
+        moderate_point_indices=moderate_snow_points,
+    )
 
-    affected = snow_pts + sig_rain_pts + light_pts
-    snow_pct = 100.0 * snow_pts / total
-    snow_moderate_pct = 100.0 * snow_moderate_pts / total
-    sig_rain_pct = 100.0 * sig_rain_pts / total
+    def subset_summary(point_indices: set[int]) -> EvidenceSummary:
+        return summarize_evidence(
+            route_points=ordered_analyses,
+            total_distance_nm=ctx.total_distance_nm,
+            evaluated_point_indices=evaluated_points,
+            complete_point_indices=signal_points,
+            affected_point_indices=point_indices,
+            evidence_samples=(),
+        )
+
+    snow_summary = subset_summary(snow_points)
+    rain_summary = subset_summary(significant_rain_points)
+    light_summary = subset_summary(light_points)
+
+    total = summary.total_points
+    snow_pct = 100.0 * len(snow_points) / total if total else 0.0
+    snow_moderate_pct = (
+        100.0 * len(moderate_snow_points) / total if total else 0.0
+    )
+    sig_rain_pct = (
+        100.0 * len(significant_rain_points) / total if total else 0.0
+    )
 
     parts: list[str] = []
-    if snow_pts:
+    if snow_points:
         parts.append(adv_t(
             "enroute_precip.snow", loc,
-            extent=format_extent(snow_pts, total, ctx.total_distance_nm),
+            extent=snow_summary.format_extent(),
         ))
-    if sig_rain_pts:
+    if significant_rain_points:
         parts.append(adv_t(
             "enroute_precip.rain", loc,
-            extent=format_extent(sig_rain_pts, total, ctx.total_distance_nm),
+            extent=rain_summary.format_extent(),
         ))
 
-    if snow_moderate_pct >= snow_moderate_pct_red:
-        status = AdvisoryStatus.RED
+    if not has_signal:
+        raw_status = AdvisoryStatus.UNAVAILABLE
+        parts = [adv_t("no_data", loc)]
+    elif snow_moderate_pct >= snow_moderate_pct_red:
+        raw_status = AdvisoryStatus.RED
     elif snow_pct >= snow_pct_amber or sig_rain_pct >= rain_pct_amber:
-        status = AdvisoryStatus.AMBER
+        raw_status = AdvisoryStatus.AMBER
     else:
-        status = AdvisoryStatus.GREEN
-        if not parts and light_pts:
+        raw_status = AdvisoryStatus.GREEN
+        if not parts and light_points:
             parts.append(adv_t(
                 "enroute_precip.light", loc,
-                extent=format_extent(light_pts, total, ctx.total_distance_nm),
+                extent=light_summary.format_extent(),
             ))
         if not parts:
             parts.append(adv_t("enroute_precip.clear", loc))
 
-    return status, " | ".join(parts), affected, total, has_signal
+    status = guard_status_for_data_state(raw_status, summary.data_state)
+    if status == AdvisoryStatus.UNAVAILABLE:
+        detail = adv_t(
+            "no_data" if summary.data_state == "unavailable" else "partial_data",
+            loc,
+        )
+    else:
+        detail = " | ".join(parts)
+
+    return EnroutePrecipAssessment(
+        status=status,
+        detail=detail,
+        summary=summary,
+        has_signal=has_signal,
+        snow_point_indices=frozenset(snow_points),
+        moderate_snow_point_indices=frozenset(moderate_snow_points),
+        significant_rain_point_indices=frozenset(significant_rain_points),
+        light_point_indices=frozenset(light_points),
+    )
+
+
+def classify_enroute_precip(
+    ctx: RouteContext,
+    model: str,
+    params: dict[str, float] | None = None,
+) -> tuple[AdvisoryStatus, str, int, int, bool]:
+    """Compatibility wrapper returning the historical five-tuple."""
+    assessment = assess_enroute_precip(ctx, model, params)
+    return (
+        assessment.status,
+        assessment.detail,
+        assessment.summary.affected_points,
+        assessment.summary.total_points,
+        assessment.has_signal,
+    )
 
 
 @register
@@ -205,13 +306,25 @@ class EnroutePrecipEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            status, detail, affected, total, _ = classify_enroute_precip(
+            assessment = assess_enroute_precip(
                 ctx, model, params,
             )
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=affected, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            missing_detail = adv_t(
+                (
+                    "no_data"
+                    if assessment.summary.data_state == "unavailable"
+                    else "partial_data"
+                ),
+                ctx.locale,
+            )
+            per_model.append(
+                assessment.summary.build_result(
+                    model=model,
+                    status=assessment.status,
+                    detail=assessment.detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=_METHOD_ID,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("enroute_precip", per_model, params)

@@ -5,11 +5,17 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     build_cost_model,
-    format_extent,
-    has_relevant_icing,
+    icing_zones_in_altitude_range,
     max_terrain_near_point,
     pct_above_threshold,
+    terrain_at_distance,
     to_mitigation_profile,
+)
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    icing_method_id,
+    icing_method_is_available,
+    summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
@@ -39,6 +45,14 @@ from weatherbrief.models import (
 # mixed ice), and SLD/freezing precip. The value only has to make the solver prefer a
 # hazard-free reroute (0) over crossing the rime when one exists.
 _LIGHT_RIME_COST = 1.0
+
+
+ICING_METRIC_BY_METHOD = {
+    "ogimet_dd": "icing_risk",
+    "ogimet_nwp": "icing_ogimet_nwp_risk",
+    "sfip": "sfip_risk",
+    "ieng": "ieng_icing_risk",
+}
 
 
 def _icing_cell_cost(sounding, alt_ft: float) -> float:
@@ -248,29 +262,53 @@ class IcingEscapeEvaluator:
             "no_escape_pct_red",
             params.get("min_route_pct", 15),
         )
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
-            affected = 0
-            no_escape_count = 0
-            has_tight_margin = False
+            evaluated: set[int] = set()
+            complete: set[int] = set()
+            affected: set[int] = set()
+            no_escape_points: set[int] = set()
+            tight_margin_points: set[int] = set()
+            samples: list[EvidenceSample] = []
+            method_id = icing_method_id(ctx.icing_method)
+            metric_id = ICING_METRIC_BY_METHOD.get(method_id or "")
 
-            for rpa in ctx.analyses:
+            for rpa in ordered_analyses:
                 sounding = rpa.sounding.get(model)
-                if sounding is None:
+                if not icing_method_is_available(sounding, ctx.icing_method):
                     continue
-                total += 1
+                assert sounding is not None
+                point_index = rpa.point_index
+                evaluated.add(point_index)
 
-                if not has_relevant_icing(
+                relevant_zones = icing_zones_in_altitude_range(
                     sounding.icing_zones,
-                    ctx.cruise_altitude_ft,
-                    icing_altitude_buffer_ft,
-                ):
+                    0,
+                    ctx.cruise_altitude_ft + icing_altitude_buffer_ft,
+                )
+                if not relevant_zones:
+                    complete.add(point_index)
                     continue
 
-                affected += 1
+                affected.add(point_index)
+                for zone in relevant_zones:
+                    samples.append(
+                        EvidenceSample(
+                            point_index=point_index,
+                            severity=AdvisoryStatus.AMBER,
+                            reason_code="icing_exposure",
+                            metric_id=metric_id,
+                            method_id=method_id,
+                            lower_altitude_ft=round(zone.base_ft),
+                            upper_altitude_ft=round(zone.top_ft),
+                        )
+                    )
 
                 # Get freezing level and terrain
                 fz_level_ft = None
@@ -280,15 +318,50 @@ class IcingEscapeEvaluator:
                 terrain_ft = max_terrain_near_point(
                     ctx.elevation, rpa.distance_from_origin_nm
                 )
+                if terrain_ft is None:
+                    terrain_ft = terrain_at_distance(
+                        ctx.elevation,
+                        rpa.distance_from_origin_nm,
+                    )
 
                 if fz_level_ft is None or terrain_ft is None:
-                    no_escape_count += 1
                     continue
+                complete.add(point_index)
 
                 if fz_level_ft < terrain_ft + terrain_margin:
-                    no_escape_count += 1
+                    no_escape_points.add(point_index)
+                    reason = "icing_no_warm_escape"
+                    severity = AdvisoryStatus.RED
                 elif fz_level_ft < terrain_ft + tight_margin:
-                    has_tight_margin = True
+                    tight_margin_points.add(point_index)
+                    reason = "icing_tight_warm_escape"
+                    severity = AdvisoryStatus.AMBER
+                else:
+                    continue
+
+                for zone in relevant_zones:
+                    samples.append(
+                        EvidenceSample(
+                            point_index=point_index,
+                            severity=severity,
+                            reason_code=reason,
+                            metric_id="freezing_level_ft",
+                            method_id=method_id,
+                            lower_altitude_ft=round(zone.base_ft),
+                            upper_altitude_ft=round(zone.top_ft),
+                        )
+                    )
+
+            summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=affected,
+                evidence_samples=samples,
+            )
+            total = summary.total_points
+            no_escape_count = len(no_escape_points)
 
             # Determine model status
             loc = ctx.locale
@@ -299,19 +372,23 @@ class IcingEscapeEvaluator:
                 no_escape_count, total, no_escape_pct_red,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
-                ext = format_extent(affected, total, ctx.total_distance_nm)
+                ext = summary.format_extent()
                 detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
             elif no_escape_count > 0:
                 status = AdvisoryStatus.AMBER
-                ext = format_extent(affected, total, ctx.total_distance_nm)
+                ext = summary.format_extent()
                 detail = adv_t("icing_escape.no_escape", loc, extent=ext, count=no_escape_count)
-            elif affected == 0:
+            elif summary.affected_points == 0:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("icing_escape.no_icing", loc)
             else:
-                status = pct_above_threshold(affected, total, icing_coverage_pct_amber)
-                ext = format_extent(affected, total, ctx.total_distance_nm)
-                if status == AdvisoryStatus.GREEN and has_tight_margin:
+                status = pct_above_threshold(
+                    summary.affected_points,
+                    total,
+                    icing_coverage_pct_amber,
+                )
+                ext = summary.format_extent()
+                if status == AdvisoryStatus.GREEN and tight_margin_points:
                     status = AdvisoryStatus.AMBER
                     detail = adv_t("icing_escape.tight_margin", loc, extent=ext)
                 elif status == AdvisoryStatus.GREEN:
@@ -323,11 +400,19 @@ class IcingEscapeEvaluator:
             # never alters the grade above) — #335.
             mitigations = _icing_escape_mitigations(ctx, model, terrain_margin, status, loc)
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=affected, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-                mitigations=mitigations,
-            ))
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                loc,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=method_id,
+                    mitigations=mitigations,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("icing_escape", per_model, params)

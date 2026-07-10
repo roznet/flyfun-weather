@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories import freezing_precip as freezing_precip_module
 from weatherbrief.analysis.advisories.freezing_precip import FreezingPrecipEvaluator
 from weatherbrief.models import (
     AdvisoryStatus,
@@ -76,6 +77,49 @@ def test_active_freezing_rain_is_red():
     result = FreezingPrecipEvaluator.evaluate(ctx, {})
     assert result.aggregate_status == AdvisoryStatus.RED
     assert "Freezing precipitation" in result.per_model[0].detail
+    active = [
+        region
+        for region in result.per_model[0].evidence_regions
+        if region.reason_code == "active_freezing_precip"
+    ]
+    assert active
+    assert all(
+        region.lower_altitude_ft is None and region.upper_altitude_ft is None
+        for region in active
+    )
+
+
+def test_active_freezing_precip_uses_warm_nose_bounds():
+    active = _active_fzra().model_copy(
+        update={
+            "precipitation": PrecipitationAssessment(
+                surface_phase=PrecipPhase.FREEZING_RAIN,
+                freezing_rain_risk=True,
+                warm_nose_base_ft=3000,
+                warm_nose_top_ft=5000,
+                total_mm=1.2,
+            )
+        }
+    )
+    result = FreezingPrecipEvaluator.evaluate(
+        _ctx([_dry()] * 9 + [active]),
+        {"primed_pct_amber": 5},
+    )
+    model = result.per_model[0]
+    active_regions = [
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "active_freezing_precip"
+    ]
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "nwp_precipitation_profile"
+    assert active_regions
+    assert all(region.metric_id == "sld_risk" for region in active_regions)
+    assert all(
+        region.lower_altitude_ft is not None
+        and region.upper_altitude_ft is not None
+        for region in active_regions
+    )
 
 
 def test_ice_pellets_is_red():
@@ -94,6 +138,29 @@ def test_primed_profile_is_amber():
     result = FreezingPrecipEvaluator.evaluate(ctx, {})
     assert result.aggregate_status == AdvisoryStatus.AMBER
     assert "profile" in result.per_model[0].detail.lower()
+    primed = [
+        region
+        for region in result.per_model[0].evidence_regions
+        if region.reason_code == "primed_freezing_rain_profile"
+    ]
+    assert primed
+    assert all(
+        (region.lower_altitude_ft, region.upper_altitude_ft) == (3000, 4000)
+        for region in primed
+    )
+
+
+def test_warm_nose_detection_runs_once_per_available_point(monkeypatch):
+    calls = []
+    real_detect = freezing_precip_module.detect_warm_nose
+
+    def recording_detect(levels):
+        calls.append(levels)
+        return real_detect(levels)
+
+    monkeypatch.setattr(freezing_precip_module, "detect_warm_nose", recording_detect)
+    FreezingPrecipEvaluator.evaluate(_ctx([_dry()] * 9 + [_active_fzra()]), {})
+    assert len(calls) == 10
 
 
 def test_primed_below_threshold_is_green():
@@ -113,3 +180,10 @@ def test_no_precip_data_is_unavailable():
     ctx = _ctx([bare] * 10)
     result = FreezingPrecipEvaluator.evaluate(ctx, {})
     assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_freezing_precip_missing_signal_is_unavailable_not_clear():
+    result = FreezingPrecipEvaluator.evaluate(_ctx([SoundingAnalysis()] * 10), {})
+    model = result.per_model[0]
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "unavailable"

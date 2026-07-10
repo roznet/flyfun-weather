@@ -21,7 +21,10 @@ Two tiers per route point per model:
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.precipitation import detect_warm_nose
@@ -35,6 +38,7 @@ from weatherbrief.models import (
 )
 
 _ACTIVE_PHASES = (PrecipPhase.FREEZING_RAIN, PrecipPhase.ICE_PELLETS)
+_METHOD_ID = "nwp_precipitation_profile"
 
 
 @register
@@ -87,74 +91,151 @@ class FreezingPrecipEvaluator:
         primed_pct_amber = params.get("primed_pct_amber", 5)
 
         per_model: list[ModelAdvisoryResult] = []
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         for model in ctx.models:
-            total = 0
-            active_pts = 0
-            primed_pts = 0
-            has_signal_source = False
+            evaluated: set[int] = set()
+            complete: set[int] = set()
+            active_points: set[int] = set()
+            primed_points: set[int] = set()
+            samples: list[EvidenceSample] = []
             loc = ctx.locale
 
-            for rpa in ctx.analyses:
+            for rpa in ordered_analyses:
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
                     continue
-                total += 1
 
                 precip = sounding.precipitation
-                if precip is not None:
-                    has_signal_source = True
-                    if (
-                        precip.surface_phase in _ACTIVE_PHASES
-                        or precip.freezing_rain_risk
-                    ):
-                        active_pts += 1
-                        continue
+                detected_risk, detected_base, detected_top, ice_pellets = (
+                    detect_warm_nose(sounding.derived_levels)
+                )
+                if precip is None and not sounding.derived_levels:
+                    continue
+
+                point_index = rpa.point_index
+                evaluated.add(point_index)
+                complete.add(point_index)
+                lower = (
+                    precip.warm_nose_base_ft
+                    if precip is not None
+                    and precip.warm_nose_base_ft is not None
+                    else detected_base
+                )
+                upper = (
+                    precip.warm_nose_top_ft
+                    if precip is not None
+                    and precip.warm_nose_top_ft is not None
+                    else detected_top
+                )
+                if lower is None or upper is None or lower > upper:
+                    lower_ft = upper_ft = None
+                else:
+                    lower_ft = round(lower)
+                    upper_ft = round(upper)
+
+                active = precip is not None and (
+                    precip.surface_phase in _ACTIVE_PHASES
+                    or precip.freezing_rain_risk
+                )
+                if active:
+                    active_points.add(point_index)
+                    samples.append(
+                        EvidenceSample(
+                            point_index=point_index,
+                            severity=AdvisoryStatus.RED,
+                            reason_code="active_freezing_precip",
+                            metric_id="sld_risk",
+                            method_id=_METHOD_ID,
+                            lower_altitude_ft=lower_ft,
+                            upper_altitude_ft=upper_ft,
+                        )
+                    )
+                    continue
 
                 # Primed: freezing-rain profile shape without active precip.
-                if sounding.derived_levels:
-                    has_signal_source = True
-                    fz_risk, _, _, ice_pellets = detect_warm_nose(
-                        sounding.derived_levels
+                if detected_risk or ice_pellets:
+                    primed_points.add(point_index)
+                    samples.append(
+                        EvidenceSample(
+                            point_index=point_index,
+                            severity=AdvisoryStatus.AMBER,
+                            reason_code="primed_freezing_rain_profile",
+                            metric_id="sld_risk",
+                            method_id=_METHOD_ID,
+                            lower_altitude_ft=lower_ft,
+                            upper_altitude_ft=upper_ft,
+                        )
                     )
-                    if fz_risk or ice_pellets:
-                        primed_pts += 1
 
-            if total == 0 or not has_signal_source:
-                per_model.append(ModelAdvisoryResult.build(
-                    model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=max(total, 0),
-                    total_distance_nm=ctx.total_distance_nm,
-                ))
-                continue
+            affected_points = active_points | primed_points
+            summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=affected_points,
+                evidence_samples=samples,
+            )
+            active_summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=active_points,
+                evidence_samples=(),
+            )
+            primed_summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=primed_points,
+                evidence_samples=(),
+            )
 
-            primed_pct = 100 * primed_pts / total if total else 0
+            primed_pct = (
+                100 * len(primed_points) / summary.total_points
+                if summary.total_points
+                else 0
+            )
 
-            if active_pts > 0:
+            if summary.total_points == 0:
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
+            elif active_points:
                 status = AdvisoryStatus.RED
-                detail = (
-                    "Freezing precipitation "
-                    f"{format_extent(active_pts, total, ctx.total_distance_nm)}"
-                )
-                if primed_pts:
+                detail = f"Freezing precipitation {active_summary.format_extent()}"
+                if primed_points:
                     detail += (
                         f"; primed profile "
-                        f"{format_extent(primed_pts, total, ctx.total_distance_nm)}"
+                        f"{primed_summary.format_extent()}"
                     )
-            elif primed_pts > 0 and primed_pct >= primed_pct_amber:
+            elif primed_points and primed_pct >= primed_pct_amber:
                 status = AdvisoryStatus.AMBER
                 detail = (
                     "Freezing-rain profile (no active precip) "
-                    f"{format_extent(primed_pts, total, ctx.total_distance_nm)}"
+                    f"{primed_summary.format_extent()}"
                 )
             else:
                 status = AdvisoryStatus.GREEN
                 detail = "No freezing precipitation signature"
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=active_pts + primed_pts, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                loc,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=_METHOD_ID,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("freezing_precip", per_model, params)

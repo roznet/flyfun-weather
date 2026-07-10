@@ -21,7 +21,7 @@ from weatherbrief.analysis.advisories._helpers import (
     format_extent,
     to_mitigation_profile,
 )
-from weatherbrief.analysis.advisories.enroute_precip import classify_enroute_precip
+from weatherbrief.analysis.advisories.enroute_precip import assess_enroute_precip
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.advisories.vertical_profile import (
@@ -749,9 +749,10 @@ class VFRFeasibilityEvaluator:
             # only VFR keys, so the two can grade differently if a user tunes
             # the standalone — that divergence is intentional; the composite is
             # a fixed-threshold sanity floor, not a mirror of the standalone.
-            precip_status, precip_detail, _, _, precip_signal = (
-                classify_enroute_precip(ctx, model)
-            )
+            precip_assessment = assess_enroute_precip(ctx, model)
+            precip_status = precip_assessment.status
+            precip_detail = precip_assessment.detail
+            precip_signal = precip_assessment.has_signal
             # Old pack without precip data (no signal / UNAVAILABLE) → treat as
             # GREEN in the composite rather than penalising a missing field.
             if not precip_signal or precip_status == AdvisoryStatus.UNAVAILABLE:
