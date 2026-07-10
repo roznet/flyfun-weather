@@ -72,13 +72,13 @@ def _cloud_overlap_fraction(
     Returns 1.0 when both lists are empty (mutually agreeing on no cloud).
     Returns ratio of intersection / union of altitude coverage otherwise.
     """
-    if not a and not b:
-        return 1.0
-    if not a or not b:
-        return 0.0
-
     a_spans = _merge_spans(a)
     b_spans = _merge_spans(b)
+    if not a_spans and not b_spans:
+        return 1.0
+    if not a_spans or not b_spans:
+        return 0.0
+
     intersection = _intersection_length(a_spans, b_spans)
     union = _span_length(a_spans) + _span_length(b_spans) - intersection
     if union <= 0:

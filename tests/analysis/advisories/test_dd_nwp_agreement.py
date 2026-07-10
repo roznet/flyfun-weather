@@ -20,3 +20,7 @@ def test_cloud_overlap_handles_disjoint_unions():
     dd = [_layer(0, 5_000), _layer(10_000, 15_000)]
     nwp = [_layer(2_500, 12_500)]
     assert _cloud_overlap_fraction(dd, nwp) == pytest.approx(1 / 3)
+
+
+def test_cloud_overlap_canonicalizes_nonpositive_spans_before_empty_contract():
+    assert _cloud_overlap_fraction([], [_layer(10_000, 10_000)]) == 1.0

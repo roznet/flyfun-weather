@@ -282,6 +282,8 @@ class TestAirportWindEvaluator:
 
 
 def test_gust_vector_crosswind_is_not_recalibrated_without_evidence():
+    # A223-09 characterization only: pins the current policy; this is not an
+    # endorsement or a gust-vector crosswind recalibration.
     status = _wind_status(
         crosswind_kt=12.0,
         gust_kt=28.0,
