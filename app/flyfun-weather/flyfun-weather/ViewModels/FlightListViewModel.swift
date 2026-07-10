@@ -9,6 +9,16 @@ enum LoadingState<T> {
     case error(Error)
 }
 
+extension LoadingState {
+    /// Whether we currently hold loaded data. Used by a *quiet* reload to keep the
+    /// existing content on screen (and swap in place) instead of flashing back to a
+    /// spinner — the seamless-sync path.
+    var hasData: Bool {
+        if case .loaded = self { return true }
+        return false
+    }
+}
+
 /// View model for the flight list screen.
 @Observable
 @MainActor

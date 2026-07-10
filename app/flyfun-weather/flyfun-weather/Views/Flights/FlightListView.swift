@@ -207,6 +207,12 @@ struct FlightListView: View {
         .onChange(of: appState.pendingNavigation) {
             applyPendingNavigation()
         }
+        .onChange(of: appState.externalSync) {
+            // A push (or other external "data changed" nudge) re-syncs the list so
+            // the per-flight summaries reflect the newest online packs. Warm
+            // refresh — the current list stays on screen (see loadFlights).
+            Task { await viewModel?.loadFlights() }
+        }
     }
 
     /// Consume an App Intent's navigation target (set on `AppState`) and route to

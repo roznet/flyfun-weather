@@ -83,6 +83,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         Task { @MainActor in
             await AppState.current?.reconcileBadge()
+            // A refresh push means the server's data changed — nudge the visible
+            // list / open briefing to re-sync to the newest online pack (a silent
+            // badge-sync carries no flight_id, which is fine: the sync no-ops when
+            // nothing changed).
+            AppState.current?.signalExternalSync(flightId: PushSupport.pendingNavigation(from: userInfo)?.flightId)
             completionHandler(.newData)
         }
     }
@@ -96,7 +101,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        Task { @MainActor in await AppState.current?.reconcileBadge() }
+        let userInfo = notification.request.content.userInfo
+        Task { @MainActor in
+            await AppState.current?.reconcileBadge()
+            // Foregrounded when a refresh landed → re-sync the visible data so the
+            // suppressed banner still results in fresh content on screen.
+            AppState.current?.signalExternalSync(flightId: PushSupport.pendingNavigation(from: userInfo)?.flightId)
+        }
         return []
     }
 

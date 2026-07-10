@@ -72,6 +72,28 @@ final class AppState {
     /// the bundled baseline at init; refreshed opportunistically when online.
     let helpCatalog = HelpCatalogStore()
 
+    /// External "server data changed" nudge (e.g. a refresh push). The flight list
+    /// and any open briefing observe this and re-sync to the newest online pack —
+    /// push is just one more sync trigger, not a special path. `token` makes every
+    /// signal distinct (so back-to-back nudges each fire); `flightId` carries the
+    /// affected flight when known. Bump via `signalExternalSync`.
+    private(set) var externalSync = ExternalSyncSignal(token: 0, flightId: nil)
+
+    /// A distinct, observable data-sync nudge. `Equatable` so SwiftUI `onChange`
+    /// fires once per signal.
+    struct ExternalSyncSignal: Equatable {
+        var token: Int
+        var flightId: String?
+    }
+
+    /// Request a seamless re-sync of the visible flight list / open briefing to
+    /// the latest online pack. Cheap by design — the observers no-op when nothing
+    /// changed. `flightId` is the affected flight when the trigger names one
+    /// (briefing push), else nil (e.g. a silent badge-sync).
+    func signalExternalSync(flightId: String?) {
+        externalSync = ExternalSyncSignal(token: externalSync.token &+ 1, flightId: flightId)
+    }
+
     /// Weak handle to the live instance so a foregrounding App Intent can trigger
     /// `consumePendingNavigation()` immediately when the app process is already
     /// alive (warm foreground / already-active). Nil on a cold launch — the scene
