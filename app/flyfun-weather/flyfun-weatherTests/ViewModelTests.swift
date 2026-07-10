@@ -369,4 +369,40 @@ import MapKit
         let dFrac = try pack(daysOut: 0, timestamp: "2026-06-24T12:00:00.500Z")
         #expect(BriefingViewModel.isViewingLatestPack(current: dFrac.fetchTimestamp, history: [dFrac, d0]))
     }
+
+    /// A *quiet* reload (seamless sync) that fails must keep the previously-loaded
+    /// section on screen, not blow it away with an error — the silent-data-loss
+    /// guard the review flagged. Drives the real `loadBriefing` → `syncLatestPack`
+    /// path so the `quiet` + stale-timestamp handling is exercised end-to-end.
+    @Test func quietReloadKeepsDataWhenSectionFetchFails() async throws {
+        let mock = MockBriefingRepository()
+        let p1 = try pack(daysOut: 0, timestamp: "2026-06-24T09:00:00Z")
+        let p2 = try pack(daysOut: 0, timestamp: "2026-06-24T12:00:00Z")   // newer → adopt
+        let advisories = try JSONDecoder.weatherBrief.decode(
+            AdvisoriesResponse.self,
+            from: Data("""
+            {"advisories": [], "catalog": [], "route_name": "R", "cruise_altitude_ft": 8000,
+             "flight_ceiling_ft": 13000, "total_distance_nm": 100.0, "models": [], "aggregation": "worst"}
+            """.utf8)
+        )
+
+        // First load: pack p1 + advisories succeed (other sections stay notStubbed —
+        // we only assert on advisories).
+        mock.latestPackHandler = { p1 }
+        mock.advisoriesHandler = { advisories }
+        let vm = BriefingViewModel(flight: makeFlight(), repository: mock)
+        await vm.loadBriefing()
+        #expect(vm.advisoriesState.hasData)
+        #expect(vm.pack?.fetchTimestamp == p1.fetchTimestamp)
+
+        // A newer pack appears, but the advisories fetch now fails transiently.
+        mock.latestPackHandler = { p2 }
+        mock.advisoriesHandler = { throw MockError.injected("transient") }
+        await vm.syncLatestPack()
+
+        // The pack advanced, but the quiet reload swallowed the error and kept the
+        // previously-loaded advisories rather than showing an error wall.
+        #expect(vm.pack?.fetchTimestamp == p2.fetchTimestamp)
+        #expect(vm.advisoriesState.hasData)
+    }
 }

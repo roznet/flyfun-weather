@@ -41,6 +41,13 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var updateFlightResult: Result<UpdateFlightResponse, Error> = .failure(MockError.notStubbed("updateFlight"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
 
+    /// Optional per-call overrides for the pack-data path (BriefingViewModel
+    /// tests). Reassign between `await`s to vary behaviour across sequential loads
+    /// — e.g. succeed on the first load, then throw on a quiet reload. Default:
+    /// the `notStubbed` throw below.
+    var latestPackHandler: (@Sendable () throws -> PackMetaResponse)?
+    var advisoriesHandler: (@Sendable () throws -> AdvisoriesResponse)?
+
     // Call counters + captured args for behaviour assertions.
     private(set) var flightsCallCount = 0
     private(set) var submitPirepsBatchCallCount = 0
@@ -73,9 +80,15 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
     func packs(flightId: String) async throws -> [PackMetaResponse] { throw MockError.notStubbed("packs") }
-    func latestPack(flightId: String) async throws -> PackMetaResponse { throw MockError.notStubbed("latestPack") }
+    func latestPack(flightId: String) async throws -> PackMetaResponse {
+        if let h = latestPackHandler { return try h() }
+        throw MockError.notStubbed("latestPack")
+    }
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse { throw MockError.notStubbed("airportWeather") }
-    func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse { throw MockError.notStubbed("advisories") }
+    func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
+        if let h = advisoriesHandler { return try h() }
+        throw MockError.notStubbed("advisories")
+    }
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse { throw MockError.notStubbed("advisoryDetail") }
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw MockError.notStubbed("recalculateAdvisories") }
     func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse { throw MockError.notStubbed("timeOptions") }
