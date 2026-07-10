@@ -60,8 +60,11 @@ are now fully controllable on both clients, with the semantics tightened:
   scope/override. The web + iOS Settings enforce this live (email locks on when
   it's the sole available channel; turning off the last channel reroutes to
   Briefing updates = Off). The **decay** fail-safe is server-side
-  (`preferences.apply_last_device_decay`, called from `devices.unregister_device`):
-  unregistering the *last* device while `notify_email` is off re-enables email and
+  (`preferences.apply_last_device_decay`, fired on BOTH device-loss paths —
+  `devices.unregister_device` on explicit sign-out, and `notify/push.py::_dispatch`
+  when an APNs send prunes the last dead token, the common
+  app-deleted-without-sign-out case): losing the *last* device while
+  `notify_email` is off **and scope ≠ off** re-enables email and
   raises a one-time `notify_decay_notice` (surfaced in the prefs response,
   dismissed by PUTting it false). Prefs also carry `push_device_count` so a
   device-less web user sees an "install the app" push row.

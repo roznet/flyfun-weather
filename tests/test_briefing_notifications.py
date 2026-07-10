@@ -370,6 +370,43 @@ def test_dispatch_skips_when_unconfigured(db_session, dev_user, monkeypatch):
     assert push_mod.send_briefing_push(db_session, DEV_USER_ID, flight, meta, badge=1) == 0
 
 
+def test_dead_token_prune_triggers_decay(db_session, dev_user, apns_env, monkeypatch):
+    # A push-only user (email off, notifications on) whose only device APNs
+    # reports dead during a send: pruning it drops the last device → the same
+    # decay fail-safe fires as an explicit unregister (re-enable email + notice).
+    prefs = db_session.get(UserPreferencesRow, DEV_USER_ID)
+    prefs.app_prefs_json = '{"notify_push": true, "notify_email": false, "notify_scope": "all"}'
+    db_session.add(DeviceTokenRow(user_id=DEV_USER_ID, token="dead", environment="sandbox"))
+    db_session.flush()
+
+    monkeypatch.setattr(
+        push_mod, "_send_one",
+        lambda *a, **k: push_mod.ApnsResult(
+            ok=False, status_code=410, reason="Unregistered", dead=True,
+        ),
+    )
+
+    flight = Flight(id="f1", user_id=DEV_USER_ID, route_name="R",
+                    departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
+                    created_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    meta = BriefingPackMeta(flight_id="f1",
+                            fetch_timestamp=datetime(2026, 7, 8, tzinfo=timezone.utc),
+                            days_out=2, assessment="AMBER")
+
+    sent = push_mod.send_briefing_push(db_session, DEV_USER_ID, flight, meta, badge=1)
+    db_session.flush()
+
+    assert sent == 0
+    assert (
+        db_session.query(DeviceTokenRow).filter(DeviceTokenRow.token == "dead").first()
+        is None
+    )  # pruned
+    import json as _json
+    data = _json.loads(db_session.get(UserPreferencesRow, DEV_USER_ID).app_prefs_json)
+    assert data["notify_email"] is True          # decay re-enabled email
+    assert data["notify_decay_notice"] is True
+
+
 # ---------------------------------------------------------------------------
 # Orchestration: notify_briefing_refresh
 # ---------------------------------------------------------------------------
