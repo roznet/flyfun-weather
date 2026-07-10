@@ -240,11 +240,18 @@ def _dispatch(
     push_type: str,
     priority: int,
     config: ApnsConfig | None = None,
+    user_id: str | None = None,
 ) -> int:
     """Send ``payload`` to each ``(token, environment)`` device; prune dead ones.
 
     Returns the number of successful sends. Never raises — the whole thing is
     best-effort (a push must not break a refresh).
+
+    ``user_id`` (when known) lets the channel-invariant decay fail-safe fire if
+    pruning a dead token removes the user's LAST device — the far more common way
+    a device disappears (app deleted without signing out) than an explicit
+    unregister. Mirrors ``api/devices.py::unregister_device`` so the invariant
+    holds on both device-loss paths.
     """
     if not devices:
         return 0
@@ -277,6 +284,17 @@ def _dispatch(
     if dead:
         try:
             _delete_dead_tokens(db, dead)
+            # If pruning dropped the user's last device, apply the same decay
+            # fail-safe as an explicit unregister — otherwise a push-only user
+            # who deleted the app (email off) is silently stranded.
+            if user_id is not None and count_user_devices(db, user_id) == 0:
+                from weatherbrief.api.preferences import apply_last_device_decay
+
+                if apply_last_device_decay(db, user_id):
+                    logger.info(
+                        "Re-enabled briefing email for %s after APNs pruned last device",
+                        user_id,
+                    )
         except Exception:
             logger.warning("Failed to prune dead device tokens", exc_info=True)
     return sent
@@ -288,6 +306,22 @@ def _load_devices(db: Session, user_id: str) -> list[tuple[str, str]]:
 
     rows = db.query(DeviceTokenRow).filter(DeviceTokenRow.user_id == user_id).all()
     return [(r.token, r.environment) for r in rows]
+
+
+def count_user_devices(db: Session, user_id: str) -> int:
+    """Count a user's registered APNs device tokens.
+
+    Single source of truth for the "how many devices?" query used by the
+    conditional-push UI, the sign-out decay path, and the dead-token-prune decay
+    path (so the three don't drift).
+    """
+    from weatherbrief.db.models import DeviceTokenRow
+
+    return (
+        db.query(DeviceTokenRow)
+        .filter(DeviceTokenRow.user_id == user_id)
+        .count()
+    )
 
 
 # --- High-level payload builders --------------------------------------------
@@ -363,7 +397,7 @@ def send_briefing_push(
     if not devices:
         return 0
     payload = _briefing_payload(flight, pack, delta, badge)
-    return _dispatch(db, devices, payload, push_type="alert", priority=10)
+    return _dispatch(db, devices, payload, push_type="alert", priority=10, user_id=user_id)
 
 
 def send_silent_badge_push(db: Session, user_id: str, badge: int) -> int:
@@ -379,4 +413,4 @@ def send_silent_badge_push(db: Session, user_id: str, badge: int) -> int:
     if not devices:
         return 0
     payload = {"aps": {"content-available": 1, "badge": badge}}
-    return _dispatch(db, devices, payload, push_type="background", priority=5)
+    return _dispatch(db, devices, payload, push_type="background", priority=5, user_id=user_id)

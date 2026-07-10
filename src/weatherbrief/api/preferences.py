@@ -240,13 +240,9 @@ def _parse_digest_config_from_prefs(raw: str) -> DigestConfig:
 
 def _count_push_devices(db: Session, user_id: str) -> int:
     """Count the user's registered APNs device tokens (for conditional push UI)."""
-    from weatherbrief.db.models import DeviceTokenRow
+    from weatherbrief.notify.push import count_user_devices
 
-    return (
-        db.query(DeviceTokenRow)
-        .filter(DeviceTokenRow.user_id == user_id)
-        .count()
-    )
+    return count_user_devices(db, user_id)
 
 
 def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> PreferencesResponse:
