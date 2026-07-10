@@ -351,4 +351,22 @@ import MapKit
         let label = m.packLabel(for: try pack(daysOut: 1, timestamp: "2026-06-24T09:00:00Z"))
         #expect(label == "D-1 · Jun 24 09:00 UTC")
     }
+
+    @Test func autoSyncOnlyWhenViewingLatestPack() throws {
+        let d0 = try pack(daysOut: 0, timestamp: "2026-06-24T12:00:00Z")   // newest
+        let d1 = try pack(daysOut: 1, timestamp: "2026-06-23T12:00:00Z")   // older
+        let history = [d0, d1]
+        // Viewing the newest pack → auto-sync allowed.
+        #expect(BriefingViewModel.isViewingLatestPack(current: d0.fetchTimestamp, history: history))
+        // Viewing an older pack picked from history → auto-sync suppressed.
+        #expect(!BriefingViewModel.isViewingLatestPack(current: d1.fetchTimestamp, history: history))
+        // History not loaded yet → don't block the first sync.
+        #expect(BriefingViewModel.isViewingLatestPack(current: d0.fetchTimestamp, history: []))
+        // No current pack → allowed.
+        #expect(BriefingViewModel.isViewingLatestPack(current: nil, history: history))
+        // Fractional seconds must not misorder vs a whole-second sibling: a viewer
+        // on the fractional (later) run still counts as latest.
+        let dFrac = try pack(daysOut: 0, timestamp: "2026-06-24T12:00:00.500Z")
+        #expect(BriefingViewModel.isViewingLatestPack(current: dFrac.fetchTimestamp, history: [dFrac, d0]))
+    }
 }
