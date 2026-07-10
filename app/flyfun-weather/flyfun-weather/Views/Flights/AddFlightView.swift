@@ -65,7 +65,7 @@ struct AddFlightView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(viewModel.submitTitle) { submit() }
-                        .disabled(!viewModel.canSubmit)
+                        .disabled(!viewModel.canSubmit || viewModel.isPreparingSubmit)
                         .accessibilityIdentifier("submitFlightButton")
                 }
             }
@@ -129,7 +129,14 @@ struct AddFlightView: View {
                 // Run the submit only after the interpret sheet is fully gone, so
                 // the parent `dismiss()` on success isn't competing with the
                 // sheet's own dismissal (which would otherwise be dropped).
-                guard let context = runSubmitAfterInterpretDismiss else { return }
+                guard let context = runSubmitAfterInterpretDismiss else {
+                    // Dismissed without accepting (Cancel, or the read-only
+                    // preview). Release the submit guard if a confirmation flow
+                    // was holding it; harmless no-op for the preview path.
+                    interpretConfirmContext = nil
+                    viewModel.isPreparingSubmit = false
+                    return
+                }
                 runSubmitAfterInterpretDismiss = nil
                 interpretConfirmContext = nil
                 Task {
@@ -137,6 +144,7 @@ struct AddFlightView: View {
                     case .create: await performCreate()
                     case .edit: await continueEditAfterInterpret()
                     }
+                    viewModel.isPreparingSubmit = false
                 }
             }) {
                 RouteInterpretSheet(
@@ -162,6 +170,13 @@ struct AddFlightView: View {
     // MARK: - Submit
 
     private func submit() {
+        // Synchronous double-submit gate: `submit()` is the single entry from the
+        // toolbar button and runs on the main actor, so setting the flag here —
+        // before the first suspension in `prepare*` — atomically rejects a rapid
+        // second tap that would otherwise race through the new interpret phase and
+        // create a duplicate flight. Cleared at every terminal branch below.
+        guard !viewModel.isPreparingSubmit else { return }
+        viewModel.isPreparingSubmit = true
         Task { viewModel.isEditing ? await prepareEdit() : await prepareCreate() }
     }
 
@@ -173,11 +188,13 @@ struct AddFlightView: View {
         switch await viewModel.interpretRouteForSubmit() {
         case .ready:
             await performCreate()
+            viewModel.isPreparingSubmit = false
         case .needsConfirmation:
             interpretConfirmContext = .create
             showInterpretSheet = true
+            // Guard held through the confirm sheet; released in the sheet's onDismiss.
         case .failed:
-            break   // errorMessage is shown in the form
+            viewModel.isPreparingSubmit = false   // errorMessage is shown in the form
         }
     }
 
@@ -193,12 +210,14 @@ struct AddFlightView: View {
             case .needsConfirmation:
                 interpretConfirmContext = .edit
                 showInterpretSheet = true
-                return
+                return   // guard held; released in the sheet's onDismiss
             case .failed:
+                viewModel.isPreparingSubmit = false
                 return
             }
         }
         await continueEditAfterInterpret()
+        viewModel.isPreparingSubmit = false
     }
 
     /// Post-interpretation edit gate: only a forecast-affecting change triggers
