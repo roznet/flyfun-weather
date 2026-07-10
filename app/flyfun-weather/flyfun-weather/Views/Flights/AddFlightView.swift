@@ -223,6 +223,16 @@ struct AddFlightView: View {
     /// Post-interpretation edit gate: only a forecast-affecting change triggers
     /// the re-briefing cost confirm (§4.4); aircraft-only edits save silently.
     private func continueEditAfterInterpret() async {
+        // Submit-time interpretation may have normalized the route back to the
+        // stored one (e.g. the pilot added a `DCT`/speed token that the resolver
+        // drops). If that leaves nothing to save, treat it as a no-op edit and
+        // just dismiss — otherwise `saveEditedFlight`'s `canSubmit` guard returns
+        // nil with no feedback and the pilot's Save appears to do nothing. Shared
+        // by the direct edit path and the confirm-sheet accept path.
+        guard viewModel.hasChanges else {
+            dismiss()
+            return
+        }
         if viewModel.hasForecastAffectingChange {
             showRebriefConfirm = true
         } else {
@@ -444,6 +454,11 @@ struct AddFlightView: View {
         .task(id: viewModel.waypointsText) {
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
+            // A submit is already interpreting this route (and `applyInterpretedRoute`
+            // rewrites the field, which would re-trigger this task). Skip the
+            // redundant debounced resolve while a submit is in flight — the submit
+            // path does its own interpret. Resumes normally on the next edit.
+            guard !viewModel.isPreparingSubmit else { return }
             await viewModel.resolveRoute()
         }
     }

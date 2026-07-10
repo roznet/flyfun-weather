@@ -209,6 +209,33 @@ private func deviceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
         vm.waypointsText = "LFMD LFMT LFML"
         #expect(vm.routeChangedFromOriginal == true)
     }
+
+    /// Edit edge case (PR #369 review): the pilot adds flight-plan syntax that the
+    /// resolver strips, so the *interpreted* route collapses back to the stored
+    /// waypoints. `routeChangedFromOriginal` fires on the raw text (so interpret
+    /// runs), but after `applyInterpretedRoute` there is nothing left to save.
+    /// This pins that invariant — the view uses `hasChanges` here to dismiss as a
+    /// no-op rather than silently hitting `saveEditedFlight`'s `canSubmit` guard.
+    @Test func editRouteNormalizingBackToOriginalLeavesNoChanges() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(
+            makeInterpretResponse(interpreted: ["LFMD", "LFML"], skipped: ["DCT"])
+        )
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"])
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+
+        vm.waypointsText = "LFMD DCT LFML"                 // pilot adds a DCT token
+        #expect(vm.routeChangedFromOriginal)               // raw text differs → interpret runs
+        #expect(vm.hasChanges)
+
+        // Submit-time interpret drops DCT and resolves back to the original two
+        // waypoints; the dropped token means the confirm sheet is offered.
+        #expect(await vm.interpretRouteForSubmit() == .needsConfirmation)
+        vm.applyInterpretedRoute()                         // pilot accepts the sheet
+
+        #expect(vm.waypointsText == "LFMD LFML")
+        #expect(!vm.hasChanges)   // collapsed back → nothing to save (view dismisses, no silent no-op)
+    }
 }
 
 @MainActor
