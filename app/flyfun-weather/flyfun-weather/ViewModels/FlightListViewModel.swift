@@ -139,6 +139,11 @@ final class FlightListViewModel {
     /// backgrounded or torn down.
     func startActiveRefreshPolling() {
         guard refreshPollTask == nil else { return }
+        // `weak self` only guards the initial hop; once `pollActiveRefreshesLoop`
+        // is running it holds a strong `self` for the loop's lifetime. That's
+        // intentional — the loop is bounded by `stopActiveRefreshPolling()`
+        // (`.onDisappear` / backgrounding), so the view model is released promptly
+        // once polling stops; it just can't be freed mid-iteration.
         refreshPollTask = Task { [weak self] in
             await self?.pollActiveRefreshesLoop()
         }

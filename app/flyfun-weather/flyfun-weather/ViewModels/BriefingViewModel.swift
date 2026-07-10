@@ -239,6 +239,14 @@ final class BriefingViewModel {
         // generation is in flight, its completion installs the newer pack itself.
         // `isSyncing` collapses overlapping triggers (e.g. foreground + push).
         guard flight.coverage == nil, !refreshState.isRefreshing, !isSyncing else { return }
+        // Don't yank the pilot off a pack they deliberately picked from the history
+        // menu: only auto-sync when the pack on screen is the latest one we know
+        // about. A brand-new server pack isn't in `packHistory` yet, so a viewer on
+        // the current latest still passes and the newer pack is allowed to adopt.
+        guard Self.isViewingLatestPack(current: pack?.fetchTimestamp, history: packHistory) else {
+            Self.logger.debug("syncLatestPack: viewing a historical pack — skipping auto-sync")
+            return
+        }
         isSyncing = true
         defer { isSyncing = false }
         let latest: PackMetaResponse
@@ -252,6 +260,21 @@ final class BriefingViewModel {
         guard latest.fetchTimestamp != pack?.fetchTimestamp else { return }
         Self.logger.info("syncLatestPack: newer pack \(latest.fetchTimestamp) available — adopting")
         await applyPack(latest, quiet: true)
+    }
+
+    /// Whether the pack on screen is the newest one the app knows about — the
+    /// gate for an automatic sync. False when the pilot has deliberately selected
+    /// an older pack from history (auto-sync must not replace it). Pure + static
+    /// so the timestamp comparison is unit-testable. A brand-new server pack isn't
+    /// in `history` yet, so a viewer on the current latest still counts as
+    /// "latest" and the newer pack is allowed to adopt. Parses to `Date` rather
+    /// than comparing ISO strings so fractional seconds can't misorder.
+    static func isViewingLatestPack(current: String?, history: [PackMetaResponse]) -> Bool {
+        guard let current, let currentDate = Date.parseISO8601(current) else { return true }
+        guard let newest = history.compactMap({ Date.parseISO8601($0.fetchTimestamp) }).max() else {
+            return true   // history not loaded yet — don't block the first sync
+        }
+        return currentDate >= newest
     }
 
     /// Adopt `newPack` as the active pack and (re)load its data + history. The
@@ -796,17 +819,25 @@ final class BriefingViewModel {
 
     // MARK: - Section loaders
 
-    // Section loaders share a `quiet` convention: a quiet reload (seamless sync)
-    // keeps the current data on screen — it only shows the spinner when there's
-    // nothing loaded yet, and keeps the old data (not an error wall) if the quiet
-    // fetch fails. A normal (non-quiet) load shows spinner/error as before.
+    // Section loaders share two conventions:
+    //  - `quiet` (seamless sync): keep current data on screen — only show the
+    //    spinner when nothing is loaded yet, and keep old data (not an error wall)
+    //    if a quiet fetch fails. A normal load shows spinner/error as before.
+    //  - stale-guard: after the await, only apply the result if `pack` still points
+    //    at `timestamp`. A concurrent sync / refresh / history-pick may have swapped
+    //    the active pack while this load was in flight; without the guard a late
+    //    result would paint one pack's data under another pack's hero/toolbar.
+    //    Mirrors `pollTimeOptions`' `pack?.fetchTimestamp == timestamp` check.
 
     private func loadAdvisories(timestamp: String, quiet: Bool = false) async {
         if !quiet || !advisoriesState.hasData { advisoriesState = .loading }
         do {
-            advisoriesState = .loaded(try await repository.advisories(flightId: flight.id, timestamp: timestamp))
+            let result = try await repository.advisories(flightId: flight.id, timestamp: timestamp)
+            guard pack?.fetchTimestamp == timestamp else { return }
+            advisoriesState = .loaded(result)
         } catch {
             Self.logger.error("Failed to load advisories: \(error)")
+            guard pack?.fetchTimestamp == timestamp else { return }
             if !quiet || !advisoriesState.hasData { advisoriesState = .error(error) }
         }
     }
@@ -814,9 +845,12 @@ final class BriefingViewModel {
     private func loadDigest(timestamp: String, quiet: Bool = false) async {
         if !quiet || !digestState.hasData { digestState = .loading }
         do {
-            digestState = .loaded(try await repository.digest(flightId: flight.id, timestamp: timestamp))
+            let result = try await repository.digest(flightId: flight.id, timestamp: timestamp)
+            guard pack?.fetchTimestamp == timestamp else { return }
+            digestState = .loaded(result)
         } catch {
             Self.logger.error("Failed to load digest: \(error)")
+            guard pack?.fetchTimestamp == timestamp else { return }
             if !quiet || !digestState.hasData { digestState = .error(error) }
         }
     }
@@ -824,9 +858,12 @@ final class BriefingViewModel {
     private func loadSnapshot(timestamp: String, quiet: Bool = false) async {
         if !quiet || !snapshotState.hasData { snapshotState = .loading }
         do {
-            snapshotState = .loaded(try await repository.snapshot(flightId: flight.id, timestamp: timestamp))
+            let result = try await repository.snapshot(flightId: flight.id, timestamp: timestamp)
+            guard pack?.fetchTimestamp == timestamp else { return }
+            snapshotState = .loaded(result)
         } catch {
             Self.logger.error("Failed to load snapshot: \(error)")
+            guard pack?.fetchTimestamp == timestamp else { return }
             if !quiet || !snapshotState.hasData { snapshotState = .error(error) }
         }
     }
@@ -835,6 +872,7 @@ final class BriefingViewModel {
         if !quiet || !routeAnalysesState.hasData { routeAnalysesState = .loading }
         do {
             let response = try await repository.routeAnalyses(flightId: flight.id, timestamp: timestamp)
+            guard pack?.fetchTimestamp == timestamp else { return }
             routeAnalysesState = .loaded(response)
             if !response.models.isEmpty {
                 let raModels = response.models.sorted()
@@ -846,6 +884,7 @@ final class BriefingViewModel {
             }
         } catch {
             Self.logger.error("Failed to load route analyses: \(error)")
+            guard pack?.fetchTimestamp == timestamp else { return }
             if !quiet || !routeAnalysesState.hasData { routeAnalysesState = .error(error) }
         }
     }
@@ -853,9 +892,12 @@ final class BriefingViewModel {
     private func loadElevation(timestamp: String, quiet: Bool = false) async {
         if !quiet || !elevationState.hasData { elevationState = .loading }
         do {
-            elevationState = .loaded(try await repository.elevation(flightId: flight.id, timestamp: timestamp))
+            let result = try await repository.elevation(flightId: flight.id, timestamp: timestamp)
+            guard pack?.fetchTimestamp == timestamp else { return }
+            elevationState = .loaded(result)
         } catch {
             Self.logger.error("Failed to load elevation: \(error)")
+            guard pack?.fetchTimestamp == timestamp else { return }
             if !quiet || !elevationState.hasData { elevationState = .error(error) }
         }
     }
