@@ -189,7 +189,7 @@ struct FlightListView: View {
         }
         .task {
             guard let repo = appState.repository else { return }
-            let vm = FlightListViewModel(repository: repo)
+            let vm = FlightListViewModel(repository: repo, networkMonitor: appState.networkMonitor)
             viewModel = vm
             await vm.loadFlights()
             // A cold-launch intent may have set a target before the list existed;

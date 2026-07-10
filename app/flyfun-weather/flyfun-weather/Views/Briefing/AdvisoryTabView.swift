@@ -67,28 +67,50 @@ struct AdvisoryTabView: View {
 
     @ViewBuilder
     private var heroSection: some View {
-        if let pack = viewModel.pack, let assessment = pack.assessment {
-            let severity = Assessment(rawValue: assessment.lowercased()) ?? .unavailable
-            HStack(spacing: 0) {
-                Rectangle()
-                    .fill(severity.color)
-                    .frame(width: 5)
-                VStack(alignment: .leading, spacing: Theme.spacingS) {
+        if let pack = viewModel.pack {
+            if let assessment = pack.assessment {
+                let severity = Assessment(rawValue: assessment.lowercased()) ?? .unavailable
+                heroCard(accent: severity.color, reason: pack.assessmentReason) {
                     AssessmentStringBadge(status: assessment)
-                    if let reason = pack.assessmentReason {
-                        Text(reason)
-                            .font(Theme.heroLabel)
-                            .foregroundStyle(Theme.text)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
-                .padding(Theme.cardPadding)
-                Spacer(minLength: 0)
+            } else if let outlook = pack.outlook {
+                // Long-range briefing (beyond the GRIB horizon): no traffic-light
+                // verdict yet, only a soft outlook tendency. Mirrors the flight-list
+                // card, which already falls back to the outlook badge — without this
+                // the hero was blank for far-out flights.
+                heroCard(accent: OutlookBadge.tint(for: outlook), reason: pack.outlookReason) {
+                    OutlookBadge(outlook: outlook)
+                }
             }
-            .background(severity.color.opacity(0.10))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius))
-            .padding(.horizontal, Theme.cardPadding)
         }
+    }
+
+    /// Shared accented hero card: a colored side bar, a status badge, and the
+    /// reason line. Used by both the short-range assessment and the long-range
+    /// outlook so the two can't drift.
+    @ViewBuilder
+    private func heroCard<Badge: View>(
+        accent: Color, reason: String?, @ViewBuilder badge: () -> Badge
+    ) -> some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(accent)
+                .frame(width: 5)
+            VStack(alignment: .leading, spacing: Theme.spacingS) {
+                badge()
+                if let reason {
+                    Text(reason)
+                        .font(Theme.heroLabel)
+                        .foregroundStyle(Theme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(Theme.cardPadding)
+            Spacer(minLength: 0)
+        }
+        .background(accent.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius))
+        .padding(.horizontal, Theme.cardPadding)
     }
 
     // MARK: Watch chips

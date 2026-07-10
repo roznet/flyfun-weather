@@ -36,12 +36,12 @@ struct FlightCardView: View {
                 if isRefreshing {
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.small)
-                        Text("Updating…")
+                        Text("Refreshing…")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Briefing updating")
+                    .accessibilityLabel("Briefing refreshing")
                 }
 
                 statusBadge
@@ -132,10 +132,12 @@ private struct PendingCoverageBadge: View {
 /// Soft tinted badge for a flight's long-range outlook (beyond the GRIB
 /// horizon). Deliberately softer than the assessment traffic light — an
 /// outlook is a tendency ("what to expect"), not a verdict.
-private struct OutlookBadge: View {
+struct OutlookBadge: View {
     let outlook: String
 
-    private var label: String {
+    /// Short human label for an outlook code. Static so the Advisory hero can
+    /// reuse the same mapping without duplicating it.
+    static func label(for outlook: String) -> String {
         switch outlook.uppercased() {
         case "TRENDING_SETTLED": "Settled"
         case "TRENDING_UNSETTLED": "Unsettled"
@@ -143,13 +145,17 @@ private struct OutlookBadge: View {
         }
     }
 
-    private var tint: Color {
+    /// Tint for an outlook code — reused by the Advisory hero's accent bar.
+    static func tint(for outlook: String) -> Color {
         switch outlook.uppercased() {
         case "TRENDING_SETTLED": Theme.green
         case "TRENDING_UNSETTLED": Theme.red
         default: Theme.amber
         }
     }
+
+    private var label: String { Self.label(for: outlook) }
+    private var tint: Color { Self.tint(for: outlook) }
 
     var body: some View {
         Text(label)

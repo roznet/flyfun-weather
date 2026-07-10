@@ -164,9 +164,11 @@ actor APIClient {
 
     // MARK: - Generic request methods
 
-    /// Fetch and decode a JSON response.
-    func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws -> T {
-        let data = try await requestData(path, method: method, body: body)
+    /// Fetch and decode a JSON response. `quietLog` suppresses the per-request log
+    /// line for high-frequency background polls (e.g. `/api/refresh/active` every
+    /// 5s) so they don't flood the console.
+    func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, quietLog: Bool = false) async throws -> T {
+        let data = try await requestData(path, method: method, body: body, quietLog: quietLog)
         do {
             return try JSONDecoder.weatherBrief.decode(T.self, from: data)
         } catch {
@@ -251,9 +253,9 @@ actor APIClient {
     }
 
     /// Fetch raw data (for images, file downloads).
-    func requestData(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+    func requestData(_ path: String, method: String = "GET", body: Data? = nil, quietLog: Bool = false) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)
-        return try await _fetch(url: url, method: method, body: body, label: path)
+        return try await _fetch(url: url, method: method, body: body, label: path, quietLog: quietLog)
     }
 
     /// Fetch raw data while reporting transfer progress as bytes arrive.
@@ -293,7 +295,7 @@ actor APIClient {
         }
     }
 
-    private func _fetch(url: URL, method: String, body: Data?, label: String) async throws -> Data {
+    private func _fetch(url: URL, method: String, body: Data?, label: String, quietLog: Bool = false) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
         if let body {
@@ -301,7 +303,7 @@ actor APIClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        Self.logger.debug("\(method) \(label)")
+        if !quietLog { Self.logger.debug("\(method) \(label)") }
 
         let data: Data
         let http: HTTPURLResponse

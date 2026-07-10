@@ -11,6 +11,12 @@ struct PackMetaResponse: Codable, Sendable {
     let hasAdvisories: Bool
     let assessment: String?
     let assessmentReason: String?
+    /// Long-range early outlook (beyond the GRIB horizon), mutually exclusive
+    /// with `assessment` — a tendency ("what to expect"), not a verdict. Present
+    /// on far-out packs where no short-range assessment exists yet; the Advisory
+    /// hero falls back to it so a long-range briefing still shows a summary.
+    let outlook: String?
+    let outlookReason: String?
     let modelInitTimes: [String: Int]
     let gribInitTimes: [String: Int]
     let modelsSkippedRegion: [String]

@@ -213,7 +213,9 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func activeRefreshes() async throws -> [ActiveRefreshResponse] {
-        try await client.request("/api/refresh/active")
+        // Polled every 5s while the list is visible — suppress its request log
+        // so it doesn't flood the console.
+        try await client.request("/api/refresh/active", quietLog: true)
     }
 
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse {
