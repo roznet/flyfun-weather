@@ -36,14 +36,19 @@ final class FlightListViewModel {
     private(set) var refreshingFlightIds: Set<String> = []
 
     private let repository: any BriefingRepository
+    /// Live reachability — gates the active-refresh poll so it doesn't hammer the
+    /// radio while offline. Optional so tests/fixtures can omit it (poll then
+    /// always attempts, relying on error backoff).
+    private let networkMonitor: NetworkMonitor?
     private var isLoading = false
     /// The active-refresh poll loop (one at a time). Detached from any `.task`, so
     /// the view must start/stop it explicitly around visibility.
     @ObservationIgnored private var refreshPollTask: Task<Void, Never>?
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "FlightList")
 
-    init(repository: any BriefingRepository) {
+    init(repository: any BriefingRepository, networkMonitor: NetworkMonitor? = nil) {
         self.repository = repository
+        self.networkMonitor = networkMonitor
     }
 
     func loadFlights() async {
@@ -145,25 +150,39 @@ final class FlightListViewModel {
         refreshPollTask = nil
     }
 
+    /// Healthy poll cadence (matches the web's flat 5s).
+    private static let refreshPollBaseDelay: Double = 5
+
     private func pollActiveRefreshesLoop() async {
+        var delay = Self.refreshPollBaseDelay
         while !Task.isCancelled {
-            do {
-                let entries = try await repository.activeRefreshes()
-                guard !Task.isCancelled else { return }
-                let newIds = Set(entries.map(\.flightId))
-                // A flight dropping out of the set means its refresh just
-                // completed — pull fresh summaries so the row updates at once.
-                let finished = refreshingFlightIds.subtracting(newIds)
-                refreshingFlightIds = newIds
-                if !finished.isEmpty {
-                    await loadFlights()
+            if networkMonitor?.isConnected == false {
+                // Offline: don't even attempt the round-trip — no point waking the
+                // radio every 5s. Clear stale indicators (we can't know a refresh is
+                // still running) and back off; the next online tick repopulates.
+                if !refreshingFlightIds.isEmpty { refreshingFlightIds = [] }
+                delay = min(delay * 2, 30)
+            } else {
+                do {
+                    let entries = try await repository.activeRefreshes()
+                    guard !Task.isCancelled else { return }
+                    let newIds = Set(entries.map(\.flightId))
+                    // A flight dropping out of the set means its refresh just
+                    // completed — pull fresh summaries so the row updates at once.
+                    let finished = refreshingFlightIds.subtracting(newIds)
+                    refreshingFlightIds = newIds
+                    if !finished.isEmpty {
+                        await loadFlights()
+                    }
+                    delay = Self.refreshPollBaseDelay   // healthy — reset cadence
+                } catch {
+                    // Offline blip / 5xx — back off (cap 60s) instead of hammering,
+                    // and keep the last known set for one cycle.
+                    delay = min(delay * 2, 60)
+                    Self.logger.debug("activeRefreshes poll failed (retry in \(Int(delay))s): \(error)")
                 }
-            } catch {
-                // Transient (offline blip, 5xx) — keep the last known set and
-                // retry next tick rather than clearing the indicators.
-                Self.logger.debug("activeRefreshes poll failed: \(error)")
             }
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(delay))
         }
     }
 
