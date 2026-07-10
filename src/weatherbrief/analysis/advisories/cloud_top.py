@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    cloud_method_id,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -66,58 +72,110 @@ class CloudTopEvaluator:
         margin_ft = params.get("margin_ft", 1000)
         pct_amber = params.get("pct_amber", 25)
         ceiling = ctx.flight_ceiling_ft
+        cruise = ctx.cruise_altitude_ft
 
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
-            above_ceiling = 0
+            evaluated: set[int] = set()
+            complete: set[int] = set()
+            affected: set[int] = set()
+            samples: list[EvidenceSample] = []
+            methods: list[str] = []
             max_top: float | None = None
 
             for rpa in ctx.analyses:
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
                     continue
-                total += 1
+                evaluated.add(rpa.point_index)
+                complete.add(rpa.point_index)
+                method_id = cloud_method_id(
+                    sounding.cloud_method_effective,
+                    ctx.cloud_method,
+                )
+                if method_id is not None:
+                    methods.append(method_id)
 
                 # Only consider layers the pilot would actually encounter:
                 # base must be within margin of cruise altitude (close enough
                 # to enter) AND below flight ceiling.  Layers well above
                 # cruise are irrelevant — the pilot flies clear below them.
-                cruise = ctx.cruise_altitude_ft
-                reachable = [
-                    cl for cl in sounding.cloud_layers
-                    if cl.base_ft <= cruise + margin_ft and cl.base_ft <= ceiling
-                ]
-                if not reachable:
-                    continue
+                for layer in sounding.cloud_layers:
+                    if (
+                        layer.base_ft > cruise + margin_ft
+                        or layer.base_ft > ceiling
+                    ):
+                        continue
+                    if max_top is None or layer.top_ft > max_top:
+                        max_top = layer.top_ft
+                    if layer.top_ft + margin_ft <= ceiling:
+                        continue
+                    affected.add(rpa.point_index)
+                    samples.append(
+                        EvidenceSample(
+                            point_index=rpa.point_index,
+                            severity=AdvisoryStatus.AMBER,
+                            reason_code="cloud_top_exceeds_ceiling",
+                            metric_id="cloud_coverage",
+                            method_id=method_id,
+                            lower_altitude_ft=round(layer.base_ft),
+                            upper_altitude_ft=round(layer.top_ft),
+                        )
+                    )
 
-                highest_top = max(cl.top_ft for cl in reachable)
-                if max_top is None or highest_top > max_top:
-                    max_top = highest_top
-
-                if highest_top + margin_ft > ceiling:
-                    above_ceiling += 1
+            summary = summarize_evidence(
+                route_points=ctx.analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=affected,
+                evidence_samples=samples,
+            )
 
             loc = ctx.locale
-            if total == 0:
+            if summary.total_points == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
-            elif above_ceiling == 0:
+            elif summary.affected_points == 0:
                 status = AdvisoryStatus.GREEN
                 if max_top is not None:
                     detail = adv_t("cloud_top.reachable", loc, top=f"{max_top:.0f}", ceiling=ceiling)
                 else:
                     detail = adv_t("cloud_top.no_layers", loc)
             else:
-                status = pct_above_threshold(above_ceiling, total, pct_amber, red_pct=60)
-                ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
-                detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
+                if summary.affected_pct >= 60:
+                    status = AdvisoryStatus.RED
+                elif summary.affected_pct >= pct_amber:
+                    status = AdvisoryStatus.AMBER
+                else:
+                    status = AdvisoryStatus.GREEN
+                detail = adv_t(
+                    "cloud_top.above_ceiling",
+                    loc,
+                    extent=summary.format_extent(),
+                    top=f"{max_top:.0f}",
+                )
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=above_ceiling, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            summary = replace(
+                summary,
+                evidence_regions=[
+                    region.model_copy(update={"severity": status})
+                    for region in summary.evidence_regions
+                ],
+            )
+            primary_method_id = next(
+                (sample.method_id for sample in samples if sample.method_id is not None),
+                methods[0] if methods else None,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=adv_t("partial_data", loc),
+                    primary_method_id=primary_method_id,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("cloud_top", per_model, params)

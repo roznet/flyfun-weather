@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    cloud_method_id,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -68,57 +72,124 @@ class VMCCruiseEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
-            bkn_count = 0
-            ovc_count = 0
+            evaluated: set[int] = set()
+            complete: set[int] = set()
+            affected: set[int] = set()
+            bkn_points: set[int] = set()
+            ovc_points: set[int] = set()
+            samples: list[EvidenceSample] = []
+            methods: list[str] = []
 
             for rpa in ctx.analyses:
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
                     continue
-                total += 1
+                evaluated.add(rpa.point_index)
+                complete.add(rpa.point_index)
+                method_id = cloud_method_id(
+                    sounding.cloud_method_effective,
+                    ctx.cloud_method,
+                )
+                if method_id is not None:
+                    methods.append(method_id)
 
                 # Check cloud layers at cruise altitude
-                worst_coverage = None
-                for cl in sounding.cloud_layers:
-                    if cl.base_ft <= cruise <= cl.top_ft:
-                        if worst_coverage is None:
-                            worst_coverage = cl.coverage
-                        elif cl.coverage == CloudCoverage.OVC:
-                            worst_coverage = CloudCoverage.OVC
-                        elif cl.coverage == CloudCoverage.BKN and worst_coverage != CloudCoverage.OVC:
-                            worst_coverage = CloudCoverage.BKN
+                has_bkn = False
+                has_ovc = False
+                for layer in sounding.cloud_layers:
+                    if not layer.base_ft <= cruise <= layer.top_ft:
+                        continue
+                    if layer.coverage == CloudCoverage.OVC:
+                        has_ovc = True
+                        local_severity = AdvisoryStatus.RED
+                        reason = "cruise_in_ovc_cloud"
+                    elif layer.coverage == CloudCoverage.BKN:
+                        has_bkn = True
+                        local_severity = AdvisoryStatus.AMBER
+                        reason = "cruise_in_bkn_cloud"
+                    else:
+                        continue
+                    affected.add(rpa.point_index)
+                    samples.append(
+                        EvidenceSample(
+                            point_index=rpa.point_index,
+                            severity=local_severity,
+                            reason_code=reason,
+                            metric_id="cloud_coverage",
+                            method_id=method_id,
+                            lower_altitude_ft=round(layer.base_ft),
+                            upper_altitude_ft=round(layer.top_ft),
+                        )
+                    )
 
-                if worst_coverage == CloudCoverage.OVC:
-                    ovc_count += 1
-                elif worst_coverage == CloudCoverage.BKN:
-                    bkn_count += 1
+                if has_ovc:
+                    ovc_points.add(rpa.point_index)
+                elif has_bkn:
+                    bkn_points.add(rpa.point_index)
 
-            affected = bkn_count + ovc_count
+            summary = summarize_evidence(
+                route_points=ctx.analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=affected,
+                evidence_samples=samples,
+            )
+            bkn_count = len(bkn_points)
+            ovc_count = len(ovc_points)
             loc = ctx.locale
-            if total == 0:
+            if summary.total_points == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             else:
-                ovc_pct = 100 * ovc_count / total
+                ovc_pct = 100 * ovc_count / summary.total_points
 
                 if ovc_pct >= ovc_pct_red:
                     status = AdvisoryStatus.RED
-                    detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_count, total, ctx.total_distance_nm))
-                elif 100 * affected / total >= bkn_pct_amber:
+                    detail = adv_t(
+                        "vmc_cruise.ovc",
+                        loc,
+                        extent=summary.format_extent(),
+                    )
+                elif summary.affected_pct >= bkn_pct_amber:
                     status = AdvisoryStatus.AMBER
-                    detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
-                elif affected > 0:
+                    detail = adv_t(
+                        "vmc_cruise.imc",
+                        loc,
+                        extent=summary.format_extent(),
+                    )
+                elif summary.affected_points > 0:
                     status = AdvisoryStatus.GREEN
-                    detail = adv_t("vmc_cruise.mostly_clear", loc, extent=format_extent(affected, total, ctx.total_distance_nm))
+                    detail = adv_t(
+                        "vmc_cruise.mostly_clear",
+                        loc,
+                        extent=summary.format_extent(),
+                    )
                 else:
                     status = AdvisoryStatus.GREEN
                     detail = adv_t("vmc_cruise.clear", loc)
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=affected, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            controlling_samples = (
+                [sample for sample in samples if sample.severity == AdvisoryStatus.RED]
+                if status == AdvisoryStatus.RED
+                else samples
+            )
+            primary_method_id = next(
+                (
+                    sample.method_id
+                    for sample in controlling_samples
+                    if sample.method_id is not None
+                ),
+                methods[0] if methods else None,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=adv_t("partial_data", loc),
+                    primary_method_id=primary_method_id,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, params)
