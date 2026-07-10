@@ -83,6 +83,14 @@ final class AddFlightViewModel {
 
     // Submission
     var isSubmitting: Bool = false
+    /// True from the moment the pilot taps Create/Save until the whole submit
+    /// flow (interpret → optional confirm sheet → create/save) settles. Unlike
+    /// `isSubmitting`, this covers the new pre-submit interpret round trip, whose
+    /// `await` would otherwise leave the button tappable long enough for a
+    /// double-tap to launch a second, independent create. The view sets it
+    /// synchronously in `submit()` (before any suspension) and disables the
+    /// button on it, so the second tap is rejected before it can spawn work.
+    var isPreparingSubmit: Bool = false
     var errorMessage: String?
     /// Streamed progress message shown while regenerating the briefing (§4.4).
     var statusMessage: String?
@@ -143,10 +151,16 @@ final class AddFlightViewModel {
         waypoints.count >= 2 && !isSubmitting && (!isEditing || hasChanges)
     }
 
+    /// Whether the typed route differs from the flight being edited (case- and
+    /// spacing-insensitive). Single source for the three change gates below.
+    private func routeDiffers(from original: FlightResponse) -> Bool {
+        waypoints != original.waypoints.map { $0.uppercased() }
+    }
+
     /// Any edited field differs from the original (gates the Save button).
     var hasChanges: Bool {
         guard let original = editingFlight else { return true }
-        if waypoints != original.waypoints.map({ $0.uppercased() }) { return true }
+        if routeDiffers(from: original) { return true }
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         if selectedAircraftId != original.aircraftId { return true }
@@ -164,7 +178,7 @@ final class AddFlightViewModel {
     /// there is no baseline, so this is always `true`.
     var routeChangedFromOriginal: Bool {
         guard let original = editingFlight else { return true }
-        return waypoints != original.waypoints.map { $0.uppercased() }
+        return routeDiffers(from: original)
     }
 
     /// Whether the edited alt-departure instant differs from the flight's stored
@@ -181,7 +195,7 @@ final class AddFlightViewModel {
     /// they save without the re-briefing confirm (§4.4).
     var hasForecastAffectingChange: Bool {
         guard let original = editingFlight else { return false }
-        if waypoints != original.waypoints.map({ $0.uppercased() }) { return true }
+        if routeDiffers(from: original) { return true }
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         // A profile carries model/method choices, so changing it can change the
@@ -239,6 +253,11 @@ final class AddFlightViewModel {
     /// Create before the debounce fires (or whose interpret call failed silently)
     /// would otherwise submit the raw tokens.
     func interpretRouteForSubmit() async -> RouteSubmitInterpretation {
+        // Clear any banner from a prior failed attempt: only createFlight()/
+        // saveEditedFlight() reset it, and the `.needsConfirmation` path reaches
+        // neither, so a now-successful interpret would otherwise leave a stale
+        // "Couldn't interpret…" error showing behind the confirm sheet.
+        errorMessage = nil
         let route = waypointsText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard waypoints.count >= 2 else {
             errorMessage = "Enter at least two waypoints."

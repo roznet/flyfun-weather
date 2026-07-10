@@ -151,6 +151,25 @@ private func deviceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
         #expect(vm.waypointsText == "EGKA ZZZZ EGKB")      // raw kept for the sheet
     }
 
+    /// A retry that now interprets successfully must clear a prior failure's
+    /// banner even on the `.needsConfirmation` path, which never reaches
+    /// `createFlight()` where `errorMessage` is otherwise reset — otherwise a
+    /// stale "Couldn't interpret…" error lingers behind the confirm sheet.
+    @Test func interpretClearsStaleErrorOnNeedsConfirmation() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(
+            makeInterpretResponse(interpreted: ["EGKA", "EGKB"], skipped: ["ZZZZ"])
+        )
+        let vm = AddFlightViewModel(repository: repo)
+        vm.errorMessage = "Couldn't interpret the route: offline"
+        vm.waypointsText = "EGKA ZZZZ EGKB"
+
+        let outcome = await vm.interpretRouteForSubmit()
+
+        #expect(outcome == .needsConfirmation)
+        #expect(vm.errorMessage == nil)
+    }
+
     /// A failed interpret (e.g. offline) aborts with an error rather than falling
     /// back to submitting the raw tokens — matches the web, which aborts the save.
     @Test func interpretFailureAbortsWithError() async {
