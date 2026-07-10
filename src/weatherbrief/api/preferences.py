@@ -94,6 +94,16 @@ class PreferencesResponse(BaseModel):
     notify_push: bool = False
     notify_scope: NotifyScope = "auto"
     notify_change_only: bool = True
+    # One-time fail-safe notice: set when the user's last push device was
+    # unregistered while email was off, so email was auto-re-enabled to keep at
+    # least one working channel (the channel invariant, decay branch). The
+    # client shows it once, then dismisses by PUTting ``notify_decay_notice: false``.
+    notify_decay_notice: bool = False
+    # Count of the user's registered APNs devices. Push is only actionable with
+    # ≥1 device — the web shows a disabled "install the app" row at 0, and both
+    # clients use this to render the channel-invariant (email locks on when
+    # push has no device to deliver to).
+    push_device_count: int = 0
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
     donations_enabled: bool = False  # global: Stripe configured (gates the donate UI)
@@ -122,6 +132,7 @@ class PreferencesUpdate(BaseModel):
     notify_push: bool | None = None
     notify_scope: NotifyScope | None = None
     notify_change_only: bool | None = None
+    notify_decay_notice: bool | None = None  # only meaningful as false, to dismiss
 
     @field_validator("display_currency")
     @classmethod
@@ -227,6 +238,17 @@ def _parse_digest_config_from_prefs(raw: str) -> DigestConfig:
     return DigestConfig(**dc)
 
 
+def _count_push_devices(db: Session, user_id: str) -> int:
+    """Count the user's registered APNs device tokens (for conditional push UI)."""
+    from weatherbrief.db.models import DeviceTokenRow
+
+    return (
+        db.query(DeviceTokenRow)
+        .filter(DeviceTokenRow.user_id == user_id)
+        .count()
+    )
+
+
 def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> PreferencesResponse:
     """Build a PreferencesResponse from a DB row."""
     toggles = _parse_service_toggles(row.app_prefs_json)
@@ -246,6 +268,8 @@ def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> Prefe
         digest_config=_parse_digest_config_from_prefs(row.app_prefs_json),
         advisories=_parse_advisory_prefs(row.app_prefs_json),
         **_parse_notify_prefs(row.app_prefs_json),
+        notify_decay_notice=bool(prefs_data.get("notify_decay_notice", False)),
+        push_device_count=_count_push_devices(db, user_id),
         has_autorouter_creds=has_ar,
         autorouter_mode="password" if is_dev_mode() else "oauth",
         pirep_can_view=prefs_data.get("pirep_can_view", False),
@@ -333,6 +357,9 @@ def update_preferences(
         data["notify_scope"] = body.notify_scope
     if body.notify_change_only is not None:
         data["notify_change_only"] = body.notify_change_only
+    if body.notify_decay_notice is not None:
+        # Only meaningful as a dismissal (client acknowledges the fail-safe).
+        data["notify_decay_notice"] = body.notify_decay_notice
 
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)
@@ -566,6 +593,32 @@ def load_notify_prefs(db: Session, user_id: str) -> dict:
     """
     row = db.get(UserPreferencesRow, user_id)
     return _parse_notify_prefs(row.app_prefs_json if row else "")
+
+
+def apply_last_device_decay(db: Session, user_id: str) -> bool:
+    """Fail-safe when a user unregisters their **last** push device.
+
+    A push-only user (``notify_email`` off) who loses their last device would be
+    left with no effective channel — a silent dead-state. Re-enable email and
+    raise a one-time ``notify_decay_notice`` so scope≠off always keeps at least
+    one working channel (channel invariant, decay branch of
+    ios-app-briefing-notifications.md). Returns True if it re-enabled email.
+
+    Idempotent: a no-op when email is already on (nothing to fail-safe).
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if row is None:
+        return False
+    try:
+        data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
+    except json.JSONDecodeError:
+        data = {}
+    if data.get("notify_email", True):
+        return False
+    data["notify_email"] = True
+    data["notify_decay_notice"] = True
+    row.app_prefs_json = json.dumps(data)
+    return True
 
 
 def can_view_pireps(db: Session, user_id: str) -> bool:

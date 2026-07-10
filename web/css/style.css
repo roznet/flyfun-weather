@@ -791,20 +791,6 @@ label {
   margin-top: 0.25rem;
 }
 
-.freshness-notify-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  margin-top: 0.25rem;
-  cursor: pointer;
-}
-
-.freshness-notify-label input[type="checkbox"] {
-  margin: 0;
-}
-
 .model-skipped {
   font-style: italic;
   opacity: 0.6;

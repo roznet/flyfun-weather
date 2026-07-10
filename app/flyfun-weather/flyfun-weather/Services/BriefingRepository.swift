@@ -1,5 +1,14 @@
 import Foundation
 
+/// Who triggered a briefing refresh, reported to the server via `?source=`.
+/// Drives email suppression: the user's own in-app manual refresh (`manual` →
+/// wire "user") is user-present and does NOT email, while Siri (`siri`) is
+/// non-user-present and does — closing the Siri refresh-intent loop.
+enum RefreshSource: String, Sendable {
+    case manual = "user"
+    case siri = "siri"
+}
+
 /// Abstraction over briefing data access.
 protocol BriefingRepository: Sendable {
     func flights() async throws -> [FlightResponse]
@@ -42,7 +51,7 @@ protocol BriefingRepository: Sendable {
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data
     func grametImage(flightId: String, timestamp: String) async throws -> Data
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse
-    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error>
+    func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error>
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse
     /// Flights whose briefing is currently queued/refreshing server-side, for the
     /// live flight-list "Updating…" indicator. Online-only.
@@ -52,6 +61,14 @@ protocol BriefingRepository: Sendable {
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse
     func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse]
     func fetchPireps(flightId: String) async throws -> PirepListResponse
+}
+
+extension BriefingRepository {
+    /// Default in-app manual refresh (source = "user"), so existing call sites
+    /// that don't name a source stay unchanged; Siri passes `.siri` explicitly.
+    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
+        await refreshStream(flightId: flightId, source: .manual)
+    }
 }
 
 /// Online-only implementation — every call hits the API.
@@ -204,8 +221,8 @@ final class OnlineBriefingRepository: BriefingRepository {
         try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/sounding-profile/\(pointIndex)/\(model)")
     }
 
-    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
-        await client.streamSSE("/api/flights/\(flightId)/packs/refresh/stream")
+    func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
+        await client.streamSSE("/api/flights/\(flightId)/packs/refresh/stream?source=\(source.rawValue)")
     }
 
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse {

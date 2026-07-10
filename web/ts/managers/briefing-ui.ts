@@ -593,8 +593,6 @@ export function renderFreshnessBar(
   onCheckAgain: () => void,
   refreshElapsed?: number | null,
   avgRefreshSeconds?: number | null,
-  notifyEmail?: boolean,
-  onNotifyEmailChange?: (checked: boolean) => void,
 ): void {
   const el = $('freshness-bar');
   if (!el) return;
@@ -624,12 +622,7 @@ export function renderFreshnessBar(
     }
     const leaveHint = `<span class="freshness-leave-hint">${t('freshness.canLeave')}${avgHint ? ' ' + avgHint : ''}</span>`;
 
-    // Read-only confirmation if email notification was opted in before refresh started
-    const emailNote = notifyEmail
-      ? `<span class="freshness-leave-hint">${t('freshness.notifyEmailActive')}</span>`
-      : '';
-
-    el.innerHTML = `<span class="refresh-prefix">${t('freshness.inProgress')}</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>${leaveHint}${emailNote}`;
+    el.innerHTML = `<span class="refresh-prefix">${t('freshness.inProgress')}</span> · ${label}${detailSuffix}<span class="dots-spinner"></span>${leaveHint}`;
     return;
   }
 
@@ -687,11 +680,6 @@ export function renderFreshnessBar(
     ? ` <a href="#" class="freshness-link" id="freshness-force-refresh">${t('freshness.forceRefresh')}</a>`
     : '';
 
-  // Email notification opt-in checkbox (shown before refresh starts)
-  const emailCheckId = 'freshness-notify-email';
-  const emailChecked = notifyEmail ? ' checked' : '';
-  const emailToggle = `<label class="freshness-notify-label"><input type="checkbox" id="${emailCheckId}"${emailChecked}> ${t('freshness.notifyEmail')}</label>`;
-
   // Tiered refresh gate: show what pressing refresh will actually
   // do, so the bar agrees with the button. Only the `realtime` and gated-`none`
   // (some updates, but below the lead-time threshold) cases need special
@@ -743,18 +731,18 @@ export function renderFreshnessBar(
 
   if (document.querySelector('.container.layout-sidebar')) {
     // Collapsible disclosure: the status sentence stays visible with a caret;
-    // the action links, "Based on…" basis, diagnostics and the email opt-in are
-    // tucked into the expandable details. Collapsed by default; state persisted.
+    // the action links, "Based on…" basis and diagnostics are tucked into the
+    // expandable details. Collapsed by default; state persisted.
     const expanded = getFreshnessExpanded();
     const actions = linksHtml ? `<div class="freshness-actions">${linksHtml}</div>` : '';
-    const detailsHtml = `${actions}${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    const detailsHtml = `${actions}${elapsedBadge}${basisLine}${diagHtml}`;
     el.innerHTML =
       `<button type="button" class="freshness-toggle" id="freshness-toggle" aria-expanded="${expanded}">`
       + `<span class="freshness-caret" aria-hidden="true">›</span>`
       + `<span class="freshness-status">${statusHtml}</span></button>`
       + `<div class="freshness-details" id="freshness-details"${expanded ? '' : ' hidden'}>${detailsHtml}</div>`;
   } else {
-    el.innerHTML = `<span>${statusHtml} ${linksHtml}</span>${elapsedBadge}${basisLine}${diagHtml}${emailToggle}`;
+    el.innerHTML = `<span>${statusHtml} ${linksHtml}</span>${elapsedBadge}${basisLine}${diagHtml}`;
   }
 
   // Wire event handlers
@@ -765,10 +753,6 @@ export function renderFreshnessBar(
   const forceEl = document.getElementById('freshness-force-refresh');
   if (forceEl) {
     forceEl.addEventListener('click', (e) => { e.preventDefault(); onForceRefresh(); });
-  }
-  const emailEl = document.getElementById(emailCheckId) as HTMLInputElement | null;
-  if (emailEl && onNotifyEmailChange) {
-    emailEl.addEventListener('change', () => onNotifyEmailChange(emailEl.checked));
   }
   const sourcesInfoBtn = document.getElementById('freshness-sources-info');
   if (sourcesInfoBtn && freshness.sources) {
@@ -971,6 +955,74 @@ export function renderAutoRefreshBar(
     const selectedHour = parseInt(hourSelect.value, 10);
     const hourVal = selectedHour === defaultHour ? null : selectedHour;
     onUpdate(true, hourVal);
+  });
+}
+
+// --- Per-flight notification override (bell) ---
+
+/**
+ * Per-flight briefing-notification override (issue #371). Three states —
+ * Default (follow the account setting) / Always (notify on any update to this
+ * flight even if the account is Off) / Mute (never). Delivery still uses the
+ * global channels; this control is "whether", not "how". The hint shows what
+ * Default currently resolves to, and adapts when the account is Off.
+ */
+export function renderNotifyOverrideBar(
+  flight: FlightResponse | null,
+  currentUserId: string,
+  isPast: boolean,
+  accountUpdates: 'off' | 'changes' | 'every',
+  onUpdate: (value: 'default' | 'notify' | 'mute') => void,
+): void {
+  const el = $('notify-override-bar');
+  if (!el) return;
+
+  if (!flight || flight.user_id !== currentUserId || isPast) {
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = '';
+  const value = flight.notify_override ?? 'default';
+  const opt = (v: string, key: string): string =>
+    `<option value="${v}"${v === value ? ' selected' : ''}>${t(key)}</option>`;
+
+  el.innerHTML = `
+    <label class="auto-refresh-toggle" for="notify-override-select">
+      <span aria-hidden="true">🔔</span>
+      <span>${t('notify.override.title')}</span>
+    </label>
+    <select id="notify-override-select">
+      ${opt('default', 'notify.override.default')}
+      ${opt('notify', 'notify.override.notify')}
+      ${opt('mute', 'notify.override.mute')}
+    </select>
+    <span class="field-hint" id="notify-override-hint"></span>
+  `;
+
+  const hintFor = (v: string): string => {
+    if (v === 'mute') return t('notify.override.hintMute');
+    if (v === 'notify') {
+      return accountUpdates === 'off'
+        ? t('notify.override.hintNotify')
+        : t('notify.override.hintNotifyOn');
+    }
+    // default → follow account
+    if (accountUpdates === 'off') return t('notify.override.hintDefaultOff');
+    const resolved = accountUpdates === 'every'
+      ? t('notify.resolved.every')
+      : t('notify.resolved.changes');
+    return t('notify.override.hintDefault', { resolved });
+  };
+
+  const hintEl = document.getElementById('notify-override-hint');
+  if (hintEl) hintEl.textContent = hintFor(value);
+
+  const select = document.getElementById('notify-override-select') as HTMLSelectElement;
+  select.addEventListener('change', () => {
+    const v = select.value as 'default' | 'notify' | 'mute';
+    if (hintEl) hintEl.textContent = hintFor(v);
+    onUpdate(v);
   });
 }
 

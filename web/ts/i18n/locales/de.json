@@ -111,8 +111,6 @@
   "freshness.refreshedIn": "Aktualisiert in {m} Min. {s} Sek.",
   "freshness.canLeave": "Sie können diese Seite schließen — die Aktualisierung läuft im Hintergrund weiter.",
   "freshness.avgTime": "Aktualisierungen dauern ca. {mins} Min.",
-  "freshness.notifyEmail": "Per E-Mail benachrichtigen",
-  "freshness.notifyEmailActive": "Sie erhalten eine E-Mail, wenn die Aktualisierung abgeschlossen ist.",
   "freshness.forceRefresh": "Aktualisierung erzwingen",
   "freshness.nextUpdate": ", nächste Aktualisierung in ~{time}",
   "freshness.checkAgain": "Erneut prüfen",

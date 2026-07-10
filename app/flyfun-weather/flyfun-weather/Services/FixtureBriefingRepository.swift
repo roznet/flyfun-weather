@@ -104,7 +104,7 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { PirepListResponse(items: [], count: 0) }
-    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
+    func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         AsyncThrowingStream { $0.finish() }
     }
 

@@ -40,8 +40,38 @@ server side is built and tested (`tests/test_briefing_notifications.py`):
   `remote-notification` background mode are added.
 
 Deployment must set the APNs secrets (see "APNs key management" below).
-Deferred: the per-flight `notify_override` control in the iOS UI (settable on the
-web today; the server + API support it).
+
+**Preferences UI + semantics (#371) — server + web + iOS.** The `notify_*` prefs
+are now fully controllable on both clients, with the semantics tightened:
+
+- **Granular `triggered_by`.** The refresh endpoints accept `?source=` (`user` |
+  `siri` | `mcp`; unknown → `user`, `scheduler` is internal-only). It rides on
+  `BriefingUsage.triggered_by`, distinct from the registry entry's coarse
+  `user|scheduler` (which only gates the queue-cap bypass). MCP passes
+  `source=mcp`; the iOS Siri intent passes `source=siri`.
+- **Per-channel trigger rule** (`notify/dispatch.py`). The shared gate
+  (`notify_qualifies`: scope + override + change-only, no `triggered_by`) drives
+  the badge and both channels. Then `email_should_send(triggered_by)` suppresses
+  email for the user's own in-app manual refresh (`user`) only — push fires on
+  every qualifying refresh (foreground-suppressed client-side); scheduler / Siri
+  / MCP always email. Legacy `scope="auto"` is read as "on" (the manual/auto line
+  moved to this per-channel rule); the UI only ever writes `all` or `off`.
+- **Channel invariant.** Channels never express "off": the only way to silence is
+  scope/override. The web + iOS Settings enforce this live (email locks on when
+  it's the sole available channel; turning off the last channel reroutes to
+  Briefing updates = Off). The **decay** fail-safe is server-side
+  (`preferences.apply_last_device_decay`, called from `devices.unregister_device`):
+  unregistering the *last* device while `notify_email` is off re-enables email and
+  raises a one-time `notify_decay_notice` (surfaced in the prefs response,
+  dismissed by PUTting it false). Prefs also carry `push_device_count` so a
+  device-less web user sees an "install the app" push row.
+- **UI shape.** Account › Notifications: a **Briefing updates** 3-stop (Off /
+  Assessment changes / Every update) folding `notify_scope` + `notify_change_only`,
+  an **Email** toggle, and a device-conditional **Push** toggle. Per-flight: a
+  **bell** (Default / Always / Mute → `notify_override`) in the freshness bar
+  (web) / briefing toolbar (iOS), whose hint shows what Default resolves to. The
+  old per-refresh "Email me when done" checkbox is **retired** (replaced by the
+  bell + client walk-away suppression); `force_email` / `?notify_email=` are gone.
 
 ## Related Docs
 
@@ -117,10 +147,14 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
   - Email → `notify_email` (default **on** if the account has an email).
   - iOS push → `notify_push` (default **off**; conditional UI — show device state
     ("2 devices") or an install hint; requires ≥1 `device_tokens` row).
-- **Scope** (*which refreshes* — single choice) → `notify_scope`:
-  - `auto` — only the scheduled near-departure auto-refresh (**default**; reproduces today).
-  - `all` — every completion, incl. manual / Siri / MCP.
-  - `off` — never, unless enabled per-flight.
+- **Scope** (*which refreshes* — single choice) → `notify_scope`. **As shipped (#371)**
+  the scope + change-only pair is presented as one **Briefing updates** 3-stop and the
+  manual-vs-automatic line moved to the per-channel email rule, so scope collapses to
+  on/off:
+  - `off` — never, unless a flight is set to Always per-flight.
+  - `all` — notifications on (the 3-stop's Assessment-changes / Every-update stops both
+    write `all`, differing only by `notify_change_only`).
+  - `auto` — **legacy** (pre-#371 default); read as "on", never written by the UI.
 - **Content filter** → `notify_change_only` (default **on**): only when the assessment
   changed/worsened (`compute_refresh_delta`), vs every completion.
 - **Timing** → migrate the existing `defer_email_for_model_update` into this group,
@@ -136,14 +170,17 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
 **Effective decision** (evaluated in `notify/dispatch.py`, driven from `_notify_refresh_complete`):
 
 ```
+# Shared gate (notify_qualifies) — drives the badge and both channels:
 if flight.notify_override == "mute":  stop
-elif flight.notify_override == "on":  send            # any completion
+elif flight.notify_override == "notify":  qualifies    # any completion
 else:                                                  # default → global scope
-    scope == "all"  → send
-    scope == "auto" → send only if triggered_by == "scheduler"
-    scope == "off"  → stop
+    scope == "off" → stop
+    else (all / legacy auto) → qualifies
 if notify_change_only and not delta.changed:  stop
-for each ON channel (email, push):  deliver
+advance the badge
+# Per-channel trigger rule (#371):
+push  → deliver on every qualifying refresh
+email → deliver only if triggered_by is non-user-present (skip a bare "user")
     # push additionally suppressed if the app is foregrounded on this flight —
     # a DELIVERY RULE, not a user setting (resolves the earlier ★ question)
 ```

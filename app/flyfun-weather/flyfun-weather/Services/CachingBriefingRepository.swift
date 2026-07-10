@@ -203,8 +203,8 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.airportWeather(icao: icao, day: day, hour: hour)
     }
 
-    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
-        await online.refreshStream(flightId: flightId)
+    func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
+        await online.refreshStream(flightId: flightId, source: source)
     }
 
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse {

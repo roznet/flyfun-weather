@@ -167,6 +167,35 @@
           </div>
         </div>
 
+        <div class="section" id="notifications-section">
+          <h3 data-i18n="settings.notify.title">Notifications</h3>
+          <p class="muted section-hint" data-i18n="settings.notify.hint">Choose whether, when, and how you're notified about briefing updates.</p>
+          <div class="form-row model-checkboxes" id="notify-decay-notice" style="display:none;">
+            <p class="field-hint" data-i18n="settings.notify.decayNotice">Email was turned back on because you removed your last push device — otherwise you'd have no way to receive updates.</p>
+          </div>
+          <div class="form-row">
+            <label for="notify-updates" data-i18n="settings.notify.updates">Briefing updates</label>
+            <select id="notify-updates">
+              <option value="off" data-i18n="settings.notify.updates.off">Off</option>
+              <option value="changes" data-i18n="settings.notify.updates.changes">Assessment changes</option>
+              <option value="every" data-i18n="settings.notify.updates.every">Every update</option>
+            </select>
+            <span class="field-hint" id="notify-updates-hint" data-i18n="settings.notify.updates.hint">Notify when an update changes your flight's assessment (the GREEN/AMBER/RED headline or early outlook).</span>
+          </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="toggle-notify-email"> <span data-i18n="settings.notify.email">Email</span>
+              <span class="field-hint" id="notify-email-hint" data-i18n="settings.notify.email.hint">Deliver briefing updates by email.</span>
+            </label>
+          </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="toggle-notify-push"> <span data-i18n="settings.notify.push">Push</span>
+              <span class="field-hint" id="notify-push-hint" data-i18n="settings.notify.push.hintNoDevice">Install the FlyFun iOS app to enable push.</span>
+            </label>
+          </div>
+        </div>
+
         <div class="section" id="autorouter-section">
           <h3>Autorouter (GRAMET)</h3>
           <p class="muted section-hint" id="ar-hint">

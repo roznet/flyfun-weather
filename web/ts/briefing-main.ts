@@ -9,7 +9,7 @@ import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
-import { fetchAdvisoryCatalog } from './adapters/preferences-adapter';
+import { fetchAdvisoryCatalog, foldBriefingUpdates, type BriefingUpdates } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
 import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime, escapeHtml } from './utils';
 import { pressureToAltitudeFt } from './utils/atmo';
@@ -101,6 +101,11 @@ function buildXsectionSnapshotProps(
 // level) and clipped to the route corridor by the renderer. Switching the model
 // re-fetches.
 let lastFrontLinesKey = '';
+
+// Account-level "Briefing updates" setting, folded from notify_scope +
+// notify_change_only once preferences load. Drives the per-flight bell's
+// "Default resolves to…" hint. Defaults to the account default until prefs land.
+let accountBriefingUpdates: BriefingUpdates = 'changes';
 
 interface FrontLevelSpec { level: number; hour: number; }
 
@@ -201,6 +206,7 @@ async function init(): Promise<void> {
     fetchPreferences()
       .then((prefs) => {
         preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method, convection: prefs.convective_method };
+        accountBriefingUpdates = foldBriefingUpdates(prefs.notify_scope, prefs.notify_change_only);
       })
       .catch(() => {})
       .finally(() => {
@@ -1716,8 +1722,7 @@ async function init(): Promise<void> {
       state.refreshStage !== prev.refreshStage ||
       state.refreshDetail !== prev.refreshDetail ||
       state.refreshElapsed !== prev.refreshElapsed ||
-      state.avgRefreshSeconds !== prev.avgRefreshSeconds ||
-      state.notifyEmail !== prev.notifyEmail
+      state.avgRefreshSeconds !== prev.avgRefreshSeconds
     ) {
       ui.renderFreshnessBar(
         state.freshness,
@@ -1732,8 +1737,6 @@ async function init(): Promise<void> {
         () => store.getState().checkFreshness(),
         state.refreshElapsed,
         state.avgRefreshSeconds,
-        state.notifyEmail,
-        (checked: boolean) => store.getState().setNotifyEmail(checked),
       );
     }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {
@@ -2265,6 +2268,17 @@ async function init(): Promise<void> {
         }
       } catch (err) {
         ui.renderError(t('autoRefresh.failedUpdate', { error: String(err) }));
+      }
+    });
+
+    // Render per-flight notification override (bell)
+    ui.renderNotifyOverrideBar(s.flight, user.id, past, accountBriefingUpdates, async (value) => {
+      if (!s.flight) return;
+      try {
+        const updated = await api.updateFlight(s.flight.id, { notify_override: value });
+        store.getState().updateFlightNotifyOverride(updated.notify_override);
+      } catch (err) {
+        ui.renderError(t('notify.override.failedUpdate', { error: String(err) }));
       }
     });
 
