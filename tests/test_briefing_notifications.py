@@ -681,6 +681,31 @@ def test_preferences_notify_roundtrip(client):
     assert updated["notify_email"] is True
 
 
+def test_channel_invariant_backstop_clamps_scope_off(client):
+    # Both channels off while scope is on would be the silent dead-state — the
+    # server clamps scope to off (mirrors the client reroute) for ANY writer.
+    r = client.put("/api/user/preferences", json={
+        "notify_email": False, "notify_push": False, "notify_scope": "all",
+    })
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["notify_scope"] == "off"
+    assert updated["notify_email"] is False
+    assert updated["notify_push"] is False
+
+
+def test_channel_invariant_backstop_leaves_one_channel_alone(client):
+    # One channel on (push) with email off is a valid push-only state — no clamp.
+    r = client.put("/api/user/preferences", json={
+        "notify_email": False, "notify_push": True, "notify_scope": "all",
+    })
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["notify_scope"] == "all"
+    assert updated["notify_email"] is False
+    assert updated["notify_push"] is True
+
+
 def test_flight_notify_override_update(client):
     r = client.patch("/api/flights/f1", json={"notify_override": "mute"})
     assert r.status_code == 200
