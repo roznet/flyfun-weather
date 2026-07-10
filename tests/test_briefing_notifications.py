@@ -604,11 +604,21 @@ def test_register_device_rejects_empty_token(client):
     assert r.status_code == 422
 
 
+def _make_push_only(client, token="d1"):
+    """Put the account in a valid push-only state: a device registered, push on,
+    email off, notifications on. (Push on keeps the channel-invariant backstop
+    from clamping scope to off, so this is a real scope≠off / email-off state.)"""
+    assert client.post("/api/devices", json={"token": token, "environment": "sandbox"}).status_code == 204
+    r = client.put("/api/user/preferences", json={
+        "notify_push": True, "notify_email": False, "notify_scope": "all",
+    }).json()
+    assert r["notify_email"] is False and r["notify_scope"] == "all"
+
+
 def test_last_device_unregister_reenables_email(client):
-    # A push-only user (email off) who loses their last device gets email
-    # re-enabled + a one-time notice (channel-invariant decay branch).
-    assert client.put("/api/user/preferences", json={"notify_email": False}).json()["notify_email"] is False
-    assert client.post("/api/devices", json={"token": "d1", "environment": "sandbox"}).status_code == 204
+    # A push-only user (email off, notifications on) who loses their last device
+    # gets email re-enabled + a one-time notice (channel-invariant decay branch).
+    _make_push_only(client, "d1")
 
     assert client.delete("/api/devices/d1").status_code == 204
 
@@ -621,9 +631,24 @@ def test_last_device_unregister_reenables_email(client):
     assert updated["notify_decay_notice"] is False
 
 
+def test_last_device_unregister_respects_explicit_off(client):
+    # If the user has explicitly silenced everything (scope off), losing the last
+    # device must NOT resurrect email — the invariant only promises a channel
+    # while notifications are on.
+    assert client.post("/api/devices", json={"token": "d1", "environment": "sandbox"}).status_code == 204
+    r = client.put("/api/user/preferences", json={
+        "notify_scope": "off", "notify_email": False, "notify_push": False,
+    }).json()
+    assert r["notify_scope"] == "off" and r["notify_email"] is False
+
+    assert client.delete("/api/devices/d1").status_code == 204
+    prefs = client.get("/api/user/preferences").json()
+    assert prefs["notify_email"] is False          # not resurrected
+    assert prefs["notify_decay_notice"] is False
+
+
 def test_non_last_device_unregister_keeps_email_off(client):
-    assert client.put("/api/user/preferences", json={"notify_email": False}).json()["notify_email"] is False
-    client.post("/api/devices", json={"token": "d1", "environment": "sandbox"})
+    _make_push_only(client, "d1")
     client.post("/api/devices", json={"token": "d2", "environment": "sandbox"})
 
     # One of two devices removed — a device remains, so no fail-safe fires.

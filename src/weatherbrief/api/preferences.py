@@ -357,9 +357,10 @@ def update_preferences(
         data["notify_scope"] = body.notify_scope
     if body.notify_change_only is not None:
         data["notify_change_only"] = body.notify_change_only
-    if body.notify_decay_notice is not None:
-        # Only meaningful as a dismissal (client acknowledges the fail-safe).
-        data["notify_decay_notice"] = body.notify_decay_notice
+    if body.notify_decay_notice is False:
+        # Only a dismissal is honored — the server owns *setting* the notice (the
+        # decay path); a client can't raise it, only acknowledge it.
+        data["notify_decay_notice"] = False
 
     # Channel-invariant backstop (server-side): notifications can't be "on" with
     # no channel to deliver on, or nothing would ever fire — the silent
@@ -616,7 +617,11 @@ def apply_last_device_decay(db: Session, user_id: str) -> bool:
     one working channel (channel invariant, decay branch of
     ios-app-briefing-notifications.md). Returns True if it re-enabled email.
 
-    Idempotent: a no-op when email is already on (nothing to fail-safe).
+    Idempotent, and scoped to the invariant it protects: a no-op when email is
+    already on, or when the user has explicitly silenced everything
+    (``notify_scope == "off"``) — the invariant only promises a working channel
+    *while notifications are on*, so decay must not resurrect email against an
+    explicit Off.
     """
     row = db.get(UserPreferencesRow, user_id)
     if row is None:
@@ -625,6 +630,8 @@ def apply_last_device_decay(db: Session, user_id: str) -> bool:
         data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
     except json.JSONDecodeError:
         data = {}
+    if data.get("notify_scope", "auto") == "off":
+        return False
     if data.get("notify_email", True):
         return False
     data["notify_email"] = True
