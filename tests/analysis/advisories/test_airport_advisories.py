@@ -13,6 +13,7 @@ from weatherbrief.analysis.advisories.airport_wind import (
     _wind_status,
 )
 from weatherbrief.analysis.advisories.flight_category import FlightCategoryEvaluator
+from weatherbrief.analysis.airport_conditions import compute_runway_winds
 from weatherbrief.models import (
     AdvisoryStatus,
     RoutePointAnalysis,
@@ -299,28 +300,47 @@ def test_gust_vector_crosswind_is_not_recalibrated_without_evidence():
 def test_public_airport_wind_keeps_gust_and_crosswind_as_separate_axes():
     # A223-09 characterization only: pins the public evaluator's current policy;
     # this is not an endorsement or a gust-vector crosswind recalibration.
-    runway = RunwayWind(
-        runway_id="09L",
-        heading_deg=90.0,
-        crosswind_kt=12.0,
-        headwind_kt=5.0,
-    )
-    gust_kt = 28.0
-    vector_crosswind_kt = (
-        abs(runway.crosswind_kt)
-        * gust_kt
-        / math.hypot(runway.crosswind_kt, runway.headwind_kt)
-    )
-    assert vector_crosswind_kt >= 25.0
+    # The prior hand-populated components contradicted the stored wind direction,
+    # so a direction-based gust-vector implementation could still pass the test.
+    runway_end = RunwayEnd(id="09L", heading_deg=90.0)
+    mean_crosswind_kt = 12.0
+    mean_headwind_kt = 5.0
+    wind_speed_kt = math.hypot(mean_crosswind_kt, mean_headwind_kt)
+    wind_direction_deg = (
+        runway_end.heading_deg
+        + math.degrees(math.atan2(mean_crosswind_kt, mean_headwind_kt))
+    ) % 360
+    runway = compute_runway_winds(
+        [runway_end],
+        wind_speed_kt=wind_speed_kt,
+        wind_direction_deg=wind_direction_deg,
+    )[0]
+    assert runway.crosswind_kt == pytest.approx(mean_crosswind_kt, abs=0.1)
+    assert runway.headwind_kt == pytest.approx(mean_headwind_kt, abs=0.1)
 
+    gust_kt = 28.0
     conditions = _make_airport_conditions(
         dep_cats={"gfs": FlightCategory.VFR},
         arr_cats={"gfs": FlightCategory.VFR},
         dep_wind={"gfs": runway},
         arr_wind={"gfs": runway},
         dep_gusts={"gfs": gust_kt},
-        wind_speed_kt=13.0,
+        wind_speed_kt=wind_speed_kt,
+        wind_direction_deg=wind_direction_deg,
     )
+    departure = conditions.departure.condition_for_model("gfs")
+    assert departure is not None
+    assert departure.best_runway is not None
+    assert departure.wind_direction_deg is not None
+    assert departure.wind_gust_kt is not None
+    relative_wind_rad = math.radians(
+        departure.wind_direction_deg - departure.best_runway.heading_deg
+    )
+    direction_based_gust_crosswind_kt = abs(
+        departure.wind_gust_kt * math.sin(relative_wind_rad)
+    )
+    assert direction_based_gust_crosswind_kt > 25.0
+
     result = AirportWindEvaluator.evaluate(
         _make_ctx(conditions, models=["gfs"]),
         {
