@@ -92,6 +92,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         AsyncThrowingStream { $0.finish() }
     }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw MockError.notStubbed("refreshStatus") }
+    func activeRefreshes() async throws -> [ActiveRefreshResponse] { [] }
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw MockError.notStubbed("submitPirep") }
     func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] {
         submitPirepsBatchCallCount += 1

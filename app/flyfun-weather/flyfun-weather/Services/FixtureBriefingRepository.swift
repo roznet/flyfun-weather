@@ -167,6 +167,7 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func grametImage(flightId: String, timestamp: String) async throws -> Data { throw FixtureError.notProvided("grametImage") }
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse { throw FixtureError.notProvided("soundingProfile") }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw FixtureError.notProvided("refreshStatus") }
+    func activeRefreshes() async throws -> [ActiveRefreshResponse] { [] }
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw FixtureError.notProvided("submitPirep") }
     func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] { throw FixtureError.notProvided("submitPirepsBatch") }
 }

@@ -44,6 +44,9 @@ protocol BriefingRepository: Sendable {
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error>
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse
+    /// Flights whose briefing is currently queued/refreshing server-side, for the
+    /// live flight-list "Updating…" indicator. Online-only.
+    func activeRefreshes() async throws -> [ActiveRefreshResponse]
 
     // PIREP
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse
@@ -207,6 +210,10 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse {
         try await client.request("/api/flights/\(flightId)/packs/refresh/status")
+    }
+
+    func activeRefreshes() async throws -> [ActiveRefreshResponse] {
+        try await client.request("/api/refresh/active")
     }
 
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse {

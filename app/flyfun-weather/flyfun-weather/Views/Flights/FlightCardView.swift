@@ -5,6 +5,9 @@ struct FlightCardView: View {
     let flight: FlightResponse
     var hasCachedData: Bool = false
     var isOffline: Bool = false
+    /// The flight's briefing is queued/refreshing server-side — show a live
+    /// "Updating…" tag alongside the (still-current) assessment badge.
+    var isRefreshing: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -28,6 +31,17 @@ struct FlightCardView: View {
                     Image(systemName: "arrow.down.circle.fill")
                         .foregroundStyle(.green)
                         .font(.caption)
+                }
+
+                if isRefreshing {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text("Updating…")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Briefing updating")
                 }
 
                 statusBadge
