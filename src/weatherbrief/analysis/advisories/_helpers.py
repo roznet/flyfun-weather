@@ -110,6 +110,12 @@ def format_extent(
 ) -> str:
     """Format affected/total as a distance string, e.g. '30nm/55nm (55%)'.
 
+    .. deprecated::
+        Migrated spatial evaluators should use
+        :meth:`evidence.EvidenceSummary.format_extent` so distance follows
+        midpoint-owned route geometry. This point-count estimate remains for
+        evaluators that have not migrated yet.
+
     Converts point counts to nautical miles using the actual route distance
     and number of analysis points. When there are too few points to compute
     spacing, falls back to the percentage only.
