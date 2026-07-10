@@ -211,6 +211,11 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.refreshStatus(flightId: flightId)
     }
 
+    func activeRefreshes() async throws -> [ActiveRefreshResponse] {
+        // Online-only — a live "which briefings are refreshing" query is never cached.
+        try await online.activeRefreshes()
+    }
+
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse {
         try await online.submitPirep(request)
     }

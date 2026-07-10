@@ -31,9 +31,15 @@ final class FlightListViewModel {
     private(set) var isOffline = false
     /// Flight IDs that have downloaded pack data available offline.
     private(set) var cachedFlightIds: Set<String> = []
+    /// Flight IDs whose briefing is currently queued/refreshing server-side —
+    /// drives the live "Updating…" row indicator. Fed by `pollActiveRefreshes`.
+    private(set) var refreshingFlightIds: Set<String> = []
 
     private let repository: any BriefingRepository
     private var isLoading = false
+    /// The active-refresh poll loop (one at a time). Detached from any `.task`, so
+    /// the view must start/stop it explicitly around visibility.
+    @ObservationIgnored private var refreshPollTask: Task<Void, Never>?
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "FlightList")
 
     init(repository: any BriefingRepository) {
@@ -110,6 +116,54 @@ final class FlightListViewModel {
                 state = .error(error)
                 Self.logger.error("Failed to load flights: \(error)")
             }
+        }
+    }
+
+    // MARK: - Active-refresh polling (live "Updating…" row indicator)
+
+    /// Poll `GET /api/refresh/active` every 5s while the list is visible so a row
+    /// shows a live "Updating…" state whenever its briefing is refreshing —
+    /// including refreshes started elsewhere (web, auto-refresh, another device).
+    /// iOS has no server push for progress, so this mirrors the web's flat 5s poll
+    /// (a single user-scoped request per tick, independent of flight count).
+    ///
+    /// Bounded + idempotent: one loop at a time. When a flight *leaves* the active
+    /// set — its refresh just finished — the list is re-synced so that row's
+    /// summary/assessment updates immediately, making the same loop double as the
+    /// completion trigger. Call `stopActiveRefreshPolling()` when the list is
+    /// backgrounded or torn down.
+    func startActiveRefreshPolling() {
+        guard refreshPollTask == nil else { return }
+        refreshPollTask = Task { [weak self] in
+            await self?.pollActiveRefreshesLoop()
+        }
+    }
+
+    /// Stop the active-refresh poll loop (list backgrounded / disappeared).
+    func stopActiveRefreshPolling() {
+        refreshPollTask?.cancel()
+        refreshPollTask = nil
+    }
+
+    private func pollActiveRefreshesLoop() async {
+        while !Task.isCancelled {
+            do {
+                let entries = try await repository.activeRefreshes()
+                guard !Task.isCancelled else { return }
+                let newIds = Set(entries.map(\.flightId))
+                // A flight dropping out of the set means its refresh just
+                // completed — pull fresh summaries so the row updates at once.
+                let finished = refreshingFlightIds.subtracting(newIds)
+                refreshingFlightIds = newIds
+                if !finished.isEmpty {
+                    await loadFlights()
+                }
+            } catch {
+                // Transient (offline blip, 5xx) — keep the last known set and
+                // retry next tick rather than clearing the indicators.
+                Self.logger.debug("activeRefreshes poll failed: \(error)")
+            }
+            try? await Task.sleep(for: .seconds(5))
         }
     }
 

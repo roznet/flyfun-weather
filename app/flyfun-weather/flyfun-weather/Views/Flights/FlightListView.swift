@@ -195,6 +195,8 @@ struct FlightListView: View {
             // A cold-launch intent may have set a target before the list existed;
             // resolve it now that flights are loaded.
             applyPendingNavigation()
+            // Begin the live "Updating…" row poll now the list is on screen.
+            vm.startActiveRefreshPolling()
         }
         .onChange(of: scenePhase) {
             if scenePhase == .active {
@@ -202,7 +204,14 @@ struct FlightListView: View {
                     await viewModel?.loadFlights()
                     applyPendingNavigation()
                 }
+                viewModel?.startActiveRefreshPolling()
+            } else {
+                // Don't poll in the background — resumes on the next `.active`.
+                viewModel?.stopActiveRefreshPolling()
             }
+        }
+        .onDisappear {
+            viewModel?.stopActiveRefreshPolling()
         }
         .onChange(of: appState.pendingNavigation) {
             applyPendingNavigation()
@@ -248,7 +257,8 @@ struct FlightListView: View {
         let hasCached = viewModel.cachedFlightIds.contains(flight.id)
         NavigationLink(value: flight) {
             FlightCardView(flight: flight, hasCachedData: hasCached,
-                           isOffline: viewModel.isOffline)
+                           isOffline: viewModel.isOffline,
+                           isRefreshing: viewModel.refreshingFlightIds.contains(flight.id))
         }
         .disabled(viewModel.isOffline && !hasCached)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
