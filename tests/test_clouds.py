@@ -391,7 +391,14 @@ def _make_rpa_with_clouds():
     from weatherbrief.models import RoutePointAnalysis
 
     dd_layers = [EnhancedCloudLayer(base_ft=3000, top_ft=8000, coverage=CloudCoverage.BKN)]
-    nwp_layers = [EnhancedCloudLayer(base_ft=5000, top_ft=12000, coverage=CloudCoverage.OVC)]
+    nwp_layers = [
+        EnhancedCloudLayer(
+            base_ft=5000,
+            top_ft=12000,
+            coverage=CloudCoverage.OVC,
+            source="nwp_3d",
+        )
+    ]
 
     sounding = SoundingAnalysis(
         cloud_layers=list(dd_layers),
@@ -430,6 +437,55 @@ def test_resolve_analyses_nwp_swaps_without_mutation():
     assert result[0].sounding["gfs"].cloud_layers[0].coverage == CloudCoverage.OVC
     # Original is NOT mutated
     assert rpa.sounding["gfs"].cloud_layers[0].base_ft == 3000
+
+
+@pytest.mark.parametrize(
+    ("sources", "expected"),
+    [
+        pytest.param(["nwp_3d"], "nwp", id="native-3d"),
+        pytest.param(["grib"], "nwp", id="native-grib"),
+        pytest.param(["nwp_3d", "grib"], "nwp", id="mixed-native"),
+        pytest.param(["synthesized"], "nwp_synthesized", id="legacy-synthesized"),
+        pytest.param(["unknown"], None, id="unknown"),
+        pytest.param(["nwp_3d", "synthesized"], None, id="mixed-3d-synthesized"),
+        pytest.param(["grib", "synthesized"], None, id="mixed-grib-synthesized"),
+    ],
+)
+def test_resolve_analyses_records_effective_cloud_provenance(sources, expected):
+    """Effective provenance follows geometry sources without guessing."""
+    from weatherbrief.tasks.advise import _resolve_analyses
+
+    rpa, _, _ = _make_rpa_with_clouds()
+    layers = [
+        EnhancedCloudLayer(
+            base_ft=5000 + index * 1000,
+            top_ft=9000 + index * 1000,
+            coverage=CloudCoverage.OVC,
+            source=source,
+        )
+        for index, source in enumerate(sources)
+    ]
+    sounding = rpa.sounding["gfs"].model_copy(update={"nwp_cloud_layers": layers})
+    rpa = rpa.model_copy(update={"sounding": {"gfs": sounding}})
+
+    result = _resolve_analyses([rpa], None, "square_nwp")
+
+    assert result[0].sounding["gfs"].cloud_method_effective == expected
+
+
+def test_resolve_analyses_empty_nwp_layers_are_native_nwp():
+    """An available empty native layer list means assessed clear, not unknown."""
+    from weatherbrief.tasks.advise import _resolve_analyses
+
+    rpa, _, _ = _make_rpa_with_clouds()
+    sounding = rpa.sounding["gfs"].model_copy(update={"nwp_cloud_layers": []})
+    rpa = rpa.model_copy(update={"sounding": {"gfs": sounding}})
+
+    result = _resolve_analyses([rpa], None, "square_nwp")
+
+    resolved = result[0].sounding["gfs"]
+    assert resolved.cloud_layers == []
+    assert resolved.cloud_method_effective == "nwp"
 
 
 def test_resolve_analyses_nwp_fallback():

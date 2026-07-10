@@ -106,12 +106,12 @@ def _resolve_analyses(
                     updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
                     # Determine effective method from layer source tags
                     sources = {cl.source for cl in sounding.nwp_cloud_layers}
-                    if "grib" in sources:
+                    if not sources or sources <= {"grib", "nwp_3d"}:
                         updates["cloud_method_effective"] = "nwp"
-                    elif sources:
+                    elif sources == {"synthesized"}:
                         updates["cloud_method_effective"] = "nwp_synthesized"
                     else:
-                        updates["cloud_method_effective"] = "nwp"
+                        updates["cloud_method_effective"] = None
                 else:
                     # Fallback: restore DD source
                     updates["cloud_layers"] = list(sounding.dd_cloud_layers)

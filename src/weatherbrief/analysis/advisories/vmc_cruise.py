@@ -68,6 +68,10 @@ class VMCCruiseEvaluator:
         bkn_pct_amber = params.get("bkn_pct_amber", 25)
         ovc_pct_red = params.get("ovc_pct_red", 50)
         cruise = ctx.cruise_altitude_ft
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -80,7 +84,7 @@ class VMCCruiseEvaluator:
             samples: list[EvidenceSample] = []
             methods: list[str] = []
 
-            for rpa in ctx.analyses:
+            for rpa in ordered_analyses:
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
                     continue
@@ -128,12 +132,13 @@ class VMCCruiseEvaluator:
                     bkn_points.add(rpa.point_index)
 
             summary = summarize_evidence(
-                route_points=ctx.analyses,
+                route_points=ordered_analyses,
                 total_distance_nm=ctx.total_distance_nm,
                 evaluated_point_indices=evaluated,
                 complete_point_indices=complete,
                 affected_point_indices=affected,
                 evidence_samples=samples,
+                moderate_point_indices=ovc_points,
             )
             bkn_count = len(bkn_points)
             ovc_count = len(ovc_points)
@@ -149,7 +154,7 @@ class VMCCruiseEvaluator:
                     detail = adv_t(
                         "vmc_cruise.ovc",
                         loc,
-                        extent=summary.format_extent(),
+                        extent=summary.format_mod_extent(),
                     )
                 elif summary.affected_pct >= bkn_pct_amber:
                     status = AdvisoryStatus.AMBER
@@ -182,12 +187,16 @@ class VMCCruiseEvaluator:
                 ),
                 methods[0] if methods else None,
             )
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                loc,
+            )
             per_model.append(
                 summary.build_result(
                     model=model,
                     status=status,
                     detail=detail,
-                    unavailable_detail=adv_t("partial_data", loc),
+                    unavailable_detail=missing_detail,
                     primary_method_id=primary_method_id,
                 )
             )

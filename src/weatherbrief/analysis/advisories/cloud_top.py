@@ -73,6 +73,10 @@ class CloudTopEvaluator:
         pct_amber = params.get("pct_amber", 25)
         ceiling = ctx.flight_ceiling_ft
         cruise = ctx.cruise_altitude_ft
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         per_model: list[ModelAdvisoryResult] = []
 
@@ -84,7 +88,7 @@ class CloudTopEvaluator:
             methods: list[str] = []
             max_top: float | None = None
 
-            for rpa in ctx.analyses:
+            for rpa in ordered_analyses:
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
                     continue
@@ -125,7 +129,7 @@ class CloudTopEvaluator:
                     )
 
             summary = summarize_evidence(
-                route_points=ctx.analyses,
+                route_points=ordered_analyses,
                 total_distance_nm=ctx.total_distance_nm,
                 evaluated_point_indices=evaluated,
                 complete_point_indices=complete,
@@ -168,12 +172,16 @@ class CloudTopEvaluator:
                 (sample.method_id for sample in samples if sample.method_id is not None),
                 methods[0] if methods else None,
             )
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                loc,
+            )
             per_model.append(
                 summary.build_result(
                     model=model,
                     status=status,
                     detail=detail,
-                    unavailable_detail=adv_t("partial_data", loc),
+                    unavailable_detail=missing_detail,
                     primary_method_id=primary_method_id,
                 )
             )
