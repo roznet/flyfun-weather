@@ -105,6 +105,9 @@ def compute_altitude_table(
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
     flight_duration_hours: float = 0.0,
+    icing_method: str | None = None,
+    cloud_method: str | None = None,
+    convective_method: str | None = None,
 ) -> AltitudeTableResult:
     """Sweep altitude-dependent advisories across a range of altitudes.
 
@@ -121,6 +124,9 @@ def compute_altitude_table(
         enabled_ids: Advisory IDs the user has enabled (None = defaults).
         user_params: Per-advisory parameter overrides.
         aggregation: How per-model statuses combine.
+        icing_method: Original resolved icing-method profile value.
+        cloud_method: Original resolved cloud-method profile value.
+        convective_method: Original resolved convective-method profile value.
 
     Returns:
         AltitudeTableResult with rows sorted altitude-descending.
@@ -173,6 +179,9 @@ def compute_altitude_table(
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conditions,
             locale=locale,
+            icing_method=icing_method,
+            cloud_method=cloud_method,
+            convective_method=convective_method,
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=flight_duration_hours,
         )

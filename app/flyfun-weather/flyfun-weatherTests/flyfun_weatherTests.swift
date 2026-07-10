@@ -140,6 +140,7 @@ struct Phase0DataPlumbingTests {
               "advisory_id": "convective",
               "aggregate_status": "red",
               "aggregate_detail": "RED on GFS/ICON",
+              "representative_model": "gfs",
               "parameters_used": {
                 "cape_red_jkg": 1000.0,
                 "affected_pct_red": 50.0
@@ -154,6 +155,20 @@ struct Phase0DataPlumbingTests {
                   "affected_pct": 33.0,
                   "affected_nm": 30.0,
                   "total_nm": 90.0,
+                  "data_state": "partial",
+                  "primary_method_id": "nwp_with_dd_floor",
+                  "evidence_regions": [
+                    {
+                      "start_point_index": 2,
+                      "end_point_index": 4,
+                      "lower_altitude_ft": 5000,
+                      "upper_altitude_ft": 25000,
+                      "severity": "red",
+                      "reason_code": "convective_dd_floor",
+                      "metric_id": "convective_risk",
+                      "method_id": "nwp_with_dd_floor"
+                    }
+                  ],
                   "cross_check": "High CAPE (1200 J/kg); NWP scheme quiet (0% cover) — expected pattern."
                 },
                 {

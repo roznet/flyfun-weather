@@ -8,7 +8,8 @@ from weatherbrief.analysis.advisories import (
     get_catalog,
     resolve_enabled_ids,
 )
-from weatherbrief.models import AdvisoryStatus
+from weatherbrief.analysis.advisories import registry
+from weatherbrief.models import AdvisoryCatalogEntry, AdvisoryStatus
 
 
 def test_get_catalog_returns_entries():
@@ -100,3 +101,29 @@ def test_catalog_entries_have_required_fields():
             assert param.key
             assert param.label
             assert param.type
+
+
+def test_registry_exception_returns_unavailable_result(monkeypatch, clear_context):
+    class BrokenEvaluator:
+        @staticmethod
+        def catalog_entry():
+            return AdvisoryCatalogEntry(
+                id="broken_test",
+                name="Broken",
+                short_description="Broken",
+                description="Broken",
+                category="test",
+            )
+
+        @staticmethod
+        def evaluate(ctx, params):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(registry, "_EVALUATORS", {"broken_test": BrokenEvaluator})
+    monkeypatch.setattr(registry, "_loaded", True)
+    results = registry.evaluate_all(clear_context, enabled_ids={"broken_test"})
+    assert len(results) == 1
+    assert results[0].advisory_id == "broken_test"
+    assert results[0].aggregate_status == AdvisoryStatus.UNAVAILABLE
+    assert {m.model for m in results[0].per_model} == set(clear_context.models)
+    assert all(m.data_state == "unavailable" for m in results[0].per_model)

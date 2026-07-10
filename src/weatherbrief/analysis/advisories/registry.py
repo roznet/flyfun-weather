@@ -9,8 +9,10 @@ from weatherbrief.models import (
     AdvisoryAggregation,
     AdvisoryCatalogEntry,
     AdvisoryStatus,
+    ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
+from weatherbrief.analysis.advisories.strings import adv_t
 
 if TYPE_CHECKING:
     from weatherbrief.analysis.advisories import AdvisoryEvaluator, RouteContext
@@ -133,19 +135,10 @@ def evaluate_all(
         try:
             result = evaluator_cls.evaluate(ctx, params)
             # Canonicalize the aggregate under the requested mode. Evaluators
-            # build their aggregate with ``from_per_model``'s own default
-            # (MAJORITY) and some then customize it — convective synthesizes a
-            # cross-model ``aggregate_detail``; fronts builds an explicit
-            # all-UNAVAILABLE result to stay hidden. So only re-aggregate when the
-            # requested mode actually DIFFERS from that majority default (else we
-            # would discard those customizations), and never re-run an
-            # all-UNAVAILABLE set through ``from_per_model`` (it collapses to
-            # GREEN — resurrecting a deliberately-hidden advisory). Re-aggregating
-            # only for non-majority modes is what fixes the prior bug where a
-            # WORST preference silently kept a majority-built aggregate.
-            if aggregation != AdvisoryAggregation.MAJORITY and not all(
-                m.status == AdvisoryStatus.UNAVAILABLE for m in result.per_model
-            ):
+            # build their aggregate with ``from_per_model``'s MAJORITY default;
+            # only re-aggregate when the requested mode differs so evaluator
+            # customizations under the default mode remain intact.
+            if aggregation != AdvisoryAggregation.MAJORITY:
                 result = RouteAdvisoryResult.from_per_model(
                     result.advisory_id, result.per_model, result.parameters_used,
                     aggregation=aggregation,
@@ -153,6 +146,18 @@ def evaluate_all(
             results.append(result)
         except Exception:
             logger.warning("Advisory %s evaluation failed", adv_id, exc_info=True)
+            failed_models = ctx.models or ["all"]
+            detail = adv_t("evaluation_failed", ctx.locale)
+            per_model = [
+                ModelAdvisoryResult(
+                    model=model,
+                    status=AdvisoryStatus.UNAVAILABLE,
+                    detail=detail,
+                    data_state="unavailable",
+                )
+                for model in failed_models
+            ]
+            results.append(RouteAdvisoryResult.from_per_model(adv_id, per_model, params))
 
     return results
 

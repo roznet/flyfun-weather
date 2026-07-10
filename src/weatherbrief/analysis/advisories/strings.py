@@ -25,6 +25,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Keine Daten",
         "es": "Sin datos",
     },
+    "evaluation_failed": {
+        "en": "Advisory evaluation unavailable",
+        "fr": "Évaluation de l'avis indisponible",
+        "de": "Bewertung des Hinweises nicht verfügbar",
+        "es": "Evaluación del aviso no disponible",
+    },
+    "partial_data": {
+        "en": "Partial data",
+        "fr": "Données partielles",
+        "de": "Teilweise Daten",
+        "es": "Datos parciales",
+    },
 
     # --- turbulence ---
     "turbulence.smooth": {

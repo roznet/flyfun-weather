@@ -52,12 +52,27 @@ class TestAdvisoryStatusMajority:
         ]
         assert AdvisoryStatus.majority(statuses) == AdvisoryStatus.GREEN
 
-    def test_all_unavailable_returns_green(self):
+    def test_all_unavailable_returns_unavailable(self):
         statuses = [AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE]
-        assert AdvisoryStatus.majority(statuses) == AdvisoryStatus.GREEN
+        assert AdvisoryStatus.majority(statuses) == AdvisoryStatus.UNAVAILABLE
 
-    def test_empty_returns_green(self):
-        assert AdvisoryStatus.majority([]) == AdvisoryStatus.GREEN
+    def test_empty_returns_unavailable(self):
+        assert AdvisoryStatus.majority([]) == AdvisoryStatus.UNAVAILABLE
+
+
+class TestAdvisoryStatusWorst:
+    """Unit tests for AdvisoryStatus.worst()."""
+
+    def test_unavailable_ignored_when_valid_status_exists(self):
+        statuses = [AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE]
+        assert AdvisoryStatus.worst(statuses) == AdvisoryStatus.GREEN
+
+    def test_all_unavailable_returns_unavailable(self):
+        statuses = [AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE]
+        assert AdvisoryStatus.worst(statuses) == AdvisoryStatus.UNAVAILABLE
+
+    def test_empty_returns_unavailable(self):
+        assert AdvisoryStatus.worst([]) == AdvisoryStatus.UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------

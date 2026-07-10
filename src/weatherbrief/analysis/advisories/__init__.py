@@ -59,6 +59,12 @@ class RouteContext:
     # Precomputed solar analysis (issue #227): night intervals + sun-side note +
     # dep/arr glare. Read by SunEvaluator. None on old packs / when unavailable.
     sun: RouteSunAnalysis | None = None
+    # Original resolved profile choices. Appended for positional-call backward
+    # compatibility; evaluators use these stable provenance values alongside
+    # the already-swapped analysis fields.
+    icing_method: str | None = None
+    cloud_method: str | None = None
+    convective_method: str | None = None
 
 
 @runtime_checkable

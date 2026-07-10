@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from weatherbrief.models.airport_conditions import AirportConditions  # noqa: F401
 
@@ -32,30 +32,58 @@ class AdvisoryStatus(str, Enum):
     @classmethod
     def worst(cls, statuses: list[AdvisoryStatus]) -> AdvisoryStatus:
         """Return the most severe status, ignoring UNAVAILABLE."""
-        _ORDER = [cls.GREEN, cls.AMBER, cls.RED]
-        result = cls.GREEN
-        for s in statuses:
-            if s in _ORDER and _ORDER.index(s) > _ORDER.index(result):
-                result = s
-        return result
+        order = [cls.GREEN, cls.AMBER, cls.RED]
+        valid = [status for status in statuses if status in order]
+        if not valid:
+            return cls.UNAVAILABLE
+        return max(valid, key=order.index)
 
     @classmethod
     def majority(cls, statuses: list[AdvisoryStatus]) -> AdvisoryStatus:
         """Return the most common status; ties broken by worst among tied.
 
         UNAVAILABLE values are ignored. If all are UNAVAILABLE or empty,
-        returns GREEN.
+        returns UNAVAILABLE.
         """
-        _ORDER = [cls.GREEN, cls.AMBER, cls.RED]
-        valid = [s for s in statuses if s in _ORDER]
+        order = [cls.GREEN, cls.AMBER, cls.RED]
+        valid = [s for s in statuses if s in order]
         if not valid:
-            return cls.GREEN
+            return cls.UNAVAILABLE
         counts: dict[AdvisoryStatus, int] = {}
         for s in valid:
             counts[s] = counts.get(s, 0) + 1
         max_count = max(counts.values())
         tied = [s for s, c in counts.items() if c == max_count]
         return cls.worst(tied)
+
+
+class AdvisoryEvidenceRegion(BaseModel):
+    """One inclusive along-route evidence region for an advisory result."""
+
+    start_point_index: int
+    end_point_index: int
+    lower_altitude_ft: int | None = None
+    upper_altitude_ft: int | None = None
+    severity: AdvisoryStatus
+    reason_code: str
+    metric_id: str | None = None
+    method_id: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_geometry(self) -> AdvisoryEvidenceRegion:
+        if self.start_point_index > self.end_point_index:
+            raise ValueError("start_point_index must not exceed end_point_index")
+        has_lower = self.lower_altitude_ft is not None
+        has_upper = self.upper_altitude_ft is not None
+        if has_lower != has_upper:
+            raise ValueError("altitude bounds must both be present or both absent")
+        if has_lower and self.lower_altitude_ft > self.upper_altitude_ft:
+            raise ValueError("lower_altitude_ft must not exceed upper_altitude_ft")
+        if self.severity == AdvisoryStatus.UNAVAILABLE:
+            raise ValueError("evidence severity cannot be unavailable")
+        if not self.reason_code.strip():
+            raise ValueError("reason_code must be non-empty")
+        return self
 
 
 class MitigationKind(str, Enum):
@@ -190,6 +218,11 @@ class ModelAdvisoryResult(BaseModel):
     # an independent second derivation (e.g. convective DD-vs-model scheme).
     # Never affects the grade; surfaced only in the info popup and LLM digest.
     cross_check: str | None = None
+    # Additive evidence/provenance metadata. ``None`` means legacy/unknown and
+    # must not be interpreted as complete data.
+    data_state: Literal["complete", "partial", "unavailable"] | None = None
+    primary_method_id: str | None = None
+    evidence_regions: list[AdvisoryEvidenceRegion] = Field(default_factory=list)
     # Per-model mitigations: alternative/mitigating decisions that would improve
     # a flagged sub-issue (advice only — never alters ``status``). Defaults empty
     # so old packs deserialize cleanly.
@@ -235,21 +268,17 @@ class ModelAdvisoryResult(BaseModel):
 
 
 def _aggregate_mitigations(
-    per_model: list[ModelAdvisoryResult],
-    agg_status: AdvisoryStatus,
+    representative: ModelAdvisoryResult | None,
 ) -> list[Mitigation]:
     """Aggregate per-model mitigations (representative-model policy).
 
-    Returns the mitigations of the first per-model result whose status equals
-    the aggregate status — the same representative used to choose
-    ``aggregate_detail`` — else an empty list. Kept as a standalone module-level
+    Returns the mitigations of the representative used to choose
+    ``aggregate_detail`` and ``representative_model``, else an empty list. Kept
+    as a standalone module-level
     function so the policy can later be swapped for a "conservative,
     all-or-nothing per kind" merge by editing this one place.
     """
-    for m in per_model:
-        if m.status == agg_status:
-            return list(m.mitigations)
-    return []
+    return list(representative.mitigations) if representative else []
 
 
 class RouteAdvisoryResult(BaseModel):
@@ -258,6 +287,7 @@ class RouteAdvisoryResult(BaseModel):
     advisory_id: str
     aggregate_status: AdvisoryStatus
     aggregate_detail: str = ""
+    representative_model: str | None = None
     per_model: list[ModelAdvisoryResult] = Field(default_factory=list)
     parameters_used: dict[str, float] = Field(default_factory=dict)
     # Aggregate mitigations chosen by ``_aggregate_mitigations`` (representative
@@ -292,9 +322,10 @@ class RouteAdvisoryResult(BaseModel):
             advisory_id=advisory_id,
             aggregate_status=agg,
             aggregate_detail=representative.detail if representative else "",
+            representative_model=representative.model if representative else None,
             per_model=per_model,
             parameters_used=params,
-            aggregate_mitigations=_aggregate_mitigations(per_model, agg),
+            aggregate_mitigations=_aggregate_mitigations(representative),
         )
 
 

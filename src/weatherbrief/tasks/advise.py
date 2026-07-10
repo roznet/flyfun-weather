@@ -341,6 +341,9 @@ def run_advisories(
             total_distance_nm=total_distance_nm,
             airport_conditions=airport_conds,
             locale=locale,
+            icing_method=icing_method,
+            cloud_method=cloud_method,
+            convective_method=convective_method,
             route_fronts=route_fronts,
             sun=_compute_route_sun(rp_analyses, airport_conds),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
@@ -392,6 +395,9 @@ def run_advisories(
                     user_params=user_params,
                     aggregation=effective_aggregation,
                     locale=locale,
+                    icing_method=icing_method,
+                    cloud_method=cloud_method,
+                    convective_method=convective_method,
                     cruise_speed_ias_kt=cruise_speed_ias_kt,
                     flight_duration_hours=route.flight_duration_hours,
                 )
@@ -511,6 +517,9 @@ def run_advisories_from_pack(
             total_distance_nm=manifest.total_distance_nm,
             airport_conditions=airport_conds,
             locale=locale,
+            icing_method=icing_method,
+            cloud_method=cloud_method,
+            convective_method=convective_method,
             route_fronts=route_fronts,
             sun=route_sun,
             cruise_speed_ias_kt=cruise_speed_ias_kt,
@@ -622,6 +631,9 @@ def run_altitude_table_from_pack(
         user_params=user_params,
         aggregation=effective_aggregation,
         locale=locale,
+        icing_method=icing_method,
+        cloud_method=cloud_method,
+        convective_method=convective_method,
         cruise_speed_ias_kt=cruise_speed_ias_kt,
         flight_duration_hours=flight_duration_hours,
     )
@@ -635,7 +647,7 @@ def run_altitude_table_from_pack(
 def derive_assessment_from_advisories(
     manifest: RouteAdvisoriesManifest,
 ) -> tuple[str, str]:
-    """Derive an overall assessment (GREEN/AMBER/RED) from an advisories manifest.
+    """Derive an overall assessment (GREEN/AMBER/RED/UNAVAILABLE) from a manifest.
 
     Returns ``(assessment, reason)`` where assessment is the worst aggregate
     status across all advisories and reason summarises the RED/AMBER ones.
@@ -646,7 +658,7 @@ def derive_assessment_from_advisories(
         if adv.aggregate_status != "unavailable"
     ]
     if not statuses:
-        return ("GREEN", "No advisory data available")
+        return ("UNAVAILABLE", "No advisory data available")
 
     worst = AdvisoryStatus.worst(statuses)
     assessment = worst.value.upper()
@@ -844,6 +856,9 @@ def run_alt_from_pack(
             total_distance_nm=total_distance,
             airport_conditions=airport_conds,
             locale=locale,
+            icing_method=icing_method,
+            cloud_method=cloud_method,
+            convective_method=convective_method,
             route_fronts=route_fronts,
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             flight_duration_hours=route.flight_duration_hours,
