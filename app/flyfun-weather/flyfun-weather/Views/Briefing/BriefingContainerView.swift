@@ -6,6 +6,7 @@ import TipKit
 struct BriefingContainerView: View {
     let flight: FlightResponse
     @Environment(AppState.self) private var appState
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: BriefingViewModel?
     @State private var trackingService = FlightTrackingService()
     @State private var showingPirepSheet = false
@@ -116,6 +117,19 @@ struct BriefingContainerView: View {
             // Opening the briefing clears this flight from the badge (web + app),
             // and fires a silent badge-sync push to the user's other devices.
             await appState.markBriefingSeen(flightId: flight.id)
+        }
+        .onChange(of: scenePhase) {
+            // Returning to the foreground: seamlessly sync to the newest online
+            // pack (no-op if unchanged). Mirrors the flight list's foreground
+            // reload — the open briefing shouldn't stay frozen on a stale pack.
+            if scenePhase == .active {
+                Task { await viewModel?.syncLatestPack() }
+            }
+        }
+        .onChange(of: appState.externalSync) {
+            // A push (or any external "data changed" nudge) is just another sync
+            // trigger — adopt the newest online pack seamlessly.
+            Task { await viewModel?.syncLatestPack() }
         }
         .onDisappear {
             // Stop the timing-scenario poll when the briefing leaves the screen —
@@ -420,6 +434,16 @@ private struct BriefingContentView: View {
     }
 
     var body: some View {
+        content
+            // Pull-to-refresh = seamless *sync* to the newest online pack (NOT the
+            // ↻ button's full regeneration). The action propagates via the
+            // environment to whichever tab's vertical ScrollView is visible
+            // (Advisory / Discussion); the canvas tabs simply don't offer a pull.
+            .refreshable { await viewModel.syncLatestPack() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if sizeClass == .regular {
             VStack(spacing: 0) {
                 BriefingTabBand(tabs: tabs, selection: $viewModel.selectedTab)

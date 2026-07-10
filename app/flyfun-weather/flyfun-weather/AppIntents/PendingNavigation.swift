@@ -9,6 +9,12 @@ enum PendingNavigation: Equatable, Sendable {
     case flightList
     /// Open a specific flight's briefing by id.
     case briefing(flightId: String)
+
+    /// The target flight id, when this navigation names one.
+    var flightId: String? {
+        if case .briefing(let id) = self { return id }
+        return nil
+    }
 }
 
 /// Cold-launch-safe hand-off for a `PendingNavigation`.

@@ -110,6 +110,9 @@ final class BriefingViewModel {
 
     // Refresh state
     private(set) var refreshState: RefreshState = .idle
+    /// Guards against overlapping `syncLatestPack()` runs when several triggers
+    /// fire close together (e.g. foreground + push). Non-observed — internal only.
+    @ObservationIgnored private var isSyncing = false
 
     // Download/cache state
     private(set) var downloadState: DownloadState = .notDownloaded
@@ -203,17 +206,8 @@ final class BriefingViewModel {
             return
         }
         do {
-            let pack = try await repository.latestPack(flightId: flight.id)
-            self.pack = pack
-            self.selectedPackTimestamp = pack.fetchTimestamp
-            updateModels(from: pack)
-
-            // Load pack history in parallel with data
-            async let historyTask: () = loadPackHistory()
-            async let dataTask: () = loadPackData(timestamp: pack.fetchTimestamp)
-            _ = await (historyTask, dataTask)
-            await checkCacheStatus()
-            await maybeAutoDownloadLatest()
+            let latest = try await repository.latestPack(flightId: flight.id)
+            await applyPack(latest)
         } catch APIError.notFound {
             // No briefing pack exists yet — this is the normal state right after a
             // flight is created (POST /api/flights only saves the flight; it does
@@ -227,6 +221,60 @@ final class BriefingViewModel {
             digestState = .error(error)
             snapshotState = .error(error)
         }
+    }
+
+    /// Seamlessly adopt the newest *already-generated* pack from the server
+    /// **without** starting a new briefing generation — the cheap "sync" that
+    /// mirrors what's live on the website. This is distinct from `refresh()`,
+    /// which runs the full pipeline to produce a *new* pack.
+    ///
+    /// A single `latestPack()` request that **no-ops when the timestamp is
+    /// unchanged** (the common case), so it's safe — and intended — to call from
+    /// many triggers: opening the briefing, pull-to-refresh, returning to the
+    /// foreground, and a refresh push. Best-effort: on any failure the current
+    /// pack stays on screen. The reload runs `quiet` so an update swaps in place
+    /// instead of flashing the sections back to spinners.
+    func syncLatestPack() async {
+        // Nothing to sync for a pending-coverage flight (no pack yet). While a
+        // generation is in flight, its completion installs the newer pack itself.
+        // `isSyncing` collapses overlapping triggers (e.g. foreground + push).
+        guard flight.coverage == nil, !refreshState.isRefreshing, !isSyncing else { return }
+        isSyncing = true
+        defer { isSyncing = false }
+        let latest: PackMetaResponse
+        do {
+            latest = try await repository.latestPack(flightId: flight.id)
+        } catch {
+            Self.logger.debug("syncLatestPack: latestPack fetch failed, keeping current pack: \(error)")
+            return
+        }
+        // Already showing the newest pack — seamless no-op (the frequent case).
+        guard latest.fetchTimestamp != pack?.fetchTimestamp else { return }
+        Self.logger.info("syncLatestPack: newer pack \(latest.fetchTimestamp) available — adopting")
+        await applyPack(latest, quiet: true)
+    }
+
+    /// Adopt `newPack` as the active pack and (re)load its data + history. The
+    /// single swap path shared by the initial load, refresh/poll completion, and
+    /// the seamless `syncLatestPack()`, so the logic can't drift across them.
+    ///
+    /// `quiet` keeps already-loaded sections on screen while the replacement
+    /// streams in (sync uses it, so picking up a newer online pack never flashes
+    /// the briefing back to spinners). A first load — with no data yet — still
+    /// shows spinners even when `quiet`, because the section loaders only suppress
+    /// the spinner when they already hold data.
+    private func applyPack(_ newPack: PackMetaResponse, quiet: Bool = false) async {
+        pack = newPack
+        // `packHistory` is still the previous pack's list here, so the
+        // `selectedPackTimestamp` didSet can't find `newPack` and won't kick a
+        // duplicate load — we load explicitly below, and refresh history alongside.
+        selectedPackTimestamp = newPack.fetchTimestamp
+        updateModels(from: newPack)
+        async let historyTask: () = loadPackHistory()
+        async let dataTask: () = loadPackData(timestamp: newPack.fetchTimestamp, quiet: quiet)
+        _ = await (historyTask, dataTask)
+        await checkCacheStatus()
+        await maybeAutoDownloadLatest()
     }
 
     /// Generate the briefing for a flight that has no pack yet (e.g. just created).
@@ -443,13 +491,7 @@ final class BriefingViewModel {
                         refreshState = .completed(elapsedSeconds: event.elapsedSeconds ?? 0)
                     }
                     if let newPack = event.pack {
-                        pack = newPack
-                        selectedPackTimestamp = newPack.fetchTimestamp
-                        updateModels(from: newPack)
-                        await loadPackHistory()
-                        await loadPackData(timestamp: newPack.fetchTimestamp)
-                        await checkCacheStatus()
-                        await maybeAutoDownloadLatest()
+                        await applyPack(newPack)
                     }
                     // Clear the transient banner after a delay.
                     try? await Task.sleep(for: .seconds(10))
@@ -514,19 +556,12 @@ final class BriefingViewModel {
                 let status = try await repository.refreshStatus(flightId: flight.id)
                 if !status.active {
                     refreshState = .completed(elapsedSeconds: 0)
-                    // Reload data
-                    let pack = try await repository.latestPack(flightId: flight.id)
-                    self.pack = pack
-                    selectedPackTimestamp = pack.fetchTimestamp
-                    updateModels(from: pack)
-                    await loadPackHistory()
-                    await loadPackData(timestamp: pack.fetchTimestamp)
-                    // A refresh started elsewhere (web/another device) still
-                    // produces a new pack here — mirror refresh()'s completion
-                    // path so an opted-in pilot gets it auto-downloaded for
-                    // offline use, instead of only on the next screen entry.
-                    await checkCacheStatus()
-                    await maybeAutoDownloadLatest()
+                    // Reload data. A refresh started elsewhere (web/another device)
+                    // still produces a new pack here — `applyPack` mirrors
+                    // refresh()'s completion path, so an opted-in pilot gets it
+                    // auto-downloaded for offline use, not only on the next entry.
+                    let latest = try await repository.latestPack(flightId: flight.id)
+                    await applyPack(latest)
                     try? await Task.sleep(for: .seconds(10))
                     if case .completed = refreshState {
                         refreshState = .idle
@@ -546,13 +581,13 @@ final class BriefingViewModel {
 
     // MARK: - Data loading
 
-    private func loadPackData(timestamp: String) async {
+    private func loadPackData(timestamp: String, quiet: Bool = false) async {
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.loadAdvisories(timestamp: timestamp) }
-            group.addTask { await self.loadDigest(timestamp: timestamp) }
-            group.addTask { await self.loadSnapshot(timestamp: timestamp) }
-            group.addTask { await self.loadRouteAnalyses(timestamp: timestamp) }
-            group.addTask { await self.loadElevation(timestamp: timestamp) }
+            group.addTask { await self.loadAdvisories(timestamp: timestamp, quiet: quiet) }
+            group.addTask { await self.loadDigest(timestamp: timestamp, quiet: quiet) }
+            group.addTask { await self.loadSnapshot(timestamp: timestamp, quiet: quiet) }
+            group.addTask { await self.loadRouteAnalyses(timestamp: timestamp, quiet: quiet) }
+            group.addTask { await self.loadElevation(timestamp: timestamp, quiet: quiet) }
         }
         // Kick the timing-scenario poll for this pack (no-op when Flexibility is
         // `none`). Runs after the briefing loads — the scan is a background job
@@ -761,38 +796,43 @@ final class BriefingViewModel {
 
     // MARK: - Section loaders
 
-    private func loadAdvisories(timestamp: String) async {
-        advisoriesState = .loading
+    // Section loaders share a `quiet` convention: a quiet reload (seamless sync)
+    // keeps the current data on screen — it only shows the spinner when there's
+    // nothing loaded yet, and keeps the old data (not an error wall) if the quiet
+    // fetch fails. A normal (non-quiet) load shows spinner/error as before.
+
+    private func loadAdvisories(timestamp: String, quiet: Bool = false) async {
+        if !quiet || !advisoriesState.hasData { advisoriesState = .loading }
         do {
             advisoriesState = .loaded(try await repository.advisories(flightId: flight.id, timestamp: timestamp))
         } catch {
-            advisoriesState = .error(error)
             Self.logger.error("Failed to load advisories: \(error)")
+            if !quiet || !advisoriesState.hasData { advisoriesState = .error(error) }
         }
     }
 
-    private func loadDigest(timestamp: String) async {
-        digestState = .loading
+    private func loadDigest(timestamp: String, quiet: Bool = false) async {
+        if !quiet || !digestState.hasData { digestState = .loading }
         do {
             digestState = .loaded(try await repository.digest(flightId: flight.id, timestamp: timestamp))
         } catch {
-            digestState = .error(error)
             Self.logger.error("Failed to load digest: \(error)")
+            if !quiet || !digestState.hasData { digestState = .error(error) }
         }
     }
 
-    private func loadSnapshot(timestamp: String) async {
-        snapshotState = .loading
+    private func loadSnapshot(timestamp: String, quiet: Bool = false) async {
+        if !quiet || !snapshotState.hasData { snapshotState = .loading }
         do {
             snapshotState = .loaded(try await repository.snapshot(flightId: flight.id, timestamp: timestamp))
         } catch {
-            snapshotState = .error(error)
             Self.logger.error("Failed to load snapshot: \(error)")
+            if !quiet || !snapshotState.hasData { snapshotState = .error(error) }
         }
     }
 
-    private func loadRouteAnalyses(timestamp: String) async {
-        routeAnalysesState = .loading
+    private func loadRouteAnalyses(timestamp: String, quiet: Bool = false) async {
+        if !quiet || !routeAnalysesState.hasData { routeAnalysesState = .loading }
         do {
             let response = try await repository.routeAnalyses(flightId: flight.id, timestamp: timestamp)
             routeAnalysesState = .loaded(response)
@@ -805,18 +845,18 @@ final class BriefingViewModel {
                 }
             }
         } catch {
-            routeAnalysesState = .error(error)
             Self.logger.error("Failed to load route analyses: \(error)")
+            if !quiet || !routeAnalysesState.hasData { routeAnalysesState = .error(error) }
         }
     }
 
-    private func loadElevation(timestamp: String) async {
-        elevationState = .loading
+    private func loadElevation(timestamp: String, quiet: Bool = false) async {
+        if !quiet || !elevationState.hasData { elevationState = .loading }
         do {
             elevationState = .loaded(try await repository.elevation(flightId: flight.id, timestamp: timestamp))
         } catch {
-            elevationState = .error(error)
             Self.logger.error("Failed to load elevation: \(error)")
+            if !quiet || !elevationState.hasData { elevationState = .error(error) }
         }
     }
 
