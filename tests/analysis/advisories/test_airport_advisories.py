@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 import pytest
@@ -293,6 +294,44 @@ def test_gust_vector_crosswind_is_not_recalibrated_without_evidence():
         gust_red=35.0,
     )
     assert status == AdvisoryStatus.AMBER
+
+
+def test_public_airport_wind_keeps_gust_and_crosswind_as_separate_axes():
+    # A223-09 characterization only: pins the public evaluator's current policy;
+    # this is not an endorsement or a gust-vector crosswind recalibration.
+    runway = RunwayWind(
+        runway_id="09L",
+        heading_deg=90.0,
+        crosswind_kt=12.0,
+        headwind_kt=5.0,
+    )
+    gust_kt = 28.0
+    vector_crosswind_kt = (
+        abs(runway.crosswind_kt)
+        * gust_kt
+        / math.hypot(runway.crosswind_kt, runway.headwind_kt)
+    )
+    assert vector_crosswind_kt >= 25.0
+
+    conditions = _make_airport_conditions(
+        dep_cats={"gfs": FlightCategory.VFR},
+        arr_cats={"gfs": FlightCategory.VFR},
+        dep_wind={"gfs": runway},
+        arr_wind={"gfs": runway},
+        dep_gusts={"gfs": gust_kt},
+        wind_speed_kt=13.0,
+    )
+    result = AirportWindEvaluator.evaluate(
+        _make_ctx(conditions, models=["gfs"]),
+        {
+            "crosswind_green_kt": 15.0,
+            "crosswind_red_kt": 25.0,
+            "gust_green_kt": 30.0,
+            "gust_red_kt": 40.0,
+        },
+    )
+
+    assert result.aggregate_status == AdvisoryStatus.GREEN
 
 
 # ---------------------------------------------------------------------------

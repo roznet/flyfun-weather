@@ -114,6 +114,11 @@ describe('sfip-at-level', () => {
     expect(m().getColor(54.9)).toBe('#f97316');
     expect(m().getColor(55)).toBe('#ef4444');
   });
+
+  it('preserves one decimal at boundary-adjacent tooltip values', () => {
+    expect(m().formatValue(29.9)).toBe('SFIP 29.9');
+    expect(m().formatValue(54.9)).toBe('SFIP 54.9');
+  });
 });
 
 describe('cloud-at-level', () => {

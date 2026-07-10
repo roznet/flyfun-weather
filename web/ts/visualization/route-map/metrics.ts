@@ -311,7 +311,7 @@ const sfipAtLevel: MapMetric = {
     return '#ef4444';
   },
   getWidth: (v) => linearWidth(v, 100, 3, 25),
-  formatValue: (v) => `SFIP ${Math.round(v)}`,
+  formatValue: (v) => `SFIP ${v.toFixed(1)}`,
   legendStops: [
     { value: 0, label: 'None (<15)', color: '#22c55e' },
     { value: 15, label: 'Light (15–29)', color: '#facc15' },

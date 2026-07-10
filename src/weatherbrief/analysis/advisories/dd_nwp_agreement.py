@@ -13,6 +13,8 @@ team and digest context rather than a pilot-facing advisory.
 
 from __future__ import annotations
 
+import math
+
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     format_extent,
@@ -31,7 +33,12 @@ from weatherbrief.models import (
 
 def _merge_spans(layers: list[EnhancedCloudLayer]) -> list[tuple[float, float]]:
     merged: list[list[float]] = []
-    for base, top in sorted((cl.base_ft, cl.top_ft) for cl in layers):
+    finite_spans = [
+        (cl.base_ft, cl.top_ft)
+        for cl in layers
+        if math.isfinite(cl.base_ft) and math.isfinite(cl.top_ft)
+    ]
+    for base, top in sorted(finite_spans):
         if top <= base:
             continue
         if merged and base <= merged[-1][1]:
