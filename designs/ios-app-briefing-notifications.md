@@ -44,18 +44,27 @@ Deployment must set the APNs secrets (see "APNs key management" below).
 **Preferences UI + semantics (#371) — server + web + iOS.** The `notify_*` prefs
 are now fully controllable on both clients, with the semantics tightened:
 
-- **Granular `triggered_by`.** The refresh endpoints accept `?source=` (`user` |
-  `siri` | `mcp`; unknown → `user`, `scheduler` is internal-only). It rides on
-  `BriefingUsage.triggered_by`, distinct from the registry entry's coarse
-  `user|scheduler` (which only gates the queue-cap bypass). MCP passes
-  `source=mcp`; the iOS Siri intent passes `source=siri`.
-- **Per-channel trigger rule** (`notify/dispatch.py`). The shared gate
-  (`notify_qualifies`: scope + override + change-only, no `triggered_by`) drives
-  the badge and both channels. Then `email_should_send(triggered_by)` suppresses
-  email for the user's own in-app manual refresh (`user`) only — push fires on
-  every qualifying refresh (foreground-suppressed client-side); scheduler / Siri
-  / MCP always email. Legacy `scope="auto"` is read as "on" (the manual/auto line
-  moved to this per-channel rule); the UI only ever writes `all` or `off`.
+- **Clean WHEN/HOW split with unified presence** (`notify/dispatch.py`). One
+  channel-agnostic **WHEN** decision — `notify_qualifies` (scope + override +
+  change-only) **AND not `present`** — gates the badge and both channels. If it
+  passes, **HOW** is pure user preference: deliver on each enabled channel
+  (email/push), independent of who/what/where triggered the refresh. This is the
+  invariant that lets "push only, never email — even when I refresh on the web"
+  work: the channel choice knows nothing about the trigger.
+- **Presence** = "was the user actively watching this refresh finish?" Recorded
+  server-side in the refresh registry (`touch_watch`/`is_watched`, `WATCH_PRESENCE_TTL`
+  = 30s) from any UI holding the SSE stream (keepalive) or polling
+  `/packs/refresh/status`. The **same signal for web and iOS** (both share those
+  endpoints), and robust to the stream→poll handoff on navigate-away-and-back
+  (the 3s poll keeps it fresh; TTL exceeds the 15s SSE keepalive). The flight-list
+  poll (`/refresh/active`) deliberately does NOT count — being on the list ≠
+  viewing the briefing. Computed once in `_notify_refresh_complete`, uniform
+  across all three refresh paths (scheduler / sync / streaming).
+- **`?source=`** (`user` | `siri` | `mcp`; unknown → `user`, `scheduler` is
+  internal-only) rides on `BriefingUsage.triggered_by` for **usage attribution
+  only** — it no longer affects notifications (presence replaced the old
+  per-channel email rule). Legacy `scope="auto"` is read as "on"; the UI only
+  ever writes `all` or `off`.
 - **Channel invariant.** Channels never express "off": the only way to silence is
   scope/override. The web + iOS Settings enforce this live (email locks on when
   it's the sole available channel; turning off the last channel reroutes to
@@ -73,8 +82,10 @@ are now fully controllable on both clients, with the semantics tightened:
   an **Email** toggle, and a device-conditional **Push** toggle. Per-flight: a
   **bell** (Default / Always / Mute → `notify_override`) in the freshness bar
   (web) / briefing toolbar (iOS), whose hint shows what Default resolves to. The
-  old per-refresh "Email me when done" checkbox is **retired** (replaced by the
-  bell + client walk-away suppression); `force_email` / `?notify_email=` are gone.
+  old per-refresh "Email me when done" checkbox is **retired** — server-side
+  presence subsumes it: a manual refresh you walk away from now notifies (the
+  poll/stream contact goes stale), and one you watch finish does not. `force_email`
+  / `?notify_email=` are gone.
 
 ## Related Docs
 
@@ -126,13 +137,13 @@ are now fully controllable on both clients, with the semantics tightened:
 - **Send gating** — only on a *new* pack whose assessment changed or worsened (avoid
   "still green" spam). Configurable; default to meaningful-change-only.
 - **In-app suppression** — a user watching the SSE progress bar in-app shouldn't also get a
-  banner. This is largely **natural on iOS**: the app's `UNUserNotificationCenterDelegate.
-  willPresent` decides whether to show a banner while foregrounded (default: don't — just
-  update the badge / an in-app indicator). The remaining nuance is that an in-app manual
-  refresh and a Siri/background refresh are **both** `triggered_by="user"` today
-  (`refresh_registry` only knows `user | scheduler`), so the server can't distinguish "I'm
-  watching this" from "tell me when done". Baseline: client-side foreground suppression;
-  optional later server signal (`triggered_by="intent"` / `notify_on_complete`) for precision.
+  banner. **Resolved by server-side presence** (#371): the notification decision suppresses
+  entirely when the user is *watching this refresh finish*, detected from watch-contact in
+  `refresh_registry` (SSE keepalive or `/packs/refresh/status` poll; see the presence bullet
+  above) — the same signal for web and iOS, so "distinguish 'I'm watching this' from 'tell me
+  when done'" is a server decision now, not a client-only heuristic. iOS
+  `UNUserNotificationCenterDelegate.willPresent` foreground banner-suppression remains as a
+  harmless delivery backstop (badge still syncs).
 - **Endpoint** `POST /api/devices` (register/upsert) + `DELETE /api/devices/{token}`.
 
 ### Notification preferences
