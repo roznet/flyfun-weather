@@ -828,6 +828,27 @@ function renderNotificationSettings(prefs: PreferencesResponse): void {
 
   const hasDevice = (prefs.push_device_count ?? 0) > 0;
 
+  // Localize the static labels via t() (the app has no [data-i18n] applier).
+  const setText = (id: string, key: string): void => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = t(key);
+  };
+  setText('notify-title', 'settings.notify.title');
+  setText('notify-section-hint', 'settings.notify.sectionHint');
+  setText('notify-decay-text', 'settings.notify.decayNotice');
+  setText('notify-updates-label', 'settings.notify.updates');
+  setText('notify-email-label', 'settings.notify.email');
+  setText('notify-push-label', 'settings.notify.push');
+  const optText: Record<string, string> = {
+    off: 'settings.notify.updates.off',
+    changes: 'settings.notify.updates.changes',
+    every: 'settings.notify.updates.every',
+  };
+  for (const opt of Array.from(updatesSel.options)) {
+    const key = optText[opt.value];
+    if (key) opt.textContent = t(key);
+  }
+
   updatesSel.value = foldBriefingUpdates(prefs.notify_scope ?? 'auto', prefs.notify_change_only ?? true);
   emailToggle.checked = prefs.notify_email ?? true;
   pushToggle.checked = (prefs.notify_push ?? false) && hasDevice;
@@ -875,7 +896,18 @@ function renderNotificationSettings(prefs: PreferencesResponse): void {
   };
 
   refresh();
-  updatesSel.onchange = refresh;
+  // Leaving Off with no channel on must enable one, or refresh()'s "both off →
+  // reroute to Off" branch would snap the dropdown straight back, stranding the
+  // user in a state they can't leave. Mirrors iOS setBriefingUpdates. Email is
+  // always available, so it's the least-surprising channel to switch on.
+  updatesSel.onchange = (): void => {
+    if (updatesSel.value !== 'off' && !emailToggle.checked && !pushToggle.checked) {
+      emailToggle.checked = true;
+    }
+    refresh();
+  };
+  // Channel toggles keep the reroute-to-Off behaviour (unchecking the last
+  // channel means "silence me").
   emailToggle.onchange = refresh;
   pushToggle.onchange = refresh;
 }
