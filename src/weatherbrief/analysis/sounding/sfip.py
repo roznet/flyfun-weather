@@ -46,6 +46,18 @@ _SFIP_LIGHT = 30.0
 _SFIP_MODERATE = 55.0
 
 
+def _weighted_membership(
+    components: list[tuple[float, float]],
+    *,
+    normalize: bool,
+) -> float:
+    weighted = sum(weight * membership for weight, membership in components)
+    if not normalize:
+        return weighted
+    denominator = sum(weight for weight, _ in components)
+    return weighted / denominator if denominator > 0 else 0.0
+
+
 # ── Membership functions ─────────────────────────────────────────────
 
 
@@ -249,21 +261,25 @@ def compute_sfip_level(
         # Apply glaciation factor when ice data available
         if icmr_g_kg is not None and icmr_g_kg > 0:
             m_clw *= glaciation_factor(clw_g_kg, icmr_g_kg, temperature_c)
-        sfip_value = (
-            _W_T_FULL * m_t
-            + _W_RH_FULL * m_rh
-            + _W_CLW_FULL * m_clw
-            + _W_VV_FULL * m_vv
-        )
+        components = [
+            (_W_T_FULL, m_t),
+            (_W_RH_FULL, m_rh),
+            (_W_CLW_FULL, m_clw),
+        ]
+        if has_vv:
+            components.append((_W_VV_FULL, m_vv))
+        sfip_value = _weighted_membership(components, normalize=not has_vv)
     else:
         # Proxy variant (SFIP_4)
         m_clw_p = membership_clw_proxy(dewpoint_depression_c, rh_pct, cloud_cover_at_band)
-        sfip_value = (
-            _W_T_PROXY * m_t
-            + _W_RH_PROXY * m_rh
-            + _W_CLW_PROXY * m_clw_p
-            + _W_VV_PROXY * m_vv
-        )
+        components = [
+            (_W_T_PROXY, m_t),
+            (_W_RH_PROXY, m_rh),
+            (_W_CLW_PROXY, m_clw_p),
+        ]
+        if has_vv:
+            components.append((_W_VV_PROXY, m_vv))
+        sfip_value = _weighted_membership(components, normalize=not has_vv)
 
     sfip_raw = max(0.0, min(1.0, sfip_value))
     sfip_100 = round(sfip_raw * 100.0, 1)

@@ -299,6 +299,56 @@ def test_level_glaciation_reduces_sfip():
     assert s100_liquid > s100_glaciated
 
 
+def test_full_no_vv_renormalizes_remaining_memberships():
+    _, score_missing, _, variant_missing = compute_sfip_level(
+        temperature_c=-7.0,
+        rh_pct=100.0,
+        dewpoint_depression_c=0.0,
+        clw_g_kg=0.2,
+        icmr_g_kg=None,
+        omega_pa_s=None,
+        cloud_cover_at_band=100.0,
+    )
+    _, score_quiescent, _, variant_quiescent = compute_sfip_level(
+        temperature_c=-7.0,
+        rh_pct=100.0,
+        dewpoint_depression_c=0.0,
+        clw_g_kg=0.2,
+        icmr_g_kg=None,
+        omega_pa_s=0.0,
+        cloud_cover_at_band=100.0,
+    )
+    assert variant_missing == "full_no_vv"
+    assert variant_quiescent == "full"
+    assert score_missing == 100.0
+    assert score_quiescent == 85.0
+
+
+def test_proxy_no_vv_renormalizes_remaining_memberships():
+    _, score_missing, _, variant_missing = compute_sfip_level(
+        temperature_c=-7.0,
+        rh_pct=100.0,
+        dewpoint_depression_c=0.0,
+        clw_g_kg=None,
+        icmr_g_kg=None,
+        omega_pa_s=None,
+        cloud_cover_at_band=100.0,
+    )
+    _, score_quiescent, _, variant_quiescent = compute_sfip_level(
+        temperature_c=-7.0,
+        rh_pct=100.0,
+        dewpoint_depression_c=0.0,
+        clw_g_kg=None,
+        icmr_g_kg=None,
+        omega_pa_s=0.0,
+        cloud_cover_at_band=100.0,
+    )
+    assert variant_missing == "proxy_no_vv"
+    assert variant_quiescent == "proxy"
+    assert score_missing == 100.0
+    assert score_quiescent == 90.0
+
+
 # ── assess_sfip_zones integration tests ──────────────────────────────
 
 

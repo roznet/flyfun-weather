@@ -305,18 +305,18 @@ const sfipAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => sfipAtAlt(p.sfipZones, altFt ?? 0),
   getColor: (v) => {
-    if (v <= 20) return '#22c55e';
-    if (v <= 50) return '#facc15';
-    if (v <= 80) return '#f97316';
+    if (v < 15) return '#22c55e';
+    if (v < 30) return '#facc15';
+    if (v < 55) return '#f97316';
     return '#ef4444';
   },
   getWidth: (v) => linearWidth(v, 100, 3, 25),
   formatValue: (v) => `SFIP ${Math.round(v)}`,
   legendStops: [
-    { value: 0, label: 'Low (0-20)', color: '#22c55e' },
-    { value: 35, label: 'Med (20-50)', color: '#facc15' },
-    { value: 65, label: 'High (50-80)', color: '#f97316' },
-    { value: 90, label: 'Very High (80+)', color: '#ef4444' },
+    { value: 0, label: 'None (<15)', color: '#22c55e' },
+    { value: 15, label: 'Light (15–29)', color: '#facc15' },
+    { value: 30, label: 'Moderate (30–54)', color: '#f97316' },
+    { value: 55, label: 'Severe (55+)', color: '#ef4444' },
   ],
 };
 

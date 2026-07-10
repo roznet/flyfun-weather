@@ -7,8 +7,11 @@ from datetime import datetime
 import pytest
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories.airport_wind import (
+    AirportWindEvaluator,
+    _wind_status,
+)
 from weatherbrief.analysis.advisories.flight_category import FlightCategoryEvaluator
-from weatherbrief.analysis.advisories.airport_wind import AirportWindEvaluator
 from weatherbrief.models import (
     AdvisoryStatus,
     RoutePointAnalysis,
@@ -276,6 +279,18 @@ class TestAirportWindEvaluator:
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert "09L" in result.per_model[0].detail
         assert "LFPG" in result.per_model[0].detail
+
+
+def test_gust_vector_crosswind_is_not_recalibrated_without_evidence():
+    status = _wind_status(
+        crosswind_kt=12.0,
+        gust_kt=28.0,
+        xwind_green=15.0,
+        xwind_red=25.0,
+        gust_green=25.0,
+        gust_red=35.0,
+    )
+    assert status == AdvisoryStatus.AMBER
 
 
 # ---------------------------------------------------------------------------

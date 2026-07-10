@@ -29,6 +29,40 @@ from weatherbrief.models import (
 )
 
 
+def _merge_spans(layers: list[EnhancedCloudLayer]) -> list[tuple[float, float]]:
+    merged: list[list[float]] = []
+    for base, top in sorted((cl.base_ft, cl.top_ft) for cl in layers):
+        if top <= base:
+            continue
+        if merged and base <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], top)
+        else:
+            merged.append([base, top])
+    return [(base, top) for base, top in merged]
+
+
+def _span_length(spans: list[tuple[float, float]]) -> float:
+    return sum(top - base for base, top in spans)
+
+
+def _intersection_length(
+    a: list[tuple[float, float]],
+    b: list[tuple[float, float]],
+) -> float:
+    total = 0.0
+    i = j = 0
+    while i < len(a) and j < len(b):
+        lo = max(a[i][0], b[j][0])
+        hi = min(a[i][1], b[j][1])
+        if hi > lo:
+            total += hi - lo
+        if a[i][1] <= b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return total
+
+
 def _cloud_overlap_fraction(
     a: list[EnhancedCloudLayer],
     b: list[EnhancedCloudLayer],
@@ -43,30 +77,13 @@ def _cloud_overlap_fraction(
     if not a or not b:
         return 0.0
 
-    def _union_length(layers: list[EnhancedCloudLayer]) -> float:
-        spans = sorted((cl.base_ft, cl.top_ft) for cl in layers)
-        merged: list[list[float]] = []
-        for base, top in spans:
-            if merged and base <= merged[-1][1]:
-                merged[-1][1] = max(merged[-1][1], top)
-            else:
-                merged.append([base, top])
-        return sum(top - base for base, top in merged)
-
-    def _intersect_length() -> float:
-        total = 0.0
-        for ca in a:
-            for cb in b:
-                lo = max(ca.base_ft, cb.base_ft)
-                hi = min(ca.top_ft, cb.top_ft)
-                if hi > lo:
-                    total += hi - lo
-        return total
-
-    union = _union_length(a) + _union_length(b) - _intersect_length()
+    a_spans = _merge_spans(a)
+    b_spans = _merge_spans(b)
+    intersection = _intersection_length(a_spans, b_spans)
+    union = _span_length(a_spans) + _span_length(b_spans) - intersection
     if union <= 0:
         return 1.0
-    return _intersect_length() / union
+    return max(0.0, min(1.0, intersection / union))
 
 
 @register

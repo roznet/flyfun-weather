@@ -106,12 +106,13 @@ describe('sfip-at-level', () => {
     expect(m().getValue(point, 6000)).toBe(25);
   });
 
-  it('color thresholds map SFIP to risk colors', () => {
-    expect(m().getColor(10)).toBe('#22c55e');  // <=20 green
-    expect(m().getColor(20)).toBe('#22c55e');
-    expect(m().getColor(35)).toBe('#facc15');  // <=50 yellow
-    expect(m().getColor(70)).toBe('#f97316');  // <=80 orange
-    expect(m().getColor(90)).toBe('#ef4444');  // >80 red
+  it('uses the authoritative backend SFIP thresholds 15/30/55', () => {
+    expect(m().getColor(14.9)).toBe('#22c55e');
+    expect(m().getColor(15)).toBe('#facc15');
+    expect(m().getColor(29.9)).toBe('#facc15');
+    expect(m().getColor(30)).toBe('#f97316');
+    expect(m().getColor(54.9)).toBe('#f97316');
+    expect(m().getColor(55)).toBe('#ef4444');
   });
 });
 
