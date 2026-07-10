@@ -48,7 +48,7 @@
 ## Task 1 correction evidence
 
 - A223-07 red: `pytest tests/test_sfip.py -k no_vv -v` failed with structurally missing omega scoring 85.0 (`full_no_vv`) and 90.0 (`proxy_no_vv`) instead of 100.0. Green: both focused tests passed after normalizing only the present members; real `omega_pa_s=0.0` remained 85.0/90.0.
-- A223-08 red: `test_cloud_overlap_merges_internal_overlaps_before_jaccard` returned 2.0. Green: both interval-set Jaccard tests passed after merging each side and intersecting the unions once.
+- A223-08 red: `test_cloud_overlap_merges_internal_overlaps_before_jaccard` returned 2.0. Follow-up red: empty vs zero-length canonical span returned 0.0, expected 1.0. Green: all three interval-set Jaccard tests passed after merging each side and intersecting the unions once.
 - A223-06 red: the route-map test classified SFIP 15 as green. Green: `npx vitest run tests/unit/route-map-metrics.test.ts` passed 22 tests with 15/30/55 boundaries and matching legend stops.
 - A223-09 characterization: `test_gust_vector_crosswind_is_not_recalibrated_without_evidence` passed with AMBER from the current separate mean-crosswind/absolute-gust policy.
-- Final Task 1 target: 104 Python tests passed, 22 Vitest tests passed, and `git diff --check` exited 0.
+- Final Task 1 target: 105 Python tests passed, 22 Vitest tests passed, and `git diff --check` exited 0.
