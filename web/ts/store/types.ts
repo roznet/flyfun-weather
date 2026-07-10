@@ -71,6 +71,9 @@ export interface FlightResponse {
   private: boolean;
   auto_refresh: boolean;
   auto_refresh_hour: number | null;
+  // Per-flight briefing-notification override: follow the account setting
+  // ('default'), always notify ('notify'), or never ('mute').
+  notify_override: 'default' | 'notify' | 'mute';
   created_at: string;
   latest_briefing?: BriefingStatusInfo | null;
   // Present only when the flight is saved beyond the forecast horizon (no

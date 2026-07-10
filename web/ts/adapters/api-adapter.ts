@@ -126,6 +126,8 @@ export interface UpdateFlightRequest {
   // Timing-scenario Flexibility mode; omit for no change. 'alternate'
   // requires an alt_departure_time (server 422s otherwise).
   flexibility?: 'none' | 'alternate' | 'same_day' | 'prev_day' | 'next_day';
+  // Per-flight briefing-notification override; omit for no change.
+  notify_override?: 'default' | 'notify' | 'mute';
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
@@ -414,12 +416,10 @@ export async function refreshBriefingStream(
   onEvent: (event: RefreshStreamEvent) => void,
   force?: boolean,
   asOfDate?: string,
-  notifyEmail?: boolean,
 ): Promise<PackMeta | null> {
   const params = new URLSearchParams();
   if (force) params.set('force', 'true');
   if (asOfDate) params.set('as_of_date', asOfDate);
-  if (notifyEmail) params.set('notify_email', 'true');
   const qs = params.toString();
   const url = `${API_BASE}/flights/${encodeURIComponent(flightId)}/packs/refresh/stream${qs ? '?' + qs : ''}`;
   const resp = await fetch(url, {

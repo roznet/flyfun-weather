@@ -12,15 +12,47 @@ struct PreferencesResponse: Codable, Sendable {
     let notifyPush: Bool?
     let notifyScope: String?
     let notifyChangeOnly: Bool?
+    // One-time fail-safe notice: email was auto-re-enabled after the last push
+    // device was removed while email was off (channel-invariant decay branch).
+    let notifyDecayNotice: Bool?
+    // Registered APNs device count — push is only actionable with ≥1 device.
+    let pushDeviceCount: Int?
 
     var pushEnabled: Bool { notifyPush ?? false }
     var emailEnabled: Bool { notifyEmail ?? true }
     var scope: String { notifyScope ?? "auto" }
     var changeOnly: Bool { notifyChangeOnly ?? true }
+    var decayNotice: Bool { notifyDecayNotice ?? false }
+    var deviceCount: Int { pushDeviceCount ?? 0 }
+    var hasPushDevice: Bool { deviceCount > 0 }
+
+    /// "Briefing updates" 3-stop — folds scope + change-only into one control
+    /// (off / changes / every). Kept identical to the web fold so the two
+    /// clients stay consistent.
+    var briefingUpdates: BriefingUpdates {
+        if scope == "off" { return .off }
+        return changeOnly ? .changes : .every
+    }
 
     /// Signed-out / no-cache default.
     static let empty = PreferencesResponse(
         pirepCanView: false, pirepCanPublish: false,
-        notifyEmail: nil, notifyPush: nil, notifyScope: nil, notifyChangeOnly: nil
+        notifyEmail: nil, notifyPush: nil, notifyScope: nil, notifyChangeOnly: nil,
+        notifyDecayNotice: nil, pushDeviceCount: nil
     )
+}
+
+/// The three "Briefing updates" stops. Off silences default-resolution flights;
+/// changes notifies only when the assessment/outlook moves; every notifies on
+/// every completion. Maps to the stored `notify_scope` + `notify_change_only`.
+enum BriefingUpdates: String, CaseIterable, Sendable, Identifiable {
+    case off
+    case changes
+    case every
+
+    var id: String { rawValue }
+
+    /// The stored fields this stop unfolds to (never writes legacy "auto").
+    var scope: String { self == .off ? "off" : "all" }
+    var changeOnly: Bool { self == .changes }
 }

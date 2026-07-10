@@ -37,6 +37,16 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// The pinned alternate departure (ISO 8601), used when `flexibility` is
     /// `.alternate` or as the "★ your alternate" row of a day scan. nil = none set.
     let altDepartureTime: String?
+    /// Per-flight briefing-notification override ("default" | "notify" | "mute").
+    /// Stored as a tolerant string (see `notifyOverrideMode`) and defaulted so
+    /// the synthesized memberwise init keeps existing call sites unchanged.
+    /// Absent on older servers → treated as "default".
+    var notifyOverride: String? = nil
+
+    /// Per-flight override folded to an enum, tolerant of unknown/absent values.
+    var notifyOverrideMode: FlightNotifyOverride {
+        FlightNotifyOverride(rawValue: notifyOverride ?? "default") ?? .default
+    }
 
     /// Parsed departure date for display.
     var departureDate: Date? {
@@ -68,6 +78,36 @@ struct FlightResponse: Codable, Identifiable, Sendable {
 enum FlightRole: String, Codable, Sendable {
     case owner
     case subscriber
+}
+
+/// Per-flight briefing-notification override (mirrors the server
+/// `Flight.notify_override`). `default` follows the account "Briefing updates"
+/// setting; `notify` fires on any update to this flight even if the account is
+/// Off; `mute` never notifies. Delivery still uses the global channels.
+enum FlightNotifyOverride: String, Codable, Sendable, CaseIterable, Identifiable {
+    case `default`
+    case notify
+    case mute
+
+    var id: String { rawValue }
+
+    /// Bell menu label.
+    var label: String {
+        switch self {
+        case .default: "Default"
+        case .notify: "Always"
+        case .mute: "Mute"
+        }
+    }
+
+    /// SF Symbol reflecting the state.
+    var systemImage: String {
+        switch self {
+        case .default: "bell"
+        case .notify: "bell.fill"
+        case .mute: "bell.slash"
+        }
+    }
 }
 
 /// Timing-scenario Flexibility mode (mirrors the server `Flight.flexibility` and
