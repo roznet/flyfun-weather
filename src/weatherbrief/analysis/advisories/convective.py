@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories._helpers import pct_above_threshold
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.convective import convective_cross_check
@@ -121,28 +125,35 @@ class ConvectiveEvaluator:
 
         min_risk = _RISK_ORDER[min(min_risk_idx, len(_RISK_ORDER) - 1)]
         cruise_ft = ctx.cruise_altitude_ft
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         per_model: list[ModelAdvisoryResult] = []
-        peak_by_model: dict[str, ConvectiveRisk] = {}
 
         for model in ctx.models:
-            total = 0
-            affected = 0  # >= min_risk (LOW floor) — drives the colour
-            affected_mod = 0  # >= MODERATE — anchors the headline extent (#300)
+            evaluated: set[int] = set()
+            complete: set[int] = set()
+            affected: set[int] = set()  # >= min_risk — drives the colour
+            affected_mod: set[int] = set()  # >= MODERATE — headline extent
+            samples: list[EvidenceSample] = []
+            methods: list[str] = []
             has_high = False
             worst_risk = ConvectiveRisk.NONE
             below_cruise_count = 0  # risky points skipped because tops below cruise
             max_cover_pct: float | None = None
             # Details-only DD-vs-model-scheme cross-check tally (never grades).
-            xcheck_fired = 0
-            xcheck_dirs: dict[str, int] = {}
+            xcheck_evaluated: set[int] = set()
+            xcheck_dirs: dict[str, set[int]] = {}
             xcheck_worst_dd_risk = ConvectiveRisk.NONE
 
-            for rpa in ctx.analyses:
+            for rpa in ordered_analyses:
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
                     continue
-                total += 1
+                point_index = rpa.point_index
+                xcheck_evaluated.add(point_index)
 
                 # Independent of the grade filters below: compare the chosen
                 # thermo (CAPE-derived) risk against the model's own convective
@@ -157,17 +168,18 @@ class ConvectiveEvaluator:
                 thermo_conv = sounding.convective_thermo
                 xc = convective_cross_check(thermo_conv, sounding.convective_nwp)
                 if xc is not None:
-                    xcheck_fired += 1
-                    xcheck_dirs[xc.direction] = xcheck_dirs.get(xc.direction, 0) + 1
+                    xcheck_dirs.setdefault(xc.direction, set()).add(point_index)
                     if xc.direction == "dd_not_corroborated" and thermo_conv is not None:
                         if _RISK_ORDER.index(thermo_conv.risk_level) > _RISK_ORDER.index(
                             xcheck_worst_dd_risk
                         ):
                             xcheck_worst_dd_risk = thermo_conv.risk_level
 
-                conv = sounding.convective
-                if conv is None:
+                active = sounding.convective
+                if active is None:
                     continue
+                evaluated.add(point_index)
+                complete.add(point_index)
 
                 # Guardrail (#283): the active track may now be the model-native
                 # NWP track (convective_method defaults to "nwp"), whose risk can
@@ -178,11 +190,22 @@ class ConvectiveEvaluator:
                 # the divergence is surfaced via the cross-check below and the
                 # dd_nwp_agreement advisory, not blended into the DD tier. When
                 # the active track is DD this is a no-op.
-                graded_risk = conv.risk_level
-                if thermo_conv is not None and _RISK_ORDER.index(
-                    thermo_conv.risk_level
-                ) > _RISK_ORDER.index(graded_risk):
+                graded_risk = active.risk_level
+                floor_controls = (
+                    thermo_conv is not None
+                    and _RISK_ORDER.index(thermo_conv.risk_level)
+                    > _RISK_ORDER.index(active.risk_level)
+                )
+                if floor_controls:
                     graded_risk = thermo_conv.risk_level
+
+                if floor_controls:
+                    method_id = "nwp_with_dd_floor"
+                elif active.method.startswith("nwp"):
+                    method_id = "nwp"
+                else:
+                    method_id = "thermo"
+                methods.append(method_id)
 
                 risk_idx = _RISK_ORDER.index(graded_risk)
                 if risk_idx < _RISK_ORDER.index(min_risk):
@@ -201,8 +224,8 @@ class ConvectiveEvaluator:
                 # (top_ft=None) and a shallow NWP top below the DD EL (#283
                 # review): otherwise a quiet/shallow NWP top would filter out a
                 # point graded HIGH by a DD tower that does reach cruise.
-                check_top_ft = conv.top_ft
-                if thermo_conv is not None and graded_risk != conv.risk_level:
+                check_top_ft = active.top_ft
+                if floor_controls:
                     thermo_top = thermo_conv.top_ft
                     if check_top_ft is None or (
                         thermo_top is not None and thermo_top > check_top_ft
@@ -215,26 +238,65 @@ class ConvectiveEvaluator:
                     below_cruise_count += 1
                     continue
 
-                affected += 1
+                affected.add(point_index)
                 if risk_idx >= _MOD_IDX:
-                    affected_mod += 1
+                    affected_mod.add(point_index)
                 if risk_idx > _RISK_ORDER.index(worst_risk):
                     worst_risk = graded_risk
 
                 if graded_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
                     has_high = True
 
-                if conv.cover_pct is not None:
-                    max_cover_pct = max(max_cover_pct or 0, conv.cover_pct)
+                if active.cover_pct is not None:
+                    max_cover_pct = max(max_cover_pct or 0, active.cover_pct)
 
-            ext = format_extent(affected, total, ctx.total_distance_nm)
-            ext_mod = format_extent(affected_mod, total, ctx.total_distance_nm)
+                source = thermo_conv if floor_controls else active
+                lower_altitude_ft: int | None = None
+                upper_altitude_ft: int | None = None
+                if source.base_ft is not None and source.top_ft is not None:
+                    lower_altitude_ft = round(source.base_ft)
+                    upper_altitude_ft = round(source.top_ft)
+                samples.append(
+                    EvidenceSample(
+                        point_index=point_index,
+                        severity=(
+                            AdvisoryStatus.RED
+                            if graded_risk
+                            in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME)
+                            else AdvisoryStatus.AMBER
+                        ),
+                        reason_code=(
+                            "convective_dd_floor"
+                            if floor_controls
+                            else "convective_active"
+                        ),
+                        metric_id=(
+                            "nwp_convective_risk"
+                            if method_id == "nwp"
+                            else "convective_risk"
+                        ),
+                        method_id=method_id,
+                        lower_altitude_ft=lower_altitude_ft,
+                        upper_altitude_ft=upper_altitude_ft,
+                    )
+                )
+
+            summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=affected,
+                evidence_samples=samples,
+                moderate_point_indices=affected_mod,
+            )
+
             loc = ctx.locale
             cover_suffix = _coverage_suffix(max_cover_pct)
-            if total == 0:
+            if summary.total_points == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
-            elif affected == 0:
+            elif summary.affected_points == 0:
                 status = AdvisoryStatus.GREEN
                 if below_cruise_count > 0:
                     detail = adv_t("convective.below_cruise", loc, count=below_cruise_count)
@@ -247,7 +309,12 @@ class ConvectiveEvaluator:
                 if has_high:
                     status = AdvisoryStatus.RED
                 else:
-                    status = pct_above_threshold(affected, total, affected_pct_amber, affected_pct_red)
+                    status = pct_above_threshold(
+                        summary.affected_points,
+                        summary.total_points,
+                        affected_pct_amber,
+                        affected_pct_red,
+                    )
                     if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
                         status = AdvisoryStatus.AMBER
                 # Headline anchors on the MODERATE+ extent + named peak, so the
@@ -255,10 +322,11 @@ class ConvectiveEvaluator:
                 # never conflated. When nothing reaches MODERATE (LOW-only floor),
                 # fall back to "primed, not firing" so favorable-but-quiet CAPE
                 # doesn't masquerade as active convection (#300).
-                if affected_mod > 0:
+                if summary.affected_mod_points > 0:
                     detail = adv_t(
                         "convective.risk_over_mod", loc,
-                        extent=ext_mod, peak=worst_risk.value.upper(),
+                        extent=summary.format_mod_extent(),
+                        peak=worst_risk.value.upper(),
                     ) + cover_suffix
                 else:
                     # Calibrated for the default LOW floor (min_risk=2): "primed,
@@ -266,15 +334,27 @@ class ConvectiveEvaluator:
                     # a MARGINAL-only route also lands here and the wording is a
                     # slight overstatement — accepted (rare, non-default; #302
                     # review).
-                    detail = adv_t("convective.favorability", loc, extent=ext) + cover_suffix
+                    detail = adv_t(
+                        "convective.favorability",
+                        loc,
+                        extent=summary.format_extent(),
+                    ) + cover_suffix
 
             cross_check: str | None = None
-            if xcheck_fired > 0:
-                dominant = max(xcheck_dirs, key=lambda d: xcheck_dirs[d])
+            if xcheck_dirs:
+                dominant = max(xcheck_dirs, key=lambda d: len(xcheck_dirs[d]))
                 # Extent reflects only the dominant direction's points, not the
                 # combined fire count — otherwise a mix of both directions would
                 # overstate the extent of the direction we're describing.
-                xc_ext = format_extent(xcheck_dirs[dominant], total, ctx.total_distance_nm)
+                xcheck_summary = summarize_evidence(
+                    route_points=ordered_analyses,
+                    total_distance_nm=ctx.total_distance_nm,
+                    evaluated_point_indices=xcheck_evaluated,
+                    complete_point_indices=xcheck_evaluated,
+                    affected_point_indices=xcheck_dirs[dominant],
+                    evidence_samples=(),
+                )
+                xc_ext = xcheck_summary.format_extent()
                 if dominant == "dd_not_corroborated":
                     cross_check = (
                         f"DD {xcheck_worst_dd_risk.value.upper()} not corroborated — "
@@ -286,57 +366,36 @@ class ConvectiveEvaluator:
                         f"over {xc_ext}"
                     )
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=affected, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-                affected_mod=affected_mod,
-                cross_check=cross_check,
-            ))
-            peak_by_model[model] = worst_risk
-
-        result = RouteAdvisoryResult.from_per_model("convective", per_model, params)
-        # Override the generic representative-model detail with a cross-model
-        # MODERATE+ range + peak, built here where the locale is available
-        # (from_per_model is locale-agnostic). GREEN/UNAVAILABLE keep the
-        # representative wording (none / below-cruise / no-data). (#300)
-        # The per-model cover_suffix is intentionally dropped from this aggregate
-        # line: a single representative model's cover is arbitrary across a
-        # cross-model range. Cover stays visible in the per-model breakdowns
-        # (#302 review).
-        agg = result.aggregate_status
-        if agg in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
-            loc = ctx.locale
-            matching = [m for m in per_model if m.status == agg]
-            mod_models = [m for m in matching if m.affected_mod_points > 0]
-            if mod_models:
-                peak = max(
-                    (peak_by_model[m.model] for m in mod_models),
-                    key=lambda r: _RISK_ORDER.index(r),
-                ).value.upper()
-                pcts = sorted(round(m.affected_mod_pct) for m in mod_models)
-                lo, hi = pcts[0], pcts[-1]
-                if lo == hi:
-                    result.aggregate_detail = adv_t(
-                        "convective.risk_over_mod_pct", loc, pct=lo, peak=peak
-                    )
-                else:
-                    result.aggregate_detail = adv_t(
-                        "convective.risk_over_range", loc, min=lo, max=hi, peak=peak
-                    )
-            else:
-                # LOW-only across every supporting model — favorability range.
-                pcts = sorted(
-                    round(m.affected_pct) for m in matching if m.total_points > 0
+            controlling_samples = (
+                [
+                    sample
+                    for sample in samples
+                    if sample.severity == AdvisoryStatus.RED
+                ]
+                if has_high
+                else samples
+            )
+            primary_method_id = next(
+                (
+                    sample.method_id
+                    for sample in controlling_samples
+                    if sample.method_id is not None
+                ),
+                methods[0] if methods else None,
+            )
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                loc,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=primary_method_id,
+                    cross_check=cross_check,
                 )
-                if pcts:
-                    lo, hi = pcts[0], pcts[-1]
-                    if lo == hi:
-                        result.aggregate_detail = adv_t(
-                            "convective.favorability_pct", loc, pct=lo
-                        )
-                    else:
-                        result.aggregate_detail = adv_t(
-                            "convective.favorability_range", loc, min=lo, max=hi
-                        )
-        return result
+            )
+
+        return RouteAdvisoryResult.from_per_model("convective", per_model, params)

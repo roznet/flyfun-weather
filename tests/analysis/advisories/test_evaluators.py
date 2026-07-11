@@ -167,8 +167,21 @@ class TestTurbulence:
 
 
 class TestConvective:
-    def test_green_no_convection(self, clear_context: RouteContext):
-        result = ConvectiveEvaluator.evaluate(clear_context, {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50})
+    def test_green_no_convection(self):
+        ctx = _conv_route(
+            {
+                "gfs": [ConvectiveRisk.NONE] * 10,
+                "ecmwf": [ConvectiveRisk.NONE] * 10,
+            }
+        )
+        result = ConvectiveEvaluator.evaluate(
+            ctx,
+            {
+                "min_risk": 2,
+                "affected_pct_amber": 20,
+                "affected_pct_red": 50,
+            },
+        )
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_moderate_convection(self, convective_context: RouteContext):
@@ -364,7 +377,7 @@ class TestConvective:
 
 class TestConvectiveHeadline:
     """Headline wording (#300): anchor extent on MODERATE+, name the peak, and
-    show a cross-model range — never the LOW-floor union as one number."""
+    keep aggregate wording owned by the representative model."""
 
     def test_moderate_plus_anchoring_not_low_union(self):
         """6 HIGH + 18 LOW of 24 points: every point clears the LOW floor (100%)
@@ -388,9 +401,9 @@ class TestConvectiveHeadline:
         assert "peak HIGH" in res.aggregate_detail
         assert "across models" not in res.aggregate_detail
 
-    def test_cross_model_range(self):
-        """Three RED models with differing MODERATE+ coverage (25/50/75%) →
-        aggregate shows the range across the supporting models + peak."""
+    def test_aggregate_uses_representative_model_detail(self):
+        """Three RED models with differing MODERATE+ coverage keep the
+        aggregate detail tied to the chosen representative model."""
         ctx = _conv_route(
             {
                 "gfs": [ConvectiveRisk.HIGH] * 2 + [ConvectiveRisk.LOW] * 6,  # 25%
@@ -401,10 +414,11 @@ class TestConvectiveHeadline:
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
 
         assert res.aggregate_status == AdvisoryStatus.RED
-        assert "MODERATE+" in res.aggregate_detail
-        assert "25–75%" in res.aggregate_detail
-        assert "across models" in res.aggregate_detail
-        assert "peak HIGH" in res.aggregate_detail
+        assert res.representative_model == "gfs"
+        assert res.aggregate_detail == res.per_model[0].detail
+        assert "25%" in res.aggregate_detail
+        assert "75%" not in res.aggregate_detail
+        assert "across models" not in res.aggregate_detail
 
     def test_low_only_favorability_fallback(self):
         """4 LOW + 6 NONE of 10: 40% clears the LOW floor (AMBER) but nothing
@@ -427,9 +441,9 @@ class TestConvectiveHeadline:
         assert "across models" not in res.aggregate_detail
         assert "peak" not in res.aggregate_detail.lower()
 
-    def test_range_collapses_when_models_agree(self):
-        """Two RED models with identical MODERATE+ coverage (50%) → the range
-        collapses to a single number; no '–' range, no 'across models'."""
+    def test_representative_detail_keeps_midpoint_extent_when_models_agree(self):
+        """Two agreeing RED models retain the representative model's
+        midpoint-derived nautical-mile extent."""
         ctx = _conv_route(
             {
                 "gfs": [ConvectiveRisk.HIGH] * 4 + [ConvectiveRisk.LOW] * 4,  # 50%
@@ -439,10 +453,11 @@ class TestConvectiveHeadline:
         res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
 
         assert res.aggregate_status == AdvisoryStatus.RED
-        assert "MODERATE+ over 50%" in res.aggregate_detail
+        assert res.representative_model == "gfs"
+        assert res.aggregate_detail == res.per_model[0].detail
+        assert "MODERATE+ over 100nm/200nm (50%)" in res.aggregate_detail
         assert "peak HIGH" in res.aggregate_detail
         assert "across models" not in res.aggregate_detail
-        assert "–" not in res.aggregate_detail  # no en-dash range
 
 
 class TestCloudTop:

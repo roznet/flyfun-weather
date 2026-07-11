@@ -1,0 +1,288 @@
+"""Evidence geometry, provenance, and missing-data tests for convection."""
+
+from dataclasses import replace
+
+import pytest
+
+from weatherbrief.analysis.advisories.convective import ConvectiveEvaluator
+from weatherbrief.models import AdvisoryStatus, ConvectiveAssessment, ConvectiveRisk
+
+
+_CONV_PARAMS = {
+    "min_risk": 2,
+    "affected_pct_amber": 20,
+    "affected_pct_red": 50,
+    "top_clearance_ft": 2000,
+}
+
+
+def _assessment(
+    risk: ConvectiveRisk,
+    *,
+    base_ft: float | None = None,
+    top_ft: float | None = None,
+    method: str = "nwp",
+) -> ConvectiveAssessment:
+    return ConvectiveAssessment(
+        risk_level=risk,
+        base_ft=base_ft,
+        top_ft=top_ft,
+        method=method,
+    )
+
+
+def _with_assessments(
+    ctx,
+    active_by_model,
+    *,
+    thermo_by_model=None,
+    selected_method: str = "nwp",
+):
+    thermo_by_model = thermo_by_model or {}
+    analyses = []
+    models = list(active_by_model)
+
+    for rpa in ctx.analyses:
+        soundings = {}
+        for model in models:
+            source = rpa.sounding.get(model, rpa.sounding["gfs"])
+            active = active_by_model[model].get(rpa.point_index)
+            thermo = thermo_by_model.get(model, {}).get(rpa.point_index)
+            if thermo is None and active is not None and not active.method.startswith("nwp"):
+                thermo = active
+            nwp = (
+                active
+                if active is not None and active.method.startswith("nwp")
+                else None
+            )
+            soundings[model] = source.model_copy(
+                update={
+                    "convective": active,
+                    "convective_thermo": thermo,
+                    "convective_nwp": nwp,
+                }
+            )
+        analyses.append(rpa.model_copy(update={"sounding": soundings}))
+
+    return replace(
+        ctx,
+        analyses=analyses,
+        models=models,
+        convective_method=selected_method,
+    )
+
+
+def test_dd_floor_emits_compound_provenance_with_thermo_geometry(clear_context):
+    active = {
+        index: _assessment(ConvectiveRisk.NONE)
+        for index in range(len(clear_context.analyses))
+    }
+    thermo = {
+        index: _assessment(ConvectiveRisk.NONE, method="thermo")
+        for index in range(len(clear_context.analyses))
+    }
+    thermo[3] = _assessment(
+        ConvectiveRisk.HIGH,
+        base_ft=5000,
+        top_ft=25000,
+        method="thermo",
+    )
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+    floor_regions = [
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "convective_dd_floor"
+    ]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "nwp_with_dd_floor"
+    assert len(floor_regions) == 1
+    assert floor_regions[0].method_id == "nwp_with_dd_floor"
+    assert floor_regions[0].metric_id == "convective_risk"
+    assert floor_regions[0].severity == AdvisoryStatus.RED
+    assert (
+        floor_regions[0].lower_altitude_ft,
+        floor_regions[0].upper_altitude_ft,
+    ) == (5000, 25000)
+
+
+def test_disconnected_nwp_cells_remain_disconnected(clear_context):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index in {1, 2, 4} else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(clear_context, {"gfs": active})
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert [
+        (region.start_point_index, region.end_point_index)
+        for region in model.evidence_regions
+    ] == [(1, 2), (4, 4)]
+    assert all(
+        region.reason_code == "convective_active"
+        and region.metric_id == "nwp_convective_risk"
+        and region.method_id == "nwp"
+        for region in model.evidence_regions
+    )
+    assert model.affected_nm == 60.0
+    assert model.affected_mod_nm == 60.0
+    assert "60nm/200nm (30%)" in model.detail
+
+
+def test_missing_active_assessments_are_partial_and_not_clear(clear_context):
+    active = {
+        index: _assessment(ConvectiveRisk.NONE)
+        for index in {0, 1}
+    }
+    ctx = _with_assessments(clear_context, {"gfs": active})
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.data_state == "partial"
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.detail == "Partial data"
+    assert model.total_points == 2
+
+
+def test_aggregate_detail_is_owned_by_representative_model(clear_context):
+    gfs = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index in {1, 2, 4} else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ecmwf = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index in {0, 1, 2, 3} else ConvectiveRisk.NONE,
+            base_ft=6000,
+            top_ft=26000,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(clear_context, {"gfs": gfs, "ecmwf": ecmwf})
+
+    result = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+    by_model = {model.model: model for model in result.per_model}
+
+    assert by_model["gfs"].status == AdvisoryStatus.AMBER
+    assert by_model["ecmwf"].status == AdvisoryStatus.AMBER
+    assert by_model["gfs"].detail != by_model["ecmwf"].detail
+    assert result.representative_model == "gfs"
+    assert result.aggregate_detail == by_model["gfs"].detail
+
+
+@pytest.mark.parametrize(
+    ("active_method", "expected_method", "expected_metric"),
+    [
+        pytest.param("nwp_hybrid", "nwp", "nwp_convective_risk", id="native-nwp"),
+        pytest.param("thermo", "thermo", "convective_risk", id="thermo"),
+    ],
+)
+def test_active_track_uses_exact_method_and_metric_ids(
+    clear_context,
+    active_method,
+    expected_method,
+    expected_metric,
+):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index == 1 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+            method=active_method,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        selected_method="thermo" if active_method == "thermo" else "nwp",
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.primary_method_id == expected_method
+    assert {region.reason_code for region in model.evidence_regions} == {
+        "convective_active"
+    }
+    assert {region.method_id for region in model.evidence_regions} == {
+        expected_method
+    }
+    assert {region.metric_id for region in model.evidence_regions} == {
+        expected_metric
+    }
+
+
+def test_evidence_bounds_require_a_complete_base_top_pair(clear_context):
+    active = {
+        index: _assessment(ConvectiveRisk.NONE)
+        for index in range(len(clear_context.analyses))
+    }
+    active[1] = _assessment(ConvectiveRisk.MODERATE, base_ft=5000)
+    active[2] = _assessment(ConvectiveRisk.MODERATE, top_ft=25000)
+    active[3] = _assessment(
+        ConvectiveRisk.MODERATE,
+        base_ft=5000,
+        top_ft=25000,
+    )
+    ctx = _with_assessments(clear_context, {"gfs": active})
+
+    regions = ConvectiveEvaluator.evaluate(
+        ctx,
+        _CONV_PARAMS,
+    ).per_model[0].evidence_regions
+
+    assert [
+        (
+            region.start_point_index,
+            region.end_point_index,
+            region.lower_altitude_ft,
+            region.upper_altitude_ft,
+        )
+        for region in regions
+    ] == [
+        (1, 2, None, None),
+        (3, 3, 5000, 25000),
+    ]
+
+
+def test_primary_and_moderate_extents_use_midpoint_route_cells(clear_context):
+    route = replace(
+        clear_context,
+        analyses=[
+            rpa.model_copy(update={"distance_from_origin_nm": distance})
+            for rpa, distance in zip(
+                clear_context.analyses[:4],
+                [0.0, 10.0, 50.0, 100.0],
+            )
+        ],
+        total_distance_nm=100.0,
+    )
+    active = {
+        0: _assessment(ConvectiveRisk.NONE),
+        1: _assessment(ConvectiveRisk.LOW, base_ft=5000, top_ft=25000),
+        2: _assessment(ConvectiveRisk.MODERATE, base_ft=5000, top_ft=25000),
+        3: _assessment(ConvectiveRisk.NONE),
+    }
+    ctx = _with_assessments(route, {"gfs": active})
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.affected_points == 2
+    assert model.affected_nm == 70.0
+    assert model.affected_mod_points == 1
+    assert model.affected_mod_nm == 45.0
+    assert "45nm/100nm (25%)" in model.detail
