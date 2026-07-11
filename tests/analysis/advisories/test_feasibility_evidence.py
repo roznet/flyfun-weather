@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from weatherbrief.analysis.advisories.ifr_feasibility import (
     IFRFeasibilityEvaluator,
+    _check_airport_ifr,
 )
 from weatherbrief.analysis.advisories.vfr_feasibility import (
     VFRFeasibilityEvaluator,
@@ -659,3 +660,68 @@ def test_ifr_one_missing_airport_endpoint_is_partial(ifr_normal_context):
 
     assert model.data_state == "partial"
     assert model.status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_ifr_missing_airport_source_fields_is_partial_unavailable(
+    vfr_clear_context,
+):
+    missing_sources = {
+        "ceiling_ft": None,
+        "ceiling_evaluated": False,
+        "visibility_sm": None,
+    }
+    ctx = _with_airport_condition_updates(
+        replace(vfr_clear_context, models=["gfs"]),
+        departure=missing_sources,
+        arrival=missing_sources,
+    )
+
+    model = IFRFeasibilityEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "partial"
+
+
+def test_ifr_assessed_clear_ceiling_is_real_partial_airport_evidence(
+    vfr_clear_context,
+):
+    assessed_clear_without_visibility = {
+        "ceiling_ft": None,
+        "ceiling_evaluated": True,
+        "visibility_sm": None,
+    }
+    ctx = _with_airport_condition_updates(
+        replace(vfr_clear_context, models=["gfs"]),
+        departure=assessed_clear_without_visibility,
+        arrival=assessed_clear_without_visibility,
+    )
+
+    airport = _check_airport_ifr(ctx, "gfs", 200, 400)
+
+    assert airport.status == AdvisoryStatus.GREEN
+    assert airport.has_evaluated_endpoint is True
+    assert airport.data_state == "partial"
+
+
+def test_ifr_known_ceiling_hazard_survives_missing_other_airport_sources(
+    vfr_clear_context,
+):
+    ctx = _with_airport_condition_updates(
+        replace(vfr_clear_context, models=["gfs"]),
+        departure={
+            "flight_category": FlightCategory.LIFR,
+            "ceiling_ft": 100,
+            "ceiling_evaluated": False,
+            "visibility_sm": None,
+        },
+        arrival={
+            "ceiling_ft": None,
+            "ceiling_evaluated": False,
+            "visibility_sm": None,
+        },
+    )
+
+    model = IFRFeasibilityEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.data_state == "partial"

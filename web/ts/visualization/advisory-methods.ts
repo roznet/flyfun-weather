@@ -103,6 +103,11 @@ const METHOD_LABELS: Readonly<Record<string, AdvisoryMethodDefinition>> = {
     descriptionKey: 'advisories.methods.airport_conditions',
     fallbackDescription: 'Forecast airport conditions',
   },
+  flight_category_composite: {
+    short: 'Airport composite',
+    descriptionKey: 'advisories.methods.flight_category_composite',
+    fallbackDescription: 'Multiple airport-weather methods tied for the controlling grade',
+  },
   runway_components: {
     short: 'Runway wind',
     descriptionKey: 'advisories.methods.runway_components',

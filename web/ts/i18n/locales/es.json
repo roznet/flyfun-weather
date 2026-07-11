@@ -310,6 +310,7 @@
   "advisories.methods.model_divergence": "Evaluación de divergencia entre modelos",
   "advisories.methods.dd_vs_nwp": "Comparación dentro del modelo de dos derivaciones",
   "advisories.methods.airport_conditions": "Condiciones aeroportuarias previstas",
+  "advisories.methods.flight_category_composite": "Varios métodos meteorológicos aeroportuarios empatan como determinantes de la calificación",
   "advisories.methods.runway_components": "Componentes del viento relativos a la pista",
   "advisories.methods.wind_gust": "Umbral de ráfaga de viento en superficie",
   "advisories.methods.runway_wind_with_gust": "Los componentes del viento en pista y la ráfaga empatan como determinantes de la calificación",

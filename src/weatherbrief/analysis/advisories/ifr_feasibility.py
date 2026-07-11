@@ -131,6 +131,7 @@ def _check_airport_ifr(
     parts: list[str] = []
     worst = AdvisoryStatus.GREEN
     evaluated: set[str] = set()
+    complete: set[str] = set()
 
     for endpoint, label_key, icao, cond, min_ceil in [
         ("departure", "airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft),
@@ -138,7 +139,13 @@ def _check_airport_ifr(
     ]:
         if cond is None:
             continue
+        ceiling_available = cond.ceiling_evaluated or cond.ceiling_ft is not None
+        visibility_available = cond.visibility_sm is not None
+        if not (ceiling_available or visibility_available):
+            continue
         evaluated.add(endpoint)
+        if ceiling_available and visibility_available:
+            complete.add(endpoint)
         label = adv_t(label_key, loc)
         cat = cond.flight_category
 
@@ -160,7 +167,7 @@ def _check_airport_ifr(
     state = data_state_from_domains(
         expected=expected,
         evaluated=evaluated,
-        complete=evaluated,
+        complete=complete,
     )
     return _IFRAirportAssessment(
         status=worst if evaluated else AdvisoryStatus.UNAVAILABLE,

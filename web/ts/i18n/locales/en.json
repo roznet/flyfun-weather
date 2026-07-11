@@ -372,6 +372,7 @@
   "advisories.methods.model_divergence": "Cross-model divergence assessment",
   "advisories.methods.dd_vs_nwp": "Within-model comparison of two derivations",
   "advisories.methods.airport_conditions": "Forecast airport conditions",
+  "advisories.methods.flight_category_composite": "Multiple airport-weather methods tied for the controlling grade",
   "advisories.methods.runway_components": "Runway-relative wind components",
   "advisories.methods.wind_gust": "Surface wind-gust threshold",
   "advisories.methods.runway_wind_with_gust": "Runway wind components and gust tied for the controlling grade",

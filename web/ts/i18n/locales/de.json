@@ -310,6 +310,7 @@
   "advisories.methods.model_divergence": "Bewertung der Abweichung zwischen Modellen",
   "advisories.methods.dd_vs_nwp": "Modellinterner Vergleich zweier Ableitungen",
   "advisories.methods.airport_conditions": "Vorhergesagte Flugplatzbedingungen",
+  "advisories.methods.flight_category_composite": "Mehrere Flugplatzwettermethoden bestimmen gleichrangig die Wertung",
   "advisories.methods.runway_components": "Pistenbezogene Windkomponenten",
   "advisories.methods.wind_gust": "Schwellenwert für Oberflächenwindböen",
   "advisories.methods.runway_wind_with_gust": "Pistenwindkomponenten und Böe bestimmen gleichrangig die Wertung",

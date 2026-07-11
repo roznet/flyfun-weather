@@ -13,6 +13,7 @@ const EXPECTED_METHOD_KEYS = [
   'dd_vs_nwp',
   'density_altitude',
   'dewpoint_depression',
+  'flight_category_composite',
   'gust_factor',
   'hewson',
   'ieng',
@@ -108,6 +109,7 @@ describe('advisoryMethodLabel', () => {
     ['gust_factor', 'Gust factor'],
     ['llws_composite', 'Shear + gust'],
     ['hewson', 'Hewson'],
+    ['flight_category_composite', 'Airport composite'],
     ['vfr_composite', 'VFR composite'],
     ['ifr_composite', 'IFR composite'],
   ])('uses the canonical short label for %s', (methodId, short) => {
@@ -120,6 +122,13 @@ describe('advisoryMethodLabel', () => {
     expect(advisoryMethodLabel('nwp_with_dd_floor')).toEqual({
       short: 'NWP + DD floor',
       description: expect.stringMatching(/\S/),
+    });
+  });
+
+  it('describes the airport composite generically for cross-method ties', () => {
+    expect(advisoryMethodLabel('flight_category_composite')).toEqual({
+      short: 'Airport composite',
+      description: 'Multiple airport-weather methods tied for the controlling grade',
     });
   });
 

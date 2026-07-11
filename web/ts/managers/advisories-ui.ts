@@ -215,6 +215,11 @@ function formatWind(cond: AirportModelCondition): string {
   return `${dir}@${spd}${gust}`;
 }
 
+function formatCeiling(cond: AirportModelCondition): string {
+  if (cond.ceiling_ft !== null) return `${cond.ceiling_ft}ft`;
+  return cond.ceiling_evaluated === true ? 'CLR' : 'N/A';
+}
+
 function formatRunwayComponents(rwy: RunwayWind, windDir: number): string {
   // Headwind: \u2193 down = headwind, \u2191 up = tailwind
   const hwArrow = rwy.headwind_kt >= 0 ? '\u2193' : '\u2191';
@@ -235,7 +240,8 @@ function renderSummaryRow(cond: AirportModelCondition): string {
   const catClass = flightCatBadgeClass(cond.flight_category);
   const visStr = formatCondVis(cond);
   const vis = visStr ? `vis ${visStr}` : '';
-  const ceil = cond.ceiling_ft !== null ? `ceil ${cond.ceiling_ft}ft` : 'CLR';
+  const ceiling = formatCeiling(cond);
+  const ceil = cond.ceiling_ft !== null ? `ceil ${ceiling}` : ceiling;
   const wind = formatWind(cond);
   const rwyComp = cond.best_runway && cond.wind_direction_deg != null
     ? formatRunwayComponents(cond.best_runway, cond.wind_direction_deg)
@@ -255,7 +261,7 @@ function renderConditionRow(cond: AirportModelCondition): string {
   const catLabel = cond.flight_category;
   const catClass = flightCatBadgeClass(cond.flight_category);
   const vis = formatCondVis(cond) ?? 'N/A';
-  const ceil = cond.ceiling_ft !== null ? `${cond.ceiling_ft}ft` : 'CLR';
+  const ceil = formatCeiling(cond);
 
   const wind = formatWind(cond);
   const rwyComp = cond.best_runway && cond.wind_direction_deg != null

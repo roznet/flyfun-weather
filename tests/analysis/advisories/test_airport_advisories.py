@@ -847,8 +847,17 @@ def test_density_altitude_missing_airports_returns_each_requested_model_unavaila
 
 # --- FlightCategoryEvaluator: terminal convective aspect ---
 
-def _conv_rpa(i: int, distance_nm: float, risk) -> RoutePointAnalysis:
-    conv = ConvectiveAssessment(risk_level=risk) if risk is not None else None
+def _conv_rpa(
+    i: int,
+    distance_nm: float,
+    risk,
+    method: str = "thermo",
+) -> RoutePointAnalysis:
+    conv = (
+        ConvectiveAssessment(risk_level=risk, method=method)
+        if risk is not None
+        else None
+    )
     return RoutePointAnalysis(
         point_index=i,
         lat=48.0,
@@ -861,18 +870,29 @@ def _conv_rpa(i: int, distance_nm: float, risk) -> RoutePointAnalysis:
     )
 
 
-def _terminal_conv_ctx(dep_risk, arr_risk, mid_risk=None) -> RouteContext:
+def _terminal_conv_ctx(
+    dep_risk,
+    arr_risk,
+    mid_risk=None,
+    *,
+    dep_method: str = "thermo",
+    arr_method: str = "thermo",
+    mid_method: str = "thermo",
+) -> RouteContext:
     """200nm route, 10 points: convective risk at the endpoints and optionally mid-route."""
     analyses = []
     for i in range(10):
         d = i * 200.0 / 9
         if d <= 25:
             risk = dep_risk
+            method = dep_method
         elif d >= 175:
             risk = arr_risk
+            method = arr_method
         else:
             risk = mid_risk
-        analyses.append(_conv_rpa(i, d, risk))
+            method = mid_method
+        analyses.append(_conv_rpa(i, d, risk, method))
     conditions = _make_airport_conditions(
         {"gfs": FlightCategory.VFR}, {"gfs": FlightCategory.VFR},
     )
@@ -911,8 +931,52 @@ class TestTerminalConvective:
         from weatherbrief.models import ConvectiveRisk
 
         ctx = _terminal_conv_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.NONE)
-        result = FlightCategoryEvaluator.evaluate(ctx, {})
-        assert result.aggregate_status == AdvisoryStatus.RED
+        model = FlightCategoryEvaluator.evaluate(ctx, {}).per_model[0]
+        assert model.status == AdvisoryStatus.RED
+        assert model.primary_method_id == "thermo"
+
+    def test_condition_controlled_hazard_keeps_airport_provenance(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.IFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+        )
+        ctx = replace(
+            _terminal_conv_ctx(ConvectiveRisk.NONE, ConvectiveRisk.NONE),
+            airport_conditions=conditions,
+        )
+
+        model = FlightCategoryEvaluator.evaluate(ctx, {}).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.primary_method_id == "airport_conditions"
+
+    def test_tied_condition_and_convection_use_composite_provenance(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.IFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+        )
+        ctx = replace(
+            _terminal_conv_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.NONE),
+            airport_conditions=conditions,
+        )
+
+        model = FlightCategoryEvaluator.evaluate(ctx, {}).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.primary_method_id == "flight_category_composite"
+
+    def test_tied_convective_methods_use_composite_provenance(self):
+        ctx = _terminal_conv_ctx(
+            ConvectiveRisk.HIGH,
+            ConvectiveRisk.HIGH,
+            dep_method="thermo",
+            arr_method="nwp_hybrid",
+        )
+
+        model = FlightCategoryEvaluator.evaluate(ctx, {}).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.primary_method_id == "flight_category_composite"
 
     def test_mid_route_convection_not_attributed_to_terminals(self):
         from weatherbrief.models import ConvectiveRisk

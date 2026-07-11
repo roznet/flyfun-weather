@@ -16,7 +16,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories.evidence import build_non_spatial_result
+from weatherbrief.analysis.advisories.evidence import (
+    build_non_spatial_result,
+    convective_method_id,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -47,6 +50,7 @@ class _TerminalConvectiveAssessment:
     risk: ConvectiveRisk
     any_evaluated: bool
     all_evaluated: bool
+    method_ids: frozenset[str]
 
 
 def _terminal_convective_risk(
@@ -59,6 +63,7 @@ def _terminal_convective_risk(
     worst = ConvectiveRisk.NONE
     expected_points = 0
     evaluated_points = 0
+    controlling_methods: set[str] = set()
     for rpa in ctx.analyses:
         dist = rpa.distance_from_origin_nm
         in_terminal = (
@@ -73,14 +78,19 @@ def _terminal_convective_risk(
         if conv is None:
             continue
         evaluated_points += 1
+        method_id = convective_method_id(conv.method)
         if _CONV_RANK[conv.risk_level] > _CONV_RANK[worst]:
             worst = conv.risk_level
+            controlling_methods = {method_id} if method_id is not None else set()
+        elif conv.risk_level == worst and method_id is not None:
+            controlling_methods.add(method_id)
     return _TerminalConvectiveAssessment(
         risk=worst,
         any_evaluated=evaluated_points > 0,
         all_evaluated=(
             expected_points > 0 and evaluated_points == expected_points
         ),
+        method_ids=frozenset(controlling_methods),
     )
 
 
@@ -247,6 +257,7 @@ class FlightCategoryEvaluator:
             evaluated: set[str] = set()
             complete: set[str] = set()
             affected: set[str] = set()
+            endpoint_controls: list[tuple[AdvisoryStatus, set[str]]] = []
             for entity, label_key, icao, cond, end in [
                 ("departure", "airport.dep", dep.icao, dep_cond, "dep"),
                 ("arrival", "airport.arr", arr.icao, arr_cond, "arr"),
@@ -275,14 +286,16 @@ class FlightCategoryEvaluator:
                     complete.add(entity)
 
                 status = AdvisoryStatus.GREEN
+                condition_status: AdvisoryStatus | None = None
                 label = adv_t(label_key, loc)
                 part = f"{label} {icao}"
                 if condition_available:
                     assert cond is not None
-                    status = _classify_conditions(
+                    condition_status = _classify_conditions(
                         cond, amber_ceiling_ft, amber_vis_sm,
                         red_ceiling_ft, red_vis_sm,
                     )
+                    status = condition_status
                     part += f": {cond.flight_category.value}"
 
                 conv_status = _terminal_convective_status(conv.risk)
@@ -296,11 +309,36 @@ class FlightCategoryEvaluator:
                 if condition_available or conv_status != AdvisoryStatus.GREEN:
                     parts.append(part)
                 statuses.append(status)
+                controlling_methods: set[str] = set()
+                if condition_status == status:
+                    controlling_methods.add("airport_conditions")
+                if (
+                    conv.any_evaluated
+                    and conv_status == status
+                    and (
+                        status != AdvisoryStatus.GREEN
+                        or condition_status is None
+                    )
+                ):
+                    controlling_methods.update(conv.method_ids)
+                endpoint_controls.append((status, controlling_methods))
                 if status != AdvisoryStatus.GREEN:
                     affected.add(entity)
 
             detail = " | ".join(parts)
             worst = AdvisoryStatus.worst(statuses)
+            controlling_methods = {
+                method_id
+                for endpoint_status, method_ids in endpoint_controls
+                if endpoint_status == worst
+                for method_id in method_ids
+            }
+            if len(controlling_methods) == 1:
+                primary_method_id = next(iter(controlling_methods))
+            elif len(controlling_methods) > 1:
+                primary_method_id = "flight_category_composite"
+            else:
+                primary_method_id = None
 
             per_model.append(
                 build_non_spatial_result(
@@ -315,7 +353,7 @@ class FlightCategoryEvaluator:
                     evaluated_entities=evaluated,
                     complete_entities=complete,
                     affected_entities=affected,
-                    primary_method_id="airport_conditions",
+                    primary_method_id=primary_method_id,
                 )
             )
 

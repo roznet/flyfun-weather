@@ -9,6 +9,7 @@ function cond(overrides: Partial<AirportModelCondition> = {}): AirportModelCondi
     model: 'gfs',
     flight_category: 'VFR' as FlightCategory,
     ceiling_ft: null,
+    ceiling_evaluated: false,
     visibility_m: null,
     visibility_sm: null,
     wind_speed_kt: null,
@@ -23,6 +24,47 @@ function cond(overrides: Partial<AirportModelCondition> = {}): AirportModelCondi
 describe('computeSummaryCondition', () => {
   it('returns null for an empty model list', () => {
     expect(computeSummaryCondition([], 'majority')).toBeNull();
+  });
+
+  it('excludes missing-derived VFR votes from the category summary', () => {
+    const summary = computeSummaryCondition([
+      cond({ model: 'gfs' }),
+      cond({ model: 'icon' }),
+      cond({
+        model: 'ecmwf',
+        flight_category: 'IFR',
+        ceiling_ft: 800,
+        visibility_sm: 2,
+      }),
+    ], 'majority');
+
+    expect(summary?.flight_category).toBe('IFR');
+  });
+
+  it('returns null when every condition lacks ceiling and visibility evidence', () => {
+    expect(computeSummaryCondition([
+      cond({ model: 'gfs', wind_speed_kt: 10 }),
+      cond({ model: 'ecmwf', wind_speed_kt: 20 }),
+    ], 'worst')).toBeNull();
+  });
+
+  it('carries assessed-clear ceiling availability into the summary', () => {
+    const summary = computeSummaryCondition([
+      cond({ ceiling_evaluated: true, visibility_sm: 10 }),
+    ], 'majority');
+
+    expect(summary?.ceiling_ft).toBeNull();
+    expect(summary?.ceiling_evaluated).toBe(true);
+  });
+
+  it('does not call a mixed assessed and unassessed null ceiling clear', () => {
+    const summary = computeSummaryCondition([
+      cond({ model: 'gfs', ceiling_evaluated: true, visibility_sm: 10 }),
+      cond({ model: 'ecmwf', ceiling_evaluated: false, visibility_sm: 10 }),
+    ], 'majority');
+
+    expect(summary?.ceiling_ft).toBeNull();
+    expect(summary?.ceiling_evaluated).toBe(false);
   });
 
   it('worst mode: worst category + lowest ceiling/vis + highest wind across all', () => {
@@ -60,9 +102,9 @@ describe('computeSummaryCondition', () => {
 
   it('majority wind vector stays coherent (dir/gust/runway from the representative model)', () => {
     const summary = computeSummaryCondition([
-      cond({ flight_category: 'VFR', wind_speed_kt: 8, wind_direction_deg: 100, wind_gust_kt: 12 }),
-      cond({ flight_category: 'VFR', wind_speed_kt: 20, wind_direction_deg: 250, wind_gust_kt: 30 }),
-      cond({ flight_category: 'VFR', wind_speed_kt: 14, wind_direction_deg: 180, wind_gust_kt: 20 }),
+      cond({ flight_category: 'VFR', visibility_sm: 10, wind_speed_kt: 8, wind_direction_deg: 100, wind_gust_kt: 12 }),
+      cond({ flight_category: 'VFR', visibility_sm: 10, wind_speed_kt: 20, wind_direction_deg: 250, wind_gust_kt: 30 }),
+      cond({ flight_category: 'VFR', visibility_sm: 10, wind_speed_kt: 14, wind_direction_deg: 180, wind_gust_kt: 20 }),
     ], 'majority');
     // median wind speed is 14 → that model supplies dir/gust together.
     expect(summary!.wind_speed_kt).toBe(14);

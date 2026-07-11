@@ -22,7 +22,12 @@ export function computeSummaryCondition(
   conditions: AirportModelCondition[],
   aggregation: 'worst' | 'majority',
 ): AirportModelCondition | null {
-  if (conditions.length === 0) return null;
+  const evidenceConditions = conditions.filter(c =>
+    c.ceiling_evaluated === true
+    || c.ceiling_ft != null
+    || c.visibility_sm != null
+    || c.visibility_m != null);
+  if (evidenceConditions.length === 0) return null;
 
   let winningCat: FlightCategory;
   let pool: AirportModelCondition[];
@@ -30,13 +35,13 @@ export function computeSummaryCondition(
   if (aggregation === 'majority') {
     // Count votes per category
     const counts = new Map<FlightCategory, number>();
-    for (const c of conditions) {
+    for (const c of evidenceConditions) {
       counts.set(c.flight_category, (counts.get(c.flight_category) ?? 0) + 1);
     }
     // Pick category with most votes; ties broken by worst severity
     let bestCount = 0;
     let bestSeverity = -1;
-    winningCat = conditions[0].flight_category;
+    winningCat = evidenceConditions[0].flight_category;
     for (const [cat, count] of counts) {
       const sev = CAT_ORDER[cat];
       if (count > bestCount || (count === bestCount && sev > bestSeverity)) {
@@ -45,16 +50,16 @@ export function computeSummaryCondition(
         winningCat = cat;
       }
     }
-    pool = conditions.filter(c => c.flight_category === winningCat);
+    pool = evidenceConditions.filter(c => c.flight_category === winningCat);
   } else {
     // Worst: pick the worst category across all
-    winningCat = conditions[0].flight_category;
-    for (const c of conditions) {
+    winningCat = evidenceConditions[0].flight_category;
+    for (const c of evidenceConditions) {
       if (CAT_ORDER[c.flight_category] > CAT_ORDER[winningCat]) {
         winningCat = c.flight_category;
       }
     }
-    pool = conditions;
+    pool = evidenceConditions;
   }
 
   const allRwysCombined = pool.flatMap(c => c.all_runways);
@@ -63,6 +68,8 @@ export function computeSummaryCondition(
     model: 'Summary',
     flight_category: winningCat,
     ceiling_ft: null,
+    ceiling_evaluated: pool.every(c =>
+      c.ceiling_ft != null || c.ceiling_evaluated === true),
     visibility_m: null,
     visibility_sm: null,
     wind_speed_kt: null,
