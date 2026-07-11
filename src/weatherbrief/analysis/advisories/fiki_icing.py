@@ -259,19 +259,11 @@ class FIKIIcingEvaluator:
                 (point.transit_thickness_ft for point in departure),
                 default=0.0,
             )
-            dep_worst = IcingRisk.NONE
-            for point in departure:
-                dep_worst = _worst_risk(dep_worst, point.transit_worst)
-            dep_sld = any(point.transit_sld for point in departure)
 
             arr_max_thickness = max(
                 (point.transit_thickness_ft for point in arrival),
                 default=0.0,
             )
-            arr_worst = IcingRisk.NONE
-            for point in arrival:
-                arr_worst = _worst_risk(arr_worst, point.transit_worst)
-            arr_sld = any(point.transit_sld for point in arrival)
 
             cruise_total = len(available)
             cruise_clear = sum(point.cruise_clear for point in available)
@@ -279,6 +271,8 @@ class FIKIIcingEvaluator:
                 point.point_index for point in available if not point.cruise_clear
             }
             samples: list[EvidenceSample] = []
+            sld_point_indices: set[int] = set()
+            severe_point_indices: set[int] = set()
 
             def aggregate_non_sld_severity(
                 point: _FIKIPointAssessment,
@@ -290,6 +284,21 @@ class FIKIIcingEvaluator:
                 if point.transit_thickness_ft >= transit_amber:
                     return AdvisoryStatus.AMBER
                 return AdvisoryStatus.GREEN
+
+            def phase_zone_severity(
+                point: _FIKIPointAssessment,
+                zone: IcingZone,
+                fallback: AdvisoryStatus,
+            ) -> AdvisoryStatus:
+                if zone.sld_risk:
+                    sld_point_indices.add(point.point_index)
+                if severe_is_red and zone.risk == IcingRisk.SEVERE:
+                    severe_point_indices.add(point.point_index)
+                if zone.sld_risk or (
+                    severe_is_red and zone.risk == IcingRisk.SEVERE
+                ):
+                    return AdvisoryStatus.RED
+                return fallback
 
             for point in available:
                 transit_zones = [
@@ -303,10 +312,10 @@ class FIKIIcingEvaluator:
                         samples.append(
                             EvidenceSample(
                                 point_index=point.point_index,
-                                severity=(
-                                    AdvisoryStatus.RED
-                                    if zone.sld_risk
-                                    else local_severity
+                                severity=phase_zone_severity(
+                                    point,
+                                    zone,
+                                    local_severity,
                                 ),
                                 reason_code="fiki_departure_transit",
                                 metric_id=metric_id,
@@ -321,10 +330,10 @@ class FIKIIcingEvaluator:
                         samples.append(
                             EvidenceSample(
                                 point_index=point.point_index,
-                                severity=(
-                                    AdvisoryStatus.RED
-                                    if zone.sld_risk
-                                    else local_severity
+                                severity=phase_zone_severity(
+                                    point,
+                                    zone,
+                                    local_severity,
                                 ),
                                 reason_code="fiki_arrival_transit",
                                 metric_id=metric_id,
@@ -339,10 +348,10 @@ class FIKIIcingEvaluator:
                     samples.append(
                         EvidenceSample(
                             point_index=point.point_index,
-                            severity=(
-                                AdvisoryStatus.RED
-                                if zone.sld_risk
-                                else AdvisoryStatus.AMBER
+                            severity=phase_zone_severity(
+                                point,
+                                zone,
+                                AdvisoryStatus.AMBER,
                             ),
                             reason_code="fiki_cruise_icing",
                             metric_id=metric_id,
@@ -371,43 +380,51 @@ class FIKIIcingEvaluator:
             statuses: list[AdvisoryStatus] = []
             detail_parts: list[str] = []
 
+            def phase_locations(point_indices: set[int]) -> str:
+                relevant = [
+                    point
+                    for point in available
+                    if point.point_index in point_indices
+                ]
+                locations = []
+                if any(point.distance_nm <= proximity_nm for point in relevant):
+                    locations.append("dep")
+                if any(
+                    proximity_nm < point.distance_nm < total_dist - proximity_nm
+                    for point in relevant
+                ):
+                    locations.append("en route")
+                if any(
+                    point.distance_nm >= total_dist - proximity_nm
+                    for point in relevant
+                ):
+                    locations.append("arr")
+                return " & ".join(locations)
+
             if summary.total_points == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             else:
                 # SLD — always RED
-                if dep_sld or arr_sld:
+                if sld_point_indices:
                     statuses.append(AdvisoryStatus.RED)
-                    where = " & ".join(
-                        [
-                            x
-                            for x in [
-                                "dep" if dep_sld else "",
-                                "arr" if arr_sld else "",
-                            ]
-                            if x
-                        ]
-                    )
-                    detail_parts.append(adv_t("fiki.sld_risk", loc, where=where))
-
-                # Severe icing in transit
-                if severe_is_red and (
-                    dep_worst == IcingRisk.SEVERE
-                    or arr_worst == IcingRisk.SEVERE
-                ):
-                    statuses.append(AdvisoryStatus.RED)
-                    where = " & ".join(
-                        [
-                            x
-                            for x in [
-                                "dep" if dep_worst == IcingRisk.SEVERE else "",
-                                "arr" if arr_worst == IcingRisk.SEVERE else "",
-                            ]
-                            if x
-                        ]
-                    )
                     detail_parts.append(
-                        adv_t("fiki.severe_icing", loc, where=where)
+                        adv_t(
+                            "fiki.sld_risk",
+                            loc,
+                            where=phase_locations(sld_point_indices),
+                        )
+                    )
+
+                # Severe icing in a phase-relevant zone
+                if severe_point_indices:
+                    statuses.append(AdvisoryStatus.RED)
+                    detail_parts.append(
+                        adv_t(
+                            "fiki.severe_icing",
+                            loc,
+                            where=phase_locations(severe_point_indices),
+                        )
                     )
 
                 # Transit thickness (worst of departure / arrival)

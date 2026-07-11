@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 
+import pytest
+
 from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
 from weatherbrief.models import (
@@ -87,6 +89,69 @@ def test_fiki_single_point_sld_is_red_and_not_diluted(fiki_sld_context):
     assert any(
         (region.lower_altitude_ft, region.upper_altitude_ft) == (3000, 7000)
         for region in sld
+    )
+
+
+@pytest.mark.parametrize(
+    ("risk", "sld_risk"),
+    [
+        pytest.param(IcingRisk.MODERATE, True, id="sld"),
+        pytest.param(IcingRisk.SEVERE, False, id="severe"),
+    ],
+)
+def test_fiki_midroute_single_point_red_hazard_is_not_diluted(
+    clear_context,
+    risk,
+    sld_risk,
+):
+    hazard_point_index = 5
+    hazard_zone = IcingZone(
+        base_ft=7000,
+        top_ft=9000,
+        risk=risk,
+        icing_type=IcingType.MIXED,
+        sld_risk=sld_risk,
+    )
+    analyses = []
+    for rpa in clear_context.analyses:
+        sounding = rpa.sounding["gfs"].model_copy(
+            update={
+                "icing_zones": (
+                    [hazard_zone]
+                    if rpa.point_index == hazard_point_index
+                    else []
+                )
+            }
+        )
+        analyses.append(rpa.model_copy(update={"sounding": {"gfs": sounding}}))
+    ctx = replace(clear_context, analyses=analyses, models=["gfs"])
+
+    model = FIKIIcingEvaluator.evaluate(ctx, {}).per_model[0]
+    cruise_regions = [
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "fiki_cruise_icing"
+    ]
+
+    assert (
+        model.status,
+        [
+            (
+                region.start_point_index,
+                region.end_point_index,
+                region.severity,
+                region.lower_altitude_ft,
+                region.upper_altitude_ft,
+            )
+            for region in cruise_regions
+        ],
+        model.affected_points,
+        model.affected_nm,
+    ) == (
+        AdvisoryStatus.RED,
+        [(5, 5, AdvisoryStatus.RED, 7000, 9000)],
+        1,
+        20.0,
     )
 
 
