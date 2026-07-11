@@ -102,6 +102,7 @@ export interface AirportModelCondition {
   model: string;
   flight_category: FlightCategory;
   ceiling_ft: number | null;
+  ceiling_evaluated?: boolean | null;
   visibility_m?: number | null;
   visibility_sm: number | null;
   wind_speed_kt: number | null;

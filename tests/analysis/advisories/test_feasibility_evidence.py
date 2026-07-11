@@ -25,6 +25,32 @@ from weatherbrief.models import (
     PrecipPhase,
     PrecipitationAssessment,
 )
+from weatherbrief.models.airport_conditions import FlightCategory
+
+
+def _with_airport_condition_updates(ctx, *, departure=None, arrival=None):
+    airport_conditions = ctx.airport_conditions
+    assert airport_conditions is not None
+    endpoint_updates = {}
+    for endpoint, condition_updates in (
+        ("departure", departure),
+        ("arrival", arrival),
+    ):
+        if condition_updates is None:
+            continue
+        summary = getattr(airport_conditions, endpoint)
+        endpoint_updates[endpoint] = summary.model_copy(
+            update={
+                "conditions": [
+                    condition.model_copy(update=condition_updates)
+                    for condition in summary.conditions
+                ]
+            }
+        )
+    return replace(
+        ctx,
+        airport_conditions=airport_conditions.model_copy(update=endpoint_updates),
+    )
 
 
 def _with_precipitation(ctx, by_index=None, *, model="gfs"):
@@ -73,6 +99,65 @@ def test_vfr_missing_airport_domain_and_clear_route_is_unavailable(clear_context
 
     assert model.data_state == "partial"
     assert model.status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_vfr_missing_airport_source_fields_is_partial_unavailable(
+    vfr_clear_context,
+):
+    missing_sources = {
+        "ceiling_ft": None,
+        "ceiling_evaluated": False,
+        "visibility_sm": None,
+    }
+    ctx = _with_airport_condition_updates(
+        replace(vfr_clear_context, models=["gfs"]),
+        departure=missing_sources,
+        arrival=missing_sources,
+    )
+
+    model = VFRFeasibilityEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "partial"
+
+
+def test_vfr_assessed_clear_ceiling_is_complete_green(vfr_clear_context):
+    ctx = replace(vfr_clear_context, models=["gfs"])
+    airport_conditions = ctx.airport_conditions
+    assert airport_conditions is not None
+    assert all(
+        condition.ceiling_ft is None
+        for summary in (
+            airport_conditions.departure,
+            airport_conditions.arrival,
+        )
+        for condition in summary.conditions
+        if condition.model == "gfs"
+    )
+
+    model = VFRFeasibilityEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.GREEN
+    assert model.data_state == "complete"
+
+
+def test_vfr_known_airport_hazard_survives_missing_other_source(
+    vfr_clear_context,
+):
+    ctx = _with_airport_condition_updates(
+        replace(vfr_clear_context, models=["gfs"]),
+        departure={
+            "flight_category": FlightCategory.IFR,
+            "ceiling_ft": 800,
+            "ceiling_evaluated": False,
+            "visibility_sm": None,
+        },
+    )
+
+    model = VFRFeasibilityEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.data_state == "partial"
 
 
 def test_vfr_partial_red_route_evidence_is_preserved(vfr_imc_enroute_context):

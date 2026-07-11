@@ -202,6 +202,9 @@ def _compute_for_airport(
         # Ceiling: reconcile sounding-derived and NWP diagnostics
         sounding = rpa.sounding.get(model)
         ceiling_ft = reconcile_ceiling(sounding, hourly)
+        ceiling_evaluated = sounding is not None or (
+            hourly is not None and hourly.nwp_cloud_diagnostics is not None
+        )
 
         visibility_m: float | None = None
         visibility_sm: float | None = None
@@ -237,6 +240,7 @@ def _compute_for_airport(
             model=model,
             flight_category=flight_category,
             ceiling_ft=round(ceiling_ft) if ceiling_ft is not None else None,
+            ceiling_evaluated=ceiling_evaluated,
             visibility_m=visibility_m,
             visibility_sm=visibility_sm,
             wind_speed_kt=round(wind_speed_kt, 1) if wind_speed_kt is not None else None,

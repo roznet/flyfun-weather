@@ -144,6 +144,7 @@ def _check_airport_vfr(
     parts: list[str] = []
     worst = AdvisoryStatus.GREEN
     evaluated: set[str] = set()
+    complete: set[str] = set()
 
     loc = ctx.locale
     for endpoint, label_key, icao, cond in [
@@ -152,7 +153,13 @@ def _check_airport_vfr(
     ]:
         if cond is None:
             continue
+        ceiling_available = cond.ceiling_evaluated or cond.ceiling_ft is not None
+        visibility_available = cond.visibility_sm is not None
+        if not (ceiling_available or visibility_available):
+            continue
         evaluated.add(endpoint)
+        if ceiling_available and visibility_available:
+            complete.add(endpoint)
         label = adv_t(label_key, loc)
         cat = cond.flight_category
         if cat in (FlightCategory.IFR, FlightCategory.LIFR):
@@ -169,7 +176,7 @@ def _check_airport_vfr(
         data_state_from_domains(
             expected=expected,
             evaluated=evaluated,
-            complete=evaluated,
+            complete=complete,
         ),
     )
 

@@ -101,7 +101,9 @@ def _airport_conditions(models: tuple[str, ...]) -> AirportConditions:
         AirportModelCondition(
             model=model,
             flight_category=FlightCategory.VFR,
-            ceiling_ft=5000,
+            ceiling_ft=None,
+            ceiling_evaluated=True,
+            visibility_sm=10.0,
         )
         for model in models
     ]

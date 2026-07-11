@@ -484,8 +484,12 @@ def poor_agreement_context() -> RouteContext:
 def _make_airport_conditions(
     dep_category: FlightCategory = FlightCategory.VFR,
     arr_category: FlightCategory = FlightCategory.VFR,
-    dep_ceiling_ft: int | None = 5000,
-    arr_ceiling_ft: int | None = 5000,
+    dep_ceiling_ft: int | None = None,
+    arr_ceiling_ft: int | None = None,
+    dep_ceiling_evaluated: bool = True,
+    arr_ceiling_evaluated: bool = True,
+    dep_visibility_sm: float | None = 10.0,
+    arr_visibility_sm: float | None = 10.0,
     models: list[str] | None = None,
 ) -> AirportConditions:
     """Create AirportConditions with given flight categories for all models."""
@@ -493,12 +497,16 @@ def _make_airport_conditions(
     dep_conditions = [
         AirportModelCondition(
             model=m, flight_category=dep_category, ceiling_ft=dep_ceiling_ft,
+            ceiling_evaluated=dep_ceiling_evaluated,
+            visibility_sm=dep_visibility_sm,
         )
         for m in models
     ]
     arr_conditions = [
         AirportModelCondition(
             model=m, flight_category=arr_category, ceiling_ft=arr_ceiling_ft,
+            ceiling_evaluated=arr_ceiling_evaluated,
+            visibility_sm=arr_visibility_sm,
         )
         for m in models
     ]

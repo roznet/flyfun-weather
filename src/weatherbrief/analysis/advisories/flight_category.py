@@ -12,6 +12,9 @@ and approach traverse every level).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Literal
+
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.evidence import build_non_spatial_result
 from weatherbrief.analysis.advisories.registry import register
@@ -39,14 +42,23 @@ _CONV_ORDER = [
 _CONV_RANK: dict[ConvectiveRisk, int] = {r: i for i, r in enumerate(_CONV_ORDER)}
 
 
+@dataclass(frozen=True)
+class _TerminalConvectiveAssessment:
+    risk: ConvectiveRisk
+    any_evaluated: bool
+    all_evaluated: bool
+
+
 def _terminal_convective_risk(
     ctx: RouteContext,
     model: str,
-    end: str,
+    end: Literal["dep", "arr"],
     radius_nm: float,
-) -> ConvectiveRisk:
+) -> _TerminalConvectiveAssessment:
     """Worst convective risk within *radius_nm* of one route end ("dep"/"arr")."""
     worst = ConvectiveRisk.NONE
+    expected_points = 0
+    evaluated_points = 0
     for rpa in ctx.analyses:
         dist = rpa.distance_from_origin_nm
         in_terminal = (
@@ -55,13 +67,21 @@ def _terminal_convective_risk(
         )
         if not in_terminal:
             continue
+        expected_points += 1
         sounding = rpa.sounding.get(model)
         conv = sounding.convective if sounding is not None else None
         if conv is None:
             continue
+        evaluated_points += 1
         if _CONV_RANK[conv.risk_level] > _CONV_RANK[worst]:
             worst = conv.risk_level
-    return worst
+    return _TerminalConvectiveAssessment(
+        risk=worst,
+        any_evaluated=evaluated_points > 0,
+        all_evaluated=(
+            expected_points > 0 and evaluated_points == expected_points
+        ),
+    )
 
 
 def _terminal_convective_status(risk: ConvectiveRisk) -> AdvisoryStatus:
@@ -225,32 +245,56 @@ class FlightCategoryEvaluator:
             parts = []
             statuses: list[AdvisoryStatus] = []
             evaluated: set[str] = set()
+            complete: set[str] = set()
             affected: set[str] = set()
             for entity, label_key, icao, cond, end in [
                 ("departure", "airport.dep", dep.icao, dep_cond, "dep"),
                 ("arrival", "airport.arr", arr.icao, arr_cond, "arr"),
             ]:
-                if cond is None:
+                ceiling_available = cond is not None and (
+                    cond.ceiling_evaluated or cond.ceiling_ft is not None
+                )
+                visibility_available = (
+                    cond is not None and cond.visibility_sm is not None
+                )
+                condition_available = ceiling_available or visibility_available
+                conv = _terminal_convective_risk(
+                    ctx,
+                    model,
+                    end,
+                    conv_radius_nm,
+                )
+                if not condition_available and not conv.any_evaluated:
                     continue
                 evaluated.add(entity)
-                status = _classify_conditions(
-                    cond, amber_ceiling_ft, amber_vis_sm,
-                    red_ceiling_ft, red_vis_sm,
-                )
-                cat_label = cond.flight_category.value
-                label = adv_t(label_key, loc)
-                part = f"{label} {icao}: {cat_label}"
+                if (
+                    ceiling_available
+                    and visibility_available
+                    and conv.all_evaluated
+                ):
+                    complete.add(entity)
 
-                conv_risk = _terminal_convective_risk(ctx, model, end, conv_radius_nm)
-                conv_status = _terminal_convective_status(conv_risk)
-                if conv_status != AdvisoryStatus.GREEN:
+                status = AdvisoryStatus.GREEN
+                label = adv_t(label_key, loc)
+                part = f"{label} {icao}"
+                if condition_available:
+                    assert cond is not None
+                    status = _classify_conditions(
+                        cond, amber_ceiling_ft, amber_vis_sm,
+                        red_ceiling_ft, red_vis_sm,
+                    )
+                    part += f": {cond.flight_category.value}"
+
+                conv_status = _terminal_convective_status(conv.risk)
+                if conv.any_evaluated and conv_status != AdvisoryStatus.GREEN:
                     part += adv_t(
                         "flight_category.conv", loc,
-                        risk=conv_risk.value.upper(),
+                        risk=conv.risk.value.upper(),
                     )
                     status = AdvisoryStatus.worst([status, conv_status])
 
-                parts.append(part)
+                if condition_available or conv_status != AdvisoryStatus.GREEN:
+                    parts.append(part)
                 statuses.append(status)
                 if status != AdvisoryStatus.GREEN:
                     affected.add(entity)
@@ -269,7 +313,7 @@ class FlightCategoryEvaluator:
                     ),
                     expected_entities={"departure", "arrival"},
                     evaluated_entities=evaluated,
-                    complete_entities=evaluated,
+                    complete_entities=complete,
                     affected_entities=affected,
                     primary_method_id="airport_conditions",
                 )

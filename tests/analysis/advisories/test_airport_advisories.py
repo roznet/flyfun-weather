@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -16,7 +17,11 @@ from weatherbrief.analysis.advisories.flight_category import FlightCategoryEvalu
 from weatherbrief.analysis.airport_conditions import compute_runway_winds
 from weatherbrief.models import (
     AdvisoryStatus,
+    ConvectiveAssessment,
+    ConvectiveRisk,
     RoutePointAnalysis,
+    SoundingAnalysis,
+    ThermodynamicIndices,
 )
 from weatherbrief.models.airport_conditions import (
     AirportConditions,
@@ -31,18 +36,69 @@ from weatherbrief.models.airport_conditions import (
 def _make_ctx(
     airport_conditions: AirportConditions | None,
     models: list[str] | None = None,
+    terminal_convective_risk: ConvectiveRisk | None = ConvectiveRisk.NONE,
 ) -> RouteContext:
     """Create a minimal RouteContext with airport conditions."""
+    selected_models = models or ["gfs", "ecmwf"]
+    analyses = []
+    for point_index, distance_nm in enumerate((0.0, 200.0)):
+        soundings = {
+            model: SoundingAnalysis(
+                indices=ThermodynamicIndices(),
+                convective=(
+                    ConvectiveAssessment(risk_level=terminal_convective_risk)
+                    if terminal_convective_risk is not None
+                    else None
+                ),
+            )
+            for model in selected_models
+        }
+        analyses.append(
+            RoutePointAnalysis(
+                point_index=point_index,
+                lat=48.0,
+                lon=2.0 + point_index,
+                distance_from_origin_nm=distance_nm,
+                interpolated_time=datetime(2026, 6, 1, 12, 0),
+                forecast_hour=datetime(2026, 6, 1, 12, 0),
+                track_deg=90.0,
+                sounding=soundings,
+            )
+        )
     return RouteContext(
-        analyses=[],
+        analyses=analyses,
         cross_sections=[],
         elevation=None,
-        models=models or ["gfs", "ecmwf"],
+        models=selected_models,
         cruise_altitude_ft=8000,
         flight_ceiling_ft=18000,
         total_distance_nm=200,
         airport_conditions=airport_conditions,
     )
+
+
+def _without_ceiling_visibility(
+    conditions: AirportConditions,
+    *endpoints: str,
+) -> AirportConditions:
+    updates = {}
+    for endpoint in endpoints:
+        summary = getattr(conditions, endpoint)
+        updates[endpoint] = summary.model_copy(
+            update={
+                "conditions": [
+                    condition.model_copy(
+                        update={
+                            "ceiling_ft": None,
+                            "ceiling_evaluated": False,
+                            "visibility_sm": None,
+                        }
+                    )
+                    for condition in summary.conditions
+                ]
+            }
+        )
+    return conditions.model_copy(update=updates)
 
 
 # Default ceiling/visibility values per flight category for test fixtures
@@ -63,9 +119,11 @@ def _make_airport_conditions(
     arr_gusts: dict[str, float | None] | None = None,
     wind_speed_kt: float = 15.0,
     wind_direction_deg: float = 270.0,
-    dep_ceiling: dict[str, int] | None = None,
+    dep_ceiling: dict[str, int | None] | None = None,
+    dep_ceiling_evaluated: dict[str, bool] | None = None,
     dep_vis: dict[str, float] | None = None,
-    arr_ceiling: dict[str, int] | None = None,
+    arr_ceiling: dict[str, int | None] | None = None,
+    arr_ceiling_evaluated: dict[str, bool] | None = None,
     arr_vis: dict[str, float] | None = None,
 ) -> AirportConditions:
     """Build airport conditions from flight categories and optional wind."""
@@ -74,8 +132,10 @@ def _make_airport_conditions(
     dep_gusts = dep_gusts or {}
     arr_gusts = arr_gusts or {}
     dep_ceiling = dep_ceiling or {}
+    dep_ceiling_evaluated = dep_ceiling_evaluated or {}
     dep_vis = dep_vis or {}
     arr_ceiling = arr_ceiling or {}
+    arr_ceiling_evaluated = arr_ceiling_evaluated or {}
     arr_vis = arr_vis or {}
 
     dep_conds = [
@@ -83,6 +143,7 @@ def _make_airport_conditions(
             model=m,
             flight_category=cat,
             ceiling_ft=dep_ceiling.get(m, _CAT_DEFAULTS[cat][0]),
+            ceiling_evaluated=dep_ceiling_evaluated.get(m, False),
             visibility_sm=dep_vis.get(m, _CAT_DEFAULTS[cat][1]),
             best_runway=dep_wind.get(m),
             all_runways=[dep_wind[m]] if dep_wind.get(m) else [],
@@ -97,6 +158,7 @@ def _make_airport_conditions(
             model=m,
             flight_category=cat,
             ceiling_ft=arr_ceiling.get(m, _CAT_DEFAULTS[cat][0]),
+            ceiling_evaluated=arr_ceiling_evaluated.get(m, False),
             visibility_sm=arr_vis.get(m, _CAT_DEFAULTS[cat][1]),
             best_runway=arr_wind.get(m),
             all_runways=[arr_wind[m]] if arr_wind.get(m) else [],
@@ -135,6 +197,82 @@ class TestFlightCategoryEvaluator:
         assert result.per_model[0].primary_method_id == "airport_conditions"
         assert result.per_model[0].total_points == 2
 
+    def test_missing_condition_sources_with_clear_convection_is_partial(self):
+        conditions = _without_ceiling_visibility(
+            _make_airport_conditions(
+                dep_cats={"gfs": FlightCategory.VFR},
+                arr_cats={"gfs": FlightCategory.VFR},
+            ),
+            "departure",
+            "arrival",
+        )
+
+        model = FlightCategoryEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.UNAVAILABLE
+        assert model.data_state == "partial"
+        assert "VFR" not in model.detail
+
+    def test_assessed_clear_ceiling_with_vfr_visibility_is_complete_green(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            dep_ceiling={"gfs": None},
+            dep_ceiling_evaluated={"gfs": True},
+            dep_vis={"gfs": 10.0},
+            arr_ceiling={"gfs": None},
+            arr_ceiling_evaluated={"gfs": True},
+            arr_vis={"gfs": 10.0},
+        )
+
+        model = FlightCategoryEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.GREEN
+        assert model.data_state == "complete"
+
+    def test_missing_terminal_convection_with_vfr_conditions_is_partial(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+        )
+
+        model = FlightCategoryEvaluator.evaluate(
+            _make_ctx(
+                conditions,
+                models=["gfs"],
+                terminal_convective_risk=None,
+            ),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.UNAVAILABLE
+        assert model.data_state == "partial"
+
+    def test_condition_hazard_survives_missing_terminal_convection(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.IFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+        )
+
+        model = FlightCategoryEvaluator.evaluate(
+            _make_ctx(
+                conditions,
+                models=["gfs"],
+                terminal_convective_risk=None,
+            ),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.data_state == "partial"
+        assert model.affected_points == 1
+
     def test_mvfr_at_arrival(self):
         ac = _make_airport_conditions(
             dep_cats={"gfs": FlightCategory.VFR, "ecmwf": FlightCategory.VFR},
@@ -167,7 +305,7 @@ class TestFlightCategoryEvaluator:
 
         assert result.status == AdvisoryStatus.RED
         assert result.data_state == "partial"
-        assert result.total_points == 1
+        assert result.total_points == 2
         assert result.affected_points == 1
 
     def test_lifr_is_red(self):
@@ -502,8 +640,6 @@ def test_density_altitude_missing_airports_returns_each_requested_model_unavaila
 # --- FlightCategoryEvaluator: terminal convective aspect ---
 
 def _conv_rpa(i: int, distance_nm: float, risk) -> RoutePointAnalysis:
-    from weatherbrief.models import ConvectiveAssessment, SoundingAnalysis, ThermodynamicIndices
-
     conv = ConvectiveAssessment(risk_level=risk) if risk is not None else None
     return RoutePointAnalysis(
         point_index=i,
@@ -519,8 +655,6 @@ def _conv_rpa(i: int, distance_nm: float, risk) -> RoutePointAnalysis:
 
 def _terminal_conv_ctx(dep_risk, arr_risk, mid_risk=None) -> RouteContext:
     """200nm route, 10 points: convective risk at the endpoints and optionally mid-route."""
-    from weatherbrief.models import ConvectiveRisk
-
     analyses = []
     for i in range(10):
         d = i * 200.0 / 9
@@ -591,3 +725,20 @@ class TestTerminalConvective:
         )
         result = FlightCategoryEvaluator.evaluate(ctx, {"conv_radius_nm": 120})
         assert result.aggregate_status == AdvisoryStatus.RED
+
+    def test_terminal_hazard_survives_missing_condition_object(self):
+        ctx = _terminal_conv_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.NONE)
+        conditions = _make_airport_conditions(
+            dep_cats={},
+            arr_cats={"gfs": FlightCategory.VFR},
+        )
+
+        model = FlightCategoryEvaluator.evaluate(
+            replace(ctx, airport_conditions=conditions),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.data_state == "partial"
+        assert model.affected_points == 1
+        assert "convective HIGH" in model.detail

@@ -8,6 +8,7 @@ from datetime import datetime
 import pytest
 
 from weatherbrief.analysis.airport_conditions import (
+    _compute_for_airport,
     _ceiling_from_sounding,
     reconcile_ceiling,
     classify_flight_category,
@@ -24,6 +25,7 @@ from weatherbrief.models import (
     ThermodynamicIndices,
 )
 from weatherbrief.models.airport_conditions import (
+    AirportModelCondition,
     FlightCategory,
     RunwayEnd,
 )
@@ -202,6 +204,16 @@ class TestFlightCategoryWorst:
         assert FlightCategory.worst([FlightCategory.MVFR, FlightCategory.LIFR]) == FlightCategory.LIFR
 
 
+def test_airport_condition_ceiling_evaluated_defaults_false():
+    condition = AirportModelCondition(
+        model="gfs",
+        flight_category=FlightCategory.VFR,
+    )
+
+    assert condition.ceiling_evaluated is False
+    assert condition.model_dump()["ceiling_evaluated"] is False
+
+
 # --- compute_airport_conditions ---
 
 class TestComputeAirportConditions:
@@ -282,6 +294,68 @@ class TestComputeAirportConditions:
         # Should still produce results using first/last
         assert len(result.departure.conditions) == 1
         assert len(result.arrival.conditions) == 1
+
+    def test_clear_sounding_marks_ceiling_evaluated(self):
+        clear_sounding = SoundingAnalysis(cloud_layers=[])
+        analyses = [
+            self._make_rpa("LFPG", 0, 0.0, {"gfs": clear_sounding}),
+        ]
+
+        result = compute_airport_conditions(
+            analyses=analyses,
+            cross_sections=[],
+            models=["gfs"],
+            dep_icao="LFPG",
+            dep_name="Paris CDG",
+            arr_icao="EGLL",
+            arr_name="London Heathrow",
+        )
+
+        condition = result.departure.conditions[0]
+        assert condition.ceiling_ft is None
+        assert condition.ceiling_evaluated is True
+
+    def test_clear_nwp_diagnostics_marks_ceiling_evaluated(self, monkeypatch):
+        analyses = [self._make_rpa("LFPG", 0, 0.0)]
+        hourly = HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(),
+        )
+        monkeypatch.setattr(
+            "weatherbrief.analysis.airport_conditions._get_hourly_at_point",
+            lambda *_args, **_kwargs: hourly,
+        )
+
+        summary = _compute_for_airport(
+            icao="LFPG",
+            name="Paris CDG",
+            is_departure=True,
+            analyses=analyses,
+            cross_sections=[],
+            models=["gfs"],
+            runway_ends=[],
+        )
+
+        condition = summary.conditions[0]
+        assert condition.ceiling_ft is None
+        assert condition.ceiling_evaluated is True
+
+    def test_missing_ceiling_sources_are_not_evaluated(self):
+        analyses = [self._make_rpa("LFPG", 0, 0.0)]
+
+        summary = _compute_for_airport(
+            icao="LFPG",
+            name="Paris CDG",
+            is_departure=True,
+            analyses=analyses,
+            cross_sections=[],
+            models=["gfs"],
+            runway_ends=[],
+        )
+
+        condition = summary.conditions[0]
+        assert condition.ceiling_ft is None
+        assert condition.ceiling_evaluated is False
 
     def test_runway_wind_selection(self):
         """Test that best runway is selected by lowest crosswind."""
