@@ -117,8 +117,8 @@ def _make_airport_conditions(
     arr_wind: dict[str, RunwayWind | None] | None = None,
     dep_gusts: dict[str, float | None] | None = None,
     arr_gusts: dict[str, float | None] | None = None,
-    wind_speed_kt: float = 15.0,
-    wind_direction_deg: float = 270.0,
+    wind_speed_kt: float | None = 15.0,
+    wind_direction_deg: float | None = 270.0,
     dep_ceiling: dict[str, int | None] | None = None,
     dep_ceiling_evaluated: dict[str, bool] | None = None,
     dep_vis: dict[str, float] | None = None,
@@ -147,7 +147,11 @@ def _make_airport_conditions(
             visibility_sm=dep_vis.get(m, _CAT_DEFAULTS[cat][1]),
             best_runway=dep_wind.get(m),
             all_runways=[dep_wind[m]] if dep_wind.get(m) else [],
-            wind_gust_kt=dep_gusts.get(m),
+            wind_gust_kt=(
+                dep_gusts[m]
+                if m in dep_gusts
+                else wind_speed_kt if dep_wind.get(m) else None
+            ),
             wind_speed_kt=wind_speed_kt if dep_wind.get(m) else None,
             wind_direction_deg=wind_direction_deg if dep_wind.get(m) else None,
         )
@@ -162,7 +166,11 @@ def _make_airport_conditions(
             visibility_sm=arr_vis.get(m, _CAT_DEFAULTS[cat][1]),
             best_runway=arr_wind.get(m),
             all_runways=[arr_wind[m]] if arr_wind.get(m) else [],
-            wind_gust_kt=arr_gusts.get(m),
+            wind_gust_kt=(
+                arr_gusts[m]
+                if m in arr_gusts
+                else wind_speed_kt if arr_wind.get(m) else None
+            ),
             wind_speed_kt=wind_speed_kt if arr_wind.get(m) else None,
             wind_direction_deg=wind_direction_deg if arr_wind.get(m) else None,
         )
@@ -173,6 +181,33 @@ def _make_airport_conditions(
         departure=AirportConditionsSummary(icao="LFPG", name="Paris CDG", conditions=dep_conds),
         arrival=AirportConditionsSummary(icao="EGLL", name="London Heathrow", conditions=arr_conds),
     )
+
+
+def _with_surface_wind_observation(
+    conditions: AirportConditions,
+    *,
+    speed_kt: float | None,
+    direction_deg: float | None,
+    gust_kt: float | None,
+) -> AirportConditions:
+    updates = {}
+    for endpoint in ("departure", "arrival"):
+        summary = getattr(conditions, endpoint)
+        updates[endpoint] = summary.model_copy(
+            update={
+                "conditions": [
+                    condition.model_copy(
+                        update={
+                            "wind_speed_kt": speed_kt,
+                            "wind_direction_deg": direction_deg,
+                            "wind_gust_kt": gust_kt,
+                        }
+                    )
+                    for condition in summary.conditions
+                ]
+            }
+        )
+    return conditions.model_copy(update=updates)
 
 
 # --- FlightCategoryEvaluator ---
@@ -360,7 +395,7 @@ class TestAirportWindEvaluator:
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert result.aggregate_status == AdvisoryStatus.GREEN
         assert result.per_model[0].data_state == "complete"
-        assert result.per_model[0].primary_method_id == "runway_components"
+        assert result.per_model[0].primary_method_id == "runway_wind_with_gust"
         assert result.per_model[0].total_points == 2
 
     def test_high_crosswind_amber(self):
@@ -374,6 +409,8 @@ class TestAirportWindEvaluator:
         ctx = _make_ctx(ac, models=["gfs"])
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert result.per_model[0].data_state == "complete"
+        assert result.per_model[0].primary_method_id == "runway_components"
 
     def test_very_high_crosswind_red(self):
         rwy = RunwayWind(runway_id="09L", heading_deg=90.0, crosswind_kt=30.0, headwind_kt=5.0)
@@ -400,6 +437,8 @@ class TestAirportWindEvaluator:
         ctx = _make_ctx(ac, models=["gfs"])
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert result.per_model[0].data_state == "partial"
+        assert result.per_model[0].primary_method_id == "wind_gust"
 
     def test_gust_red(self):
         rwy = RunwayWind(runway_id="09L", heading_deg=90.0, crosswind_kt=5.0, headwind_kt=15.0)
@@ -413,6 +452,7 @@ class TestAirportWindEvaluator:
         ctx = _make_ctx(ac, models=["gfs"])
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert result.aggregate_status == AdvisoryStatus.RED
+        assert result.per_model[0].primary_method_id == "wind_gust"
 
     def test_no_airport_conditions(self):
         ctx = _make_ctx(None)
@@ -436,6 +476,174 @@ class TestAirportWindEvaluator:
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
         assert result.per_model[0].data_state == "unavailable"
         assert "calm" not in result.per_model[0].detail.lower()
+
+    def test_benign_gust_only_is_partial_unavailable_not_calm(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            dep_gusts={"gfs": 12.0},
+            arr_gusts={"gfs": 12.0},
+        )
+
+        model = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.UNAVAILABLE
+        assert model.data_state == "partial"
+        assert model.primary_method_id == "wind_gust"
+        assert "calm" not in model.detail.lower()
+
+    def test_crosswind_without_wind_observation_uses_unavailable_detail(self):
+        runway = RunwayWind(
+            runway_id="09L",
+            heading_deg=90.0,
+            crosswind_kt=18.0,
+            headwind_kt=10.0,
+        )
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            dep_wind={"gfs": runway},
+            arr_wind={"gfs": runway},
+            dep_gusts={"gfs": None},
+            arr_gusts={"gfs": None},
+            wind_speed_kt=None,
+            wind_direction_deg=None,
+        )
+
+        model = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.AMBER
+        assert model.data_state == "partial"
+        assert model.primary_method_id == "runway_components"
+        assert "unavailable" in model.detail.lower()
+        assert "calm" not in model.detail.lower()
+
+    @pytest.mark.parametrize(
+        ("gust_kt", "expected_status"),
+        [(28.0, AdvisoryStatus.AMBER), (40.0, AdvisoryStatus.RED)],
+    )
+    def test_hazardous_gust_only_preserves_grade_and_provenance(
+        self,
+        gust_kt,
+        expected_status,
+    ):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            dep_gusts={"gfs": gust_kt},
+            arr_gusts={"gfs": 12.0},
+        )
+
+        model = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == expected_status
+        assert model.data_state == "partial"
+        assert model.primary_method_id == "wind_gust"
+        assert "gust" in model.detail.lower()
+        assert "calm" not in model.detail.lower()
+
+    def test_observed_zero_wind_is_complete_calm(self):
+        calm_runway = RunwayWind(
+            runway_id="09L",
+            heading_deg=90.0,
+            crosswind_kt=0.0,
+            headwind_kt=0.0,
+        )
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            dep_wind={"gfs": calm_runway},
+            arr_wind={"gfs": calm_runway},
+            dep_gusts={"gfs": 0.0},
+            arr_gusts={"gfs": 0.0},
+            wind_speed_kt=0.0,
+            wind_direction_deg=0.0,
+        )
+
+        model = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.GREEN
+        assert model.data_state == "complete"
+        assert model.primary_method_id == "runway_wind_with_gust"
+        assert "calm" in model.detail.lower()
+
+    def test_observed_calm_without_direction_or_runway_is_complete(self):
+        conditions = _with_surface_wind_observation(
+            _make_airport_conditions(
+                dep_cats={"gfs": FlightCategory.VFR},
+                arr_cats={"gfs": FlightCategory.VFR},
+            ),
+            speed_kt=0.0,
+            direction_deg=None,
+            gust_kt=0.0,
+        )
+
+        model = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.GREEN
+        assert model.data_state == "complete"
+        assert model.primary_method_id == "runway_wind_with_gust"
+        assert "calm" in model.detail.lower()
+
+    def test_observed_calm_without_gust_is_partial_unavailable(self):
+        conditions = _with_surface_wind_observation(
+            _make_airport_conditions(
+                dep_cats={"gfs": FlightCategory.VFR},
+                arr_cats={"gfs": FlightCategory.VFR},
+            ),
+            speed_kt=0.0,
+            direction_deg=None,
+            gust_kt=None,
+        )
+
+        model = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.UNAVAILABLE
+        assert model.data_state == "partial"
+        assert model.primary_method_id == "runway_components"
+
+    def test_equal_crosswind_and_gust_grade_uses_compound_method(self):
+        runway = RunwayWind(
+            runway_id="09L",
+            heading_deg=90.0,
+            crosswind_kt=18.0,
+            headwind_kt=10.0,
+        )
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            dep_wind={"gfs": runway},
+            arr_wind={"gfs": runway},
+            dep_gusts={"gfs": 28.0},
+            arr_gusts={"gfs": 28.0},
+        )
+
+        model = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.AMBER
+        assert model.data_state == "complete"
+        assert model.primary_method_id == "runway_wind_with_gust"
 
     def test_custom_thresholds(self):
         rwy = RunwayWind(runway_id="09L", heading_deg=90.0, crosswind_kt=12.0, headwind_kt=15.0)

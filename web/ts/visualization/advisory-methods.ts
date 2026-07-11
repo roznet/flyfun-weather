@@ -107,6 +107,16 @@ const METHOD_LABELS: Readonly<Record<string, AdvisoryMethodDefinition>> = {
     descriptionKey: 'advisories.methods.runway_components',
     fallbackDescription: 'Runway-relative wind components',
   },
+  wind_gust: {
+    short: 'Wind gust',
+    descriptionKey: 'advisories.methods.wind_gust',
+    fallbackDescription: 'Surface wind-gust threshold',
+  },
+  runway_wind_with_gust: {
+    short: 'Runway + gust',
+    descriptionKey: 'advisories.methods.runway_wind_with_gust',
+    fallbackDescription: 'Runway wind components and gust tied for the controlling grade',
+  },
   density_altitude: {
     short: 'Density altitude',
     descriptionKey: 'advisories.methods.density_altitude',
@@ -116,6 +126,16 @@ const METHOD_LABELS: Readonly<Record<string, AdvisoryMethodDefinition>> = {
     short: 'Bulk shear',
     descriptionKey: 'advisories.methods.bulk_shear',
     fallbackDescription: 'Low-level bulk wind shear',
+  },
+  gust_factor: {
+    short: 'Gust factor',
+    descriptionKey: 'advisories.methods.gust_factor',
+    fallbackDescription: 'Surface gust factor (gust minus sustained wind)',
+  },
+  llws_composite: {
+    short: 'Shear + gust',
+    descriptionKey: 'advisories.methods.llws_composite',
+    fallbackDescription: 'Low-level bulk shear and gust factor tied for the controlling grade',
   },
   hewson: {
     short: 'Hewson',

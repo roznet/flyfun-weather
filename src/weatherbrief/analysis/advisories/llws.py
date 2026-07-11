@@ -167,7 +167,9 @@ class LLWSEvaluator:
             parts: list[str] = []
             statuses: list[AdvisoryStatus] = []
             evaluated: set[str] = set()
+            complete: set[str] = set()
             affected: set[str] = set()
+            axis_statuses: list[tuple[str, AdvisoryStatus]] = []
 
             for entity, label_key, icao, rpa, summary in [
                 ("departure", "airport.dep", dep_icao, dep_rpa,
@@ -191,13 +193,36 @@ class LLWSEvaluator:
                 ):
                     gust_factor_kt = max(cond.wind_gust_kt - cond.wind_speed_kt, 0.0)
 
-                status = _classify_llws(
-                    shear_kt, gust_factor_kt,
-                    shear_amber_kt, shear_red_kt, gust_factor_amber_kt,
-                )
-                if status is None:
+                endpoint_axis_statuses: list[tuple[str, AdvisoryStatus]] = []
+                if shear_kt is not None:
+                    shear_status = _classify_llws(
+                        shear_kt,
+                        None,
+                        shear_amber_kt,
+                        shear_red_kt,
+                        gust_factor_amber_kt,
+                    )
+                    if shear_status is not None:
+                        endpoint_axis_statuses.append(("bulk_shear", shear_status))
+                if gust_factor_kt is not None:
+                    gust_status = _classify_llws(
+                        None,
+                        gust_factor_kt,
+                        shear_amber_kt,
+                        shear_red_kt,
+                        gust_factor_amber_kt,
+                    )
+                    if gust_status is not None:
+                        endpoint_axis_statuses.append(("gust_factor", gust_status))
+                if not endpoint_axis_statuses:
                     continue
                 evaluated.add(entity)
+                if shear_kt is not None and gust_factor_kt is not None:
+                    complete.add(entity)
+                axis_statuses.extend(endpoint_axis_statuses)
+                status = AdvisoryStatus.worst(
+                    [axis_status for _, axis_status in endpoint_axis_statuses]
+                )
 
                 desc: list[str] = []
                 if shear_kt is not None:
@@ -217,6 +242,17 @@ class LLWSEvaluator:
                     affected.add(entity)
 
             worst = AdvisoryStatus.worst(statuses)
+            controlling_methods = {
+                method_id
+                for method_id, axis_status in axis_statuses
+                if axis_status == worst
+            }
+            if controlling_methods == {"bulk_shear", "gust_factor"}:
+                primary_method_id = "llws_composite"
+            elif "gust_factor" in controlling_methods:
+                primary_method_id = "gust_factor"
+            else:
+                primary_method_id = "bulk_shear"
             per_model.append(
                 build_non_spatial_result(
                     model=model,
@@ -228,9 +264,9 @@ class LLWSEvaluator:
                     ),
                     expected_entities={"departure", "arrival"},
                     evaluated_entities=evaluated,
-                    complete_entities=evaluated,
+                    complete_entities=complete,
                     affected_entities=affected,
-                    primary_method_id="bulk_shear",
+                    primary_method_id=primary_method_id,
                 )
             )
 

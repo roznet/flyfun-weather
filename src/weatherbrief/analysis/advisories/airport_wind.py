@@ -21,9 +21,21 @@ from weatherbrief.models.airport_conditions import AirportModelCondition
 
 def _format_wind_detail(cond: AirportModelCondition, rwy_id: str, locale: str | None = None) -> str:
     """Format wind like: 230@11G25 RW24 ↓11 →5."""
-    wind_text = format_wind_string(cond.wind_direction_deg, cond.wind_speed_kt, cond.wind_gust_kt)
-    if not wind_text:
+    if cond.wind_speed_kt == 0 and (
+        cond.wind_gust_kt is None or cond.wind_gust_kt <= 0
+    ):
         return adv_t("airport_wind.calm", locale)
+
+    if cond.wind_direction_deg is None or cond.wind_speed_kt is None:
+        if cond.wind_gust_kt is not None and cond.wind_gust_kt > 0:
+            return adv_t(
+                "airport_wind.gust_only",
+                locale,
+                gust=f"{cond.wind_gust_kt:.0f}",
+            )
+        return adv_t("airport_wind.wind_unavailable", locale)
+
+    wind_text = format_wind_string(cond.wind_direction_deg, cond.wind_speed_kt, cond.wind_gust_kt)
 
     if cond.best_runway is None:
         return wind_text
@@ -154,7 +166,9 @@ class AirportWindEvaluator:
             statuses: list[AdvisoryStatus] = []
             parts: list[str] = []
             evaluated: set[str] = set()
+            complete: set[str] = set()
             affected: set[str] = set()
+            axis_statuses: list[tuple[str, AdvisoryStatus]] = []
 
             for entity, label_key, icao, cond in [
                 ("departure", "airport.dep", dep.icao, dep_cond),
@@ -163,13 +177,47 @@ class AirportWindEvaluator:
                 if cond is None:
                     continue
 
-                xwind = cond.best_runway.crosswind_kt if cond.best_runway else None
+                xwind = (
+                    cond.best_runway.crosswind_kt
+                    if cond.best_runway
+                    else 0.0 if cond.wind_speed_kt == 0 else None
+                )
                 if xwind is None and cond.wind_gust_kt is None:
                     continue
                 evaluated.add(entity)
+                if xwind is not None and cond.wind_gust_kt is not None:
+                    complete.add(entity)
                 rwy_id = cond.best_runway.runway_id if cond.best_runway else "N/A"
 
-                s = _wind_status(xwind, cond.wind_gust_kt, xwind_green, xwind_red, gust_green, gust_red)
+                endpoint_axis_statuses: list[tuple[str, AdvisoryStatus]] = []
+                if xwind is not None:
+                    endpoint_axis_statuses.append((
+                        "runway_components",
+                        _wind_status(
+                            xwind,
+                            None,
+                            xwind_green,
+                            xwind_red,
+                            gust_green,
+                            gust_red,
+                        ),
+                    ))
+                if cond.wind_gust_kt is not None:
+                    endpoint_axis_statuses.append((
+                        "wind_gust",
+                        _wind_status(
+                            None,
+                            cond.wind_gust_kt,
+                            xwind_green,
+                            xwind_red,
+                            gust_green,
+                            gust_red,
+                        ),
+                    ))
+                axis_statuses.extend(endpoint_axis_statuses)
+                s = AdvisoryStatus.worst(
+                    [axis_status for _, axis_status in endpoint_axis_statuses]
+                )
                 statuses.append(s)
                 if s != AdvisoryStatus.GREEN:
                     affected.add(entity)
@@ -179,6 +227,17 @@ class AirportWindEvaluator:
                 parts.append(f"{label} {icao}: {wind_str}")
 
             status = AdvisoryStatus.worst(statuses) if statuses else AdvisoryStatus.UNAVAILABLE
+            controlling_methods = {
+                method_id
+                for method_id, axis_status in axis_statuses
+                if axis_status == status
+            }
+            if controlling_methods == {"runway_components", "wind_gust"}:
+                primary_method_id = "runway_wind_with_gust"
+            elif "wind_gust" in controlling_methods:
+                primary_method_id = "wind_gust"
+            else:
+                primary_method_id = "runway_components"
             detail = " | ".join(parts)
 
             per_model.append(
@@ -192,9 +251,9 @@ class AirportWindEvaluator:
                     ),
                     expected_entities={"departure", "arrival"},
                     evaluated_entities=evaluated,
-                    complete_entities=evaluated,
+                    complete_entities=complete,
                     affected_entities=affected,
-                    primary_method_id="runway_components",
+                    primary_method_id=primary_method_id,
                 )
             )
 

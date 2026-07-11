@@ -78,17 +78,21 @@ def _ctx(
 def test_low_shear_is_green():
     result = LLWSEvaluator.evaluate(_ctx(_sounding(8), _sounding(12)), {})
     assert result.aggregate_status == AdvisoryStatus.GREEN
+    assert result.per_model[0].data_state == "complete"
+    assert result.per_model[0].primary_method_id == "llws_composite"
 
 
 def test_amber_shear_at_arrival():
     result = LLWSEvaluator.evaluate(_ctx(_sounding(8), _sounding(24)), {})
     assert result.aggregate_status == AdvisoryStatus.AMBER
     assert "LSGS" in result.per_model[0].detail
+    assert result.per_model[0].primary_method_id == "bulk_shear"
 
 
 def test_red_shear():
     result = LLWSEvaluator.evaluate(_ctx(_sounding(34), _sounding(10)), {})
     assert result.aggregate_status == AdvisoryStatus.RED
+    assert result.per_model[0].primary_method_id == "bulk_shear"
 
 
 def test_surface_inversion_reported_with_shear():
@@ -114,6 +118,41 @@ def test_gust_factor_triggers_amber():
     )
     assert result.aggregate_status == AdvisoryStatus.AMBER
     assert "gust factor" in result.per_model[0].detail
+    assert result.per_model[0].data_state == "complete"
+    assert result.per_model[0].primary_method_id == "gust_factor"
+
+
+def test_benign_gust_factor_without_shear_is_partial_unavailable():
+    conditions = _conditions(wind_speed_kt=10.0, wind_gust_kt=14.0)
+    model = LLWSEvaluator.evaluate(
+        _ctx(_sounding(None), _sounding(None), conditions), {},
+    ).per_model[0]
+
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "partial"
+    assert model.primary_method_id == "gust_factor"
+
+
+def test_hazardous_gust_factor_without_shear_preserves_amber():
+    conditions = _conditions(wind_speed_kt=10.0, wind_gust_kt=28.0)
+    model = LLWSEvaluator.evaluate(
+        _ctx(_sounding(None), _sounding(None), conditions), {},
+    ).per_model[0]
+
+    assert model.status == AdvisoryStatus.AMBER
+    assert model.data_state == "partial"
+    assert model.primary_method_id == "gust_factor"
+
+
+def test_equal_shear_and_gust_factor_grade_uses_composite_method():
+    conditions = _conditions(wind_speed_kt=10.0, wind_gust_kt=28.0)
+    model = LLWSEvaluator.evaluate(
+        _ctx(_sounding(24), _sounding(24), conditions), {},
+    ).per_model[0]
+
+    assert model.status == AdvisoryStatus.AMBER
+    assert model.data_state == "complete"
+    assert model.primary_method_id == "llws_composite"
 
 
 def test_unavailable_without_any_signal():

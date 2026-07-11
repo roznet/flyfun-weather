@@ -217,6 +217,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "windstill",
         "es": "calma",
     },
+    "airport_wind.gust_only": {
+        "en": "gust {gust}kt (direction/sustained wind unavailable)",
+        "fr": "rafale {gust} kt (direction/vent soutenu indisponibles)",
+        "de": "Böe {gust} kt (Richtung/Mittelwind nicht verfügbar)",
+        "es": "ráfaga {gust} kt (dirección/viento sostenido no disponibles)",
+    },
+    "airport_wind.wind_unavailable": {
+        "en": "wind direction/speed unavailable",
+        "fr": "direction/vitesse du vent indisponibles",
+        "de": "Windrichtung/-geschwindigkeit nicht verfügbar",
+        "es": "dirección/velocidad del viento no disponibles",
+    },
 
     # --- mountain_wind ---
     "mountain_wind.no_terrain": {
