@@ -350,6 +350,47 @@ final class AppState {
         pendingNavigation = nil
     }
 
+    // MARK: - Universal Links
+
+    /// Route an inbound Universal Link to a briefing, if it names one.
+    ///
+    /// Fires for the web Smart App Banner's "Open" button (whose `app-argument`
+    /// carries the current briefing URL) and for a tapped
+    /// `https://weather.flyfun.aero/briefing.html?flight=<id>` link. Reuses the
+    /// same cold-launch-safe `PendingNavigation` seam as App Intents and push
+    /// taps: writes the target to `PendingNavigationStore` and consumes it, so a
+    /// cold launch (where the scene `.active` hook consumes) and a warm foreground
+    /// both route through one path.
+    ///
+    /// Returns whether the URL was a recognized briefing link, so the caller can
+    /// fall through to the auth-callback handler for everything else (the
+    /// `/auth/callback` universal link and the reviewer token deep link).
+    @discardableResult
+    func handleUniversalLink(url: URL) -> Bool {
+        guard let target = Self.navigationTarget(for: url) else { return false }
+        PendingNavigationStore.set(target)
+        consumePendingNavigation()
+        return true
+    }
+
+    /// Parse an inbound Universal Link into a navigation target, if it names one.
+    ///
+    /// Recognizes only `https://weather.flyfun.aero/briefing.html?flight=<id>` —
+    /// the same URL the web Smart App Banner carries as its `app-argument`. The
+    /// auth callback (`/auth/callback`), unknown hosts/paths, and a missing or
+    /// empty `flight` param all return nil so the caller routes them elsewhere.
+    /// Pure + `nonisolated` so the path/param logic is unit-testable off the
+    /// MainActor and can't silently regress.
+    nonisolated static func navigationTarget(for url: URL) -> PendingNavigation? {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              comps.host == "weather.flyfun.aero",
+              comps.path == "/briefing.html",
+              let flight = comps.queryItems?.first(where: { $0.name == "flight" })?.value,
+              !flight.isEmpty
+        else { return nil }
+        return .briefing(flightId: flight)
+    }
+
     // MARK: - Push notifications & badge
 
     /// UserDefaults key for the last-uploaded APNs token hex, so sign-out can
