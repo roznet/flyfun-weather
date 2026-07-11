@@ -9,6 +9,13 @@ function waypointLabelColor(): string { return isDarkTheme() ? '#d1d5db' : '#495
 function borderColor(): string { return isDarkTheme() ? '#4a4a5a' : '#adb5bd'; }
 const FONT = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 const ICAO_FONT = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+
+// Y offsets (px, from plotArea.bottom, textBaseline 'top') for the two bottom
+// label rows on the distance axis. Bumped down from 6/20 so an 8px strip just
+// under the plot stays clear for the advisory verdict ribbon (#373); the 50px
+// bottom margin (CROSS_SECTION_MARGIN) still comfortably fits both rows.
+const DISTANCE_LABEL_DY = 11;
+const WAYPOINT_LABEL_DY = 25;
 const LABEL_PAD_PX = 4;
 
 export function drawAxes(
@@ -182,8 +189,11 @@ function drawDistanceAxis(
     ctx.lineTo(x, plotArea.top + plotArea.height);
     ctx.stroke();
 
-    // Bottom label
-    ctx.fillText(`${Math.round(d)} nm`, x, plotArea.top + plotArea.height + 6);
+    // Bottom label. Offsets DISTANCE_LABEL_DY / WAYPOINT_LABEL_DY leave a clear
+    // strip just under the plot for the advisory verdict ribbon (#373) — the
+    // ribbon draws in [bottom+RIBBON_GAP, bottom+RIBBON_GAP+RIBBON_HEIGHT]
+    // (highlight-layer.ts), above these labels. Keep them in sync.
+    ctx.fillText(`${Math.round(d)} nm`, x, plotArea.top + plotArea.height + DISTANCE_LABEL_DY);
   }
 
   // Time labels at waypoint positions (skip overlapping ones)
@@ -197,7 +207,7 @@ function drawDistanceAxis(
     if (nearest) {
       const timeStr = formatTimeUTC(nearest.time);
       ctx.fillStyle = labelColor();
-      ctx.fillText(timeStr, x, plotArea.top + plotArea.height + 20);
+      ctx.fillText(timeStr, x, plotArea.top + plotArea.height + WAYPOINT_LABEL_DY);
     }
   }
 }
