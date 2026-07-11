@@ -275,24 +275,29 @@ class FrontsEvaluator:
         convective_deep_ft = params.get("convective_deep_ft", 15000)
         cruise_ft = ctx.cruise_altitude_ft
 
-        # Gating: no artifact → experimental feature was off → UNAVAILABLE.
-        # Build the result directly (not via from_per_model): the aggregation
-        # helpers collapse an all-UNAVAILABLE set to GREEN, but here we want the
-        # advisory to genuinely read UNAVAILABLE so it stays hidden.
+        # Gating: no artifact → experimental feature was off → explicit
+        # per-requested-model UNAVAILABLE results keep the advisory hidden.
         if manifest is None or not manifest.per_model:
-            return _unavailable(params, loc)
+            return _unavailable(params, loc, ctx.models)
 
         total_km = ctx.total_distance_nm * _KM_PER_NM
         primary = manifest.primary_level_hPa
 
         # Honor the user's advisory model selection; fall back to whatever the
         # artifact carries (front models are always a subset of ecmwf/gfs/icon).
-        models = [m for m in ctx.models if m in manifest.per_model] or list(manifest.per_model.keys())
+        models = ctx.models or list(manifest.per_model.keys())
 
         per_model: list[ModelAdvisoryResult] = []
         for model in models:
             analyses = manifest.per_model.get(model)
             if not analyses:
+                per_model.append(ModelAdvisoryResult(
+                    model=model,
+                    status=AdvisoryStatus.UNAVAILABLE,
+                    detail=adv_t("no_data", loc),
+                    data_state="unavailable",
+                    primary_method_id="hewson",
+                ))
                 continue
 
             # Grade against *this* model's nearest-cruise level, not a single
@@ -342,24 +347,38 @@ class FrontsEvaluator:
                 detail = adv_t("fronts.none", loc)
 
             per_model.append(ModelAdvisoryResult(
-                model=model, status=status, detail=detail,
+                model=model,
+                status=status,
+                detail=detail,
+                data_state="complete",
+                primary_method_id="hewson",
             ))
 
         if not per_model:
-            return _unavailable(params, loc)
+            return _unavailable(params, loc, models)
 
         return RouteAdvisoryResult.from_per_model(FRONTS_ADVISORY_ID, per_model, params)
 
 
-def _unavailable(params: dict[str, float], loc: str | None) -> RouteAdvisoryResult:
-    """An explicitly-UNAVAILABLE result (the aggregation helpers would otherwise
-    collapse an all-UNAVAILABLE per-model set to GREEN)."""
-    return RouteAdvisoryResult(
-        advisory_id=FRONTS_ADVISORY_ID,
-        aggregate_status=AdvisoryStatus.UNAVAILABLE,
-        aggregate_detail=adv_t("no_data", loc),
-        per_model=[ModelAdvisoryResult(
-            model="all", status=AdvisoryStatus.UNAVAILABLE, detail=adv_t("no_data", loc),
-        )],
-        parameters_used=params,
+def _unavailable(
+    params: dict[str, float],
+    loc: str | None,
+    models: list[str],
+) -> RouteAdvisoryResult:
+    """Build an explicit unavailable result for every requested model."""
+    requested_models = models or ["all"]
+    per_model = [
+        ModelAdvisoryResult(
+            model=model,
+            status=AdvisoryStatus.UNAVAILABLE,
+            detail=adv_t("no_data", loc),
+            data_state="unavailable",
+            primary_method_id="hewson",
+        )
+        for model in requested_models
+    ]
+    return RouteAdvisoryResult.from_per_model(
+        FRONTS_ADVISORY_ID,
+        per_model,
+        params,
     )

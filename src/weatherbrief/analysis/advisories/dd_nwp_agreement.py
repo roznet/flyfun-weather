@@ -14,13 +14,15 @@ team and digest context rather than a pilot-facing advisory.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
-    format_extent,
     pct_above_threshold,
 )
+from weatherbrief.analysis.advisories.evidence import EvidenceSample, summarize_evidence
 from weatherbrief.analysis.advisories.registry import register
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -171,44 +173,92 @@ class DDvsNWPAgreementEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
-            disagree_points = 0
+            evaluated: set[int] = set()
+            complete: set[int] = set()
+            disagreement_points: set[int] = set()
+            samples: list[EvidenceSample] = []
             categories_triggered: dict[str, int] = {
                 "freezing": 0, "clouds": 0,
             }
 
             for rpa in ctx.analyses:
                 sounding = rpa.sounding.get(model)
-                if sounding is None or sounding.indices is None:
+                if sounding is None:
                     continue
 
                 # Collect disagreements on this point
                 disagreements: list[str] = []
 
                 # Freezing level
-                dd_fz = sounding.indices.freezing_level_ft
-                nwp_fz = sounding.indices.nwp_freezing_level_ft
-                if dd_fz is not None and nwp_fz is not None:
+                indices = sounding.indices
+                dd_fz = indices.freezing_level_ft if indices is not None else None
+                nwp_fz = (
+                    indices.nwp_freezing_level_ft if indices is not None else None
+                )
+                freezing_comparable = dd_fz is not None and nwp_fz is not None
+                if freezing_comparable:
                     if abs(dd_fz - nwp_fz) >= freezing_delta_ft:
                         disagreements.append("freezing")
+                        samples.append(
+                            EvidenceSample(
+                                point_index=rpa.point_index,
+                                severity=AdvisoryStatus.AMBER,
+                                reason_code="freezing_level_disagreement",
+                                metric_id="freezing_level_ft",
+                                method_id="dd_vs_nwp",
+                                lower_altitude_ft=round(min(dd_fz, nwp_fz)),
+                                upper_altitude_ft=round(max(dd_fz, nwp_fz)),
+                            )
+                        )
 
                 # Cloud layers (DD vs NWP)
                 dd_clouds = sounding.dd_cloud_layers
-                nwp_clouds = sounding.nwp_cloud_layers or []
+                nwp_clouds = sounding.nwp_cloud_layers
                 # Only compare when NWP layers are genuinely model-native.
                 # source="synthesized" is derived from the DD envelope →
                 # comparison would be circular. "nwp_3d" (ECMWF cc / ICON clc)
                 # and "grib" (GFS LCDC/MCDC/HCDC bulk bands) are both
                 # independent of DD.
-                nwp_native = [cl for cl in nwp_clouds
-                              if cl.source in ("nwp_3d", "grib")]
-                has_native_nwp = len(nwp_native) > 0 or (
-                    nwp_clouds == [] and sounding.nwp_cloud_diagnostics is not None
+                nwp_native = [
+                    layer
+                    for layer in (nwp_clouds or [])
+                    if layer.source in ("nwp_3d", "grib")
+                ]
+                has_native_nwp = nwp_clouds is not None and (
+                    len(nwp_native) > 0
+                    or (
+                        nwp_clouds == []
+                        and sounding.nwp_cloud_diagnostics is not None
+                    )
                 )
                 if has_native_nwp:
                     overlap = _cloud_overlap_fraction(dd_clouds, nwp_native)
                     if overlap < cloud_overlap_min:
                         disagreements.append("clouds")
+                        samples.extend(
+                            EvidenceSample(
+                                point_index=rpa.point_index,
+                                severity=AdvisoryStatus.AMBER,
+                                reason_code="dd_cloud_disagreement",
+                                metric_id="cloud_coverage",
+                                method_id="dewpoint_depression",
+                                lower_altitude_ft=round(base_ft),
+                                upper_altitude_ft=round(top_ft),
+                            )
+                            for base_ft, top_ft in _merge_spans(dd_clouds)
+                        )
+                        samples.extend(
+                            EvidenceSample(
+                                point_index=rpa.point_index,
+                                severity=AdvisoryStatus.AMBER,
+                                reason_code="nwp_cloud_disagreement",
+                                metric_id="cloud_coverage",
+                                method_id="nwp",
+                                lower_altitude_ft=round(base_ft),
+                                upper_altitude_ft=round(top_ft),
+                            )
+                            for base_ft, top_ft in _merge_spans(nwp_native)
+                        )
 
                 # Convective divergence is intentionally NOT compared here. The
                 # NWP convective track is now model-native (#283), so DD-vs-NWP
@@ -219,38 +269,65 @@ class DDvsNWPAgreementEvaluator:
                 # focused on freezing-level + cloud-overlap (see
                 # designs/advisories.md).
 
-                # Only count points where at least one comparison was possible
-                if dd_fz is None and nwp_fz is None and not has_native_nwp:
+                # Only count points where one of the exact grading comparisons
+                # had both of its required inputs.
+                if not freezing_comparable and not has_native_nwp:
                     continue
 
-                total += 1
+                evaluated.add(rpa.point_index)
+                if freezing_comparable and has_native_nwp:
+                    complete.add(rpa.point_index)
                 if disagreements:
-                    disagree_points += 1
+                    disagreement_points.add(rpa.point_index)
                     for cat in disagreements:
                         categories_triggered[cat] = categories_triggered.get(cat, 0) + 1
 
-            if total == 0:
+            summary = summarize_evidence(
+                route_points=ctx.analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=disagreement_points,
+                evidence_samples=samples,
+            )
+
+            if summary.total_points == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = "no comparable DD/NWP data"
-            elif disagree_points == 0:
+            elif summary.affected_points == 0:
                 status = AdvisoryStatus.GREEN
                 detail = "DD and NWP tracks agree"
             else:
                 status = pct_above_threshold(
-                    disagree_points, total, amber_pct, red_pct,
+                    summary.affected_points,
+                    summary.total_points,
+                    amber_pct,
+                    red_pct,
                 )
-                ext = format_extent(disagree_points, total, ctx.total_distance_nm)
+                ext = summary.format_extent()
                 top_cat = max(categories_triggered, key=categories_triggered.get)
                 detail = f"{top_cat} track diverges over {ext}"
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model,
-                status=status,
-                detail=detail,
-                affected=disagree_points,
-                total=total,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            summary = replace(
+                summary,
+                evidence_regions=[
+                    region.model_copy(update={"severity": status})
+                    for region in summary.evidence_regions
+                ],
+            )
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                ctx.locale,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id="dd_vs_nwp",
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model(
             "dd_nwp_agreement", per_model, params,

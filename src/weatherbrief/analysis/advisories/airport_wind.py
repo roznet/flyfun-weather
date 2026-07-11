@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories.evidence import build_non_spatial_result
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.airport_conditions import format_wind_string
@@ -124,7 +125,23 @@ class AirportWindEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         if ctx.airport_conditions is None:
-            return RouteAdvisoryResult.from_per_model("airport_wind", [], params)
+            per_model = [
+                build_non_spatial_result(
+                    model=model,
+                    status=AdvisoryStatus.UNAVAILABLE,
+                    detail=adv_t("no_data", ctx.locale),
+                    unavailable_detail=adv_t("no_data", ctx.locale),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=set(),
+                    complete_entities=set(),
+                    affected_entities=set(),
+                    primary_method_id="runway_components",
+                )
+                for model in ctx.models
+            ]
+            return RouteAdvisoryResult.from_per_model(
+                "airport_wind", per_model, params,
+            )
 
         dep = ctx.airport_conditions.departure
         arr = ctx.airport_conditions.arrival
@@ -134,26 +151,28 @@ class AirportWindEvaluator:
             arr_cond = arr.condition_for_model(model)
 
             loc = ctx.locale
-            if dep_cond is None and arr_cond is None:
-                per_model.append(ModelAdvisoryResult.build(
-                    model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=0,
-                    total_distance_nm=ctx.total_distance_nm,
-                ))
-                continue
+            statuses: list[AdvisoryStatus] = []
+            parts: list[str] = []
+            evaluated: set[str] = set()
+            affected: set[str] = set()
 
-            statuses = []
-            parts = []
-
-            for label_key, icao, cond in [("airport.dep", dep.icao, dep_cond), ("airport.arr", arr.icao, arr_cond)]:
+            for entity, label_key, icao, cond in [
+                ("departure", "airport.dep", dep.icao, dep_cond),
+                ("arrival", "airport.arr", arr.icao, arr_cond),
+            ]:
                 if cond is None:
                     continue
 
                 xwind = cond.best_runway.crosswind_kt if cond.best_runway else None
+                if xwind is None and cond.wind_gust_kt is None:
+                    continue
+                evaluated.add(entity)
                 rwy_id = cond.best_runway.runway_id if cond.best_runway else "N/A"
 
                 s = _wind_status(xwind, cond.wind_gust_kt, xwind_green, xwind_red, gust_green, gust_red)
                 statuses.append(s)
+                if s != AdvisoryStatus.GREEN:
+                    affected.add(entity)
 
                 wind_str = _format_wind_detail(cond, rwy_id, loc)
                 label = adv_t(label_key, loc)
@@ -162,11 +181,21 @@ class AirportWindEvaluator:
             status = AdvisoryStatus.worst(statuses) if statuses else AdvisoryStatus.UNAVAILABLE
             detail = " | ".join(parts)
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=1 if status != AdvisoryStatus.GREEN else 0,
-                total=1,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            per_model.append(
+                build_non_spatial_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=adv_t(
+                        "no_data" if not evaluated else "partial_data",
+                        loc,
+                    ),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=evaluated,
+                    complete_entities=evaluated,
+                    affected_entities=affected,
+                    primary_method_id="runway_components",
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("airport_wind", per_model, params)

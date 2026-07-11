@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import terrain_at_distance
+from weatherbrief.analysis.advisories.evidence import build_non_spatial_result
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -153,7 +154,23 @@ class DensityAltitudeEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         if ctx.airport_conditions is None:
-            return RouteAdvisoryResult.from_per_model("density_altitude", [], params)
+            per_model = [
+                build_non_spatial_result(
+                    model=model,
+                    status=AdvisoryStatus.UNAVAILABLE,
+                    detail=adv_t("no_data", ctx.locale),
+                    unavailable_detail=adv_t("no_data", ctx.locale),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=set(),
+                    complete_entities=set(),
+                    affected_entities=set(),
+                    primary_method_id="density_altitude",
+                )
+                for model in ctx.models
+            ]
+            return RouteAdvisoryResult.from_per_model(
+                "density_altitude", per_model, params,
+            )
 
         dep = ctx.airport_conditions.departure
         arr = ctx.airport_conditions.arrival
@@ -167,37 +184,43 @@ class DensityAltitudeEvaluator:
         for model in ctx.models:
             loc = ctx.locale
             parts: list[str] = []
-            worst: AdvisoryStatus | None = None
+            statuses: list[AdvisoryStatus] = []
+            evaluated: set[str] = set()
+            affected: set[str] = set()
 
-            for label_key, icao, cond, elev in [
-                ("airport.dep", dep.icao, dep.condition_for_model(model), dep_elev),
-                ("airport.arr", arr.icao, arr.condition_for_model(model), arr_elev),
+            for entity, label_key, icao, cond, elev in [
+                ("departure", "airport.dep", dep.icao, dep.condition_for_model(model), dep_elev),
+                ("arrival", "airport.arr", arr.icao, arr.condition_for_model(model), arr_elev),
             ]:
                 if cond is None or cond.temperature_c is None or elev is None:
                     continue
+                evaluated.add(entity)
                 da_ft = compute_density_altitude_ft(elev, cond.temperature_c, cond.qnh_hpa)
                 status = _classify_da(
                     da_ft, elev, da_amber_ft, da_red_ft, delta_amber_ft, delta_red_ft,
                 )
                 label = adv_t(label_key, loc)
                 parts.append(f"{label} {icao}: DA {da_ft:.0f}ft (field {elev:.0f}ft)")
-                worst = status if worst is None else AdvisoryStatus.worst([worst, status])
+                statuses.append(status)
+                if status != AdvisoryStatus.GREEN:
+                    affected.add(entity)
 
-            if worst is None:
-                # No temperature or no terrain data — explicitly unavailable,
-                # never silently green.
-                per_model.append(ModelAdvisoryResult.build(
-                    model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=0,
-                    total_distance_nm=ctx.total_distance_nm,
-                ))
-                continue
-
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=worst, detail=" | ".join(parts),
-                affected=1 if worst != AdvisoryStatus.GREEN else 0,
-                total=1,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            worst = AdvisoryStatus.worst(statuses)
+            per_model.append(
+                build_non_spatial_result(
+                    model=model,
+                    status=worst,
+                    detail=" | ".join(parts),
+                    unavailable_detail=adv_t(
+                        "no_data" if not evaluated else "partial_data",
+                        loc,
+                    ),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=evaluated,
+                    complete_entities=evaluated,
+                    affected_entities=affected,
+                    primary_method_id="density_altitude",
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("density_altitude", per_model, params)

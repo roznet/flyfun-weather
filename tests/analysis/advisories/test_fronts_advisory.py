@@ -62,10 +62,13 @@ def _manifest(
     )
 
 
-def _ctx(manifest: RouteFrontsManifest | None) -> RouteContext:
+def _ctx(
+    manifest: RouteFrontsManifest | None,
+    models: list[str] | None = None,
+) -> RouteContext:
     return RouteContext(
         analyses=[], cross_sections=[], elevation=None,
-        models=["gfs"], cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+        models=models or ["gfs"], cruise_altitude_ft=8000, flight_ceiling_ft=18000,
         total_distance_nm=200.0,  # ~370 km route
         route_fronts=manifest,
     )
@@ -73,9 +76,13 @@ def _ctx(manifest: RouteFrontsManifest | None) -> RouteContext:
 
 def test_no_artifact_is_unavailable():
     """No route_fronts → experimental feature off → UNAVAILABLE."""
-    result = FrontsEvaluator.evaluate(_ctx(None), _PARAMS)
+    result = FrontsEvaluator.evaluate(_ctx(None, ["gfs", "ecmwf"]), _PARAMS)
     assert result.advisory_id == FRONTS_ADVISORY_ID
     assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+    assert result.representative_model == "gfs"
+    assert [model.model for model in result.per_model] == ["gfs", "ecmwf"]
+    assert all(model.status == AdvisoryStatus.UNAVAILABLE for model in result.per_model)
+    assert all(model.data_state == "unavailable" for model in result.per_model)
 
 
 def test_empty_per_model_is_unavailable():
@@ -83,8 +90,10 @@ def test_empty_per_model_is_unavailable():
         generated_at=datetime(2026, 5, 31, tzinfo=timezone.utc),
         primary_level_hPa=850, levels=[850], models=[], per_model={},
     )
-    result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
+    result = FrontsEvaluator.evaluate(_ctx(manifest, ["gfs", "ecmwf"]), _PARAMS)
     assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+    assert [model.model for model in result.per_model] == ["gfs", "ecmwf"]
+    assert all(model.data_state == "unavailable" for model in result.per_model)
 
 
 def test_sharp_crossing_is_red():
@@ -92,6 +101,27 @@ def test_sharp_crossing_is_red():
     result = FrontsEvaluator.evaluate(_ctx(manifest), _PARAMS)
     assert result.aggregate_status == AdvisoryStatus.RED
     assert "sharp" in result.aggregate_detail.lower()
+    assert result.per_model[0].data_state == "complete"
+    assert result.per_model[0].primary_method_id == "hewson"
+    assert result.per_model[0].evidence_regions == []
+
+
+def test_missing_requested_model_analysis_is_explicitly_unavailable():
+    manifest = _manifest(crossings=[_crossing(intensity="sharp", gradient=14.0)])
+
+    result = FrontsEvaluator.evaluate(
+        _ctx(manifest, ["gfs", "ecmwf"]),
+        _PARAMS,
+    )
+
+    assert [model.model for model in result.per_model] == ["gfs", "ecmwf"]
+    by_model = {model.model: model for model in result.per_model}
+    assert by_model["gfs"].status == AdvisoryStatus.RED
+    assert by_model["gfs"].data_state == "complete"
+    assert by_model["gfs"].primary_method_id == "hewson"
+    assert by_model["gfs"].evidence_regions == []
+    assert by_model["ecmwf"].status == AdvisoryStatus.UNAVAILABLE
+    assert by_model["ecmwf"].data_state == "unavailable"
 
 
 def test_classical_crossing_is_amber():

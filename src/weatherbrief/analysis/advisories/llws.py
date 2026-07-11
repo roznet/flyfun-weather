@@ -20,6 +20,7 @@ Two criteria per airport per model (OR logic):
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories.evidence import build_non_spatial_result
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -136,7 +137,21 @@ class LLWSEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         if not ctx.analyses:
-            return RouteAdvisoryResult.from_per_model("llws", [], params)
+            per_model = [
+                build_non_spatial_result(
+                    model=model,
+                    status=AdvisoryStatus.UNAVAILABLE,
+                    detail=adv_t("no_data", ctx.locale),
+                    unavailable_detail=adv_t("no_data", ctx.locale),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=set(),
+                    complete_entities=set(),
+                    affected_entities=set(),
+                    primary_method_id="bulk_shear",
+                )
+                for model in ctx.models
+            ]
+            return RouteAdvisoryResult.from_per_model("llws", per_model, params)
 
         dep_rpa: RoutePointAnalysis = ctx.analyses[0]
         arr_rpa: RoutePointAnalysis = ctx.analyses[-1]
@@ -150,12 +165,14 @@ class LLWSEvaluator:
         for model in ctx.models:
             loc = ctx.locale
             parts: list[str] = []
-            worst: AdvisoryStatus | None = None
+            statuses: list[AdvisoryStatus] = []
+            evaluated: set[str] = set()
+            affected: set[str] = set()
 
-            for label_key, icao, rpa, summary in [
-                ("airport.dep", dep_icao, dep_rpa,
+            for entity, label_key, icao, rpa, summary in [
+                ("departure", "airport.dep", dep_icao, dep_rpa,
                  ctx.airport_conditions.departure if ctx.airport_conditions else None),
-                ("airport.arr", arr_icao, arr_rpa,
+                ("arrival", "airport.arr", arr_icao, arr_rpa,
                  ctx.airport_conditions.arrival if ctx.airport_conditions else None),
             ]:
                 sounding = rpa.sounding.get(model)
@@ -180,6 +197,7 @@ class LLWSEvaluator:
                 )
                 if status is None:
                     continue
+                evaluated.add(entity)
 
                 desc: list[str] = []
                 if shear_kt is not None:
@@ -194,21 +212,26 @@ class LLWSEvaluator:
 
                 label = adv_t(label_key, loc)
                 parts.append(f"{label} {icao}: {', '.join(desc) if desc else 'no shear signal'}")
-                worst = status if worst is None else AdvisoryStatus.worst([worst, status])
+                statuses.append(status)
+                if status != AdvisoryStatus.GREEN:
+                    affected.add(entity)
 
-            if worst is None:
-                per_model.append(ModelAdvisoryResult.build(
-                    model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=0,
-                    total_distance_nm=ctx.total_distance_nm,
-                ))
-                continue
-
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=worst, detail=" | ".join(parts),
-                affected=1 if worst != AdvisoryStatus.GREEN else 0,
-                total=1,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            worst = AdvisoryStatus.worst(statuses)
+            per_model.append(
+                build_non_spatial_result(
+                    model=model,
+                    status=worst,
+                    detail=" | ".join(parts),
+                    unavailable_detail=adv_t(
+                        "no_data" if not evaluated else "partial_data",
+                        loc,
+                    ),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=evaluated,
+                    complete_entities=evaluated,
+                    affected_entities=affected,
+                    primary_method_id="bulk_shear",
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("llws", per_model, params)

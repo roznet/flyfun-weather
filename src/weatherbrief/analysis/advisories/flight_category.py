@@ -13,6 +13,7 @@ and approach traverse every level).
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories.evidence import build_non_spatial_result
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -195,7 +196,23 @@ class FlightCategoryEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         if ctx.airport_conditions is None:
-            return RouteAdvisoryResult.from_per_model("flight_category", [], params)
+            per_model = [
+                build_non_spatial_result(
+                    model=model,
+                    status=AdvisoryStatus.UNAVAILABLE,
+                    detail=adv_t("no_data", ctx.locale),
+                    unavailable_detail=adv_t("no_data", ctx.locale),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=set(),
+                    complete_entities=set(),
+                    affected_entities=set(),
+                    primary_method_id="airport_conditions",
+                )
+                for model in ctx.models
+            ]
+            return RouteAdvisoryResult.from_per_model(
+                "flight_category", per_model, params,
+            )
 
         dep = ctx.airport_conditions.departure
         arr = ctx.airport_conditions.arrival
@@ -205,22 +222,17 @@ class FlightCategoryEvaluator:
             arr_cond = arr.condition_for_model(model)
 
             loc = ctx.locale
-            if dep_cond is None and arr_cond is None:
-                per_model.append(ModelAdvisoryResult.build(
-                    model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=0,
-                    total_distance_nm=ctx.total_distance_nm,
-                ))
-                continue
-
             parts = []
-            worst = AdvisoryStatus.GREEN
-            for label_key, icao, cond, end in [
-                ("airport.dep", dep.icao, dep_cond, "dep"),
-                ("airport.arr", arr.icao, arr_cond, "arr"),
+            statuses: list[AdvisoryStatus] = []
+            evaluated: set[str] = set()
+            affected: set[str] = set()
+            for entity, label_key, icao, cond, end in [
+                ("departure", "airport.dep", dep.icao, dep_cond, "dep"),
+                ("arrival", "airport.arr", arr.icao, arr_cond, "arr"),
             ]:
                 if cond is None:
                     continue
+                evaluated.add(entity)
                 status = _classify_conditions(
                     cond, amber_ceiling_ft, amber_vis_sm,
                     red_ceiling_ft, red_vis_sm,
@@ -239,15 +251,28 @@ class FlightCategoryEvaluator:
                     status = AdvisoryStatus.worst([status, conv_status])
 
                 parts.append(part)
-                worst = AdvisoryStatus.worst([worst, status])
+                statuses.append(status)
+                if status != AdvisoryStatus.GREEN:
+                    affected.add(entity)
 
             detail = " | ".join(parts)
+            worst = AdvisoryStatus.worst(statuses)
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=worst, detail=detail,
-                affected=1 if worst != AdvisoryStatus.GREEN else 0,
-                total=1,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            per_model.append(
+                build_non_spatial_result(
+                    model=model,
+                    status=worst,
+                    detail=detail,
+                    unavailable_detail=adv_t(
+                        "no_data" if not evaluated else "partial_data",
+                        loc,
+                    ),
+                    expected_entities={"departure", "arrival"},
+                    evaluated_entities=evaluated,
+                    complete_entities=evaluated,
+                    affected_entities=affected,
+                    primary_method_id="airport_conditions",
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("flight_category", per_model, params)

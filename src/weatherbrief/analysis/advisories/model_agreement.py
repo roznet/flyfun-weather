@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories._helpers import pct_above_threshold
+from weatherbrief.analysis.advisories.evidence import EvidenceSample, summarize_evidence
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
+from weatherbrief.analysis.comparison import DIVERGENCE_THRESHOLDS
 from weatherbrief.models import (
     AgreementLevel,
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,
-    ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
 
@@ -77,23 +78,76 @@ class ModelAgreementEvaluator:
         poor_pct_red = params.get("poor_pct_red", 50)
 
         # Model agreement is cross-model — evaluated once, not per-model
-        total = 0
-        poor_count = 0
-        moderate_count = 0
+        evaluated: set[int] = set()
+        complete: set[int] = set()
+        poor_points: set[int] = set()
+        moderate_points: set[int] = set()
+        samples: list[EvidenceSample] = []
 
         for rpa in ctx.analyses:
             if not rpa.model_divergence:
                 continue
-            total += 1
+            point_index = rpa.point_index
+            evaluated.add(point_index)
+            complete.add(point_index)
 
-            n_poor = sum(1 for d in rpa.model_divergence if d.agreement == AgreementLevel.POOR)
-            has_poor = n_poor >= min_poor_vars
-            has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in rpa.model_divergence)
+            poor = [
+                divergence
+                for divergence in rpa.model_divergence
+                if divergence.agreement == AgreementLevel.POOR
+            ]
+            moderate = [
+                divergence
+                for divergence in rpa.model_divergence
+                if divergence.agreement == AgreementLevel.MODERATE
+            ]
+            has_poor = len(poor) >= min_poor_vars
 
             if has_poor:
-                poor_count += 1
-            elif has_moderate:
-                moderate_count += 1
+                poor_points.add(point_index)
+                samples.extend(
+                    EvidenceSample(
+                        point_index=point_index,
+                        severity=AdvisoryStatus.RED,
+                        reason_code="poor_model_agreement",
+                        metric_id=(
+                            divergence.variable
+                            if divergence.variable in DIVERGENCE_THRESHOLDS
+                            else None
+                        ),
+                        method_id="model_divergence",
+                    )
+                    for divergence in poor
+                )
+            elif moderate:
+                moderate_points.add(point_index)
+                samples.extend(
+                    EvidenceSample(
+                        point_index=point_index,
+                        severity=AdvisoryStatus.AMBER,
+                        reason_code="moderate_model_agreement",
+                        metric_id=(
+                            divergence.variable
+                            if divergence.variable in DIVERGENCE_THRESHOLDS
+                            else None
+                        ),
+                        method_id="model_divergence",
+                    )
+                    for divergence in moderate
+                )
+
+        summary = summarize_evidence(
+            route_points=ctx.analyses,
+            total_distance_nm=ctx.total_distance_nm,
+            evaluated_point_indices=evaluated,
+            complete_point_indices=complete,
+            affected_point_indices=poor_points,
+            evidence_samples=samples,
+            moderate_point_indices=moderate_points,
+        )
+        total = summary.total_points
+        poor_count = summary.affected_points
+        moderate_count = summary.affected_mod_points
 
         loc = ctx.locale
         if total == 0:
@@ -105,14 +159,32 @@ class ModelAgreementEvaluator:
         else:
             status = pct_above_threshold(poor_count, total, poor_pct_amber, poor_pct_red)
             if status == AdvisoryStatus.GREEN and moderate_count > 0:
-                detail = adv_t("model_agreement.mostly_good", loc, extent=format_extent(moderate_count, total, ctx.total_distance_nm))
+                detail = adv_t(
+                    "model_agreement.mostly_good",
+                    loc,
+                    extent=summary.format_mod_extent(),
+                )
             else:
-                detail = adv_t("model_agreement.poor", loc, extent=format_extent(poor_count, total, ctx.total_distance_nm))
+                detail = adv_t(
+                    "model_agreement.poor",
+                    loc,
+                    extent=summary.format_extent(),
+                )
 
-        per_model = [ModelAdvisoryResult.build(
-            model="all", status=status, detail=detail,
-            affected=poor_count, total=total,
-            total_distance_nm=ctx.total_distance_nm,
-        )]
+        missing_detail = adv_t(
+            "model_agreement.no_data"
+            if summary.data_state == "unavailable"
+            else "partial_data",
+            loc,
+        )
+        per_model = [
+            summary.build_result(
+                model="all",
+                status=status,
+                detail=detail,
+                unavailable_detail=missing_detail,
+                primary_method_id="model_divergence",
+            )
+        ]
 
         return RouteAdvisoryResult.from_per_model("model_agreement", per_model, params)

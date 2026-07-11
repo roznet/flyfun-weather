@@ -131,6 +131,9 @@ class TestFlightCategoryEvaluator:
         ctx = _make_ctx(ac)
         result = FlightCategoryEvaluator.evaluate(ctx, {})
         assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert result.per_model[0].data_state == "complete"
+        assert result.per_model[0].primary_method_id == "airport_conditions"
+        assert result.per_model[0].total_points == 2
 
     def test_mvfr_at_arrival(self):
         ac = _make_airport_conditions(
@@ -151,6 +154,22 @@ class TestFlightCategoryEvaluator:
         # GFS has IFR → RED, worst across models is RED
         assert result.aggregate_status == AdvisoryStatus.RED
 
+    def test_hazardous_departure_survives_missing_arrival_model_condition(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.IFR},
+            arr_cats={},
+        )
+
+        result = FlightCategoryEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        ).per_model[0]
+
+        assert result.status == AdvisoryStatus.RED
+        assert result.data_state == "partial"
+        assert result.total_points == 1
+        assert result.affected_points == 1
+
     def test_lifr_is_red(self):
         ac = _make_airport_conditions(
             dep_cats={"gfs": FlightCategory.VFR},
@@ -163,7 +182,10 @@ class TestFlightCategoryEvaluator:
     def test_no_airport_conditions(self):
         ctx = _make_ctx(None)
         result = FlightCategoryEvaluator.evaluate(ctx, {})
-        assert len(result.per_model) == 0
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+        assert [model.model for model in result.per_model] == ["gfs", "ecmwf"]
+        assert all(model.status == AdvisoryStatus.UNAVAILABLE for model in result.per_model)
+        assert all(model.data_state == "unavailable" for model in result.per_model)
 
     def test_per_model_detail(self):
         ac = _make_airport_conditions(
@@ -199,6 +221,9 @@ class TestAirportWindEvaluator:
         ctx = _make_ctx(ac, models=["gfs"])
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert result.per_model[0].data_state == "complete"
+        assert result.per_model[0].primary_method_id == "runway_components"
+        assert result.per_model[0].total_points == 2
 
     def test_high_crosswind_amber(self):
         rwy = RunwayWind(runway_id="09L", heading_deg=90.0, crosswind_kt=18.0, headwind_kt=10.0)
@@ -252,9 +277,27 @@ class TestAirportWindEvaluator:
         assert result.aggregate_status == AdvisoryStatus.RED
 
     def test_no_airport_conditions(self):
-        ctx = _make_ctx(None, models=["gfs"])
+        ctx = _make_ctx(None)
         result = AirportWindEvaluator.evaluate(ctx, {})
-        assert len(result.per_model) == 0
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+        assert [model.model for model in result.per_model] == ["gfs", "ecmwf"]
+        assert all(model.status == AdvisoryStatus.UNAVAILABLE for model in result.per_model)
+        assert all(model.data_state == "unavailable" for model in result.per_model)
+
+    def test_condition_without_crosswind_or_gust_is_missing_not_calm(self):
+        conditions = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+        )
+
+        result = AirportWindEvaluator.evaluate(
+            _make_ctx(conditions, models=["gfs"]),
+            {},
+        )
+
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+        assert result.per_model[0].data_state == "unavailable"
+        assert "calm" not in result.per_model[0].detail.lower()
 
     def test_custom_thresholds(self):
         rwy = RunwayWind(runway_id="09L", heading_deg=90.0, crosswind_kt=12.0, headwind_kt=15.0)
@@ -414,6 +457,9 @@ def test_density_altitude_hot_high_field():
 def test_density_altitude_green_cool_day():
     result = DensityAltitudeEvaluator.evaluate(_da_ctx(temperature_c=10.0), {})
     assert result.aggregate_status == AdvisoryStatus.GREEN
+    assert result.per_model[0].data_state == "complete"
+    assert result.per_model[0].primary_method_id == "density_altitude"
+    assert result.per_model[0].total_points == 2
 
 
 def test_density_altitude_amber_hot_day():
@@ -442,6 +488,15 @@ def test_density_altitude_unavailable_without_elevation():
         _da_ctx(temperature_c=30.0, elevation=None), {},
     )
     assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_density_altitude_missing_airports_returns_each_requested_model_unavailable():
+    result = DensityAltitudeEvaluator.evaluate(_make_ctx(None), {})
+
+    assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+    assert [model.model for model in result.per_model] == ["gfs", "ecmwf"]
+    assert all(model.status == AdvisoryStatus.UNAVAILABLE for model in result.per_model)
+    assert all(model.data_state == "unavailable" for model in result.per_model)
 
 
 # --- FlightCategoryEvaluator: terminal convective aspect ---
