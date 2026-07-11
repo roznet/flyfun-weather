@@ -35,10 +35,30 @@ from weatherbrief.models import (
     ModelAdvisoryResult,
     PrecipPhase,
     RouteAdvisoryResult,
+    SoundingAnalysis,
 )
 
 _ACTIVE_PHASES = (PrecipPhase.FREEZING_RAIN, PrecipPhase.ICE_PELLETS)
 _METHOD_ID = "nwp_precipitation_profile"
+
+
+def _warm_nose_profile_is_usable(sounding: SoundingAnalysis) -> bool:
+    """Return whether the profile can support ``detect_warm_nose``."""
+    return sum(
+        1
+        for level in sounding.derived_levels
+        if level.wet_bulb_c is not None and level.altitude_ft is not None
+    ) >= 3
+
+
+def _complete_bounds(
+    lower: float | None,
+    upper: float | None,
+) -> tuple[int, int] | None:
+    """Return one complete valid altitude pair, never mixed endpoints."""
+    if lower is None or upper is None or lower > upper:
+        return None
+    return round(lower), round(upper)
 
 
 @register
@@ -110,32 +130,36 @@ class FreezingPrecipEvaluator:
                     continue
 
                 precip = sounding.precipitation
-                detected_risk, detected_base, detected_top, ice_pellets = (
-                    detect_warm_nose(sounding.derived_levels)
-                )
-                if precip is None and not sounding.derived_levels:
+                precip_usable = precip is not None
+                profile_usable = _warm_nose_profile_is_usable(sounding)
+                if not precip_usable and not profile_usable:
                     continue
+                if profile_usable:
+                    detected_risk, detected_base, detected_top, ice_pellets = (
+                        detect_warm_nose(sounding.derived_levels)
+                    )
+                else:
+                    detected_risk = False
+                    detected_base = detected_top = None
+                    ice_pellets = False
 
                 point_index = rpa.point_index
                 evaluated.add(point_index)
-                complete.add(point_index)
-                lower = (
-                    precip.warm_nose_base_ft
-                    if precip is not None
-                    and precip.warm_nose_base_ft is not None
-                    else detected_base
+                if precip_usable and profile_usable:
+                    complete.add(point_index)
+                stored_bounds = _complete_bounds(
+                    precip.warm_nose_base_ft if precip is not None else None,
+                    precip.warm_nose_top_ft if precip is not None else None,
                 )
-                upper = (
-                    precip.warm_nose_top_ft
-                    if precip is not None
-                    and precip.warm_nose_top_ft is not None
-                    else detected_top
+                detected_bounds = _complete_bounds(
+                    detected_base,
+                    detected_top,
                 )
-                if lower is None or upper is None or lower > upper:
+                bounds = stored_bounds or detected_bounds
+                if bounds is None:
                     lower_ft = upper_ft = None
                 else:
-                    lower_ft = round(lower)
-                    upper_ft = round(upper)
+                    lower_ft, upper_ft = bounds
 
                 active = precip is not None and (
                     precip.surface_phase in _ACTIVE_PHASES

@@ -72,6 +72,15 @@ def _primed() -> SoundingAnalysis:
     )
 
 
+def _invalid_profile_levels() -> list[DerivedLevel]:
+    """Profile structure that cannot support warm-nose detection."""
+    return [
+        DerivedLevel(pressure_hpa=1000, altitude_ft=500, wet_bulb_c=-2.0),
+        DerivedLevel(pressure_hpa=925, altitude_ft=None, wet_bulb_c=1.0),
+        DerivedLevel(pressure_hpa=900, altitude_ft=4000, wet_bulb_c=None),
+    ]
+
+
 def test_active_freezing_rain_is_red():
     ctx = _ctx([_dry()] * 9 + [_active_fzra()])
     result = FreezingPrecipEvaluator.evaluate(ctx, {})
@@ -150,7 +159,7 @@ def test_primed_profile_is_amber():
     )
 
 
-def test_warm_nose_detection_runs_once_per_available_point(monkeypatch):
+def test_warm_nose_detection_runs_once_per_usable_profile(monkeypatch):
     calls = []
     real_detect = freezing_precip_module.detect_warm_nose
 
@@ -160,7 +169,121 @@ def test_warm_nose_detection_runs_once_per_available_point(monkeypatch):
 
     monkeypatch.setattr(freezing_precip_module, "detect_warm_nose", recording_detect)
     FreezingPrecipEvaluator.evaluate(_ctx([_dry()] * 9 + [_active_fzra()]), {})
-    assert len(calls) == 10
+    assert len(calls) == 9
+
+
+def test_structurally_insufficient_profile_without_precip_is_unavailable():
+    sounding = SoundingAnalysis(derived_levels=_invalid_profile_levels())
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "unavailable"
+
+
+def test_active_precip_with_unusable_profile_is_partial_red():
+    sounding = _active_fzra().model_copy(
+        update={"derived_levels": _invalid_profile_levels()}
+    )
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.data_state == "partial"
+
+
+def test_clear_precip_with_unusable_profile_is_guarded_unavailable():
+    sounding = SoundingAnalysis(
+        precipitation=PrecipitationAssessment(),
+        derived_levels=_invalid_profile_levels(),
+    )
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "partial"
+
+
+def test_primed_profile_without_precip_track_is_partial_amber():
+    sounding = _primed().model_copy(update={"precipitation": None})
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.AMBER
+    assert model.data_state == "partial"
+
+
+def test_clear_profile_without_precip_track_is_guarded_unavailable():
+    sounding = _dry().model_copy(update={"precipitation": None})
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "partial"
+
+
+def test_precip_and_profile_tracks_together_are_complete():
+    model = FreezingPrecipEvaluator.evaluate(_ctx([_dry()]), {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.GREEN
+    assert model.data_state == "complete"
+
+
+def test_partial_stored_bounds_use_complete_detected_pair():
+    sounding = _primed().model_copy(
+        update={
+            "precipitation": PrecipitationAssessment(
+                surface_phase=PrecipPhase.FREEZING_RAIN,
+                freezing_rain_risk=True,
+                warm_nose_base_ft=3500,
+            )
+        }
+    )
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+    region = next(
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "active_freezing_precip"
+    )
+
+    assert (region.lower_altitude_ft, region.upper_altitude_ft) == (3000, 4000)
+
+
+def test_partial_stored_bounds_without_detected_pair_emit_no_altitude():
+    sounding = SoundingAnalysis(
+        precipitation=PrecipitationAssessment(
+            surface_phase=PrecipPhase.FREEZING_RAIN,
+            freezing_rain_risk=True,
+            warm_nose_base_ft=3500,
+        ),
+        derived_levels=_invalid_profile_levels(),
+    )
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+    region = next(
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "active_freezing_precip"
+    )
+
+    assert model.data_state == "partial"
+    assert region.lower_altitude_ft is None
+    assert region.upper_altitude_ft is None
+
+
+def test_complete_stored_bounds_take_precedence_over_detected_pair():
+    sounding = _primed().model_copy(
+        update={
+            "precipitation": PrecipitationAssessment(
+                surface_phase=PrecipPhase.FREEZING_RAIN,
+                freezing_rain_risk=True,
+                warm_nose_base_ft=3500,
+                warm_nose_top_ft=4500,
+            )
+        }
+    )
+    model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]
+    region = next(
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "active_freezing_precip"
+    )
+
+    assert (region.lower_altitude_ft, region.upper_altitude_ft) == (3500, 4500)
 
 
 def test_primed_below_threshold_is_green():

@@ -287,9 +287,9 @@ class FIKIIcingEvaluator:
             }
             samples: list[EvidenceSample] = []
 
-            def transit_severity(point: _FIKIPointAssessment) -> AdvisoryStatus:
-                if point.transit_sld:
-                    return AdvisoryStatus.RED
+            def aggregate_non_sld_severity(
+                point: _FIKIPointAssessment,
+            ) -> AdvisoryStatus:
                 if severe_is_red and point.transit_worst == IcingRisk.SEVERE:
                     return AdvisoryStatus.RED
                 if point.transit_thickness_ft >= transit_red:
@@ -305,7 +305,7 @@ class FIKIIcingEvaluator:
                     if min(zone.top_ft, cruise_alt) > max(zone.base_ft, 0)
                 ]
                 if point.distance_nm <= proximity_nm:
-                    local_severity = transit_severity(point)
+                    local_severity = aggregate_non_sld_severity(point)
                     for zone in transit_zones:
                         samples.append(
                             EvidenceSample(
@@ -323,7 +323,7 @@ class FIKIIcingEvaluator:
                             )
                         )
                 if point.distance_nm >= total_dist - proximity_nm:
-                    local_severity = transit_severity(point)
+                    local_severity = aggregate_non_sld_severity(point)
                     for zone in transit_zones:
                         samples.append(
                             EvidenceSample(

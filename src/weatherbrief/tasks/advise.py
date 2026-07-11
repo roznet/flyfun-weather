@@ -83,6 +83,7 @@ def _resolve_analyses(
     Icing resolution (``icing_method``):
         ``"ogimet_nwp"`` → use ``icing_ogimet_nwp_zones``.
         ``"sfip_nwp"``   → convert ``sfip_zones`` to ``IcingZone`` list.
+        ``"ieng"``       → use ``ieng_icing_zones``.
     Convective resolution (``convective_method``):
         ``"nwp"`` → use ``convective_nwp`` (fall back to ``convective_thermo``).
     """
@@ -121,6 +122,8 @@ def _resolve_analyses(
             if swap_icing:
                 if icing_method == "ogimet_nwp":
                     updates["icing_zones"] = list(sounding.icing_ogimet_nwp_zones)
+                elif icing_method == "ieng":
+                    updates["icing_zones"] = list(sounding.ieng_icing_zones)
                 elif icing_method == "sfip_nwp":
                     updates["icing_zones"] = [
                         IcingZone(

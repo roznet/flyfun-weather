@@ -634,6 +634,50 @@ def test_resolve_analyses_ogimet_nwp_swaps_without_mutation():
     assert rpa.sounding["gfs"].icing_zones[0].base_ft == 5000
 
 
+def test_resolve_analyses_ieng_swaps_without_mutation():
+    """ieng resolves icing_zones from its native NWP-gated zone list."""
+    from datetime import datetime, timezone
+
+    from weatherbrief.models import IcingZone, RoutePointAnalysis, SoundingAnalysis
+    from weatherbrief.tasks.advise import _resolve_analyses
+
+    dd_zone = IcingZone(
+        base_ft=4000,
+        top_ft=6000,
+        risk=IcingRisk.LIGHT,
+        icing_type=IcingType.RIME,
+    )
+    ieng_zone = IcingZone(
+        base_ft=7000,
+        top_ft=9000,
+        risk=IcingRisk.MODERATE,
+        icing_type=IcingType.MIXED,
+    )
+    sounding = SoundingAnalysis(
+        icing_zones=[dd_zone],
+        ieng_icing_zones=[ieng_zone],
+    )
+    rpa = RoutePointAnalysis(
+        point_index=0,
+        lat=0,
+        lon=0,
+        distance_from_origin_nm=0,
+        interpolated_time=datetime.now(timezone.utc),
+        forecast_hour=datetime.now(timezone.utc),
+        track_deg=0,
+        sounding={"gfs": sounding},
+    )
+
+    result = _resolve_analyses([rpa], "ieng", None)
+
+    resolved = result[0].sounding["gfs"].icing_zones
+    assert [(zone.base_ft, zone.top_ft) for zone in resolved] == [(7000, 9000)]
+    assert resolved[0].risk == IcingRisk.MODERATE
+    assert [(zone.base_ft, zone.top_ft) for zone in rpa.sounding["gfs"].icing_zones] == [
+        (4000, 6000)
+    ]
+
+
 def test_resolve_analyses_sfip_nwp_converts_without_mutation():
     """sfip_nwp converts sfip_zones to IcingZone; original is untouched."""
     from weatherbrief.tasks.advise import _resolve_analyses
