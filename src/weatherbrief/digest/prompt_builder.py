@@ -499,17 +499,33 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
             if parts:
                 lines.append(f"  Sounding [{model}]: {', '.join(parts)}")
 
-        # Native NWP cloud layers (ECMWF/ICON 3-D cloud fraction or GFS GRIB
-        # decks) — the model's own cloud envelope, same signal the app
-        # cross-section's NWP cloud layer draws. This is deliberately NOT the
-        # bulk Open-Meteo cloud_cover_low/mid/high summary: that low/mid/high
-        # triple is the GFS-native paradigm and mislabels ECMWF (whose native
-        # cloud is per-level 3-D fraction), so emitting it as "NWP cloud" for
-        # every model was wrong. `None` means no native NWP envelope at this
-        # lead time (no GRIB enrichment) — the digest then says so explicitly,
-        # matching the app's empty NWP cloud layer rather than contradicting it.
+        # Cloud, split by provenance so the LLM (and the MCP client reading this
+        # via get_digest_context) can tell the model's *native* cloud envelope
+        # from the coarse bulk summary:
+        #
+        # 1. `nwp_cloud_layers` present → the model's own cloud decks (ECMWF/ICON
+        #    3-D cloud fraction or GFS GRIB) — the same signal the app
+        #    cross-section's NWP cloud layer draws. Emitted as "NWP cloud".
+        # 2. `nwp_cloud_layers is None` → no native envelope. This happens two
+        #    ways and both fall through here: ECMWF far-out (no GRIB enrichment
+        #    yet) AND Open-Meteo-only models (UKMO/MétéoFrance/GEM) that never
+        #    have native diagnostics at any lead time. Fall back to the bulk
+        #    Open-Meteo low/mid/high summary — real data, just coarse — under a
+        #    label that does NOT claim to be the native NWP layer and does NOT
+        #    imply a temporal gap. (The old code mislabeled this bulk triple as
+        #    "NWP cloud [ecmwf]: Low/Mid/High", the GFS-native paradigm applied
+        #    to a model whose native cloud is per-level 3-D fraction.)
+        # 3. `nwp_cloud_layers == []` → a native source exists and reports clear.
         if sa.nwp_cloud_layers is None:
-            lines.append(f"  NWP cloud [{model}]: no native NWP cloud layer at this lead time")
+            if sa.cloud_cover_low_pct is not None:
+                lines.append(
+                    f"  Bulk cloud [{model}] (Open-Meteo summary, no native NWP layer): "
+                    f"Low={sa.cloud_cover_low_pct:.0f}%"
+                    f", Mid={sa.cloud_cover_mid_pct:.0f}%"
+                    f", High={sa.cloud_cover_high_pct:.0f}%"
+                )
+            else:
+                lines.append(f"  NWP cloud [{model}]: no native NWP cloud layer")
         elif not sa.nwp_cloud_layers:
             lines.append(f"  NWP cloud [{model}]: none (model clear)")
         else:

@@ -82,7 +82,7 @@ final class CrossSectionViewModel {
     }
 
     // MARK: - NWP availability & fallback (port of web getUnavailableLayers +
-    // applyNwpFallback). See `NwpFallback`. All three are pure functions of the
+    // applyNwpFallback). See `NwpFallback`. Both are pure functions of the
     // already-observed `vizData` + `enabledLayers`, so reading them inside the
     // Canvas / config sheet registers the right `@Observable` dependencies.
 
@@ -99,12 +99,6 @@ final class CrossSectionViewModel {
     /// NWP-capable model auto-restores NWP). Mirrors web `briefing-main.ts`.
     var effectiveEnabledLayers: [String: Bool] {
         NwpFallback.applyFallback(enabledLayers: enabledLayers, unavailable: unavailableLayers)
-    }
-
-    /// Layers auto-substituted at render (DD standing in for an unavailable NWP
-    /// method) — the config sheet flags these so the user knows why NWP looks off.
-    var substitutedLayers: Set<String> {
-        NwpFallback.substitutedLayers(enabledLayers: enabledLayers, effective: effectiveEnabledLayers)
     }
 
     func toggleLayer(_ id: String) {

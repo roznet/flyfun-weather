@@ -116,28 +116,19 @@ import Foundation
         #expect(stored["cloud-bands"] != true)
     }
 
-    /// substitutedLayers reports exactly the layers the fallback turned on that
-    /// the user did not — the auto-substitutes, for the UI hint.
-    @Test func substitutedLayersReportsAutoEnabled() {
-        let stored = CrossSectionPresets.gramet
-        let unavailable: Set<String> = ["nwp-cloud-bands", "icing-ogimet-nwp-bands"]
-        let effective = NwpFallback.applyFallback(enabledLayers: stored, unavailable: unavailable)
-        let substituted = NwpFallback.substitutedLayers(enabledLayers: stored, effective: effective)
-        #expect(substituted.contains("cloud-bands"))
-        #expect(substituted.contains("icing-bands"))
-        #expect(!substituted.contains("nwp-cloud-bands"))  // disabled, not substituted
-    }
-
-    /// When the user already has the DD sibling enabled, the fallback doesn't
-    /// double-toggle and reports no auto-substitute for it.
+    /// When the user already runs DD methods (ForeFlight preset), an NWP-less
+    /// model is a no-op: the DD layers already selected stay on, and the fallback
+    /// doesn't need to substitute anything.
     @Test func applyFallbackNoOpWhenDdAlreadyEnabled() {
         var stored = CrossSectionPresets.foreflight  // Square DD clouds + Ogimet-DD
         stored["nwp-cloud-bands"] = false
         let unavailable: Set<String> = ["nwp-cloud-bands", "icing-ogimet-nwp-bands"]
         let effective = NwpFallback.applyFallback(enabledLayers: stored, unavailable: unavailable)
-        let substituted = NwpFallback.substitutedLayers(enabledLayers: stored, effective: effective)
-        // ForeFlight already uses DD, so nothing is auto-substituted.
-        #expect(substituted.isEmpty)
-        #expect(effective["icing-bands"] == true)
+        // ForeFlight's DD methods are untouched…
+        #expect(effective["square-cloud-bands"] == true)  // Square DD clouds
+        #expect(effective["icing-bands"] == true)         // Ogimet-DD
+        // …and the unavailable NWP methods are off.
+        #expect(effective["nwp-cloud-bands"] == false)
+        #expect(effective["icing-ogimet-nwp-bands"] == false)
     }
 }

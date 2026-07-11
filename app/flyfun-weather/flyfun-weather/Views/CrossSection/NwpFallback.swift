@@ -116,15 +116,4 @@ enum NwpFallback {
 
         return effective
     }
-
-    /// Layer ids the fallback turned on but the user did not — the auto
-    /// substitutes. Mirrors web `getSubstitutedLayers`.
-    static func substitutedLayers(
-        enabledLayers: [String: Bool],
-        effective: [String: Bool]
-    ) -> Set<String> {
-        var out = Set<String>()
-        for (id, on) in effective where on && enabledLayers[id] != true { out.insert(id) }
-        return out
-    }
 }
