@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    format_extent,
+    ribbon_peak,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     CloudCoverage,
+    HighlightSeverity,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -71,17 +79,31 @@ class VMCCruiseEvaluator:
             total = 0
             bkn_count = 0
             ovc_count = 0
+            # Per-point highlight geometry (#373). ribbon_points carries every
+            # route point (incl. no-sounding → UNAVAILABLE); region_cells carries
+            # a FlaggedCell only for BKN/OVC points, None otherwise.
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            region_cells: list[tuple[float, FlaggedCell | None]] = []
 
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
                     continue
                 total += 1
 
-                # Check cloud layers at cruise altitude
+                # Check cloud layers at cruise altitude, tracking the envelope
+                # (min base / max top) of layers that contain cruise for the
+                # scrim cutout.
                 worst_coverage = None
+                env_base: float | None = None
+                env_top: float | None = None
                 for cl in sounding.cloud_layers:
                     if cl.base_ft <= cruise <= cl.top_ft:
+                        env_base = cl.base_ft if env_base is None else min(env_base, cl.base_ft)
+                        env_top = cl.top_ft if env_top is None else max(env_top, cl.top_ft)
                         if worst_coverage is None:
                             worst_coverage = cl.coverage
                         elif cl.coverage == CloudCoverage.OVC:
@@ -91,8 +113,23 @@ class VMCCruiseEvaluator:
 
                 if worst_coverage == CloudCoverage.OVC:
                     ovc_count += 1
+                    severity = HighlightSeverity.RED
                 elif worst_coverage == CloudCoverage.BKN:
                     bkn_count += 1
+                    severity = HighlightSeverity.AMBER
+                else:
+                    severity = HighlightSeverity.GREEN
+
+                ribbon_points.append((dist, severity))
+                if severity in (HighlightSeverity.AMBER, HighlightSeverity.RED):
+                    region_cells.append((dist, FlaggedCell(
+                        kind="cruise_imc",
+                        severity=severity,
+                        base_ft=int(env_base) if env_base is not None else None,
+                        top_ft=int(env_top) if env_top is not None else None,
+                    )))
+                else:
+                    region_cells.append((dist, None))
 
             affected = bkn_count + ovc_count
             loc = ctx.locale
@@ -115,10 +152,22 @@ class VMCCruiseEvaluator:
                     status = AdvisoryStatus.GREEN
                     detail = adv_t("vmc_cruise.clear", loc)
 
+            # Build highlights only when the model has data (total > 0); an
+            # all-UNAVAILABLE model gets no scrim/ribbon (highlights=None).
+            highlights = None
+            if total > 0:
+                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+                highlights = AdvisoryHighlights(
+                    ribbon=ribbon,
+                    regions=build_regions(region_cells, ctx.total_distance_nm),
+                    peak_dist_nm=ribbon_peak(ribbon),
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, params)

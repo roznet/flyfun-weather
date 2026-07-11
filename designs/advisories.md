@@ -220,9 +220,59 @@ hazard→cost `CostModel` and reads the returned profile; the same solver backs 
   per-model `mitigations` + top-level `aggregate_mitigations` plus a `MITIGATION_NOTE`
   guardrail (sibling of `CROSS_CHECK_NOTE`). See [chatgpt-connector.md](./chatgpt-connector.md).
 
+## Advisory Highlights (cross-section geometry — #373)
+
+An advisory can carry **highlights**: per-model cross-section geometry locating
+*where along the route and at what altitudes* the verdict comes from. Like
+`cross_check` / mitigations, highlights **never change the grade** — they locate
+it. Two elements, each doing exactly one job (models in `models/advisories.py`,
+sibling of `Mitigation`):
+
+| Model | Job | Shape |
+|-------|-----|-------|
+| `RibbonSegment` | **1-D route verdict** (judgement) | `dist_from_nm`, `dist_to_nm`, `severity` — a gapless partition of `[0, total_nm]` |
+| `HighlightRegion` | **2-D scrim cutout** (focus), flagged areas only | `dist_from/to_nm`, `base_ft`/`top_ft` (both `None` = full column), `kind` (stable English token), `severity` (amber/red) |
+| `AdvisoryHighlights` | container | `ribbon`, `regions`, optional `peak_dist_nm` (jump-to-worst) |
+
+`ModelAdvisoryResult` gains `highlights: AdvisoryHighlights | None` (+ a `highlights=`
+kwarg on `.build`, same pattern as `mitigations`). Old packs deserialize with `None`;
+no migration (pure JSON). There is **no** `aggregate_highlights` — the cross-section
+is per-model, and the web chip switches to the representative model (the same
+policy as `aggregate_detail`) to cover the aggregate view at the UI level.
+
+Design decisions (don't relitigate): **backend owns the geometry** (which zones
+fired depends on evaluator thresholds/altitude buffers/user params — re-deriving
+client-side would drift and iOS would need a third copy); **distance-space (`nm`)**
+like `MitigationSegment`; **ribbon is a full partition** incl. explicit GREEN and
+UNAVAILABLE segments (green must never be inferred from silence); highlights
+**track params/altitude for free** because the recalc endpoint and altitude slider
+re-run `evaluate_all`. The ribbon (per-point verdict) and the card badge
+(route-level, extent-thresholded grade) deliberately use **different mappings** — a
+GREEN advisory with a short amber ribbon run is correct.
+
+**Emitting helpers** (`_helpers.py`, below): the two emitting evaluators build the
+geometry inside the per-point loops they already run:
+
+- `vmc_cruise` — ribbon: OVC→red, BKN→amber, else green, no sounding→unavailable.
+  Regions `kind="cruise_imc"`, band = envelope of the cloud layer(s) containing
+  cruise. `peak_dist_nm` via `ribbon_peak` (longest red run, else amber).
+- `convective` — ribbon: HIGH/EXTREME→red, LOW/MODERATE (≥ `min_risk`)→amber, else
+  (below floor / tops below cruise / no convection)→green, no sounding→unavailable.
+  Regions reuse the evaluator's own base/top resolution (`check_top_ft`, model
+  base/top with thermo-EL fallback): `kind="tower"` when resolved, else
+  `kind="tower_unresolved"` full-column ghost (nwp_precip / cover-only). `peak_dist_nm`
+  = the affected point with the worst graded risk, ties → highest CAPE (matches the
+  MCP deep-link peak). Both build highlights only when the model has data (`total > 0`).
+
+Remaining advisories (#375) and iOS rendering (#374) are follow-ups; only `vmc_cruise`
+and `convective` emit today.
+
 ## Shared Helpers (`_helpers.py`)
 
 - **`format_extent(affected, total, total_distance_nm)`** → `"30nm/55nm (55%)"` — human-readable spatial extent
+- **`build_ribbon(per_point, total_nm)`** → `list[RibbonSegment]` — merge consecutive same-severity route points into runs; boundaries fall midway between adjacent points; tiles `[0, total_nm]` exactly (sorted/non-overlapping/gapless invariants tested). No-sounding points → `UNAVAILABLE` (#373)
+- **`build_regions(per_point, total_nm)`** → `list[HighlightRegion]` — merge consecutive same-`kind`/`severity` flagged points (a `FlaggedCell` per flagged point, `None` otherwise) into one cutout using the **envelope** (min `base_ft` / max `top_ft`); all-`None` run stays a full column. Same cell-midpoint x-boundaries as the ribbon (#373)
+- **`ribbon_peak(segments)`** → center of the longest RED run, else longest AMBER run, else `None` — generic worst-point for evaluators whose peak is pure ribbon extent (`vmc_cruise`); richer peaks (convective's highest-CAPE) are computed in the evaluator (#373)
 - **`icing_zones_in_altitude_range(zones, floor_ft, ceiling_ft)`** → filter zones overlapping an altitude band
 - **`has_relevant_icing(zones, cruise_altitude_ft, buffer_ft=2000)`** → True if any zone overlaps `[0, cruise + buffer]`. Used by IFR feasibility, icing escape, and FIKI evaluators to ignore icing far above cruise altitude
 - **`min_icing_clearance(zones, cruise_altitude_ft)`** → minimum vertical distance (ft) from cruise to nearest icing zone. Used by FIKI evaluator

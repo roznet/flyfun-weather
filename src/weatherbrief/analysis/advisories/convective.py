@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    format_extent,
+    pct_above_threshold,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     ConvectiveRisk,
+    HighlightSeverity,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -137,10 +145,21 @@ class ConvectiveEvaluator:
             xcheck_fired = 0
             xcheck_dirs: dict[str, int] = {}
             xcheck_worst_dd_risk = ConvectiveRisk.NONE
+            # Per-point highlight geometry (#373). Every route point contributes
+            # a ribbon severity (no sounding → UNAVAILABLE, unaffected → GREEN);
+            # flagged points also contribute a tower cutout.
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            region_cells: list[tuple[float, FlaggedCell | None]] = []
+            # Worst affected point for peak_dist_nm: max graded risk, ties → CAPE.
+            peak_key: tuple[int, float] | None = None
+            peak_dist: float | None = None
 
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
                     continue
                 total += 1
 
@@ -167,6 +186,11 @@ class ConvectiveEvaluator:
 
                 conv = sounding.convective
                 if conv is None:
+                    # Sounding present but no convective assessment: not a hazard
+                    # we can locate — grade the ribbon GREEN (not UNAVAILABLE,
+                    # which is reserved for a missing sounding).
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    region_cells.append((dist, None))
                     continue
 
                 # Guardrail (#283): the active track may now be the model-native
@@ -186,6 +210,10 @@ class ConvectiveEvaluator:
 
                 risk_idx = _RISK_ORDER.index(graded_risk)
                 if risk_idx < _RISK_ORDER.index(min_risk):
+                    # Below the min risk floor → GREEN on the ribbon (checked,
+                    # nothing worth flagging here).
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    region_cells.append((dist, None))
                     continue
 
                 # Skip if convective tops are well below cruise altitude. When the
@@ -213,6 +241,10 @@ class ConvectiveEvaluator:
                     and check_top_ft + top_clearance_ft <= cruise_ft
                 ):
                     below_cruise_count += 1
+                    # Tops below cruise (with clearance) → not a hazard at cruise
+                    # → GREEN on the ribbon, no cutout.
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    region_cells.append((dist, None))
                     continue
 
                 affected += 1
@@ -221,11 +253,52 @@ class ConvectiveEvaluator:
                 if risk_idx > _RISK_ORDER.index(worst_risk):
                     worst_risk = graded_risk
 
-                if graded_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
+                is_high = graded_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME)
+                if is_high:
                     has_high = True
 
                 if conv.cover_pct is not None:
                     max_cover_pct = max(max_cover_pct or 0, conv.cover_pct)
+
+                # Highlight geometry for this flagged point (#373).
+                severity = HighlightSeverity.RED if is_high else HighlightSeverity.AMBER
+                ribbon_points.append((dist, severity))
+                if check_top_ft is not None:
+                    # Resolved tower: reuse check_top_ft (active/thermo-EL
+                    # fallback, already computed); base from the same base
+                    # resolution (model base, thermo-LFC fallback when raised).
+                    check_base_ft = conv.base_ft
+                    if (
+                        check_base_ft is None
+                        and thermo_conv is not None
+                        and graded_risk != conv.risk_level
+                    ):
+                        check_base_ft = thermo_conv.base_ft
+                    region_cells.append((dist, FlaggedCell(
+                        kind="tower",
+                        severity=severity,
+                        base_ft=int(check_base_ft) if check_base_ft is not None else None,
+                        top_ft=int(check_top_ft),
+                    )))
+                else:
+                    # Depth-unresolved (nwp_precip / cover-only): full-column
+                    # ghost, mirrors nwp-convective-bg.ts.
+                    region_cells.append((dist, FlaggedCell(
+                        kind="tower_unresolved",
+                        severity=severity,
+                        base_ft=None,
+                        top_ft=None,
+                    )))
+
+                # Peak = worst graded risk, ties broken by highest CAPE — matches
+                # the MCP deep-link's highest-CAPE peak.
+                cape = conv.cape_jkg
+                if cape is None and thermo_conv is not None:
+                    cape = thermo_conv.cape_jkg
+                key = (risk_idx, cape if cape is not None else 0.0)
+                if peak_key is None or key > peak_key:
+                    peak_key = key
+                    peak_dist = dist
 
             ext = format_extent(affected, total, ctx.total_distance_nm)
             ext_mod = format_extent(affected_mod, total, ctx.total_distance_nm)
@@ -286,12 +359,22 @@ class ConvectiveEvaluator:
                         f"over {xc_ext}"
                     )
 
+            # Build highlights only when the model has data (total > 0).
+            highlights = None
+            if total > 0:
+                highlights = AdvisoryHighlights(
+                    ribbon=build_ribbon(ribbon_points, ctx.total_distance_nm),
+                    regions=build_regions(region_cells, ctx.total_distance_nm),
+                    peak_dist_nm=peak_dist,
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 affected_mod=affected_mod,
                 cross_check=cross_check,
+                highlights=highlights,
             ))
             peak_by_model[model] = worst_risk
 

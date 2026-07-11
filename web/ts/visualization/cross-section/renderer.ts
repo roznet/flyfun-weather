@@ -90,15 +90,18 @@ export class CrossSectionRenderer {
     for (const layer of this.layers) {
       if (this.enabledLayers[layer.id] !== false) {
         ctx.save();
-        // Clip to plot area
-        ctx.beginPath();
-        ctx.rect(
-          transform.plotArea.left,
-          transform.plotArea.top,
-          transform.plotArea.width,
-          transform.plotArea.height,
-        );
-        ctx.clip();
+        // Clip to plot area — unless the layer opts out (clipToPlot === false),
+        // e.g. the highlight ribbon which draws in the bottom margin (#373).
+        if (layer.clipToPlot !== false) {
+          ctx.beginPath();
+          ctx.rect(
+            transform.plotArea.left,
+            transform.plotArea.top,
+            transform.plotArea.width,
+            transform.plotArea.height,
+          );
+          ctx.clip();
+        }
         layer.render(ctx, transform, this.data);
         ctx.restore();
       }

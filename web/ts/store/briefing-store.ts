@@ -10,6 +10,7 @@ import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled, getPreset } from '../visualization/cross-section/layer-registry';
 import type { ResolvedView } from '../visualization/cross-section/advisory-presets';
+import { HIGHLIGHT_LAYER_ID } from '../visualization/cross-section/advisory-highlights';
 import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
@@ -58,6 +59,7 @@ function loadVizSettings(): VizSettings {
     cloudStyle: 'square',
     mapFrontsVisible: false,
     activePreset: null,
+    activeHighlightAdvisoryId: null,
   };
   try {
     const v = localStorage.getItem('wb_vizSettings');
@@ -202,6 +204,10 @@ export interface BriefingState {
   /** Drop the active-preset label to "Custom" after a user-initiated Skew-T
    *  edit (overlay toggle / side-panel change). No-op when already Custom. */
   markVizCustom: () => void;
+  /** Set (or clear with null) the advisory whose cross-section highlight is
+   *  tracked (#373). Setting a non-null id force-enables the Highlight layer
+   *  toggle (fresh intent). Model/point changes do NOT clear it. */
+  setHighlightAdvisory: (advisoryId: string | null) => void;
 }
 
 /** Build the SSE event handler shared by `refresh` and `forceRefresh`.
@@ -625,7 +631,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // setLayersBatch, which deliberately preserves activePreset.)
     const current = get().vizSettings;
     const enabled = { ...current.enabledLayers, [layerId]: !(current.enabledLayers[layerId] !== false) };
-    const updated = { ...current, enabledLayers: enabled, activePreset: null };
+    // Exemption (#373): toggling the Highlight layer checkbox is a visibility
+    // control for the highlight, not a lens edit — it must NOT mark the view
+    // Custom or clear the active highlight advisory. Any OTHER layer toggle is a
+    // manual lens edit, so it drops both the preset label and the highlight.
+    const updated = layerId === HIGHLIGHT_LAYER_ID
+      ? { ...current, enabledLayers: enabled }
+      : { ...current, enabledLayers: enabled, activePreset: null, activeHighlightAdvisoryId: null };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
@@ -644,10 +656,25 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // A user-initiated Skew-T edit (overlay toggle / side-panel change) means the
     // view no longer matches the applied preset → dropdown reflects "Custom".
     // The Skew-T renderer owns its own overlay/var localStorage, so we only need
-    // to drop the preset label here (no enabledLayers change).
+    // to drop the preset label here (no enabledLayers change). A manual lens edit
+    // also drops the advisory highlight (#373).
     const current = get().vizSettings;
-    if (current.activePreset == null) return;
-    const updated = { ...current, activePreset: null };
+    if (current.activePreset == null && current.activeHighlightAdvisoryId == null) return;
+    const updated = { ...current, activePreset: null, activeHighlightAdvisoryId: null };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setHighlightAdvisory: (advisoryId: string | null) => {
+    // Store only the advisory id; the scrim/ribbon are derived reactively from
+    // it × selectedModel at render time (#373). Setting a non-null id force-
+    // enables the Highlight layer toggle so a fresh chip click never produces an
+    // invisible highlight; clearing leaves the toggle state alone.
+    const current = get().vizSettings;
+    const enabled = advisoryId
+      ? { ...current.enabledLayers, [HIGHLIGHT_LAYER_ID]: true }
+      : current.enabledLayers;
+    const updated = { ...current, activeHighlightAdvisoryId: advisoryId, enabledLayers: enabled };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
@@ -1098,7 +1125,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // (no factory reset).
     const current = get().vizSettings;
     if (!presetId) {
-      const updated = { ...current, activePreset: null };
+      // Selecting Custom / a bare layer preset drops any advisory highlight (#373).
+      const updated = { ...current, activePreset: null, activeHighlightAdvisoryId: null };
       set({ vizSettings: updated });
       saveVizSettings(updated);
       return;
@@ -1111,7 +1139,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       setActiveTheme(themeId);
     }
     const enabled = { ...current.enabledLayers, ...preset.enabledLayers };
-    const updated = { ...current, enabledLayers: enabled, vizTheme: preset.themeId, activePreset: presetId };
+    const updated = { ...current, enabledLayers: enabled, vizTheme: preset.themeId, activePreset: presetId, activeHighlightAdvisoryId: null };
     set({ vizSettings: updated });
     saveVizSettings(updated);
     window.dispatchEvent(new Event('theme-changed'));
@@ -1124,7 +1152,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // slot in as additional `if (view.X)` branches — existing presets and call
     // sites untouched.
     const cur = get().vizSettings;
-    const next: VizSettings = { ...cur, activePreset: presetId };
+    // Applying a lens clears any prior highlight (#373). A bare dropdown/deep-link
+    // preset therefore ends with no highlight; the chip/deep-link path re-sets it
+    // via setHighlightAdvisory AFTER this call, so same-chip re-click toggles off.
+    const next: VizSettings = { ...cur, activePreset: presetId, activeHighlightAdvisoryId: null };
     if (view.enabledLayers) next.enabledLayers = { ...cur.enabledLayers, ...view.enabledLayers };
     // Route-graph metrics are set, but routeGraphVisible is intentionally left
     // as the user had it — applying a preset shouldn't pop open a graph the user

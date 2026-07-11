@@ -45,6 +45,35 @@ export interface AdvisoryCatalogEntry {
   parameters: AdvisoryParameterDef[];
 }
 
+/** Severity of a highlight element (scrim cutout / ribbon segment, #373). */
+export type HighlightSeverity = 'green' | 'amber' | 'red' | 'unavailable';
+
+/** One run of the 1-D route verdict. Segments tile `[0, total_nm]` exactly. */
+export interface RibbonSegment {
+  dist_from_nm: number;
+  dist_to_nm: number;
+  severity: HighlightSeverity;
+}
+
+/** One 2-D scrim cutout — where the hazard physically is (flagged areas only).
+ *  `base_ft`/`top_ft` both null = full column (terrain-to-top). */
+export interface HighlightRegion {
+  dist_from_nm: number;
+  dist_to_nm: number;
+  base_ft?: number | null;
+  top_ft?: number | null;
+  kind: string;
+  severity: HighlightSeverity;
+}
+
+/** Cross-section highlight geometry for one advisory × one model (#373).
+ *  Backend owns the geometry; the client only renders it. */
+export interface AdvisoryHighlights {
+  ribbon: RibbonSegment[];
+  regions: HighlightRegion[];
+  peak_dist_nm?: number | null;
+}
+
 export interface ModelAdvisoryResult {
   model: string;
   status: AdvisoryStatus;
@@ -56,6 +85,9 @@ export interface ModelAdvisoryResult {
   total_nm: number;
   cross_check?: string | null;
   mitigations?: Mitigation[];
+  /** Cross-section highlight geometry (#373). Absent/null on old packs and for
+   *  models/evaluators that don't emit it → the derive selector returns null. */
+  highlights?: AdvisoryHighlights | null;
 }
 
 export interface RouteAdvisoryResult {

@@ -264,6 +264,8 @@ export function snapshotToVizData(
     fronts: null,
     nightIntervals: [],
     sunSide: null,
+    // Advisory highlights are a route-level briefing surface — N/A here.
+    advisoryHighlights: null,
   };
 }
 

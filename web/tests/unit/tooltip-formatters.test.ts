@@ -54,6 +54,10 @@ describe('LAYER_TOOLTIPS registry — structural integrity', () => {
       // Full-column X-span tint behind the weather; no per-altitude data, so no
       // tooltip row (handled like terrain/current-conditions).
       'night-shading',
+      // Advisory highlight (scrim + verdict ribbon, #373): deliberately carries
+      // no tooltip rows in v1 — the ribbon is self-explanatory and the scrim is a
+      // focus cue, not per-point data.
+      'advisory-highlight',
     ]);
 
     const layerIds = getAllLayers()

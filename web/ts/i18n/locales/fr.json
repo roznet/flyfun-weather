@@ -541,6 +541,8 @@
   "viz.group.conditions": "Conditions actuelles",
   "viz.group.fronts": "Front",
   "viz.group.sun": "Soleil",
+  "viz.group.highlight": "Surbrillance",
+  "viz.layer.advisory-highlight": "Surbrillance",
   "viz.group.reference": "Référence",
   "viz.obscurationMethod": "<h3>Obscurcissement de surface</h3><p>Les détecteurs de nuages aux niveaux de pression ne peignent rien pour le brouillard situé sous 1000 hPa (≈ quelques centaines de pieds AGL sur la plupart des aérodromes). Cette couche synthétise une bande proche de la surface lorsque les prévisions de surface indiquent une visibilité réduite ou des nuages bas proches de la saturation.</p><h4>Déclencheurs</h4><ul><li><strong>Primaire</strong> — visibilité de surface &lt; 5 km. Niveaux : <strong>LIFR</strong> violet (FG, &lt; 1 km), <strong>IFR</strong> rouge (BR/MIFG, 1–3 km), <strong>MVFR</strong> orange (BR, 3–5 km).</li><li><strong>Secondaire</strong> — pour les modèles sans prévision de visibilité (ECMWF / Météo-France / GEM) : couverture des nuages bas ≥ 80 % ET écart au point de rosée &lt; 2 °C. La sévérité dépend de l'écart au point de rosée en surface : &lt; 0,5 °C → LIFR (air saturé, brouillard), sinon IFR.</li></ul><p>Hachurage diagonal pour signaler une obstruction de <em>visibilité</em>, distincte d'une bande nuageuse.</p>",
   "viz.refCruise": "Croisière {alt} ft",
