@@ -8,11 +8,33 @@ from weatherbrief.analysis.advisories.evidence import (
     EvidenceSample,
     build_non_spatial_result,
     cloud_method_id,
+    convective_method_id,
     icing_metric_id,
     icing_method_is_available,
     summarize_evidence,
 )
 from weatherbrief.models import AdvisoryStatus, RoutePointAnalysis, SoundingAnalysis
+
+
+@pytest.mark.parametrize(
+    ("effective_method", "expected_method_id"),
+    [
+        pytest.param("nwp", "nwp", id="nwp"),
+        pytest.param("nwp_hybrid", "nwp", id="nwp-hybrid"),
+        pytest.param("nwp_lcl_top", "nwp", id="nwp-lcl-top"),
+        pytest.param("nwp_precip", "nwp", id="nwp-precip"),
+        pytest.param("thermo", "thermo", id="thermo"),
+        pytest.param("nwp_cape_fallback", "thermo", id="cape-fallback"),
+        pytest.param("nwp_future_method", None, id="unknown-nwp-prefix"),
+        pytest.param("unknown", None, id="unknown"),
+        pytest.param(None, None, id="missing"),
+    ],
+)
+def test_convective_method_id_normalizes_effective_methods_exactly(
+    effective_method,
+    expected_method_id,
+):
+    assert convective_method_id(effective_method) == expected_method_id
 
 
 @pytest.fixture

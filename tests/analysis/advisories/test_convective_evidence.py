@@ -189,6 +189,12 @@ def test_aggregate_detail_is_owned_by_representative_model(clear_context):
     [
         pytest.param("nwp_hybrid", "nwp", "nwp_convective_risk", id="native-nwp"),
         pytest.param("thermo", "thermo", "convective_risk", id="thermo"),
+        pytest.param(
+            "nwp_cape_fallback",
+            "thermo",
+            "convective_risk",
+            id="cape-fallback",
+        ),
     ],
 )
 def test_active_track_uses_exact_method_and_metric_ids(
@@ -223,6 +229,44 @@ def test_active_track_uses_exact_method_and_metric_ids(
     }
     assert {region.metric_id for region in model.evidence_regions} == {
         expected_metric
+    }
+
+
+def test_cape_fallback_floor_remains_thermo_provenance(clear_context):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.LOW if index == 1 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+            method="nwp_cape_fallback",
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    thermo = {
+        index: _assessment(
+            ConvectiveRisk.HIGH if index == 1 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+            method="thermo",
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "thermo"
+    assert {region.reason_code for region in model.evidence_regions} == {
+        "convective_dd_floor"
+    }
+    assert {region.method_id for region in model.evidence_regions} == {"thermo"}
+    assert {region.metric_id for region in model.evidence_regions} == {
+        "convective_risk"
     }
 
 

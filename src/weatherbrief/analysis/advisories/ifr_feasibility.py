@@ -15,6 +15,7 @@ from weatherbrief.analysis.advisories.evidence import (
     DataState,
     EvidenceSample,
     combine_data_states,
+    convective_method_id,
     data_state_from_domains,
     icing_metric_id,
     icing_method_id,
@@ -221,9 +222,7 @@ def _assess_enroute_hazards(
         convective_samples: list[EvidenceSample] = []
         if conv is not None:
             convective_risk = conv.risk_level
-            convective_method = (
-                "nwp" if conv.method.startswith("nwp") else "thermo"
-            )
+            convective_method = convective_method_id(conv.method)
             risk_idx = _CONVECTIVE_SEVERITY_INDEX.get(conv.risk_level, 0)
             if risk_idx >= convective_min_risk_idx:
                 convective_affected = True

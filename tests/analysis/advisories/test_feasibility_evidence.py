@@ -515,6 +515,38 @@ def test_ifr_convective_evidence_uses_active_method_and_geometry(
     assert {region.method_id for region in model.evidence_regions} == {"thermo"}
 
 
+def test_ifr_cape_fallback_uses_thermo_provenance(ifr_convective_context):
+    analyses = []
+    for rpa in ifr_convective_context.analyses:
+        sounding = rpa.sounding["gfs"]
+        convective = sounding.convective
+        assert convective is not None
+        soundings = {
+            **rpa.sounding,
+            "gfs": sounding.model_copy(
+                update={
+                    "convective": convective.model_copy(
+                        update={"method": "nwp_cape_fallback"}
+                    )
+                }
+            ),
+        }
+        analyses.append(rpa.model_copy(update={"sounding": soundings}))
+    ctx = replace(ifr_convective_context, analyses=analyses, models=["gfs"])
+
+    model = IFRFeasibilityEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "thermo"
+    assert {region.reason_code for region in model.evidence_regions} == {
+        "ifr_convective_exposure"
+    }
+    assert {region.method_id for region in model.evidence_regions} == {"thermo"}
+    assert {region.metric_id for region in model.evidence_regions} == {
+        "convective_risk"
+    }
+
+
 def test_ifr_tied_icing_and_convection_use_composite_primary(ifr_normal_context):
     icing = IcingZone(
         base_ft=4000,

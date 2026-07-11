@@ -8,6 +8,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import pct_above_threshold
 from weatherbrief.analysis.advisories.evidence import (
     EvidenceSample,
+    convective_method_id,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -210,9 +211,11 @@ class ConvectiveEvaluator:
             affected: set[int] = set()  # >= min_risk — drives the colour
             affected_mod: set[int] = set()  # >= MODERATE — headline extent
             samples: list[EvidenceSample] = []
-            active_methods: list[str] = []
-            active_path_risks: list[tuple[ConvectiveRisk, str]] = []
-            qualifying_risks: list[tuple[ConvectiveRisk, str, bool]] = []
+            active_methods: list[str | None] = []
+            active_path_risks: list[tuple[ConvectiveRisk, str | None]] = []
+            qualifying_risks: list[
+                tuple[ConvectiveRisk, str | None, bool]
+            ] = []
             below_cruise_count = 0  # risky points skipped because tops below cruise
             max_cover_pct: float | None = None
             # Details-only DD-vs-model-scheme cross-check tally (never grades).
@@ -271,9 +274,7 @@ class ConvectiveEvaluator:
                 if floor_controls:
                     graded_risk = thermo_conv.risk_level
 
-                active_method_id = (
-                    "nwp" if active.method.startswith("nwp") else "thermo"
-                )
+                active_method_id = convective_method_id(active.method)
                 active_methods.append(active_method_id)
                 active_risk_idx = _RISK_ORDER.index(active.risk_level)
                 if (
@@ -287,8 +288,9 @@ class ConvectiveEvaluator:
                     active_path_risks.append(
                         (active.risk_level, active_method_id)
                     )
+                native_nwp_floor = floor_controls and active_method_id == "nwp"
                 method_id = (
-                    "nwp_with_dd_floor" if floor_controls else active_method_id
+                    "nwp_with_dd_floor" if native_nwp_floor else active_method_id
                 )
 
                 risk_idx = _RISK_ORDER.index(graded_risk)
@@ -325,7 +327,7 @@ class ConvectiveEvaluator:
 
                 affected.add(point_index)
                 qualifying_risks.append(
-                    (graded_risk, active_method_id, floor_controls)
+                    (graded_risk, active_method_id, native_nwp_floor)
                 )
                 if risk_idx >= _MOD_IDX:
                     affected_mod.add(point_index)
@@ -448,7 +450,7 @@ class ConvectiveEvaluator:
                 affected_pct_red,
             )
             if (
-                any(floor_controls for _, _, floor_controls in qualifying_risks)
+                any(native_nwp_floor for _, _, native_nwp_floor in qualifying_risks)
                 and _STATUS_ORDER[status_without_floor] < _STATUS_ORDER[status]
             ):
                 primary_method_id = "nwp_with_dd_floor"

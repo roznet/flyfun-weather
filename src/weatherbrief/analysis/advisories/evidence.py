@@ -409,9 +409,12 @@ def icing_method_is_available(
 
 
 def convective_method_id(value: str | None) -> str | None:
-    """Normalize requested convective-method identifiers without guessing."""
-    if value is None or value == "thermo":
-        return "thermo"
-    if value == "nwp":
-        return "nwp"
-    return None
+    """Normalize effective convective methods without prefix guessing."""
+    return {
+        "nwp": "nwp",
+        "nwp_hybrid": "nwp",
+        "nwp_lcl_top": "nwp",
+        "nwp_precip": "nwp",
+        "thermo": "thermo",
+        "nwp_cape_fallback": "thermo",
+    }.get(value or "")
