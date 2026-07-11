@@ -185,6 +185,17 @@ describe('briefing store advisory focus lifecycle', () => {
     return stickyViz;
   }
 
+  function deferred<T>(): {
+    promise: Promise<T>;
+    resolve: (value: T) => void;
+  } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((next) => {
+      resolve = next;
+    });
+    return { promise, resolve };
+  }
+
   it('applies model, resolved view, preset, and focus in one atomic update', () => {
     storageValues.set('wb_vizSettings', JSON.stringify({ sentinel: 'unchanged' }));
     briefingStore.setState({
@@ -460,6 +471,30 @@ describe('briefing store advisory focus lifecycle', () => {
     expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
   });
 
+  it.each([12_000, null] as const)(
+    'manual altitude override %s clears focus',
+    (altitude) => {
+      focusCloudTop();
+
+      briefingStore.getState().setAdvisoryAltitudeOverride(altitude);
+
+      expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+    },
+  );
+
+  it('probing an altitude clears focus immediately', () => {
+    vi.spyOn(window, 'setTimeout').mockReturnValue(null as never);
+    briefingStore.setState({
+      flight: { id: 'flight-1', cruise_altitude_ft: 10_000 } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+    });
+    focusCloudTop();
+
+    briefingStore.getState().probeAltitude(12_000);
+
+    expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+  });
+
   it('manual layer edits retain focus identity while clearing active preset', () => {
     const focus = focusCloudTop();
 
@@ -508,6 +543,87 @@ describe('briefing store advisory focus lifecycle', () => {
     await briefingStore.getState().selectPack('2026-07-11T10:00:00Z');
 
     expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+  });
+
+  it('clears focus while reanchoring and restores its snapshot from a full manifest', async () => {
+    const response = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    vi.spyOn(api, 'recalculateAdvisories').mockReturnValue(response.promise);
+    briefingStore.setState({
+      flight: { id: 'flight-1' } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+    });
+    const focus = focusCloudTop();
+
+    const reanchor = briefingStore.getState().reanchorAdvisories(12_000);
+
+    expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+
+    const manifest = refreshedManifest();
+    response.resolve({ manifest, wind_overlay: null });
+    await reanchor;
+
+    expect(briefingStore.getState().routeAdvisories).toEqual(manifest);
+    expect(briefingStore.getState().activeAdvisoryFocus).toBe(focus);
+  });
+
+  it('does not restore reanchor focus without a full returned manifest', async () => {
+    const response = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    vi.spyOn(api, 'recalculateAdvisories').mockReturnValue(response.promise);
+    briefingStore.setState({
+      flight: { id: 'flight-1' } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+    });
+    focusCloudTop();
+
+    const reanchor = briefingStore.getState().reanchorAdvisories(12_000);
+
+    expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+
+    response.resolve({ manifest: null, wind_overlay: null } as never);
+    await reanchor;
+
+    expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+  });
+
+  it('preserves a new focus selected while reanchor is pending', async () => {
+    const response = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    vi.spyOn(api, 'recalculateAdvisories').mockReturnValue(response.promise);
+    briefingStore.setState({
+      flight: { id: 'flight-1' } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+    });
+    focusCloudTop();
+    const reanchor = briefingStore.getState().reanchorAdvisories(12_000);
+    const replacement = activeFocus('ecmwf');
+    briefingStore.getState().focusAdvisory(replacement, 'clouds', view);
+
+    response.resolve({ manifest: refreshedManifest(), wind_overlay: null });
+    await reanchor;
+
+    expect(briefingStore.getState().activeAdvisoryFocus).toBe(replacement);
+  });
+
+  it('ignores an older reanchor response after a newer altitude request', async () => {
+    const first = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    const second = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    vi.spyOn(api, 'recalculateAdvisories')
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    briefingStore.setState({
+      flight: { id: 'flight-1' } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+    });
+
+    const older = briefingStore.getState().reanchorAdvisories(12_000);
+    const newer = briefingStore.getState().reanchorAdvisories(14_000);
+    const newerManifest = refreshedManifest();
+    second.resolve({ manifest: newerManifest, wind_overlay: null });
+    await newer;
+    first.resolve({ manifest: manifestWithoutFocusedModel(), wind_overlay: null });
+    await older;
+
+    expect(briefingStore.getState().advisoryAltitudeOverride).toBe(14_000);
+    expect(briefingStore.getState().routeAdvisories).toBe(newerManifest);
   });
 
   it('atomically reconciles focus with a recalculated manifest', async () => {

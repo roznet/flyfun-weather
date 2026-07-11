@@ -116,6 +116,22 @@ describe('planAdvisoryAction', () => {
     });
   });
 
+  it('rejects a requested model that is not available and uses the valid representative', () => {
+    const advisory = ddAgreementWithDistinctResults('gfs');
+
+    const plan = planAdvisoryAction(
+      advisory,
+      actionContext({ selectedModel: 'gfs', availableModels: ['gfs'] }),
+      'ecmwf',
+    );
+
+    expect(plan.model).toBe('gfs');
+    expect(plan.layerOverrides).toEqual({
+      'square-cloud-bands': true,
+      'square-nwp-cloud-bands': true,
+    });
+  });
+
   it('uses representative model evidence before selected-model evidence', () => {
     const advisory = ddAgreementWithDistinctResults('gfs');
 
@@ -157,6 +173,45 @@ describe('planAdvisoryAction', () => {
       noteParams: {},
       disabledReasonKey: null,
     });
+  });
+
+  it('rejects a representative outside the briefing and uses the valid selected model', () => {
+    const advisory = ddAgreementWithDistinctResults('ecmwf');
+
+    const plan = planAdvisoryAction(
+      advisory,
+      actionContext({ selectedModel: 'gfs', availableModels: ['gfs'] }),
+    );
+
+    expect(plan.model).toBe('gfs');
+    expect(plan.layerOverrides).toEqual({
+      'square-cloud-bands': true,
+      'square-nwp-cloud-bands': true,
+    });
+  });
+
+  it('uses the first valid per-model result when requested, representative, and selected are invalid', () => {
+    const advisory = ddAgreementWithDistinctResults(null);
+    advisory.per_model = [advisory.per_model[1], advisory.per_model[0]];
+
+    const plan = planAdvisoryAction(
+      advisory,
+      actionContext({ selectedModel: 'icon', availableModels: ['gfs', 'ecmwf'] }),
+      'ukmo',
+    );
+
+    expect(plan.model).toBe('ecmwf');
+    expect(plan.layerOverrides).toEqual({ 'freezing-level': true });
+  });
+
+  it('returns no model when the advisory and briefing model sets do not intersect', () => {
+    const plan = planAdvisoryAction(
+      ddAgreementWithDistinctResults(null),
+      actionContext({ selectedModel: 'ukmo', availableModels: ['ukmo'] }),
+    );
+
+    expect(plan.model).toBeNull();
+    expect(plan.layerOverrides).toEqual({});
   });
 
   it('returns the exact freezing-only method-context plan', () => {
@@ -286,7 +341,7 @@ describe('planAdvisoryAction', () => {
     });
   });
 
-  it('falls back when the advisory model is supported but unavailable', () => {
+  it('preserves an unavailable advisory model for visible airport-profile fallback', () => {
     expectPlan(planAdvisoryAction(
       airportAdvisory('gfs'),
       actionContext({ availableModels: ['ecmwf'] }),

@@ -80,6 +80,33 @@ function emptyPlan(
   };
 }
 
+function selectActionModel(
+  advisory: RouteAdvisoryResult,
+  context: AdvisoryActionContext,
+  requestedModel?: string,
+  requireAvailableModel = true,
+): string | null {
+  const advisoryModels = new Set(advisory.per_model.map(result => result.model));
+  const availableModels = new Set(context.availableModels);
+  const isValid = (model: string | null | undefined): model is string => (
+    model !== null
+    && model !== undefined
+    && advisoryModels.has(model)
+    && (!requireAvailableModel || availableModels.has(model))
+  );
+
+  for (const candidate of [
+    requestedModel,
+    advisory.representative_model,
+    context.selectedModel,
+  ]) {
+    if (isValid(candidate)) return candidate;
+  }
+  return advisory.per_model.find(
+    result => !requireAvailableModel || availableModels.has(result.model),
+  )?.model ?? null;
+}
+
 export function planAdvisoryAction(
   advisory: RouteAdvisoryResult,
   context: AdvisoryActionContext,
@@ -88,9 +115,12 @@ export function planAdvisoryAction(
   const action = actionForAdvisory(advisory.advisory_id);
   if (!action) throw new Error(`No action registered for ${advisory.advisory_id}`);
   const kind = action.kind;
-  const attributedModel = requestedModel
-    ?? advisory.representative_model
-    ?? context.selectedModel;
+  const attributedModel = selectActionModel(
+    advisory,
+    context,
+    requestedModel,
+    kind !== 'airport-profile',
+  );
   const attributedResult = advisory.per_model.find(
     result => result.model === attributedModel,
   ) ?? null;
@@ -141,6 +171,12 @@ export function planAdvisoryAction(
   }
 
   if (kind === 'airport-profile') {
+    if (attributedModel === null) {
+      return {
+        ...plan,
+        disabledReasonKey: 'advisories.airportProfileUnavailable',
+      };
+    }
     const exactModelSupported = context.supportedAirportProfileModels.includes(
       attributedModel,
     ) && context.availableModels.includes(attributedModel);

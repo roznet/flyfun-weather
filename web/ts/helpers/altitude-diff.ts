@@ -11,7 +11,12 @@
  * Pure — no DOM, no store. Kept testable in isolation.
  */
 
-import type { AltitudeAdvisoryRow, AltitudeTableResult, AdvisoryStatus } from '../types/advisories';
+import type {
+  AltitudeAdvisoryRow,
+  AltitudeTableResult,
+  AdvisoryStatus,
+  RouteAdvisoriesManifest,
+} from '../types/advisories';
 import { formatAlt } from '../utils';
 
 /** Severity rank; UNAVAILABLE is excluded (not comparable). */
@@ -131,21 +136,29 @@ export function formatAltitudeDeltaNote(
  *  detail text is intentionally left at the pack's planned altitude — the lever
  *  conveys the per-altitude picture through the overlaid badges + delta note,
  *  and the base manifest is never mutated, so resetting is instant. */
-export function overlayAltitudeStatuses<
-  T extends { advisories: { advisory_id: string; aggregate_status: AdvisoryStatus }[] },
->(
-  manifest: T,
+export function overlayAltitudeStatuses(
+  manifest: RouteAdvisoriesManifest,
   table: AltitudeTableResult,
   altitudeFt: number,
-): T {
+): RouteAdvisoriesManifest {
   const row = rowForAltitude(table, altitudeFt) ?? nearestRow(table, altitudeFt);
   if (!row) return manifest;
   return {
     ...manifest,
     advisories: manifest.advisories.map(adv => {
       const status = row.statuses[adv.advisory_id];
-      if (status === undefined || status === adv.aggregate_status) return adv;
-      return { ...adv, aggregate_status: status };
+      if (status === undefined) return adv;
+      return {
+        ...adv,
+        aggregate_status: status,
+        representative_model: null,
+        per_model: adv.per_model.map(model => ({
+          ...model,
+          data_state: null,
+          primary_method_id: null,
+          evidence_regions: [],
+        })),
+      };
     }),
   };
 }

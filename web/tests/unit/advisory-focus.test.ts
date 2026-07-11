@@ -308,6 +308,36 @@ describe('focus lifecycle helpers', () => {
     expect(focusedMethodId(mixed)).toBe('nwp_synthesized');
     expect(focusedMethodId(null)).toBeNull();
   });
+
+  it.each([
+    ['legacy', undefined, 'amber'],
+    ['unknown', 'future-state', 'amber'],
+    ['unavailable', 'unavailable', 'amber'],
+    ['partial unavailable', 'partial', 'unavailable'],
+  ] as const)('suppresses method attribution for %s model results', (_label, dataState, status) => {
+    const manifest = manifestWithTwoModels();
+    const model = manifest.advisories[0].per_model[0];
+    model.data_state = dataState as typeof model.data_state;
+    model.status = status;
+    model.primary_method_id = 'nwp';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const resolved = resolveAdvisoryFocus(activeFocus(), manifest, routeData());
+
+    expect(focusedMethodId(resolved)).toBeNull();
+    warn.mockRestore();
+  });
+
+  it.each(['complete', 'partial'] as const)(
+    'keeps method attribution for an assessed %s hazard',
+    (dataState) => {
+      const manifest = manifestWithTwoModels();
+      manifest.advisories[0].per_model[0].data_state = dataState;
+      expect(focusedMethodId(
+        resolveAdvisoryFocus(activeFocus(), manifest, routeData()),
+      )).toBe('nwp');
+    },
+  );
 });
 
 describe('VizPoint stable indices', () => {

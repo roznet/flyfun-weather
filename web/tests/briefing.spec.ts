@@ -91,6 +91,9 @@ interface MockBriefingRefs {
   advisories: { current: any };
   routeFronts: { current: any | null };
   airportRequests: URL[];
+  flightOverrides?: Record<string, unknown>;
+  packOverrides?: Record<string, unknown>;
+  altAdvisories?: any;
 }
 
 /**
@@ -111,7 +114,13 @@ async function mockBriefingApi(
   await page.route(`**/api/flights/${FLIGHT_ID}`, route => {
     if (route.request().url().includes('/packs'))
       return route.fallthrough();            // let more-specific routes handle /packs/*
-    const flight = { ...fixture('flight.json'), id: FLIGHT_ID, departure_time: `${FUTURE_DATE}T17:00:00+00:00`, target_date: FUTURE_DATE };
+    const flight = {
+      ...fixture('flight.json'),
+      id: FLIGHT_ID,
+      departure_time: `${FUTURE_DATE}T17:00:00+00:00`,
+      target_date: FUTURE_DATE,
+      ...refs.flightOverrides,
+    };
     return route.fulfill({ json: flight });
   });
 
@@ -131,7 +140,9 @@ async function mockBriefingApi(
     const afterTs = url.split(enc(TIMESTAMP))[1];
     if (afterTs && afterTs !== '' && afterTs !== '/')
       return route.fallthrough();
-    return route.fulfill({ json: fixture('pack_meta.json') });
+    return route.fulfill({
+      json: { ...fixture('pack_meta.json'), ...refs.packOverrides },
+    });
   });
 
   // GET /api/flights/{id}/packs/{ts}/snapshot
@@ -157,6 +168,12 @@ async function mockBriefingApi(
   await page.route(`**/packs/${enc(TIMESTAMP)}/advisories`, route =>
     route.fulfill({ json: refs.advisories.current })
   );
+
+  await page.route(`**/packs/${enc(TIMESTAMP)}/advisories/alt`, route => (
+    refs.altAdvisories
+      ? route.fulfill({ json: refs.altAdvisories })
+      : route.fulfill({ status: 404, json: { detail: 'Alternate advisories unavailable' } })
+  ));
 
   // GET /api/flights/{id}/packs/{ts}/route-fronts
   await page.route(`**/packs/${enc(TIMESTAMP)}/route-fronts`, route => {
@@ -751,6 +768,39 @@ test.describe('Advisory evidence actions', () => {
     await expect(page.locator('#advisory-focus-banner')).toBeVisible();
     await expect.poll(() => focusPixelCount(page, '#viz-canvas-container canvas')).toBeGreaterThan(0);
     await expect(page.locator('#viz-preset-select')).toHaveValue('');
+    expect(await crossSectionDimAlphaWrites(page)).toBe(0);
+  });
+
+  test('unresolved focus cannot retain visualization emphasis', async ({ page }) => {
+    await instrumentCrossSectionAlphaWrites(page);
+    await useFullBriefingMode(page);
+    const advisories = clone(fixture('advisories.json'));
+    const altAdvisories = clone(advisories);
+    altAdvisories.advisories = altAdvisories.advisories.filter(
+      (advisory: any) => advisory.advisory_id !== 'cloud_top',
+    );
+    await mockBriefingApi(page, {
+      advisories: { current: advisories },
+      routeFronts: { current: routeFrontsFixture() },
+      airportRequests: [],
+      flightOverrides: {
+        alt_departure_time: `${FUTURE_DATE}T20:00:00+00:00`,
+      },
+      packOverrides: { has_alt_advisories: true },
+      altAdvisories,
+    });
+    await openBriefing(page);
+    await expect(page.locator('[data-alt-toggle="alt"]')).toBeVisible();
+
+    await page.locator('[data-advisory="cloud_top"] .advisory-action-btn').click();
+    await expect.poll(() => crossSectionDimAlphaWrites(page)).toBeGreaterThan(0);
+    await page.evaluate(() => {
+      ((window as any).__crossSectionAlphaWrites as number[]).length = 0;
+    });
+    await page.locator('[data-alt-toggle="alt"]').click();
+
+    await expect(page.locator('[data-advisory="cloud_top"]')).toHaveCount(0);
+    await expect(page.locator('#advisory-focus-banner')).toBeHidden();
     expect(await crossSectionDimAlphaWrites(page)).toBe(0);
   });
 
@@ -1678,6 +1728,71 @@ test.describe('Advisory evidence actions', () => {
     await page.locator('#viz-controls [data-layout="split"]').click();
     await expect(page.locator('#map-container.leaflet-container')).toBeVisible();
     await expect(page.locator('#advisory-focus-banner')).toContainText('Location unavailable');
+    await expect(evidencePaths(page)).toHaveCount(0);
+  });
+
+  test('legacy advisory without a valid model still applies its generic preset', async ({ page }) => {
+    await useFullBriefingMode(page, { layout: 'map' });
+    await page.addInitScript(() => {
+      (window as any).__scrollTargets = [];
+      Element.prototype.scrollIntoView = function scrollIntoView(): void {
+        (window as any).__scrollTargets.push((this as Element).id);
+      };
+    });
+    const refs: MockBriefingRefs = {
+      advisories: { current: clone(fixture('advisories.json')) },
+      routeFronts: { current: routeFrontsFixture() },
+      airportRequests: [],
+    };
+    const cloud = refs.advisories.current.advisories.find(
+      (advisory: any) => advisory.advisory_id === 'cloud_top',
+    );
+    cloud.representative_model = null;
+    cloud.per_model = [];
+    await mockBriefingApi(page, refs);
+    await openBriefing(page);
+
+    await expect(page.locator('#viz-model-select')).toHaveValue('gfs');
+    await expect(page.locator('#viz-layout-wrapper')).toHaveClass(/layout-map/);
+    await page.evaluate(() => { (window as any).__scrollTargets.length = 0; });
+    await page.locator('[data-advisory="cloud_top"] .advisory-action-btn').click();
+
+    await expect(page.locator('#viz-preset-select')).toHaveValue('clouds');
+    await expect(page.locator('[data-cloud-source="nwp"]')).toBeChecked();
+    await expect(page.locator('input[data-layer-id="freezing-level"]')).toBeChecked();
+    await expect(page.locator('#viz-layout-wrapper')).toHaveClass(/layout-split/);
+    await expect(page.locator('#viz-model-select')).toHaveValue('gfs');
+    await expect(page.locator('#advisory-focus-banner')).toBeHidden();
+    await expect(evidencePaths(page)).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => (
+      (window as any).__scrollTargets.includes('viz-section')
+    ))).toBe(true);
+  });
+
+  test('invalid requested and representative models do not fabricate attribution', async ({ page }) => {
+    await useFullBriefingMode(page);
+    const refs: MockBriefingRefs = {
+      advisories: { current: clone(fixture('advisories.json')) },
+      routeFronts: { current: routeFrontsFixture() },
+      airportRequests: [],
+    };
+    const cloud = refs.advisories.current.advisories.find(
+      (advisory: any) => advisory.advisory_id === 'cloud_top',
+    );
+    cloud.representative_model = 'ukmo';
+    await mockBriefingApi(page, refs);
+    await openBriefing(page);
+
+    await page.locator(
+      '[data-advisory="cloud_top"] .adv-model-badge[data-model="ukmo"]',
+    ).click();
+    await page.getByRole('button', { name: 'Show on chart: UK Met Office' }).click();
+
+    await expect(page.locator('#viz-preset-select')).toHaveValue('clouds');
+    await expect(page.locator('#viz-model-select')).toHaveValue('gfs');
+    await expect(page.locator('#advisory-focus-banner')).toContainText('Older briefing');
+    await page.keyboard.press('Escape');
+    await page.locator('#viz-controls [data-layout="split"]').click();
     await expect(evidencePaths(page)).toHaveCount(0);
   });
 

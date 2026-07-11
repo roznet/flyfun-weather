@@ -1,4 +1,5 @@
 import { t } from '../i18n/i18n';
+import type { AdvisoryStatus, ModelAdvisoryResult } from '../types/advisories';
 
 export interface AdvisoryMethodLabel {
   short: string;
@@ -156,6 +157,16 @@ const METHOD_LABELS: Readonly<Record<string, AdvisoryMethodDefinition>> = {
 
 function hasOwn(record: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+export function isAssessedAdvisoryResult(
+  result: ModelAdvisoryResult | null | undefined,
+): result is ModelAdvisoryResult & {
+  data_state: 'complete' | 'partial';
+  status: Exclude<AdvisoryStatus, 'unavailable'>;
+} {
+  return (result?.data_state === 'complete' || result?.data_state === 'partial')
+    && result.status !== 'unavailable';
 }
 
 export function advisoryMethodLabel(

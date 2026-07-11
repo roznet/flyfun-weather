@@ -337,17 +337,23 @@ async function init(): Promise<void> {
     if (plan.disabledReasonKey) return;
 
     if (plan.kind === 'preset-focus') {
-      if (!plan.model || !advisory.per_model.some(result => result.model === plan.model)) return;
       const preset = getPresetForAdvisory(advisoryId);
       if (!preset) return;
       const view = resolveAdvisoryPreset(preset, preferredMethods);
+      if (!plan.model) {
+        store.getState().applyAdvisoryPreset(preset.id, view);
+        if (state.vizSettings.layout === 'map') store.getState().setLayout('split');
+        scrollToVisualization();
+        return;
+      }
+      if (!advisory.per_model.some(result => result.model === plan.model)) return;
       store.getState().focusAdvisory({
         advisoryId,
         model: plan.model,
         highlightSurfaces: [...(view.highlightSurfaces ?? [])],
         emphasizeLayers: [...(view.emphasizeLayers ?? [])],
-        modelAttributionKnown: requestedModel !== undefined
-          || advisory.representative_model != null,
+        modelAttributionKnown: plan.model === requestedModel
+          || plan.model === advisory.representative_model,
       }, preset.id, view, state.vizSettings.layout === 'map' ? 'split' : undefined);
       scrollToVisualization();
       return;
@@ -387,7 +393,8 @@ async function init(): Promise<void> {
         model: plan.model,
         highlightSurfaces: ['cross-section', 'route-graph', 'route-map'],
         emphasizeLayers,
-        modelAttributionKnown: true,
+        modelAttributionKnown: plan.model === requestedModel
+          || plan.model === advisory.representative_model,
       }, 'dd_nwp_agreement', {
         enabledLayers,
         highlightSurfaces: ['cross-section', 'route-graph', 'route-map'],
@@ -1591,7 +1598,7 @@ async function init(): Promise<void> {
       data,
     );
     const emphasis = effectiveEmphasis(
-      state.activeAdvisoryFocus,
+      focus?.active ?? null,
       state.vizSettings.activePreset ?? null,
     );
     renderAdvisoryFocusBanner(focus, effectiveAdvisories);

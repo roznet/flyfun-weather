@@ -731,9 +731,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // Clearing the override resets the wind overlay too — manifest values
     // now match the effective altitude again.
     if (alt === null) {
-      set({ advisoryAltitudeOverride: null, windOverlay: null });
+      set({
+        advisoryAltitudeOverride: null,
+        windOverlay: null,
+        activeAdvisoryFocus: null,
+      });
     } else {
-      set({ advisoryAltitudeOverride: alt });
+      set({ advisoryAltitudeOverride: alt, activeAdvisoryFocus: null });
     }
   },
 
@@ -766,7 +770,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // getAltitudeOverrideConfig.defaultAlt so the null/non-null override
     // decision is consistent across drag and release.
     const anchor = flight.cruise_altitude_ft;
-    set({ advisoryAltitudeOverride: alt === anchor ? null : alt });
+    set({
+      advisoryAltitudeOverride: alt === anchor ? null : alt,
+      activeAdvisoryFocus: null,
+    });
 
     // The advisory statuses come from the cached table (overlaid client-side in
     // getEffectiveAdvisories — instant, no race). Only the route-graph wind
@@ -795,7 +802,11 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // the cheap recalc endpoint (no full pipeline re-fetch). The override is set
     // so the displayed cards + cross-section line follow the new altitude; the
     // flight's saved cruise_altitude_ft is never written from here.
-    const { flight, currentPack } = get();
+    const {
+      flight,
+      currentPack,
+      activeAdvisoryFocus: focusSnapshot,
+    } = get();
     if (!flight || !currentPack) return;
     const packTimestamp = currentPack.fetch_timestamp;
     // Cancel any in-flight probe wind-overlay request + bump the sequence so a
@@ -805,23 +816,30 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       clearTimeout(_windOverlayTimer);
       _windOverlayTimer = null;
     }
-    _windOverlaySeq++;
-    set({ advisoryAltitudeOverride: alt });
+    const requestSeq = ++_windOverlaySeq;
+    set({ advisoryAltitudeOverride: alt, activeAdvisoryFocus: null });
     try {
       const result = await api.recalculateAdvisories(flight.id, packTimestamp, alt);
       // Drop the response if the user switched packs while it was in flight,
       // otherwise we'd write a stale manifest into the new pack's state.
       if (get().currentPack?.fetch_timestamp !== packTimestamp) return;
+      if (requestSeq !== _windOverlaySeq) return;
+      if (get().advisoryAltitudeOverride !== alt) return;
       // routeAdvisories now reflects `alt`; the override stays set so the
       // cross-section cruise line follows, and getEffectiveAdvisories skips the
       // table overlay once base.cruise_altitude_ft === the override (no double
       // overlay — see briefing-main).
+      const manifest = result.manifest;
+      if (!manifest) {
+        set({ windOverlay: result.wind_overlay });
+        return;
+      }
       set((state) => ({
-        routeAdvisories: result.manifest,
+        routeAdvisories: manifest,
         windOverlay: result.wind_overlay,
         activeAdvisoryFocus: reconcileAdvisoryFocus(
-          state.activeAdvisoryFocus,
-          result.manifest,
+          state.activeAdvisoryFocus ?? focusSnapshot,
+          manifest,
         ),
       }));
     } catch (err) {

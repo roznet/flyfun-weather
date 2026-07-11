@@ -5,6 +5,7 @@ import type {
   RouteAdvisoryResult,
 } from '../types/advisories';
 import type { CoordTransform, PlotArea, VizPoint, VizRouteData } from './types';
+import { isAssessedAdvisoryResult } from './advisory-methods';
 
 export type AdvisoryHighlightSurface =
   | 'cross-section'
@@ -842,7 +843,7 @@ export function effectiveEmphasis(
 export function focusedMethodId(
   focus: ResolvedAdvisoryFocus | null,
 ): string | null {
-  if (!focus) return null;
+  if (!focus || !isAssessedAdvisoryResult(focus.modelResult)) return null;
   const primaryMethod = focus.modelResult.primary_method_id ?? null;
   if (focus.regions.length > 0) {
     const effectiveMethods = focus.regions.map(

@@ -16,7 +16,10 @@ import {
   type AdvisoryAction,
   type AdvisoryActionContext,
 } from '../visualization/advisory-actions';
-import { advisoryMethodLabel } from '../visualization/advisory-methods';
+import {
+  advisoryMethodLabel,
+  isAssessedAdvisoryResult,
+} from '../visualization/advisory-methods';
 import { computeSummaryCondition } from '../helpers/airport-summary';
 
 /** Live advisory catalog (names / descriptions / parameter defs) fetched from
@@ -148,6 +151,7 @@ function representativeMethodBadge(adv: RouteAdvisoryResult): string {
   const representative = adv.per_model.find(
     (model) => model.model === adv.representative_model,
   );
+  if (!isAssessedAdvisoryResult(representative)) return '';
   const method = advisoryMethodLabel(representative?.primary_method_id);
   if (!method) return '';
   return `<span class="badge advisory-method-badge"`

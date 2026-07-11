@@ -13,7 +13,13 @@ import {
   formatAltitudeDeltaNote,
   overlayAltitudeStatuses,
 } from '../../ts/helpers/altitude-diff';
-import type { AltitudeAdvisoryRow, AltitudeTableResult } from '../../ts/types/advisories';
+import type {
+  AltitudeAdvisoryRow,
+  AltitudeTableResult,
+  ModelAdvisoryResult,
+  RouteAdvisoriesManifest,
+  RouteAdvisoryResult,
+} from '../../ts/types/advisories';
 
 function row(altitude_ft: number, statuses: AltitudeAdvisoryRow['statuses']): AltitudeAdvisoryRow {
   return { altitude_ft, statuses, red_count: 0, amber_count: 0, green_count: 0 };
@@ -34,6 +40,55 @@ const table: AltitudeTableResult = {
   best_below_cruise: 4000,
   best_above_cruise: null,
 };
+
+function modelResult(model: string): ModelAdvisoryResult {
+  return {
+    model,
+    status: 'amber',
+    detail: `${model} detail`,
+    affected_points: 1,
+    total_points: 2,
+    affected_pct: 50,
+    affected_nm: 10,
+    total_nm: 20,
+    data_state: 'complete',
+    primary_method_id: 'nwp',
+    evidence_regions: [{
+      start_point_index: 0,
+      end_point_index: 1,
+      severity: 'amber',
+      reason_code: 'test_region',
+      method_id: 'nwp',
+    }],
+  };
+}
+
+function advisory(advisoryId: string, status: RouteAdvisoryResult['aggregate_status']): RouteAdvisoryResult {
+  return {
+    advisory_id: advisoryId,
+    aggregate_status: status,
+    aggregate_detail: `${advisoryId} detail`,
+    representative_model: 'gfs',
+    per_model: [modelResult('gfs'), modelResult('ecmwf')],
+    parameters_used: {},
+  };
+}
+
+function manifest(): RouteAdvisoriesManifest {
+  return {
+    advisories: [
+      advisory('icing_escape', 'amber'),
+      advisory('airport_wind', 'red'),
+    ],
+    catalog: [],
+    route_name: 'EGTF EGLF',
+    cruise_altitude_ft: 8000,
+    flight_ceiling_ft: 10000,
+    total_distance_nm: 20,
+    models: ['gfs', 'ecmwf'],
+    airport_conditions: null,
+  };
+}
 
 describe('diffAltitudeRows', () => {
   it('classifies improved / worsened / unchanged by severity', () => {
@@ -94,15 +149,33 @@ describe('formatAltitudeDeltaNote', () => {
 
 describe('overlayAltitudeStatuses', () => {
   it('updates only altitude-dependent statuses, leaving others untouched', () => {
-    const manifest = {
-      advisories: [
-        { advisory_id: 'icing_escape', aggregate_status: 'amber' as const },
-        { advisory_id: 'airport_wind', aggregate_status: 'red' as const },
-      ],
-    };
-    const out = overlayAltitudeStatuses(manifest, table, 4000);
+    const input = manifest();
+    const out = overlayAltitudeStatuses(input, table, 4000);
     expect(out.advisories.find(a => a.advisory_id === 'icing_escape')!.aggregate_status).toBe('green');
     // airport_wind isn't in the table → preserved.
     expect(out.advisories.find(a => a.advisory_id === 'airport_wind')!.aggregate_status).toBe('red');
+  });
+
+  it('clears model attribution and evidence even when the row status is unchanged', () => {
+    const input = manifest();
+    const out = overlayAltitudeStatuses(input, table, 8000);
+    const icing = out.advisories.find(a => a.advisory_id === 'icing_escape')!;
+
+    expect(icing.aggregate_status).toBe('amber');
+    expect(icing.representative_model).toBeNull();
+    expect(icing.per_model).toEqual(input.advisories[0].per_model.map(model => ({
+      ...model,
+      data_state: null,
+      primary_method_id: null,
+      evidence_regions: [],
+    })));
+  });
+
+  it('preserves the complete advisory object when it is absent from the altitude row', () => {
+    const input = manifest();
+    const airportWind = input.advisories.find(a => a.advisory_id === 'airport_wind')!;
+    const out = overlayAltitudeStatuses(input, table, 4000);
+
+    expect(out.advisories.find(a => a.advisory_id === 'airport_wind')).toBe(airportWind);
   });
 });
