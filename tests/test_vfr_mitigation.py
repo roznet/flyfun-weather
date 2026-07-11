@@ -13,6 +13,9 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.vfr_feasibility import VFRFeasibilityEvaluator
 from weatherbrief.models import (
     AdvisoryStatus,
+    AirportConditions,
+    AirportConditionsSummary,
+    AirportModelCondition,
     CloudCoverage,
     ElevationPoint,
     ElevationProfile,
@@ -20,11 +23,13 @@ from weatherbrief.models import (
     Mitigation,
     MitigationKind,
     ModelAdvisoryResult,
+    PrecipitationAssessment,
     RouteAdvisoryResult,
     RoutePointAnalysis,
     SoundingAnalysis,
     ThermodynamicIndices,
 )
+from weatherbrief.models.airport_conditions import FlightCategory
 
 # Default VFR params (mirror the catalog defaults).
 _VFR_DEFAULTS = {
@@ -52,6 +57,7 @@ def _sounding(layers: list[EnhancedCloudLayer] | None = None) -> SoundingAnalysi
     return SoundingAnalysis(
         indices=ThermodynamicIndices(freezing_level_ft=5000),
         cloud_layers=layers or [],
+        precipitation=PrecipitationAssessment(),
     )
 
 
@@ -90,6 +96,29 @@ def _elevation(max_elev_ft: float = 500.0, n_points: int = 20, total_nm: float =
     )
 
 
+def _airport_conditions(models: tuple[str, ...]) -> AirportConditions:
+    conditions = [
+        AirportModelCondition(
+            model=model,
+            flight_category=FlightCategory.VFR,
+            ceiling_ft=5000,
+        )
+        for model in models
+    ]
+    return AirportConditions(
+        departure=AirportConditionsSummary(
+            icao="EGTK",
+            name="Oxford",
+            conditions=conditions,
+        ),
+        arrival=AirportConditionsSummary(
+            icao="LSGS",
+            name="Sion",
+            conditions=conditions,
+        ),
+    )
+
+
 def _ctx(
     analyses: list[RoutePointAnalysis],
     *,
@@ -98,6 +127,21 @@ def _ctx(
     cruise_altitude_ft: int = 8000,
     total_distance_nm: float = 200.0,
 ) -> RouteContext:
+    analyses = list(analyses)
+    if (
+        analyses
+        and (analyses[-1].distance_from_origin_nm or 0.0) < total_distance_nm
+    ):
+        last = analyses[-1]
+        analyses.append(
+            last.model_copy(
+                update={
+                    "point_index": max(rpa.point_index for rpa in analyses) + 1,
+                    "distance_from_origin_nm": total_distance_nm,
+                    "sounding": dict(last.sounding),
+                }
+            )
+        )
     return RouteContext(
         analyses=analyses,
         cross_sections=[],
@@ -106,6 +150,7 @@ def _ctx(
         cruise_altitude_ft=cruise_altitude_ft,
         flight_ceiling_ft=18000,
         total_distance_nm=total_distance_nm,
+        airport_conditions=_airport_conditions(models),
     )
 
 

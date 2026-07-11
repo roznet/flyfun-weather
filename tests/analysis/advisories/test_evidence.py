@@ -8,6 +8,7 @@ from weatherbrief.analysis.advisories.evidence import (
     EvidenceSample,
     build_non_spatial_result,
     cloud_method_id,
+    icing_metric_id,
     icing_method_is_available,
     summarize_evidence,
 )
@@ -349,6 +350,21 @@ def test_non_spatial_partial_hazard_keeps_supported_grade():
 def test_method_provenance_does_not_guess_native_nwp():
     assert cloud_method_id("nwp_synthesized", "square_nwp") == "nwp_synthesized"
     assert cloud_method_id(None, "square_nwp") is None
+
+
+@pytest.mark.parametrize(
+    ("method_id", "expected_metric_id"),
+    [
+        pytest.param("ogimet_dd", "icing_risk", id="ogimet-dd"),
+        pytest.param("ogimet_nwp", "icing_ogimet_nwp_risk", id="ogimet-nwp"),
+        pytest.param("sfip", "sfip_risk", id="sfip"),
+        pytest.param("ieng", "ieng_icing_risk", id="ieng"),
+        pytest.param(None, None, id="missing"),
+        pytest.param("unknown", None, id="unknown"),
+    ],
+)
+def test_icing_metric_id_maps_supported_methods(method_id, expected_metric_id):
+    assert icing_metric_id(method_id) == expected_metric_id
 
 
 def test_ogimet_nwp_distinguishes_missing_from_available_clear_geometry():

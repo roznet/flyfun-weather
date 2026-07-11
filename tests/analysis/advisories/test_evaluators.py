@@ -666,10 +666,12 @@ class TestVFRFeasibility:
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
-    def test_no_airport_data_still_works(self, clear_context: RouteContext):
-        """Without airport conditions, evaluates en-route only."""
-        result = VFRFeasibilityEvaluator.evaluate(clear_context, _VFR_DEFAULTS)
-        assert result.aggregate_status == AdvisoryStatus.GREEN
+    def test_no_airport_data_is_unavailable(self, vfr_clear_context: RouteContext):
+        """Missing a required airport axis cannot present as clear."""
+        ctx = replace(vfr_clear_context, airport_conditions=None)
+        result = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+        assert result.per_model[0].data_state == "partial"
 
     def test_per_model_results(self, vfr_clear_context: RouteContext):
         result = VFRFeasibilityEvaluator.evaluate(vfr_clear_context, _VFR_DEFAULTS)

@@ -13,6 +13,7 @@ from weatherbrief.analysis.advisories._helpers import (
 )
 from weatherbrief.analysis.advisories.evidence import (
     EvidenceSample,
+    icing_metric_id,
     icing_method_id,
     icing_method_is_available,
     summarize_evidence,
@@ -45,14 +46,6 @@ from weatherbrief.models import (
 # mixed ice), and SLD/freezing precip. The value only has to make the solver prefer a
 # hazard-free reroute (0) over crossing the rime when one exists.
 _LIGHT_RIME_COST = 1.0
-
-
-ICING_METRIC_BY_METHOD = {
-    "ogimet_dd": "icing_risk",
-    "ogimet_nwp": "icing_ogimet_nwp_risk",
-    "sfip": "sfip_risk",
-    "ieng": "ieng_icing_risk",
-}
 
 
 def _icing_cell_cost(sounding, alt_ft: float) -> float:
@@ -277,7 +270,7 @@ class IcingEscapeEvaluator:
             tight_margin_points: set[int] = set()
             samples: list[EvidenceSample] = []
             method_id = icing_method_id(ctx.icing_method)
-            metric_id = ICING_METRIC_BY_METHOD.get(method_id or "")
+            metric_id = icing_metric_id(method_id)
 
             for rpa in ordered_analyses:
                 sounding = rpa.sounding.get(model)

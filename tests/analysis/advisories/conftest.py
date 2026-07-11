@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -22,6 +23,7 @@ from weatherbrief.models import (
     IcingType,
     IcingZone,
     ModelDivergence,
+    PrecipitationAssessment,
     RoutePointAnalysis,
     SoundingAnalysis,
     ThermodynamicIndices,
@@ -510,6 +512,30 @@ def _make_airport_conditions(
     )
 
 
+def _with_complete_feasibility_inputs(
+    ctx: RouteContext,
+    *,
+    include_precipitation: bool = False,
+) -> RouteContext:
+    """Make feasibility fixtures explicit about clear required axes."""
+    analyses = []
+    for rpa in ctx.analyses:
+        soundings = {}
+        for model, sounding in rpa.sounding.items():
+            updates = {}
+            if sounding.convective is None:
+                updates["convective"] = ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.NONE,
+                )
+            if include_precipitation and sounding.precipitation is None:
+                updates["precipitation"] = PrecipitationAssessment()
+            soundings[model] = (
+                sounding.model_copy(update=updates) if updates else sounding
+            )
+        analyses.append(rpa.model_copy(update={"sounding": soundings}))
+    return replace(ctx, analyses=analyses)
+
+
 # ---------------------------------------------------------------------------
 # VFR / IFR feasibility fixtures
 # ---------------------------------------------------------------------------
@@ -517,14 +543,14 @@ def _make_airport_conditions(
 @pytest.fixture
 def vfr_clear_context() -> RouteContext:
     """VFR-ideal: VFR at airports, clear en-route."""
-    n_points = 10
+    n_points = 11
     analyses = [
         _make_rpa(i, i * 20.0, sounding={
             "gfs": _make_sounding(), "ecmwf": _make_sounding(),
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -533,20 +559,20 @@ def vfr_clear_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=200,
         airport_conditions=_make_airport_conditions(),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
 def vfr_ifr_airport_context() -> RouteContext:
     """VFR flight with IFR conditions at arrival — should be RED for VFR."""
-    n_points = 10
+    n_points = 11
     analyses = [
         _make_rpa(i, i * 20.0, sounding={
             "gfs": _make_sounding(), "ecmwf": _make_sounding(),
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -557,20 +583,20 @@ def vfr_ifr_airport_context() -> RouteContext:
         airport_conditions=_make_airport_conditions(
             arr_category=FlightCategory.IFR, arr_ceiling_ft=800,
         ),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
 def vfr_mvfr_airport_context() -> RouteContext:
     """VFR flight with MVFR at departure — should be AMBER for VFR."""
-    n_points = 10
+    n_points = 11
     analyses = [
         _make_rpa(i, i * 20.0, sounding={
             "gfs": _make_sounding(), "ecmwf": _make_sounding(),
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -581,13 +607,13 @@ def vfr_mvfr_airport_context() -> RouteContext:
         airport_conditions=_make_airport_conditions(
             dep_category=FlightCategory.MVFR, dep_ceiling_ft=2500,
         ),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
 def vfr_marginal_clearance_context() -> RouteContext:
     """VFR with cloud layers near cruise — marginal cloud clearance."""
-    n_points = 10
+    n_points = 11
     # BKN cloud with base at 8800ft — only 800ft above cruise (8000ft)
     near_cloud = EnhancedCloudLayer(
         base_ft=8800, top_ft=12000, coverage=CloudCoverage.BKN,
@@ -598,7 +624,7 @@ def vfr_marginal_clearance_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -607,13 +633,13 @@ def vfr_marginal_clearance_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=200,
         airport_conditions=_make_airport_conditions(models=["gfs"]),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
 def vfr_imc_enroute_context() -> RouteContext:
     """VFR with OVC cloud at cruise — in IMC en-route."""
-    n_points = 10
+    n_points = 11
     ovc_cloud = EnhancedCloudLayer(
         base_ft=6000, top_ft=12000, coverage=CloudCoverage.OVC,
     )
@@ -623,7 +649,7 @@ def vfr_imc_enroute_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -632,7 +658,7 @@ def vfr_imc_enroute_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=200,
         airport_conditions=_make_airport_conditions(models=["gfs"]),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
@@ -652,7 +678,7 @@ def vfr_bkn_corridor_context() -> RouteContext:
             for i in range(1, 10)
         ],
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -661,7 +687,7 @@ def vfr_bkn_corridor_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=180,
         airport_conditions=_make_airport_conditions(models=["gfs"]),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
@@ -676,7 +702,7 @@ def vfr_ovc_corridor_context() -> RouteContext:
             for i in range(1, 10)
         ],
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -685,7 +711,7 @@ def vfr_ovc_corridor_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=180,
         airport_conditions=_make_airport_conditions(models=["gfs"]),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
@@ -704,7 +730,7 @@ def vfr_short_route_overlap_context() -> RouteContext:
         )
         for i in range(5)  # 0, 2, 4, 6, 8 nm
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -713,7 +739,7 @@ def vfr_short_route_overlap_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=8,
         airport_conditions=_make_airport_conditions(models=["gfs"]),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
@@ -732,7 +758,7 @@ def vfr_midroute_deck_context() -> RouteContext:
         )
         for i in range(10)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -741,7 +767,7 @@ def vfr_midroute_deck_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=180,
         airport_conditions=_make_airport_conditions(models=["gfs"]),
-    )
+    ), include_precipitation=True)
 
 
 @pytest.fixture
@@ -754,7 +780,7 @@ def ifr_normal_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -766,7 +792,7 @@ def ifr_normal_context() -> RouteContext:
             dep_category=FlightCategory.IFR, dep_ceiling_ft=800,
             arr_category=FlightCategory.IFR, arr_ceiling_ft=900,
         ),
-    )
+    ))
 
 
 @pytest.fixture
@@ -779,7 +805,7 @@ def ifr_lifr_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -792,7 +818,7 @@ def ifr_lifr_context() -> RouteContext:
             arr_category=FlightCategory.LIFR, arr_ceiling_ft=450,
             models=["gfs"],
         ),
-    )
+    ))
 
 
 @pytest.fixture
@@ -805,7 +831,7 @@ def ifr_lifr_below_mins_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -818,7 +844,7 @@ def ifr_lifr_below_mins_context() -> RouteContext:
             arr_category=FlightCategory.LIFR, arr_ceiling_ft=150,
             models=["gfs"],
         ),
-    )
+    ))
 
 
 @pytest.fixture
@@ -835,7 +861,7 @@ def ifr_heavy_icing_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -848,7 +874,7 @@ def ifr_heavy_icing_context() -> RouteContext:
             arr_category=FlightCategory.IFR, arr_ceiling_ft=900,
             models=["gfs"],
         ),
-    )
+    ))
 
 
 @pytest.fixture
@@ -865,7 +891,7 @@ def ifr_high_altitude_icing_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -878,7 +904,7 @@ def ifr_high_altitude_icing_context() -> RouteContext:
             arr_category=FlightCategory.IFR, arr_ceiling_ft=900,
             models=["gfs"],
         ),
-    )
+    ))
 
 
 @pytest.fixture
@@ -895,7 +921,7 @@ def ifr_convective_context() -> RouteContext:
         })
         for i in range(n_points)
     ]
-    return RouteContext(
+    return _with_complete_feasibility_inputs(RouteContext(
         analyses=analyses,
         cross_sections=[],
         elevation=_make_elevation(),
@@ -904,4 +930,4 @@ def ifr_convective_context() -> RouteContext:
         flight_ceiling_ft=18000,
         total_distance_nm=200,
         airport_conditions=_make_airport_conditions(models=["gfs"]),
-    )
+    ))

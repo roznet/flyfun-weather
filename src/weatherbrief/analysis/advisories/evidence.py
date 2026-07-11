@@ -386,6 +386,16 @@ def icing_method_id(value: str | None) -> str | None:
     }.get(value)
 
 
+def icing_metric_id(method_id: str | None) -> str | None:
+    """Return the evidence metric associated with an icing method."""
+    return {
+        "ogimet_dd": "icing_risk",
+        "ogimet_nwp": "icing_ogimet_nwp_risk",
+        "sfip": "sfip_risk",
+        "ieng": "ieng_icing_risk",
+    }.get(method_id or "")
+
+
 def icing_method_is_available(
     sounding: SoundingAnalysis | None,
     value: str | None,

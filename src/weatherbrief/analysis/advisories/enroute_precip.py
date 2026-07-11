@@ -65,6 +65,10 @@ class EnroutePrecipAssessment:
     detail: str
     summary: EvidenceSummary
     has_signal: bool
+    evidence_samples: tuple[EvidenceSample, ...]
+    evaluated_point_indices: frozenset[int]
+    complete_point_indices: frozenset[int]
+    affected_point_indices: frozenset[int]
     snow_point_indices: frozenset[int]
     moderate_snow_point_indices: frozenset[int]
     significant_rain_point_indices: frozenset[int]
@@ -215,6 +219,10 @@ def assess_enroute_precip(
         detail=detail,
         summary=summary,
         has_signal=has_signal,
+        evidence_samples=tuple(samples),
+        evaluated_point_indices=frozenset(evaluated_points),
+        complete_point_indices=frozenset(signal_points),
+        affected_point_indices=frozenset(affected_points),
         snow_point_indices=frozenset(snow_points),
         moderate_snow_point_indices=frozenset(moderate_snow_points),
         significant_rain_point_indices=frozenset(significant_rain_points),

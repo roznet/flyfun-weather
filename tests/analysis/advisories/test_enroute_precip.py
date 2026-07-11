@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from types import SimpleNamespace
-
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories import enroute_precip as enroute_precip_module
 from weatherbrief.analysis.advisories import vfr_feasibility as vfr_module
 from weatherbrief.analysis.advisories.enroute_precip import (
+    EnroutePrecipAssessment,
     EnroutePrecipEvaluator,
     classify_enroute_precip,
 )
@@ -73,27 +72,30 @@ def _evaluate(ctx: RouteContext, params: dict | None = None):
 
 def _shared_assessment_stub(ctx: RouteContext):
     indices = {rpa.point_index for rpa in ctx.analyses}
+    sample = EvidenceSample(
+        point_index=0,
+        severity=AdvisoryStatus.AMBER,
+        reason_code="precip_visibility",
+        metric_id="precipitation_mm",
+        method_id="nwp_precipitation_profile",
+    )
     summary = summarize_evidence(
         route_points=ctx.analyses,
         total_distance_nm=ctx.total_distance_nm,
         evaluated_point_indices=indices,
         complete_point_indices=indices,
         affected_point_indices={0},
-        evidence_samples=[
-            EvidenceSample(
-                point_index=0,
-                severity=AdvisoryStatus.AMBER,
-                reason_code="precip_visibility",
-                metric_id="precipitation_mm",
-                method_id="nwp_precipitation_profile",
-            )
-        ],
+        evidence_samples=[sample],
     )
-    return SimpleNamespace(
+    return EnroutePrecipAssessment(
         status=AdvisoryStatus.AMBER,
         detail="Shared precipitation assessment",
         summary=summary,
         has_signal=True,
+        evidence_samples=(sample,),
+        evaluated_point_indices=frozenset(indices),
+        complete_point_indices=frozenset(indices),
+        affected_point_indices=frozenset({0}),
         snow_point_indices=frozenset(),
         moderate_snow_point_indices=frozenset(),
         significant_rain_point_indices=frozenset({0}),
@@ -121,6 +123,10 @@ def test_assessment_exposes_point_sets_summary_and_compatibility_tuple():
     assert assessment.moderate_snow_point_indices == frozenset({1})
     assert assessment.significant_rain_point_indices == frozenset({2})
     assert assessment.light_point_indices == frozenset({3})
+    assert assessment.evaluated_point_indices == frozenset(range(10))
+    assert assessment.complete_point_indices == frozenset(range(10))
+    assert assessment.affected_point_indices == frozenset({0, 1, 2, 3})
+    assert assessment.evidence_samples
     assert assessment.summary.affected_points == 4
     assert assessment.summary.total_points == 10
     assert assessment.summary.evidence_regions
@@ -293,9 +299,10 @@ class TestVFRPrecipFeed:
         assert result.aggregate_status == AdvisoryStatus.AMBER
         assert "Snow" in result.per_model[0].detail
 
-    def test_vfr_composite_unaffected_by_missing_precip_data(self):
+    def test_vfr_composite_missing_precip_data_is_unavailable(self):
         ctx = _ctx([_sounding(with_precip=False) for _ in range(10)])
         entry = VFRFeasibilityEvaluator.catalog_entry()
         defaults = {p.key: p.default for p in entry.parameters}
         result = VFRFeasibilityEvaluator.evaluate(ctx, defaults)
-        assert result.per_model[0].status == AdvisoryStatus.GREEN
+        assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE
+        assert result.per_model[0].data_state == "partial"

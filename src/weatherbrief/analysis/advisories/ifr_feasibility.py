@@ -6,8 +6,21 @@ and convective activity into a single go/no-go style assessment for IFR flights.
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass, replace
+
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, min_icing_clearance
+from weatherbrief.analysis.advisories._helpers import min_icing_clearance
+from weatherbrief.analysis.advisories.evidence import (
+    DataState,
+    EvidenceSample,
+    combine_data_states,
+    data_state_from_domains,
+    icing_metric_id,
+    icing_method_id,
+    icing_method_is_available,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -39,6 +52,45 @@ _CONVECTIVE_SEVERITY_INDEX = {r: i for i, r in enumerate(_CONVECTIVE_SEVERITY)}
 _ICING_PCT_AMBER_DEFAULT = 20
 _ICING_PCT_RED_DEFAULT = 50
 
+@dataclass(frozen=True)
+class IFRPointAssessment:
+    """One route point's supported IFR hazard axes and display evidence."""
+
+    point_index: int
+    icing_available: bool
+    convective_available: bool
+    icing_affected: bool
+    convective_affected: bool
+    convective_risk: ConvectiveRisk
+    icing_method_id: str | None
+    convective_method_id: str | None
+    icing_samples: tuple[EvidenceSample, ...]
+    convective_samples: tuple[EvidenceSample, ...]
+
+
+@dataclass(frozen=True)
+class _IFRAirportAssessment:
+    status: AdvisoryStatus
+    detail: str
+    data_state: DataState
+    has_evaluated_endpoint: bool
+
+
+def _finite_altitude_bounds(
+    base_ft: float | None,
+    top_ft: float | None,
+) -> tuple[int | None, int | None]:
+    """Return safe evidence bounds, or an unknown envelope for invalid data."""
+    if (
+        base_ft is None
+        or top_ft is None
+        or not math.isfinite(base_ft)
+        or not math.isfinite(top_ft)
+        or base_ft > top_ft
+    ):
+        return None, None
+    return round(base_ft), round(top_ft)
+
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
     """Return the most severe status from the given values."""
@@ -50,16 +102,24 @@ def _check_airport_ifr(
     model: str,
     min_dep_ceiling_ft: float,
     min_arr_ceiling_ft: float,
-) -> tuple[AdvisoryStatus, str]:
+) -> _IFRAirportAssessment:
     """Check departure and arrival airport conditions for IFR feasibility.
 
     IFR flights accept IFR conditions, but LIFR triggers amber and
     ceilings below configurable minimums trigger red.
-
-    Returns (status, detail_fragment).
     """
+    expected = {"departure", "arrival"}
     if ctx.airport_conditions is None:
-        return AdvisoryStatus.GREEN, ""
+        return _IFRAirportAssessment(
+            status=AdvisoryStatus.UNAVAILABLE,
+            detail="",
+            data_state=data_state_from_domains(
+                expected=expected,
+                evaluated=set(),
+                complete=set(),
+            ),
+            has_evaluated_endpoint=False,
+        )
 
     dep = ctx.airport_conditions.departure
     arr = ctx.airport_conditions.arrival
@@ -69,13 +129,15 @@ def _check_airport_ifr(
     loc = ctx.locale
     parts: list[str] = []
     worst = AdvisoryStatus.GREEN
+    evaluated: set[str] = set()
 
-    for label_key, icao, cond, min_ceil in [
-        ("airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft),
-        ("airport.arr", arr.icao, arr_cond, min_arr_ceiling_ft),
+    for endpoint, label_key, icao, cond, min_ceil in [
+        ("departure", "airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft),
+        ("arrival", "airport.arr", arr.icao, arr_cond, min_arr_ceiling_ft),
     ]:
         if cond is None:
             continue
+        evaluated.add(endpoint)
         label = adv_t(label_key, loc)
         cat = cond.flight_category
 
@@ -94,61 +156,120 @@ def _check_airport_ifr(
                 parts.append(adv_t("ifr.lifr", loc, label=label, icao=icao))
 
     detail = " | ".join(parts) if parts else ""
-    return worst, detail
+    state = data_state_from_domains(
+        expected=expected,
+        evaluated=evaluated,
+        complete=evaluated,
+    )
+    return _IFRAirportAssessment(
+        status=worst if evaluated else AdvisoryStatus.UNAVAILABLE,
+        detail=detail,
+        data_state=state,
+        has_evaluated_endpoint=bool(evaluated),
+    )
 
 
-def _check_enroute_hazards(
+def _assess_enroute_hazards(
     ctx: RouteContext,
     model: str,
     convective_min_risk_idx: int,
     cruise_altitude_ft: float,
     icing_altitude_buffer_ft: float,
-) -> tuple[int, int, int, int, ConvectiveRisk]:
-    """Check en-route icing and convective hazards in a single pass.
+) -> list[IFRPointAssessment]:
+    """Assess both route hazard axes once, retaining availability and evidence."""
+    ordered_analyses = sorted(
+        ctx.analyses,
+        key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+    )
+    selected_icing_method = icing_method_id(ctx.icing_method)
+    selected_icing_metric = icing_metric_id(selected_icing_method)
+    assessments: list[IFRPointAssessment] = []
 
-    Uses the same clearance-based icing check as the FIKI advisory:
-    a point counts as "icing affected" only when an icing zone is within
-    *icing_altitude_buffer_ft* of cruise altitude.
-
-    Returns (total, affected, icing_count, conv_count, worst_conv_risk).
-    - affected: number of unique points with icing OR convective risk
-    - icing_count / conv_count: individual counts for detail messages
-    """
-    total = 0
-    affected = 0
-    icing_count = 0
-    conv_count = 0
-    worst_conv_risk = ConvectiveRisk.NONE
-
-    for rpa in ctx.analyses:
+    for rpa in ordered_analyses:
         sounding = rpa.sounding.get(model)
-        if sounding is None:
-            continue
-        total += 1
+        icing_available = icing_method_is_available(sounding, ctx.icing_method)
+        icing_samples: list[EvidenceSample] = []
+        if icing_available:
+            assert sounding is not None
+            for zone in sounding.icing_zones:
+                if (
+                    min_icing_clearance([zone], cruise_altitude_ft)
+                    >= icing_altitude_buffer_ft
+                ):
+                    continue
+                lower_altitude_ft, upper_altitude_ft = _finite_altitude_bounds(
+                    zone.base_ft,
+                    zone.top_ft,
+                )
+                icing_samples.append(
+                    EvidenceSample(
+                        point_index=rpa.point_index,
+                        severity=AdvisoryStatus.AMBER,
+                        reason_code="ifr_icing_exposure",
+                        metric_id=selected_icing_metric,
+                        method_id=selected_icing_method,
+                        lower_altitude_ft=lower_altitude_ft,
+                        upper_altitude_ft=upper_altitude_ft,
+                    )
+                )
 
-        has_icing = (
-            bool(sounding.icing_zones)
-            and min_icing_clearance(sounding.icing_zones, cruise_altitude_ft)
-            < icing_altitude_buffer_ft
-        )
-        has_convective = False
-
-        conv = sounding.convective
+        conv = sounding.convective if sounding is not None else None
+        convective_available = conv is not None
+        convective_affected = False
+        convective_risk = ConvectiveRisk.NONE
+        convective_method: str | None = None
+        convective_samples: list[EvidenceSample] = []
         if conv is not None:
+            convective_risk = conv.risk_level
+            convective_method = (
+                "nwp" if conv.method.startswith("nwp") else "thermo"
+            )
             risk_idx = _CONVECTIVE_SEVERITY_INDEX.get(conv.risk_level, 0)
             if risk_idx >= convective_min_risk_idx:
-                has_convective = True
-                if risk_idx > _CONVECTIVE_SEVERITY_INDEX.get(worst_conv_risk, 0):
-                    worst_conv_risk = conv.risk_level
+                convective_affected = True
+                lower_altitude_ft, upper_altitude_ft = _finite_altitude_bounds(
+                    conv.base_ft,
+                    conv.top_ft,
+                )
+                convective_samples.append(
+                    EvidenceSample(
+                        point_index=rpa.point_index,
+                        severity=(
+                            AdvisoryStatus.RED
+                            if conv.risk_level
+                            in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME)
+                            else AdvisoryStatus.AMBER
+                        ),
+                        reason_code="ifr_convective_exposure",
+                        metric_id=(
+                            "nwp_convective_risk"
+                            if convective_method == "nwp"
+                            else "convective_risk"
+                        ),
+                        method_id=convective_method,
+                        lower_altitude_ft=lower_altitude_ft,
+                        upper_altitude_ft=upper_altitude_ft,
+                    )
+                )
 
-        if has_icing:
-            icing_count += 1
-        if has_convective:
-            conv_count += 1
-        if has_icing or has_convective:
-            affected += 1
+        assessments.append(
+            IFRPointAssessment(
+                point_index=rpa.point_index,
+                icing_available=icing_available,
+                convective_available=convective_available,
+                icing_affected=bool(icing_samples),
+                convective_affected=convective_affected,
+                convective_risk=convective_risk,
+                icing_method_id=(
+                    selected_icing_method if icing_available else None
+                ),
+                convective_method_id=convective_method,
+                icing_samples=tuple(icing_samples),
+                convective_samples=tuple(convective_samples),
+            )
+        )
 
-    return total, affected, icing_count, conv_count, worst_conv_risk
+    return assessments
 
 
 @register
@@ -275,39 +396,92 @@ class IFRFeasibilityEvaluator:
         convective_pct_red = params.get("convective_pct_red", 10)
 
         per_model: list[ModelAdvisoryResult] = []
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         for model in ctx.models:
             # 1. Airport conditions
-            airport_status, airport_detail = _check_airport_ifr(
+            airport = _check_airport_ifr(
                 ctx, model, min_dep_ceiling_ft, min_arr_ceiling_ft
             )
 
-            # 2. En-route hazards (single pass — no double-counting)
-            total, affected, icing_count, conv_count, worst_conv_risk = (
-                _check_enroute_hazards(
-                    ctx, model, convective_min_risk,
-                    ctx.cruise_altitude_ft, icing_altitude_buffer_ft,
-                )
+            # 2. En-route hazards. One point pass owns grading, counts, data
+            # completeness, and the evidence regions for both route axes.
+            point_assessments = _assess_enroute_hazards(
+                ctx,
+                model,
+                convective_min_risk,
+                ctx.cruise_altitude_ft,
+                icing_altitude_buffer_ft,
+            )
+
+            icing_evaluated = {
+                point.point_index
+                for point in point_assessments
+                if point.icing_available
+            }
+            convective_evaluated = {
+                point.point_index
+                for point in point_assessments
+                if point.convective_available
+            }
+            icing_points = {
+                point.point_index
+                for point in point_assessments
+                if point.icing_affected
+            }
+            convective_points = {
+                point.point_index
+                for point in point_assessments
+                if point.convective_affected
+            }
+            affected_points = icing_points | convective_points
+            route_evaluated = icing_evaluated | convective_evaluated
+            route_complete = icing_evaluated & convective_evaluated
+            evidence_samples = [
+                sample
+                for point in point_assessments
+                for sample in (*point.icing_samples, *point.convective_samples)
+            ]
+
+            route_summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=route_evaluated,
+                complete_point_indices=route_complete,
+                affected_point_indices=affected_points,
+                evidence_samples=evidence_samples,
+            )
+            icing_summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=icing_evaluated,
+                complete_point_indices=icing_evaluated,
+                affected_point_indices=icing_points,
+                evidence_samples=(),
+            )
+            convective_summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=convective_evaluated,
+                complete_point_indices=convective_evaluated,
+                affected_point_indices=convective_points,
+                evidence_samples=(),
             )
 
             loc = ctx.locale
-            if (
-                total == 0
-                and airport_status == AdvisoryStatus.GREEN
-                and not airport_detail
-            ):
-                per_model.append(ModelAdvisoryResult.build(
-                    model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=0,
-                    total_distance_nm=ctx.total_distance_nm,
-                ))
-                continue
 
             # 3. Determine icing status
-            icing_status = AdvisoryStatus.GREEN
+            icing_status = (
+                AdvisoryStatus.GREEN
+                if icing_summary.total_points > 0
+                else AdvisoryStatus.UNAVAILABLE
+            )
             icing_detail = ""
-            if total > 0 and icing_count > 0:
-                icing_pct = 100.0 * icing_count / total
+            if icing_summary.affected_points > 0:
+                icing_pct = icing_summary.affected_pct
                 if icing_pct >= icing_pct_red:
                     icing_status = AdvisoryStatus.RED
                 elif icing_pct >= icing_pct_amber:
@@ -315,33 +489,69 @@ class IFRFeasibilityEvaluator:
                 if icing_status != AdvisoryStatus.GREEN:
                     icing_detail = adv_t(
                         "ifr.icing_over", loc,
-                        extent=format_extent(icing_count, total, ctx.total_distance_nm),
+                        extent=icing_summary.format_extent(),
                     )
 
             # 4. Determine convective status
-            conv_status = AdvisoryStatus.GREEN
+            conv_status = (
+                AdvisoryStatus.GREEN
+                if convective_summary.total_points > 0
+                else AdvisoryStatus.UNAVAILABLE
+            )
             conv_detail = ""
-            if total > 0 and conv_count > 0:
-                conv_pct = 100.0 * conv_count / total
+            affected_convective = [
+                point
+                for point in point_assessments
+                if point.convective_affected
+            ]
+            worst_conv_risk = max(
+                (point.convective_risk for point in affected_convective),
+                key=lambda risk: _CONVECTIVE_SEVERITY_INDEX.get(risk, 0),
+                default=ConvectiveRisk.NONE,
+            )
+            if convective_summary.affected_points > 0:
                 # HIGH/EXTREME at any point is always red
                 if worst_conv_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
                     conv_status = AdvisoryStatus.RED
-                elif conv_pct >= convective_pct_red:
+                elif convective_summary.affected_pct >= convective_pct_red:
                     conv_status = AdvisoryStatus.RED
                 else:
                     conv_status = AdvisoryStatus.AMBER
                 conv_detail = adv_t(
                     "ifr.conv_over", loc,
                     risk=worst_conv_risk.value.upper(),
-                    extent=format_extent(conv_count, total, ctx.total_distance_nm),
+                    extent=convective_summary.format_extent(),
                 )
 
             # 5. Combine all factors
-            status = _worst_status(airport_status, icing_status, conv_status)
+            status = _worst_status(airport.status, icing_status, conv_status)
+            combined_state = combine_data_states(
+                route_summary.data_state,
+                airport.data_state,
+            )
+            axis_status_by_reason = {
+                "ifr_icing_exposure": icing_status,
+                "ifr_convective_exposure": conv_status,
+            }
+            summary = replace(
+                route_summary,
+                data_state=combined_state,
+                evidence_regions=[
+                    region.model_copy(
+                        update={
+                            "severity": axis_status_by_reason.get(
+                                region.reason_code,
+                                region.severity,
+                            )
+                        }
+                    )
+                    for region in route_summary.evidence_regions
+                ],
+            )
 
             detail_parts = []
-            if airport_detail:
-                detail_parts.append(airport_detail)
+            if airport.detail:
+                detail_parts.append(airport.detail)
             if icing_detail:
                 detail_parts.append(icing_detail)
             if conv_detail:
@@ -352,10 +562,78 @@ class IFRFeasibilityEvaluator:
             else:
                 detail = " | ".join(detail_parts)
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=affected, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            # 6. Attribute the headline to all distinct methods tied at its raw
+            # status. A composite must never claim icing or convection alone when
+            # both independently control the same verdict.
+            controlling_methods: set[str] = set()
+            if (
+                airport.has_evaluated_endpoint
+                and airport.status == status
+                and status != AdvisoryStatus.UNAVAILABLE
+            ):
+                controlling_methods.add("airport_conditions")
+            if (
+                icing_summary.total_points > 0
+                and icing_status == status
+                and status != AdvisoryStatus.UNAVAILABLE
+            ):
+                controlling_methods.update(
+                    point.icing_method_id
+                    for point in point_assessments
+                    if point.icing_method_id is not None
+                )
+            if (
+                convective_summary.total_points > 0
+                and conv_status == status
+                and status != AdvisoryStatus.UNAVAILABLE
+            ):
+                if conv_status == AdvisoryStatus.RED:
+                    severe_methods = {
+                        point.convective_method_id
+                        for point in affected_convective
+                        if point.convective_risk
+                        in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME)
+                        and point.convective_method_id is not None
+                    }
+                    convective_methods = severe_methods or {
+                        point.convective_method_id
+                        for point in affected_convective
+                        if point.convective_method_id is not None
+                    }
+                elif conv_status == AdvisoryStatus.AMBER:
+                    convective_methods = {
+                        point.convective_method_id
+                        for point in affected_convective
+                        if point.convective_method_id is not None
+                    }
+                else:
+                    convective_methods = {
+                        point.convective_method_id
+                        for point in point_assessments
+                        if point.convective_available
+                        and point.convective_method_id is not None
+                    }
+                controlling_methods.update(convective_methods)
+
+            if len(controlling_methods) == 1:
+                primary_method_id = next(iter(controlling_methods))
+            elif len(controlling_methods) > 1:
+                primary_method_id = "ifr_composite"
+            else:
+                primary_method_id = None
+
+            missing_detail = adv_t(
+                "no_data" if combined_state == "unavailable" else "partial_data",
+                loc,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=primary_method_id,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("ifr_feasibility", per_model, params)

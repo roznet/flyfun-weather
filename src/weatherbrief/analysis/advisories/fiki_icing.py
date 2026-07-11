@@ -14,6 +14,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import min_icing_clearance
 from weatherbrief.analysis.advisories.evidence import (
     EvidenceSample,
+    icing_metric_id,
     icing_method_id,
     icing_method_is_available,
     summarize_evidence,
@@ -31,14 +32,6 @@ from weatherbrief.models import (
 )
 
 _RISK_ORDER = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
-
-_ICING_METRIC_BY_METHOD = {
-    "ogimet_dd": "icing_risk",
-    "ogimet_nwp": "icing_ogimet_nwp_risk",
-    "sfip": "sfip_risk",
-    "ieng": "ieng_icing_risk",
-}
-
 
 @dataclass(frozen=True)
 class _FIKIPointAssessment:
@@ -214,7 +207,7 @@ class FIKIIcingEvaluator:
 
         for model in ctx.models:
             method_id = icing_method_id(ctx.icing_method)
-            metric_id = _ICING_METRIC_BY_METHOD.get(method_id or "")
+            metric_id = icing_metric_id(method_id)
             point_assessments: list[_FIKIPointAssessment] = []
 
             for rpa in ordered_analyses:

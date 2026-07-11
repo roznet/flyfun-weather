@@ -13,15 +13,27 @@ caution. The standalone advisory still grades it fully (snow can RED).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
+from typing import Literal
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     build_cost_model,
-    format_extent,
     to_mitigation_profile,
 )
-from weatherbrief.analysis.advisories.enroute_precip import assess_enroute_precip
+from weatherbrief.analysis.advisories.enroute_precip import (
+    EnroutePrecipAssessment,
+    assess_enroute_precip,
+)
+from weatherbrief.analysis.advisories.evidence import (
+    DataState,
+    EvidenceSample,
+    cloud_method_id,
+    combine_data_states,
+    data_state_from_domains,
+    summarize_evidence,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.advisories.vertical_profile import (
@@ -37,10 +49,12 @@ from weatherbrief.models import (
     AdvisoryParameterDef,
     AdvisoryStatus,
     CloudCoverage,
+    EnhancedCloudLayer,
     Mitigation,
     MitigationKind,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
+    SoundingAnalysis,
 )
 from weatherbrief.models.airport_conditions import FlightCategory
 
@@ -50,19 +64,77 @@ def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
     return AdvisoryStatus.worst(list(statuses))
 
 
+@dataclass(frozen=True)
+class VFRPointAssessment:
+    """One route point's authoritative VFR cloud assessment."""
+
+    point_index: int
+    method_id: str | None
+    available: bool
+    complete: bool
+    in_cloud: bool
+    marginal: bool
+    cloud_samples: tuple[EvidenceSample, ...]
+
+
+@dataclass(frozen=True)
+class CorridorPointAssessment:
+    """One point in a climb/descent corridor and its exact blocking layers."""
+
+    point_index: int
+    method_id: str | None
+    distance_nm: float
+    phase: Literal["climb", "descent"]
+    has_ovc: bool
+    has_bkn: bool
+    base_agl_ft: float | None
+    blocking_layers: tuple[EnhancedCloudLayer, ...]
+
+
+def _classify_vfr_cloud_layers(
+    sounding: SoundingAnalysis,
+    altitude_ft: float,
+    cloud_clearance_ft: float,
+) -> tuple[tuple[EnhancedCloudLayer, ...], tuple[EnhancedCloudLayer, ...]]:
+    """Return in-cloud and marginal layers for the canonical VFR predicate."""
+    in_cloud_layers: list[EnhancedCloudLayer] = []
+    marginal_layers: list[EnhancedCloudLayer] = []
+    for layer in sounding.cloud_layers:
+        if layer.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
+            continue
+        if layer.base_ft <= altitude_ft <= layer.top_ft:
+            in_cloud_layers.append(layer)
+            continue
+        if min(
+            abs(altitude_ft - layer.base_ft),
+            abs(altitude_ft - layer.top_ft),
+        ) < cloud_clearance_ft:
+            marginal_layers.append(layer)
+    return tuple(in_cloud_layers), tuple(marginal_layers)
+
+
 def _check_airport_vfr(
     ctx: RouteContext,
     model: str,
-) -> tuple[AdvisoryStatus, str]:
+) -> tuple[AdvisoryStatus, str, DataState]:
     """Check departure and arrival airport conditions for VFR feasibility.
 
     Uses the flight category (VFR/MVFR/IFR/LIFR) which already encodes
     ceiling and visibility thresholds per aviation standards.
 
-    Returns (status, detail_fragment).
+    Returns (status, detail_fragment, two-endpoint data state).
     """
+    expected = {"departure", "arrival"}
     if ctx.airport_conditions is None:
-        return AdvisoryStatus.GREEN, ""
+        return (
+            AdvisoryStatus.GREEN,
+            "",
+            data_state_from_domains(
+                expected=expected,
+                evaluated=(),
+                complete=(),
+            ),
+        )
 
     dep = ctx.airport_conditions.departure
     arr = ctx.airport_conditions.arrival
@@ -71,11 +143,16 @@ def _check_airport_vfr(
 
     parts: list[str] = []
     worst = AdvisoryStatus.GREEN
+    evaluated: set[str] = set()
 
     loc = ctx.locale
-    for label_key, icao, cond in [("airport.dep", dep.icao, dep_cond), ("airport.arr", arr.icao, arr_cond)]:
+    for endpoint, label_key, icao, cond in [
+        ("departure", "airport.dep", dep.icao, dep_cond),
+        ("arrival", "airport.arr", arr.icao, arr_cond),
+    ]:
         if cond is None:
             continue
+        evaluated.add(endpoint)
         label = adv_t(label_key, loc)
         cat = cond.flight_category
         if cat in (FlightCategory.IFR, FlightCategory.LIFR):
@@ -86,7 +163,99 @@ def _check_airport_vfr(
             parts.append(f"{label} {icao} MVFR")
 
     detail = " | ".join(parts) if parts else ""
-    return worst, detail
+    return (
+        worst,
+        detail,
+        data_state_from_domains(
+            expected=expected,
+            evaluated=evaluated,
+            complete=evaluated,
+        ),
+    )
+
+
+def _assess_enroute_vfr(
+    ctx: RouteContext,
+    model: str,
+    cloud_clearance_ft: float,
+    altitude_ft: float,
+) -> list[VFRPointAssessment]:
+    """Assess every stable route point using the established VFR cloud predicate."""
+    assessments: list[VFRPointAssessment] = []
+    ordered_analyses = sorted(
+        ctx.analyses,
+        key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+    )
+
+    for rpa in ordered_analyses:
+        sounding = rpa.sounding.get(model)
+        if sounding is None:
+            assessments.append(
+                VFRPointAssessment(
+                    point_index=rpa.point_index,
+                    method_id=None,
+                    available=False,
+                    complete=False,
+                    in_cloud=False,
+                    marginal=False,
+                    cloud_samples=(),
+                )
+            )
+            continue
+
+        method_id = cloud_method_id(
+            sounding.cloud_method_effective,
+            ctx.cloud_method,
+        )
+        in_cloud_layers, marginal_layers = _classify_vfr_cloud_layers(
+            sounding,
+            altitude_ft,
+            cloud_clearance_ft,
+        )
+
+        if in_cloud_layers:
+            in_cloud = True
+            marginal = False
+            selected_layers = in_cloud_layers
+            severity = AdvisoryStatus.RED
+            reason_code = "vfr_cruise_imc"
+        elif marginal_layers:
+            in_cloud = False
+            marginal = True
+            selected_layers = marginal_layers
+            severity = AdvisoryStatus.AMBER
+            reason_code = "vfr_cloud_clearance"
+        else:
+            in_cloud = marginal = False
+            selected_layers = ()
+            severity = AdvisoryStatus.GREEN
+            reason_code = ""
+
+        samples = tuple(
+            EvidenceSample(
+                point_index=rpa.point_index,
+                severity=severity,
+                reason_code=reason_code,
+                metric_id="cloud_coverage",
+                method_id=method_id,
+                lower_altitude_ft=round(layer.base_ft),
+                upper_altitude_ft=round(layer.top_ft),
+            )
+            for layer in selected_layers
+        )
+        assessments.append(
+            VFRPointAssessment(
+                point_index=rpa.point_index,
+                method_id=method_id,
+                available=True,
+                complete=True,
+                in_cloud=in_cloud,
+                marginal=marginal,
+                cloud_samples=samples,
+            )
+        )
+
+    return assessments
 
 
 def _check_enroute_vfr(
@@ -105,42 +274,17 @@ def _check_enroute_vfr(
     - imc_count: points where the altitude is inside BKN/OVC cloud
     - marginal_count: points where cloud clearance < threshold (but not in cloud)
     """
-    total = 0
-    imc_count = 0
-    marginal_count = 0
-    clear_count = 0
-    cruise = altitude_ft
-
-    for rpa in ctx.analyses:
-        sounding = rpa.sounding.get(model)
-        if sounding is None:
-            continue
-        total += 1
-
-        in_cloud = False
-        marginal = False
-
-        for cl in sounding.cloud_layers:
-            if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
-                continue
-            # Check if cruise altitude is inside the cloud layer
-            if cl.base_ft <= cruise <= cl.top_ft:
-                in_cloud = True
-                break
-            # Check vertical clearance from cloud base or top
-            dist_to_base = abs(cruise - cl.base_ft)
-            dist_to_top = abs(cruise - cl.top_ft)
-            min_dist = min(dist_to_base, dist_to_top)
-            if min_dist < cloud_clearance_ft:
-                marginal = True
-
-        if in_cloud:
-            imc_count += 1
-        elif marginal:
-            marginal_count += 1
-        else:
-            clear_count += 1
-
+    assessments = _assess_enroute_vfr(
+        ctx,
+        model,
+        cloud_clearance_ft,
+        altitude_ft,
+    )
+    available = [assessment for assessment in assessments if assessment.available]
+    total = len(available)
+    imc_count = sum(assessment.in_cloud for assessment in available)
+    marginal_count = sum(assessment.marginal for assessment in available)
+    clear_count = total - imc_count - marginal_count
     return total, imc_count, marginal_count, clear_count
 
 
@@ -181,13 +325,89 @@ def _field_elevation_ft(ctx: RouteContext, distance_nm: float) -> float:
     return nearest.elevation_ft
 
 
+def _in_corridor(
+    distance_nm: float,
+    total_distance_nm: float,
+    corridor_nm: float,
+    phase: Literal["climb", "descent"],
+) -> bool:
+    if phase == "climb":
+        return distance_nm <= corridor_nm and distance_nm <= total_distance_nm / 2
+    return (
+        (total_distance_nm - distance_nm) <= corridor_nm
+        and distance_nm > total_distance_nm / 2
+    )
+
+
+def _grade_corridor_layer(
+    layer: EnhancedCloudLayer,
+    floor_ft: float,
+    cruise_ft: float,
+) -> bool:
+    """Existing grade predicate: a sub-cruise deck the flight must transit."""
+    return floor_ft < layer.top_ft < cruise_ft
+
+
+def _terminal_mitigation_layer(
+    layer: EnhancedCloudLayer,
+    floor_ft: float,
+    cruise_ft: float,
+) -> bool:
+    """Broader existing solver guard, including decks that reach cruise."""
+    return layer.top_ft > floor_ft and layer.base_ft < cruise_ft
+
+
+def _corridor_point_assessment(
+    ctx: RouteContext,
+    model: str,
+    rpa,
+    phase: Literal["climb", "descent"],
+    layer_predicate: Callable[[EnhancedCloudLayer, float, float], bool],
+) -> CorridorPointAssessment | None:
+    """Build the shared corridor record for either grade or mitigation use."""
+    sounding = rpa.sounding.get(model)
+    if sounding is None:
+        return None
+    distance_nm = rpa.distance_from_origin_nm or 0.0
+    floor_ft = _field_elevation_ft(ctx, distance_nm)
+    blocking_layers = tuple(
+        layer
+        for layer in sounding.cloud_layers
+        if layer.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+        and layer_predicate(layer, floor_ft, ctx.cruise_altitude_ft)
+    )
+    lowest_base_ft = min(
+        (layer.base_ft for layer in blocking_layers),
+        default=None,
+    )
+    return CorridorPointAssessment(
+        point_index=rpa.point_index,
+        method_id=cloud_method_id(
+            sounding.cloud_method_effective,
+            ctx.cloud_method,
+        ),
+        distance_nm=distance_nm,
+        phase=phase,
+        has_ovc=any(
+            layer.coverage == CloudCoverage.OVC for layer in blocking_layers
+        ),
+        has_bkn=any(
+            layer.coverage == CloudCoverage.BKN for layer in blocking_layers
+        ),
+        base_agl_ft=(
+            lowest_base_ft - floor_ft if lowest_base_ft is not None else None
+        ),
+        blocking_layers=blocking_layers,
+    )
+
+
 def _corridor_points(
     ctx: RouteContext,
     model: str,
     corridor_nm: float,
-    phase: str,
-) -> Iterator[tuple[float, bool, bool, float | None]]:
-    """Yield ``(distance_nm, has_ovc, has_bkn, base_agl_ft)`` for each corridor point.
+    phase: Literal["climb", "descent"],
+) -> Iterator[CorridorPointAssessment]:
+    """Yield stable corridor records using the established grade predicate.
 
     Single source of truth for both corridor membership and the transitable-deck
     condition, shared by the corridor grade (``_check_corridor_vfr``) and the
@@ -210,42 +430,28 @@ def _corridor_points(
     Points are yielded in ``ctx.analyses`` order (callers that need distance order
     sort the result).
     """
-    cruise = ctx.cruise_altitude_ft
     total = ctx.total_distance_nm
 
     for rpa in ctx.analyses:
         d = rpa.distance_from_origin_nm or 0.0
-        if phase == "climb":
-            in_corridor = d <= corridor_nm and d <= total / 2
-        else:
-            in_corridor = (total - d) <= corridor_nm and d > total / 2
-        if not in_corridor:
+        if not _in_corridor(d, total, corridor_nm, phase):
             continue
-        sounding = rpa.sounding.get(model)
-        if sounding is None:
-            continue
-        floor = _field_elevation_ft(ctx, d)
-        has_ovc = False
-        has_bkn = False
-        lowest_base_ft: float | None = None
-        for cl in sounding.cloud_layers:
-            if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
-                continue
-            if floor < cl.top_ft < cruise:
-                if cl.coverage == CloudCoverage.OVC:
-                    has_ovc = True
-                else:
-                    has_bkn = True
-                if lowest_base_ft is None or cl.base_ft < lowest_base_ft:
-                    lowest_base_ft = cl.base_ft
-        base_agl_ft = (lowest_base_ft - floor) if lowest_base_ft is not None else None
-        yield d, has_ovc, has_bkn, base_agl_ft
+        assessment = _corridor_point_assessment(
+            ctx,
+            model,
+            rpa,
+            phase,
+            _grade_corridor_layer,
+        )
+        if assessment is not None:
+            yield assessment
 
 
 def _check_corridor_vfr(
     ctx: RouteContext,
     model: str,
     corridor_nm: float,
+    records: tuple[CorridorPointAssessment, ...] | None = None,
 ) -> tuple[AdvisoryStatus, list[str]]:
     """Check the climb-out and descent corridors for transitable cloud decks.
 
@@ -272,13 +478,17 @@ def _check_corridor_vfr(
         ("climb", "vfr.corridor_climb", dep_icao, adv_t("airport.dep", loc)),
         ("descent", "vfr.corridor_descent", arr_icao, adv_t("airport.arr", loc)),
     )
+    if records is None:
+        records = tuple(
+            record
+            for phase in ("climb", "descent")
+            for record in _corridor_points(ctx, model, corridor_nm, phase)
+        )
 
     for phase, key, icao, fallback in phases:
-        has_ovc = False
-        has_bkn = False
-        for _d, p_ovc, p_bkn, _base in _corridor_points(ctx, model, corridor_nm, phase):
-            has_ovc = has_ovc or p_ovc
-            has_bkn = has_bkn or p_bkn
+        phase_records = [record for record in records if record.phase == phase]
+        has_ovc = any(record.has_ovc for record in phase_records)
+        has_bkn = any(record.has_bkn for record in phase_records)
 
         if has_ovc:
             worst = _worst_status(worst, AdvisoryStatus.RED)
@@ -318,15 +528,14 @@ def _vfr_cell_cost(sounding, alt_ft: float, cloud_clearance_ft: float) -> float:
     separation), else ``0``. Mirrors the per-point logic of ``_check_enroute_vfr`` so the
     solver's feasibility matches the advisory's own grading of the same cell.
     """
-    marginal = False
-    for cl in sounding.cloud_layers:
-        if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
-            continue
-        if cl.base_ft <= alt_ft <= cl.top_ft:
-            return INF
-        if min(abs(alt_ft - cl.base_ft), abs(alt_ft - cl.top_ft)) < cloud_clearance_ft:
-            marginal = True
-    return _MARGINAL_COST if marginal else 0.0
+    in_cloud_layers, marginal_layers = _classify_vfr_cloud_layers(
+        sounding,
+        alt_ft,
+        cloud_clearance_ft,
+    )
+    if in_cloud_layers:
+        return INF
+    return _MARGINAL_COST if marginal_layers else 0.0
 
 
 def _build_vfr_cost_model(
@@ -387,6 +596,7 @@ def _terminal_deck_span(
     cruise: float,
     lo_nm: float,
     hi_nm: float,
+    phase: Literal["climb", "descent"],
 ) -> tuple[int, float]:
     """Count route points carrying a real climb/descent deck within ``[lo_nm, hi_nm]``.
 
@@ -407,16 +617,15 @@ def _terminal_deck_span(
         d = rpa.distance_from_origin_nm or 0.0
         if not (lo_nm <= d <= hi_nm):
             continue
-        sounding = rpa.sounding.get(model)
-        if sounding is None:
-            continue
-        floor = _field_elevation_ft(ctx, d)
-        for cl in sounding.cloud_layers:
-            if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
-                continue
-            if cl.top_ft > floor and cl.base_ft < cruise:
-                dists.append(d)
-                break
+        assessment = _corridor_point_assessment(
+            ctx,
+            model,
+            rpa,
+            phase,
+            _terminal_mitigation_layer,
+        )
+        if assessment is not None and assessment.blocking_layers:
+            dists.append(d)
     if not dists:
         return 0, 0.0
     return len(dists), max(dists) - min(dists)
@@ -544,7 +753,14 @@ def _solver_mitigations(
         if (
             climb is not None
             and climb.from_nm <= max_reposition_nm
-            and _is_real_terminal_deck(*_terminal_deck_span(ctx, model, cruise, 0.0, climb.to_nm))
+            and _is_real_terminal_deck(*_terminal_deck_span(
+                ctx,
+                model,
+                cruise,
+                0.0,
+                climb.to_nm,
+                "climb",
+            ))
         ):
             dist = round(climb.from_nm)
             mitigations.append(Mitigation(
@@ -568,7 +784,14 @@ def _solver_mitigations(
         if descent is not None:
             before = total - descent.to_nm
             if before <= max_reposition_nm and _is_real_terminal_deck(
-                *_terminal_deck_span(ctx, model, cruise, descent.from_nm, total)
+                *_terminal_deck_span(
+                    ctx,
+                    model,
+                    cruise,
+                    descent.from_nm,
+                    total,
+                    "descent",
+                )
             ):
                 dist = round(before)
                 mitigations.append(Mitigation(
@@ -582,6 +805,131 @@ def _solver_mitigations(
                 ))
 
     return mitigations
+
+
+_AIRPORT_METHOD_ID = "airport_conditions"
+_PRECIP_METHOD_ID = "nwp_precipitation_profile"
+
+
+def _corridor_data_state(
+    ctx: RouteContext,
+    corridor_nm: float,
+    records: tuple[CorridorPointAssessment, ...],
+    route_assessments: list[VFRPointAssessment],
+) -> DataState:
+    """Classify corridor coverage from route-cloud and terrain availability."""
+    phases: tuple[Literal["climb", "descent"], ...] = ("climb", "descent")
+    expected_by_phase = {
+        phase: {
+            rpa.point_index
+            for rpa in ctx.analyses
+            if _in_corridor(
+                rpa.distance_from_origin_nm or 0.0,
+                ctx.total_distance_nm,
+                corridor_nm,
+                phase,
+            )
+        }
+        for phase in phases
+    }
+    evaluated_by_phase = {
+        phase: {
+            record.point_index
+            for record in records
+            if record.phase == phase
+        }
+        for phase in phases
+    }
+    route_complete = {
+        assessment.point_index
+        for assessment in route_assessments
+        if assessment.complete
+    }
+    elevation_usable = ctx.elevation is not None and bool(ctx.elevation.points)
+    evaluated_phases = {
+        phase for phase, point_indices in evaluated_by_phase.items() if point_indices
+    }
+    complete_phases = {
+        phase
+        for phase in phases
+        if elevation_usable
+        and expected_by_phase[phase]
+        and expected_by_phase[phase] <= evaluated_by_phase[phase]
+        and expected_by_phase[phase] <= route_complete
+    }
+    return data_state_from_domains(
+        expected=phases,
+        evaluated=evaluated_phases,
+        complete=complete_phases,
+    )
+
+
+def _corridor_evidence_samples(
+    records: tuple[CorridorPointAssessment, ...],
+) -> tuple[EvidenceSample, ...]:
+    samples: list[EvidenceSample] = []
+    for record in records:
+        reason_code = (
+            "vfr_climb_deck"
+            if record.phase == "climb"
+            else "vfr_descent_deck"
+        )
+        for layer in record.blocking_layers:
+            samples.append(
+                EvidenceSample(
+                    point_index=record.point_index,
+                    severity=(
+                        AdvisoryStatus.RED
+                        if layer.coverage == CloudCoverage.OVC
+                        else AdvisoryStatus.AMBER
+                    ),
+                    reason_code=reason_code,
+                    metric_id="cloud_coverage",
+                    method_id=record.method_id,
+                    lower_altitude_ft=round(layer.base_ft),
+                    upper_altitude_ft=round(layer.top_ft),
+                )
+            )
+    return tuple(samples)
+
+
+def _precip_evidence_samples(
+    assessment: EnroutePrecipAssessment,
+) -> tuple[EvidenceSample, ...]:
+    """Remap the shared precipitation evidence for the capped VFR axis."""
+    return tuple(
+        replace(
+            sample,
+            severity=(
+                AdvisoryStatus.AMBER
+                if sample.severity == AdvisoryStatus.RED
+                else sample.severity
+            ),
+            reason_code="vfr_precip_visibility",
+            metric_id="precipitation_mm",
+            method_id=_PRECIP_METHOD_ID,
+        )
+        for sample in assessment.evidence_samples
+        if sample.severity != AdvisoryStatus.GREEN
+    )
+
+
+def _primary_method_for_status(
+    raw_status: AdvisoryStatus,
+    axes: tuple[tuple[AdvisoryStatus, set[str | None]], ...],
+) -> str | None:
+    """Choose one controlling method, or the explicit composite tie token."""
+    controlling_methods: set[str] = set()
+    for status, methods in axes:
+        if status == raw_status:
+            controlling_methods.update(
+                method for method in methods if method is not None
+            )
+    if not controlling_methods:
+        return None
+    if len(controlling_methods) > 1:
+        return "vfr_composite"
+    return next(iter(controlling_methods))
 
 
 @register
@@ -692,54 +1040,115 @@ class VFRFeasibilityEvaluator:
 
         per_model: list[ModelAdvisoryResult] = []
 
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
+
         for model in ctx.models:
             # 1. Airport conditions
-            airport_status, airport_detail = _check_airport_vfr(ctx, model)
+            airport_status, airport_detail, airport_state = _check_airport_vfr(
+                ctx,
+                model,
+            )
 
             # 2. En-route cloud clearance
-            total, imc_count, marginal_count, _ = _check_enroute_vfr(
-                ctx, model, cloud_clearance_ft, ctx.cruise_altitude_ft
+            route_assessments = _assess_enroute_vfr(
+                ctx,
+                model,
+                cloud_clearance_ft,
+                ctx.cruise_altitude_ft,
             )
+            evaluated = {
+                assessment.point_index
+                for assessment in route_assessments
+                if assessment.available
+            }
+            complete = {
+                assessment.point_index
+                for assessment in route_assessments
+                if assessment.complete
+            }
+            imc_points = {
+                assessment.point_index
+                for assessment in route_assessments
+                if assessment.available and assessment.in_cloud
+            }
+            marginal_points = {
+                assessment.point_index
+                for assessment in route_assessments
+                if assessment.available and assessment.marginal
+            }
+            affected = imc_points | marginal_points
+            cloud_samples = tuple(
+                sample
+                for assessment in route_assessments
+                for sample in assessment.cloud_samples
+            )
+            available_route_methods = {
+                assessment.method_id
+                for assessment in route_assessments
+                if assessment.available
+            }
+            total = len(evaluated)
+            imc_count = len(imc_points)
+            marginal_count = len(marginal_points)
 
             # 3. Climb-out / descent corridor decks (BKN/OVC below cruise near airports)
-            corridor_status, corridor_parts = _check_corridor_vfr(
-                ctx, model, corridor_nm
+            corridor_records = tuple(
+                record
+                for phase in ("climb", "descent")
+                for record in _corridor_points(ctx, model, corridor_nm, phase)
             )
+            corridor_status, corridor_parts = _check_corridor_vfr(
+                ctx,
+                model,
+                corridor_nm,
+                corridor_records,
+            )
+            corridor_state = _corridor_data_state(
+                ctx,
+                corridor_nm,
+                corridor_records,
+                route_assessments,
+            )
+            corridor_samples = _corridor_evidence_samples(corridor_records)
+            available_corridor_methods = {
+                record.method_id
+                for record in corridor_records
+            }
 
             loc = ctx.locale
-            if (
-                total == 0
-                and airport_status == AdvisoryStatus.GREEN
-                and not airport_detail
-                and corridor_status == AdvisoryStatus.GREEN
-            ):
-                per_model.append(ModelAdvisoryResult.build(
-                    model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=0,
-                    total_distance_nm=ctx.total_distance_nm,
-                ))
-                continue
 
             # 4. Determine en-route status
-            affected = imc_count + marginal_count
             enroute_status = _enroute_vfr_status(
                 total, imc_count, marginal_count, imc_pct_amber, imc_pct_red
             )
-            enroute_detail = ""
+            if enroute_status == AdvisoryStatus.RED:
+                route_methods = {
+                    sample.method_id
+                    for sample in cloud_samples
+                    if sample.reason_code == "vfr_cruise_imc"
+                }
+            elif enroute_status == AdvisoryStatus.AMBER:
+                route_methods = {sample.method_id for sample in cloud_samples}
+            else:
+                route_methods = available_route_methods
 
-            if total > 0 and affected > 0:
-                ext = format_extent(affected, total, ctx.total_distance_nm)
-                if enroute_status == AdvisoryStatus.RED:
-                    enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
-                elif enroute_status == AdvisoryStatus.AMBER:
-                    if marginal_count > 0 and imc_count > 0:
-                        enroute_detail = adv_t("vfr.imc_marginal", loc, extent=ext)
-                    elif imc_count > 0:
-                        enroute_detail = adv_t("vfr.imc_over", loc, extent=ext)
-                    else:
-                        enroute_detail = adv_t("vfr.marginal", loc, extent=ext)
-                else:  # GREEN status but some points affected → minor clearance issues
-                    enroute_detail = adv_t("vfr.minor", loc, extent=ext)
+            if corridor_status == AdvisoryStatus.RED:
+                corridor_methods = {
+                    record.method_id
+                    for record in corridor_records
+                    if record.has_ovc
+                }
+            elif corridor_status == AdvisoryStatus.AMBER:
+                corridor_methods = {
+                    record.method_id
+                    for record in corridor_records
+                    if record.has_bkn
+                }
+            else:
+                corridor_methods = available_corridor_methods
 
             # 5. En-route precipitation (visibility proxy) — capped at AMBER
             # in the composite; the standalone advisory grades it fully.
@@ -753,15 +1162,68 @@ class VFRFeasibilityEvaluator:
             precip_status = precip_assessment.status
             precip_detail = precip_assessment.detail
             precip_signal = precip_assessment.has_signal
-            # Old pack without precip data (no signal / UNAVAILABLE) → treat as
-            # GREEN in the composite rather than penalising a missing field.
+            # Missing precipitation is neutral to the raw VFR grade. Its missing
+            # data state still participates in the final completeness guard.
             if not precip_signal or precip_status == AdvisoryStatus.UNAVAILABLE:
                 precip_status, precip_detail = AdvisoryStatus.GREEN, ""
             elif precip_status == AdvisoryStatus.RED:
                 precip_status = AdvisoryStatus.AMBER
+            precip_samples = _precip_evidence_samples(precip_assessment)
+            precip_methods = (
+                {_PRECIP_METHOD_ID}
+                if precip_assessment.summary.data_state != "unavailable"
+                else set()
+            )
+
+            summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=affected,
+                evidence_samples=(
+                    *cloud_samples,
+                    *corridor_samples,
+                    *precip_samples,
+                ),
+            )
+            combined_state = combine_data_states(
+                summary.data_state,
+                corridor_state,
+                airport_state,
+                precip_assessment.summary.data_state,
+            )
+            summary = replace(summary, data_state=combined_state)
+
+            enroute_detail = ""
+            if summary.total_points > 0 and summary.affected_points > 0:
+                extent = summary.format_extent()
+                if enroute_status == AdvisoryStatus.RED:
+                    enroute_detail = adv_t("vfr.imc_over", loc, extent=extent)
+                elif enroute_status == AdvisoryStatus.AMBER:
+                    if marginal_count > 0 and imc_count > 0:
+                        enroute_detail = adv_t(
+                            "vfr.imc_marginal",
+                            loc,
+                            extent=extent,
+                        )
+                    elif imc_count > 0:
+                        enroute_detail = adv_t(
+                            "vfr.imc_over",
+                            loc,
+                            extent=extent,
+                        )
+                    else:
+                        enroute_detail = adv_t(
+                            "vfr.marginal",
+                            loc,
+                            extent=extent,
+                        )
+                else:
+                    enroute_detail = adv_t("vfr.minor", loc, extent=extent)
 
             # 6. Combine airport + en-route + corridor + precipitation
-            status = _worst_status(
+            raw_status = _worst_status(
                 airport_status, enroute_status, corridor_status, precip_status,
             )
 
@@ -775,7 +1237,7 @@ class VFRFeasibilityEvaluator:
                 detail_parts.append(precip_detail)
 
             if not detail_parts:
-                if total > 0:
+                if summary.total_points > 0:
                     detail = adv_t("vfr.throughout", loc)
                 else:
                     detail = adv_t("vfr.airports_ok", loc)
@@ -794,11 +1256,31 @@ class VFRFeasibilityEvaluator:
                 enroute_status, loc,
             )
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=affected, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-                mitigations=mitigations,
-            ))
+            primary_method_id = _primary_method_for_status(
+                raw_status,
+                (
+                    (
+                        airport_status,
+                        ({_AIRPORT_METHOD_ID} if airport_state != "unavailable" else set()),
+                    ),
+                    (enroute_status, route_methods),
+                    (corridor_status, corridor_methods),
+                    (precip_status, precip_methods),
+                ),
+            )
+            missing_detail = adv_t(
+                "no_data" if combined_state == "unavailable" else "partial_data",
+                loc,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=raw_status,
+                    detail=detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=primary_method_id,
+                    mitigations=mitigations,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("vfr_feasibility", per_model, params)
