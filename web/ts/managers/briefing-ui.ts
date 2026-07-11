@@ -44,6 +44,7 @@ import {
   riskCssClass,
   variableToMetricId,
 } from '../helpers/metrics-helper';
+import { formatHeading } from '../units';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
 import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl, flightTitle, flightRouteCompact } from '../utils';
@@ -1064,9 +1065,8 @@ function windTooltip(rwyId: string | null, crosswind: number | null): string {
 
 function formatWindStr(dir: number | null, speed: number | null, gust: number | null): string {
   if (dir == null || speed == null) return '';
-  const d = Math.round(dir / 10) * 10;
   const g = gust != null ? `G${Math.round(gust)}` : '';
-  return `${String(d).padStart(3, '0')}@${Math.round(speed)}${g}`;
+  return `${formatHeading(dir, 10)}@${Math.round(speed)}${g}`;
 }
 
 function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | undefined): string {
@@ -3051,6 +3051,10 @@ function formatMetricValue(metricId: string, value: number): string {
   // IDs that should show 1 decimal
   if (metricId === 'lifted_index' || metricId === 'showalter_index') {
     return value.toFixed(1);
+  }
+  // Compass headings: zero-pad to 3 digits (10° → 010)
+  if (metricId === 'wind_direction_deg') {
+    return formatHeading(value);
   }
   // IDs that show integer with comma formatting
   if (metricId === 'cape_surface_jkg' && Math.abs(value) >= 1000) {

@@ -119,6 +119,14 @@ export function qnhDisplayValue(
   return region === 'us' ? hpa / HPA_PER_INHG : hpa;
 }
 
+/** Zero-pad a compass heading/bearing to 3 digits. Rounds to nearest `step`° first
+ *  (step=10 for wind chips/METAR/TAF, step=1 elsewhere). Does NOT append the ° symbol;
+ *  call sites append °/°T/@ themselves. */
+export function formatHeading(deg: number, step = 1): string {
+  const rounded = Math.round(deg / step) * step;
+  return String(rounded).padStart(3, '0');
+}
+
 /** Format a temperature in Celsius. (Not yet wired into surfaces.) */
 export function formatTemperature(
   celsius: number | null | undefined,

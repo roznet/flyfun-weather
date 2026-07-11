@@ -9,7 +9,7 @@
 
 import type { VizPoint, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizSurfaceObscuration } from '../types';
 import { fmtFL } from '../interaction-utils';
-import { formatVisibility } from '../../units';
+import { formatVisibility, formatHeading } from '../../units';
 import { getActiveTheme } from './theme';
 import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity } from '../scales';
 import { coverageToPct } from './layers/cloud-bands-factory';
@@ -314,7 +314,7 @@ const sunAtPoint: LayerTooltipDef = {
   getZones: (p): SunZone[] =>
     p.sun ? [{ baseFt: -1e6, topFt: 1e6, ...p.sun }] : [],
   formatLine: (z: SunZone) => {
-    const az = `az ${Math.round(z.azimuthDeg)}°T`;
+    const az = `az ${formatHeading(z.azimuthDeg)}°T`;
     if (z.elevationDeg <= 0) {
       return `${Math.abs(z.elevationDeg).toFixed(0)}° below horizon · ${az}`;
     }
