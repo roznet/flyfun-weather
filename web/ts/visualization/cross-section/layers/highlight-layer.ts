@@ -26,9 +26,13 @@ import type { HighlightRegion, HighlightSeverity } from '../../../types/advisori
 import { cssVar, isDarkTheme } from '../../interaction-utils';
 import { HIGHLIGHT_LAYER_ID } from '../advisory-highlights';
 
-/** Ribbon strip geometry within the bottom margin. */
+/** Ribbon strip geometry within the bottom margin. The ribbon occupies
+ *  [plotArea.bottom + RIBBON_GAP, + RIBBON_GAP + RIBBON_HEIGHT] = [+2, +8], which
+ *  sits ABOVE the distance-axis labels — axes.ts pushes those to DISTANCE_LABEL_DY
+ *  (+11) / WAYPOINT_LABEL_DY (+25) to keep this strip clear (#373). Keep in sync
+ *  with those offsets so the ribbon never paints over the tick labels. */
 const RIBBON_HEIGHT = 6;
-const RIBBON_GAP = 6;      // gap below the plot area before the ribbon
+const RIBBON_GAP = 2;      // gap below the plot area before the ribbon
 const CUTOUT_OUTLINE_WIDTH = 1.5;
 
 /** Theme-aware severity colour, aligned with the advisory status colours
