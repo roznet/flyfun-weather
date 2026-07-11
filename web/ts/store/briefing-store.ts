@@ -213,7 +213,23 @@ export interface BriefingState {
     focus: ActiveAdvisoryFocus,
     presetId: string,
     view: ResolvedView,
+    layout?: VizLayout,
   ) => void;
+  /** Atomically enter the compare surface with all advisory-requested models. */
+  openAdvisoryCompare: (
+    enableModels: readonly string[],
+    compareLayer: string | null,
+  ) => void;
+  /** Atomically apply the DD method lens, model, layout, and evidence focus.
+   * Only the sticky layout is persisted; evidence directives remain transient. */
+  focusAdvisoryMethodContext: (
+    focus: ActiveAdvisoryFocus,
+    presetId: string,
+    view: ResolvedView,
+    layout: VizLayout,
+  ) => void;
+  /** Atomically select the fronts model and reveal the fronts map. */
+  openAdvisoryFrontsMap: (model?: string) => void;
   clearAdvisoryFocus: () => void;
   /** Drop the active-preset label to "Custom" after a user-initiated Skew-T
    *  edit (overlay toggle / side-panel change). No-op when already Custom. */
@@ -645,8 +661,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setSelectedModel: (model: string) => {
+    const current = get();
+    if (current.selectedModel === model && current.activeAdvisoryFocus === null) return;
     set({ selectedModel: model, activeAdvisoryFocus: null });
-    try { localStorage.setItem('wb_selectedModel', model); } catch { /* ignore */ }
+    if (current.selectedModel !== model) {
+      try { localStorage.setItem('wb_selectedModel', model); } catch { /* ignore */ }
+    }
   },
 
   setSelectedPoint: (index: number) => {
@@ -1070,7 +1090,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setLayout: (layout: VizLayout) => {
-    const updated = { ...get().vizSettings, layout };
+    const current = get().vizSettings;
+    if (current.layout === layout) return;
+    const updated = { ...current, layout };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
@@ -1094,7 +1116,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setMapFrontsVisible: (visible: boolean) => {
-    const updated = { ...get().vizSettings, mapFrontsVisible: visible };
+    const current = get().vizSettings;
+    if (current.mapFrontsVisible === visible) return;
+    const updated = { ...current, mapFrontsVisible: visible };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
@@ -1113,13 +1137,16 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setCompareLayer: (layerId: string) => {
-    const updated = { ...get().vizSettings, compareLayer: layerId };
+    const current = get().vizSettings;
+    if (current.compareLayer === layerId) return;
+    const updated = { ...current, compareLayer: layerId };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
 
   setCompareModel: (model: string, enabled: boolean) => {
     const current = get().vizSettings;
+    if (current.compareModels[model] === enabled) return;
     const compareModels = { ...current.compareModels, [model]: enabled };
     const updated = { ...current, compareModels };
     set({ vizSettings: updated });
@@ -1194,8 +1221,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     window.dispatchEvent(new Event('theme-changed')); // existing re-render trigger
   },
 
-  focusAdvisory: (focus, presetId, view) => {
-    const next = resolvedVizSettings(get().vizSettings, presetId, view);
+  focusAdvisory: (focus, presetId, view, layout) => {
+    const current = get().vizSettings;
+    const next = {
+      ...resolvedVizSettings(current, presetId, view),
+      ...(layout === undefined ? {} : { layout }),
+    };
     // One state write is intentional: subscribers must never render a preset for
     // one model while still carrying another model's evidence identity.
     set({
@@ -1204,6 +1235,67 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       activeAdvisoryFocus: focus,
     });
     try { localStorage.setItem('wb_selectedModel', focus.model); } catch { /* ignore */ }
+    if (layout !== undefined) {
+      const sticky = loadVizSettings();
+      if (sticky.layout !== layout) saveVizSettings({ ...sticky, layout });
+    }
+  },
+
+  openAdvisoryCompare: (enableModels, compareLayer) => {
+    const current = get().vizSettings;
+    const compareModels = { ...current.compareModels };
+    for (const model of enableModels) compareModels[model] = true;
+    const updated: VizSettings = {
+      ...current,
+      layout: 'compare',
+      compareLayer: compareLayer ?? current.compareLayer,
+      compareModels,
+    };
+    set({ vizSettings: updated, activeAdvisoryFocus: null });
+    saveVizSettings({
+      ...loadVizSettings(),
+      layout: updated.layout,
+      compareLayer: updated.compareLayer,
+      compareModels: updated.compareModels,
+    });
+  },
+
+  focusAdvisoryMethodContext: (focus, presetId, view, layout) => {
+    const current = get().vizSettings;
+    const next: VizSettings = {
+      ...resolvedVizSettings(current, presetId, view),
+      layout,
+    };
+    set({
+      selectedModel: focus.model,
+      vizSettings: next,
+      activeAdvisoryFocus: focus,
+    });
+    try { localStorage.setItem('wb_selectedModel', focus.model); } catch { /* ignore */ }
+    const sticky = loadVizSettings();
+    if (sticky.layout !== layout) saveVizSettings({ ...sticky, layout });
+  },
+
+  openAdvisoryFrontsMap: (model) => {
+    const current = get();
+    const updated: VizSettings = {
+      ...current.vizSettings,
+      layout: 'map',
+      mapFrontsVisible: true,
+    };
+    set({
+      selectedModel: model ?? current.selectedModel,
+      vizSettings: updated,
+      activeAdvisoryFocus: null,
+    });
+    if (model !== undefined && model !== current.selectedModel) {
+      try { localStorage.setItem('wb_selectedModel', model); } catch { /* ignore */ }
+    }
+    saveVizSettings({
+      ...loadVizSettings(),
+      layout: updated.layout,
+      mapFrontsVisible: updated.mapFrontsVisible,
+    });
   },
 
   clearAdvisoryFocus: () => {

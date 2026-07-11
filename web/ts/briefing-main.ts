@@ -18,6 +18,10 @@ import { getVariableById } from './visualization/skewt/variable-panel';
 import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper';
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { openFlexibilityExplainer } from './components/flexibility-explainer';
+import {
+  BriefingAirportProfileDrawer,
+  SUPPORTED_AIRPORT_PROFILE_MODELS,
+} from './components/briefing-airport-profile-drawer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
@@ -56,7 +60,10 @@ import { getActiveTheme } from './visualization/cross-section/theme';
 import { startBriefingTour, maybeAutoStartBriefingTour } from './tour/briefing-tour';
 import { maybeOfferTour } from './tour/tour-offer';
 import { initBriefingLayout } from './managers/sidebar-layout';
-import { actionForAdvisory } from './visualization/advisory-actions';
+import {
+  planAdvisoryAction,
+  type AdvisoryActionContext,
+} from './visualization/advisory-actions';
 import {
   effectiveEmphasis,
   focusedMethodId,
@@ -123,6 +130,7 @@ export function createPointSectionsRenderOnce(effect: () => void): () => void {
 // level) and clipped to the route corridor by the renderer. Switching the model
 // re-fetches.
 let lastFrontLinesKey = '';
+let lastFrontLinesRender: Promise<boolean> = Promise.resolve(true);
 
 interface FrontLevelSpec { level: number; hour: number; }
 
@@ -152,10 +160,10 @@ function updateMapFrontLines(
   model: string,
   visible: boolean,
   renderer: RouteMapRenderer,
-): void {
+): Promise<boolean> {
   // Layer off: renderer.showFronts already suppresses drawing; keep any cached
   // lines so re-enabling is instant (no refetch).
-  if (!visible) return;
+  if (!visible) return Promise.resolve(false);
   const spec = frontLineSpec(routeFronts, model);
   if (!spec) {
     if (lastFrontLinesKey !== '') {
@@ -163,25 +171,28 @@ function updateMapFrontLines(
       renderer.setFrontLines(null);
       renderer.refreshFronts();
     }
-    return;
+    lastFrontLinesRender = Promise.resolve(true);
+    return lastFrontLinesRender;
   }
   const key = `${model}|${spec.init}|${spec.gate}|`
     + spec.levels.map(l => `${l.level}@${l.hour}`).join(',');
-  if (key === lastFrontLinesKey) return;  // already fetched/drawn for this slice
+  if (key === lastFrontLinesKey) return lastFrontLinesRender;
   lastFrontLinesKey = key;
   renderer.setFrontLines(null);
   renderer.refreshFronts();  // drop the previous model's lines immediately
   // One request per level; tag each axis with its level for altitude styling.
-  Promise.all(spec.levels.map(l =>
+  lastFrontLinesRender = Promise.all(spec.levels.map(l =>
     fetchHewsonFronts({ model, init: spec.init, level: l.level, hour: l.hour, gate: spec.gate, minLengthKm: 150 })
       .then(resp => resp.fronts.map((f): MapFrontLine => ({ ...f, level_hPa: l.level })))
       .catch(() => [] as MapFrontLine[]),
   )).then((perLevel) => {
-    if (lastFrontLinesKey !== key) return;  // superseded by a newer selection
+    if (lastFrontLinesKey !== key) return false;  // superseded by a newer selection
     const all = perLevel.flat();
     renderer.setFrontLines(all.length ? all : null);
     renderer.refreshFronts();
+    return true;
   });
+  return lastFrontLinesRender;
 }
 
 
@@ -262,6 +273,9 @@ async function init(): Promise<void> {
   });
 
   const store = briefingStore;
+  const airportProfileDrawer = new BriefingAirportProfileDrawer();
+  let fitFrontsAfterRender = false;
+  let frontsFitIntentEpoch = 0;
 
   // --- Preset wiring (#219) ---
   // Generalized preset dropdown handler: advisory presets are method-resolved
@@ -278,42 +292,150 @@ async function init(): Promise<void> {
     store.getState().setVizPreset(presetId);
   }
 
-  // Typed advisory action handler. Task 12 implements the spatial preset-focus
-  // action only; compare/method/airport/fronts actions are intentionally left for
-  // Task 13. Exact model identity is mandatory — never substitute another model
-  // or union another forecast's evidence geometry.
-  function handleAdvisoryAction(advisoryId: string, requestedModel?: string): void {
-    const action = actionForAdvisory(advisoryId);
-    if (action?.kind !== 'preset-focus') return;
+  function advisoryActionContext(state: BriefingState): AdvisoryActionContext {
+    return {
+      selectedModel: state.selectedModel,
+      availableModels: [...(state.routeAnalyses?.models ?? [])],
+      layout: state.vizSettings.layout,
+      compareLayer: state.vizSettings.compareLayer,
+      hasFronts: state.routeFronts !== null,
+      supportedAirportProfileModels: [...SUPPORTED_AIRPORT_PROFILE_MODELS],
+    };
+  }
 
+  function scrollToVisualization(): void {
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    document.getElementById('viz-section')?.scrollIntoView({
+      behavior: reducedMotion ? 'auto' : 'smooth',
+      block: 'start',
+    });
+  }
+
+  function showActionNote(key: string, params: Record<string, string>): void {
+    let note = translatedOrFallback(key, 'No direct comparison layer is available for this evidence.');
+    for (const [name, value] of Object.entries(params)) {
+      note = note.replace(`{${name}}`, value);
+    }
+    showPopupContent(`<div class="popup-header"><h3>${escapeHtml(note)}</h3></div>`);
+  }
+
+  // Typed advisory action handler. All special-action semantics come from the
+  // pure planner; this dispatch layer only applies the returned directives.
+  function handleAdvisoryAction(advisoryId: string, requestedModel?: string): void {
     const state = store.getState();
     const manifest = getEffectiveAdvisories(state);
     const advisory = manifest?.advisories.find(
       (candidate) => candidate.advisory_id === advisoryId,
     );
     if (!advisory) return;
+    const plan = planAdvisoryAction(
+      advisory,
+      advisoryActionContext(state),
+      requestedModel,
+    );
 
-    const representativeModel = advisory.representative_model || null;
-    const model = requestedModel !== undefined
-      ? requestedModel
-      : (representativeModel ?? state.selectedModel);
-    if (!advisory.per_model.some((result) => result.model === model)) return;
+    if (plan.disabledReasonKey) return;
 
-    const preset = getPresetForAdvisory(advisoryId);
-    if (!preset) return;
-    const view = resolveAdvisoryPreset(preset, preferredMethods);
-    store.getState().focusAdvisory({
-      advisoryId,
-      model,
-      highlightSurfaces: [...(view.highlightSurfaces ?? [])],
-      emphasizeLayers: [...(view.emphasizeLayers ?? [])],
-      // Aggregate actions on old packs may display the current model's preset,
-      // but that model is not representative evidence attribution.
-      modelAttributionKnown: requestedModel !== undefined || representativeModel !== null,
-    }, preset.id, view);
+    if (plan.kind === 'preset-focus') {
+      if (!plan.model || !advisory.per_model.some(result => result.model === plan.model)) return;
+      const preset = getPresetForAdvisory(advisoryId);
+      if (!preset) return;
+      const view = resolveAdvisoryPreset(preset, preferredMethods);
+      store.getState().focusAdvisory({
+        advisoryId,
+        model: plan.model,
+        highlightSurfaces: [...(view.highlightSurfaces ?? [])],
+        emphasizeLayers: [...(view.emphasizeLayers ?? [])],
+        modelAttributionKnown: requestedModel !== undefined
+          || advisory.representative_model != null,
+      }, preset.id, view, state.vizSettings.layout === 'map' ? 'split' : undefined);
+      scrollToVisualization();
+      return;
+    }
 
-    if (state.vizSettings.layout === 'map') store.getState().setLayout('split');
-    document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (plan.kind === 'compare-models') {
+      store.getState().openAdvisoryCompare(plan.enableModels, plan.compareLayer);
+      scrollToVisualization();
+      if (plan.noteKey) showActionNote(plan.noteKey, plan.noteParams);
+      return;
+    }
+
+    if (plan.kind === 'method-context') {
+      if (
+        !plan.model
+        || !state.routeAnalyses?.models.includes(plan.model)
+        || !advisory.per_model.some(result => result.model === plan.model)
+      ) return;
+      const enabledLayers: Record<string, boolean> = {};
+      const hasCloudComparison = plan.layerOverrides['square-cloud-bands'] === true
+        || plan.layerOverrides['square-nwp-cloud-bands'] === true;
+      if (hasCloudComparison) {
+        for (const layer of getAllLayers()) {
+          if (layer.group === 'clouds') enabledLayers[layer.id] = false;
+        }
+      }
+      Object.assign(enabledLayers, plan.layerOverrides);
+      const emphasizeLayers = [
+        ...Object.entries(plan.layerOverrides)
+          .filter(([, enabled]) => enabled)
+          .map(([layerId]) => layerId),
+        'terrain',
+        'cruise-altitude',
+      ];
+      store.getState().focusAdvisoryMethodContext({
+        advisoryId,
+        model: plan.model,
+        highlightSurfaces: ['cross-section', 'route-graph', 'route-map'],
+        emphasizeLayers,
+        modelAttributionKnown: true,
+      }, 'dd_nwp_agreement', {
+        enabledLayers,
+        highlightSurfaces: ['cross-section', 'route-graph', 'route-map'],
+        emphasizeLayers,
+      }, plan.layout ?? state.vizSettings.layout);
+      scrollToVisualization();
+      return;
+    }
+
+    if (plan.kind === 'airport-profile') {
+      if (!state.flight || !plan.model || !plan.airportProfileModel) return;
+      const [departureIcao, ...remainingIcaos] = state.flight.waypoints;
+      const arrivalIcao = remainingIcaos[remainingIcaos.length - 1];
+      const departureMs = Date.parse(state.flight.departure_time);
+      const durationHours = state.flight.flight_duration_hours;
+      if (
+        !departureIcao
+        || !arrivalIcao
+        || !Number.isFinite(departureMs)
+        || !Number.isFinite(durationHours)
+      ) return;
+      const departureTime = new Date(departureMs).toISOString();
+      const arrivalTime = new Date(
+        departureMs + durationHours * 3_600_000,
+      ).toISOString();
+      store.getState().clearAdvisoryFocus();
+      airportProfileDrawer.open({
+        departureIcao,
+        arrivalIcao,
+        departureTime,
+        arrivalTime,
+        advisoryModel: plan.model,
+        availableModels: [...(state.routeAnalyses?.models ?? [])],
+      });
+      return;
+    }
+
+    if (plan.kind === 'fronts-map') {
+      const model = (
+        plan.model
+        && plan.model !== 'all'
+        && state.routeAnalyses?.models.includes(plan.model)
+      ) ? plan.model : undefined;
+      frontsFitIntentEpoch += 1;
+      fitFrontsAfterRender = true;
+      store.getState().openAdvisoryFrontsMap(model);
+      scrollToVisualization();
+    }
   }
 
   // URL params — declared before applyDeepLink() so the closure never reads it
@@ -450,11 +572,8 @@ async function init(): Promise<void> {
     ui.renderSoundingAnalysis(state.snapshot, state.routeAnalyses, state.selectedPointIndex, state.displayMode, state.tierVisibility, state.vizSettings.enabledLayers, effectiveCruiseAlt);
     // Dynamic Skew-T (canvas), compare, or static MetPy
     if (skewtViewMode === 'dynamic') {
-      lastSkewtPointIndex = null; // force re-fetch when point/model changes
-      lastSkewtModel = null;
       loadSkewtData(state);
     } else if (skewtViewMode === 'compare') {
-      lastSkewtCompareKey = null; // force re-fetch
       loadSkewtCompareData(state);
     } else {
       ui.renderSkewTs(state.flight, state.currentPack, state.snapshot, state.selectedModel, state.routeAnalyses, state.selectedPointIndex);
@@ -493,7 +612,7 @@ async function init(): Promise<void> {
     // Re-render advisories now that profiles are available for the selector
     const s = store.getState();
     if (s.flight) {
-      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s));
+      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s), advisoryActionContext(s));
     }
   }).catch(err => console.error('Failed to fetch profiles:', err));
 
@@ -504,7 +623,7 @@ async function init(): Promise<void> {
     setLiveAdvisoryCatalog(entries);
     const s = store.getState();
     if (s.flight) {
-      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s));
+      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s), advisoryActionContext(s));
     }
   }).catch(err => console.error('Failed to fetch advisory catalog:', err));
 
@@ -851,6 +970,11 @@ async function init(): Promise<void> {
     if (!focus) {
       banner.hidden = true;
       banner.innerHTML = '';
+      banner.classList.remove(
+        'advisory-focus--partial',
+        'advisory-focus--unavailable',
+        'advisory-focus--legacy',
+      );
       return;
     }
 
@@ -894,14 +1018,24 @@ async function init(): Promise<void> {
     const statusHtml = status
       ? `<span class="advisory-focus-status">${escapeHtml(status)}</span>`
       : '';
+    const partialKeyHtml = focus.locationState === 'partial'
+      ? `<span class="advisory-focus-partial-key" aria-hidden="true"></span>`
+      : '';
     const closeLabel = translatedOrFallback('advisories.focusClose', 'Close');
 
-    banner.setAttribute('aria-label', focusLabel);
+    banner.classList.toggle('advisory-focus--partial', focus.locationState === 'partial');
+    banner.classList.toggle('advisory-focus--unavailable', focus.locationState === 'unavailable');
+    banner.classList.toggle('advisory-focus--legacy', focus.locationState === 'legacy');
+    banner.setAttribute(
+      'aria-label',
+      [focusLabel, catalogName, modelName, status].filter(Boolean).join(': '),
+    );
     banner.innerHTML = `
       <div class="advisory-focus-content">
         <strong class="advisory-focus-name">${escapeHtml(catalogName)}</strong>
         ${modelHtml}
         ${methodHtml}
+        ${partialKeyHtml}
         ${statusHtml}
         <button type="button" class="advisory-focus-close" aria-label="${escapeHtml(closeLabel)}">${escapeHtml(closeLabel)}</button>
       </div>
@@ -931,9 +1065,10 @@ async function init(): Promise<void> {
   let skewtCompareRenderer: SkewTCompareRenderer | null = null;
   let skewtCompareInteraction: SkewTCompareInteractionHandle | null = null;
   let skewtViewMode: 'dynamic' | 'compare' | 'static' = 'dynamic';
-  let lastSkewtPointIndex: number | null = null;
-  let lastSkewtModel: string | null = null;
+  let lastSkewtRequestKey: string | null = null;
+  let skewtRequestSequence = 0;
   let lastSkewtCompareKey: string | null = null;
+  let skewtCompareRequestSequence = 0;
 
   function initSkewtToggle(): void {
     const dynBtn = document.getElementById('skewt-view-dynamic');
@@ -967,13 +1102,14 @@ async function init(): Promise<void> {
   }
 
   function destroySkewtRenderer(): void {
+    skewtRequestSequence += 1;
     if (skewtInteraction) { skewtInteraction.destroy(); skewtInteraction = null; }
     if (skewtRenderer) { skewtRenderer.destroy(); skewtRenderer = null; }
-    lastSkewtPointIndex = null;
-    lastSkewtModel = null;
+    lastSkewtRequestKey = null;
   }
 
   function destroySkewtCompareRenderer(): void {
+    skewtCompareRequestSequence += 1;
     if (skewtCompareInteraction) { skewtCompareInteraction.destroy(); skewtCompareInteraction = null; }
     if (skewtCompareRenderer) { skewtCompareRenderer.destroy(); skewtCompareRenderer = null; }
     lastSkewtCompareKey = null;
@@ -1181,6 +1317,8 @@ async function init(): Promise<void> {
   async function loadSkewtData(state: BriefingState): Promise<void> {
     if (skewtViewMode !== 'dynamic') return;
     if (!state.flight || !state.currentPack || !state.routeAnalyses) {
+      skewtRequestSequence += 1;
+      lastSkewtRequestKey = null;
       ensureSkewtRenderer().clear();
       return;
     }
@@ -1191,22 +1329,46 @@ async function init(): Promise<void> {
     const idx = state.selectedPointIndex ?? 0;
     const point = state.routeAnalyses.analyses[idx];
     if (!point) {
+      skewtRequestSequence += 1;
+      lastSkewtRequestKey = null;
       ensureSkewtRenderer().clear();
       return;
     }
 
-    // Avoid re-fetching if same point and model
-    if (idx === lastSkewtPointIndex && state.selectedModel === lastSkewtModel) return;
-    lastSkewtPointIndex = idx;
-    lastSkewtModel = state.selectedModel;
+    const requestIdentity = {
+      flightId: state.flight.id,
+      packTimestamp: state.currentPack.fetch_timestamp,
+      pointIndex: point.point_index,
+      model: state.selectedModel,
+    };
+    const requestKey = JSON.stringify(requestIdentity);
+    if (requestKey === lastSkewtRequestKey) return;
+    lastSkewtRequestKey = requestKey;
+    const requestSequence = ++skewtRequestSequence;
+
+    const requestIsCurrent = (): boolean => {
+      if (
+        requestSequence !== skewtRequestSequence
+        || skewtViewMode !== 'dynamic'
+      ) return false;
+      const current = store.getState();
+      const currentPoint = current.routeAnalyses?.analyses[
+        current.selectedPointIndex ?? 0
+      ];
+      return current.flight?.id === requestIdentity.flightId
+        && current.currentPack?.fetch_timestamp === requestIdentity.packTimestamp
+        && currentPoint?.point_index === requestIdentity.pointIndex
+        && current.selectedModel === requestIdentity.model;
+    };
 
     try {
       const data = await api.fetchSoundingProfile(
-        state.flight.id,
-        state.currentPack.fetch_timestamp,
-        point.point_index,
-        state.selectedModel,
+        requestIdentity.flightId,
+        requestIdentity.packTimestamp,
+        requestIdentity.pointIndex,
+        requestIdentity.model,
       );
+      if (!requestIsCurrent()) return;
       if (data) {
         ensureSkewtRenderer().setData(data);
         skewtInteraction?.update(data);
@@ -1215,6 +1377,7 @@ async function init(): Promise<void> {
         skewtInteraction?.update(null);
       }
     } catch {
+      if (!requestIsCurrent()) return;
       ensureSkewtRenderer().clear();
     }
   }
@@ -1253,6 +1416,8 @@ async function init(): Promise<void> {
   async function loadSkewtCompareData(state: BriefingState): Promise<void> {
     if (skewtViewMode !== 'compare') return;
     if (!state.flight || !state.currentPack || !state.routeAnalyses) {
+      skewtCompareRequestSequence += 1;
+      lastSkewtCompareKey = null;
       ensureSkewtCompareRenderer().clear();
       return;
     }
@@ -1261,6 +1426,8 @@ async function init(): Promise<void> {
     const idx = state.selectedPointIndex ?? 0;
     const point = state.routeAnalyses.analyses[idx];
     if (!point) {
+      skewtCompareRequestSequence += 1;
+      lastSkewtCompareKey = null;
       ensureSkewtCompareRenderer().clear();
       return;
     }
@@ -1270,14 +1437,43 @@ async function init(): Promise<void> {
     const compareModels = store.getState().vizSettings.compareModels;
     const enabledModels = state.routeAnalyses.models.filter(m => compareModels[m] !== false);
     if (enabledModels.length === 0) {
+      skewtCompareRequestSequence += 1;
+      lastSkewtCompareKey = null;
       ensureSkewtCompareRenderer().clear();
       return;
     }
 
-    // Cache check: skip re-fetch if same point + same enabled models
-    const cacheKey = JSON.stringify({ idx, models: [...enabledModels].sort() });
+    const requestIdentity = {
+      view: 'compare' as const,
+      flightId: state.flight.id,
+      packTimestamp: state.currentPack.fetch_timestamp,
+      pointIndex: point.point_index,
+      enabledModels: [...enabledModels].sort(),
+      selectedModel: state.selectedModel,
+    };
+    const cacheKey = JSON.stringify(requestIdentity);
     if (cacheKey === lastSkewtCompareKey) return;
     lastSkewtCompareKey = cacheKey;
+    const requestSequence = ++skewtCompareRequestSequence;
+
+    const requestIsCurrent = (): boolean => {
+      if (
+        requestSequence !== skewtCompareRequestSequence
+        || skewtViewMode !== requestIdentity.view
+      ) return false;
+      const current = store.getState();
+      const currentPoint = current.routeAnalyses?.analyses[
+        current.selectedPointIndex ?? 0
+      ];
+      const currentEnabledModels = current.routeAnalyses?.models
+        .filter(model => current.vizSettings.compareModels[model] !== false)
+        .sort() ?? [];
+      return current.flight?.id === requestIdentity.flightId
+        && current.currentPack?.fetch_timestamp === requestIdentity.packTimestamp
+        && currentPoint?.point_index === requestIdentity.pointIndex
+        && current.selectedModel === requestIdentity.selectedModel
+        && JSON.stringify(currentEnabledModels) === JSON.stringify(requestIdentity.enabledModels);
+    };
 
     // Fetch all models in parallel
     const theme = getActiveTheme();
@@ -1286,10 +1482,16 @@ async function init(): Promise<void> {
     try {
       const results = await Promise.all(
         enabledModels.map(m =>
-          api.fetchSoundingProfile(state.flight!.id, state.currentPack!.fetch_timestamp, point.point_index, m)
+          api.fetchSoundingProfile(
+            requestIdentity.flightId,
+            requestIdentity.packTimestamp,
+            requestIdentity.pointIndex,
+            m,
+          )
             .catch(() => null),
         ),
       );
+      if (!requestIsCurrent()) return;
 
       const datasets: SkewtCompareModelDataset[] = [];
       for (let i = 0; i < enabledModels.length; i++) {
@@ -1338,6 +1540,7 @@ async function init(): Promise<void> {
         });
       }
     } catch {
+      if (!requestIsCurrent()) return;
       ensureSkewtCompareRenderer().clear();
     }
   }
@@ -1603,6 +1806,7 @@ async function init(): Promise<void> {
       const isAltDependent = (colorMetric?.altitudeDependent || widthMetric?.altitudeDependent) ?? false;
 
       if (!mapRenderer) {
+        frontsFitIntentEpoch += 1;
         mapRenderer = new RouteMapRenderer(mapContainer);
       }
 
@@ -1615,12 +1819,44 @@ async function init(): Promise<void> {
       mapRenderer.setAdvisoryFocus(focus);
       mapRenderer.render();
       // Gated front axes for the selected model (async; redraws when ready).
-      updateMapFrontLines(
+      const frontLinesRendered = updateMapFrontLines(
         state.routeFronts,
         state.selectedModel,
         state.vizSettings.mapFrontsVisible ?? false,
         mapRenderer,
       );
+      if (
+        fitFrontsAfterRender
+        && state.vizSettings.mapFrontsVisible
+        && state.routeFronts
+      ) {
+        fitFrontsAfterRender = false;
+        const rendererForFit = mapRenderer;
+        const modelForFit = state.selectedModel;
+        const routeFrontsForFit = state.routeFronts;
+        const fitIntentEpoch = frontsFitIntentEpoch;
+        void frontLinesRendered.then((rendered) => {
+          const live = store.getState();
+          if (
+            !rendered
+            || frontsFitIntentEpoch !== fitIntentEpoch
+            || mapRenderer !== rendererForFit
+            || !live.vizSettings.mapFrontsVisible
+            || live.selectedModel !== modelForFit
+            || live.routeFronts !== routeFrontsForFit
+          ) return;
+          requestAnimationFrame(() => {
+            const current = store.getState();
+            if (
+              frontsFitIntentEpoch === fitIntentEpoch
+              && mapRenderer === rendererForFit
+              && current.vizSettings.mapFrontsVisible
+              && current.selectedModel === modelForFit
+              && current.routeFronts === routeFrontsForFit
+            ) rendererForFit.fitRouteAndFronts();
+          });
+        });
+      }
 
       // Attach or update map interaction
       if (mapInteraction) {
@@ -1683,7 +1919,13 @@ async function init(): Promise<void> {
     } else {
       // Map not visible — destroy
       if (mapInteraction) { mapInteraction.destroy(); mapInteraction = null; }
-      if (mapRenderer) { mapRenderer.destroy(); mapRenderer = null; }
+      if (mapRenderer) {
+        frontsFitIntentEpoch += 1;
+        mapRenderer.destroy();
+        mapRenderer = null;
+        lastFrontLinesKey = '';
+        lastFrontLinesRender = Promise.resolve(false);
+      }
     }
 
     // Render cross-section controls (above canvas) — skip in compare mode (rendered above)
@@ -1782,6 +2024,16 @@ async function init(): Promise<void> {
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
+    if (
+      state.selectedModel !== prev.selectedModel
+      || state.routeFronts !== prev.routeFronts
+      || state.vizSettings.mapFrontsVisible !== prev.vizSettings.mapFrontsVisible
+    ) {
+      frontsFitIntentEpoch += 1;
+    }
+    if (state.flight !== prev.flight || state.currentPack !== prev.currentPack) {
+      airportProfileDrawer.close();
+    }
     // Several atomic actions intentionally change model, viz settings, and focus
     // together. Coalesce the existing dependency branches so every surface sees
     // one coherent snapshot and focus clears do not trigger redundant renders.
@@ -1854,7 +2106,7 @@ async function init(): Promise<void> {
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
       ui.togglePackSections(!!state.currentPack);
-      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryAction, isFlightOwner(state));
+      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryAction, isFlightOwner(state), advisoryActionContext(state));
       ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
@@ -1912,7 +2164,7 @@ async function init(): Promise<void> {
       updateToggleButtons(state.displayMode);
       renderPointSectionsOnce();
       if (state.displayMode !== prev.displayMode) {
-        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryAction, isFlightOwner(state));
+        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryAction, isFlightOwner(state), advisoryActionContext(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber).
@@ -2373,7 +2625,7 @@ async function init(): Promise<void> {
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories, s.digestPending, () => store.getState().generateDigest());
     ui.togglePackSections(!!s.currentPack);
-    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s));
+    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s), advisoryActionContext(s));
     ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());

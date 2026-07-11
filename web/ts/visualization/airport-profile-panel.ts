@@ -20,6 +20,7 @@ import { SkewTRenderer } from './skewt/renderer';
 import { getAllLayers, getDefaultEnabled } from './cross-section/layer-registry';
 import { renderLayerToggles } from './controls/panel';
 import { renderSkewtOverlayControls } from './skewt/overlay-controls';
+import { t } from '../i18n/i18n';
 import {
   streamAirportProfile, snapshotToVizData, snapshotToSkewtData,
   type AirportProfileSnapshot, type AirportProfileStreamHandle,
@@ -163,7 +164,7 @@ export class AirportProfilePanel {
     this.container.innerHTML = `
       <div class="ap-panel-header">
         <div class="ap-panel-title" id="ap-title">—</div>
-        <button class="ap-panel-close" type="button" title="Close">&times;</button>
+        <button class="ap-panel-close" type="button">&times;</button>
       </div>
       <div class="ap-panel-controls">
         <label>Model</label>
@@ -206,7 +207,11 @@ export class AirportProfilePanel {
 
     this.applyViewMode();
 
-    this.container.querySelector('.ap-panel-close')?.addEventListener('click', () => this.close());
+    const closeButton = this.container.querySelector('.ap-panel-close') as HTMLButtonElement;
+    const closeLabel = t('advisories.focusClose');
+    closeButton.setAttribute('aria-label', closeLabel);
+    closeButton.title = closeLabel;
+    closeButton.addEventListener('click', () => this.close());
     this.modelSel.addEventListener('change', () => {
       this.model = this.modelSel.value;
       this.onModelChange?.(this.model);
@@ -270,6 +275,7 @@ export class AirportProfilePanel {
       this.setLoading(false);
       this.renderCross();
       this.renderSkewT();
+      if (this.drawerOpen) this.renderDrawer();
       return;
     }
 
@@ -283,6 +289,7 @@ export class AirportProfilePanel {
     // as "real-clear-skies forecast" while we wait for derived data.
     // Lifted in onPhase('derived') / 'complete' / 'error'.
     this.setLoading(true);
+    if (this.drawerOpen) this.renderDrawer();
 
     this.stream = streamAirportProfile(
       { icao: req.icao, model: this.model, startHour: req.startHour, windowH: req.windowH },
@@ -292,7 +299,7 @@ export class AirportProfilePanel {
 
   /** Toggle the dimmed/grayscale "loading" state on the canvas areas.
    *  Driven by `is-loading` CSS class on `.ap-cross` and `.ap-skewt`
-   *  (see maps.html). */
+   *  (see css/style.css). */
   private setLoading(loading: boolean): void {
     this.crossEl.classList.toggle('is-loading', loading);
     this.skewtEl.classList.toggle('is-loading', loading);
@@ -454,7 +461,7 @@ export class AirportProfilePanel {
   // Settings drawer (gear icon → slide-out panel that overlaps the map)
   //
   // The drawer is anchored to the panel's left edge via CSS (see
-  // maps.html: `.ap-settings-drawer { right: 100%; }`) so it grows
+  // css/style.css: `.ap-settings-drawer { right: 100%; }`) so it grows
   // toward the map without resizing the panel itself. Contents are
   // rebuilt on every open + on viewMode change so toggling the View
   // segmented control swaps which section's controls are visible.
@@ -477,7 +484,7 @@ export class AirportProfilePanel {
     // sub-control via the dedicated render helpers.
     let html = '<div class="ap-drawer-header">';
     html += '<span class="ap-drawer-title">Layers & overlays</span>';
-    html += '<button class="ap-drawer-close" type="button" title="Close" aria-label="Close">×</button>';
+    html += '<button class="ap-drawer-close" type="button">×</button>';
     html += '</div>';
     if (showCross) {
       html += '<section class="ap-drawer-section" data-section="cross">';
@@ -492,9 +499,11 @@ export class AirportProfilePanel {
       html += '</section>';
     }
     this.drawerEl.innerHTML = html;
-    this.drawerEl.querySelector('.ap-drawer-close')?.addEventListener(
-      'click', () => this.toggleDrawer(),
-    );
+    const closeButton = this.drawerEl.querySelector('.ap-drawer-close') as HTMLButtonElement;
+    const closeLabel = t('advisories.focusClose');
+    closeButton.setAttribute('aria-label', closeLabel);
+    closeButton.title = closeLabel;
+    closeButton.addEventListener('click', () => this.toggleDrawer());
 
     if (showCross) {
       const host = this.drawerEl.querySelector('.ap-drawer-cross-host') as HTMLElement;

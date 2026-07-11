@@ -22,6 +22,7 @@ export class CrossSectionRenderer {
   private advisoryFocus: ResolvedAdvisoryFocus | null = null;
   private emphasizedLayerIds: ReadonlySet<string> | null = null;
   private selectedPointIndex = -1;
+  private readonly themeListener = (): void => this.render();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -37,7 +38,7 @@ export class CrossSectionRenderer {
     this.resizeObserver = new ResizeObserver(() => this.render());
     this.resizeObserver.observe(container);
 
-    window.addEventListener('theme-changed', () => this.render());
+    window.addEventListener('theme-changed', this.themeListener);
   }
 
   setData(data: VizRouteData): void {
@@ -138,6 +139,7 @@ export class CrossSectionRenderer {
 
   destroy(): void {
     this.resizeObserver.disconnect();
+    window.removeEventListener('theme-changed', this.themeListener);
     this.mainCanvas.remove();
     this.overlayCanvas.remove();
   }

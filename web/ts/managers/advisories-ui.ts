@@ -12,7 +12,9 @@ import { t } from '../i18n/i18n';
 import { formatVisibility } from '../units';
 import {
   actionForAdvisory,
+  planAdvisoryAction,
   type AdvisoryAction,
+  type AdvisoryActionContext,
 } from '../visualization/advisory-actions';
 import { advisoryMethodLabel } from '../visualization/advisory-methods';
 import { computeSummaryCondition } from '../helpers/airport-summary';
@@ -153,18 +155,24 @@ function representativeMethodBadge(adv: RouteAdvisoryResult): string {
     + ` aria-label="${escapeHtml(method.description)}">${escapeHtml(method.short)}</span>`;
 }
 
-function aggregateActionMarkup(adv: RouteAdvisoryResult): string {
+function aggregateActionMarkup(
+  adv: RouteAdvisoryResult,
+  context?: AdvisoryActionContext,
+): string {
   const action = actionForAdvisory(adv.advisory_id);
   if (!action) return '';
   const label = advisoryActionLabel(action);
-  const frontsUnavailable = action.kind === 'fronts-map'
-    && adv.per_model.length > 0
-    && adv.per_model.every((model) => model.status === 'unavailable');
-  const disabled = frontsUnavailable ? ' disabled aria-disabled="true"' : '';
-  const explanation = frontsUnavailable
+  const disabledReasonKey = context
+    ? planAdvisoryAction(adv, context).disabledReasonKey
+    : null;
+  const disabled = disabledReasonKey ? ' disabled aria-disabled="true"' : '';
+  const unavailableFallback = disabledReasonKey === 'advisories.airportProfileUnavailable'
+    ? 'Airport profiles are unavailable for this briefing.'
+    : 'Fronts unavailable for this briefing';
+  const explanation = disabledReasonKey
     ? `<span class="advisory-action-unavailable">${escapeHtml(translatedOrFallback(
-      'advisories.frontsUnavailable',
-      'Fronts unavailable for all models',
+      disabledReasonKey,
+      unavailableFallback,
     ))}</span>`
     : '';
   return `<span class="advisory-action">`
@@ -295,6 +303,7 @@ function renderAdvisoryCard(
   adv: RouteAdvisoryResult,
   catalog: Map<string, AdvisoryCatalogEntry>,
   compact = false,
+  actionContext?: AdvisoryActionContext,
 ): string {
   const entry = catalog.get(adv.advisory_id);
   const name = entry ? escapeHtml(entry.name) : escapeHtml(adv.advisory_id);
@@ -316,7 +325,7 @@ function renderAdvisoryCard(
     ? `<button class="metric-info-btn advisory-info-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.advisoryInfo')}" aria-label="${t('advisories.advisoryInfo')}">i</button>`
     : '';
   const methodBadge = representativeMethodBadge(adv);
-  const action = aggregateActionMarkup(adv);
+  const action = aggregateActionMarkup(adv, actionContext);
 
   // Mitigation hint (#330): a soft lightbulb shown only when this advisory
   // carries mitigations. Tapping it opens a popup listing the "Options to
@@ -464,6 +473,7 @@ export function renderAdvisories(
   // Owner-only: renders the explicit "Recalculate" button. The recalculate
   // endpoint is owner-gated (403 otherwise), so non-owners never see it.
   canRecalculate = false,
+  advisoryActionContext?: AdvisoryActionContext,
 ): void {
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
@@ -613,12 +623,16 @@ export function renderAdvisories(
   for (const adv of sorted) {
     (isCompactBand(advisoryBand(adv)) ? compactCards : fullCards).push(adv);
   }
-  const cards = fullCards.map(adv => renderAdvisoryCard(adv, catalog)).join('');
+  const cards = fullCards.map(
+    adv => renderAdvisoryCard(adv, catalog, false, advisoryActionContext),
+  ).join('');
   const compact = compactCards.length > 0
     ? `<div class="advisory-allclear">`
       + `<div class="advisory-allclear-label">${t('advisories.allClear')}</div>`
       + `<div class="advisory-grid advisory-grid--compact">`
-      + compactCards.map(adv => renderAdvisoryCard(adv, catalog, true)).join('')
+      + compactCards.map(
+        adv => renderAdvisoryCard(adv, catalog, true, advisoryActionContext),
+      ).join('')
       + `</div></div>`
     : '';
 

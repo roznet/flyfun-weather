@@ -18,7 +18,9 @@ import {
   resolveAdvisoryFocus,
 } from '../../ts/visualization/advisory-focus';
 import {
+  actionContext,
   activeFocus,
+  airportAdvisory,
   manifestWithoutFocusedModel,
   manifestWithTwoModels,
   refreshedManifest,
@@ -167,6 +169,22 @@ describe('briefing store advisory focus lifecycle', () => {
     return focus;
   }
 
+  function seedPersistedViz(
+    overrides: Partial<ReturnType<typeof briefingStore.getState>['vizSettings']>,
+  ): ReturnType<typeof briefingStore.getState>['vizSettings'] {
+    const stickyViz = {
+      ...briefingStore.getState().vizSettings,
+      ...overrides,
+    };
+    briefingStore.setState({
+      selectedModel: 'ecmwf',
+      vizSettings: stickyViz,
+      activeAdvisoryFocus: null,
+    });
+    storageValues.set('wb_vizSettings', JSON.stringify(stickyViz));
+    return stickyViz;
+  }
+
   it('applies model, resolved view, preset, and focus in one atomic update', () => {
     storageValues.set('wb_vizSettings', JSON.stringify({ sentinel: 'unchanged' }));
     briefingStore.setState({
@@ -210,6 +228,222 @@ describe('briefing store advisory focus lifecycle', () => {
       ([key]) => key === 'wb_vizSettings',
     )).toBe(false);
     expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('atomically focuses from map into split while persisting only the sticky layout', () => {
+    const stickyViz = seedPersistedViz({
+      layout: 'map',
+      activePreset: null,
+      enabledLayers: {
+        ...briefingStore.getState().vizSettings.enabledLayers,
+        'square-nwp-cloud-bands': false,
+      },
+    });
+    const focus = {
+      ...activeFocus('gfs', 'cloud_top'),
+      modelAttributionKnown: true,
+    };
+    vi.mocked(localStorage.setItem).mockClear();
+    const notifications: Array<ReturnType<typeof briefingStore.getState>> = [];
+    const unsubscribe = briefingStore.subscribe((state) => notifications.push(state));
+
+    briefingStore.getState().focusAdvisory(focus, 'clouds', view, 'split');
+    unsubscribe();
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      selectedModel: 'gfs',
+      activeAdvisoryFocus: focus,
+      vizSettings: {
+        layout: 'split',
+        activePreset: 'clouds',
+        enabledLayers: { 'square-nwp-cloud-bands': true },
+      },
+    });
+    expect(JSON.parse(storageValues.get('wb_vizSettings')!))
+      .toEqual({ ...stickyViz, layout: 'split' });
+  });
+
+  it('opens advisory compare in one coherent persisted update', () => {
+    const stickyViz = seedPersistedViz({
+      layout: 'cross-section',
+      activePreset: null,
+      compareLayer: 'icing-bands',
+      compareModels: { ecmwf: false, ukmo: false },
+      enabledLayers: {
+        ...briefingStore.getState().vizSettings.enabledLayers,
+        'square-nwp-cloud-bands': false,
+      },
+    });
+    focusCloudTop();
+    briefingStore.setState({
+      vizSettings: {
+        ...briefingStore.getState().vizSettings,
+        compareLayer: stickyViz.compareLayer,
+        compareModels: stickyViz.compareModels,
+      },
+    });
+    vi.mocked(localStorage.setItem).mockClear();
+    const notifications: Array<ReturnType<typeof briefingStore.getState>> = [];
+    const unsubscribe = briefingStore.subscribe((state) => notifications.push(state));
+
+    briefingStore.getState().openAdvisoryCompare(
+      ['ecmwf', 'gfs'],
+      'square-nwp-cloud-bands',
+    );
+    unsubscribe();
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].activeAdvisoryFocus).toBeNull();
+    expect(notifications[0].vizSettings).toMatchObject({
+      layout: 'compare',
+      compareLayer: 'square-nwp-cloud-bands',
+      compareModels: { ecmwf: true, gfs: true, ukmo: false },
+    });
+    expect(vi.mocked(localStorage.setItem).mock.calls.filter(
+      ([key]) => key === 'wb_vizSettings',
+    )).toHaveLength(1);
+    expect(JSON.parse(storageValues.get('wb_vizSettings')!)).toEqual({
+      ...stickyViz,
+      layout: 'compare',
+      compareLayer: 'square-nwp-cloud-bands',
+      compareModels: { ecmwf: true, gfs: true, ukmo: false },
+    });
+  });
+
+  it('focuses advisory method context atomically while persisting only its layout', () => {
+    const focus = {
+      ...activeFocus('gfs', 'dd_nwp_agreement'),
+      modelAttributionKnown: true,
+    };
+    const stickyViz = seedPersistedViz({
+      layout: 'map' as const,
+      activePreset: null,
+      enabledLayers: {
+        ...briefingStore.getState().vizSettings.enabledLayers,
+        'square-cloud-bands': false,
+        'square-nwp-cloud-bands': false,
+      },
+    });
+    focusCloudTop();
+    vi.mocked(localStorage.setItem).mockClear();
+    const notifications: Array<ReturnType<typeof briefingStore.getState>> = [];
+    const unsubscribe = briefingStore.subscribe((state) => notifications.push(state));
+
+    briefingStore.getState().focusAdvisoryMethodContext(
+      focus,
+      'dd_nwp_agreement',
+      {
+        enabledLayers: {
+          'square-cloud-bands': true,
+          'square-nwp-cloud-bands': true,
+        },
+        highlightSurfaces: ['cross-section', 'route-graph', 'route-map'],
+        emphasizeLayers: ['square-cloud-bands', 'square-nwp-cloud-bands'],
+      },
+      'cross-section',
+    );
+    unsubscribe();
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      selectedModel: 'gfs',
+      activeAdvisoryFocus: focus,
+      vizSettings: {
+        layout: 'cross-section',
+        activePreset: 'dd_nwp_agreement',
+        enabledLayers: {
+          'square-cloud-bands': true,
+          'square-nwp-cloud-bands': true,
+        },
+      },
+    });
+    expect(storageValues.get('wb_selectedModel')).toBe('gfs');
+    const persistedViz = JSON.parse(storageValues.get('wb_vizSettings')!);
+    expect(persistedViz).toEqual({ ...stickyViz, layout: 'cross-section' });
+    expect(persistedViz.activePreset).toBeNull();
+    expect(persistedViz.enabledLayers).toMatchObject({
+      'square-cloud-bands': false,
+      'square-nwp-cloud-bands': false,
+    });
+    expect(persistedViz).not.toHaveProperty('activeAdvisoryFocus');
+    expect(persistedViz).not.toHaveProperty('highlightSurfaces');
+    expect(persistedViz).not.toHaveProperty('emphasizeLayers');
+  });
+
+  it('opens the advisory fronts map in one coherent persisted update', () => {
+    const stickyViz = seedPersistedViz({
+      layout: 'cross-section',
+      mapFrontsVisible: false,
+      activePreset: null,
+      enabledLayers: {
+        ...briefingStore.getState().vizSettings.enabledLayers,
+        'square-nwp-cloud-bands': false,
+      },
+    });
+    focusCloudTop();
+    briefingStore.setState({
+      selectedModel: 'ecmwf',
+      vizSettings: {
+        ...briefingStore.getState().vizSettings,
+        mapFrontsVisible: stickyViz.mapFrontsVisible,
+      },
+    });
+    vi.mocked(localStorage.setItem).mockClear();
+    const notifications: Array<ReturnType<typeof briefingStore.getState>> = [];
+    const unsubscribe = briefingStore.subscribe((state) => notifications.push(state));
+
+    briefingStore.getState().openAdvisoryFrontsMap('gfs');
+    unsubscribe();
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      selectedModel: 'gfs',
+      activeAdvisoryFocus: null,
+      vizSettings: {
+        layout: 'map',
+        mapFrontsVisible: true,
+      },
+    });
+    expect(storageValues.get('wb_selectedModel')).toBe('gfs');
+    expect(vi.mocked(localStorage.setItem).mock.calls.filter(
+      ([key]) => key === 'wb_vizSettings',
+    )).toHaveLength(1);
+    expect(JSON.parse(storageValues.get('wb_vizSettings')!)).toEqual({
+      ...stickyViz,
+      layout: 'map',
+      mapFrontsVisible: true,
+    });
+  });
+
+  it('does not notify subscribers for unchanged generic visualization setters', () => {
+    briefingStore.setState({
+      activeAdvisoryFocus: null,
+      vizSettings: {
+        ...briefingStore.getState().vizSettings,
+        compareModels: {
+          ...briefingStore.getState().vizSettings.compareModels,
+          gfs: true,
+        },
+      },
+    });
+    const state = briefingStore.getState();
+    vi.mocked(localStorage.setItem).mockClear();
+    const notifications: Array<ReturnType<typeof briefingStore.getState>> = [];
+    const unsubscribe = briefingStore.subscribe((next) => notifications.push(next));
+
+    briefingStore.getState().setSelectedModel(state.selectedModel);
+    briefingStore.getState().setLayout(state.vizSettings.layout);
+    briefingStore.getState().setMapFrontsVisible(state.vizSettings.mapFrontsVisible);
+    briefingStore.getState().setCompareLayer(state.vizSettings.compareLayer);
+    briefingStore.getState().setCompareModel(
+      'gfs',
+      state.vizSettings.compareModels.gfs,
+    );
+    unsubscribe();
+
+    expect(notifications).toHaveLength(0);
+    expect(localStorage.setItem).not.toHaveBeenCalled();
   });
 
   it('manual model and generic preset actions clear focus', () => {
@@ -374,6 +608,49 @@ describe('per-model advisory popup focus action', () => {
     expect(firstCallback).not.toHaveBeenCalled();
     expect(secondCallback).toHaveBeenCalledOnce();
     expect(secondCallback).toHaveBeenCalledWith('cloud_top', 'ecmwf');
+  });
+
+  it('disables an unsupported airport action with the exact localized explanation', () => {
+    const section = fakeListenerHost();
+    const wrapper = fakeListenerHost();
+    const popup = fakeListenerHost();
+    vi.stubGlobal('document', {
+      getElementById: vi.fn((id: string) => {
+        if (id === 'advisories-section') return section;
+        if (id === 'advisories-wrapper') return wrapper;
+        if (id === 'metric-info-popup') return popup;
+        return null;
+      }),
+      querySelector: vi.fn(() => null),
+    });
+    const base = manifestWithTwoModels();
+
+    renderAdvisories(
+      {
+        ...base,
+        advisories: [airportAdvisory('meteofrance')],
+        models: ['ukmo', 'meteofrance'],
+      },
+      undefined,
+      'full',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      vi.fn(),
+      false,
+      actionContext({
+        selectedModel: 'meteofrance',
+        availableModels: ['ukmo', 'meteofrance'],
+      }),
+    );
+
+    expect(section.innerHTML).toContain('data-action-kind="airport-profile" disabled aria-disabled="true"');
+    expect(section.innerHTML).toContain('class="advisory-action-unavailable"');
+    expect(section.innerHTML).toContain(
+      'Airport profiles are unavailable for this briefing.',
+    );
+    expect(section.innerHTML).not.toContain('Fronts unavailable for this briefing');
   });
 });
 

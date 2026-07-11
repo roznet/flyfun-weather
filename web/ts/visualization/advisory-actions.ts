@@ -62,8 +62,121 @@ export interface AdvisoryActionPlan {
   disabledReasonKey: string | null;
 }
 
-export declare function planAdvisoryAction(
+function emptyPlan(
+  kind: AdvisoryAction['kind'],
+  model: string | null,
+): AdvisoryActionPlan {
+  return {
+    kind,
+    model,
+    layout: null,
+    enableModels: [],
+    compareLayer: null,
+    layerOverrides: {},
+    airportProfileModel: null,
+    noteKey: null,
+    noteParams: {},
+    disabledReasonKey: null,
+  };
+}
+
+export function planAdvisoryAction(
   advisory: RouteAdvisoryResult,
   context: AdvisoryActionContext,
   requestedModel?: string,
-): AdvisoryActionPlan;
+): AdvisoryActionPlan {
+  const action = actionForAdvisory(advisory.advisory_id);
+  if (!action) throw new Error(`No action registered for ${advisory.advisory_id}`);
+  const kind = action.kind;
+  const attributedModel = requestedModel
+    ?? advisory.representative_model
+    ?? context.selectedModel;
+  const attributedResult = advisory.per_model.find(
+    result => result.model === attributedModel,
+  ) ?? null;
+  const plan = emptyPlan(kind, attributedModel);
+
+  if (kind === 'compare-models') {
+    const representativeResult = advisory.per_model.find(
+      result => result.model === advisory.representative_model,
+    ) ?? advisory.per_model[0];
+    const compareLayer = representativeResult?.evidence_regions
+      ?.map(region => region.metric_id)
+      .find((metricId): metricId is string => (
+        typeof metricId === 'string'
+        && hasOwn(COMPARE_LAYER_BY_METRIC, metricId)
+      ));
+
+    return {
+      ...emptyPlan(kind, null),
+      layout: 'compare',
+      enableModels: [...context.availableModels],
+      compareLayer: compareLayer ? COMPARE_LAYER_BY_METRIC[compareLayer] : null,
+      noteKey: compareLayer ? null : 'advisories.noDirectCompareLayer',
+    };
+  }
+
+  if (kind === 'method-context') {
+    const reasons = new Set(
+      attributedResult?.evidence_regions?.map(region => region.reason_code) ?? [],
+    );
+    const hasCloudDisagreement = reasons.has('dd_cloud_disagreement')
+      || reasons.has('nwp_cloud_disagreement');
+
+    return {
+      ...plan,
+      layout: 'cross-section',
+      layerOverrides: {
+        ...(hasCloudDisagreement
+          ? {
+              'square-cloud-bands': true,
+              'square-nwp-cloud-bands': true,
+            }
+          : {}),
+        ...(reasons.has('freezing_level_disagreement')
+          ? { 'freezing-level': true }
+          : {}),
+      },
+    };
+  }
+
+  if (kind === 'airport-profile') {
+    const exactModelSupported = context.supportedAirportProfileModels.includes(
+      attributedModel,
+    ) && context.availableModels.includes(attributedModel);
+    const airportProfileModel = exactModelSupported
+      ? attributedModel
+      : context.supportedAirportProfileModels.find(model => (
+          context.availableModels.includes(model)
+        )) ?? null;
+    const isFallback = airportProfileModel !== null
+      && airportProfileModel !== attributedModel;
+
+    return {
+      ...plan,
+      airportProfileModel,
+      noteKey: isFallback ? 'advisories.airportProfileFallback' : null,
+      noteParams: isFallback
+        ? {
+            advisoryModel: attributedModel,
+            profileModel: airportProfileModel,
+          }
+        : {},
+      disabledReasonKey: airportProfileModel === null
+        ? 'advisories.airportProfileUnavailable'
+        : null,
+    };
+  }
+
+  if (kind === 'fronts-map') {
+    return {
+      ...plan,
+      layout: 'map',
+      disabledReasonKey: context.hasFronts
+        ? null
+        : 'advisories.frontsUnavailable',
+    };
+  }
+
+  return plan;
+}

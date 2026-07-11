@@ -5,11 +5,15 @@ import { t } from '../i18n/i18n';
 
 let popupEl: HTMLElement | null = null;
 let backdropEl: HTMLElement | null = null;
+let returnFocusEl: HTMLElement | null = null;
 
 export function initInfoPopup(): void {
   // Create backdrop
   backdropEl = document.createElement('div');
   backdropEl.className = 'metric-popup-backdrop';
+  backdropEl.dataset.modalPortal = 'true';
+  backdropEl.dataset.modalPortalActive = 'false';
+  backdropEl.setAttribute('aria-hidden', 'true');
   backdropEl.addEventListener('click', hideMetricInfo);
 
   // Create popup container
@@ -42,8 +46,9 @@ export function showMetricInfo(metricId: string, value?: string): void {
     ${renderInfoPopupContent(metricId, numValue)}
   `;
 
-  backdropEl.classList.add('active');
+  activateMetricInfo();
   wirePopupButtons();
+  focusPopupClose();
 }
 
 export function showLayerInfo(layerId: string, metricId: string): void {
@@ -56,8 +61,9 @@ export function showLayerInfo(layerId: string, metricId: string): void {
     ${legendHtml}
   `;
 
-  backdropEl.classList.add('active');
+  activateMetricInfo();
   wirePopupButtons();
+  focusPopupClose();
 }
 
 /** Show the popup with arbitrary HTML content. Used by advisory info buttons
@@ -71,14 +77,37 @@ export function showPopupContent(html: string): void {
     ${html}
   `;
 
-  backdropEl.classList.add('active');
+  activateMetricInfo();
   wirePopupButtons();
+  focusPopupClose();
 }
 
 export function hideMetricInfo(): void {
-  if (backdropEl) {
-    backdropEl.classList.remove('active');
+  if (!backdropEl?.classList.contains('active')) return;
+  backdropEl.classList.remove('active');
+  backdropEl.dataset.modalPortalActive = 'false';
+  backdropEl.setAttribute('aria-hidden', 'true');
+  const returnTarget = returnFocusEl;
+  returnFocusEl = null;
+  if (returnTarget?.isConnected && !returnTarget.inert) returnTarget.focus();
+}
+
+function activateMetricInfo(): void {
+  if (!backdropEl) return;
+  if (!backdropEl.classList.contains('active')) {
+    returnFocusEl = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   }
+  backdropEl.inert = false;
+  backdropEl.classList.add('active');
+  backdropEl.dataset.modalPortalActive = 'true';
+  backdropEl.setAttribute('aria-hidden', 'false');
+}
+
+function focusPopupClose(): void {
+  const closeButton = popupEl?.querySelector<HTMLElement>('.metric-popup-close');
+  closeButton?.focus();
 }
 
 /** Wire close button and AI discuss buttons after rendering popup content. */

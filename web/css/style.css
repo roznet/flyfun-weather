@@ -6782,3 +6782,365 @@ body.resizing-rail {
     padding-bottom: 0.75rem;
   }
 }
+
+/* --- Airport profile panel (shared by maps and the briefing drawer) --- */
+/* Forecast tab switches to a 2-column grid when the panel is open;
+ * the map keeps its existing height and the panel claims the right
+ * column. On narrow screens (<900px) the panel becomes a full-screen
+ * takeover so the map and detail don't fight for width. */
+.ap-split-host { display: flex; gap: 0.5rem; position: relative; }
+.ap-split-host > .map-wrapper { flex: 1 1 auto; min-width: 0; }
+.ap-split-host > .ap-panel-host {
+  flex: 0 0 480px;
+  max-width: 50%;
+  min-width: 360px;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* Was overflow:hidden for rounded-corner clipping; relaxed so the
+   * settings drawer (positioned at right:100%) can extend left over
+   * the map. The inner sections do their own clipping. */
+  overflow: visible;
+  position: relative;
+}
+
+.ap-panel { display: flex; flex-direction: column; height: calc(100vh - 280px); min-height: 400px; }
+.ap-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border);
+}
+.ap-panel-title { font-weight: 600; font-size: 0.9rem; color: var(--text); }
+.ap-panel-close {
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 0 0.4rem;
+}
+.ap-panel-close:hover { color: var(--text); }
+.ap-panel-controls {
+  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+  padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+.ap-panel-controls label { color: var(--text-muted); font-weight: 600; font-size: 0.75rem; }
+.ap-panel-controls select {
+  padding: 0.2rem 0.4rem; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); border-radius: 4px;
+  font-size: 0.75rem;
+}
+.ap-panel-controls .btn-toggle {
+  padding: 0.2rem 0.5rem; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); cursor: pointer;
+  font-size: 0.75rem;
+}
+.ap-panel-controls .btn-group .btn-toggle:first-child { border-radius: 4px 0 0 4px; }
+.ap-panel-controls .btn-group .btn-toggle:last-child { border-radius: 0 4px 4px 0; }
+.ap-panel-controls .btn-group .btn-toggle:not(:first-child) { border-left: none; }
+.ap-panel-controls .btn-toggle.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+.ap-panel-status {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem; color: var(--text-muted);
+  min-height: 1.1rem; border-bottom: 1px solid var(--border);
+}
+.ap-panel-status:empty { display: none; }
+
+.ap-panel-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.ap-panel.view-both .ap-cross,
+.ap-panel.view-both .ap-skewt { flex: 1 1 50%; min-height: 0; position: relative; }
+.ap-panel.view-cross .ap-cross { flex: 1 1 100%; min-height: 0; position: relative; }
+.ap-panel.view-skewt .ap-skewt { flex: 1 1 100%; min-height: 0; position: relative; }
+.ap-cross, .ap-skewt { background: var(--bg); position: relative; min-height: 0; }
+.ap-cross + .ap-skewt { border-top: 1px solid var(--border); }
+
+/* Loading state — kills the "blue sky = forecast is clear" trap by
+ * desaturating the empty canvas and overlaying a "Loading…" badge
+ * until the `derived` SSE phase lands real data. The status row
+ * (with dots-spinner) keeps showing the actual stage label. */
+.ap-cross.is-loading > canvas,
+.ap-skewt.is-loading > canvas {
+  filter: grayscale(0.95) opacity(0.45);
+  transition: filter 0.15s ease-out;
+}
+.ap-cross.is-loading::after,
+.ap-skewt.is-loading::after {
+  content: 'Loading\2026';
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* Gear / settings button in the controls row. Uses the same toggle
+ * vocabulary as the briefing-page sidebar gear so users find it
+ * familiar. */
+.ap-settings-btn {
+  margin-left: auto;
+  padding: 0.2rem 0.45rem; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); cursor: pointer;
+  border-radius: 4px; font-size: 0.9rem; line-height: 1;
+}
+.ap-settings-btn:hover { background: var(--bg); }
+.ap-settings-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* Settings drawer slides out to the LEFT of the panel and overlaps
+ * the map. Width is fixed; on narrow viewports the drawer drops
+ * inline below the controls instead (see media query below). */
+.ap-settings-drawer {
+  position: absolute;
+  top: 0; right: 100%;
+  height: 100%;
+  width: 320px;
+  margin-right: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: -6px 0 14px rgba(0, 0, 0, 0.15);
+  z-index: 1500;
+  overflow-y: auto;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.78rem;
+}
+.ap-settings-drawer[hidden] { display: none; }
+.ap-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 0.4rem; margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.ap-drawer-title { font-weight: 600; font-size: 0.85rem; }
+.ap-drawer-close {
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 0 0.3rem;
+}
+.ap-drawer-close:hover { color: var(--text); }
+.ap-drawer-section { margin-bottom: 0.7rem; }
+.ap-drawer-section + .ap-drawer-section {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+.ap-drawer-section-title {
+  margin: 0 0 0.4rem 0; font-size: 0.75rem; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.ap-drawer-empty { color: var(--text-muted); font-style: italic; padding: 0.3rem 0; }
+/* Reused viz layer-toggle styling: tighter line height + wrap inside
+ * the narrow drawer column. */
+.ap-settings-drawer .viz-layer-toggles {
+  display: flex; flex-direction: column; gap: 0.3rem;
+}
+.ap-settings-drawer .viz-layer-group {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem;
+}
+.ap-settings-drawer .viz-layer-checkbox {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  font-size: 0.78rem;
+}
+
+/* --- Advisory evidence focus and typed action affordances --- */
+.advisory-focus-banner {
+  margin: 0.55rem 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+}
+.advisory-focus-banner[hidden] { display: none; }
+.advisory-focus-content {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.advisory-focus-model,
+.advisory-focus-status { color: var(--text-muted); font-size: 0.82rem; }
+.advisory-focus-method,
+.advisory-method-badge {
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  color: var(--text);
+}
+.advisory-focus-close {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.22rem 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.advisory-focus-partial-key {
+  display: inline-block;
+  width: 30px;
+  height: 12px;
+  border: 2px dashed currentColor;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 4px,
+    currentColor 4px 5px,
+    transparent 5px 9px
+  );
+  color: #b45309;
+}
+.advisory-action { display: inline-flex; align-items: center; gap: 0.35rem; margin-left: auto; }
+.advisory-action-btn {
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, var(--border));
+  border-radius: var(--radius);
+  padding: 0.24rem 0.5rem;
+  background: var(--surface);
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.advisory-action-btn:disabled,
+.advisory-action-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+  border-style: dashed;
+  color: var(--text-muted);
+}
+.advisory-action-unavailable { color: var(--text-muted); font-size: 0.75rem; }
+
+/* --- Briefing airport-profile dialog drawer --- */
+.briefing-airport-profile-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 3000;
+  width: min(680px, 96vw);
+  height: 100dvh;
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--surface) 97%, transparent);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.24);
+  overflow: auto;
+  animation: briefing-airport-drawer-in 160ms ease-out;
+}
+.briefing-airport-profile-drawer[hidden] { display: none; }
+@keyframes briefing-airport-drawer-in {
+  from { transform: translateX(18px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.briefing-airport-profile-shell {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.5);
+  overflow: hidden;
+}
+.briefing-airport-profile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.briefing-airport-profile-header h2 { margin: 0; font-size: 1.05rem; }
+.briefing-airport-profile-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.6rem;
+  line-height: 1;
+}
+.briefing-airport-endpoints { display: grid; grid-template-columns: 1fr 1fr; }
+.briefing-airport-endpoint-tab {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+}
+.briefing-airport-endpoint-tab[aria-selected="true"] {
+  border-bottom-color: var(--primary);
+  background: var(--surface);
+  color: var(--primary);
+}
+.briefing-airport-profile-tabpanel {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+.briefing-airport-endpoint-time {
+  padding: 0.4rem 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.briefing-airport-fallback-note {
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px dashed #b45309;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, #f59e0b 12%, var(--surface));
+  color: var(--text);
+  font-size: 0.82rem;
+}
+.briefing-airport-profile-panel-host { flex: 1 1 auto; min-height: 520px; }
+.briefing-airport-profile-panel-host.ap-panel {
+  position: relative;
+  height: calc(100dvh - 190px);
+  overflow: visible;
+}
+
+@media (min-width: 901px) {
+  .briefing-airport-profile-panel-host.ap-panel .ap-settings-drawer {
+    right: 0;
+    margin-right: 0;
+  }
+}
+
+.advisory-action-btn:focus-visible,
+.advisory-focus-close:focus-visible,
+.briefing-airport-profile-close:focus-visible,
+.briefing-airport-endpoint-tab:focus-visible,
+.ap-panel button:focus-visible,
+.ap-panel select:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .ap-split-host { display: block; }
+  .ap-split-host > .ap-panel-host {
+    position: fixed; inset: 0; max-width: none; min-width: 0;
+    z-index: 2000; border-radius: 0;
+  }
+  .ap-panel { height: 100vh; }
+  /* No room for a left-overlap drawer on phones; render it as a
+   * full-width sheet at the bottom of the panel instead. */
+  .ap-settings-drawer {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    width: auto; height: 60vh; border-radius: 8px 8px 0 0;
+    margin-right: 0;
+    box-shadow: 0 -6px 14px rgba(0, 0, 0, 0.2);
+  }
+  .briefing-airport-profile-drawer { width: 100vw; padding: 0; }
+  .briefing-airport-profile-shell { border-radius: 0; border-block: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .briefing-airport-profile-drawer { animation: none; }
+  .ap-cross.is-loading > canvas,
+  .ap-skewt.is-loading > canvas { transition: none; }
+  :root { scroll-behavior: auto !important; }
+}
+
+@media (forced-colors: active) {
+  .advisory-focus-banner,
+  .advisory-focus-partial-key,
+  .advisory-action-btn,
+  .briefing-airport-profile-drawer,
+  .briefing-airport-endpoint-tab[aria-selected="true"] {
+    border-color: CanvasText;
+    outline: 1px solid CanvasText;
+  }
+  .advisory-focus-partial-key { background: none; border-style: dashed; }
+}

@@ -1,12 +1,82 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { advisoryMethodLabel } from '../../ts/visualization/advisory-methods';
+import de from '../../ts/i18n/locales/de.json';
+import en from '../../ts/i18n/locales/en.json';
+import es from '../../ts/i18n/locales/es.json';
+import fr from '../../ts/i18n/locales/fr.json';
+
+const EXPECTED_METHOD_KEYS = [
+  'airport_conditions',
+  'bulk_shear',
+  'cat_with_vertical_motion',
+  'dd_vs_nwp',
+  'density_altitude',
+  'dewpoint_depression',
+  'hewson',
+  'ieng',
+  'ifr_composite',
+  'model_divergence',
+  'nwp',
+  'nwp_precipitation_profile',
+  'nwp_synthesized',
+  'nwp_with_dd_floor',
+  'ogimet_dd',
+  'ogimet_nwp',
+  'richardson_cat',
+  'runway_components',
+  'sfip',
+  'terrain_wind',
+  'terrain_wind_wave',
+  'thermo',
+  'vertical_motion',
+  'vfr_composite',
+].sort();
+
+function advisoryMethodKeys(locale: Record<string, string>): string[] {
+  return Object.keys(locale)
+    .filter(key => key.startsWith('advisories.methods.'))
+    .map(key => key.slice('advisories.methods.'.length))
+    .sort();
+}
+
+function placeholderNames(message: string): string[] {
+  return [...message.matchAll(/\{([^{}]+)\}/g)]
+    .map(match => match[1])
+    .sort();
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe('advisoryMethodLabel', () => {
+  it('defines the complete advisory method translation set in every locale', () => {
+    const locales = { en, fr, de, es } as const;
+    for (const [locale, messages] of Object.entries(locales)) {
+      expect(advisoryMethodKeys(messages), locale).toEqual(EXPECTED_METHOD_KEYS);
+      for (const key of EXPECTED_METHOD_KEYS) {
+        expect(messages[`advisories.methods.${key}` as keyof typeof messages], `${locale}.${key}`)
+          .toMatch(/\S/);
+      }
+    }
+  });
+
+  it('defines the unavailable airport-profile message consistently in every locale', () => {
+    const locales: Record<string, Record<string, string>> = { en, fr, de, es };
+    const key = 'advisories.airportProfileUnavailable';
+
+    for (const [locale, messages] of Object.entries(locales)) {
+      expect(messages[key], `${locale}.${key}`).toMatch(/\S/);
+    }
+
+    const expectedPlaceholders = placeholderNames(en[key]);
+    for (const [locale, messages] of Object.entries(locales)) {
+      expect(placeholderNames(messages[key]), `${locale}.${key} placeholders`)
+        .toEqual(expectedPlaceholders);
+    }
+  });
+
   it.each([
     ['dewpoint_depression', 'DD'],
     ['nwp', 'NWP'],
