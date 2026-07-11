@@ -19,6 +19,7 @@ from weatherbrief.models import (
     AdvisoryStatus,
     ConvectiveAssessment,
     ConvectiveRisk,
+    DerivedLevel,
     RoutePointAnalysis,
     SoundingAnalysis,
     ThermodynamicIndices,
@@ -147,10 +148,20 @@ class TestTurbulence:
             classification=VerticalMotionClass.QUIESCENT,
             max_w_fpm=0,
         )
+        clear_cat_level = DerivedLevel(
+            pressure_hpa=700,
+            altitude_ft=10000,
+            richardson_number=3.0,
+        )
         analyses = []
         for rpa in clear_context.analyses:
             soundings = {
-                model: sounding.model_copy(update={"vertical_motion": smooth})
+                model: sounding.model_copy(
+                    update={
+                        "vertical_motion": smooth,
+                        "derived_levels": [clear_cat_level],
+                    }
+                )
                 for model, sounding in rpa.sounding.items()
             }
             analyses.append(rpa.model_copy(update={"sounding": soundings}))
@@ -159,6 +170,7 @@ class TestTurbulence:
             ctx, {"route_pct_amber": 20, "strong_w_fpm": 200},
         )
         assert result.aggregate_status == AdvisoryStatus.GREEN
+        assert all(model.data_state == "complete" for model in result.per_model)
 
     def test_turbulent_route(self, turbulent_context: RouteContext):
         """CAT at cruise along full route → AMBER or RED."""

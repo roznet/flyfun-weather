@@ -3,7 +3,47 @@
 from dataclasses import replace
 
 from weatherbrief.analysis.advisories.turbulence import TurbulenceEvaluator
-from weatherbrief.models import AdvisoryStatus, CATRiskLevel
+from weatherbrief.models import (
+    AdvisoryStatus,
+    CATRiskLayer,
+    CATRiskLevel,
+    DerivedLevel,
+    VerticalMotionAssessment,
+    VerticalMotionClass,
+)
+
+
+_TURBULENCE_PARAMS = {"route_pct_amber": 20, "strong_w_fpm": 200}
+
+
+def _with_gfs_turbulence(clear_context, assessment_for_point):
+    analyses = []
+    for rpa in clear_context.analyses:
+        vertical_motion, derived_levels = assessment_for_point(rpa.point_index)
+        sounding = rpa.sounding["gfs"].model_copy(
+            update={
+                "vertical_motion": vertical_motion,
+                "derived_levels": derived_levels,
+            }
+        )
+        analyses.append(rpa.model_copy(update={"sounding": {"gfs": sounding}}))
+    return replace(clear_context, analyses=analyses, models=["gfs"])
+
+
+def _quiescent_motion() -> VerticalMotionAssessment:
+    return VerticalMotionAssessment(
+        classification=VerticalMotionClass.QUIESCENT,
+        max_w_fpm=0,
+        cat_risk_layers=[],
+    )
+
+
+def _explicit_clear_cat_level() -> DerivedLevel:
+    return DerivedLevel(
+        pressure_hpa=700,
+        altitude_ft=10000,
+        richardson_number=3.0,
+    )
 
 
 def test_turbulence_missing_vertical_motion_is_unavailable(clear_context):
@@ -18,6 +58,105 @@ def test_turbulence_missing_vertical_motion_is_unavailable(clear_context):
     model = result.per_model[0]
     assert model.status == AdvisoryStatus.UNAVAILABLE
     assert model.data_state == "unavailable"
+
+
+def test_turbulence_severe_cat_survives_unavailable_vertical_motion(clear_context):
+    hazard_point_index = 5
+    severe_layer = CATRiskLayer(
+        base_ft=7000,
+        top_ft=9000,
+        richardson_number=0.2,
+        risk=CATRiskLevel.SEVERE,
+    )
+
+    def assessment_for_point(point_index):
+        if point_index == hazard_point_index:
+            return (
+                VerticalMotionAssessment(
+                    classification=VerticalMotionClass.UNAVAILABLE,
+                    cat_risk_layers=[severe_layer],
+                ),
+                [],
+            )
+        return _quiescent_motion(), [_explicit_clear_cat_level()]
+
+    model = TurbulenceEvaluator.evaluate(
+        _with_gfs_turbulence(clear_context, assessment_for_point),
+        _TURBULENCE_PARAMS,
+    ).per_model[0]
+    cat_regions = [
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "cat_at_cruise"
+    ]
+
+    assert (
+        model.status,
+        model.data_state,
+        model.affected_points,
+        model.affected_nm,
+        model.primary_method_id,
+        [
+            (
+                region.start_point_index,
+                region.end_point_index,
+                region.severity,
+                region.metric_id,
+                region.method_id,
+                region.lower_altitude_ft,
+                region.upper_altitude_ft,
+            )
+            for region in cat_regions
+        ],
+    ) == (
+        AdvisoryStatus.RED,
+        "partial",
+        1,
+        20.0,
+        "richardson_cat",
+        [
+            (
+                5,
+                5,
+                AdvisoryStatus.RED,
+                "cat_risk",
+                "richardson_cat",
+                7000,
+                9000,
+            )
+        ],
+    )
+
+
+def test_turbulence_missing_richardson_assessment_is_partial(clear_context):
+    ctx = _with_gfs_turbulence(
+        clear_context,
+        lambda _point_index: (_quiescent_motion(), []),
+    )
+
+    model = TurbulenceEvaluator.evaluate(ctx, _TURBULENCE_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "partial"
+    assert model.total_points == len(clear_context.analyses)
+    assert model.affected_points == 0
+
+
+def test_turbulence_explicit_clear_richardson_is_complete_green(clear_context):
+    ctx = _with_gfs_turbulence(
+        clear_context,
+        lambda _point_index: (
+            _quiescent_motion(),
+            [_explicit_clear_cat_level()],
+        ),
+    )
+
+    model = TurbulenceEvaluator.evaluate(ctx, _TURBULENCE_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.GREEN
+    assert model.data_state == "complete"
+    assert model.total_points == len(clear_context.analyses)
+    assert model.affected_points == 0
 
 
 def test_turbulence_partial_severe_evidence_remains_red(turbulent_context):

@@ -97,17 +97,28 @@ class TurbulenceEvaluator:
                 if sounding is None:
                     continue
                 vm = sounding.vertical_motion
-                if (
-                    vm is None
-                    or vm.classification == VerticalMotionClass.UNAVAILABLE
-                ):
+                classification = (
+                    vm.classification
+                    if vm is not None
+                    else VerticalMotionClass.UNAVAILABLE
+                )
+                motion_available = (
+                    classification != VerticalMotionClass.UNAVAILABLE
+                )
+                cat_layers = vm.cat_risk_layers if vm is not None else []
+                cat_available = bool(cat_layers) or any(
+                    level.richardson_number is not None
+                    for level in sounding.derived_levels
+                )
+                if not (motion_available or cat_available):
                     continue
 
                 point_index = rpa.point_index
                 evaluated.add(point_index)
-                complete.add(point_index)
+                if motion_available and cat_available:
+                    complete.add(point_index)
 
-                for layer in vm.cat_risk_layers:
+                for layer in cat_layers:
                     if not (
                         layer.base_ft <= cruise <= layer.top_ft
                         and layer.risk != CATRiskLevel.NONE
@@ -137,7 +148,9 @@ class TurbulenceEvaluator:
                         severe_cat_points.add(point_index)
 
                 if (
-                    vm.max_w_fpm is not None
+                    motion_available
+                    and vm is not None
+                    and vm.max_w_fpm is not None
                     and abs(vm.max_w_fpm) > strong_w_fpm
                     and vm.max_w_level_ft is not None
                     and abs(vm.max_w_level_ft - cruise) < 3000
