@@ -300,3 +300,39 @@ def wind_at_altitude(
             return (best_level.wind_speed_kt, best_level.wind_direction_deg)
 
     return None
+
+
+def wind_speed_at_altitude(
+    cross_sections: list[RouteCrossSection],
+    model: str,
+    point_index: int,
+    target_alt_ft: float,
+    target_time: datetime,
+) -> float | None:
+    """Find scalar wind speed at the nearest pressure level to an altitude.
+
+    Unlike :func:`wind_at_altitude`, this speed-only lookup does not require a
+    wind direction. It still selects the hourly forecast nearest
+    ``target_time`` so multi-hour routes retain their point-valid timing.
+    """
+    from weatherbrief.analysis.wind import pick_wind_speed_at_pressure
+    from weatherbrief.models import altitude_to_pressure_hpa
+
+    target_pressure = altitude_to_pressure_hpa(int(target_alt_ft))
+
+    for cs in cross_sections:
+        if cs.model.value != model:
+            continue
+        if point_index >= len(cs.point_forecasts):
+            return None
+
+        wf = cs.point_forecasts[point_index]
+        hourly = wf.at_time(target_time)
+        if hourly is None:
+            return None
+
+        best_level = pick_wind_speed_at_pressure(hourly, target_pressure)
+        if best_level is not None and best_level.wind_speed_kt is not None:
+            return best_level.wind_speed_kt
+
+    return None

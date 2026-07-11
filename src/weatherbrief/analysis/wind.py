@@ -47,3 +47,24 @@ def pick_wind_at_pressure(
         ):
             chosen = level
     return chosen
+
+
+def pick_wind_speed_at_pressure(
+    hourly: HourlyForecast,
+    target_pressure_hpa: float,
+) -> Optional[PressureLevelData]:
+    """Return the nearest pressure level carrying a valid wind speed.
+
+    Direction is deliberately not required. This selector is for scalar-speed
+    consumers such as mountain-wind grading, where the route profile cannot
+    establish a cross-ridge component and direction must not gate availability.
+    """
+    chosen: Optional[PressureLevelData] = None
+    for level in hourly.pressure_levels:
+        if level.wind_speed_kt is None:
+            continue
+        if chosen is None or abs(level.pressure_hpa - target_pressure_hpa) < abs(
+            chosen.pressure_hpa - target_pressure_hpa
+        ):
+            chosen = level
+    return chosen

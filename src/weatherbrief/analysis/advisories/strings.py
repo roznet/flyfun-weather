@@ -57,6 +57,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "{risk} über {extent}",
         "es": "{risk} sobre {extent}",
     },
+    "turbulence.combined_over": {
+        "en": "{risk} CAT + strong vertical motion over {extent}",
+        "fr": "CAT {risk} + fort mouvement vertical sur {extent}",
+        "de": "{risk} CAT + starke Vertikalbewegung über {extent}",
+        "es": "CAT {risk} + fuerte movimiento vertical sobre {extent}",
+    },
 
     # --- flight_category ---
     # Uses "Dep {icao}: {cat}" pattern — Dep/Arr kept as compact labels

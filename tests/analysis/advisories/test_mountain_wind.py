@@ -137,6 +137,49 @@ def _evaluate(ctx: RouteContext, params: dict | None = None):
     return MountainWindEvaluator.evaluate(ctx, {**defaults, **(params or {})})
 
 
+def _with_point_pressure_levels(
+    ctx: RouteContext,
+    levels_by_point: dict[int, list[PressureLevelData]],
+) -> RouteContext:
+    cross_section = ctx.cross_sections[0]
+    forecasts = []
+    for point_index, forecast in enumerate(cross_section.point_forecasts):
+        hourly = forecast.hourly[0]
+        levels = levels_by_point.get(point_index, hourly.pressure_levels)
+        forecasts.append(
+            forecast.model_copy(
+                update={
+                    "hourly": [hourly.model_copy(update={"pressure_levels": levels})]
+                }
+            )
+        )
+    return replace(
+        ctx,
+        cross_sections=[
+            cross_section.model_copy(update={"point_forecasts": forecasts})
+        ],
+    )
+
+
+def _with_ridge_inversions(
+    ctx: RouteContext,
+    point_indices: set[int],
+) -> RouteContext:
+    analyses = []
+    for rpa in ctx.analyses:
+        sounding = rpa.sounding["gfs"].model_copy(
+            update={
+                "inversion_layers": (
+                    [InversionLayer(base_ft=5500, top_ft=6500, strength_c=3.0)]
+                    if rpa.point_index in point_indices
+                    else []
+                )
+            }
+        )
+        analyses.append(rpa.model_copy(update={"sounding": {"gfs": sounding}}))
+    return replace(ctx, analyses=analyses)
+
+
 class TestMountainWindWaveCorroboration:
 
     def test_light_wind_green(self):
@@ -244,3 +287,109 @@ def test_mountain_wind_partial_hazard_remains_red():
     model = result.per_model[0]
     assert model.status == AdvisoryStatus.RED
     assert model.data_state == "partial"
+
+
+def test_mountain_wind_uses_target_speed_without_direction():
+    ctx = _with_point_pressure_levels(
+        _ctx(10.0),
+        {
+            4: [
+                PressureLevelData(
+                    pressure_hpa=800,
+                    wind_speed_kt=45,
+                    wind_direction_deg=None,
+                ),
+                PressureLevelData(
+                    pressure_hpa=600,
+                    wind_speed_kt=10,
+                    wind_direction_deg=270,
+                ),
+            ]
+        },
+    )
+
+    result = _evaluate(ctx)
+
+    assert result.per_model[0].status == AdvisoryStatus.RED
+    assert "45kt" in result.per_model[0].detail
+
+
+def test_mountain_wave_detail_uses_same_point_speed_signature_and_extent():
+    ctx = _with_point_pressure_levels(
+        _ctx(10.0),
+        {
+            4: [PressureLevelData(
+                pressure_hpa=800,
+                wind_speed_kt=39,
+                wind_direction_deg=270,
+            )],
+            5: [PressureLevelData(
+                pressure_hpa=800,
+                wind_speed_kt=31,
+                wind_direction_deg=270,
+            )],
+        },
+    )
+    ctx = _with_ridge_inversions(ctx, {5})
+
+    result = _evaluate(ctx)
+
+    model = result.per_model[0]
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "terrain_wind_wave"
+    assert "31kt" in model.detail
+    assert "39kt" not in model.detail
+    assert "stable layer" in model.detail
+    assert "22nm/200nm (10%)" in model.detail
+
+
+def test_severe_mountain_wind_does_not_borrow_another_points_signature():
+    ctx = _with_point_pressure_levels(
+        _ctx(10.0),
+        {
+            4: [PressureLevelData(
+                pressure_hpa=800,
+                wind_speed_kt=45,
+                wind_direction_deg=270,
+            )],
+            5: [PressureLevelData(
+                pressure_hpa=800,
+                wind_speed_kt=32,
+                wind_direction_deg=270,
+            )],
+        },
+    )
+    ctx = _with_ridge_inversions(ctx, {5})
+
+    result = _evaluate(ctx)
+
+    model = result.per_model[0]
+    assert model.status == AdvisoryStatus.RED
+    assert "45kt" in model.detail
+    assert "stable layer" not in model.detail
+
+
+def test_amber_mountain_wind_does_not_borrow_another_points_signature():
+    ctx = _with_point_pressure_levels(
+        _ctx(10.0),
+        {
+            4: [PressureLevelData(
+                pressure_hpa=800,
+                wind_speed_kt=29,
+                wind_direction_deg=270,
+            )],
+            5: [PressureLevelData(
+                pressure_hpa=800,
+                wind_speed_kt=25,
+                wind_direction_deg=270,
+            )],
+        },
+    )
+    ctx = _with_ridge_inversions(ctx, {5})
+
+    result = _evaluate(ctx)
+
+    model = result.per_model[0]
+    assert model.status == AdvisoryStatus.AMBER
+    assert "29kt" in model.detail
+    assert "stable layer" not in model.detail

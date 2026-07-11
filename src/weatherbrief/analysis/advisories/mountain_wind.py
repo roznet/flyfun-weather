@@ -26,7 +26,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     max_terrain_near_point,
-    wind_at_altitude,
+    wind_speed_at_altitude,
 )
 from weatherbrief.analysis.advisories.evidence import (
     EvidenceSample,
@@ -178,10 +178,10 @@ class MountainWindEvaluator:
             complete: set[int] = set()
             affected: set[int] = set()
             mountain_points: set[int] = set()
+            wave_red_points: set[int] = set()
             samples: list[EvidenceSample] = []
-            max_wind = 0.0
-            wave_red = False  # corroborated point above the lower red bar
-            wave_sigs: set[str] = set()  # signatures seen at strong-wind points
+            speed_by_point: dict[int, float] = {}
+            signatures_by_point: dict[int, set[str]] = {}
 
             for rpa in ordered_analyses:
                 terrain_ft = max_terrain_near_point(
@@ -197,21 +197,19 @@ class MountainWindEvaluator:
                     continue
                 mountain_points.add(point_index)
 
-                wind = wind_at_altitude(
+                speed_kt = wind_speed_at_altitude(
                     ctx.cross_sections,
                     model,
                     point_index,
                     terrain_ft + altitude_margin,
                     rpa.forecast_hour,
                 )
-                if wind is None:
+                if speed_kt is None:
                     continue
 
                 evaluated.add(point_index)
                 complete.add(point_index)
-                speed_kt, _ = wind
-                if speed_kt > max_wind:
-                    max_wind = speed_kt
+                speed_by_point[point_index] = speed_kt
 
                 if speed_kt >= wind_amber:
                     affected.add(point_index)
@@ -230,10 +228,10 @@ class MountainWindEvaluator:
                     )
                     sigs = _wave_signatures(rpa.sounding.get(model), terrain_ft)
                     if sigs:
-                        wave_sigs |= sigs
+                        signatures_by_point[point_index] = sigs
                         corroborated = speed_kt >= corroborated_red
                         if corroborated:
-                            wave_red = True
+                            wave_red_points.add(point_index)
                         samples.append(
                             EvidenceSample(
                                 point_index=point_index,
@@ -248,6 +246,32 @@ class MountainWindEvaluator:
                             )
                         )
 
+            def controlling_point(point_indices: set[int]) -> int | None:
+                controlling: int | None = None
+                for rpa in ordered_analyses:
+                    point_index = rpa.point_index
+                    if point_index not in point_indices:
+                        continue
+                    if (
+                        controlling is None
+                        or speed_by_point[point_index] > speed_by_point[controlling]
+                    ):
+                        controlling = point_index
+                return controlling
+
+            max_wind_point = controlling_point(set(speed_by_point))
+            wave_control_point = controlling_point(wave_red_points)
+            max_wind = (
+                speed_by_point[max_wind_point]
+                if max_wind_point is not None
+                else 0.0
+            )
+            wave_control_speed = (
+                speed_by_point[wave_control_point]
+                if wave_control_point is not None
+                else 0.0
+            )
+
             summary = summarize_evidence(
                 route_points=ordered_analyses,
                 total_distance_nm=ctx.total_distance_nm,
@@ -256,13 +280,28 @@ class MountainWindEvaluator:
                 affected_point_indices=affected,
                 evidence_samples=samples,
             )
+            wave_summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=wave_red_points,
+                evidence_samples=(),
+            )
 
             loc = ctx.locale
             ext = summary.format_extent()
-            sig_text = " + ".join(
-                adv_t(f"mountain_wind.sig_{s}", loc)
-                for s in sorted(wave_sigs)
-            )
+
+            def signature_text(point_index: int | None) -> str:
+                return " + ".join(
+                    adv_t(f"mountain_wind.sig_{signature}", loc)
+                    for signature in sorted(
+                        signatures_by_point.get(point_index, set())
+                    )
+                )
+
+            max_wind_sig_text = signature_text(max_wind_point)
+            wave_sig_text = signature_text(wave_control_point)
             if summary.total_points == 0:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
@@ -272,26 +311,37 @@ class MountainWindEvaluator:
             elif max_wind >= wind_red:
                 status = AdvisoryStatus.RED
                 detail = adv_t("mountain_wind.severe", loc, speed=f"{max_wind:.0f}", extent=ext)
-                if sig_text:
-                    detail += adv_t("mountain_wind.sig_suffix", loc, signature=sig_text)
-            elif wave_red:
+                if max_wind_sig_text:
+                    detail += adv_t(
+                        "mountain_wind.sig_suffix",
+                        loc,
+                        signature=max_wind_sig_text,
+                    )
+            elif wave_control_point is not None:
                 status = AdvisoryStatus.RED
                 detail = adv_t(
-                    "mountain_wind.wave_confirmed", loc,
-                    speed=f"{max_wind:.0f}", signature=sig_text, extent=ext,
+                    "mountain_wind.wave_confirmed",
+                    loc,
+                    speed=f"{wave_control_speed:.0f}",
+                    signature=wave_sig_text,
+                    extent=wave_summary.format_extent(),
                 )
             elif max_wind >= wind_amber:
                 status = AdvisoryStatus.AMBER
                 detail = adv_t("mountain_wind.wave_risk", loc, speed=f"{max_wind:.0f}", extent=ext)
-                if sig_text:
-                    detail += adv_t("mountain_wind.sig_suffix", loc, signature=sig_text)
+                if max_wind_sig_text:
+                    detail += adv_t(
+                        "mountain_wind.sig_suffix",
+                        loc,
+                        signature=max_wind_sig_text,
+                    )
             else:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("mountain_wind.light", loc, speed=f"{max_wind:.0f}")
 
             primary_method_id = (
                 "terrain_wind_wave"
-                if wave_red and max_wind < wind_red
+                if wave_control_point is not None and max_wind < wind_red
                 else "terrain_wind"
             )
             missing_detail = adv_t(

@@ -1,8 +1,13 @@
 """Tests for wind component analysis."""
 
 import math
+from datetime import datetime
 
-from weatherbrief.analysis.wind import compute_wind_components
+from weatherbrief.analysis.wind import (
+    compute_wind_components,
+    pick_wind_speed_at_pressure,
+)
+from weatherbrief.models import HourlyForecast, PressureLevelData
 
 
 def test_pure_headwind():
@@ -54,3 +59,28 @@ def test_calm_wind_direction():
     assert wc.track_deg == 180
     assert wc.wind_direction_deg == 270
     assert wc.wind_speed_kt == 10
+
+
+def test_pick_wind_speed_at_pressure_accepts_missing_direction():
+    hourly = HourlyForecast(
+        time=datetime(2026, 3, 1, 12, 0),
+        pressure_levels=[
+            PressureLevelData(
+                pressure_hpa=800,
+                wind_speed_kt=45,
+                wind_direction_deg=None,
+            ),
+            PressureLevelData(
+                pressure_hpa=600,
+                wind_speed_kt=10,
+                wind_direction_deg=270,
+            ),
+        ],
+    )
+
+    chosen = pick_wind_speed_at_pressure(hourly, 790)
+
+    assert chosen is not None
+    assert chosen.pressure_hpa == 800
+    assert chosen.wind_speed_kt == 45
+    assert chosen.wind_direction_deg is None

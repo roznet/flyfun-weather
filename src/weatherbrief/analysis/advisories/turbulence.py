@@ -86,6 +86,7 @@ class TurbulenceEvaluator:
             complete: set[int] = set()
             affected: set[int] = set()
             cat_points: set[int] = set()
+            severe_cat_points: set[int] = set()
             motion_points: set[int] = set()
             samples: list[EvidenceSample] = []
             has_severe = False
@@ -133,6 +134,7 @@ class TurbulenceEvaluator:
                         worst_cat = layer.risk
                     if layer.risk == CATRiskLevel.SEVERE:
                         has_severe = True
+                        severe_cat_points.add(point_index)
 
                 if (
                     vm.max_w_fpm is not None
@@ -163,6 +165,20 @@ class TurbulenceEvaluator:
                 affected_point_indices=affected,
                 evidence_samples=samples,
             )
+
+            def subset_summary(point_indices: set[int]):
+                return summarize_evidence(
+                    route_points=ordered_analyses,
+                    total_distance_nm=ctx.total_distance_nm,
+                    evaluated_point_indices=evaluated,
+                    complete_point_indices=complete,
+                    affected_point_indices=point_indices,
+                    evidence_samples=(),
+                )
+
+            cat_summary = subset_summary(cat_points)
+            severe_cat_summary = subset_summary(severe_cat_points)
+            motion_summary = subset_summary(motion_points)
             loc = ctx.locale
             if summary.total_points == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -172,7 +188,7 @@ class TurbulenceEvaluator:
                 detail = adv_t(
                     "turbulence.severe_over",
                     loc,
-                    extent=summary.format_extent(),
+                    extent=severe_cat_summary.format_extent(),
                 )
             elif summary.affected_points == 0:
                 status = AdvisoryStatus.GREEN
@@ -184,17 +200,27 @@ class TurbulenceEvaluator:
                     route_pct_amber,
                     red_pct=50,
                 )
-                risk_label = (
-                    worst_cat.value.upper()
-                    if worst_cat != CATRiskLevel.NONE
-                    else "Turbulence"
-                )
-                detail = adv_t(
-                    "turbulence.risk_over",
-                    loc,
-                    risk=risk_label,
-                    extent=summary.format_extent(),
-                )
+                if cat_points and motion_points:
+                    detail = adv_t(
+                        "turbulence.combined_over",
+                        loc,
+                        risk=worst_cat.value.upper(),
+                        extent=summary.format_extent(),
+                    )
+                elif cat_points:
+                    detail = adv_t(
+                        "turbulence.risk_over",
+                        loc,
+                        risk=worst_cat.value.upper(),
+                        extent=cat_summary.format_extent(),
+                    )
+                else:
+                    detail = adv_t(
+                        "turbulence.risk_over",
+                        loc,
+                        risk="Turbulence",
+                        extent=motion_summary.format_extent(),
+                    )
 
             if has_severe:
                 primary_method_id = "richardson_cat"

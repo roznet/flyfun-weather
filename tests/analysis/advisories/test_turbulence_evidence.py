@@ -27,15 +27,33 @@ def test_turbulence_partial_severe_evidence_remains_red(turbulent_context):
             sounding = rpa.sounding["gfs"].model_copy(update={"vertical_motion": None})
             analyses.append(rpa.model_copy(update={"sounding": {"gfs": sounding}}))
         else:
+            sounding = rpa.sounding["gfs"]
+            vertical_motion = sounding.vertical_motion
+            severe_layers = [
+                layer.model_copy(update={"risk": CATRiskLevel.SEVERE})
+                for layer in vertical_motion.cat_risk_layers
+            ]
             analyses.append(
-                rpa.model_copy(update={"sounding": {"gfs": rpa.sounding["gfs"]}})
+                rpa.model_copy(
+                    update={
+                        "sounding": {
+                            "gfs": sounding.model_copy(
+                                update={
+                                    "vertical_motion": vertical_motion.model_copy(
+                                        update={"cat_risk_layers": severe_layers}
+                                    )
+                                }
+                            )
+                        }
+                    }
+                )
             )
     ctx = replace(turbulent_context, analyses=analyses, models=["gfs"])
     result = TurbulenceEvaluator.evaluate(
         ctx, {"route_pct_amber": 20, "strong_w_fpm": 200},
     )
     assert result.per_model[0].data_state == "partial"
-    assert result.per_model[0].status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+    assert result.per_model[0].status == AdvisoryStatus.RED
 
 
 def test_turbulence_keeps_cat_bounds_and_motion_level(turbulent_context):
@@ -155,3 +173,52 @@ def test_turbulence_severe_cat_controls_primary_method(turbulent_context):
     model = result.per_model[0]
     assert model.status == AdvisoryStatus.RED
     assert model.primary_method_id == "richardson_cat"
+
+
+def test_turbulence_severe_detail_uses_only_severe_cat_extent(turbulent_context):
+    analyses = []
+    for rpa in turbulent_context.analyses:
+        sounding = rpa.sounding["gfs"]
+        vertical_motion = sounding.vertical_motion
+        if rpa.point_index == 0:
+            cat_layers = [
+                layer.model_copy(update={"risk": CATRiskLevel.SEVERE})
+                for layer in vertical_motion.cat_risk_layers
+            ]
+            max_w_fpm = 0
+        else:
+            cat_layers = []
+            max_w_fpm = 300
+        updated_motion = vertical_motion.model_copy(
+            update={
+                "cat_risk_layers": cat_layers,
+                "max_w_fpm": max_w_fpm,
+            }
+        )
+        analyses.append(
+            rpa.model_copy(
+                update={
+                    "sounding": {
+                        "gfs": sounding.model_copy(
+                            update={"vertical_motion": updated_motion}
+                        )
+                    }
+                }
+            )
+        )
+
+    result = TurbulenceEvaluator.evaluate(
+        replace(turbulent_context, analyses=analyses),
+        {"route_pct_amber": 20, "strong_w_fpm": 200},
+    )
+
+    assert result.per_model[0].detail == "Severe CAT over 10nm/200nm (10%)"
+
+
+def test_turbulence_combined_detail_names_both_contributors(turbulent_context):
+    result = TurbulenceEvaluator.evaluate(
+        turbulent_context,
+        {"route_pct_amber": 20, "strong_w_fpm": 200},
+    )
+
+    assert "MODERATE CAT + strong vertical motion" in result.per_model[0].detail
