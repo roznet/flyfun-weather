@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 #if DEBUG
 import TipKit
 #endif
@@ -209,7 +210,10 @@ struct SettingsView: View {
                 Text("You have downloaded packs. They won't be accessible until you sign in again.")
             }
             .alert("Notifications Disabled", isPresented: $showPushDeniedAlert) {
-                Button("OK", role: .cancel) {}
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+                Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Enable notifications for FlyFun Weather in the iOS Settings app to receive briefing alerts.")
             }
@@ -238,20 +242,26 @@ struct SettingsView: View {
         pushBusy = true
         Task {
             if enabled {
-                let granted = await appState.requestPushAuthorizationAndRegister()
-                if !granted {
+                switch await appState.enablePush() {
+                case .enabled:
+                    break   // enablePush already wrote notify_push = true
+                case .promptDenied, .needsSettings:
+                    // The user just declined the system prompt, or iOS is already
+                    // denied (no re-prompt possible) — point them at Settings. The
+                    // intent is kept so the foreground reconcile resumes push once
+                    // they authorize there.
                     showPushDeniedAlert = true
-                    pushBusy = false
-                    return
                 }
-            } else if !notifyPrefs.emailEnabled && notifyPrefs.briefingUpdates != .off {
-                // Turning off push while email is already off would strand the
-                // user with no channel — "silence me" → reroute to Off (mirrors
-                // setEmail, and the web pushToggle reroute). Without this the
-                // channel invariant leaks into the silent dead-state.
-                await appState.userPreferences.updateBriefingUpdates(.off, using: client)
+            } else {
+                appState.setWantsPush(false)
+                if !notifyPrefs.emailEnabled && notifyPrefs.briefingUpdates != .off {
+                    // Turning off push while email is already off would strand the
+                    // user with no channel — reroute to Off (mirrors setEmail and
+                    // the web pushToggle reroute; the channel invariant).
+                    await appState.userPreferences.updateBriefingUpdates(.off, using: client)
+                }
+                await appState.userPreferences.updateNotifyPush(false, using: client)
             }
-            await appState.userPreferences.updateNotifyPush(enabled, using: client)
             pushBusy = false
         }
     }

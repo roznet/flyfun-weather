@@ -52,14 +52,19 @@ struct WeatherBriefApp: App {
                     // list sees it before its own `.task` load runs.
                     appState.consumePendingNavigation()
                     Task { await appState.syncPendingPireps() }
-                    Task { await appState.refreshUserPreferences() }
+                    // Refresh prefs, then reconcile push against iOS's actual
+                    // authorization so the toggle/pref match reality (and a rotated
+                    // APNs token is re-registered). Chained so reconcile reads fresh
+                    // prefs, not a stale snapshot.
+                    Task {
+                        await appState.refreshUserPreferences()
+                        await appState.reconcilePushAuthorization()
+                    }
                     Task { await appState.refreshHelpCatalog() }
                     Task { await appState.pruneStaleCache() }
                     // Badge is server-authoritative: reconcile on every activation
-                    // (the correctness backstop for coalesced/missed silent pushes),
-                    // and re-upload a rotated APNs token when already authorized.
+                    // (the correctness backstop for coalesced/missed silent pushes).
                     Task { await appState.reconcileBadge() }
-                    Task { await appState.refreshPushRegistrationIfAuthorized() }
                 }
             }
         }
