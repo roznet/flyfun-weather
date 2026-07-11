@@ -499,13 +499,33 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
             if parts:
                 lines.append(f"  Sounding [{model}]: {', '.join(parts)}")
 
-        # NWP 3-level cloud cover (not available for ECMWF)
-        if sa.cloud_cover_low_pct is not None:
-            lines.append(
-                f"  NWP cloud [{model}]: Low={sa.cloud_cover_low_pct:.0f}%"
-                f", Mid={sa.cloud_cover_mid_pct:.0f}%"
-                f", High={sa.cloud_cover_high_pct:.0f}%"
-            )
+        # Native NWP cloud layers (ECMWF/ICON 3-D cloud fraction or GFS GRIB
+        # decks) — the model's own cloud envelope, same signal the app
+        # cross-section's NWP cloud layer draws. This is deliberately NOT the
+        # bulk Open-Meteo cloud_cover_low/mid/high summary: that low/mid/high
+        # triple is the GFS-native paradigm and mislabels ECMWF (whose native
+        # cloud is per-level 3-D fraction), so emitting it as "NWP cloud" for
+        # every model was wrong. `None` means no native NWP envelope at this
+        # lead time (no GRIB enrichment) — the digest then says so explicitly,
+        # matching the app's empty NWP cloud layer rather than contradicting it.
+        if sa.nwp_cloud_layers is None:
+            lines.append(f"  NWP cloud [{model}]: no native NWP cloud layer at this lead time")
+        elif not sa.nwp_cloud_layers:
+            lines.append(f"  NWP cloud [{model}]: none (model clear)")
+        else:
+            for cl in sa.nwp_cloud_layers:
+                cc_str = (
+                    f" CC={cl.mean_cloud_cover_pct:.0f}%"
+                    if cl.mean_cloud_cover_pct is not None else ""
+                )
+                t_str = (
+                    f" T={cl.mean_temperature_c:.0f}C"
+                    if cl.mean_temperature_c is not None else ""
+                )
+                lines.append(
+                    f"  NWP cloud [{model}]: {cl.coverage.value.upper()} "
+                    f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft{cc_str}{t_str}"
+                )
 
         if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
             conv = sa.convective

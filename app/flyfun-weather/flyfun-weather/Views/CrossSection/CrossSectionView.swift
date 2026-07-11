@@ -192,7 +192,12 @@ struct CrossSectionView: View {
             let _ = trackingService.locationUpdateCount
             let aircraft = aircraftPosition
             let cursor = scrubDistanceNm ?? activePointDistanceNm
-            let layers = csVM.enabledLayers
+            // Effective (not stored) layer set: disables what this model can't
+            // provide and substitutes same-style DD clouds / Ogimet-DD / thermo
+            // convective for unavailable NWP methods, so a far-out ECMWF flight
+            // renders DD clouds instead of a blank NWP layer (matches web). The
+            // stored preference is untouched. (#nwp-cloud-layer-ios-web)
+            let layers = csVM.effectiveEnabledLayers
             // Read themeId here so the Canvas re-renders when the theme changes
             // (it's an @Observable dependency, like `layers`). (#320)
             let themeId = csVM.themeId
