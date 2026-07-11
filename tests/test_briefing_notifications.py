@@ -749,8 +749,21 @@ def test_channel_invariant_backstop_clamps_scope_off(client):
     assert updated["notify_push"] is False
 
 
-def test_channel_invariant_backstop_leaves_one_channel_alone(client):
-    # One channel on (push) with email off is a valid push-only state — no clamp.
+def test_channel_invariant_push_only_without_device_clamps(client):
+    # push=true is NOT a deliverable channel without a registered device, so
+    # {email off, push on} with no device is still the silent dead-state → clamp.
+    r = client.put("/api/user/preferences", json={
+        "notify_email": False, "notify_push": True, "notify_scope": "all",
+    })
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["notify_scope"] == "off"        # no device → not deliverable
+    assert updated["notify_push"] is True
+
+
+def test_channel_invariant_push_only_with_device_ok(client):
+    # With a registered device, push IS deliverable — valid push-only state, no clamp.
+    assert client.post("/api/devices", json={"token": "d1", "environment": "sandbox"}).status_code == 204
     r = client.put("/api/user/preferences", json={
         "notify_email": False, "notify_push": True, "notify_scope": "all",
     })

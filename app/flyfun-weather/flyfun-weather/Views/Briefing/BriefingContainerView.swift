@@ -86,7 +86,10 @@ struct BriefingContainerView: View {
                                     .font(.caption)
                             }
                         }
-                        if flight.isEditable {
+                        // Hide the notify bell for flown flights (matches web's
+                        // renderNotifyOverrideBar isPast guard) — an override on a
+                        // past flight is a no-op.
+                        if flight.isEditable && !flight.isPast {
                             notifyBellMenu
                         }
                         BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,

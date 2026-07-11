@@ -359,16 +359,20 @@ def update_preferences(
         data["notify_decay_notice"] = False
 
     # Channel-invariant backstop (server-side): notifications can't be "on" with
-    # no channel to deliver on, or nothing would ever fire — the silent
+    # no *deliverable* channel, or nothing would ever fire — the silent
     # dead-state. Mirror the client reroute (turning off the last channel means
     # "silence me" → scope off) so the invariant holds for ANY writer — a direct
     # PUT, or a client whose UI guard leaks — not just the web/iOS forms.
-    if (
-        data.get("notify_scope", "auto") != "off"
-        and not data.get("notify_email", True)
-        and not data.get("notify_push", False)
-    ):
-        data["notify_scope"] = "off"
+    # ``notify_push`` alone is NOT a deliverable channel: it needs a registered
+    # device, so a `{email:false, push:true}` PUT with no device is still a
+    # dead-state (this is what the web/iOS UIs prevent by disabling the push
+    # toggle when device-less).
+    if data.get("notify_scope", "auto") != "off" and not data.get("notify_email", True):
+        push_deliverable = (
+            data.get("notify_push", False) and _count_push_devices(db, user_id) > 0
+        )
+        if not push_deliverable:
+            data["notify_scope"] = "off"
 
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)

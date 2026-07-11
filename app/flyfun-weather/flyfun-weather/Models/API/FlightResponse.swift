@@ -53,6 +53,14 @@ struct FlightResponse: Codable, Identifiable, Sendable {
         ISO8601DateFormatter().date(from: departureTime)
     }
 
+    /// Whether the flight has already ended (departure + duration in the past).
+    /// Mirrors the web `isFlightPast` so past-flight UI gating matches across
+    /// clients (e.g. the per-flight notify bell is hidden for flown flights).
+    var isPast: Bool {
+        guard let departure = departureDate else { return false }
+        return Date() > departure.addingTimeInterval(flightDurationHours * 3600)
+    }
+
     /// Short title: "ORIGIN → DEST" from waypoints.
     var shortTitle: String {
         guard let origin = waypoints.first, let dest = waypoints.last else {
