@@ -157,6 +157,21 @@ export async function updateFlight(
   );
 }
 
+/**
+ * Mark a flight's briefing seen for the current user, returning the new
+ * server-computed badge count. Mirrors the iOS client's `markFlightSeen`
+ * (`POST /api/flights/{id}/seen`): opening a briefing on the web clears that
+ * flight from the badge and, if it was unseen, triggers a silent badge-sync
+ * push to the user's devices — the cross-surface "read on web → app badge
+ * drops" path.
+ */
+export async function markFlightSeen(flightId: string): Promise<{ count: number }> {
+  return apiFetch<{ count: number }>(
+    `/flights/${encodeURIComponent(flightId)}/seen`,
+    { method: 'POST' },
+  );
+}
+
 export async function updateAutoRefresh(
   flightId: string,
   req: { auto_refresh: boolean; auto_refresh_hour?: number | null },

@@ -107,6 +107,21 @@ let lastFrontLinesKey = '';
 // "Default resolves to…" hint. Defaults to the account default until prefs land.
 let accountBriefingUpdates: BriefingUpdates = 'changes';
 
+// Cross-surface badge: fire `POST /flights/{id}/seen` once per (flight, pack)
+// when the owner opens a briefing, so the badge clears and a silent badge-sync
+// push drops it on the user's devices. Guarded because the render block below
+// runs on every store update — without this we'd POST on every re-render.
+let lastMarkedSeenKey: string | null = null;
+function maybeMarkFlightSeen(flightId: string, packTimestamp: string): void {
+  const key = `${flightId}:${packTimestamp}`;
+  if (key === lastMarkedSeenKey) return;
+  lastMarkedSeenKey = key; // optimistic: don't retry-storm on a flaky POST
+  void api.markFlightSeen(flightId).catch(() => {
+    // Best-effort — a missed mark-seen just leaves the badge until the next
+    // open (a fresh page load resets this guard).
+  });
+}
+
 interface FrontLevelSpec { level: number; hour: number; }
 
 /** Resolve the per-level fetch plan for one model from the manifest, or null if
@@ -2226,6 +2241,12 @@ async function init(): Promise<void> {
     // Load PIREPs for this flight (fire-and-forget, non-blocking)
     if (s.flight) {
       loadFlightPireps(s.flight.id);
+    }
+
+    // Mark this briefing seen (clears the cross-surface badge). Only for the
+    // owner viewing an actual pack; guarded to fire once per (flight, pack).
+    if (s.flight && s.flight.user_id === user.id && s.currentPack) {
+      maybeMarkFlightSeen(s.flight.id, s.currentPack.fetch_timestamp);
     }
 
     // Refresh button visibility is handled by renderBriefingSharing above
