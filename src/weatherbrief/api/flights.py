@@ -1665,15 +1665,18 @@ def update_auto_refresh(
 ):
     """Update auto-refresh settings for a flight."""
     row = _load_owned_row(db, flight_id, user_id)
+    was_enabled = row.auto_refresh
     row.auto_refresh = req.auto_refresh
     row.auto_refresh_hour = req.auto_refresh_hour
-    if req.auto_refresh:
-        # Enabling auto-refresh restores the pre-#366 "tell me whenever a new
-        # report is ready" behavior: default this flight's bell to "always" so
-        # every scheduled refresh notifies, even when the assessment is
-        # unchanged but the detail moved. Still fully overridable — the user can
-        # mute or drop back to "default" afterward. Disabling auto-refresh
-        # leaves the bell untouched (we don't silently undo a notify choice).
+    if req.auto_refresh and not was_enabled:
+        # Only on the off→on transition: restore the pre-#366 "tell me whenever a
+        # new report is ready" behavior by defaulting this flight's bell to
+        # "always" so every scheduled refresh notifies, even when the assessment
+        # is unchanged but the detail moved. Still fully overridable afterward —
+        # so we must NOT re-seed on every auto_refresh=true request (the web
+        # hour-select sends auto_refresh=true while already on), which would
+        # silently clobber a subsequent "mute". Disabling likewise leaves the
+        # bell untouched — we never silently undo a notify choice.
         row.notify_override = "notify"
     db.flush()
     updated = load_flight(db, flight_id)

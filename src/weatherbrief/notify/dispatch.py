@@ -13,11 +13,11 @@ scope + per-flight override + the change filter. It drives the badge and is the
 base decision for both channels:
 
     if flight.notify_override == "mute":  stop
-    elif flight.notify_override == "notify":  qualifies      # any completion
-    else:                                                    # follow global scope
+    elif flight.notify_override == "notify":  qualifies      # ALWAYS — bypasses scope AND change filter
+    else:                                                    # follow global scope + change filter
         scope == "off"  → stop
         else (on)       → qualifies       # "all"; legacy "auto" also means on
-    if change_only and not changed:  stop
+        if change_only and not changed:  stop
     → advance the badge
 
 The **per-channel trigger rule** then layers on top of a qualifying refresh

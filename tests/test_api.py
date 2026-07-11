@@ -549,6 +549,19 @@ class TestFlightsAPI:
         assert resp.status_code == 200
         assert resp.json()["notify_override"] == "notify"
 
+    def test_hour_change_while_enabled_preserves_mute(self, client, sample_flight):
+        """Only the off→on transition seeds the bell. Once auto-refresh is on, a
+        later request that keeps it on (e.g. the web hour-select sends
+        auto_refresh=true) must NOT re-seed "notify" and clobber an explicit mute."""
+        fid = sample_flight.id
+        # Enable (seeds bell to notify), then the user explicitly mutes it.
+        client.patch(f"/api/flights/{fid}/auto-refresh", json={"auto_refresh": True})
+        assert client.patch(f"/api/flights/{fid}", json={"notify_override": "mute"}).json()["notify_override"] == "mute"
+        # Change only the hour while auto-refresh stays on — mute must survive.
+        resp = client.patch(f"/api/flights/{fid}/auto-refresh", json={"auto_refresh": True, "auto_refresh_hour": 6})
+        assert resp.status_code == 200
+        assert resp.json()["notify_override"] == "mute"
+
 
 # --- Flight subscriptions ---
 
