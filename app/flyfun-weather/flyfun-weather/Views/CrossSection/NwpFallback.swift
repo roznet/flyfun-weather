@@ -1,5 +1,20 @@
 import Foundation
 
+// =============================================================================
+// SYNC — keep this file in lockstep with the web NWP-fallback logic:
+//   • Availability detection (`unavailableLayers`):
+//       web/ts/visualization/data-extract.ts (getUnavailableLayers)
+//   • Substitution + fallback map (`applyFallback` / `ddSubstituteId` / maps):
+//       web/ts/visualization/cross-section/nwp-fallback.ts
+//         (applyNwpFallback, getDdSubstituteId, SINGLE_LAYER_FALLBACK,
+//          NWP_CLOUDS_SIGNAL, ALL_CLOUD_LAYER_IDS)
+//
+// iOS uses its own layer IDs and lacks a few web layers (ieng / sld / e-shear /
+// current-conditions / fronts) — those are intentionally absent here. When the
+// web fallback logic changes, update this file, and note it on the web side
+// (both files carry the reciprocal SYNC comment).
+// =============================================================================
+
 /// Render-time NWP→fallback substitution + availability detection for models
 /// without native NWP data. Port of web's `data-extract.ts:getUnavailableLayers`
 /// and `cross-section/nwp-fallback.ts`.

@@ -445,6 +445,11 @@ function extractPoint(
 /**
  * Determine which cross-section layers lack data for the current model.
  * Returns layer IDs that should be disabled in the UI.
+ *
+ * SYNC: the iOS app mirrors this in
+ * app/flyfun-weather/flyfun-weather/Views/CrossSection/NwpFallback.swift
+ * (NwpFallback.unavailableLayers). The substitution half lives in
+ * ./cross-section/nwp-fallback.ts. Keep all three in lockstep.
  */
 export function getUnavailableLayers(data: VizRouteData): Set<string> {
   const unavailable = new Set<string>();

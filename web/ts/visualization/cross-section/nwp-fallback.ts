@@ -11,6 +11,12 @@
  *  Works purely on a throwaway `effectiveEnabled` map — the stored
  *  `enabledLayers` preference is never mutated, so switching back to an
  *  NWP-capable model auto-restores NWP with no persisted "downgraded" flag.
+ *
+ *  SYNC: the iOS app mirrors this substitution logic (applyNwpFallback,
+ *  getDdSubstituteId, SINGLE_LAYER_FALLBACK) in
+ *  app/flyfun-weather/flyfun-weather/Views/CrossSection/NwpFallback.swift
+ *  (translated to iOS layer IDs). The availability half lives in
+ *  ../data-extract.ts:getUnavailableLayers. Keep all three in lockstep.
  */
 
 import {

@@ -54,6 +54,7 @@ final class CrossSectionViewModel {
             enabledLayers = merged
         }
         activeAdvisoryPreset = UserDefaults.standard.string(forKey: Self.advisoryPresetDefaultsKey)
+        recomputeEffectiveLayers()
     }
 
     /// Switch the colour theme. Independent of the layer preset. Persisted.
@@ -74,31 +75,53 @@ final class CrossSectionViewModel {
         } else {
             UserDefaults.standard.removeObject(forKey: Self.advisoryPresetDefaultsKey)
         }
+        // This is the single funnel for every `enabledLayers` mutation
+        // (toggle/enable/preset/method/advisory-lens), so refresh the effective-
+        // layer cache here rather than at each call site.
+        recomputeEffectiveLayers()
     }
 
     func update(routeAnalyses: RouteAnalysesResponse, elevation: ElevationResponse?, model: String) {
         vizData = Self.extractVizData(from: routeAnalyses, model: model, elevation: elevation)
         dataVersion += 1
+        recomputeEffectiveLayers()  // model/route/elevation changed → refresh the cache
     }
 
     // MARK: - NWP availability & fallback (port of web getUnavailableLayers +
-    // applyNwpFallback). See `NwpFallback`. Both are pure functions of the
-    // already-observed `vizData` + `enabledLayers`, so reading them inside the
-    // Canvas / config sheet registers the right `@Observable` dependencies.
+    // applyNwpFallback). See `NwpFallback`. Both are derived from `vizData` +
+    // `enabledLayers`, but cached as `@Observable` stored properties (refreshed by
+    // `recomputeEffectiveLayers()` only when those inputs change) rather than
+    // recomputed on each access — the Canvas reads them inside `body` at scrub-drag
+    // frequency, so they must not carry an O(points) scan on the render path.
 
     /// Layer ids the currently-rendered model can't provide (no native NWP data,
     /// etc.) — greyed / disabled in the config sheet. Empty until `vizData` loads.
-    var unavailableLayers: Set<String> {
-        guard let vizData else { return [] }
-        return NwpFallback.unavailableLayers(in: vizData)
-    }
+    ///
+    /// Cached, not computed: recomputed by `recomputeEffectiveLayers()` only when
+    /// `vizData` or `enabledLayers` actually change. `effectiveEnabledLayers` is
+    /// read inside `CrossSectionView.crossSectionCanvas`, a `@ViewBuilder` var
+    /// SwiftUI re-evaluates as plain Swift on every `body` invalidation — including
+    /// each scrub-drag tick. Recomputing the O(points) `NwpFallback` scan +
+    /// `Set`/`Dictionary` allocation there (before the `StaticCrossSectionScene`
+    /// `Equatable` gate is even checked) would re-introduce exactly the per-tick
+    /// jank #303 exists to prevent, so the work is hoisted off the render path.
+    private(set) var unavailableLayers: Set<String> = []
 
     /// Render-time enabled map: the stored preference with unavailable layers
     /// disabled and DD substituted for any wanted-but-unavailable NWP layer. The
     /// stored `enabledLayers` preference is never mutated (switching back to an
     /// NWP-capable model auto-restores NWP). Mirrors web `briefing-main.ts`.
-    var effectiveEnabledLayers: [String: Bool] {
-        NwpFallback.applyFallback(enabledLayers: enabledLayers, unavailable: unavailableLayers)
+    /// Cached alongside `unavailableLayers` — see its note.
+    private(set) var effectiveEnabledLayers: [String: Bool] = [:]
+
+    /// Refresh the cached `unavailableLayers` / `effectiveEnabledLayers`. Called
+    /// only from the two mutation funnels — `update()` (data rebuilt) and
+    /// `persistLayerConfig()` (any layer edit) — plus once at the end of `init`, so
+    /// the expensive scan runs on real changes, never per render frame.
+    private func recomputeEffectiveLayers() {
+        unavailableLayers = vizData.map { NwpFallback.unavailableLayers(in: $0) } ?? []
+        effectiveEnabledLayers = NwpFallback.applyFallback(
+            enabledLayers: enabledLayers, unavailable: unavailableLayers)
     }
 
     func toggleLayer(_ id: String) {
