@@ -370,6 +370,7 @@ function synthesizeVizPoint(
   );
 
   return {
+    pointIndex: idx,
     distanceNm: idx * HOURS_TO_NM_SCALE,
     lat, lon, time,
     altitudeLines,

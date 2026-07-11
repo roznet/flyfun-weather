@@ -24,6 +24,7 @@
  * lockstep when editing here.
  */
 
+import type { AdvisoryHighlightSurface } from '../advisory-focus';
 import type { LayerGroup } from '../types';
 import { getAllLayers, getPreferredLayerForGroup } from './layer-registry';
 import { SKEWT_OVERLAYS } from '../skewt/overlay-bands';
@@ -44,6 +45,8 @@ export interface AdvisoryPreset {
   lines?: string[];           // explicit layer IDs to force on (lines, obscuration, ...)
   routeGraph?: { left?: string; right?: string };  // metric ids ('none' clears right)
   map?: { metric?: string; altitude?: 'cruise' };  // route-map color metric + slider target
+  highlights?: AdvisoryHighlightSurface[];
+  emphasize?: boolean;
 
   // ---- Skew-T directives (#308 Phase A; same dispatch-over-present pattern) ----
   /** Overlay bands to pre-enable on the Skew-T (ids from {@link SKEWT_OVERLAYS}:
@@ -57,9 +60,6 @@ export interface AdvisoryPreset {
    *  'vertical_velocity', 'relative_humidity', 'richardson'). */
   skewtSidePanel?: string;
 
-  // ---- reserved for later phases (documented now so the shape doesn't churn) ----
-  // highlights?: HighlightDirective[]; // shade in-cloud band / affected segments
-  // emphasize?: string[];              // dim layers NOT in this list
 }
 
 /**
@@ -84,6 +84,7 @@ const RESET_GROUPS: ReadonlySet<LayerGroup> = new Set<LayerGroup>([
 export const ADVISORY_OVERRIDES: Record<string, Partial<AdvisoryPreset>> = {
   // FIKI: add layer-thickness / warm-nose context (−10/−20 °C + SLD warm-nose).
   fiki_icing: { lines: ['minus-10c', 'minus-20c', 'sld-bands'] },
+  freezing_precip: { lines: ['sld-bands', 'freezing-level'] },
 };
 
 export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
@@ -117,6 +118,8 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
     lines: ['freezing-level'],
     routeGraph: { left: 'freezing-level', right: 'ceiling-nwp' },
     map: { metric: 'icing-risk-at-level', altitude: 'cruise' },
+    highlights: ['cross-section', 'route-graph', 'route-map'],
+    emphasize: true,
     skewtOverlays: ['icing-nwp', 'clouds-nwp'],
     skewtSidePanel: 'relative_humidity',
   },
@@ -134,6 +137,8 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
     lines: ['freezing-level'],
     routeGraph: { left: 'cloud-cover', right: 'ceiling-nwp' },
     map: { metric: 'cloud-at-level', altitude: 'cruise' },
+    highlights: ['cross-section', 'route-graph', 'route-map'],
+    emphasize: true,
     skewtOverlays: ['clouds-nwp'],
     skewtSidePanel: 'relative_humidity',
   },
@@ -153,6 +158,8 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
     lines: ['lcl', 'lfc', 'el', 'freezing-level', 'minus-10c', 'minus-20c'],
     routeGraph: { left: 'cape', right: 'precipitation' },
     map: { metric: 'convective-risk', altitude: 'cruise' },
+    highlights: ['cross-section', 'route-graph', 'route-map'],
+    emphasize: true,
     skewtOverlays: ['convective', 'clouds-nwp'],
     // omega belongs on Convective specifically — w_fpm, positive = up (#308).
     skewtSidePanel: 'vertical_velocity',
@@ -171,6 +178,8 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
     lines: ['inversion-bands'],
     routeGraph: { left: 'headwind', right: 'crosswind' },
     map: { metric: 'cat-risk-at-level', altitude: 'cruise' },
+    highlights: ['cross-section', 'route-graph', 'route-map'],
+    emphasize: true,
     skewtOverlays: ['inversions'],
     skewtSidePanel: 'richardson',
   },
@@ -187,6 +196,8 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
     lines: ['surface-obscuration-bands', 'freezing-level'],
     routeGraph: { left: 'cloud-cover', right: 'ceiling-nwp' },
     map: { metric: 'nwp-ceiling' },
+    highlights: ['cross-section', 'route-graph', 'route-map'],
+    emphasize: true,
     skewtOverlays: ['clouds-nwp'],
     skewtSidePanel: 'relative_humidity',
   },
@@ -203,6 +214,8 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
     lines: ['freezing-level', 'minus-10c'],
     routeGraph: { left: 'cape', right: 'freezing-level' },
     map: { metric: 'icing-risk-at-level', altitude: 'cruise' },
+    highlights: ['cross-section', 'route-graph', 'route-map'],
+    emphasize: true,
     skewtOverlays: ['icing-nwp', 'convective', 'clouds-nwp'],
     skewtSidePanel: 'relative_humidity',
   },
@@ -216,6 +229,7 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
  */
 export const ADVISORY_TO_PRESET: Record<string, string> = {
   icing_escape: 'icing', fiki_icing: 'icing',
+  freezing_precip: 'icing',
   cloud_top: 'clouds', vmc_cruise: 'clouds',
   convective: 'convective',
   turbulence: 'turbulence', mountain_wind: 'turbulence',
@@ -284,8 +298,8 @@ export function getPresetForAdvisory(advisoryId: string): AdvisoryPreset | undef
     ...base,
     ...override,
     // arrays union (so FIKI adds to icing's lines/bands rather than replacing them)
-    groups: [...(base.groups ?? []), ...(override.groups ?? [])],
-    lines: [...(base.lines ?? []), ...(override.lines ?? [])],
+    groups: [...new Set([...(base.groups ?? []), ...(override.groups ?? [])])],
+    lines: [...new Set([...(base.lines ?? []), ...(override.lines ?? [])])],
     skewtOverlays: override.skewtOverlays
       ? [...new Set([...(base.skewtOverlays ?? []), ...override.skewtOverlays])]
       : base.skewtOverlays,
@@ -306,6 +320,8 @@ export function getPresetForAdvisory(advisoryId: string): AdvisoryPreset | undef
  *  loop below is otherwise unchanged. */
 export interface ResolvedView {
   enabledLayers?: Record<string, boolean>;
+  highlightSurfaces?: AdvisoryHighlightSurface[];
+  emphasizeLayers?: string[];
   routeGraph?: { left?: string; right?: string };
   map?: { metric?: string; altitudeFt?: number | null };
   /** Full clean-slate overlay state for the Skew-T (every known overlay id set
@@ -313,7 +329,6 @@ export interface ResolvedView {
   skewtOverlays?: Record<string, boolean>;
   /** Primary side-panel variable id to select on the Skew-T. */
   skewtSidePanel?: string;
-  // future: highlights?, emphasize? — added alongside, dispatched independently
 }
 
 /**
@@ -367,6 +382,19 @@ export function resolveAdvisoryPreset(
     view.skewtOverlays = overlays;
   }
   if (preset.skewtSidePanel) view.skewtSidePanel = preset.skewtSidePanel;
+
+  if (preset.highlights) {
+    view.highlightSurfaces = [...preset.highlights];
+  }
+  if (preset.emphasize) {
+    view.emphasizeLayers = [...new Set([
+      ...Object.entries(view.enabledLayers ?? {})
+        .filter(([, enabled]) => enabled)
+        .map(([id]) => id),
+      'terrain',
+      'cruise-altitude',
+    ])];
+  }
 
   if (preset.routeGraph) view.routeGraph = preset.routeGraph;
   if (preset.map) {

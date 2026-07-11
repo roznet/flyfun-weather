@@ -23,6 +23,7 @@ export function makeAltitudeLines(overrides: Partial<AltitudeLines> = {}): Altit
 
 export function makeVizPoint(overrides: Partial<VizPoint> = {}): VizPoint {
   return {
+    pointIndex: 0,
     distanceNm: 0,
     lat: 0,
     lon: 0,

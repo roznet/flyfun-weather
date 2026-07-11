@@ -396,6 +396,7 @@ function extractPoint(
   );
 
   return {
+    pointIndex: rpa.point_index,
     distanceNm: rpa.distance_from_origin_nm,
     lat: rpa.lat,
     lon: rpa.lon,

@@ -86,6 +86,17 @@ describe('config integrity', () => {
     expect(isAdvisoryPreset(null)).toBe(false);
     expect(isAdvisoryPreset(undefined)).toBe(false);
   });
+
+  it('opts hazard presets into all focus surfaces and emphasis, but not Basic', () => {
+    const surfaces = ['cross-section', 'route-graph', 'route-map'];
+    for (const id of ['icing', 'clouds', 'convective', 'turbulence', 'vfr', 'ifr']) {
+      const preset = getAdvisoryPreset(id)!;
+      expect(preset.highlights).toEqual(surfaces);
+      expect(preset.emphasize).toBe(true);
+    }
+    expect(getAdvisoryPreset('basic')!.highlights).toBeUndefined();
+    expect(getAdvisoryPreset('basic')!.emphasize).toBeUndefined();
+  });
 });
 
 describe('resolveAdvisoryPreset — method resolution', () => {
@@ -149,6 +160,30 @@ describe('resolveAdvisoryPreset — method resolution', () => {
     // altitude not 'cruise' → altitudeFt left undefined (store leaves slider as-is)
     expect(view.map && 'altitudeFt' in view.map ? view.map.altitudeFt : 'absent').toBe('absent');
   });
+
+  it('copies focus surfaces and derives a deduplicated emphasis allow-list', () => {
+    const preset = getAdvisoryPreset('icing')!;
+    const view = resolveAdvisoryPreset(preset, { clouds: 'soft_nwp', icing: 'sfip_nwp' });
+    expect(view.highlightSurfaces).toEqual(['cross-section', 'route-graph', 'route-map']);
+    expect(view.highlightSurfaces).not.toBe(preset.highlights);
+
+    const expected = new Set([
+      ...Object.entries(view.enabledLayers!)
+        .filter(([, enabled]) => enabled)
+        .map(([id]) => id),
+      'terrain',
+      'cruise-altitude',
+    ]);
+    expect(new Set(view.emphasizeLayers)).toEqual(expected);
+    expect(view.emphasizeLayers?.filter((id) => id === 'terrain')).toHaveLength(1);
+    expect(view.emphasizeLayers?.filter((id) => id === 'cruise-altitude')).toHaveLength(1);
+  });
+
+  it('does not emit focus directives for the Basic preset', () => {
+    const view = resolveAdvisoryPreset(getAdvisoryPreset('basic')!, {});
+    expect(view.highlightSurfaces).toBeUndefined();
+    expect(view.emphasizeLayers).toBeUndefined();
+  });
 });
 
 describe('getPresetForAdvisory — chip resolution + FIKI override', () => {
@@ -183,6 +218,25 @@ describe('getPresetForAdvisory — chip resolution + FIKI override', () => {
   it('returns undefined for an advisory with no chip mapping', () => {
     expect(getPresetForAdvisory('flight_category')).toBeUndefined();
     expect(getPresetForAdvisory('airport_wind')).toBeUndefined();
+  });
+
+  it('maps freezing precipitation to icing with SLD and freezing-level context', () => {
+    const preset = getPresetForAdvisory('freezing_precip')!;
+    expect(preset.id).toBe('icing');
+    expect(preset.lines).toContain('sld-bands');
+    expect(preset.lines).toContain('freezing-level');
+
+    const enabled = resolveAdvisoryPreset(preset, {}).enabledLayers!;
+    expect(enabled['sld-bands']).toBe(true);
+    expect(enabled['freezing-level']).toBe(true);
+  });
+
+  it('does not map model, DD/NWP, airport, or fronts advisories to presets', () => {
+    for (const advisoryId of [
+      'model_agreement', 'dd_nwp_agreement', 'flight_category', 'airport_wind', 'fronts',
+    ]) {
+      expect(getPresetForAdvisory(advisoryId)).toBeUndefined();
+    }
   });
 });
 

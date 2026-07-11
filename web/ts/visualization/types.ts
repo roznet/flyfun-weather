@@ -244,6 +244,8 @@ export interface VizCloudDiag {
 }
 
 export interface VizPoint {
+  /** Stable backend route-point identity (synthetic position for airport profiles). */
+  pointIndex: number;
   distanceNm: number;
   lat: number;
   lon: number;

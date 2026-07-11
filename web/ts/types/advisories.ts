@@ -2,6 +2,19 @@
 
 export type AdvisoryStatus = 'green' | 'amber' | 'red' | 'unavailable';
 
+export type AdvisoryDataState = 'complete' | 'partial' | 'unavailable';
+
+export interface AdvisoryEvidenceRegion {
+  start_point_index: number;
+  end_point_index: number;
+  lower_altitude_ft?: number | null;
+  upper_altitude_ft?: number | null;
+  severity: Exclude<AdvisoryStatus, 'unavailable'>;
+  reason_code: string;
+  metric_id?: string | null;
+  method_id?: string | null;
+}
+
 /** Axis along which an advisory's flagged sub-issue could be mitigated. */
 export type MitigationKind = 'altitude' | 'route_position' | 'timing';
 
@@ -55,6 +68,9 @@ export interface ModelAdvisoryResult {
   affected_nm: number;
   total_nm: number;
   cross_check?: string | null;
+  data_state?: AdvisoryDataState | null;
+  primary_method_id?: string | null;
+  evidence_regions?: AdvisoryEvidenceRegion[];
   mitigations?: Mitigation[];
 }
 
@@ -62,6 +78,7 @@ export interface RouteAdvisoryResult {
   advisory_id: string;
   aggregate_status: AdvisoryStatus;
   aggregate_detail: string;
+  representative_model?: string | null;
   per_model: ModelAdvisoryResult[];
   parameters_used: Record<string, number>;
   aggregate_mitigations?: Mitigation[];
