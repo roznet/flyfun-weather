@@ -1,13 +1,18 @@
 # Timing scenario scan — better departure-window discovery
 
-> **Status (2026-07-02): decisions locked — ready to implement (next:
-> `/worktree-init`).** History: brainstorm 2026-07-01 → code review of the reuse
-> premise (same day, reshaped around the enrichment window) → full code-verified
-> plan review + flow decisions 2026-07-02 (Flexibility toggle, background
-> scenario job, all open questions resolved — see *Decisions locked*).
-> Implements the `MitigationKind.TIMING` axis reserved in the mitigation
-> framework (#330). Do NOT add to `designs/INDEX.md` (plans are not
-> MCP-discoverable by house rule).
+> **Status (2026-07-11): SHIPPED — all 4 slices MERGED (backend+web PR #341,
+> 2026-07-04; iOS client port #357, see `timing-scenario-ios-port.md`).** This
+> is now a historical build record: the ✅ slices below reflect what was built,
+> and the "as-built" annotations are the durable truth. Ready to fold the
+> durable architecture into a real design doc and archive this plan. Code lives
+> in `tasks/time_scan.py`, `tasks/time_scan_runner.py`, `models/time_scan.py`,
+> `api/packs.py` (`/time-options` endpoints), migration `074_flight_flexibility`.
+> History: brainstorm 2026-07-01 → code review of the reuse premise (same day,
+> reshaped around the enrichment window) → full code-verified plan review + flow
+> decisions 2026-07-02 (Flexibility toggle, background scenario job — see
+> *Decisions locked*). Implements the `MitigationKind.TIMING` axis reserved in
+> the mitigation framework (#330). Do NOT add to `designs/INDEX.md` (plans are
+> not MCP-discoverable by house rule).
 
 ## Goal
 
@@ -322,8 +327,13 @@ cross-sections are in memory, `tasks/advise.py:375-390`.)
 **Endpoints**
 - `GET .../packs/{ts}/time-options` → scan result or status ("Scenarios
   running…" while pending; client polls).
-- `POST .../packs/{ts}/time-options/{step}/confirm` → on-tap full check
-  (ICON+GFS across the shifted window; async; polled; cached on the candidate).
+- `POST .../packs/{ts}/time-options/confirm` → on-tap full check (ICON+GFS
+  across the shifted window; async 202, polled, cached on the candidate). The
+  candidate is named by `departure_time` (ISO-8601) in the **request body**
+  (`TimeConfirmRequest`), not a path segment; a second concurrent confirm on the
+  same pack returns 429 (one briefing-equivalent each, no stacking).
+- `POST .../packs/{ts}/time-options/rescan` → force a re-scan (202); preserves
+  paid confirm verdicts across a same-run rescan.
 
 **Reuse, don't rebuild:** re-grading machinery = `run_alt_from_pack` (arbitrary
 time + `advisory_models` subset) — reused unchanged. What's *new* is the data
@@ -421,7 +431,8 @@ user to the app rather than exposing half a workflow.
   shared hint.
 - Multi-day search beyond the ECMWF GRIB horizon.
 - Lateral route deviation (2-D) — the route is 1-D; only along-track timing.
-- iOS surfacing (alt-departure/scenarios are web-only client-side today).
+- iOS surfacing (web-only for v1 backend+web). *Since shipped as a separate
+  client port — #357, `timing-scenario-ios-port.md`.*
 
 ## Remaining build-time details (no user decision needed)
 

@@ -1,6 +1,6 @@
 # ChatGPT connector (Custom GPT + OpenAPI Action)
 
-> Native ChatGPT support as the sibling of the Claude MCP connector — same seven
+> Native ChatGPT support as the sibling of the Claude MCP connector — same eight
 > capabilities, one shared core, two front-doors.
 
 ## Why two front-doors
@@ -39,8 +39,9 @@ and ChatGPT cannot drift.
   two-layer exposure: a neutral `aggregate_mitigations_present` hook always, full
   objects only in the non-green/flagged window. Key exports:
   `summarize_advisories`, `summarize_altitude_table`, `advisory_detail`,
-  `convective_detail`, `briefing_freshness_status`, `CROSS_CHECK_NOTE`,
-  `CONVECTIVE_NOTE`, `MITIGATION_NOTE`.
+  `convective_detail`, `summarize_alternates`, `alternates_hook`,
+  `briefing_freshness_status`, `CROSS_CHECK_NOTE`, `CONVECTIVE_NOTE`,
+  `MITIGATION_NOTE`.
 
 - **`weatherbrief/api/agent.py`** `[project]` — the ChatGPT front-door router,
   mounted at `/agent/v1`. **In-process reuse, no localhost loopback:**
@@ -55,7 +56,7 @@ and ChatGPT cannot drift.
 
 - **`weatherbrief/api/app.py`** — registers `agent_router` (own `/agent/v1`
   prefix, not `/api`) and serves an **isolated OpenAPI** at
-  `/agent/v1/openapi.json`: only the seven operations + the OAuth2
+  `/agent/v1/openapi.json`: only the eight operations + the OAuth2
   authorization-code security scheme. That tiny document is the artifact pasted
   into the Custom GPT builder, decoupled from the app's large internal API.
 

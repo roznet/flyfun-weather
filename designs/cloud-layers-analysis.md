@@ -2,7 +2,7 @@
 
 > Per-model cloud data pipeline, source tracing, interpolation methods, and consistency analysis across all icing methods and visualization.
 
-_Code references verified against the repo on 2026-06-13._
+_Code references verified against the repo on 2026-07-11._
 
 > **`nwp_cloud_layers` is strictly model-native.** A server-side synthesized-layer
 > fallback for Open-Meteo-only models was added then **reverted** (df4474ff), so

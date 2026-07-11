@@ -54,7 +54,7 @@ Comprehensive catalog of all ~85 weather metrics across 7 models: Open-Meteo API
 → Full doc: analysis-metrics.md
 
 ### advisories
-Route advisory system: 20 deterministic evaluators across 11 categories (icing incl. freezing precipitation, cloud, precipitation/en-route visibility, turbulence incl. wave-corroborated mountain wind, convective, winds-aloft trip impact, airport conditions incl. density altitude, LLWS and terminal convective, feasibility, model-quality, fronts, sun) with per-model severity grading, user-tunable params, registry auto-discovery, worst/majority aggregation, and recalculation without re-fetching.
+Route advisory system: 21 deterministic evaluators across 11 categories (icing incl. freezing precipitation, cloud, precipitation/en-route visibility, turbulence incl. wave-corroborated mountain wind, convective incl. convective-character, winds-aloft trip impact, airport conditions incl. density altitude, LLWS and terminal convective, feasibility, model-quality, fronts, sun) with per-model severity grading, user-tunable params, registry auto-discovery, worst/majority aggregation, and recalculation without re-fetching.
 Key exports: `evaluate_all`, `get_catalog`, `RouteContext`, `RouteAdvisoriesManifest`
 → Full doc: advisories.md
 
@@ -146,9 +146,9 @@ Sync engine + forecast-driven prompting engine — largely Phase 3a/3b design in
 3-phase roadmap: Phase 1 (online viewer — DONE), Phase 2 (offline + push — resilience done, push pending), Phase 3 (3a manual + sync, 3b prompting, 3c live sharing). Cross-section renderer layer waves. Decisions made and open questions.
 → Full doc: ios-app-roadmap.md
 
-### ios-app-intents [proposed]
-App Intents / Siri / Apple Intelligence surface for the iOS app — the on-device sibling of the MCP tool catalog. Phase 1 (current iOS 26): `FlightEntity`/`AirportEntity`, open/refresh/check intents, `AppShortcutsProvider` phrases, `EntityStringQuery` resolver for "the flight tomorrow to Fairoaks", Spotlight indexing. Phase 2 (WWDC26/iOS 27): View Annotations ("explain this", "show the cross-section"), on-device Foundation Models narration of cached advisories. No SiriKit to migrate. MCP⇆intent parity table. Nothing built yet.
-Key exports (planned): `FlightEntity`, `AirportEntity`, `OpenFlightListIntent`, `OpenBriefingIntent`, `CheckBriefingIntent`, `RefreshBriefingIntent`, `AirportWeatherIntent`, `ExplainAdvisoryIntent`, `FlyFunShortcuts`
+### ios-app-intents [phase-1 shipped]
+App Intents / Siri / Apple Intelligence surface for the iOS app — the on-device sibling of the MCP tool catalog. Phase 1 (current iOS 26, shipped in #364): `FlightEntity`/`AirportEntity`, open/refresh/check intents, `AppShortcutsProvider` phrases, `EntityStringQuery` resolver for "the flight tomorrow to Fairoaks", Spotlight indexing. Phase 2 (WWDC26/iOS 27, not yet built): View Annotations ("explain this", "show the cross-section"), on-device Foundation Models narration of cached advisories. No SiriKit to migrate. MCP⇆intent parity table.
+Key exports: `FlightEntity`, `AirportEntity`, `OpenFlightListIntent`, `OpenBriefingIntent`, `CheckBriefingIntent`, `RefreshBriefingIntent`, `AirportWeatherIntent`, `ExplainAdvisoryIntent`, `FlyFunShortcuts`
 → Full doc: ios-app-intents.md
 
 ### ios-app-briefing-notifications [implemented]

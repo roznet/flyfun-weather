@@ -1,9 +1,21 @@
 # iOS Flight-Create Overhaul — Implementation Plan
 
-> Status: IMPLEMENTED on branch `ios-flight-create-revamp` (worktree). All six items
-> built + compiling; pure TZ/tokenisation logic unit-tested; server endpoint tested.
-> Bring the iOS flight-creation flow to parity with the web flight-create page, fix the
-> stuck "Loading Briefing" screen, and add dynamic ICAO autocomplete.
+> Status: SHIPPED — merged to `main` (the `ios-flight-create-revamp` worktree is gone).
+> All six items are live. This file is now a historical build record and a candidate for
+> archive/. Goal was: bring the iOS flight-creation flow to parity with the web
+> flight-create page, fix the stuck "Loading Briefing" screen, add dynamic ICAO autocomplete.
+>
+> As-built code paths (verified in `main`):
+> - Item 1: `BriefingViewModel.loadBriefing()` catches `APIError.notFound` and calls
+>   `generateFirstBriefing()` (streams the refresh banner).
+> - Item 6: server endpoint in `src/weatherbrief/api/nav.py` (`GET /api/nav/airports-db`,
+>   ETag), iOS `Services/AirportDatabase.swift` + `ViewModels/RouteAutocompleteController.swift`.
+> - Item 3: `Models/API/ProfileResponse.swift`, `profileId` on `CreateFlightRequest`/`FlightResponse`.
+> - Item 2: `autorouterRoutes(limit:)` repo method + `AutorouterRoute`; recent routes derived client-side.
+> - Items 4/5: TZ lives in `ViewModels/DepartureTimeModel.swift` (NOT `Utils/Timezone.swift`);
+>   interpret popup is `Views/Flights/RouteInterpretSheet.swift` (NOT `RouteInterpretView.swift`);
+>   repo methods `interpretRoute(rawRoute:)` + `routeDistance(waypoints:)`; logic unit-tested
+>   in `flyfun-weatherTests/RouteCreateLogicTests.swift`.
 
 ## As-built deviations from the original plan
 

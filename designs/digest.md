@@ -209,7 +209,7 @@ For Europe routes, the digest pipeline also fetches DWD German weather text, tra
 
 ### System Prompt
 
-`configs/weather_digest/prompts/briefer_v1.md`: aviation weather briefer persona, instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty. Avoids exposing internal section names (e.g. "ALTITUDE OPTIONS") in prose and renders numbered `watch_items` as a list. `briefer_longrange_v1.md` is the trimmed long-range counterpart (outlook tendency + model-agreement framing; see *Long-Range Outlook*).
+The shipped configs (`default.json`, `openai.json`) point `briefer` at `configs/weather_digest/prompts/briefer_v2.md` (the `DigestConfig.prompts.briefer` code default is still `briefer_v1.md`, but the JSON overrides it). It sets an aviation weather briefer persona addressing a competent pilot (do NOT over-simplify), instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty. Avoids exposing internal section names (e.g. "ALTITUDE OPTIONS") in prose and renders numbered `watch_items` as a list. `briefer_longrange_v1.md` is the trimmed long-range counterpart (outlook tendency + model-agreement framing; see *Long-Range Outlook*).
 
 The prompt contains a `{guidance}` placeholder that is replaced at runtime with a guidance preset. This controls how the LLM interprets advisory severity when producing the GREEN/AMBER/RED assessment.
 

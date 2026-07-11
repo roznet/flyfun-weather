@@ -86,9 +86,9 @@ Rules (both implementations):
 - **Worst mode**: Pick most restrictive flight category across models (VFR=0 < MVFR < IFR < LIFR=3)
 - **Majority mode**: Most common category; ties broken by worst severity
 - **Agreement scoring**: Uses `compare_models()` divergence on wind/ceiling/CAPE/visibility/cloud → good/moderate/poor
-- **Numeric consensus**: Wind direction uses circular mean; others arithmetic mean (server) / median in majority mode (client)
+- **Numeric consensus**: Wind direction uses circular mean; every other numeric field takes the least-favourable value in worst mode (`min` or `max` per field, via `_WORST_IS_MIN` server-side / `NUMERIC_CONSENSUS` client-side) and the median of the winning-category pool in majority mode — the rules are identical on both sides
 - **Crosswind consensus**: max (largest crosswind) across models — the conservative pick
-- **Headwind consensus**: server takes `min` (weakest headwind / strongest tailwind = least favourable); client `weather-map-consensus.ts` takes `max`. NOTE: these disagree — verify intent before relying on headwind consensus values
+- **Headwind consensus**: both server (`_WORST_IS_MIN` includes `headwind_kt`) and client (`NUMERIC_CONSENSUS.headwind_kt.worst = _min`) take `min` in worst mode — a positive headwind helps, so the weakest headwind / strongest tailwind is the least-favourable pick (worst ≠ max here). These were reconciled to agree
 
 ## Cache Layer
 
@@ -128,7 +128,7 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 
 - **Hour availability**: Not all sample hours have data for all days — `fetchAvailableHours()` checks and disables unavailable hour buttons; `fetchAvailableDays()` does the same for the D-0..D-3 day buttons
 - **Consensus is client-side**: Switching worst/majority/individual-model is all a pure client rerender (`computeConsensus`); only day/hour hits the API. Don't reintroduce a per-mode server query or per-mode cache key
-- **Per-model-only metrics (client `computeConsensus`)**: `convective_risk` uses worst-across-models (ordinal max) in consensus mode; `cloud_cover_pct` worst = max; `crosswind_kt` worst = max; `headwind_kt` worst = max (note the server's `airport_consensus.py` uses min for headwind — see Consensus Algorithm)
+- **Per-model-only metrics (client `computeConsensus`)**: `convective_risk` uses worst-across-models (ordinal max) in consensus mode; `cloud_cover_pct` worst = max; `crosswind_kt` worst = max; `headwind_kt` worst = min (weakest headwind is least favourable; matches the server's `airport_consensus.py` — see Consensus Algorithm)
 - **Runway wind data**: Crosswind/headwind require runway headings from the airports database; airports without runway data show no crosswind/headwind values. Best runway is selected by minimizing crosswind then maximizing headwind
 - **Marker sizing**: Radius scales with zoom level (5px at z<=4 up to 11px at z>7) for readability at all zoom levels
 - **All map endpoints require authentication**: forecast data is available to any authenticated user

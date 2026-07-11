@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 20 hazard evaluators (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 21 hazard evaluators (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -27,7 +27,8 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register EnroutePrecipEvaluator     # precipitation (en-route visibility proxy)
   ├── @register TurbulenceEvaluator        # en-route turbulence
   ├── @register MountainWindEvaluator
-  ├── @register ConvectiveEvaluator        # convective
+  ├── @register ConvectiveEvaluator        # convective (severity)
+  ├── @register ConvectiveCharacterEvaluator  # convective (VFR-avoidability, orthogonal to severity)
   ├── @register HeadwindEvaluator          # wind (trip impact)
   ├── @register ModelAgreementEvaluator    # model quality (cross-model)
   ├── @register DDvsNWPAgreementEvaluator  # model quality (within-model)
@@ -84,7 +85,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 `AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
 
-## The 20 Evaluators
+## The 21 Evaluators
 
 ### Icing
 
@@ -119,6 +120,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `ConvectiveEvaluator` | convective | Route points with convective risk ≥ threshold. Altitude-aware: ignores convection whose tops are below `cruise_ft - top_clearance_ft`. HIGH/EXTREME → instant RED. LOW risk capped at AMBER (prevents false alarms for marginal instability). **Grade floors at the DD (thermo) tier** even when the active track is the model-native NWP one (`convective_method` defaults to `"nwp"`) — a quiet NWP never suppresses a DD HIGH (#283; safety asymmetry). Also emits a per-model, **details-only** `cross_check` note via `convective_cross_check` (DD risk vs the model's native *firing* signal — precip/cover/deep-tower, #283): `dd_not_corroborated` (DD MODERATE+ but the scheme is quiet) or `model_active_dd_quiet` (the scheme fired where DD is quiet). The note never affects the grade. **This is the single source of truth for convective DD-vs-NWP divergence** (see `DDvsNWPAgreementEvaluator`). | `min_risk`, `affected_pct_amber`, `affected_pct_red`, `top_clearance_ft` (2000) |
+| `ConvectiveCharacterEvaluator` | convective | Second convective axis (#294), **orthogonal to severity** — grades whether route convection is *circumnavigable VFR*, never touches the `convective` grade. Per-model (realized-coverage + K/TT signals are per model; disagreement on avoidability is itself signal). Classifies via `classify_convective_character` (sounding subpackage): NONE/UNKNOWN → GREEN; ISOLATED/SCATTERED (avoidable but committing) → AMBER; WIDESPREAD/ORGANIZED/EMBEDDED (no reliable gaps, frontal band, or cells hidden under a deck) → RED. Only considers points at/above `min_risk`; `_point_embedded` relabels cells under a BKN/OVC deck, `_front_present` promotes a widespread band to ORGANIZED. Altitude-aware (see-and-avoid needs `base_clearance_ft` VMC below cell bases) | `min_risk` (3), `showers_mm` (0.1), `isolated_max_pct` (15), `scattered_max_pct` (40), `organized_shear_kt` (35), `base_clearance_ft` (2000) |
 | `HeadwindEvaluator` | wind | Route-average cruise-level headwind + trip-time delta vs still air. TAS is derived from `ctx.cruise_speed_ias_kt` (aircraft/profile cruise IAS via `atmo.resolve_cruise_speed_ias`, converted to TAS at cruise altitude), falling back to `total_distance_nm / flight_duration_hours` — both ride on `RouteContext` so recalc-from-pack still works. Altitude-aware (cross-section winds at the evaluated altitude → the altitude table shows the wind trade per level; falls back to precomputed `wind_components`). Informational bias: AMBER on mean ≥ 20kt, RED only ≥ 40kt; tailwinds report minutes saved | `mean_amber_kt` (20), `mean_red_kt` (40) |
 | `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). Evaluated once, not per-model. **Disabled by default** — user must enable via profile | `min_poor_vars` (3), `poor_pct_amber`, `poor_pct_red` |
 | `DDvsNWPAgreementEvaluator` | model | Within-model agreement: compares DD (thermodynamic) vs NWP tracks per model at each route point. Checks freezing-level delta and cloud layer Jaccard (only when NWP has real boundaries — `source="nwp_3d"` or `"grib"`, never `"synthesized"` which is circular). Surfaces e.g. mid-level decks GFS sees that DD misses, or ECMWF cirrus ice-supersaturation that `cc` rejects. **Convective divergence is intentionally NOT checked here** — now that the NWP convective track is model-native (#283), DD-vs-NWP convective disagreement is reported by the richer, convective-specific inline `cross_check` on `ConvectiveEvaluator`; duplicating it here would double-count the same divergence. **Disabled by default** — dev/calibration signal, not pilot-facing | `freezing_delta_ft` (2000), `cloud_overlap_min` (30%), `amber_pct` (30), `red_pct` (60) |
@@ -172,8 +174,15 @@ representative that sets `aggregate_detail`). Kept as a standalone function so t
 policy can later swap to a conservative per-kind merge in one place. Both default
 to `[]`, so old packs deserialize cleanly.
 
-**Worked example — only `vfr_feasibility` populates mitigations so far** (PoC).
-Two generators in `vfr_feasibility.py`:
+**Producers.** Two evaluators emit mitigations, both via the shared
+`vertical_profile.py` min-cost path-finder (`solve`/`CostModel`, design in
+[future/vertical-profile-solver.md](./future/vertical-profile-solver.md)):
+`icing_escape.py` emits an `ALTITUDE` mitigation (`addresses="icing_escape"` —
+"climb/descend to an ice-free band") off its own cost grid, and
+`vfr_feasibility.py` emits the cloud/corridor tips below. A consumer builds a
+hazard→cost `CostModel` and reads the returned profile; the same solver backs both.
+
+**Worked example — `vfr_feasibility.py`.** Two generators:
 - `_vertical_mitigation` → `ALTITUDE`, `addresses="cruise_imc"`: scans downward
   from cruise to a terrain floor (`max_terrain + _TERRAIN_CLEARANCE_FT`, 1000 ft),
   re-grading the en-route cloud axis at each step; offers the highest altitude that

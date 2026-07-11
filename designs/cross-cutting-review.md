@@ -2,7 +2,7 @@
 
 > Pipeline interdependencies, method coupling, inconsistencies, and simplification opportunities across the three subsystems.
 
-_Code references verified against the repo on 2026-06-06; re-checked 2026-06-13 and 2026-06-20: findings #1/#5/#6/A/B/C remain fixed in code (icing + cloud-uncertainty now call `convective.effective_cape(indices)`; NWP enrichment moved ahead of consumers); open findings #2/#3/#4 still open. Embedded line numbers are approximate — the sounding pipeline (`__init__.py`) was reorganized into lite/heavy passes since the original review, so the in-text `__init__.py` line refs no longer match (the live icing call is now ~`__init__.py:416`, the gate at `advisories.py:162`)._
+_Code references verified against the repo on 2026-06-06; re-checked 2026-06-13, 2026-06-20 and 2026-07-11: findings #1/#5/#6/A/B/C remain fixed in code (icing + cloud-uncertainty now call `convective.effective_cape(indices)`; NWP CAPE is attached to `indices` at `__init__.py:260`, before the convective assessment at `~311`); open findings #2/#3/#4 still open. Embedded line numbers are approximate — the sounding pipeline (`__init__.py`) was reorganized into lite/heavy passes since the original review, so the in-text `__init__.py` line refs no longer match (the live Ogimet-DD icing call is now ~`__init__.py:449` with `cape_jkg=eff_cape`, the ICON-EU convective-transition gate at `advisories.py:162`, `compute_altitude_advisories` at `analyze.py:161`)._
 
 ## Pipeline Order & Data Flow
 

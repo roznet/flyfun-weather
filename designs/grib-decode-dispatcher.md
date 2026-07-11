@@ -44,9 +44,9 @@ Propagation mirrors the existing `_GRIB_TIMER` pattern via a `ContextVar` `_DECO
 
 `PriorityDecodeDispatcher` — process-wide lazy singleton (`_get_dispatcher`), one lock + condition guards all state. **Event-driven; no dedicated dispatch thread.**
 
-- `pending`: min-heap of `(priority, seq, JobHandle)`. `seq` is a monotonic counter → FIFO within a level (and makes heap entries totally ordered, so handles are never compared).
-- `inflight`: `dict[pool_future, JobHandle]`, capped at the worker count.
-- `JobHandle`: `worker_fn_name`, `args`, `caller_future`, `priority`, `seq`, `retries`, `deadline`, `last_exc`.
+- `pending`: min-heap of `(priority, seq, _JobHandle)`. `seq` is a monotonic counter → FIFO within a level (and makes heap entries totally ordered, so handles are never compared).
+- `inflight`: `dict[pool_future, _JobHandle]`, capped at the worker count.
+- `_JobHandle`: `worker_fn_name`, `args`, `caller_future`, `priority`, `seq`, `retries`, `deadline`, `last_exc`.
 
 `submit_one` / `submit_batch` create caller-facing futures, push handles, call `_pump`, and return the caller futures. **Callers block on these exactly as before** (`fut.result()`); the call-site shape is unchanged. The caller future is the *logical* operation — internally several pool futures may back it across retries, transparently.
 

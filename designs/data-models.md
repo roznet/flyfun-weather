@@ -5,8 +5,9 @@
 Models are organized in `src/weatherbrief/models/` package:
 - `analysis.py` — route, forecast, weather analysis, and route-solar (`RouteSunAnalysis` and friends) models
 - `storage.py` — `Flight`, `FlightProfile`, `BriefingPackMeta`, `FlightDebrief`
-- `advisories.py` — route advisory models (status, results, catalog, manifest, altitude table)
+- `advisories.py` — route advisory models (status, results, catalog, manifest, altitude table, mitigations; see advisories.md)
 - `observations.py` — METAR/TAF/SIGMET route models, `RefreshDelta`, `RealtimeRefreshResult`
+- `time_scan.py` — timing-scenario / Flexibility scan artifact (`time_options.json`): `TimeWindowScan`, `TimeCandidate`, `TimeScanBaseline`, `ModelCoverage`, `TimeScanStatus` (see timing-scenario-plan.md)
 - `airport_conditions.py` — derived airport flight-category conditions (see advisories.md)
 - `alternates.py` / `alternate_requirement.py` — weather-based divert candidates + regulatory "alternate required?" assessment (see alternates.md, alternate-requirement.md)
 - `fronts.py` — per-briefing front-detection artifact (`route_fronts.json`; see frontal-detection.md)
@@ -115,7 +116,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `IcingZone` | Grouped icing zone (Ogimet-DD or Ogimet-NWP) | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_temperature_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
 | `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant ("full"/"proxy") |
 | `SldZone` | Supercooled Large Droplet zone | base/top (ft + hPa), risk, mechanism ("warm_nose"/"coalescence"), mean_temperature_c |
-| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, k_index, total_totals, severe_modifiers, regime (`ConvectiveRegime`), drivers/suppressors lists, elevated_convection, base_ft/top_ft (unified bounds), cover_pct (NWP only), method ("thermo"/"nwp"/"nwp_hybrid") |
+| `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, k_index, total_totals, severe_modifiers, regime (`ConvectiveRegime`), drivers/suppressors lists, elevated_convection, base_ft/top_ft (unified bounds), cover_pct (NWP only), convective_precip_mm_h (NWP native firing signal, #283), method ("thermo"/"nwp"/"nwp_hybrid"/"nwp_lcl_top"/"nwp_precip"/"nwp_cape_fallback") |
 | `ConvectiveRegime` | Enum: dominant convective regime | THERMAL, WEAK_INSTABILITY, LOADED_GUN, ACTIVE (`.label` → title-case) |
 | `ParcelPathPoint` | Lifted parcel temp profile point | pressure_hpa, temperature_c |
 | `PrecipitationAssessment` | Precip type + intensity for a sounding | surface_phase, surface_intensity, precipitation_zones, freezing_rain_risk, warm_nose_base/top_ft, rain_mm, snow_cm, total_mm |
@@ -238,7 +239,7 @@ flight.target_time_utc  # → 9
 - `departure_time` is the canonical field — a single aware-UTC datetime
 - `target_date` and `target_time_utc` are `@computed_field` properties for backward compatibility (used by email, admin, digest, and frontend display code)
 - `aircraft_id` links to a user's aircraft (see `multi-user-deployment.md` for schema). Independent from `profile_id` — aircraft provides physical defaults (speed, ceiling), profile provides mission preferences.
-- Additional fields: `private` (sharing opt-out), `alt_departure_time` (optional same-day alternate departure), `auto_refresh` / `auto_refresh_hour` / `last_auto_refresh_at` (scheduled refresh), `raw_route` + `parser_version` (original Field-15 string the pilot typed and the euro_aip version that derived `waypoints` from it; both NULL for iOS/MCP-created flights), `share_code` (short token for `/s/{code}` redirect, minted at save time)
+- Additional fields: `private` (sharing opt-out), `alt_departure_time` (optional same-day alternate departure), `flexibility` (`none`/`alternate`/`same_day`/`prev_day`/`next_day` — how much departure flexibility the timing-scenario job grades; see time_scan.py + timing-scenario-plan.md), `notify_override` (`default`/`notify`/`mute` — per-flight briefing-notification override, independent of auto_refresh), `auto_refresh` / `auto_refresh_hour` / `last_auto_refresh_at` (scheduled refresh), `raw_route` + `parser_version` (original Field-15 string the pilot typed and the euro_aip version that derived `waypoints` from it; both NULL for iOS/MCP-created flights), `share_code` (short token for `/s/{code}` redirect, minted at save time)
 
 ### BriefingPackMeta
 
@@ -345,6 +346,7 @@ See [advisories.md](./advisories.md) for the evaluator framework.
 - `CloudCoverage`: `FEW`, `SCT`, `BKN`, `OVC`
 - `ConvectiveRisk`: `NONE`, `MARGINAL`, `LOW`, `MODERATE`, `HIGH`, `EXTREME`
 - `ConvectiveRegime`: `THERMAL`, `WEAK_INSTABILITY`, `LOADED_GUN`, `ACTIVE`
+- `ConvectiveCharacter` (#294): `NONE`, `ISOLATED`, `SCATTERED`, `WIDESPREAD`, `EMBEDDED`, `ORGANIZED`, `UNKNOWN` — VFR-avoidability, orthogonal to `ConvectiveRisk` severity; drives digest narrative + a dedicated graded advisory, never changes the severity advisory's colour
 - `PrecipPhase`: `SNOW`, `MIXED`, `RAIN`, `FREEZING_RAIN`, `ICE_PELLETS`, `DRY`
 - `PrecipIntensity`: `NONE`, `LIGHT`, `MODERATE`, `HEAVY`
 - `AgreementLevel`: `GOOD`, `MODERATE`, `POOR`

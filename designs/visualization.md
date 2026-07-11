@@ -204,10 +204,11 @@ Switchable visual themes for the cross-section via `cross-section/theme.ts`. Sep
 - Theme selector dropdown + preview button in the controls panel (both standard and compare mode)
 - `'theme-changed'` window event triggers re-renders in all renderers
 
-**Available themes:**
+**Available themes** (`ThemeId`, registered in the `THEMES` map):
 - `'standard'` — Light blue sky (#7395DB), default, designed for readability
-- `'high-contrast'` — Dark navy sky (#1B3060), optimized for visibility in varying lighting
+- `'high-contrast'` — Dark navy sky (#1B3060), optimized for visibility in varying lighting. Applied by the ForeFlight preset.
 - `'gramet'` — Deep blue sky (#2B5DA8), CloudPath-inspired. Blue-tinted icing, prominent red freezing level, warm brown terrain. Optimized for soft cloud rendering. Applied automatically by the GRAMET preset.
+- `'light'` — Light cross-section variant applied by the Windy preset.
 
 **Cloud rendering styles:**
 - **Natural** (DD Natural, NWP Natural): flat-bottom puffs with bumpy tops, drawn procedurally on canvas (no PNG assets). Coverage is encoded as horizontal fill fraction — SCT shows discrete puffs with sky gaps, BKN shows mostly-touching puffs with valleys between humps, OVC shows a continuous bumpy blanket. Each puff is a closed path: flat base + chain of quadratic-Bezier humps whose peaks reach the band-top profile, with per-hump amplitude jitter from a stable per-band hash. Puff slots are anchored on a global x grid so adjacent matched-zone segments tile coherently; the gap pattern is deterministic so the same band keeps a stable shape across redraws. Tunable knobs live in `DEFAULT_NATURAL_CONFIG` in `cloud-bands-factory.ts` (fill-fraction per coverage class, puff/hump width, min band width before falling back to continuous fill, amplitude jitter, edge overflow, fill alpha).
@@ -330,9 +331,9 @@ Shared modal infrastructure (`components/info-popup.ts`) used by three popup typ
 
 Keyboard (ESC) and click-outside close the popup.
 
-### Metrics Catalog (`data/metrics-catalog.json`)
+### Metrics Catalog (`web/ts/data/metrics-catalog.json`)
 
-~60 metrics (including `sounding_ceiling_ft` and `nwp_ceiling_ft` for Key Altitudes) with catalog-driven contextual help:
+~64 metrics (including `sounding_ceiling_ft` and `nwp_ceiling_ft` for Key Altitudes) with catalog-driven contextual help (the iOS app mirrors this file at `app/.../Resources/metrics-catalog.json`):
 
 - `vibe`: One-liner analogy (e.g., "The atmosphere's battery level" for CAPE)
 - `primary_goal`, `best_used_for`, `limitations`: Aviation-focused guidance

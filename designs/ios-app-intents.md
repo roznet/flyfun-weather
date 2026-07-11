@@ -184,16 +184,21 @@ without Apple Intelligence degrade to deterministic + Siri disambiguation with n
 core paths. (Naming note: *resolver* tiers 1–3 above are internal to this algorithm and
 distinct from the product **Tier 1 / Tier 2** issue split.) *(see Decisions)*
 
-### Navigation from an intent
+### Navigation from an intent (built, #364)
 
-Foregrounding intents set a pending navigation target that the UI consumes, reusing
-the pattern already established for `onOpenURL`:
+Foregrounding intents set a pending navigation target the UI consumes. Implemented as a
+typed `PendingNavigation` enum (`.flightList` / `.briefing(flightId:)`) with **two backings**:
 
-- Add a `PendingNavigation` value on `AppState` (e.g. `.flightList`, `.briefing(flightId:)`).
-- `OpenBriefingIntent` / `OpenFlightListIntent` set it, return with `openAppWhenRun`.
-- `WeatherBriefApp` / `FlightListView` read it on `.active` and route — the same seam
-  `onOpenURL` already uses. Alternatively an intent can emit the existing
-  `flyfunweather://` deep link, but a typed `PendingNavigation` avoids URL parsing.
+- `PendingNavigationStore` (UserDefaults.standard) is the **cold-launch-safe** hand-off — a
+  foregrounding intent may run *before* `AppState` exists, so it writes there and returns
+  with `openAppWhenRun`. `OpenBriefingIntent` / `OpenFlightListIntent` call `…Store.set(...)`.
+- `AppState.consumePendingNavigation()` runs on every scene `.active` (covers cold launch +
+  warm foreground), `take()`s from the store into the observable `pendingNavigation`
+  property, and `FlightListView` routes then calls `clearPendingNavigation()`.
+
+This is now the **unified navigation seam**: App Intents, push-notification taps
+(`PushNotifications.swift`), and Universal Links (`handleUniversalLink`) all write to the same
+`PendingNavigationStore` rather than parsing `flyfunweather://` URLs.
 
 ### Auth & process model
 
@@ -330,8 +335,10 @@ Locked (★) decisions first, then defaults still open to revision.
    "refresh" triggers a real, **billed** pipeline run (see
    [cost-attribution](./cost-attribution-design.md)), but the server's `already_fresh`
    gate prevents redundant spend and it is rate-limited (409/429). No extra Siri
-   confirmation step (friction in a hands-busy flow). *Task: define spoken responses for
-   `queued` / `already_fresh` / `already_in_progress` / `rate_limited`.*
+   confirmation step (friction in a hands-busy flow). *Built (#364): `RefreshDriver.Outcome`
+   + `RefreshBriefingIntent` speak `alreadyFresh` / `started` / `completed` / `alreadyInProgress`
+   / `rateLimited` / `failed`. A started run resumes early (interim "open FlyFun shortly")
+   while a detached SSE drain keeps the server run alive.*
 3. **★ DECIDED — Full tiered resolver ships in Tier 1 (today).** The Foundation Models
    framework is available on **iOS 26**, so the on-device LLM tier is implementable now and
    belongs in the Tier-1 issue — Tier 2 is reserved for what genuinely needs the next iOS
