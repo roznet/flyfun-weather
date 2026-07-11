@@ -28,6 +28,7 @@ import { surfaceObscurationBandsLayer } from './layers/surface-obscuration-bands
 import { currentConditionsLayer } from './layers/current-conditions';
 import { frontsMarkersLayer } from './layers/fronts-markers';
 import { nightShadingLayer } from './layers/night-shading';
+import { highlightLayer } from './layers/highlight-layer';
 
 const ALL_LAYERS: CrossSectionLayer[] = [
   // Rendering order: night → obscuration → clouds → convection → icing → other bands → terrain → lines → reference.
@@ -67,6 +68,9 @@ const ALL_LAYERS: CrossSectionLayer[] = [
   lfcLayer,
   elLayer,
   cruiseAltitudeLayer,
+  // Advisory highlight (scrim + verdict ribbon, #373) — registered last so it
+  // sits at the very top of the stack (the dim wash must overlay everything).
+  highlightLayer,
 ];
 
 export function getAllLayers(): CrossSectionLayer[] {
@@ -308,13 +312,16 @@ export function getLayerGroups(): LayerGroupInfo[] {
     conditions: t('viz.group.conditions'),
     fronts: t('viz.group.fronts'),
     sun: t('viz.group.sun'),
+    highlight: t('viz.group.highlight'),
     reference: t('viz.group.reference'),
   };
 
   // 'terrain' is intentionally omitted: terrain always renders (force-on at
   // render time), so it has no UI toggle. The terrainFillLayer stays in
   // ALL_LAYERS — only its panel group is dropped here.
-  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection', 'conditions', 'sun', 'fronts'];
+  // 'highlight' is listed so its toggle CAN render, but the panel hides it via
+  // `hiddenGroups` unless an advisory highlight is active with data (#373).
+  const order: LayerGroup[] = ['reference', 'temperature', 'clouds', 'obscuration', 'icing', 'stability', 'turbulence', 'convection', 'conditions', 'sun', 'fronts', 'highlight'];
 
   return order
     .filter((g) => groupMap.has(g))

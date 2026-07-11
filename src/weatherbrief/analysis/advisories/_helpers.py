@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from collections.abc import Callable
 
 from weatherbrief.models import (
     AdvisoryStatus,
     ElevationProfile,
+    HighlightRegion,
+    HighlightSeverity,
     IcingZone,
     MitigationProfile,
     MitigationSegment,
     MitigationTransition,
+    RibbonSegment,
 )
 
 if TYPE_CHECKING:
@@ -120,6 +123,150 @@ def format_extent(
     total_nm = round(total_distance_nm)
     pct = 100 * affected / total
     return f"{affected_nm}nm/{total_nm}nm ({pct:.0f}%)"
+
+
+class FlaggedCell(NamedTuple):
+    """A flagged route point's scrim geometry, for :func:`build_regions`.
+
+    ``None`` base/top means a full column (the depth-unresolved convective
+    ghost). Only flagged (AMBER/RED) points carry a ``FlaggedCell``; clean
+    points pass ``None`` in :func:`build_regions`'s input.
+    """
+
+    kind: str
+    severity: HighlightSeverity
+    base_ft: int | None
+    top_ft: int | None
+
+
+def _cell_edges(distances: list[float], total_nm: float) -> tuple[list[float], list[float]]:
+    """Per-point cell boundaries: each point owns ``[left, right]`` midway to its neighbours.
+
+    First point's cell starts at 0, last point's ends at ``total_nm`` — so the
+    per-point cells tile ``[0, total_nm]`` exactly. Boundaries fall midway
+    between adjacent points, matching the ribbon/region convention.
+    """
+    n = len(distances)
+    lefts = [
+        0.0 if i == 0 else (distances[i - 1] + distances[i]) / 2.0
+        for i in range(n)
+    ]
+    rights = [
+        total_nm if i == n - 1 else (distances[i] + distances[i + 1]) / 2.0
+        for i in range(n)
+    ]
+    return lefts, rights
+
+
+def build_ribbon(
+    per_point: list[tuple[float, HighlightSeverity]],
+    total_nm: float,
+) -> list[RibbonSegment]:
+    """Merge per-point severities into a gapless 1-D route-verdict partition (#373).
+
+    Input: ``(distance_from_origin_nm, severity)`` per route point, in route
+    order (points with no sounding for the model → ``UNAVAILABLE``). Consecutive
+    same-severity points merge into one run; run boundaries fall midway between
+    adjacent points; the first run starts at 0 and the last ends at ``total_nm``.
+
+    Invariants (guaranteed): segments are sorted, non-overlapping, gapless, and
+    tile ``[0, total_nm]`` exactly. Returns ``[]`` for empty input.
+    """
+    if not per_point:
+        return []
+    pts = sorted(per_point, key=lambda t: t[0])
+    distances = [d for d, _ in pts]
+    severities = [s for _, s in pts]
+    lefts, rights = _cell_edges(distances, total_nm)
+
+    segments: list[RibbonSegment] = []
+    run_start = 0
+    n = len(pts)
+    for i in range(1, n + 1):
+        if i == n or severities[i] != severities[run_start]:
+            segments.append(RibbonSegment(
+                dist_from_nm=lefts[run_start],
+                dist_to_nm=rights[i - 1],
+                severity=severities[run_start],
+            ))
+            run_start = i
+    return segments
+
+
+def build_regions(
+    per_point: list[tuple[float, FlaggedCell | None]],
+    total_nm: float,
+) -> list[HighlightRegion]:
+    """Merge consecutive same-kind/severity flagged points into scrim cutouts (#373).
+
+    Input mirrors :func:`build_ribbon` but the second tuple element is a
+    :class:`FlaggedCell` on flagged points and ``None`` on clean ones. Adjacent
+    flagged points sharing ``kind`` and ``severity`` merge into one region using
+    the **envelope** (min ``base_ft`` / max ``top_ft`` across the run, ignoring
+    ``None``); an all-``None`` run stays a full column. Region x-extent uses the
+    same per-point cell boundaries as the ribbon.
+    """
+    if not per_point:
+        return []
+    pts = sorted(per_point, key=lambda t: t[0])
+    distances = [d for d, _ in pts]
+    cells = [c for _, c in pts]
+    lefts, rights = _cell_edges(distances, total_nm)
+
+    regions: list[HighlightRegion] = []
+    n = len(pts)
+    i = 0
+    while i < n:
+        cell = cells[i]
+        if cell is None:
+            i += 1
+            continue
+        j = i
+        bases: list[int] = []
+        tops: list[int] = []
+        while (
+            j < n
+            and cells[j] is not None
+            and cells[j].kind == cell.kind
+            and cells[j].severity == cell.severity
+        ):
+            if cells[j].base_ft is not None:
+                bases.append(cells[j].base_ft)
+            if cells[j].top_ft is not None:
+                tops.append(cells[j].top_ft)
+            j += 1
+        regions.append(HighlightRegion(
+            dist_from_nm=lefts[i],
+            dist_to_nm=rights[j - 1],
+            base_ft=min(bases) if bases else None,
+            top_ft=max(tops) if tops else None,
+            kind=cell.kind,
+            severity=cell.severity,
+        ))
+        i = j
+    return regions
+
+
+def ribbon_peak(segments: list[RibbonSegment]) -> float | None:
+    """Center of the longest RED run, else the longest AMBER run, else ``None``.
+
+    A generic "worst point" pick for evaluators (e.g. ``vmc_cruise``) whose peak
+    is defined purely by ribbon extent. Evaluators with a richer notion of worst
+    (e.g. convective's highest-CAPE point) compute their own ``peak_dist_nm``.
+    """
+    for sev in (HighlightSeverity.RED, HighlightSeverity.AMBER):
+        center: float | None = None
+        best_len = -1.0
+        for seg in segments:
+            if seg.severity != sev:
+                continue
+            length = seg.dist_to_nm - seg.dist_from_nm
+            if length > best_len:
+                best_len = length
+                center = (seg.dist_from_nm + seg.dist_to_nm) / 2.0
+        if center is not None:
+            return center
+    return None
 
 
 def icing_zones_in_altitude_range(

@@ -128,6 +128,74 @@ class Mitigation(BaseModel):
     profile: MitigationProfile | None = None
 
 
+class HighlightSeverity(str, Enum):
+    """Severity of a highlight element (scrim cutout / ribbon segment).
+
+    A superset of the amber/red used on scrim cutouts: the ribbon partition
+    also carries GREEN ("checked, clear here") and UNAVAILABLE ("no sounding
+    for this model here"). Distinct from :class:`AdvisoryStatus` because the
+    highlight is a *per-point / per-region* verdict, not the route-level grade.
+    """
+
+    GREEN = "green"
+    AMBER = "amber"
+    RED = "red"
+    UNAVAILABLE = "unavailable"
+
+
+class RibbonSegment(BaseModel):
+    """One run of the 1-D route verdict. Segments tile ``[0, total_nm]`` exactly.
+
+    The ribbon grades the whole route along the x-axis — where along the route
+    this advisory's verdict is green/amber/red/unavailable — as a gapless
+    partition so that GREEN is never inferred from silence (an UNAVAILABLE gap
+    must not render as "clear"). Distance-space (``nm``), same convention as
+    :class:`MitigationSegment`.
+    """
+
+    dist_from_nm: float
+    dist_to_nm: float
+    severity: HighlightSeverity
+
+
+class HighlightRegion(BaseModel):
+    """One 2-D scrim cutout — where the hazard physically is. Flagged areas only.
+
+    A region is a spotlight the scrim punches out of its dim wash, framed by a
+    severity-colored outline. Emitted only for flagged (AMBER/RED) areas — a
+    clean chart gets no scrim at all. ``base_ft``/``top_ft`` both ``None`` means
+    a full column (terrain-to-top), e.g. a depth-unresolved convective ghost.
+    """
+
+    dist_from_nm: float
+    dist_to_nm: float
+    base_ft: int | None = None   # None (both) = full column
+    top_ft: int | None = None
+    kind: str                    # stable machine token, e.g. "cruise_imc", "tower"
+    severity: HighlightSeverity  # amber | red (cutouts are only emitted for flagged areas)
+
+
+class AdvisoryHighlights(BaseModel):
+    """Cross-section highlight geometry for one advisory evaluated against one model.
+
+    Two elements, each doing exactly one job (issue #373):
+
+    - ``ribbon`` — a gapless 1-D partition of ``[0, total_nm]`` (the route
+      verdict along the x-axis).
+    - ``regions`` — 2-D scrim cutouts for flagged areas only (where the hazard
+      physically is).
+
+    Backend owns the geometry (evaluator logic decides *which* zones fired), so
+    web and iOS never re-derive thresholds/altitude buffers client-side. Old
+    packs deserialize with ``highlights=None`` on :class:`ModelAdvisoryResult`;
+    both lists default empty. Payload cost is negligible (~20 route points).
+    """
+
+    ribbon: list[RibbonSegment] = Field(default_factory=list)
+    regions: list[HighlightRegion] = Field(default_factory=list)
+    peak_dist_nm: float | None = None  # optional "worst point" for jump-to-worst
+
+
 class AdvisoryParameterDef(BaseModel):
     """Definition of a user-tunable parameter for an advisory."""
 
@@ -194,6 +262,10 @@ class ModelAdvisoryResult(BaseModel):
     # a flagged sub-issue (advice only — never alters ``status``). Defaults empty
     # so old packs deserialize cleanly.
     mitigations: list[Mitigation] = Field(default_factory=list)
+    # Per-model cross-section highlight geometry (scrim regions + verdict ribbon,
+    # issue #373). None on old packs and for evaluators that don't emit it. Never
+    # affects the grade — it locates *where* the verdict comes from.
+    highlights: AdvisoryHighlights | None = None
 
     @classmethod
     def build(
@@ -208,6 +280,7 @@ class ModelAdvisoryResult(BaseModel):
         affected_mod: int | None = None,
         cross_check: str | None = None,
         mitigations: list[Mitigation] | None = None,
+        highlights: AdvisoryHighlights | None = None,
     ) -> ModelAdvisoryResult:
         """Build a result, computing pct and nm from point counts.
 
@@ -231,6 +304,7 @@ class ModelAdvisoryResult(BaseModel):
             affected_mod_nm=round(total_distance_nm * mod / total, 1) if total > 0 else 0,
             cross_check=cross_check,
             mitigations=mitigations if mitigations is not None else [],
+            highlights=highlights,
         )
 
 

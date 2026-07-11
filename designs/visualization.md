@@ -86,6 +86,7 @@ Rendering order: **night shading → obscuration → clouds → convection → i
 | LFC | LFC | stability | `stability-lines.ts` | off | Orange dotted (level of free convection) |
 | EL | EL | stability | `stability-lines.ts` | off | Red dotted (equilibrium level) |
 | Cruise altitude | Cruise | reference | `reference-lines.ts` | on | Dark gray dashed + flight ceiling (purple) |
+| Advisory highlight | Highlight | highlight | `highlight-layer.ts` | off | Scrim (dim wash with severity-outlined cutouts where the hazard is) + verdict ribbon (6px strip in the bottom margin grading the whole route green/amber/red/gray). Registered **last** (very top of stack). Reads the derived `VizRouteData.advisoryHighlights`; no-ops when absent. `clipToPlot: false` so the ribbon draws in the margin. See [Advisory Highlights](#advisory-highlights-373). |
 
 ## Render Mode
 
@@ -150,6 +151,64 @@ layers per-advisory extras (e.g. FIKI warm-nose lines) onto a shared preset.
 source of truth, no server-side copy of the mapping), and focuses the requested surface
 (`view=skewt` scrolls to the Skew-T). The MCP `get_advisory_detail` builds this link in
 its `web_url` (`_advisory_web_url`), pointing convective at the highest-CAPE peak point.
+
+## Advisory Highlights (#373)
+
+When a user clicks an advisory chip (or opens an `?advisory=` deep-link), the
+cross-section shows **where the advisory's verdict comes from**. Two elements, each
+one job:
+
+- **Scrim (focus, 2D)** — a translucent dim wash over the plot with cutouts punched
+  out where the hazard physically is, each framed by a thin severity-colored
+  outline. Dimming means "not the focus", never a verdict. **No scrim at all when
+  nothing is flagged** (the all-green case — never dim a clean chart).
+- **Verdict ribbon (judgement, 1D)** — a ~6px strip in the bottom margin (below
+  `plotArea.bottom`, above the distance labels) partitioning the whole route into
+  green/amber/red/gray(unavailable). Renders even all-green (an explicit "checked:
+  clear the whole way").
+
+**Backend owns the geometry** (`analysis/advisories`, see [advisories.md](./advisories.md));
+the client only renders it. Data path & state:
+
+- **State** (`vizSettings.activeHighlightAdvisoryId`, persisted): stores **only** the
+  advisory id, never a copy of the geometry. No-ops gracefully if the advisory no
+  longer exists in the manifest.
+- **Derived, never stored** (`cross-section/advisory-highlights.ts`): at render time
+  `deriveHighlights(getEffectiveAdvisories(state), activeHighlightAdvisoryId, selectedModel)`
+  looks up the advisory × the rendered model's `per_model.highlights`. Missing / old
+  pack / model without data → `null` → no scrim, no ribbon, toggle hidden. Because it
+  re-derives, model switches / recalcs / altitude changes update the highlight with no
+  stale-copy bugs. briefing-main attaches the result onto `VizRouteData.advisoryHighlights`
+  before `setData` (precedent: `fronts`, `nightIntervals`).
+- **Chip / deep-link** (`briefing-main.handleAdvisoryChip` / `applyDeepLink`): on top of
+  the Phase-1 preset, switch to the **representative model** (`representativeModel` — first
+  `per_model` whose status equals `aggregate_status`, mirroring the Python policy),
+  `setHighlightAdvisory(id)` (force-enables the Highlight toggle — fresh intent).
+  Same-chip re-click toggles the highlight off (lens stays). An explicit `?model=` wins
+  over the representative switch. Old packs (no highlight data) behave exactly as Phase 1.
+- **Clearing**: a bare dropdown/deep-link preset (`applyAdvisoryPreset` / `setVizPreset`),
+  a manual layer/overlay edit (`markVizCustom`, or any non-highlight `toggleVizLayer`) →
+  `activeHighlightAdvisoryId = null`. Model/point changes do **not** clear it.
+  **Exemption**: toggling the Highlight layer checkbox itself is a visibility control,
+  not a lens edit — it neither marks the view Custom nor clears the highlight.
+- **Rendering** (`layers/highlight-layer.ts`): registered last (top of stack) in a new
+  `highlight` `LayerGroup`. The scrim composes on an **offscreen canvas** (fill wash →
+  `destination-out` punch cutouts → draw onto main → stroke severity outlines) so
+  `destination-out` never erases the sky/axes beneath (compare-mode precedent). The
+  ribbon draws in the bottom margin, so the layer sets `clipToPlot: false` (honored by
+  the render loop in `renderer.ts`). Severity colors come from the advisory-status CSS
+  vars (`--red`/`--amber`/`--green`, theme-aware); unavailable = neutral gray; the dim
+  wash has light/dark variants via `isDarkTheme()`.
+- **Panel toggle**: the `highlight` group appears in the layer panel **only while**
+  `activeHighlightAdvisoryId` is set and the selected model has highlight data (gated via
+  the panel's `hiddenGroups`). One checkbox ("Highlight"), i18n `viz.layer.advisory-highlight`.
+  Compare mode is out of scope — highlights render only in single-model layouts.
+
+Highlight geometry deliberately does **not** flow through the static advisory-preset
+config (`advisory-presets.ts`) — a bare dropdown lens has no advisory instance — it
+flows through the chip/deep-link path via `activeHighlightAdvisoryId`. The scrim also
+subsumes the old reserved `emphasize` directive (it dims by region, so even the relevant
+layer's non-affected extent is de-emphasized).
 
 ## Data Flow
 
@@ -350,7 +409,7 @@ Info popups include buttons for Claude, ChatGPT, and Gemini that copy a context-
 
 ### Layer Control Panel
 
-`controls/panel.ts` renders checkboxes grouped by category. `getLayerGroups()` returns them in the order `reference, temperature, clouds, obscuration, icing, stability, turbulence, convection, conditions, sun, fronts` — the `terrain` group is intentionally omitted from the panel (terrain always renders, force-on at render time, so it has no UI toggle). Layers with a `metricId` get an info button that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods. A **theme selector dropdown** and **preview button** appear in the toolbar (both standard and compare mode) for switching cross-section themes.
+`controls/panel.ts` renders checkboxes grouped by category. `getLayerGroups()` returns them in the order `reference, temperature, clouds, obscuration, icing, stability, turbulence, convection, conditions, sun, fronts, highlight` — the `terrain` group is intentionally omitted from the panel (terrain always renders, force-on at render time, so it has no UI toggle), and the `highlight` group is hidden via `hiddenGroups` unless an advisory highlight is active with data for the selected model (#373). Layers with a `metricId` get an info button that opens the layer info popup. The **Clouds** and **Icing** group headers show an info button explaining the available methods. A **theme selector dropdown** and **preview button** appear in the toolbar (both standard and compare mode) for switching cross-section themes.
 
 ## Unified Atmospheric Profile Table
 

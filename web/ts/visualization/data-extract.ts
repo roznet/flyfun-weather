@@ -101,6 +101,10 @@ export function extractVizData(
     fronts: buildFronts(opts?.routeFronts, model),
     nightIntervals: buildNightIntervals(manifest),
     sunSide: buildSunSide(manifest),
+    // Advisory highlight geometry is derived from the advisories manifest (a
+    // separate artifact), so briefing-main attaches it after extraction —
+    // extractVizData only sees route analyses. Default to null here.
+    advisoryHighlights: null,
   };
 }
 

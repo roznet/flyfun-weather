@@ -13,9 +13,17 @@
  *
  * The preset shape is a bag of OPTIONAL view directives; the resolver/applier
  * dispatches over whichever directives are present. Adding a *new kind* of
- * effect later (highlight a band, emphasize layers, pre-enable a Skew-T
- * overlay) is: add one optional field here + one field on {@link ResolvedView}
- * + one branch in the store applier — existing presets and call sites untouched.
+ * effect later (pre-enable a Skew-T overlay, retarget the map metric, ...) is:
+ * add one optional field here + one field on {@link ResolvedView} + one branch
+ * in the store applier — existing presets and call sites untouched.
+ *
+ * NOTE: the advisory HIGHLIGHT mechanism (scrim + verdict ribbon, #373) does NOT
+ * flow through this static preset config. Geometry depends on a concrete advisory
+ * instance (evaluator thresholds / altitude / user params), which a bare dropdown
+ * lens does not have — so highlights travel the chip/deep-link path instead, via
+ * `vizSettings.activeHighlightAdvisoryId` (set in briefing-main's chip handler and
+ * derived reactively in `cross-section/advisory-highlights.ts`), never as a preset
+ * directive.
  *
  * SYNC: the iOS app mirrors ADVISORY_PRESETS + ADVISORY_TO_PRESET (cross-section
  * directives only) in
@@ -57,9 +65,12 @@ export interface AdvisoryPreset {
    *  'vertical_velocity', 'relative_humidity', 'richardson'). */
   skewtSidePanel?: string;
 
-  // ---- reserved for later phases (documented now so the shape doesn't churn) ----
-  // highlights?: HighlightDirective[]; // shade in-cloud band / affected segments
-  // emphasize?: string[];              // dim layers NOT in this list
+  // NB: there is deliberately no `highlights`/`emphasize` directive here. The
+  // scrim + verdict ribbon (#373) need a concrete advisory instance and so ride
+  // the chip/deep-link path via `activeHighlightAdvisoryId`, not the static
+  // preset config (see the file header). The scrim also subsumes the old
+  // `emphasize` idea — it dims by region, de-emphasizing even the relevant
+  // layer's non-affected extent, which per-layer alpha could not.
 }
 
 /**
@@ -313,7 +324,9 @@ export interface ResolvedView {
   skewtOverlays?: Record<string, boolean>;
   /** Primary side-panel variable id to select on the Skew-T. */
   skewtSidePanel?: string;
-  // future: highlights?, emphasize? — added alongside, dispatched independently
+  // No highlight/emphasize field: the scrim + ribbon (#373) are keyed to a live
+  // advisory instance and flow through `activeHighlightAdvisoryId`, not a
+  // resolved preset view.
 }
 
 /**

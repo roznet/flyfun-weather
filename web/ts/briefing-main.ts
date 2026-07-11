@@ -19,6 +19,7 @@ import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper
 import { initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
+import type { LayerGroup } from './visualization/types';
 import { extractVizData, getUnavailableLayers } from './visualization/data-extract';
 import { getAllLayers, getCompactLayerOverrides } from './visualization/cross-section/layer-registry';
 import {
@@ -29,6 +30,11 @@ import {
   advisoryPresetInterpretation,
 } from './visualization/cross-section/advisory-presets';
 import { applyNwpFallback, getSubstitutedLayers } from './visualization/cross-section/nwp-fallback';
+import {
+  deriveHighlights,
+  findAdvisory,
+  representativeModel,
+} from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
@@ -265,7 +271,21 @@ async function init(): Promise<void> {
   function handleAdvisoryChip(advisoryId: string): void {
     const preset = getPresetForAdvisory(advisoryId);
     if (!preset) return;
+    const s = store.getState();
+    // Same-chip re-click toggles the highlight OFF (lens stays): applyAdvisoryPreset
+    // clears the highlight, and we skip re-setting it below (#373).
+    const alreadyOn = s.vizSettings.activeHighlightAdvisoryId === advisoryId;
+    // Phase 1 (#219): apply the lens (also clears any prior highlight).
     store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
+    // Phase 2 (#373): when the advisory carries highlight geometry, switch to its
+    // representative model and enable the highlight. Old packs (no highlight data)
+    // fall through as pure Phase 1 — chip behaves exactly as before.
+    const adv = findAdvisory(getEffectiveAdvisories(s), advisoryId);
+    if (adv && !alreadyOn && adv.per_model.some((m) => !!m.highlights)) {
+      const rep = representativeModel(adv);
+      if (rep) store.getState().setSelectedModel(rep);
+      store.getState().setHighlightAdvisory(advisoryId);
+    }
     if (store.getState().vizSettings.layout === 'map') store.getState().setLayout('split');
     document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -313,6 +333,22 @@ async function init(): Promise<void> {
       : (advisoryId ? getPresetForAdvisory(advisoryId) : undefined);
     if (preset) {
       store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
+    }
+
+    // Highlight (#373): an `?advisory=` deep-link behaves like a card chip —
+    // enable the scrim/ribbon and switch to the advisory's representative model,
+    // UNLESS an explicit `?model=` param was honored above (it wins). A bare
+    // `?preset=` link has no advisory instance, so it gets no highlight.
+    if (advisoryId && preset) {
+      const adv = findAdvisory(getEffectiveAdvisories(s), advisoryId);
+      if (adv && adv.per_model.some((m) => !!m.highlights)) {
+        const explicitModel = !!(model && s.routeAnalyses.models.includes(model));
+        if (!explicitModel) {
+          const rep = representativeModel(adv);
+          if (rep) store.getState().setSelectedModel(rep);
+        }
+        store.getState().setHighlightAdvisory(advisoryId);
+      }
     }
 
     // Surface — focus the Skew-T (or the compare/static variant) and scroll to it.
@@ -1249,6 +1285,16 @@ async function init(): Promise<void> {
       routeFronts: state.routeFronts,
     };
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
+    // Advisory highlight geometry (#373): derived reactively from the tracked
+    // advisory × the rendered model (never stored), so model switches / recalcs /
+    // altitude changes update it with no stale-copy bugs. Null → the highlight
+    // layer + its panel toggle stay hidden.
+    const derivedHighlights = deriveHighlights(
+      getEffectiveAdvisories(state),
+      state.vizSettings.activeHighlightAdvisoryId ?? null,
+      state.selectedModel,
+    );
+    data.advisoryHighlights = derivedHighlights;
     const unavailable = getUnavailableLayers(data);
     const allLayers = getAllLayers();
     // Render-time map only — never mutates the stored enabledLayers pref.
@@ -1534,6 +1580,9 @@ async function init(): Promise<void> {
 
     // Render cross-section controls (above canvas) — skip in compare mode (rendered above)
     if (!showCompare) {
+      // The Highlight group toggle appears only while an advisory highlight is
+      // active AND the selected model has highlight data for it (#373).
+      const hiddenGroups = derivedHighlights ? undefined : new Set<LayerGroup>(['highlight']);
       renderVizControls(controlsContainer, state.vizSettings, {
         onLayerToggle: (layerId) => store.getState().toggleVizLayer(layerId),
         onLayoutChange: (l) => store.getState().setLayout(l),
@@ -1541,7 +1590,7 @@ async function init(): Promise<void> {
         onThemeChange: (themeId) => store.getState().setVizTheme(themeId),
         onPresetChange: (presetId) => handlePresetChange(presetId),
         onCloudStyleChange: (style) => store.getState().setCloudStyle(style),
-      }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable, substitutedLayers);
+      }, state.selectedModel, availableModels.length > 0 ? availableModels : undefined, state.displayMode, preferredMethods, unavailable, substitutedLayers, hiddenGroups);
 
       // Render route graph controls (below graph)
       if (routeGraphControlsContainer && showCrossSection) {

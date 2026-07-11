@@ -1,6 +1,7 @@
 /** Shared types for the cross-section and map visualizations. */
 
 import type { FrontCrossing, FrontProximity, FrontChain } from '../types/fronts';
+import type { AdvisoryHighlights } from '../types/advisories';
 
 // --- Settings ---
 
@@ -43,6 +44,13 @@ export interface VizSettings {
   skewtOverlays?: Record<string, boolean>;
   /** Primary side-panel variable id selected by a preset / deep-link (#308). */
   skewtPrimaryVar?: string;
+  /** Which advisory the cross-section highlight (scrim + verdict ribbon, #373)
+   *  is tracking, or null/undefined for no highlight. Only the advisory id is
+   *  stored — the regions/ribbon are derived reactively from the advisory ×
+   *  selectedModel at render time, so model switches / recalcs / altitude
+   *  changes update the highlight with no stale-copy bugs. No-ops gracefully
+   *  when the advisory no longer exists in the manifest. */
+  activeHighlightAdvisoryId?: string | null;
 }
 
 // --- Coordinate Transform ---
@@ -70,6 +78,11 @@ export interface CrossSectionLayer {
   readonly group: LayerGroup;
   readonly defaultEnabled: boolean;
   readonly metricId?: string;
+  /** When explicitly `false`, the render loop does NOT clip this layer to the
+   *  plot area, so it may draw into the canvas margins. The verdict ribbon
+   *  (#373) uses this to render its strip in the bottom margin, below the plot.
+   *  Defaults to clipped (undefined/true). */
+  readonly clipToPlot?: boolean;
   render(
     ctx: CanvasRenderingContext2D,
     transform: CoordTransform,
@@ -89,6 +102,7 @@ export type LayerGroup =
   | 'conditions'
   | 'fronts'
   | 'sun'
+  | 'highlight'
   | 'reference';
 
 // --- Terrain ---
@@ -145,6 +159,15 @@ export interface VizRouteData {
    * `null` when no sun analysis is present.
    */
   sunSide: VizSunSide | null;
+  /**
+   * Advisory highlight geometry (scrim regions + verdict ribbon, #373) for the
+   * currently-tracked advisory × the rendered model. Derived reactively in
+   * briefing-main from `activeHighlightAdvisoryId` × `selectedModel` and attached
+   * before `setData`; `null` when no advisory is highlighted, the advisory is
+   * gone, or the model/pack carries no highlight data (old pack) → the highlight
+   * layer no-ops.
+   */
+  advisoryHighlights: AdvisoryHighlights | null;
 }
 
 /** A twilight or night stretch along the route (distance-based for shading). */

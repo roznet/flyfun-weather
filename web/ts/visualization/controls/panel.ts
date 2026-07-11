@@ -345,6 +345,7 @@ export function renderVizControls(
   preferredMethods?: Record<string, string>,
   unavailableLayers?: Set<string>,
   substitutedLayers?: Set<string>,
+  hiddenGroups?: Set<LayerGroup>,
 ): void {
   let html = '<div class="viz-toolbar">';
 
@@ -428,7 +429,7 @@ export function renderVizControls(
   if (settings.layout !== 'map') {
     html += layerTogglesHtml(settings.enabledLayers, {
       displayMode, preferredMethods, unavailableLayers, substitutedLayers,
-      cloudStyle: settings.cloudStyle,
+      cloudStyle: settings.cloudStyle, hiddenGroups,
     });
   }
   html += '</div>'; // .viz-toolbar
