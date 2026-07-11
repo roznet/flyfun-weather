@@ -156,7 +156,28 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw FixtureError.notProvided("updateFlight") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw FixtureError.notProvided("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw FixtureError.notProvided("parseFpl") }
-    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse { throw FixtureError.notProvided("interpretRoute") }
+    /// Echo the typed tokens back as a clean interpretation. The create/edit flow
+    /// now interprets the route on the server *at submit time* before it will
+    /// create (`AddFlightViewModel.interpretRouteForSubmit`), so a fixture that
+    /// throws here strands the add-flight journey on the form. Fixtures have no
+    /// server to resolve Field-15 syntax, and the journey types plain ICAO idents,
+    /// so a verbatim echo (nothing skipped / off-route → `isClean`) resolves to
+    /// `.ready` and lets `performCreate` proceed.
+    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse {
+        let tokens = rawRoute
+            .split(whereSeparator: { $0 == " " || $0 == "\n" })
+            .map { $0.uppercased() }
+        let waypoints = tokens.map {
+            RouteWaypointInfo(icao: $0, name: $0, lat: 0, lon: 0, timezone: "UTC")
+        }
+        return InterpretRouteResponse(
+            originalTokens: tokens,
+            interpreted: tokens,
+            skipped: [],
+            offRoute: [],
+            waypoints: waypoints
+        )
+    }
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw FixtureError.notProvided("routeDistance") }
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw FixtureError.notProvided("recalculateAdvisories") }
