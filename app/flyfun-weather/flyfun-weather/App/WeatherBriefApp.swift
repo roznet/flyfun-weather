@@ -39,6 +39,10 @@ struct WeatherBriefApp: App {
             }
             .environment(appState)
             .onOpenURL { url in
+                // Universal Links (Smart App Banner "Open", tapped briefing links)
+                // route to a flight; everything else falls through to the
+                // auth-callback path (auth-callback universal link + reviewer token).
+                if appState.handleUniversalLink(url: url) { return }
                 appState.handleAuthCallback(url: url)
             }
             .onChange(of: scenePhase) {
