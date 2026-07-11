@@ -241,18 +241,17 @@ def test_build_context_divergence_poor_included(sample_snapshot):
     assert "spread=70.0" in context
 
 
-def test_build_context_nwp_cloud_absent_says_no_native_layer(sample_snapshot):
-    """Far-out models with no native NWP cloud enrichment (nwp_cloud_layers is
-    None) report 'no native NWP cloud layer' — NOT the bulk Open-Meteo low/mid/
-    high summary mislabeled as 'NWP cloud'. That bulk triple is the GFS-native
-    paradigm and mislabels ECMWF; emitting it as NWP cloud contradicted the app's
-    empty cross-section NWP layer (#nwp-cloud-layer-ios-web)."""
+def test_build_context_nwp_cloud_absent_falls_back_to_bulk(sample_snapshot):
+    """No native NWP cloud envelope (nwp_cloud_layers is None) but bulk
+    cloud_cover present → fall back to the bulk Open-Meteo summary under a
+    disambiguated label, NOT mislabeled as 'NWP cloud Low/Mid/High' (the
+    GFS-native paradigm that misrepresented ECMWF, #nwp-cloud-layer-ios-web).
+    This covers both far-out ECMWF and Open-Meteo-only models (UKMO/MF/GEM)
+    whose bulk fields are always populated — no data is dropped."""
     from weatherbrief.models import ThermodynamicIndices
 
     sample_snapshot.analyses[0].sounding["gfs"] = SoundingAnalysis(
         indices=ThermodynamicIndices(),
-        # Bulk fields populated (as Open-Meteo now returns for ECMWF too) — these
-        # must NOT be surfaced as "NWP cloud Low/Mid/High" any more.
         cloud_cover_low_pct=81.0,
         cloud_cover_mid_pct=61.0,
         cloud_cover_high_pct=100.0,
@@ -262,8 +261,31 @@ def test_build_context_nwp_cloud_absent_says_no_native_layer(sample_snapshot):
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "NWP cloud [gfs]: no native NWP cloud layer at this lead time" in context
+    assert (
+        "Bulk cloud [gfs] (Open-Meteo summary, no native NWP layer): "
+        "Low=81%, Mid=61%, High=100%" in context
+    )
+    # The bulk triple must NOT be mislabeled as native NWP cloud…
     assert "NWP cloud [gfs]: Low=" not in context
+    # …and the message must not imply a temporal gap (wrong for always-None models).
+    assert "at this lead time" not in context
+
+
+def test_build_context_nwp_cloud_absent_no_bulk(sample_snapshot):
+    """No native NWP cloud layer AND no bulk summary → the explicit
+    'no native NWP cloud layer' line (no temporal framing)."""
+    from weatherbrief.models import ThermodynamicIndices
+
+    sample_snapshot.analyses[0].sounding["gfs"] = SoundingAnalysis(
+        indices=ThermodynamicIndices(),
+        nwp_cloud_layers=None,
+    )
+
+    target_time = datetime(2026, 2, 17, 9, 0, 0)
+    context = build_digest_context(sample_snapshot, target_time)
+
+    assert "NWP cloud [gfs]: no native NWP cloud layer" in context
+    assert "at this lead time" not in context
 
 
 def test_build_context_nwp_cloud_clear(sample_snapshot):
