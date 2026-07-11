@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Safari (iOS/iPadOS) Smart App Banner → FlyFunWeather on the App Store.
+       app-argument is set to this exact briefing URL so, once the app ships
+       Universal-Link handling, "Open" deep-links straight to this flight. -->
+  <meta name="apple-itunes-app" content="app-id=6760951972">
+  <script>(function(){var m=document.querySelector('meta[name="apple-itunes-app"]');if(m){m.setAttribute('content','app-id=6760951972, app-argument='+location.href);}})();</script>
   <title>Flyfun Weather — Briefing</title>
   <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
   <link rel="stylesheet" href="/css/style.css">
