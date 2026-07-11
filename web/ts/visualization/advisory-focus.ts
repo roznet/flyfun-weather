@@ -16,6 +16,10 @@ export interface ActiveAdvisoryFocus {
   model: string;
   highlightSurfaces: AdvisoryHighlightSurface[];
   emphasizeLayers: string[];
+  /** False only for an aggregate action on a legacy manifest that omitted its
+   * representative model. The selected model still drives the displayed preset,
+   * but must not be presented as evidence attribution in the focus banner. */
+  modelAttributionKnown?: boolean;
 }
 
 export interface ResolvedFocusRegion {
@@ -793,7 +797,10 @@ export function resolveAdvisoryFocus(
     });
   }
 
-  const resolvedLocationState = locationState(match.modelResult);
+  const resolvedLocationState: ResolvedAdvisoryFocus['locationState'] =
+    active.modelAttributionKnown === false
+      ? 'legacy'
+      : locationState(match.modelResult);
   if (resolvedLocationState === 'legacy' || resolvedLocationState === 'unavailable') {
     regions = [];
   }

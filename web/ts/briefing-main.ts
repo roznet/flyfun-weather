@@ -11,7 +11,7 @@ import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
-import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime, escapeHtml } from './utils';
+import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime, escapeHtml, modelLabel } from './utils';
 import { pressureToAltitudeFt } from './utils/atmo';
 import { SKEWT_OVERLAYS } from './visualization/skewt/overlay-bands';
 import { getVariableById } from './visualization/skewt/variable-panel';
@@ -56,6 +56,15 @@ import { getActiveTheme } from './visualization/cross-section/theme';
 import { startBriefingTour, maybeAutoStartBriefingTour } from './tour/briefing-tour';
 import { maybeOfferTour } from './tour/tour-offer';
 import { initBriefingLayout } from './managers/sidebar-layout';
+import { actionForAdvisory } from './visualization/advisory-actions';
+import {
+  effectiveEmphasis,
+  focusedMethodId,
+  resolveAdvisoryFocus,
+  type ResolvedAdvisoryFocus,
+} from './visualization/advisory-focus';
+import { advisoryMethodLabel } from './visualization/advisory-methods';
+import type { RouteAdvisoriesManifest } from './types/advisories';
 
 
 // --- Cross-section config snapshot (analytics, #232) -----------------------
@@ -88,6 +97,19 @@ function buildXsectionSnapshotProps(
     map_color_metric: v.mapColorMetric,
     map_width_metric: v.mapWidthMetric,
     layers,
+  };
+}
+
+/** Build a per-store-notification guard for the expensive point-section path.
+ * Atomic actions can change model and visualization settings together; both
+ * dependency branches may request the same sounding render, but only the first
+ * request in that notification should reset caches and load data. */
+export function createPointSectionsRenderOnce(effect: () => void): () => void {
+  let rendered = false;
+  return () => {
+    if (rendered) return;
+    rendered = true;
+    effect();
   };
 }
 
@@ -231,9 +253,9 @@ async function init(): Promise<void> {
       openFlexibilityExplainer();
       return;
     }
-    // advisory-info-btn and advisory-view-btn reuse .metric-info-btn styling but
-    // have their own delegated handlers (in advisories-ui.ts) — skip them here.
-    if (!btn.classList.contains('advisory-info-btn') && !btn.classList.contains('advisory-view-btn')) {
+    // advisory-info-btn reuses .metric-info-btn styling but has its own delegated
+    // handler in advisories-ui.ts — skip it here.
+    if (!btn.classList.contains('advisory-info-btn')) {
       e.preventDefault();
       showMetricInfo(btn.dataset.metric!, btn.dataset.value);
     }
@@ -256,17 +278,41 @@ async function init(): Promise<void> {
     store.getState().setVizPreset(presetId);
   }
 
-  // Advisory-card chip handler: resolve the advisory's preset (with any
-  // per-advisory override, e.g. FIKI) and apply it. The companion route-map
-  // metric is set in state (so it's "made" when the map is shown), but we keep
-  // the cross-section as the view rather than forcing split — except when the
-  // user is on the map-only layout, where we switch to split so the
-  // cross-section the preset configures is actually visible. Then scroll it in.
-  function handleAdvisoryChip(advisoryId: string): void {
+  // Typed advisory action handler. Task 12 implements the spatial preset-focus
+  // action only; compare/method/airport/fronts actions are intentionally left for
+  // Task 13. Exact model identity is mandatory — never substitute another model
+  // or union another forecast's evidence geometry.
+  function handleAdvisoryAction(advisoryId: string, requestedModel?: string): void {
+    const action = actionForAdvisory(advisoryId);
+    if (action?.kind !== 'preset-focus') return;
+
+    const state = store.getState();
+    const manifest = getEffectiveAdvisories(state);
+    const advisory = manifest?.advisories.find(
+      (candidate) => candidate.advisory_id === advisoryId,
+    );
+    if (!advisory) return;
+
+    const representativeModel = advisory.representative_model || null;
+    const model = requestedModel !== undefined
+      ? requestedModel
+      : (representativeModel ?? state.selectedModel);
+    if (!advisory.per_model.some((result) => result.model === model)) return;
+
     const preset = getPresetForAdvisory(advisoryId);
     if (!preset) return;
-    store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
-    if (store.getState().vizSettings.layout === 'map') store.getState().setLayout('split');
+    const view = resolveAdvisoryPreset(preset, preferredMethods);
+    store.getState().focusAdvisory({
+      advisoryId,
+      model,
+      highlightSurfaces: [...(view.highlightSurfaces ?? [])],
+      emphasizeLayers: [...(view.emphasizeLayers ?? [])],
+      // Aggregate actions on old packs may display the current model's preset,
+      // but that model is not representative evidence attribution.
+      modelAttributionKnown: requestedModel !== undefined || representativeModel !== null,
+    }, preset.id, view);
+
+    if (state.vizSettings.layout === 'map') store.getState().setLayout('split');
     document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -447,7 +493,7 @@ async function init(): Promise<void> {
     // Re-render advisories now that profiles are available for the selector
     const s = store.getState();
     if (s.flight) {
-      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
+      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s));
     }
   }).catch(err => console.error('Failed to fetch profiles:', err));
 
@@ -458,7 +504,7 @@ async function init(): Promise<void> {
     setLiveAdvisoryCatalog(entries);
     const s = store.getState();
     if (s.flight) {
-      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
+      renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s));
     }
   }).catch(err => console.error('Failed to fetch advisory catalog:', err));
 
@@ -778,6 +824,91 @@ async function init(): Promise<void> {
       return overlayAltitudeStatuses(base, state.altitudeTable, state.advisoryAltitudeOverride);
     }
     return base;
+  }
+
+  function translatedOrFallback(key: string, fallback: string): string {
+    const translated = t(key);
+    return translated === key ? fallback : translated;
+  }
+
+  function humanizeAdvisoryId(advisoryId: string): string {
+    return advisoryId
+      .split(/[_-]+/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  }
+
+  /** Render the ephemeral evidence identity independently of geometry. Legacy
+   * and unavailable focus therefore still explains what the pilot selected even
+   * when no region can be painted on a surface. */
+  function renderAdvisoryFocusBanner(
+    focus: ResolvedAdvisoryFocus | null,
+    manifest: RouteAdvisoriesManifest | null,
+  ): void {
+    const banner = document.getElementById('advisory-focus-banner');
+    if (!banner) return;
+    if (!focus) {
+      banner.hidden = true;
+      banner.innerHTML = '';
+      return;
+    }
+
+    const focusLabel = translatedOrFallback('advisories.focusLabel', 'Advisory focus');
+    const catalogName = manifest?.catalog.find(
+      (entry) => entry.id === focus.active.advisoryId,
+    )?.name ?? humanizeAdvisoryId(focus.active.advisoryId);
+    const attributionKnown = focus.active.modelAttributionKnown !== false;
+    const modelName = attributionKnown ? modelLabel(focus.modelResult.model) : null;
+    const method = attributionKnown
+      ? advisoryMethodLabel(focusedMethodId(focus))
+      : null;
+
+    let status = '';
+    if (focus.locationState === 'partial') {
+      status = translatedOrFallback('advisories.partialData', 'Partial data');
+    } else if (focus.locationState === 'unavailable') {
+      status = translatedOrFallback(
+        'advisories.locationUnavailable',
+        'Location unavailable',
+      );
+    } else if (focus.locationState === 'legacy') {
+      status = attributionKnown
+        ? translatedOrFallback(
+          'advisories.locationLegacy',
+          'Older briefing — location unavailable',
+        )
+        : translatedOrFallback(
+          'advisories.locationLegacy',
+          'Older briefing — evidence model unavailable',
+        );
+    }
+
+    const modelHtml = modelName
+      ? `<span class="advisory-focus-model">${escapeHtml(modelName)}</span>`
+      : '';
+    const methodHtml = method
+      ? `<span class="badge advisory-focus-method" title="${escapeHtml(method.description)}"`
+        + ` aria-label="${escapeHtml(method.description)}">${escapeHtml(method.short)}</span>`
+      : '';
+    const statusHtml = status
+      ? `<span class="advisory-focus-status">${escapeHtml(status)}</span>`
+      : '';
+    const closeLabel = translatedOrFallback('advisories.focusClose', 'Close');
+
+    banner.setAttribute('aria-label', focusLabel);
+    banner.innerHTML = `
+      <div class="advisory-focus-content">
+        <strong class="advisory-focus-name">${escapeHtml(catalogName)}</strong>
+        ${modelHtml}
+        ${methodHtml}
+        ${statusHtml}
+        <button type="button" class="advisory-focus-close" aria-label="${escapeHtml(closeLabel)}">${escapeHtml(closeLabel)}</button>
+      </div>
+    `;
+    banner.hidden = false;
+    const close = banner.querySelector<HTMLButtonElement>('.advisory-focus-close');
+    if (close) close.onclick = () => store.getState().clearAdvisoryFocus();
   }
 
   // Apply initial display mode
@@ -1234,6 +1365,7 @@ async function init(): Promise<void> {
 
     if (!state.routeAnalyses) {
       vizSection.style.display = 'none';
+      renderAdvisoryFocusBanner(null, null);
       return;
     }
     vizSection.style.display = '';
@@ -1249,6 +1381,17 @@ async function init(): Promise<void> {
       routeFronts: state.routeFronts,
     };
     const data = extractVizData(state.routeAnalyses, state.selectedModel, state.flight?.flight_ceiling_ft, state.elevationProfile, extractOpts);
+    const effectiveAdvisories = getEffectiveAdvisories(state);
+    const focus = resolveAdvisoryFocus(
+      state.activeAdvisoryFocus,
+      effectiveAdvisories,
+      data,
+    );
+    const emphasis = effectiveEmphasis(
+      state.activeAdvisoryFocus,
+      state.vizSettings.activePreset ?? null,
+    );
+    renderAdvisoryFocusBanner(focus, effectiveAdvisories);
     const unavailable = getUnavailableLayers(data);
     const allLayers = getAllLayers();
     // Render-time map only — never mutates the stored enabledLayers pref.
@@ -1295,6 +1438,7 @@ async function init(): Promise<void> {
         compareRenderer.setCompareLayer(layer);
         compareRenderer.setBandMode(state.vizSettings.compareBandMode ?? 'consensus-outline');
         compareRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
+        compareRenderer.setAdvisoryFocus(focus);
         compareRenderer.render();
 
         // Attach or update compare interaction
@@ -1307,6 +1451,12 @@ async function init(): Promise<void> {
             },
           );
         }
+      } else {
+        // No active compare datasets means there is no live surface to retain.
+        // Destroy the old renderer so a previously-painted focus cannot linger
+        // after every compare model has been disabled.
+        if (compareInteraction) { compareInteraction.destroy(); compareInteraction = null; }
+        if (compareRenderer) { compareRenderer.destroy(); compareRenderer = null; }
       }
 
       // Hide route graph in compare mode
@@ -1340,6 +1490,8 @@ async function init(): Promise<void> {
       vizRenderer.setData(data);
       vizRenderer.setLayers(allLayers, effectiveEnabled);
       vizRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
+      vizRenderer.setAdvisoryFocus(focus);
+      vizRenderer.setLayerEmphasis(emphasis);
       vizRenderer.render();
 
       // --- Route graph ---
@@ -1360,6 +1512,7 @@ async function init(): Promise<void> {
         routeGraphRenderer.setData(data);
         routeGraphRenderer.setMetrics(leftMetric, rightMetric);
         routeGraphRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
+        routeGraphRenderer.setAdvisoryFocus(focus);
         routeGraphRenderer.render();
 
         // Attach or update route graph interaction
@@ -1459,6 +1612,7 @@ async function init(): Promise<void> {
       mapRenderer.setAltitude(altFt);
       mapRenderer.setShowFronts(state.vizSettings.mapFrontsVisible ?? false);
       mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
+      mapRenderer.setAdvisoryFocus(focus);
       mapRenderer.render();
       // Gated front axes for the selected model (async; redraws when ready).
       updateMapFrontLines(
@@ -1628,6 +1782,19 @@ async function init(): Promise<void> {
 
   // --- Subscribe to state changes ---
   store.subscribe((state, prev) => {
+    // Several atomic actions intentionally change model, viz settings, and focus
+    // together. Coalesce the existing dependency branches so every surface sees
+    // one coherent snapshot and focus clears do not trigger redundant renders.
+    let visualizationRendered = false;
+    const renderVisualizationOnce = (): void => {
+      if (visualizationRendered) return;
+      visualizationRendered = true;
+      renderVisualization(state);
+    };
+    const renderPointSectionsOnce = createPointSectionsRenderOnce(
+      () => renderPointSections(state),
+    );
+
     // Resolve 'auto' units against this flight's region (US flights → US units)
     // before any sub-render reads getUnitsRegion(). No-op for a forced pref.
     if (state.snapshot !== prev.snapshot && state.snapshot) {
@@ -1687,7 +1854,7 @@ async function init(): Promise<void> {
     ) {
       ui.renderAssessment(state.currentPack, state.flight, state.routeAdvisories, state.altAdvisories, state.digestPending, () => store.getState().generateDigest());
       ui.togglePackSections(!!state.currentPack);
-      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
+      renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryAction, isFlightOwner(state));
       ui.renderRefreshDelta(state.snapshot);
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
@@ -1696,8 +1863,8 @@ async function init(): Promise<void> {
       ui.renderDwdCharts(state.flight, state.currentPack, user.is_admin || !!state.currentPack?.metoffice_charts_public);
       ui.renderDWDOverview(state.flight, state.currentPack, user.is_admin);
       ui.renderGramet(state.flight, state.currentPack);
-      renderPointSections(state);
-      renderVisualization(state);
+      renderPointSectionsOnce();
+      renderVisualizationOnce();
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
     }
     if (
@@ -1737,15 +1904,15 @@ async function init(): Promise<void> {
       );
     }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {
-      renderPointSections(state);
+      renderPointSectionsOnce();
       updateVizOverlay(state);
     }
     if (state.displayMode !== prev.displayMode || state.tierVisibility !== prev.tierVisibility) {
       applyDisplayModeClass(state.displayMode);
       updateToggleButtons(state.displayMode);
-      renderPointSections(state);
+      renderPointSectionsOnce();
       if (state.displayMode !== prev.displayMode) {
-        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
+        renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryAction, isFlightOwner(state));
         ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber).
@@ -1755,16 +1922,19 @@ async function init(): Promise<void> {
         if (state.displayMode === 'compact') {
           store.getState().setLayersBatch(getCompactLayerOverrides(preferredMethods));
         } else {
-          renderVisualization(state);
+          renderVisualizationOnce();
         }
       }
     }
     if (state.selectedModel !== prev.selectedModel) {
-      renderPointSections(state);
-      renderVisualization(state);
+      renderPointSectionsOnce();
+      renderVisualizationOnce();
+    }
+    if (state.activeAdvisoryFocus !== prev.activeAdvisoryFocus) {
+      renderVisualizationOnce();
     }
     if (state.vizSettings !== prev.vizSettings) {
-      renderVisualization(state);
+      renderVisualizationOnce();
       // Apply a newly-selected lens (or deep-link) to the Skew-T too, so the
       // preset is coherent across cross-section + Skew-T (#308).
       if (
@@ -1775,7 +1945,7 @@ async function init(): Promise<void> {
         applySkewtPresetState();
       }
       ui.updateWindyLink(state.routeAnalyses, state.selectedPointIndex, state.selectedModel);
-      renderPointSections(state);
+      renderPointSectionsOnce();
       // Analytics: emit at most once per briefing on transition into
       // map / compare / split. The user can toggle between layouts
       // freely; counting every toggle would inflate engagement.
@@ -2203,7 +2373,7 @@ async function init(): Promise<void> {
     }
     ui.renderAssessment(s.currentPack, s.flight, s.routeAdvisories, s.altAdvisories, s.digestPending, () => store.getState().generateDigest());
     ui.togglePackSections(!!s.currentPack);
-    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
+    renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryAction, isFlightOwner(s));
     ui.renderRefreshDelta(s.snapshot);
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());

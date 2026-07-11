@@ -10,7 +10,11 @@ import { formatAltitudeDeltaNote } from '../helpers/altitude-diff';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
 import { formatVisibility } from '../units';
-import { ADVISORY_TO_PRESET } from '../visualization/cross-section/advisory-presets';
+import {
+  actionForAdvisory,
+  type AdvisoryAction,
+} from '../visualization/advisory-actions';
+import { advisoryMethodLabel } from '../visualization/advisory-methods';
 import { computeSummaryCondition } from '../helpers/airport-summary';
 
 /** Live advisory catalog (names / descriptions / parameter defs) fetched from
@@ -19,8 +23,58 @@ import { computeSummaryCondition } from '../helpers/airport-summary';
  *  generation time. Set once by briefing-main; null until it arrives, then we
  *  fall back to the pack catalog. Grades/results stay pack-sourced. */
 let liveCatalog: AdvisoryCatalogEntry[] | null = null;
+const advisoryRenderControllers = new WeakMap<HTMLElement, AbortController>();
+const advisoryActionCallbacks = new WeakMap<
+  HTMLElement,
+  (advisoryId: string, model?: string) => void
+>();
+const popupActionCallbackProviders = new WeakMap<
+  HTMLElement,
+  () => ((advisoryId: string, model?: string) => void) | undefined
+>();
+const delegatedActionPopups = new WeakSet<HTMLElement>();
+
+function wireAdvisoryModelFocusDelegation(
+  popup: HTMLElement,
+  callbackProvider: () => (
+    (advisoryId: string, model?: string) => void
+  ) | undefined,
+): void {
+  popupActionCallbackProviders.set(popup, callbackProvider);
+  if (delegatedActionPopups.has(popup)) return;
+  delegatedActionPopups.add(popup);
+  popup.addEventListener('click', (event) => {
+    const target = event.target as { closest?: (selector: string) => Element | null } | null;
+    const button = target?.closest?.('.advisory-model-focus-btn') as HTMLElement | null;
+    const advisoryId = button?.dataset.advisoryId;
+    const model = button?.dataset.model;
+    if (!advisoryId || !model) return;
+    popupActionCallbackProviders.get(popup)?.()?.(advisoryId, model);
+  });
+}
+
 export function setLiveAdvisoryCatalog(entries: AdvisoryCatalogEntry[]): void {
   liveCatalog = entries;
+}
+
+function translatedOrFallback(key: string, fallback: string): string {
+  const translated = t(key);
+  return translated === key ? fallback : translated;
+}
+
+function advisoryActionLabel(action: AdvisoryAction): string {
+  switch (action.kind) {
+    case 'preset-focus':
+      return translatedOrFallback('advisories.showOnChart', 'Show on chart');
+    case 'compare-models':
+      return translatedOrFallback('advisories.openCompare', 'Open compare');
+    case 'method-context':
+      return translatedOrFallback('advisories.showOnChart', 'Show on chart');
+    case 'airport-profile':
+      return translatedOrFallback('advisories.openAirportProfile', 'Open airport profile');
+    case 'fronts-map':
+      return translatedOrFallback('advisories.openFrontsMap', 'Open fronts map');
+  }
 }
 
 /** Visibility for an airport condition, region-aware.
@@ -61,16 +115,64 @@ function flightCatBadgeClass(cat: FlightCategory): string {
 }
 
 /** Popup for a single per-model advisory badge: "ECMWF · Fronts" + status + detail. */
-function formatModelDetailPopup(advName: string, m: ModelAdvisoryResult): string {
+function formatModelDetailPopup(
+  advName: string,
+  advisoryId: string,
+  m: ModelAdvisoryResult,
+  action: AdvisoryAction | null,
+): string {
   // Per-model "Options to improve" (#330): this model's own mitigations, shown
   // below its condition. Optional — `renderMitigationBlock` returns '' when the
   // model carries none, so the section only appears when there's advice.
+  const showOnChart = action?.kind === 'preset-focus' || action?.kind === 'method-context'
+    ? advisoryActionLabel(action)
+    : null;
+  const modelName = modelLabel(m.model);
+  const focusButton = showOnChart
+    ? `<button type="button" class="btn btn-secondary btn-sm advisory-model-focus-btn"`
+      + ` data-advisory-id="${escapeHtml(advisoryId)}" data-model="${escapeHtml(m.model)}"`
+      + ` aria-label="${escapeHtml(`${showOnChart}: ${modelName}`)}">${escapeHtml(showOnChart)}</button>`
+    : '';
   return `
-    <div class="popup-header"><h3>${escapeHtml(modelLabel(m.model))} &middot; ${escapeHtml(advName)}</h3></div>
+    <div class="popup-header"><h3>${escapeHtml(modelName)} &middot; ${escapeHtml(advName)}</h3></div>
     <p><span class="badge ${statusBadgeClass(m.status)}">${statusLabel(m.status)}</span></p>
     <p class="advisory-detail">${escapeHtml(m.detail)}</p>
     ${renderMitigationBlock(m.mitigations)}
+    ${focusButton}
   `;
+}
+
+function representativeMethodBadge(adv: RouteAdvisoryResult): string {
+  const representative = adv.per_model.find(
+    (model) => model.model === adv.representative_model,
+  );
+  const method = advisoryMethodLabel(representative?.primary_method_id);
+  if (!method) return '';
+  return `<span class="badge advisory-method-badge"`
+    + ` title="${escapeHtml(method.description)}"`
+    + ` aria-label="${escapeHtml(method.description)}">${escapeHtml(method.short)}</span>`;
+}
+
+function aggregateActionMarkup(adv: RouteAdvisoryResult): string {
+  const action = actionForAdvisory(adv.advisory_id);
+  if (!action) return '';
+  const label = advisoryActionLabel(action);
+  const frontsUnavailable = action.kind === 'fronts-map'
+    && adv.per_model.length > 0
+    && adv.per_model.every((model) => model.status === 'unavailable');
+  const disabled = frontsUnavailable ? ' disabled aria-disabled="true"' : '';
+  const explanation = frontsUnavailable
+    ? `<span class="advisory-action-unavailable">${escapeHtml(translatedOrFallback(
+      'advisories.frontsUnavailable',
+      'Fronts unavailable for all models',
+    ))}</span>`
+    : '';
+  return `<span class="advisory-action">`
+    + `<button type="button" class="advisory-action-btn"`
+    + ` data-advisory-id="${escapeHtml(adv.advisory_id)}"`
+    + ` data-action-kind="${escapeHtml(action.kind)}"${disabled}>${escapeHtml(label)}</button>`
+    + explanation
+    + `</span>`;
 }
 
 function formatRunwayPopup(allRunways: RunwayWind[]): string {
@@ -192,7 +294,6 @@ function renderAirportConditions(conditions: AirportConditions, aggregation: 'wo
 function renderAdvisoryCard(
   adv: RouteAdvisoryResult,
   catalog: Map<string, AdvisoryCatalogEntry>,
-  chipsEnabled: boolean,
   compact = false,
 ): string {
   const entry = catalog.get(adv.advisory_id);
@@ -214,12 +315,8 @@ function renderAdvisoryCard(
   const infoBtn = entry
     ? `<button class="metric-info-btn advisory-info-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.advisoryInfo')}" aria-label="${t('advisories.advisoryInfo')}">i</button>`
     : '';
-
-  // Cross-section preset chip (#219): only for advisories with a mapped preset.
-  // Reuses .metric-info-btn styling; its own delegated handler fires onAdvisoryChip.
-  const chip = chipsEnabled && ADVISORY_TO_PRESET[adv.advisory_id]
-    ? `<button class="metric-info-btn advisory-view-btn" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.showOnCrossSection')}" aria-label="${t('advisories.showOnCrossSection')}">\u{1F4C8}</button>`
-    : '';
+  const methodBadge = representativeMethodBadge(adv);
+  const action = aggregateActionMarkup(adv);
 
   // Mitigation hint (#330): a soft lightbulb shown only when this advisory
   // carries mitigations. Tapping it opens a popup listing the "Options to
@@ -237,8 +334,9 @@ function renderAdvisoryCard(
       <div class="advisory-card-header">
         <span class="badge ${aggClass}">${statusLabel(adv.aggregate_status)}</span>
         <span class="advisory-name">${name}</span>
+        ${methodBadge}
         ${lightbulb}
-        ${chip}
+        ${action}
         ${infoBtn}
       </div>
       <div class="advisory-detail">${escapeHtml(adv.aggregate_detail)}</div>
@@ -251,8 +349,9 @@ function renderAdvisoryCard(
       <div class="advisory-card-header">
         <span class="badge ${aggClass}">${statusLabel(adv.aggregate_status)}</span>
         <span class="advisory-name">${name}</span>
+        ${methodBadge}
         ${lightbulb}
-        ${chip}
+        ${action}
         ${infoBtn}
       </div>
       <div class="advisory-models">${modelBadges}</div>
@@ -361,7 +460,7 @@ export function renderAdvisories(
   onAltitudeTable?: () => Promise<void>,
   altTimeToggle?: AltTimeToggleConfig,
   profileSelector?: ProfileSelectorConfig,
-  onAdvisoryChip?: (advisoryId: string) => void,
+  onAdvisoryAction?: (advisoryId: string, model?: string) => void,
   // Owner-only: renders the explicit "Recalculate" button. The recalculate
   // endpoint is owner-gated (403 otherwise), so non-owners never see it.
   canRecalculate = false,
@@ -369,6 +468,18 @@ export function renderAdvisories(
   const el = $('advisories-section');
   const section = $('advisories-wrapper');
   if (!el) return;
+
+  // The section element survives innerHTML replacement, so delegated handlers
+  // would otherwise accumulate on every store-driven rerender. Abort the prior
+  // render's listeners before wiring callbacks that close over the new manifest.
+  advisoryRenderControllers.get(el)?.abort();
+  const renderController = new AbortController();
+  advisoryRenderControllers.set(el, renderController);
+  const delegatedListenerOptions: AddEventListenerOptions = {
+    signal: renderController.signal,
+  };
+  if (onAdvisoryAction) advisoryActionCallbacks.set(el, onAdvisoryAction);
+  else advisoryActionCallbacks.delete(el);
 
   if (!manifest || manifest.advisories.length === 0) {
     el.innerHTML = `<p class="muted">${t('advisories.noAdvisories')}</p>`;
@@ -502,12 +613,12 @@ export function renderAdvisories(
   for (const adv of sorted) {
     (isCompactBand(advisoryBand(adv)) ? compactCards : fullCards).push(adv);
   }
-  const cards = fullCards.map(adv => renderAdvisoryCard(adv, catalog, !!onAdvisoryChip)).join('');
+  const cards = fullCards.map(adv => renderAdvisoryCard(adv, catalog)).join('');
   const compact = compactCards.length > 0
     ? `<div class="advisory-allclear">`
       + `<div class="advisory-allclear-label">${t('advisories.allClear')}</div>`
       + `<div class="advisory-grid advisory-grid--compact">`
-      + compactCards.map(adv => renderAdvisoryCard(adv, catalog, !!onAdvisoryChip, true)).join('')
+      + compactCards.map(adv => renderAdvisoryCard(adv, catalog, true)).join('')
       + `</div></div>`
     : '';
 
@@ -655,7 +766,7 @@ export function renderAdvisories(
         showPopupContent(renderFrontsInfo());
       });
     }
-  });
+  }, delegatedListenerOptions);
 
   // Wire mitigation lightbulb popups (#330, event delegation). Tap/click — or
   // Enter/Space while focused — opens the "Options to improve" list, reliable on
@@ -671,14 +782,14 @@ export function renderAdvisories(
   el.addEventListener('click', (e) => {
     const hint = (e.target as HTMLElement).closest('.advisory-mitigation-hint--tappable') as HTMLElement | null;
     if (hint) showMitigations(hint);
-  });
+  }, delegatedListenerOptions);
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const hint = (e.target as HTMLElement).closest('.advisory-mitigation-hint--tappable') as HTMLElement | null;
     if (!hint) return;
     e.preventDefault();
     showMitigations(hint);
-  });
+  }, delegatedListenerOptions);
 
   // Wire per-model badge popups (event delegation). Tap/click — or Enter/Space
   // while focused — shows that model's detail, reliable on touch where the
@@ -691,12 +802,26 @@ export function renderAdvisories(
     const m = adv?.per_model.find(pm => pm.model === model);
     if (!adv || !m) return;
     const advName = catalog.get(advId)?.name ?? advId;
-    showPopupContent(formatModelDetailPopup(advName, m));
+    const action = actionForAdvisory(advId);
+    showPopupContent(formatModelDetailPopup(advName, advId, m, action));
+
+    // showPopupContent renders outside #advisories-section. Its popup container
+    // persists across content swaps, so keep one delegated click handler there
+    // and resolve the latest advisory callback at activation time.
+    if (action?.kind === 'preset-focus' || action?.kind === 'method-context') {
+      const popup = document.getElementById('metric-info-popup');
+      if (popup) {
+        wireAdvisoryModelFocusDelegation(
+          popup,
+          () => advisoryActionCallbacks.get(el),
+        );
+      }
+    }
   };
   el.addEventListener('click', (e) => {
     const badge = (e.target as HTMLElement).closest('.adv-model-badge--tappable') as HTMLElement | null;
     if (badge) showModelDetail(badge);
-  });
+  }, delegatedListenerOptions);
 
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -704,17 +829,18 @@ export function renderAdvisories(
     if (!badge) return;
     e.preventDefault();
     showModelDetail(badge);
-  });
+  }, delegatedListenerOptions);
 
-  // Wire advisory cross-section chips (#219, event delegation). Configures the
-  // cross-section for the advisory's preset and jumps to it.
-  if (onAdvisoryChip) {
+  // Wire aggregate typed advisory actions. Special actions are planned by the
+  // briefing page; disabled fronts actions never leave this renderer.
+  if (onAdvisoryAction) {
     el.addEventListener('click', (e) => {
-      const btn = (e.target as HTMLElement).closest('.advisory-view-btn') as HTMLElement | null;
+      const btn = (e.target as HTMLElement).closest('.advisory-action-btn') as HTMLButtonElement | null;
       if (!btn) return;
+      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
       const advId = btn.dataset.advisoryId;
-      if (advId) onAdvisoryChip(advId);
-    });
+      if (advId) onAdvisoryAction(advId);
+    }, delegatedListenerOptions);
   }
 
   // Wire runway info popups (event delegation)
@@ -736,6 +862,6 @@ export function renderAdvisories(
       if (cond && cond.all_runways.length > 0) {
         showPopupContent(formatRunwayPopup(cond.all_runways));
       }
-    });
+    }, delegatedListenerOptions);
   }
 }

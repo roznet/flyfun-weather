@@ -10,6 +10,10 @@ import type { VizLayout, VizSettings } from '../visualization/types';
 import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled, getPreset } from '../visualization/cross-section/layer-registry';
 import type { ResolvedView } from '../visualization/cross-section/advisory-presets';
+import {
+  reconcileAdvisoryFocus,
+  type ActiveAdvisoryFocus,
+} from '../visualization/advisory-focus';
 import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
@@ -106,6 +110,9 @@ export interface BriefingState {
   displayMode: DisplayMode;
   tierVisibility: Record<Tier, boolean>;
   vizSettings: VizSettings;
+  /** Ephemeral evidence selection. Deliberately excluded from VizSettings and
+   * localStorage so a briefing never reopens with stale advisory geometry. */
+  activeAdvisoryFocus: ActiveAdvisoryFocus | null;
   loading: boolean;
   refreshing: boolean;
   refreshStatus: 'queued' | 'refreshing' | null;
@@ -200,6 +207,14 @@ export interface BriefingState {
    *  resolves the preset → concrete layer IDs where preferredMethods is in
    *  scope, and hands this a {@link ResolvedView}. Does not touch the theme. */
   applyAdvisoryPreset: (presetId: string, view: ResolvedView) => void;
+  /** Atomically select the evidence model, apply the resolved view, and retain
+   * the exact advisory/model identity for all visualization surfaces. */
+  focusAdvisory: (
+    focus: ActiveAdvisoryFocus,
+    presetId: string,
+    view: ResolvedView,
+  ) => void;
+  clearAdvisoryFocus: () => void;
   /** Drop the active-preset label to "Custom" after a user-initiated Skew-T
    *  edit (overlay toggle / side-panel change). No-op when already Custom. */
   markVizCustom: () => void;
@@ -273,6 +288,29 @@ let timeOptionsPollDelay = 3_000;
 // sole immediate-terminal answer). Reset on any successful poll / pack change.
 let timeOptionsErrorStreak = 0;
 
+/** Apply every currently-supported advisory view directive without touching
+ * theme state. Shared by generic preset application and evidence focus so the
+ * two paths cannot drift. */
+function resolvedVizSettings(
+  current: VizSettings,
+  presetId: string,
+  view: ResolvedView,
+): VizSettings {
+  const next: VizSettings = { ...current, activePreset: presetId };
+  if (view.enabledLayers) {
+    next.enabledLayers = { ...current.enabledLayers, ...view.enabledLayers };
+  }
+  if (view.routeGraph?.left) next.routeGraphLeftMetric = view.routeGraph.left;
+  if (view.routeGraph?.right) next.routeGraphRightMetric = view.routeGraph.right;
+  if (view.map?.metric) next.mapColorMetric = view.map.metric;
+  if (view.map && 'altitudeFt' in view.map) {
+    next.mapAltitudeFt = view.map.altitudeFt ?? null;
+  }
+  if (view.skewtOverlays !== undefined) next.skewtOverlays = view.skewtOverlays;
+  if (view.skewtSidePanel !== undefined) next.skewtPrimaryVar = view.skewtSidePanel;
+  return next;
+}
+
 export const briefingStore = createStore<BriefingState>((set, get) => ({
   flight: null,
   packs: [],
@@ -294,6 +332,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   displayMode: loadDisplayMode(),
   tierVisibility: loadTierVisibility(),
   vizSettings: loadVizSettings(),
+  activeAdvisoryFocus: null,
   loading: false,
   refreshing: false,
   refreshStatus: null,
@@ -311,7 +350,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   error: null,
 
   loadFlight: async (id: string) => {
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, activeAdvisoryFocus: null });
     try {
       const flight = await api.fetchFlight(id);
       set({ flight, loading: false });
@@ -346,7 +385,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       clearTimeout(_windOverlayTimer);
       _windOverlayTimer = null;
     }
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, activeAdvisoryFocus: null });
     try {
       const pack = await api.fetchPack(flight.id, timestamp);
       let snapshot: ForecastSnapshot | null = null;
@@ -399,7 +438,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, loading: false, activeAdvisoryFocus: null });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
@@ -606,7 +645,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setSelectedModel: (model: string) => {
-    set({ selectedModel: model });
+    set({ selectedModel: model, activeAdvisoryFocus: null });
     try { localStorage.setItem('wb_selectedModel', model); } catch { /* ignore */ }
   },
 
@@ -687,7 +726,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         currentPack.fetch_timestamp,
         advisoryAltitudeOverride ?? undefined,
       );
-      set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
+      set((state) => ({
+        routeAdvisories: result.manifest,
+        windOverlay: result.wind_overlay,
+        activeAdvisoryFocus: reconcileAdvisoryFocus(
+          state.activeAdvisoryFocus,
+          result.manifest,
+        ),
+      }));
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
     }
@@ -750,7 +796,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       // cross-section cruise line follows, and getEffectiveAdvisories skips the
       // table overlay once base.cruise_altitude_ft === the override (no double
       // overlay — see briefing-main).
-      set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
+      set((state) => ({
+        routeAdvisories: result.manifest,
+        windOverlay: result.wind_overlay,
+        activeAdvisoryFocus: reconcileAdvisoryFocus(
+          state.activeAdvisoryFocus,
+          result.manifest,
+        ),
+      }));
     } catch (err) {
       set({ error: `Advisory recalculation failed: ${err}` });
     }
@@ -770,7 +823,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         currentPack.fetch_timestamp,
         advisoryAltitudeOverride ?? undefined,
       );
-      set({ routeAdvisories: result.manifest, windOverlay: result.wind_overlay });
+      set((state) => ({
+        routeAdvisories: result.manifest,
+        windOverlay: result.wind_overlay,
+        activeAdvisoryFocus: reconcileAdvisoryFocus(
+          state.activeAdvisoryFocus,
+          result.manifest,
+        ),
+      }));
     } catch (err) {
       set({ error: `Profile change failed: ${err}` });
     }
@@ -1100,12 +1160,15 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const current = get().vizSettings;
     if (!presetId) {
       const updated = { ...current, activePreset: null };
-      set({ vizSettings: updated });
+      set({ vizSettings: updated, activeAdvisoryFocus: null });
       saveVizSettings(updated);
       return;
     }
     const preset = getPreset(presetId);
-    if (!preset) return;
+    if (!preset) {
+      set({ activeAdvisoryFocus: null });
+      return;
+    }
     // Apply preset: override theme + layer enabled state, and record it.
     const themeId = preset.themeId as ThemeId;
     if (themeId in THEMES) {
@@ -1113,7 +1176,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     }
     const enabled = { ...current.enabledLayers, ...preset.enabledLayers };
     const updated = { ...current, enabledLayers: enabled, vizTheme: preset.themeId, activePreset: presetId };
-    set({ vizSettings: updated });
+    set({ vizSettings: updated, activeAdvisoryFocus: null });
     saveVizSettings(updated);
     window.dispatchEvent(new Event('theme-changed'));
   },
@@ -1124,26 +1187,27 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // directives only; does NOT touch the cross-section theme. New effect types
     // slot in as additional `if (view.X)` branches — existing presets and call
     // sites untouched.
-    const cur = get().vizSettings;
-    const next: VizSettings = { ...cur, activePreset: presetId };
-    if (view.enabledLayers) next.enabledLayers = { ...cur.enabledLayers, ...view.enabledLayers };
-    // Route-graph metrics are set, but routeGraphVisible is intentionally left
-    // as the user had it — applying a preset shouldn't pop open a graph the user
-    // collapsed (mirrors the chip's "don't disrupt the user's layout" stance).
-    if (view.routeGraph?.left) next.routeGraphLeftMetric = view.routeGraph.left;
-    if (view.routeGraph?.right) next.routeGraphRightMetric = view.routeGraph.right;
-    if (view.map?.metric) next.mapColorMetric = view.map.metric;
-    if (view.map && 'altitudeFt' in view.map) next.mapAltitudeFt = view.map.altitudeFt ?? null;
-    // Skew-T directives (#308): the resolver hands a full clean-slate overlay
-    // map + the primary side-panel variable. briefing-main pushes these into the
-    // live SkewTRenderer when activePreset changes; storing them here is what
-    // makes the lens survive reload and lets a deep-link drive the Skew-T.
-    if (view.skewtOverlays !== undefined) next.skewtOverlays = view.skewtOverlays;
-    if (view.skewtSidePanel !== undefined) next.skewtPrimaryVar = view.skewtSidePanel;
+    const next = resolvedVizSettings(get().vizSettings, presetId, view);
     // future directives: add a branch here, nothing else changes
-    set({ vizSettings: next });
+    set({ vizSettings: next, activeAdvisoryFocus: null });
     saveVizSettings(next);
     window.dispatchEvent(new Event('theme-changed')); // existing re-render trigger
+  },
+
+  focusAdvisory: (focus, presetId, view) => {
+    const next = resolvedVizSettings(get().vizSettings, presetId, view);
+    // One state write is intentional: subscribers must never render a preset for
+    // one model while still carrying another model's evidence identity.
+    set({
+      selectedModel: focus.model,
+      vizSettings: next,
+      activeAdvisoryFocus: focus,
+    });
+    try { localStorage.setItem('wb_selectedModel', focus.model); } catch { /* ignore */ }
+  },
+
+  clearAdvisoryFocus: () => {
+    if (get().activeAdvisoryFocus) set({ activeAdvisoryFocus: null });
   },
 }));
 
