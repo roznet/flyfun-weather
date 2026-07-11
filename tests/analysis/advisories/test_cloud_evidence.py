@@ -128,6 +128,22 @@ def test_synthesized_nwp_clouds_keep_explicit_compound_provenance(clear_context)
     assert result.per_model[0].primary_method_id == "nwp_synthesized"
 
 
+def test_cloud_top_partial_clear_becomes_unavailable(clear_context):
+    ctx = _with_clouds(clear_context, {})
+    analyses = [
+        rpa if rpa.point_index != 3 else rpa.model_copy(update={"sounding": {}})
+        for rpa in ctx.analyses
+    ]
+    model = CloudTopEvaluator.evaluate(
+        replace(ctx, analyses=analyses, locale="en"),
+        {"margin_ft": 1000, "pct_amber": 25},
+    ).per_model[0]
+
+    assert model.data_state == "partial"
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.detail == "Partial data"
+
+
 def test_cloud_partial_clear_becomes_unavailable(clear_context):
     ctx = _with_clouds(clear_context, {})
     analyses = [
