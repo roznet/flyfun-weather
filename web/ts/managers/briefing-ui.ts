@@ -2815,7 +2815,10 @@ function renderComparisonTable(
 
     const valueCells = models.map((m) => {
       const val = d.model_values[m];
-      return `<td>${val !== undefined ? val.toFixed(1) : '\u2014'}</td>`;
+      if (val === undefined) return '<td>\u2014</td>';
+      // Compass headings zero-pad to 3 digits (10\u00b0 \u2192 010); everything else keeps 1 decimal.
+      const cell = metricId === 'wind_direction_deg' ? formatHeading(val) : val.toFixed(1);
+      return `<td>${cell}</td>`;
     }).join('');
     const agreeIcon = d.agreement === 'good' ? '&#10003;'
       : d.agreement === 'moderate' ? '&#9888;' : '&#10007;';
@@ -3051,10 +3054,6 @@ function formatMetricValue(metricId: string, value: number): string {
   // IDs that should show 1 decimal
   if (metricId === 'lifted_index' || metricId === 'showalter_index') {
     return value.toFixed(1);
-  }
-  // Compass headings: zero-pad to 3 digits (10° → 010)
-  if (metricId === 'wind_direction_deg') {
-    return formatHeading(value);
   }
   // IDs that show integer with comma formatting
   if (metricId === 'cape_surface_jkg' && Math.abs(value) >= 1000) {
