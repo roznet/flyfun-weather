@@ -74,11 +74,13 @@ def test_gate_change_only_suppresses_unchanged():
              changed=True)
 
 
-def test_gate_change_only_applies_even_under_notify_override():
-    # The content filter is applied after the scope/override decision, so it
-    # gates the "notify" override too (design pseudocode order).
-    assert not Q(notify_override="notify", scope="off", change_only=True,
-                 changed=False)
+def test_gate_notify_override_bypasses_change_filter():
+    # "notify" means ALWAYS: it fires on every completion, so the change filter
+    # does NOT gate it. This restores the pre-#366 auto-refresh behavior — a
+    # "new report is ready" ping even when the assessment is unchanged but the
+    # detail moved. (Presence, applied by the caller, can still suppress it.)
+    assert Q(notify_override="notify", scope="off", change_only=True,
+             changed=False)
     assert Q(notify_override="notify", scope="off", change_only=True,
              changed=True)
 
@@ -496,6 +498,26 @@ def test_notify_override_notify_fires_even_when_scope_off(db_session, dev_user, 
     prefs.app_prefs_json = '{"notify_scope": "off"}'
     db_session.flush()
     meta = _seed(db_session)
+    dispatch_mod.notify_briefing_refresh(
+        db_session, _mkflight("notify"), meta, pack_dir=None, user_id=DEV_USER_ID, present=False,
+    )
+    db_session.flush()
+    assert calls["email"] == 1
+    assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
+
+
+def test_notify_override_notify_fires_on_unchanged_refresh(db_session, dev_user, monkeypatch):
+    # Per-flight "Always" fires even when the assessment is UNCHANGED and the
+    # global change filter is on — this is the auto-refresh "new report ready"
+    # behavior (detail moved, assessment didn't). A default-override flight in
+    # the same state would be suppressed by change_only.
+    calls = _spy_channels(monkeypatch)
+    _add_flight(db_session)
+    t0 = datetime(2026, 7, 8, 8, 0, tzinfo=timezone.utc)
+    t1 = datetime(2026, 7, 8, 10, 0, tzinfo=timezone.utc)
+    _add_pack(db_session, "f1", t0, assessment="GREEN")
+    _add_pack(db_session, "f1", t1, assessment="GREEN")  # same assessment → unchanged
+    meta = BriefingPackMeta(flight_id="f1", fetch_timestamp=t1, days_out=2, assessment="GREEN")
     dispatch_mod.notify_briefing_refresh(
         db_session, _mkflight("notify"), meta, pack_dir=None, user_id=DEV_USER_ID, present=False,
     )

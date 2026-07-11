@@ -177,26 +177,27 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
 
 **Per-flight override** (flight settings — generalizes today's "email me when done"), on `FlightRow`:
 
-- `notify_override`: `default` (follow global) | `on` (notify for **any** completion of this
-  flight, even if global is `off`/`auto`) | `mute` (never for this flight). Channels always
-  follow the global channel selection.
+- `notify_override`: `default` (follow global scope + change filter) | `notify` (**always** —
+  notify for **any** completion of this flight, even if global is `off`/`auto` **and even when
+  the assessment is unchanged**; the change filter does not apply) | `mute` (never for this
+  flight). Channels always follow the global channel selection.
 
-**Effective decision** (evaluated in `notify/dispatch.py`, driven from `_notify_refresh_complete`):
+**Effective decision** (evaluated in `notify/dispatch.py::notify_qualifies` + presence, driven from `_notify_refresh_complete`). NOTE: as *shipped* (#371) the WHEN/HOW split is what the top-of-doc summary describes — the pseudocode below is the final form (an earlier draft gated email per-`triggered_by`; that was replaced by presence):
 
 ```
-# Shared gate (notify_qualifies) — drives the badge and both channels:
+# Single WHEN decision — presence AND the shared gate — drives badge + both channels:
+if present:  stop                          # user was watching this refresh finish
 if flight.notify_override == "mute":  stop
-elif flight.notify_override == "notify":  qualifies    # any completion
-else:                                                  # default → global scope
+elif flight.notify_override == "notify":  qualifies    # ALWAYS — bypasses scope AND the change filter
+else:                                                  # default → global scope + change filter
     scope == "off" → stop
     else (all / legacy auto) → qualifies
-if notify_change_only and not delta.changed:  stop
+    if notify_change_only and not delta.changed:  stop
 advance the badge
-# Per-channel trigger rule (#371):
-push  → deliver on every qualifying refresh
-email → deliver only if triggered_by is non-user-present (skip a bare "user")
-    # push additionally suppressed if the app is foregrounded on this flight —
-    # a DELIVERY RULE, not a user setting (resolves the earlier ★ question)
+# HOW (channels) — pure user preference, trigger-agnostic:
+push  → deliver if notify_push
+email → deliver if notify_email
+# (?source= / triggered_by is usage attribution only — it does NOT gate notifications)
 ```
 
 ### UX principles
@@ -213,10 +214,17 @@ email → deliver only if triggered_by is non-user-present (skip a bare "user")
 
 ### Other choices worth offering / deciding
 
-- **★ DECIDED — per-flight notify is independent of auto-refresh.** They are two separate
-  controls today and stay separate: the notify override never enables or schedules
-  auto-refresh. (A per-flight "notify" is most useful precisely for manual/Siri refreshes
-  on a flight whose auto-refresh is off — the Siri-loop case.)
+- **★ DECIDED — per-flight notify stays a separate control, but auto-refresh seeds a smart
+  default.** The data model stays independent: the notify override never enables or schedules
+  auto-refresh, and a per-flight `notify` is still useful for manual/Siri refreshes on a flight
+  whose auto-refresh is off — the Siri-loop case. What changed (post-#371): the old auto-refresh
+  meant "email me whenever a new report is ready" — every scheduled run, unconditionally. The
+  new default (`notify_change_only` on) is quieter, gating on assessment change; but a report's
+  *detail* often moves while the assessment holds, so auto-refresh users would perceive it as
+  going silent. Fix: **enabling auto-refresh defaults that flight's bell to `notify`** (see
+  `api/flights.py::update_auto_refresh`) — restoring the every-completion ping (which is why
+  `notify` bypasses the change filter). It's a default, not a hard link: the user can drop the
+  bell back to `default` or `mute` afterward, and disabling auto-refresh leaves the bell as-is.
 - **Batching/digest** — the scheduler can finish several flights close together; a future
   digest could replace N separate pushes.
 - **Per-channel scope** — deliberately NOT in v1 (one scope for all channels); revisit only
