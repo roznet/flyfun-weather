@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from weatherbrief.analysis.advisories import RouteContext
@@ -21,6 +22,8 @@ from weatherbrief.models import (
     RoutePointAnalysis,
     SoundingAnalysis,
     ThermodynamicIndices,
+    VerticalMotionAssessment,
+    VerticalMotionClass,
 )
 
 # Default convective params (LOW floor drives colour, MODERATE+ anchors headline).
@@ -140,7 +143,21 @@ class TestVMCCruise:
 
 class TestTurbulence:
     def test_green_smooth(self, clear_context: RouteContext):
-        result = TurbulenceEvaluator.evaluate(clear_context, {"icing_coverage_pct_amber": 20, "strong_w_fpm": 200})
+        smooth = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT,
+            max_w_fpm=0,
+        )
+        analyses = []
+        for rpa in clear_context.analyses:
+            soundings = {
+                model: sounding.model_copy(update={"vertical_motion": smooth})
+                for model, sounding in rpa.sounding.items()
+            }
+            analyses.append(rpa.model_copy(update={"sounding": soundings}))
+        ctx = replace(clear_context, analyses=analyses)
+        result = TurbulenceEvaluator.evaluate(
+            ctx, {"route_pct_amber": 20, "strong_w_fpm": 200},
+        )
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
     def test_turbulent_route(self, turbulent_context: RouteContext):

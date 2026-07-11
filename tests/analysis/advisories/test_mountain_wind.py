@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from weatherbrief.analysis.advisories import RouteContext
@@ -43,8 +44,12 @@ def _mountain_elevation() -> ElevationProfile:
     )
 
 
-def _cross_section(wind_speed_kt: float) -> RouteCrossSection:
+def _cross_section(
+    wind_speed_kt: float,
+    missing_wind_indices: set[int] | None = None,
+) -> RouteCrossSection:
     """One-model cross-section with uniform wind at a single 800hPa level."""
+    missing_wind_indices = missing_wind_indices or set()
     route_points = [
         RoutePoint(lat=46.0, lon=6.0 + i * 0.2, distance_from_origin_nm=i * _TOTAL_NM / (_N - 1))
         for i in range(_N)
@@ -56,11 +61,15 @@ def _cross_section(wind_speed_kt: float) -> RouteCrossSection:
             fetched_at=_T0,
             hourly=[HourlyForecast(
                 time=_T0,
-                pressure_levels=[PressureLevelData(
-                    pressure_hpa=800,
-                    wind_speed_kt=wind_speed_kt,
-                    wind_direction_deg=270.0,
-                )],
+                pressure_levels=(
+                    []
+                    if i in missing_wind_indices
+                    else [PressureLevelData(
+                        pressure_hpa=800,
+                        wind_speed_kt=wind_speed_kt,
+                        wind_direction_deg=270.0,
+                    )]
+                ),
             )],
         )
         for i in range(_N)
@@ -96,6 +105,7 @@ def _ctx(
     wind_speed_kt: float,
     ridge_inversion: bool = False,
     oscillating: bool = False,
+    missing_wind_indices: set[int] | None = None,
 ) -> RouteContext:
     analyses = [
         RoutePointAnalysis(
@@ -112,7 +122,7 @@ def _ctx(
     ]
     return RouteContext(
         analyses=analyses,
-        cross_sections=[_cross_section(wind_speed_kt)],
+        cross_sections=[_cross_section(wind_speed_kt, missing_wind_indices)],
         elevation=_mountain_elevation(),
         models=["gfs"],
         cruise_altitude_ft=8000,
@@ -138,10 +148,12 @@ class TestMountainWindWaveCorroboration:
         # signature it stays AMBER until the plain red bar (40).
         result = _evaluate(_ctx(32.0))
         assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert result.per_model[0].primary_method_id == "terrain_wind"
 
     def test_strong_wind_with_ridge_inversion_red(self):
         result = _evaluate(_ctx(32.0, ridge_inversion=True))
         assert result.aggregate_status == AdvisoryStatus.RED
+        assert result.per_model[0].primary_method_id == "terrain_wind_wave"
         assert "stable layer" in result.per_model[0].detail
 
     def test_strong_wind_with_oscillating_motion_red(self):
@@ -164,6 +176,7 @@ class TestMountainWindWaveCorroboration:
         # branch wins (RED) and the signature suffix is appended to the detail.
         result = _evaluate(_ctx(45.0, ridge_inversion=True))
         assert result.aggregate_status == AdvisoryStatus.RED
+        assert result.per_model[0].primary_method_id == "terrain_wind"
         assert "stable layer" in result.per_model[0].detail
 
     def test_no_mountains_green(self):
@@ -174,7 +187,6 @@ class TestMountainWindWaveCorroboration:
                     for p in ctx.elevation.points],
             max_elevation_ft=500, total_distance_nm=_TOTAL_NM,
         )
-        from dataclasses import replace
         result = _evaluate(replace(ctx, elevation=flat))
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
@@ -184,3 +196,51 @@ class TestMountainWindWaveCorroboration:
             params={"corroborated_red_kt": 35},
         )
         assert result.aggregate_status == AdvisoryStatus.AMBER
+
+
+def test_mountain_wind_evidence_is_route_only():
+    result = _evaluate(_ctx(32.0, ridge_inversion=True))
+    regions = result.per_model[0].evidence_regions
+    assert {r.reason_code for r in regions} == {
+        "mountain_wind",
+        "mountain_wave_corroborated",
+    }
+    assert all(
+        r.lower_altitude_ft is None and r.upper_altitude_ft is None
+        for r in regions
+    )
+    by_reason = {r.reason_code: r for r in regions}
+    assert by_reason["mountain_wind"].metric_id == "wind_speed_kt"
+    assert by_reason["mountain_wind"].method_id == "terrain_wind"
+    assert by_reason["mountain_wave_corroborated"].metric_id == "wind_speed_kt"
+    assert (
+        by_reason["mountain_wave_corroborated"].method_id
+        == "terrain_wind_wave"
+    )
+
+
+def test_mountain_wind_missing_target_wind_is_unavailable():
+    result = _evaluate(_ctx(32.0, missing_wind_indices={4, 5, 6}))
+    model = result.per_model[0]
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "partial"
+
+
+def test_mountain_wind_missing_elevation_is_unavailable():
+    result = _evaluate(replace(_ctx(32.0), elevation=None))
+    model = result.per_model[0]
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.data_state == "unavailable"
+
+
+def test_mountain_wind_partial_hazard_remains_red():
+    result = _evaluate(
+        _ctx(
+            32.0,
+            ridge_inversion=True,
+            missing_wind_indices={4},
+        )
+    )
+    model = result.per_model[0]
+    assert model.status == AdvisoryStatus.RED
+    assert model.data_state == "partial"

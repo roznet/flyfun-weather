@@ -25,9 +25,12 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
-    format_extent,
     max_terrain_near_point,
     wind_at_altitude,
+)
+from weatherbrief.analysis.advisories.evidence import (
+    EvidenceSample,
+    summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
@@ -163,50 +166,107 @@ class MountainWindEvaluator:
         wind_amber = params.get("wind_amber_kt", 20)
         wind_red = params.get("wind_red_kt", 40)
         corroborated_red = params.get("corroborated_red_kt", 30)
+        ordered_analyses = sorted(
+            ctx.analyses,
+            key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
+        )
 
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0  # mountain points only
-            affected = 0
+            evaluated: set[int] = set()
+            complete: set[int] = set()
+            affected: set[int] = set()
+            mountain_points: set[int] = set()
+            samples: list[EvidenceSample] = []
             max_wind = 0.0
-            wave_red = False          # corroborated point above the lower red bar
+            wave_red = False  # corroborated point above the lower red bar
             wave_sigs: set[str] = set()  # signatures seen at strong-wind points
 
-            for rpa in ctx.analyses:
+            for rpa in ordered_analyses:
                 terrain_ft = max_terrain_near_point(
                     ctx.elevation, rpa.distance_from_origin_nm
                 )
-                if terrain_ft is None or terrain_ft < terrain_threshold:
+                if terrain_ft is None:
                     continue
-                total += 1
+
+                point_index = rpa.point_index
+                if terrain_ft < terrain_threshold:
+                    evaluated.add(point_index)
+                    complete.add(point_index)
+                    continue
+                mountain_points.add(point_index)
 
                 wind = wind_at_altitude(
-                    ctx.cross_sections, model, rpa.point_index,
-                    terrain_ft + altitude_margin, rpa.forecast_hour,
+                    ctx.cross_sections,
+                    model,
+                    point_index,
+                    terrain_ft + altitude_margin,
+                    rpa.forecast_hour,
                 )
                 if wind is None:
                     continue
 
+                evaluated.add(point_index)
+                complete.add(point_index)
                 speed_kt, _ = wind
                 if speed_kt > max_wind:
                     max_wind = speed_kt
 
                 if speed_kt >= wind_amber:
-                    affected += 1
+                    affected.add(point_index)
+                    samples.append(
+                        EvidenceSample(
+                            point_index=point_index,
+                            severity=(
+                                AdvisoryStatus.RED
+                                if speed_kt >= wind_red
+                                else AdvisoryStatus.AMBER
+                            ),
+                            reason_code="mountain_wind",
+                            metric_id="wind_speed_kt",
+                            method_id="terrain_wind",
+                        )
+                    )
                     sigs = _wave_signatures(rpa.sounding.get(model), terrain_ft)
                     if sigs:
                         wave_sigs |= sigs
-                        if speed_kt >= corroborated_red:
+                        corroborated = speed_kt >= corroborated_red
+                        if corroborated:
                             wave_red = True
+                        samples.append(
+                            EvidenceSample(
+                                point_index=point_index,
+                                severity=(
+                                    AdvisoryStatus.RED
+                                    if corroborated
+                                    else AdvisoryStatus.AMBER
+                                ),
+                                reason_code="mountain_wave_corroborated",
+                                metric_id="wind_speed_kt",
+                                method_id="terrain_wind_wave",
+                            )
+                        )
+
+            summary = summarize_evidence(
+                route_points=ordered_analyses,
+                total_distance_nm=ctx.total_distance_nm,
+                evaluated_point_indices=evaluated,
+                complete_point_indices=complete,
+                affected_point_indices=affected,
+                evidence_samples=samples,
+            )
 
             loc = ctx.locale
-            ext = format_extent(affected, total, ctx.total_distance_nm)
+            ext = summary.format_extent()
             sig_text = " + ".join(
                 adv_t(f"mountain_wind.sig_{s}", loc)
                 for s in sorted(wave_sigs)
             )
-            if total == 0:
+            if summary.total_points == 0:
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
+            elif not mountain_points:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("mountain_wind.no_terrain", loc)
             elif max_wind >= wind_red:
@@ -229,10 +289,23 @@ class MountainWindEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("mountain_wind.light", loc, speed=f"{max_wind:.0f}")
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=affected, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-            ))
+            primary_method_id = (
+                "terrain_wind_wave"
+                if wave_red and max_wind < wind_red
+                else "terrain_wind"
+            )
+            missing_detail = adv_t(
+                "no_data" if summary.data_state == "unavailable" else "partial_data",
+                loc,
+            )
+            per_model.append(
+                summary.build_result(
+                    model=model,
+                    status=status,
+                    detail=detail,
+                    unavailable_detail=missing_detail,
+                    primary_method_id=primary_method_id,
+                )
+            )
 
         return RouteAdvisoryResult.from_per_model("mountain_wind", per_model, params)
