@@ -2284,6 +2284,11 @@ async function init(): Promise<void> {
         });
         // Update the flight in store with new auto-refresh fields
         store.getState().updateFlightAutoRefresh(updated.auto_refresh, updated.auto_refresh_hour);
+        // Enabling auto-refresh promotes the bell to "always" server-side; mirror
+        // the returned override so the notification control reflects it live.
+        if (updated.notify_override) {
+          store.getState().updateFlightNotifyOverride(updated.notify_override);
+        }
         if (autoRefresh !== wasEnabled) {
           track(autoRefresh ? EVENTS.AUTO_REFRESH_ENABLED : EVENTS.AUTO_REFRESH_DISABLED);
         }

@@ -68,21 +68,29 @@ def notify_qualifies(
     Channel- and trigger-agnostic — scope + per-flight override + the change
     filter. The caller combines this with *presence* (was the user watching the
     refresh's UI stream) to form the single WHEN decision that gates the badge
-    and both channels. ``scope`` "off" silences default-resolution flights; any
-    other value — "all", or legacy "auto" — means notifications are on. The
-    manual-vs-automatic line is drawn by presence (in the caller), NOT here and
-    NOT per-channel.
+    and both channels.
+
+    Per-flight override precedence, evaluated first:
+
+    - ``mute`` → never, regardless of scope.
+    - ``notify`` → **always**: every completion for this flight, bypassing both
+      global ``scope`` and the ``change_only`` filter. This is the strong opt-in
+      and the default applied when auto-refresh is enabled — it restores the
+      pre-#366 "notify me whenever a new report is ready" behavior, which fires
+      even when the assessment is unchanged but the detail moved.
+    - ``default`` → follow global scope + the change filter. ``scope`` "off"
+      silences these flights; any other value — "all", or legacy "auto" — is on.
+
+    The manual-vs-automatic line is drawn by presence (in the caller), NOT here
+    and NOT per-channel — so a refresh the user watched finish is suppressed even
+    for a ``notify`` flight.
     """
     if notify_override == "mute":
         return False
     if notify_override == "notify":
-        qualifies = True
-    elif scope == "off":
-        qualifies = False
-    else:  # "all", or legacy "auto" — notifications on
-        qualifies = True
+        return True  # always — bypasses scope + change filter (see docstring)
 
-    if not qualifies:
+    if scope == "off":
         return False
     if change_only and not changed:
         return False

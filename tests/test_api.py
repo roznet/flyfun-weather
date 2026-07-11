@@ -533,6 +533,22 @@ class TestFlightsAPI:
         )
         assert resp.status_code == 404
 
+    def test_enable_auto_refresh_defaults_bell_to_notify(self, client, sample_flight):
+        """Enabling auto-refresh promotes the flight's bell to "always" (notify),
+        restoring the pre-#366 "tell me when a new report is ready" behavior."""
+        fid = sample_flight.id
+        resp = client.patch(f"/api/flights/{fid}/auto-refresh", json={"auto_refresh": True})
+        assert resp.status_code == 200
+        assert resp.json()["notify_override"] == "notify"
+
+    def test_disable_auto_refresh_leaves_bell_untouched(self, client, sample_flight):
+        """Turning auto-refresh back off does not silently undo the notify choice."""
+        fid = sample_flight.id
+        client.patch(f"/api/flights/{fid}/auto-refresh", json={"auto_refresh": True})
+        resp = client.patch(f"/api/flights/{fid}/auto-refresh", json={"auto_refresh": False})
+        assert resp.status_code == 200
+        assert resp.json()["notify_override"] == "notify"
+
 
 # --- Flight subscriptions ---
 
