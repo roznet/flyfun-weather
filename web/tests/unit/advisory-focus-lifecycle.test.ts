@@ -603,6 +603,23 @@ describe('briefing store advisory focus lifecycle', () => {
     expect(briefingStore.getState().activeAdvisoryFocus).toBe(replacement);
   });
 
+  it('does not resurrect focus after a generic preset is selected during reanchor', async () => {
+    const response = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    vi.spyOn(api, 'recalculateAdvisories').mockReturnValue(response.promise);
+    briefingStore.setState({
+      flight: { id: 'flight-1' } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+    });
+    focusCloudTop();
+    const reanchor = briefingStore.getState().reanchorAdvisories(12_000);
+
+    briefingStore.getState().applyAdvisoryPreset('clouds', view);
+    response.resolve({ manifest: refreshedManifest(), wind_overlay: null });
+    await reanchor;
+
+    expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+  });
+
   it('ignores an older reanchor response after a newer altitude request', async () => {
     const first = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
     const second = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
@@ -613,6 +630,7 @@ describe('briefing store advisory focus lifecycle', () => {
       flight: { id: 'flight-1' } as never,
       currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
     });
+    const focus = focusCloudTop();
 
     const older = briefingStore.getState().reanchorAdvisories(12_000);
     const newer = briefingStore.getState().reanchorAdvisories(14_000);
@@ -624,6 +642,7 @@ describe('briefing store advisory focus lifecycle', () => {
 
     expect(briefingStore.getState().advisoryAltitudeOverride).toBe(14_000);
     expect(briefingStore.getState().routeAdvisories).toBe(newerManifest);
+    expect(briefingStore.getState().activeAdvisoryFocus).toBe(focus);
   });
 
   it('atomically reconciles focus with a recalculated manifest', async () => {

@@ -298,6 +298,14 @@ function isStreamDrop(err: unknown): boolean {
 // scope (not store state) — purely transient request bookkeeping.
 let _windOverlayTimer: number | null = null;
 let _windOverlaySeq = 0;
+let _advisoryFocusRevision = 0;
+let _pendingReanchorFocusSnapshot: ActiveAdvisoryFocus | null = null;
+
+function noteAdvisoryFocusIntent(): void {
+  _advisoryFocusRevision += 1;
+  _pendingReanchorFocusSnapshot = null;
+}
+
 // Timing-scenario poll backoff (3s → ×1.5 → cap 15s); reset on pack change.
 let timeOptionsPollDelay = 3_000;
 // Consecutive transient poll failures; only give up after a few (404 is the
@@ -366,6 +374,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   error: null,
 
   loadFlight: async (id: string) => {
+    noteAdvisoryFocusIntent();
     set({ loading: true, error: null, activeAdvisoryFocus: null });
     try {
       const flight = await api.fetchFlight(id);
@@ -392,6 +401,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   selectPack: async (timestamp: string) => {
     const flight = get().flight;
     if (!flight) return;
+    noteAdvisoryFocusIntent();
     // Cancel any in-flight altitude-probe wind-overlay request and bump the
     // sequence so a slow response from the previous pack can't apply to this
     // one (the per-probe guard alone misses the release-at-default case where
@@ -663,6 +673,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   setSelectedModel: (model: string) => {
     const current = get();
     if (current.selectedModel === model && current.activeAdvisoryFocus === null) return;
+    noteAdvisoryFocusIntent();
     set({ selectedModel: model, activeAdvisoryFocus: null });
     if (current.selectedModel !== model) {
       try { localStorage.setItem('wb_selectedModel', model); } catch { /* ignore */ }
@@ -728,6 +739,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   setAdvisoryAltitudeOverride: (alt: number | null) => {
+    noteAdvisoryFocusIntent();
     // Clearing the override resets the wind overlay too — manifest values
     // now match the effective altitude again.
     if (alt === null) {
@@ -770,6 +782,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // getAltitudeOverrideConfig.defaultAlt so the null/non-null override
     // decision is consistent across drag and release.
     const anchor = flight.cruise_altitude_ft;
+    noteAdvisoryFocusIntent();
     set({
       advisoryAltitudeOverride: alt === anchor ? null : alt,
       activeAdvisoryFocus: null,
@@ -805,10 +818,13 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const {
       flight,
       currentPack,
-      activeAdvisoryFocus: focusSnapshot,
+      activeAdvisoryFocus,
     } = get();
     if (!flight || !currentPack) return;
+    const focusSnapshot = activeAdvisoryFocus ?? _pendingReanchorFocusSnapshot;
     const packTimestamp = currentPack.fetch_timestamp;
+    const focusRevision = _advisoryFocusRevision;
+    _pendingReanchorFocusSnapshot = focusSnapshot;
     // Cancel any in-flight probe wind-overlay request + bump the sequence so a
     // slow probe response at a different altitude can't land on top of the
     // reanchored wind overlay (mirrors selectPack).
@@ -824,25 +840,35 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       // otherwise we'd write a stale manifest into the new pack's state.
       if (get().currentPack?.fetch_timestamp !== packTimestamp) return;
       if (requestSeq !== _windOverlaySeq) return;
-      if (get().advisoryAltitudeOverride !== alt) return;
+      if (get().advisoryAltitudeOverride !== alt) {
+        _pendingReanchorFocusSnapshot = null;
+        return;
+      }
       // routeAdvisories now reflects `alt`; the override stays set so the
       // cross-section cruise line follows, and getEffectiveAdvisories skips the
       // table overlay once base.cruise_altitude_ft === the override (no double
       // overlay — see briefing-main).
       const manifest = result.manifest;
       if (!manifest) {
+        _pendingReanchorFocusSnapshot = null;
         set({ windOverlay: result.wind_overlay });
         return;
       }
+      _pendingReanchorFocusSnapshot = null;
       set((state) => ({
         routeAdvisories: manifest,
         windOverlay: result.wind_overlay,
         activeAdvisoryFocus: reconcileAdvisoryFocus(
-          state.activeAdvisoryFocus ?? focusSnapshot,
+          focusRevision === _advisoryFocusRevision
+            ? state.activeAdvisoryFocus ?? focusSnapshot
+            : state.activeAdvisoryFocus,
           manifest,
         ),
       }));
     } catch (err) {
+      if (requestSeq === _windOverlaySeq) {
+        _pendingReanchorFocusSnapshot = null;
+      }
       set({ error: `Advisory recalculation failed: ${err}` });
     }
   },
@@ -1202,6 +1228,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // dropdown sticks on it; selecting "Custom" (null) is a no-op label for the
     // dirty state — it only clears activePreset and leaves layers/theme as-is
     // (no factory reset).
+    noteAdvisoryFocusIntent();
     const current = get().vizSettings;
     if (!presetId) {
       const updated = { ...current, activePreset: null };
@@ -1232,6 +1259,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // directives only; does NOT touch the cross-section theme. New effect types
     // slot in as additional `if (view.X)` branches — existing presets and call
     // sites untouched.
+    noteAdvisoryFocusIntent();
     const next = resolvedVizSettings(get().vizSettings, presetId, view);
     // future directives: add a branch here, nothing else changes
     set({ vizSettings: next, activeAdvisoryFocus: null });
@@ -1240,6 +1268,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   focusAdvisory: (focus, presetId, view, layout) => {
+    noteAdvisoryFocusIntent();
     const current = get().vizSettings;
     const next = {
       ...resolvedVizSettings(current, presetId, view),
@@ -1260,6 +1289,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   openAdvisoryCompare: (enableModels, compareLayer) => {
+    noteAdvisoryFocusIntent();
     const current = get().vizSettings;
     const compareModels = { ...current.compareModels };
     for (const model of enableModels) compareModels[model] = true;
@@ -1279,6 +1309,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   focusAdvisoryMethodContext: (focus, presetId, view, layout) => {
+    noteAdvisoryFocusIntent();
     const current = get().vizSettings;
     const next: VizSettings = {
       ...resolvedVizSettings(current, presetId, view),
@@ -1295,6 +1326,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   openAdvisoryFrontsMap: (model) => {
+    noteAdvisoryFocusIntent();
     const current = get();
     const updated: VizSettings = {
       ...current.vizSettings,
@@ -1317,6 +1349,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   clearAdvisoryFocus: () => {
+    noteAdvisoryFocusIntent();
     if (get().activeAdvisoryFocus) set({ activeAdvisoryFocus: null });
   },
 }));
