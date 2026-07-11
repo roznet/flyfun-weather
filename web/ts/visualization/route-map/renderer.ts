@@ -2,6 +2,14 @@
 
 import * as L from 'leaflet';
 import type { VizRouteData } from '../types';
+import type { ResolvedAdvisoryFocus } from '../advisory-focus';
+import {
+  ROUTE_EVIDENCE_HALO_WEIGHT,
+  collectRouteMapFitCoordinates,
+  focusRegionsInPaintOrder,
+  routeEvidenceDashArray,
+  routePointBounds,
+} from '../advisory-focus';
 import type { MapMetric } from './metrics';
 import { computeSegmentStyles } from './segment-style';
 import { isDarkTheme } from '../interaction-utils';
@@ -21,6 +29,21 @@ export interface MapFrontLine extends HewsonFront {
 const FRONT_CORRIDOR_KM = 120;
 // Fainter with altitude so a 925 hPa warm front reads as lower than a 700 line.
 const FRONT_LEVEL_OPACITY: Record<number, number> = { 700: 0.9, 850: 0.72, 925: 0.6 };
+const EVIDENCE_PANE = 'wb-advisory-evidence';
+const EVIDENCE_COLORS: Record<ResolvedAdvisoryFocus['regions'][number]['severity'], string> = {
+  green: '#16a34a',
+  amber: '#d97706',
+  red: '#dc2626',
+};
+
+function validCoordinate(lat: number, lon: number): boolean {
+  return Number.isFinite(lat)
+    && Number.isFinite(lon)
+    && lat >= -90
+    && lat <= 90
+    && lon >= -180
+    && lon <= 180;
+}
 
 function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
   const toRad = (d: number): number => (d * Math.PI) / 180;
@@ -40,12 +63,14 @@ export class RouteMapRenderer {
   private container: HTMLElement;
   private map: L.Map | null = null;
   private tileLayer: L.TileLayer | null = null;
+  private evidenceGroup: L.LayerGroup | null = null;
   private segmentGroup: L.LayerGroup | null = null;
   private waypointGroup: L.LayerGroup | null = null;
   private frontsGroup: L.LayerGroup | null = null;
   private highlightMarker: L.CircleMarker | null = null;
 
   private data: VizRouteData | null = null;
+  private advisoryFocus: ResolvedAdvisoryFocus | null = null;
   private colorMetric: MapMetric | null = null;
   private widthMetric: MapMetric | null = null;
   private altitudeFt = 0;
@@ -54,6 +79,9 @@ export class RouteMapRenderer {
   private selectedPointIndex = -1;
   private initialized = false;
   private currentTileTheme: 'light' | 'dark' = 'light';
+  private readonly themeChangedHandler: EventListener = (event) => {
+    this.updateTiles((event as CustomEvent<string>).detail === 'dark');
+  };
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -62,6 +90,11 @@ export class RouteMapRenderer {
   setData(data: VizRouteData): void {
     this.data = data;
     this.altitudeFt = data.cruiseAltitudeFt;
+  }
+
+  setAdvisoryFocus(focus: ResolvedAdvisoryFocus | null): void {
+    this.advisoryFocus = focus;
+    this.renderEvidence();
   }
 
   setColorMetric(metric: MapMetric | null): void {
@@ -104,6 +137,7 @@ export class RouteMapRenderer {
     if (this.container.clientWidth === 0 || this.container.clientHeight === 0) return;
 
     this.ensureMap();
+    this.renderEvidence();
     this.renderSegments();
     this.renderFronts();
     this.renderWaypoints();
@@ -115,6 +149,34 @@ export class RouteMapRenderer {
     if (this.map) {
       this.map.invalidateSize();
     }
+  }
+
+  /** Fit the route, advisory evidence, and front axes when explicitly requested. */
+  fitRouteAndFronts(): void {
+    const coordinates: Array<[number, number]> = [];
+    const addCoordinate = (lat: number, lon: number): void => {
+      if (validCoordinate(lat, lon)) coordinates.push([lat, lon]);
+    };
+
+    const fitCoordinates = collectRouteMapFitCoordinates({
+      routePoints: this.data?.points ?? [],
+      focus: this.advisoryFocus,
+      showFronts: this.showFronts,
+      frontAxes: this.frontLines ?? [],
+      frontCrossings: this.data?.fronts?.crossings ?? [],
+      nearestFront: this.data?.fronts?.nearest ?? null,
+      frontAxisNearRoute: (axis) => this.lineNearRoute(axis),
+    });
+    for (const point of fitCoordinates) {
+      addCoordinate(point.lat, point.lon);
+    }
+
+    if (coordinates.length === 0) return;
+    this.ensureMap();
+    if (!this.map) return;
+    const bounds = L.latLngBounds(coordinates);
+    if (!bounds.isValid()) return;
+    this.map.fitBounds(bounds, { padding: [30, 30] });
   }
 
   /** Highlight a segment by point index (for hover sync from other panels). */
@@ -155,14 +217,19 @@ export class RouteMapRenderer {
   }
 
   destroy(): void {
+    window.removeEventListener('theme-changed', this.themeChangedHandler);
+    this.evidenceGroup?.clearLayers();
     if (this.map) {
       this.map.remove();
       this.map = null;
     }
+    this.tileLayer = null;
+    this.evidenceGroup = null;
     this.segmentGroup = null;
     this.frontsGroup = null;
     this.waypointGroup = null;
     this.highlightMarker = null;
+    this.advisoryFocus = null;
     this.initialized = false;
   }
 
@@ -184,25 +251,21 @@ export class RouteMapRenderer {
     }).addTo(this.map);
 
     // Switch tiles when theme changes
-    window.addEventListener('theme-changed', ((e: CustomEvent<string>) => {
-      this.updateTiles(e.detail === 'dark');
-    }) as EventListener);
+    window.addEventListener('theme-changed', this.themeChangedHandler);
 
+    const evidencePane = this.map.getPane(EVIDENCE_PANE) ?? this.map.createPane(EVIDENCE_PANE);
+    evidencePane.style.zIndex = '390';
+    evidencePane.style.pointerEvents = 'none';
+
+    this.evidenceGroup = L.layerGroup().addTo(this.map);
     this.segmentGroup = L.layerGroup().addTo(this.map);
     this.frontsGroup = L.layerGroup().addTo(this.map);
     this.waypointGroup = L.layerGroup().addTo(this.map);
 
-    // Fit to route bounds
-    if (this.data && this.data.points.length > 0) {
-      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-      for (const p of this.data.points) {
-        if (p.lat < minLat) minLat = p.lat;
-        if (p.lat > maxLat) maxLat = p.lat;
-        if (p.lon < minLon) minLon = p.lon;
-        if (p.lon > maxLon) maxLon = p.lon;
-      }
-      const bounds = L.latLngBounds([minLat, minLon], [maxLat, maxLon]);
-      this.map.fitBounds(bounds, { padding: [30, 30] });
+    const initialRouteBounds = routePointBounds(this.data?.points ?? []);
+    if (initialRouteBounds) {
+      const bounds = L.latLngBounds(initialRouteBounds[0], initialRouteBounds[1]);
+      if (bounds.isValid()) this.map.fitBounds(bounds, { padding: [30, 30] });
     }
 
     this.initialized = true;
@@ -217,6 +280,36 @@ export class RouteMapRenderer {
     L.control.attribution().addTo(this.map);
     this.tileLayer.getAttribution = () => dark ? DARK_ATTR : LIGHT_ATTR;
     this.renderWaypoints();
+  }
+
+  private renderEvidence(): void {
+    if (!this.evidenceGroup) return;
+    this.evidenceGroup.clearLayers();
+    const focus = this.advisoryFocus;
+    if (!focus?.active.highlightSurfaces.includes('route-map')) return;
+
+    for (const region of focusRegionsInPaintOrder(focus.regions)) {
+      if (
+        region.mapPath.length < 2
+        || !region.mapPath.every((point) => validCoordinate(point.lat, point.lon))
+      ) {
+        continue;
+      }
+      const line = L.polyline(
+        region.mapPath.map((point) => [point.lat, point.lon] as [number, number]),
+        {
+          pane: EVIDENCE_PANE,
+          interactive: false,
+          color: EVIDENCE_COLORS[region.severity],
+          weight: ROUTE_EVIDENCE_HALO_WEIGHT,
+          opacity: 0.38,
+          dashArray: routeEvidenceDashArray(focus.locationState),
+          lineCap: 'round',
+          lineJoin: 'round',
+        },
+      );
+      this.evidenceGroup.addLayer(line);
+    }
   }
 
   private renderSegments(): void {
@@ -331,7 +424,7 @@ export class RouteMapRenderer {
   /** True if any vertex of the axis is within FRONT_CORRIDOR_KM of any route
    *  point — the corridor clip that keeps the overlay near the track. Without a
    *  route (no points), don't filter. */
-  private lineNearRoute(coords: [number, number][]): boolean {
+  private lineNearRoute(coords: ReadonlyArray<ReadonlyArray<number>>): boolean {
     const pts = this.data?.points;
     if (!pts || pts.length === 0) return true;
     for (const [lon, lat] of coords) {

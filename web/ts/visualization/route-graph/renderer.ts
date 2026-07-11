@@ -1,7 +1,9 @@
 /** Route graph canvas renderer — 2D chart below the cross-section. */
 
 import type { PlotArea, VizRouteData, VizPoint } from '../types';
+import type { ResolvedAdvisoryFocus } from '../advisory-focus';
 import type { RouteGraphMetric } from './metrics';
+import { renderRouteGraphFocus } from '../advisory-focus';
 import type { YAxisScale } from './axes';
 import { computeYScale, drawLeftYAxis, drawRightYAxis, drawXGrid, drawZeroLine, drawBorder } from './axes';
 import { monotoneCubicTangents } from '../cross-section/layers/base';
@@ -16,6 +18,7 @@ export class RouteGraphRenderer {
   private data: VizRouteData | null = null;
   private leftMetric: RouteGraphMetric | null = null;
   private rightMetric: RouteGraphMetric | null = null;
+  private advisoryFocus: ResolvedAdvisoryFocus | null = null;
   private selectedPointIndex = -1;
 
   constructor(container: HTMLElement) {
@@ -42,6 +45,10 @@ export class RouteGraphRenderer {
   setMetrics(left: RouteGraphMetric | null, right: RouteGraphMetric | null): void {
     this.leftMetric = left;
     this.rightMetric = right;
+  }
+
+  setAdvisoryFocus(focus: ResolvedAdvisoryFocus | null): void {
+    this.advisoryFocus = focus;
   }
 
   setSelectedPointIndex(index: number): void {
@@ -122,6 +129,10 @@ export class RouteGraphRenderer {
     ctx.beginPath();
     ctx.rect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
     ctx.clip();
+
+    if (this.advisoryFocus?.active.highlightSurfaces.includes('route-graph')) {
+      renderRouteGraphFocus(ctx, plotArea, distanceToX, this.advisoryFocus);
+    }
 
     // Draw zero lines
     if (this.leftMetric?.showZeroLine && leftScale) drawZeroLine(ctx, leftScale, plotArea, this.leftMetric.zeroLineLabels);

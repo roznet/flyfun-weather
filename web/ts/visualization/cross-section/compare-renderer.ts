@@ -1,7 +1,14 @@
 /** Compare cross-section renderer: one layer across N models. */
 
 import type { CoordTransform, VizRouteData, CompareBandMode } from '../types';
+import type { ResolvedAdvisoryFocus } from '../advisory-focus';
 import type { ComparableLayer } from './compare-layers';
+import { modelLabel } from '../../utils';
+import {
+  COMPARE_FOCUS_LABEL_TEXT_ALIGN,
+  focusRegionsForPrimitiveKind,
+  renderCrossSectionFocus,
+} from '../advisory-focus';
 import { drawAxes } from './axes';
 import { terrainFillLayer } from './layers/terrain-fill';
 import { cruiseAltitudeLayer } from './layers/reference-lines';
@@ -16,6 +23,15 @@ export interface CompareModelData {
   data: VizRouteData;
 }
 
+function humanizeAdvisoryId(advisoryId: string): string {
+  if (advisoryId === 'cloud_top') return 'Cloud Tops';
+  return advisoryId
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 export class CompareSectionRenderer {
   private container: HTMLElement;
   private mainCanvas: HTMLCanvasElement;
@@ -25,6 +41,7 @@ export class CompareSectionRenderer {
   private datasets: CompareModelData[] = [];
   private compareLayer: ComparableLayer | null = null;
   private bandMode: CompareBandMode = 'consensus-outline';
+  private advisoryFocus: ResolvedAdvisoryFocus | null = null;
   private selectedPointIndex = -1;
 
   constructor(container: HTMLElement) {
@@ -57,6 +74,10 @@ export class CompareSectionRenderer {
 
   setBandMode(mode: CompareBandMode): void {
     this.bandMode = mode;
+  }
+
+  setAdvisoryFocus(focus: ResolvedAdvisoryFocus | null): void {
+    this.advisoryFocus = focus;
   }
 
   setSelectedPointIndex(index: number): void {
@@ -122,8 +143,37 @@ export class CompareSectionRenderer {
       }
     }
 
-    // Terrain and reference lines (from first dataset)
+    const advisoryFocus = this.advisoryFocus;
+    const renderableFocus = advisoryFocus
+      && advisoryFocus.regions.length > 0
+      && advisoryFocus.active.highlightSurfaces.includes('cross-section')
+      ? advisoryFocus
+      : null;
+    const bandRegions = renderableFocus
+      ? focusRegionsForPrimitiveKind(renderableFocus.regions, 'band')
+      : [];
+    const railRegions = renderableFocus
+      ? focusRegionsForPrimitiveKind(renderableFocus.regions, 'route-rail')
+      : [];
+    if (renderableFocus && bandRegions.length > 0) {
+      renderCrossSectionFocus(ctx, transform, {
+        ...renderableFocus,
+        regions: bandRegions,
+      });
+    }
+
+    // Terrain covers altitude evidence, but route-only rails remain visible above it.
     terrainFillLayer.render(ctx, transform, this.datasets[0].data);
+    if (
+      renderableFocus
+      && railRegions.length > 0
+    ) {
+      renderCrossSectionFocus(ctx, transform, {
+        ...renderableFocus,
+        regions: railRegions,
+      });
+    }
+    if (renderableFocus) this.renderAdvisoryFocusLabel(ctx, transform, renderableFocus);
     ctx.restore(); // unclip
 
     // Cruise altitude on top (unclipped so labels can extend)
@@ -151,6 +201,41 @@ export class CompareSectionRenderer {
     this.resizeObserver.disconnect();
     this.mainCanvas.remove();
     this.overlayCanvas.remove();
+  }
+
+  private renderAdvisoryFocusLabel(
+    ctx: CanvasRenderingContext2D,
+    transform: CoordTransform,
+    focus: ResolvedAdvisoryFocus,
+  ): void {
+    const partial = focus.locationState === 'partial' ? ' · Partial data' : '';
+    const label = `${humanizeAdvisoryId(focus.active.advisoryId)}`
+      + ` · ${modelLabel(focus.modelResult.model)} evidence${partial}`;
+    const { plotArea } = transform;
+    const paddingX = 6;
+    const height = 22;
+    const maxWidth = Math.max(0, plotArea.width - 16);
+    if (maxWidth <= 0) return;
+
+    ctx.save();
+    try {
+      ctx.font = '600 12px system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = COMPARE_FOCUS_LABEL_TEXT_ALIGN;
+      const width = Math.min(maxWidth, ctx.measureText(label).width + paddingX * 2);
+      const left = plotArea.left + 8;
+      const top = plotArea.top + 8;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+      ctx.fillRect(left, top, width, height);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash(focus.locationState === 'partial' ? [4, 3] : []);
+      ctx.strokeRect(left, top, width, height);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(label, left + paddingX, top + height / 2, width - paddingX * 2);
+    } finally {
+      ctx.restore();
+    }
   }
 
   private renderBandLayerOverlay(

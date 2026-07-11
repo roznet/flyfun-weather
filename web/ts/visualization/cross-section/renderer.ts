@@ -1,6 +1,12 @@
 /** Main cross-section canvas renderer with coordinate transform. */
 
 import type { CoordTransform, VizRouteData, CrossSectionLayer } from '../types';
+import type { ResolvedAdvisoryFocus } from '../advisory-focus';
+import {
+  crossSectionPaintPlan,
+  focusRegionsForPrimitiveKind,
+  renderCrossSectionFocus,
+} from '../advisory-focus';
 import { drawAxes } from './axes';
 import { getActiveTheme } from './theme';
 import { createCoordTransform, renderCrosshairOverlay, setupCanvasDpr } from './renderer-utils';
@@ -13,6 +19,8 @@ export class CrossSectionRenderer {
   private data: VizRouteData | null = null;
   private layers: CrossSectionLayer[] = [];
   private enabledLayers: Record<string, boolean> = {};
+  private advisoryFocus: ResolvedAdvisoryFocus | null = null;
+  private emphasizedLayerIds: ReadonlySet<string> | null = null;
   private selectedPointIndex = -1;
 
   constructor(container: HTMLElement) {
@@ -39,6 +47,16 @@ export class CrossSectionRenderer {
   setLayers(layers: CrossSectionLayer[], enabled: Record<string, boolean>): void {
     this.layers = layers;
     this.enabledLayers = enabled;
+  }
+
+  setAdvisoryFocus(focus: ResolvedAdvisoryFocus | null): void {
+    this.advisoryFocus = focus;
+  }
+
+  setLayerEmphasis(
+    layerIds: ReadonlySet<string> | readonly string[] | null,
+  ): void {
+    this.emphasizedLayerIds = layerIds === null ? null : new Set(layerIds);
   }
 
   setSelectedPointIndex(index: number): void {
@@ -86,22 +104,24 @@ export class CrossSectionRenderer {
     // Draw axes first (background grid)
     drawAxes(ctx, transform, this.data);
 
-    // Draw layers in order
-    for (const layer of this.layers) {
-      if (this.enabledLayers[layer.id] !== false) {
-        ctx.save();
-        // Clip to plot area
-        ctx.beginPath();
-        ctx.rect(
-          transform.plotArea.left,
-          transform.plotArea.top,
-          transform.plotArea.width,
-          transform.plotArea.height,
-        );
-        ctx.clip();
-        layer.render(ctx, transform, this.data);
-        ctx.restore();
+    const advisoryFocus = this.advisoryFocus?.active.highlightSurfaces.includes('cross-section')
+      ? this.advisoryFocus
+      : null;
+    const bandRegions = advisoryFocus
+      ? focusRegionsForPrimitiveKind(advisoryFocus.regions, 'band')
+      : [];
+    const railRegions = advisoryFocus
+      ? focusRegionsForPrimitiveKind(advisoryFocus.regions, 'route-rail')
+      : [];
+    for (const step of crossSectionPaintPlan(this.layers)) {
+      if (step.kind === 'layer') {
+        this.renderLayer(ctx, transform, step.layer);
+        continue;
       }
+      if (!advisoryFocus) continue;
+      const regions = step.primitiveKind === 'band' ? bandRegions : railRegions;
+      if (regions.length === 0) continue;
+      renderCrossSectionFocus(ctx, transform, { ...advisoryFocus, regions });
     }
 
     ctx.restore();
@@ -120,5 +140,30 @@ export class CrossSectionRenderer {
     this.resizeObserver.disconnect();
     this.mainCanvas.remove();
     this.overlayCanvas.remove();
+  }
+
+  private renderLayer(
+    ctx: CanvasRenderingContext2D,
+    transform: CoordTransform,
+    layer: CrossSectionLayer,
+  ): void {
+    if (!this.data || this.enabledLayers[layer.id] === false) return;
+    ctx.save();
+    try {
+      if (this.emphasizedLayerIds && !this.emphasizedLayerIds.has(layer.id)) {
+        ctx.globalAlpha = 0.22;
+      }
+      ctx.beginPath();
+      ctx.rect(
+        transform.plotArea.left,
+        transform.plotArea.top,
+        transform.plotArea.width,
+        transform.plotArea.height,
+      );
+      ctx.clip();
+      layer.render(ctx, transform, this.data);
+    } finally {
+      ctx.restore();
+    }
   }
 }

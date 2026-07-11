@@ -4,7 +4,7 @@ import type {
   RouteAdvisoriesManifest,
   RouteAdvisoryResult,
 } from '../types/advisories';
-import type { VizPoint, VizRouteData } from './types';
+import type { CoordTransform, PlotArea, VizPoint, VizRouteData } from './types';
 
 export type AdvisoryHighlightSurface =
   | 'cross-section'
@@ -39,6 +39,428 @@ export interface ResolvedAdvisoryFocus {
   modelResult: ModelAdvisoryResult;
   regions: ResolvedFocusRegion[];
   locationState: 'available' | 'partial' | 'unavailable' | 'legacy';
+}
+
+export type CrossSectionFocusPrimitive =
+  | {
+    kind: 'band';
+    startNm: number;
+    endNm: number;
+    lowerAltitudeFt: number;
+    upperAltitudeFt: number;
+    severity: 'green' | 'amber' | 'red';
+  }
+  | {
+    kind: 'route-rail';
+    startNm: number;
+    endNm: number;
+    severity: 'green' | 'amber' | 'red';
+  };
+
+interface FocusStyle {
+  stroke: string;
+  fill: string;
+  hatch: string;
+}
+
+interface FocusRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export const ROUTE_EVIDENCE_HALO_WEIGHT = 32;
+export const ROUTE_EVIDENCE_PARTIAL_DASH = { dash: 24, gap: 44 } as const;
+export const COMPARE_FOCUS_LABEL_TEXT_ALIGN: CanvasTextAlign = 'left';
+
+export type RoutePointBounds = [
+  [lat: number, lon: number],
+  [lat: number, lon: number],
+];
+
+export interface RouteMapFitCoordinate {
+  lat: number;
+  lon: number;
+}
+
+export interface RouteMapFitFrontAxis {
+  coordinates: ReadonlyArray<ReadonlyArray<number>>;
+}
+
+export interface RouteMapFitNearestFront extends RouteMapFitCoordinate {
+  on_track: boolean;
+  trend: string;
+}
+
+export interface RouteMapFitSources {
+  routePoints: readonly RouteMapFitCoordinate[];
+  focus: ResolvedAdvisoryFocus | null;
+  showFronts: boolean;
+  frontAxes: readonly RouteMapFitFrontAxis[];
+  frontCrossings: readonly RouteMapFitCoordinate[];
+  nearestFront: RouteMapFitNearestFront | null;
+  frontAxisNearRoute: (
+    coordinates: ReadonlyArray<ReadonlyArray<number>>,
+  ) => boolean;
+}
+
+const FOCUS_STYLES: Record<ResolvedFocusRegion['severity'], FocusStyle> = {
+  green: {
+    stroke: '#15803d',
+    fill: 'rgba(34, 197, 94, 0.16)',
+    hatch: 'rgba(21, 128, 61, 0.55)',
+  },
+  amber: {
+    stroke: '#b45309',
+    fill: 'rgba(245, 158, 11, 0.18)',
+    hatch: 'rgba(180, 83, 9, 0.58)',
+  },
+  red: {
+    stroke: '#b91c1c',
+    fill: 'rgba(239, 68, 68, 0.17)',
+    hatch: 'rgba(185, 28, 28, 0.58)',
+  },
+};
+
+const FOCUS_SEVERITY_RANK: Record<ResolvedFocusRegion['severity'], number> = {
+  green: 0,
+  amber: 1,
+  red: 2,
+};
+
+export function routeEvidenceDashArray(
+  locationState: ResolvedAdvisoryFocus['locationState'],
+): string | undefined {
+  return locationState === 'partial'
+    ? `${ROUTE_EVIDENCE_PARTIAL_DASH.dash}, ${ROUTE_EVIDENCE_PARTIAL_DASH.gap}`
+    : undefined;
+}
+
+export function focusRegionsInPaintOrder(
+  regions: readonly ResolvedFocusRegion[],
+): ResolvedFocusRegion[] {
+  return regions
+    .map((region, index) => ({ region, index }))
+    .sort((a, b) => (
+      FOCUS_SEVERITY_RANK[a.region.severity] - FOCUS_SEVERITY_RANK[b.region.severity]
+      || a.index - b.index
+    ))
+    .map(({ region }) => region);
+}
+
+export type CrossSectionPaintStep<T> =
+  | { kind: 'layer'; layer: T }
+  | { kind: 'focus'; primitiveKind: CrossSectionFocusPrimitive['kind'] };
+
+function layerPaintSteps<T>(layers: readonly T[]): CrossSectionPaintStep<T>[] {
+  return layers.map((layer) => ({ kind: 'layer', layer }));
+}
+
+export function crossSectionPaintPlan<T extends { group: string }>(
+  layers: readonly T[],
+): CrossSectionPaintStep<T>[] {
+  const firstTerrain = layers.findIndex((layer) => layer.group === 'terrain');
+  if (firstTerrain < 0) {
+    const firstReference = layers.findIndex((layer) => layer.group === 'reference');
+    const insertion = firstReference < 0 ? layers.length : firstReference;
+    return [
+      ...layerPaintSteps(layers.slice(0, insertion)),
+      { kind: 'focus', primitiveKind: 'band' },
+      { kind: 'focus', primitiveKind: 'route-rail' },
+      ...layerPaintSteps(layers.slice(insertion)),
+    ];
+  }
+  let lastTerrain = firstTerrain;
+  for (let index = firstTerrain + 1; index < layers.length; index += 1) {
+    if (layers[index].group === 'terrain') lastTerrain = index;
+  }
+  return [
+    ...layerPaintSteps(layers.slice(0, firstTerrain)),
+    { kind: 'focus', primitiveKind: 'band' },
+    ...layerPaintSteps(layers.slice(firstTerrain, lastTerrain + 1)),
+    { kind: 'focus', primitiveKind: 'route-rail' },
+    ...layerPaintSteps(layers.slice(lastTerrain + 1)),
+  ];
+}
+
+function validPlotArea(plotArea: PlotArea): boolean {
+  return Number.isFinite(plotArea.left)
+    && Number.isFinite(plotArea.top)
+    && Number.isFinite(plotArea.width)
+    && Number.isFinite(plotArea.height)
+    && plotArea.width > 0
+    && plotArea.height > 0;
+}
+
+function clippedFocusRect(
+  plotArea: PlotArea,
+  left: number,
+  right: number,
+  top: number,
+  bottom: number,
+): FocusRect | null {
+  if (![left, right, top, bottom].every(Number.isFinite)) return null;
+  const plotRight = plotArea.left + plotArea.width;
+  const plotBottom = plotArea.top + plotArea.height;
+  const clippedLeft = Math.max(plotArea.left, Math.min(left, right));
+  const clippedRight = Math.min(plotRight, Math.max(left, right));
+  const clippedTop = Math.max(plotArea.top, Math.min(top, bottom));
+  const clippedBottom = Math.min(plotBottom, Math.max(top, bottom));
+  if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) return null;
+  return {
+    left: clippedLeft,
+    top: clippedTop,
+    width: clippedRight - clippedLeft,
+    height: clippedBottom - clippedTop,
+  };
+}
+
+function drawHatchedFocusRect(
+  ctx: CanvasRenderingContext2D,
+  rect: FocusRect,
+  severity: ResolvedFocusRegion['severity'],
+  dashed: boolean,
+): void {
+  const style = FOCUS_STYLES[severity];
+  ctx.save();
+  try {
+    ctx.fillStyle = style.fill;
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+
+    ctx.save();
+    try {
+      ctx.beginPath();
+      ctx.rect(rect.left, rect.top, rect.width, rect.height);
+      ctx.clip();
+      ctx.strokeStyle = style.hatch;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      for (let offset = -rect.height; offset < rect.width; offset += 8) {
+        ctx.moveTo(rect.left + offset, rect.top + rect.height);
+        ctx.lineTo(rect.left + offset + rect.height, rect.top);
+      }
+      ctx.stroke();
+    } finally {
+      ctx.restore();
+    }
+
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(dashed ? [6, 4] : []);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+  } finally {
+    ctx.restore();
+  }
+}
+
+function validRouteInterval(startNm: number, endNm: number): boolean {
+  return Number.isFinite(startNm)
+    && Number.isFinite(endNm)
+    && endNm > startNm;
+}
+
+export function routePointBounds(
+  points: readonly Pick<VizPoint, 'lat' | 'lon'>[],
+): RoutePointBounds | null {
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  for (const point of points) {
+    if (
+      !Number.isFinite(point.lat)
+      || !Number.isFinite(point.lon)
+      || point.lat < -90
+      || point.lat > 90
+      || point.lon < -180
+      || point.lon > 180
+    ) {
+      continue;
+    }
+    minLat = Math.min(minLat, point.lat);
+    maxLat = Math.max(maxLat, point.lat);
+    minLon = Math.min(minLon, point.lon);
+    maxLon = Math.max(maxLon, point.lon);
+  }
+  return Number.isFinite(minLat)
+    ? [[minLat, minLon], [maxLat, maxLon]]
+    : null;
+}
+
+export function collectRouteMapFitCoordinates(
+  sources: RouteMapFitSources,
+): RouteMapFitCoordinate[] {
+  const coordinates = sources.routePoints.map((point) => ({
+    lat: point.lat,
+    lon: point.lon,
+  }));
+
+  if (sources.focus?.active.highlightSurfaces.includes('route-map')) {
+    for (const region of sources.focus.regions) {
+      for (const point of region.mapPath) {
+        coordinates.push({ lat: point.lat, lon: point.lon });
+      }
+    }
+  }
+
+  if (!sources.showFronts) return coordinates;
+  for (const axis of sources.frontAxes) {
+    if (axis.coordinates.length < 2 || !sources.frontAxisNearRoute(axis.coordinates)) {
+      continue;
+    }
+    for (const coordinate of axis.coordinates) {
+      const [lon, lat] = coordinate;
+      coordinates.push({ lat, lon });
+    }
+  }
+  for (const crossing of sources.frontCrossings) {
+    coordinates.push({ lat: crossing.lat, lon: crossing.lon });
+  }
+  const nearest = sources.nearestFront;
+  if (nearest && !nearest.on_track && nearest.trend === 'closing') {
+    coordinates.push({ lat: nearest.lat, lon: nearest.lon });
+  }
+  return coordinates;
+}
+
+export function crossSectionPrimitive(
+  region: ResolvedFocusRegion,
+): CrossSectionFocusPrimitive {
+  if (region.lowerAltitudeFt !== null && region.upperAltitudeFt !== null) {
+    return {
+      kind: 'band',
+      startNm: region.startNm,
+      endNm: region.endNm,
+      lowerAltitudeFt: region.lowerAltitudeFt,
+      upperAltitudeFt: region.upperAltitudeFt,
+      severity: region.severity,
+    };
+  }
+  return {
+    kind: 'route-rail',
+    startNm: region.startNm,
+    endNm: region.endNm,
+    severity: region.severity,
+  };
+}
+
+export function focusRegionsForPrimitiveKind(
+  regions: readonly ResolvedFocusRegion[],
+  kind: CrossSectionFocusPrimitive['kind'],
+): ResolvedFocusRegion[] {
+  return focusRegionsInPaintOrder(regions).filter(
+    (region) => crossSectionPrimitive(region).kind === kind,
+  );
+}
+
+export function renderCrossSectionFocus(
+  ctx: CanvasRenderingContext2D,
+  transform: CoordTransform,
+  focus: ResolvedAdvisoryFocus,
+): void {
+  const { plotArea } = transform;
+  if (!validPlotArea(plotArea)) return;
+
+  ctx.save();
+  try {
+    ctx.beginPath();
+    ctx.rect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
+    ctx.clip();
+
+    for (const region of focusRegionsInPaintOrder(focus.regions)) {
+      const primitive = crossSectionPrimitive(region);
+      if (!validRouteInterval(primitive.startNm, primitive.endNm)) continue;
+      const startX = transform.distanceToX(primitive.startNm);
+      const endX = transform.distanceToX(primitive.endNm);
+
+      if (primitive.kind === 'route-rail') {
+        const railHeight = Math.min(10, plotArea.height);
+        const rect = clippedFocusRect(
+          plotArea,
+          startX,
+          endX,
+          plotArea.top + plotArea.height - railHeight,
+          plotArea.top + plotArea.height,
+        );
+        if (rect) {
+          drawHatchedFocusRect(
+            ctx,
+            rect,
+            primitive.severity,
+            focus.locationState === 'partial',
+          );
+        }
+        continue;
+      }
+
+      if (
+        !Number.isFinite(primitive.lowerAltitudeFt)
+        || !Number.isFinite(primitive.upperAltitudeFt)
+        || primitive.upperAltitudeFt < primitive.lowerAltitudeFt
+      ) {
+        continue;
+      }
+      const lowerY = transform.altitudeToY(primitive.lowerAltitudeFt);
+      const upperY = transform.altitudeToY(primitive.upperAltitudeFt);
+      if (!Number.isFinite(lowerY) || !Number.isFinite(upperY)) continue;
+      let top = Math.min(lowerY, upperY);
+      let bottom = Math.max(lowerY, upperY);
+      if (bottom - top < 4) {
+        const center = (top + bottom) / 2;
+        top = center - 2;
+        bottom = center + 2;
+      }
+      const rect = clippedFocusRect(plotArea, startX, endX, top, bottom);
+      if (rect) {
+        drawHatchedFocusRect(
+          ctx,
+          rect,
+          primitive.severity,
+          focus.locationState === 'partial',
+        );
+      }
+    }
+  } finally {
+    ctx.restore();
+  }
+}
+
+export function renderRouteGraphFocus(
+  ctx: CanvasRenderingContext2D,
+  plotArea: PlotArea,
+  distanceToX: (distanceNm: number) => number,
+  focus: ResolvedAdvisoryFocus,
+): void {
+  if (!validPlotArea(plotArea)) return;
+
+  ctx.save();
+  try {
+    ctx.beginPath();
+    ctx.rect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
+    ctx.clip();
+    for (const region of focusRegionsInPaintOrder(focus.regions)) {
+      if (!validRouteInterval(region.startNm, region.endNm)) continue;
+      const rect = clippedFocusRect(
+        plotArea,
+        distanceToX(region.startNm),
+        distanceToX(region.endNm),
+        plotArea.top,
+        plotArea.top + plotArea.height,
+      );
+      if (rect) {
+        drawHatchedFocusRect(
+          ctx,
+          rect,
+          region.severity,
+          focus.locationState === 'partial',
+        );
+      }
+    }
+  } finally {
+    ctx.restore();
+  }
 }
 
 interface PointSpan {
