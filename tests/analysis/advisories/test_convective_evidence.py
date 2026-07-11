@@ -286,3 +286,242 @@ def test_primary_and_moderate_extents_use_midpoint_route_cells(clear_context):
     assert model.affected_mod_points == 1
     assert model.affected_mod_nm == 45.0
     assert "45nm/100nm (25%)" in model.detail
+
+
+def test_below_cruise_dd_floor_falls_back_to_selected_nwp_method(clear_context):
+    active = {
+        index: _assessment(ConvectiveRisk.NONE)
+        for index in range(len(clear_context.analyses))
+    }
+    thermo = {
+        index: _assessment(ConvectiveRisk.NONE, method="thermo")
+        for index in range(len(clear_context.analyses))
+    }
+    thermo[3] = _assessment(
+        ConvectiveRisk.HIGH,
+        base_ft=1000,
+        top_ft=4000,
+        method="thermo",
+    )
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.GREEN
+    assert model.evidence_regions == []
+    assert model.primary_method_id == "nwp"
+
+
+def test_partial_below_cruise_floor_never_claims_compound_primary(clear_context):
+    active = {3: _assessment(ConvectiveRisk.NONE)}
+    thermo = {
+        3: _assessment(
+            ConvectiveRisk.HIGH,
+            base_ft=1000,
+            top_ft=4000,
+            method="thermo",
+        )
+    }
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.data_state == "partial"
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+    assert model.evidence_regions == []
+    assert model.primary_method_id == "nwp"
+
+
+def test_floor_filtered_by_min_risk_falls_back_to_selected_nwp_method(clear_context):
+    active = {
+        index: _assessment(ConvectiveRisk.NONE)
+        for index in range(len(clear_context.analyses))
+    }
+    thermo = {
+        index: _assessment(ConvectiveRisk.NONE, method="thermo")
+        for index in range(len(clear_context.analyses))
+    }
+    thermo[3] = _assessment(
+        ConvectiveRisk.MODERATE,
+        base_ft=5000,
+        top_ft=25000,
+        method="thermo",
+    )
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+    params = {**_CONV_PARAMS, "min_risk": 4}
+
+    model = ConvectiveEvaluator.evaluate(ctx, params).per_model[0]
+
+    assert model.status == AdvisoryStatus.GREEN
+    assert model.evidence_regions == []
+    assert model.primary_method_id == "nwp"
+
+
+def test_dd_floor_primary_when_floor_contributions_raise_route_grade(clear_context):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index == 0 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    thermo = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if 1 <= index <= 5 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+            method="thermo",
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "nwp_with_dd_floor"
+
+    reversed_ctx = replace(ctx, analyses=list(reversed(ctx.analyses)))
+    reversed_model = ConvectiveEvaluator.evaluate(
+        reversed_ctx,
+        _CONV_PARAMS,
+    ).per_model[0]
+    assert reversed_model.status == AdvisoryStatus.RED
+    assert reversed_model.primary_method_id == "nwp_with_dd_floor"
+    assert reversed_model.evidence_regions == model.evidence_regions
+
+
+def test_nwp_primary_when_nwp_already_controls_route_grade(clear_context):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index <= 5 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    thermo = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index == 6 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+            method="thermo",
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "nwp"
+
+
+def test_nwp_primary_when_floor_only_raises_risk_not_route_grade(clear_context):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE if index <= 5 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    thermo = {
+        index: _assessment(
+            ConvectiveRisk.HIGH if index <= 5 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+            method="thermo",
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(
+        clear_context,
+        {"gfs": active},
+        thermo_by_model={"gfs": thermo},
+    )
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.primary_method_id == "nwp"
+    assert {region.method_id for region in model.evidence_regions} == {
+        "nwp_with_dd_floor"
+    }
+
+
+@pytest.mark.parametrize(
+    ("base_ft", "top_ft"),
+    [
+        pytest.param(25000.0, 20000.0, id="reversed"),
+        pytest.param(float("nan"), 25000.0, id="nan-base"),
+        pytest.param(5000.0, float("nan"), id="nan-top"),
+        pytest.param(float("inf"), 25000.0, id="positive-infinite-base"),
+        pytest.param(float("-inf"), 25000.0, id="negative-infinite-base"),
+        pytest.param(5000.0, float("inf"), id="positive-infinite-top"),
+        pytest.param(5000.0, float("-inf"), id="negative-infinite-top"),
+    ],
+)
+def test_invalid_altitude_pairs_preserve_hazard_without_geometry(
+    clear_context,
+    base_ft,
+    top_ft,
+):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.MODERATE,
+            base_ft=base_ft,
+            top_ft=top_ft,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(clear_context, {"gfs": active})
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert len(model.evidence_regions) == 1
+    assert model.evidence_regions[0].lower_altitude_ft is None
+    assert model.evidence_regions[0].upper_altitude_ft is None
+
+
+def test_sparse_partial_hazard_keeps_evaluated_point_denominator(clear_context):
+    active = {
+        0: _assessment(
+            ConvectiveRisk.MODERATE,
+            base_ft=5000,
+            top_ft=25000,
+        )
+    }
+    ctx = _with_assessments(clear_context, {"gfs": active})
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.data_state == "partial"
+    assert model.status == AdvisoryStatus.RED
+    assert model.total_points == 1
+    assert model.affected_points == 1
+    assert model.affected_pct == 100.0
+    assert model.affected_nm == 10.0
+    assert "10nm/200nm (100%)" in model.detail

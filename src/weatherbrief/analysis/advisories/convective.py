@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import pct_above_threshold
 from weatherbrief.analysis.advisories.evidence import (
@@ -34,6 +36,76 @@ _RISK_ORDER = [
 # here (MODERATE+), separate from the LOW min_risk floor that drives the colour
 # (#300).
 _MOD_IDX = _RISK_ORDER.index(ConvectiveRisk.MODERATE)
+
+_STATUS_ORDER = {
+    AdvisoryStatus.UNAVAILABLE: -1,
+    AdvisoryStatus.GREEN: 0,
+    AdvisoryStatus.AMBER: 1,
+    AdvisoryStatus.RED: 2,
+}
+
+
+def _grade_risks(
+    risks: list[ConvectiveRisk],
+    total_points: int,
+    affected_pct_amber: float,
+    affected_pct_red: float,
+) -> tuple[AdvisoryStatus, ConvectiveRisk]:
+    """Apply the established convective colour policy to qualifying risks."""
+    worst_risk = max(
+        risks,
+        key=_RISK_ORDER.index,
+        default=ConvectiveRisk.NONE,
+    )
+    if total_points == 0:
+        return AdvisoryStatus.UNAVAILABLE, worst_risk
+    if not risks:
+        return AdvisoryStatus.GREEN, worst_risk
+    if worst_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
+        return AdvisoryStatus.RED, worst_risk
+
+    status = pct_above_threshold(
+        len(risks),
+        total_points,
+        affected_pct_amber,
+        affected_pct_red,
+    )
+    if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
+        status = AdvisoryStatus.AMBER
+    return status, worst_risk
+
+
+def _finite_altitude(altitude_ft: float | None) -> float | None:
+    if altitude_ft is None or not math.isfinite(altitude_ft):
+        return None
+    return altitude_ft
+
+
+def _is_below_cruise(
+    top_ft: float | None,
+    cruise_ft: float,
+    top_clearance_ft: float,
+) -> bool:
+    finite_top_ft = _finite_altitude(top_ft)
+    return (
+        finite_top_ft is not None
+        and finite_top_ft + top_clearance_ft <= cruise_ft
+    )
+
+
+def _evidence_altitude_bounds(
+    base_ft: float | None,
+    top_ft: float | None,
+) -> tuple[int | None, int | None]:
+    finite_base_ft = _finite_altitude(base_ft)
+    finite_top_ft = _finite_altitude(top_ft)
+    if (
+        finite_base_ft is None
+        or finite_top_ft is None
+        or finite_base_ft > finite_top_ft
+    ):
+        return None, None
+    return round(finite_base_ft), round(finite_top_ft)
 
 
 def _coverage_suffix(max_cover_pct: float | None) -> str:
@@ -138,9 +210,9 @@ class ConvectiveEvaluator:
             affected: set[int] = set()  # >= min_risk — drives the colour
             affected_mod: set[int] = set()  # >= MODERATE — headline extent
             samples: list[EvidenceSample] = []
-            methods: list[str] = []
-            has_high = False
-            worst_risk = ConvectiveRisk.NONE
+            active_methods: list[str] = []
+            active_path_risks: list[tuple[ConvectiveRisk, str]] = []
+            qualifying_risks: list[tuple[ConvectiveRisk, str, bool]] = []
             below_cruise_count = 0  # risky points skipped because tops below cruise
             max_cover_pct: float | None = None
             # Details-only DD-vs-model-scheme cross-check tally (never grades).
@@ -199,13 +271,25 @@ class ConvectiveEvaluator:
                 if floor_controls:
                     graded_risk = thermo_conv.risk_level
 
-                if floor_controls:
-                    method_id = "nwp_with_dd_floor"
-                elif active.method.startswith("nwp"):
-                    method_id = "nwp"
-                else:
-                    method_id = "thermo"
-                methods.append(method_id)
+                active_method_id = (
+                    "nwp" if active.method.startswith("nwp") else "thermo"
+                )
+                active_methods.append(active_method_id)
+                active_risk_idx = _RISK_ORDER.index(active.risk_level)
+                if (
+                    active_risk_idx >= _RISK_ORDER.index(min_risk)
+                    and not _is_below_cruise(
+                        active.top_ft,
+                        cruise_ft,
+                        top_clearance_ft,
+                    )
+                ):
+                    active_path_risks.append(
+                        (active.risk_level, active_method_id)
+                    )
+                method_id = (
+                    "nwp_with_dd_floor" if floor_controls else active_method_id
+                )
 
                 risk_idx = _RISK_ORDER.index(graded_risk)
                 if risk_idx < _RISK_ORDER.index(min_risk):
@@ -224,38 +308,36 @@ class ConvectiveEvaluator:
                 # (top_ft=None) and a shallow NWP top below the DD EL (#283
                 # review): otherwise a quiet/shallow NWP top would filter out a
                 # point graded HIGH by a DD tower that does reach cruise.
-                check_top_ft = active.top_ft
+                check_top_ft = _finite_altitude(active.top_ft)
                 if floor_controls:
-                    thermo_top = thermo_conv.top_ft
+                    thermo_top = _finite_altitude(thermo_conv.top_ft)
                     if check_top_ft is None or (
                         thermo_top is not None and thermo_top > check_top_ft
                     ):
                         check_top_ft = thermo_top
-                if (
-                    check_top_ft is not None
-                    and check_top_ft + top_clearance_ft <= cruise_ft
+                if _is_below_cruise(
+                    check_top_ft,
+                    cruise_ft,
+                    top_clearance_ft,
                 ):
                     below_cruise_count += 1
                     continue
 
                 affected.add(point_index)
+                qualifying_risks.append(
+                    (graded_risk, active_method_id, floor_controls)
+                )
                 if risk_idx >= _MOD_IDX:
                     affected_mod.add(point_index)
-                if risk_idx > _RISK_ORDER.index(worst_risk):
-                    worst_risk = graded_risk
-
-                if graded_risk in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME):
-                    has_high = True
 
                 if active.cover_pct is not None:
                     max_cover_pct = max(max_cover_pct or 0, active.cover_pct)
 
                 source = thermo_conv if floor_controls else active
-                lower_altitude_ft: int | None = None
-                upper_altitude_ft: int | None = None
-                if source.base_ft is not None and source.top_ft is not None:
-                    lower_altitude_ft = round(source.base_ft)
-                    upper_altitude_ft = round(source.top_ft)
+                lower_altitude_ft, upper_altitude_ft = _evidence_altitude_bounds(
+                    source.base_ft,
+                    source.top_ft,
+                )
                 samples.append(
                     EvidenceSample(
                         point_index=point_index,
@@ -293,11 +375,15 @@ class ConvectiveEvaluator:
 
             loc = ctx.locale
             cover_suffix = _coverage_suffix(max_cover_pct)
+            status, worst_risk = _grade_risks(
+                [risk for risk, _, _ in qualifying_risks],
+                summary.total_points,
+                affected_pct_amber,
+                affected_pct_red,
+            )
             if summary.total_points == 0:
-                status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
             elif summary.affected_points == 0:
-                status = AdvisoryStatus.GREEN
                 if below_cruise_count > 0:
                     detail = adv_t("convective.below_cruise", loc, count=below_cruise_count)
                 else:
@@ -306,17 +392,6 @@ class ConvectiveEvaluator:
                 # Colour grade is unchanged (#300 is display-only): HIGH/EXTREME
                 # anywhere → RED; otherwise threshold on the LOW-floor extent,
                 # capped at AMBER when the peak is only LOW.
-                if has_high:
-                    status = AdvisoryStatus.RED
-                else:
-                    status = pct_above_threshold(
-                        summary.affected_points,
-                        summary.total_points,
-                        affected_pct_amber,
-                        affected_pct_red,
-                    )
-                    if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
-                        status = AdvisoryStatus.AMBER
                 # Headline anchors on the MODERATE+ extent + named peak, so the
                 # severity word (peak) and the coverage (MODERATE+ extent) are
                 # never conflated. When nothing reaches MODERATE (LOW-only floor),
@@ -366,23 +441,29 @@ class ConvectiveEvaluator:
                         f"over {xc_ext}"
                     )
 
-            controlling_samples = (
-                [
-                    sample
-                    for sample in samples
-                    if sample.severity == AdvisoryStatus.RED
-                ]
-                if has_high
-                else samples
+            status_without_floor, _ = _grade_risks(
+                [risk for risk, _ in active_path_risks],
+                summary.total_points,
+                affected_pct_amber,
+                affected_pct_red,
             )
-            primary_method_id = next(
-                (
-                    sample.method_id
-                    for sample in controlling_samples
-                    if sample.method_id is not None
-                ),
-                methods[0] if methods else None,
-            )
+            if (
+                any(floor_controls for _, _, floor_controls in qualifying_risks)
+                and _STATUS_ORDER[status_without_floor] < _STATUS_ORDER[status]
+            ):
+                primary_method_id = "nwp_with_dd_floor"
+            elif active_path_risks:
+                worst_active_risk = max(
+                    (risk for risk, _ in active_path_risks),
+                    key=_RISK_ORDER.index,
+                )
+                primary_method_id = next(
+                    method
+                    for risk, method in active_path_risks
+                    if risk == worst_active_risk
+                )
+            else:
+                primary_method_id = active_methods[0] if active_methods else None
             missing_detail = adv_t(
                 "no_data" if summary.data_state == "unavailable" else "partial_data",
                 loc,
