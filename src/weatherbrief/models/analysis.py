@@ -735,7 +735,11 @@ class SoundingAnalysis(BaseModel):
     convective_nwp: Optional[ConvectiveAssessment] = None
     precipitation: Optional[PrecipitationAssessment] = None
     vertical_motion: Optional[VerticalMotionAssessment] = None
-    # NWP 3-level cloud cover from Open-Meteo (None for ECMWF)
+    # Bulk Open-Meteo 3-level cloud-cover summary. NOT the native NWP cloud
+    # envelope (that's `nwp_cloud_layers`): this low/mid/high triple is a coarse
+    # per-model summary now populated for ECMWF too, so it must not be surfaced
+    # as "NWP cloud" — the low/mid/high framing is the GFS-native paradigm and
+    # misrepresents ECMWF's per-level 3-D fraction. See digest/prompt_builder.py.
     cloud_cover_low_pct: Optional[float] = None
     cloud_cover_mid_pct: Optional[float] = None
     cloud_cover_high_pct: Optional[float] = None

@@ -81,6 +81,32 @@ final class CrossSectionViewModel {
         dataVersion += 1
     }
 
+    // MARK: - NWP availability & fallback (port of web getUnavailableLayers +
+    // applyNwpFallback). See `NwpFallback`. All three are pure functions of the
+    // already-observed `vizData` + `enabledLayers`, so reading them inside the
+    // Canvas / config sheet registers the right `@Observable` dependencies.
+
+    /// Layer ids the currently-rendered model can't provide (no native NWP data,
+    /// etc.) — greyed / disabled in the config sheet. Empty until `vizData` loads.
+    var unavailableLayers: Set<String> {
+        guard let vizData else { return [] }
+        return NwpFallback.unavailableLayers(in: vizData)
+    }
+
+    /// Render-time enabled map: the stored preference with unavailable layers
+    /// disabled and DD substituted for any wanted-but-unavailable NWP layer. The
+    /// stored `enabledLayers` preference is never mutated (switching back to an
+    /// NWP-capable model auto-restores NWP). Mirrors web `briefing-main.ts`.
+    var effectiveEnabledLayers: [String: Bool] {
+        NwpFallback.applyFallback(enabledLayers: enabledLayers, unavailable: unavailableLayers)
+    }
+
+    /// Layers auto-substituted at render (DD standing in for an unavailable NWP
+    /// method) — the config sheet flags these so the user knows why NWP looks off.
+    var substitutedLayers: Set<String> {
+        NwpFallback.substitutedLayers(enabledLayers: enabledLayers, effective: effectiveEnabledLayers)
+    }
+
     func toggleLayer(_ id: String) {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
         activeAdvisoryPreset = nil  // a manual edit is no longer a named lens
