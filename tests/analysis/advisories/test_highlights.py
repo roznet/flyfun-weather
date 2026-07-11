@@ -313,6 +313,21 @@ class TestConvectiveHighlights:
         assert h.regions[0].kind == "tower_unresolved"
         assert h.regions[0].base_ft is None and h.regions[0].top_ft is None
 
+    def test_resolved_top_unknown_base_is_ghost_not_grounded_tower(self):
+        """Known top but no base (e.g. nwp_lcl_top w/o LCL) → full-column ghost,
+        not a solid 'tower' box the client would draw down to terrain."""
+        conv = ConvectiveAssessment(
+            risk_level=ConvectiveRisk.HIGH, cape_jkg=1500,
+            base_ft=None, top_ft=30000, method="nwp_lcl_top",
+        )
+        analyses = [_rpa(i, i * 20.0, {"gfs": SoundingAnalysis(convective=conv)}) for i in range(10)]
+        ctx = _ctx(analyses, models=["gfs"], total_nm=180)
+        res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+        h = res.per_model[0].highlights
+        assert len(h.regions) == 1
+        assert h.regions[0].kind == "tower_unresolved"
+        assert h.regions[0].base_ft is None and h.regions[0].top_ft is None
+
     def test_below_cruise_tops_are_green(self):
         """Tops well below cruise (with clearance) → not flagged → GREEN ribbon."""
         # cruise 8000, top 3000 + clearance 2000 = 5000 <= 8000 → skipped.

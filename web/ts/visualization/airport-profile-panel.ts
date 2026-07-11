@@ -502,9 +502,13 @@ export class AirportProfilePanel {
       // state is owned by the panel and applied via setLayers() once
       // the renderer exists (see ensureCrossRenderer).
       // The current-conditions overlay is route-only (distance X axis); the
-      // airport-profile drawer is time-axis, so drop that group's toggle.
+      // airport-profile drawer is time-axis, so drop that group's toggle. The
+      // advisory-highlight group is also dropped: this view has no advisory
+      // context (snapshotToVizData hardcodes advisoryHighlights=null), so the
+      // Highlight toggle could never do anything — a static exclusion here,
+      // unlike the main view's dynamic gating (#373).
       renderLayerToggles(host, this.enabledLayers, (layerId) => this.onLayerToggle(layerId), {
-        hiddenGroups: new Set(['conditions']),
+        hiddenGroups: new Set(['conditions', 'highlight']),
       });
     }
     if (showSkewT) {
