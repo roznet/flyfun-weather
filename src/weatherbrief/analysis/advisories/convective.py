@@ -263,26 +263,32 @@ class ConvectiveEvaluator:
                 # Highlight geometry for this flagged point (#373).
                 severity = HighlightSeverity.RED if is_high else HighlightSeverity.AMBER
                 ribbon_points.append((dist, severity))
-                if check_top_ft is not None:
-                    # Resolved tower: reuse check_top_ft (active/thermo-EL
-                    # fallback, already computed); base from the same base
-                    # resolution (model base, thermo-LFC fallback when raised).
-                    check_base_ft = conv.base_ft
-                    if (
-                        check_base_ft is None
-                        and thermo_conv is not None
-                        and graded_risk != conv.risk_level
-                    ):
-                        check_base_ft = thermo_conv.base_ft
+                # Base from the same resolution as the top (model base, thermo-LFC
+                # fallback when the DD floor raised the grade).
+                check_base_ft = conv.base_ft
+                if (
+                    check_base_ft is None
+                    and thermo_conv is not None
+                    and graded_risk != conv.risk_level
+                ):
+                    check_base_ft = thermo_conv.base_ft
+                # A "tower" cutout requires BOTH base and top resolved. A known top
+                # with an unknown base (e.g. ECMWF nwp_lcl_top with no LCL) must
+                # NOT render as a solid box down to terrain — the client draws
+                # base=None to the ground, which would imply a base the model
+                # doesn't have and erase the tower/ghost distinction. So fall back
+                # to the full-column ghost whenever either bound is missing
+                # (mirrors nwp-convective-bg.ts's depth-unresolved column).
+                if check_top_ft is not None and check_base_ft is not None:
                     region_cells.append((dist, FlaggedCell(
                         kind="tower",
                         severity=severity,
-                        base_ft=int(check_base_ft) if check_base_ft is not None else None,
+                        base_ft=int(check_base_ft),
                         top_ft=int(check_top_ft),
                     )))
                 else:
-                    # Depth-unresolved (nwp_precip / cover-only): full-column
-                    # ghost, mirrors nwp-convective-bg.ts.
+                    # Depth-unresolved (nwp_precip / cover-only, or a resolved top
+                    # with unknown base): full-column ghost.
                     region_cells.append((dist, FlaggedCell(
                         kind="tower_unresolved",
                         severity=severity,

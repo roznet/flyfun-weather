@@ -250,8 +250,10 @@ geometry inside the per-point loops they already run:
 - `convective` — ribbon: HIGH/EXTREME→red, LOW/MODERATE (≥ `min_risk`)→amber, else
   (below floor / tops below cruise / no convection)→green, no sounding→unavailable.
   Regions reuse the evaluator's own base/top resolution (`check_top_ft`, model
-  base/top with thermo-EL fallback): `kind="tower"` when resolved, else
-  `kind="tower_unresolved"` full-column ghost (nwp_precip / cover-only). `peak_dist_nm`
+  base/top with thermo-EL fallback): `kind="tower"` only when **both** base and
+  top resolve, else `kind="tower_unresolved"` full-column ghost (nwp_precip /
+  cover-only, or a resolved top with unknown base — never draw a bounded box that
+  implies a base the model lacks). `peak_dist_nm`
   = the affected point with the worst graded risk, ties → highest CAPE (matches the
   MCP deep-link peak). Both build highlights only when the model has data (`total > 0`).
 
