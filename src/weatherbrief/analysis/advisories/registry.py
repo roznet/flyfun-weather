@@ -243,8 +243,20 @@ def evaluate_all(
                     aggregation=aggregation,
                 )
             results.append(result)
-        except Exception:
+        except Exception as exc:
+            # A throwing evaluator must NOT vanish from the briefing — a missing
+            # advisory reads as "not a concern" (#391). Emit an explicit
+            # UNAVAILABLE result with a diagnostic instead, built directly (never
+            # through from_per_model, whose empty-list path we already rely on
+            # elsewhere) so the deliberately-empty per_model is preserved.
             logger.warning("Advisory %s evaluation failed", adv_id, exc_info=True)
+            results.append(RouteAdvisoryResult(
+                advisory_id=adv_id,
+                aggregate_status=AdvisoryStatus.UNAVAILABLE,
+                aggregate_detail=f"Evaluation failed: {type(exc).__name__}",
+                per_model=[],
+                parameters_used=params,
+            ))
 
     return results
 
