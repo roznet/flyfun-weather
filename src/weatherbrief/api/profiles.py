@@ -184,10 +184,25 @@ def update_user_profile(
         kwargs["name"] = name
 
     if req.settings is not None:
-        # Merge new settings with existing
+        # Sparse-merge with delete-semantics (#403 Part B). We persist only what
+        # differs from the default: the client prunes any advisory param / engine
+        # method equal to the default before saving, so an already-dense profile
+        # can *shrink*. A plain ``dict.update()`` merge could never do that — it
+        # cannot remove a key — so instead:
+        #   * a key the client omits entirely is left untouched (partial-writer
+        #     safe — a non-web PATCHer sending a subset never wipes siblings);
+        #   * a key sent explicitly as ``null`` means "delete" (follow the default);
+        #   * any other value replaces.
+        # ``exclude_unset`` (not ``exclude_none``) is what distinguishes an omitted
+        # key from an explicit null. The ``advisories`` block is sent complete on
+        # every web save, so replacing it wholesale here already prunes its params.
         current_settings = profile.settings.copy()
-        new_settings = req.settings.model_dump(exclude_none=True)
-        current_settings.update(new_settings)
+        sent = req.settings.model_dump(exclude_unset=True)
+        for key, value in sent.items():
+            if value is None:
+                current_settings.pop(key, None)
+            else:
+                current_settings[key] = value
         kwargs["settings"] = current_settings
 
     if req.is_default is True:
