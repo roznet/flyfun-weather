@@ -229,7 +229,45 @@ answer is "unknown ⇒ not FIKI", which is also the conservative one (it selects
 
 `ceiling_ft = NULL` and `icao_type = 'ZZZZ'` are deliberately *honest gaps*, not
 invented data: they disable the mission≤service check until the pilot fills them
-in, and they drive the naming nudge (§7).
+in, and they drive the review prompt (§5a).
+
+### 5a. The "review your aircraft" prompt
+
+The migration also sets **`user_aircraft.needs_review = true`** on the 487
+synthesised rows (one new boolean — the only schema change in the plan). On next
+web login, those users get a small modal: *"FlyFun now tracks your aeroplane
+separately from your flying preferences. Here's what we carried over — please
+check it."* Saving clears the flag. The 94 users who already own aircraft never
+see it.
+
+**It completes, it does not gate.** The aircraft already exists, so nothing is
+broken for these users — flights, scheduled refreshes and MCP calls all keep
+working the moment the migration lands. So the modal is *dismissible but
+re-shown* until reviewed: soft and persistent, rather than soft and forgettable.
+Hard-blocking a returning pilot behind a modal before they can read their weather
+is a bad trade for data we already have a reasonable guess at.
+
+Fields, prefilled from what we actually know:
+
+| field | prefilled from | confidence |
+|---|---|---|
+| cruise speed | `profile.speed_kt` | real data |
+| IFR-equipped | `flight_rules != 'vfr_only'` | real; load-bearing (§4.3) |
+| name | `"My aircraft"` | placeholder |
+| **ICAO type** | empty (typeahead) | **unknown — the main ask** |
+| **service ceiling** | empty | **unknown — deliberately not invented** |
+| FIKI | unticked | unknown; conservative default |
+
+**No cruise altitude and no mission ceiling on this form** — they are profile
+(mission) fields, not aircraft fields (§1a). Putting them here would rebuild the
+exact confusion this work removes.
+
+Why a flag and not the `icao_type == 'ZZZZ'` placeholder as the marker: a pilot
+whose type genuinely isn't in the catalog could save ZZZZ deliberately and be
+trapped in an unclearable prompt.
+
+iOS and MCP users are unaffected until they visit the web app; their synthesised
+aircraft works regardless. The equivalent iOS prompt rides along with S5.
 
 ## 6. Slices
 
