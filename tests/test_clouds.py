@@ -411,11 +411,15 @@ def _make_rpa_with_clouds():
 
 
 def test_resolve_analyses_dd_returns_original():
-    """DD method returns the original list unchanged (identity)."""
+    """All-DD/thermo methods return the original list unchanged (identity).
+
+    Since #403 an *absent* (None) method resolves to its NWP default, so the
+    no-swap identity case requires the DD/thermo methods to be stated explicitly.
+    """
     from weatherbrief.tasks.advise import _resolve_analyses
     rpa, dd_layers, _ = _make_rpa_with_clouds()
     original = [rpa]
-    result = _resolve_analyses(original, None, "dd")
+    result = _resolve_analyses(original, "ogimet_dd", "dd", "thermo")
     assert result is original
     assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
 

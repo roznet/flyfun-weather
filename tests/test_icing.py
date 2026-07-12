@@ -593,7 +593,11 @@ def test_icing_type_uses_wet_bulb():
 
 
 def test_resolve_analyses_ogimet_dd_returns_original():
-    """ogimet_dd (default) returns the original list unchanged."""
+    """All-DD/thermo methods return the original list unchanged.
+
+    Since #403 an absent (None) cloud/convective method resolves to its NWP
+    default, so this identity case must state the DD/thermo methods explicitly.
+    """
     from weatherbrief.tasks.advise import _resolve_analyses
     from weatherbrief.models import RoutePointAnalysis, SoundingAnalysis, IcingZone
     from datetime import datetime, timezone
@@ -607,7 +611,7 @@ def test_resolve_analyses_ogimet_dd_returns_original():
         sounding={"gfs": sa},
     )
     original = [rpa]
-    result = _resolve_analyses(original, "ogimet_dd", None)
+    result = _resolve_analyses(original, "ogimet_dd", "dd", "thermo")
     assert result is original
     assert result[0].sounding["gfs"].icing_zones[0].risk == IcingRisk.MODERATE
 

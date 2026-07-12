@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
 from weatherbrief.models import (
     AdvisoryAggregation,
     AdvisoryChip,
@@ -94,11 +95,21 @@ def _resolve_analyses(
         ``"sfip_nwp"``   → convert ``sfip_zones`` to ``IcingZone`` list.
     Convective resolution (``convective_method``):
         ``"nwp"`` → use ``convective_nwp`` (fall back to ``convective_thermo``).
+
+    Absence (``None``) means "follow the declared default" (#403): each method is
+    resolved through :data:`ENGINE_METHOD_DEFAULTS` (NWP icing / NWP cloud / NWP
+    convective) before the checks below, so a profile that never saved an engine
+    method grades on the same methods its settings page has always displayed —
+    not the DD/DD/thermo the old falsy fall-through silently applied.
     """
+    icing_method = icing_method or ENGINE_METHOD_DEFAULTS["icing_method"]
+    cloud_method = cloud_method or ENGINE_METHOD_DEFAULTS["cloud_method"]
+    convective_method = convective_method or ENGINE_METHOD_DEFAULTS["convective_method"]
+
     cloud_source = _cloud_source_from_method(cloud_method)
-    swap_icing = icing_method and icing_method != "ogimet_dd"
+    swap_icing = icing_method != "ogimet_dd"
     swap_cloud = cloud_source == "nwp"
-    swap_convective = convective_method and convective_method != "thermo"
+    swap_convective = convective_method != "thermo"
     if not swap_icing and not swap_cloud and not swap_convective:
         return rp_analyses
 
