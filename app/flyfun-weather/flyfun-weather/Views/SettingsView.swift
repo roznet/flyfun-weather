@@ -19,7 +19,8 @@ struct SettingsView: View {
     @State private var notifyBusy = false
     @State private var showPushDeniedAlert = false
     #if DEBUG
-    @State private var tipsResetConfirmation: String?
+    /// Transient footer message for the Developer sections (tips overrides, copy).
+    @State private var developerNotice: String?
     #endif
 
     var body: some View {
@@ -146,32 +147,46 @@ struct SettingsView: View {
                 }
 
                 #if DEBUG
-                // Developer-only: TipKit persists which coachmarks have been
-                // seen, so they never reappear once dismissed. `resetDatastore()`
-                // can only run *before* `Tips.configure()` (it throws
-                // `tipsDatastoreAlreadyConfigured` at runtime), so for in-app
-                // testing we use the session overrides instead: "Show All"
-                // force-displays every tip ignoring seen-state and eligibility
-                // gates; "Reset" clears that override. Mirrors the debug server
-                // picker — present only in DEBUG builds.
+                Section {
+                    // Identifies the binary on the device: stamped into the built
+                    // Info.plist at compile time by scripts/stamp-build-info.sh.
+                    buildInfoRow("Version", BuildInfo.version)
+                    buildInfoRow("Built", BuildInfo.buildDate ?? "not stamped")
+                    buildInfoRow("Commit", BuildInfo.revision ?? "not stamped")
+                    Button {
+                        UIPasteboard.general.string = BuildInfo.summary
+                        developerNotice = "Build info copied: \(BuildInfo.summary)"
+                    } label: {
+                        Label("Copy Build Info", systemImage: "doc.on.doc")
+                    }
+                } header: {
+                    Text("Developer")
+                } footer: {
+                    Text(developerNotice
+                         ?? "Which source this binary was compiled from. A `-dirty` commit means the app sources had uncommitted changes at build time.")
+                }
+
+                // TipKit persists which coachmarks have been seen, so they never
+                // reappear once dismissed. `resetDatastore()` can only run *before*
+                // `Tips.configure()` (it throws `tipsDatastoreAlreadyConfigured` at
+                // runtime), so for in-app testing we use the session overrides
+                // instead: "Show All" force-displays every tip ignoring seen-state
+                // and eligibility gates; "Reset" clears that override.
                 Section {
                     Button {
                         Tips.showAllTipsForTesting()
-                        tipsResetConfirmation = "Showing all tips — open the briefing / Cross-Section tab to see them."
+                        developerNotice = "Showing all tips — open the briefing / Cross-Section tab to see them."
                     } label: {
                         Label("Show All Tips", systemImage: "lightbulb")
                     }
                     Button {
                         Tips.hideAllTipsForTesting()
-                        tipsResetConfirmation = "Override cleared — tips follow their normal seen-state and gates again."
+                        developerNotice = "Override cleared — tips follow their normal seen-state and gates again."
                     } label: {
                         Label("Reset Tips Override", systemImage: "lightbulb.slash")
                     }
-                } header: {
-                    Text("Developer")
                 } footer: {
-                    Text(tipsResetConfirmation
-                         ?? "Force-show the briefing coachmarks (#312) for testing. Session-only — overrides reset on relaunch.")
+                    Text("Force-show the briefing coachmarks (#312) for testing. Session-only — overrides reset on relaunch.")
                 }
                 #endif
             }
@@ -220,6 +235,20 @@ struct SettingsView: View {
             .onDisappear { dismissDecayNoticeIfShown() }
         }
     }
+
+    #if DEBUG
+    /// Label + monospaced value, selectable so a commit can be pulled off the screen.
+    private func buildInfoRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+    #endif
 
     /// Current notification preferences (server-cached).
     private var notifyPrefs: PreferencesResponse { appState.userPreferences.preferences }
