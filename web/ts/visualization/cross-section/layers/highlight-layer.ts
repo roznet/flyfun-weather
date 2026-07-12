@@ -94,8 +94,13 @@ function drawScrim(
   offCtx.fillStyle = scrimWash();
   offCtx.fillRect(plotArea.left, plotArea.top, plotArea.width, plotArea.height);
 
-  // 2. Punch out each region (spotlight cutout).
+  // 2. Punch out each region (spotlight cutout). The punch MUST be fully opaque:
+  //    `destination-out` yields outAlpha = destAlpha * (1 - srcAlpha), so punching
+  //    with the wash's own translucent fillStyle would erase only ~a third of it and
+  //    leave the spotlight dimmed (and double-punched overlaps brighter than single
+  //    ones). Mirrors iOS's `.color(.black)`.
   offCtx.globalCompositeOperation = 'destination-out';
+  offCtx.fillStyle = '#000';
   for (const region of regions) {
     const x0 = transform.distanceToX(region.dist_from_nm);
     const x1 = transform.distanceToX(region.dist_to_nm);
