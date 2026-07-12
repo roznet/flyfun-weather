@@ -271,7 +271,10 @@ class IcingEscapeEvaluator:
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
-                if sounding is None:
+                if sounding is None or not sounding.active_icing_available:
+                    # No sounding, or the active icing method could not run here
+                    # (e.g. Ogimet-NWP with no native cloud envelope) — its empty
+                    # icing_zones is absent data, not a clear sky. UNAVAILABLE.
                     ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
                     region_cells.append((dist, None))
                     continue

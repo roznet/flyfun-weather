@@ -757,6 +757,15 @@ class SoundingAnalysis(BaseModel):
     # "nwp_synthesized" (synthesized from Open-Meteo + DD heuristics).
     cloud_method_effective: Optional[str] = None
 
+    # Whether the *active* icing method (the one resolved into ``icing_zones`` by
+    # _resolve_analyses) could actually run at this point. Ogimet-NWP requires a
+    # model-native cloud envelope; on a model without one it returns [] — which
+    # is indistinguishable from "ran, found no icing". This flag carries the
+    # distinction to the icing evaluators so absent icing is graded UNAVAILABLE,
+    # not clear-by-absence (#391). Default True: the DD method (and old packs)
+    # can always run.
+    active_icing_available: bool = True
+
     # Immutable DD source fields — populated at construction, preserved
     # through serialization.  The validator reconstructs them from
     # cloud_layers / icing_zones when loading old JSON that lacks them.
