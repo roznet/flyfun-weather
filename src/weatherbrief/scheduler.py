@@ -452,10 +452,11 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
         # ``_notify_refresh_complete`` sink AFTER commit, so the same hook covers
         # auto / in-app / Siri / MCP refreshes without notifying about a pack that
         # could still roll back or holding the transaction open across network
-        # I/O. ``triggered_by`` was set to "scheduler" above, so the auto/all
-        # scope gate treats this as the scheduled auto-refresh.
+        # I/O. A scheduled refresh normally has no one watching, so presence
+        # (read inside the sink) is false and it notifies — unless a user happens
+        # to be on that flight's briefing polling status as it lands.
         _notify_refresh_complete(
-            db, flight, meta, pack_path, result, user_id=user_id,
+            db, flight, meta, pack_path, user_id=user_id,
         )
 
     finally:

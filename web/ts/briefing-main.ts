@@ -9,7 +9,7 @@ import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
-import { fetchAdvisoryCatalog } from './adapters/preferences-adapter';
+import { fetchAdvisoryCatalog, foldBriefingUpdates, type BriefingUpdates } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
 import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime, escapeHtml, modelLabel } from './utils';
 import { pressureToAltitudeFt } from './utils/atmo';
@@ -132,6 +132,26 @@ export function createPointSectionsRenderOnce(effect: () => void): () => void {
 let lastFrontLinesKey = '';
 let lastFrontLinesRender: Promise<boolean> = Promise.resolve(true);
 
+// Account-level "Briefing updates" setting, folded from notify_scope +
+// notify_change_only once preferences load. Drives the per-flight bell's
+// "Default resolves to…" hint. Defaults to the account default until prefs land.
+let accountBriefingUpdates: BriefingUpdates = 'changes';
+
+// Cross-surface badge: fire `POST /flights/{id}/seen` once per (flight, pack)
+// when the owner opens a briefing, so the badge clears and a silent badge-sync
+// push drops it on the user's devices. Guarded because the render block below
+// runs on every store update — without this we'd POST on every re-render.
+let lastMarkedSeenKey: string | null = null;
+function maybeMarkFlightSeen(flightId: string, packTimestamp: string): void {
+  const key = `${flightId}:${packTimestamp}`;
+  if (key === lastMarkedSeenKey) return;
+  lastMarkedSeenKey = key; // optimistic: don't retry-storm on a flaky POST
+  void api.markFlightSeen(flightId).catch(() => {
+    // Best-effort — a missed mark-seen just leaves the badge until the next
+    // open (a fresh page load resets this guard).
+  });
+}
+
 interface FrontLevelSpec { level: number; hour: number; }
 
 /** Resolve the per-level fetch plan for one model from the manifest, or null if
@@ -234,6 +254,7 @@ async function init(): Promise<void> {
     fetchPreferences()
       .then((prefs) => {
         preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method, convection: prefs.convective_method };
+        accountBriefingUpdates = foldBriefingUpdates(prefs.notify_scope, prefs.notify_change_only);
       })
       .catch(() => {})
       .finally(() => {
@@ -2142,8 +2163,7 @@ async function init(): Promise<void> {
       state.refreshStage !== prev.refreshStage ||
       state.refreshDetail !== prev.refreshDetail ||
       state.refreshElapsed !== prev.refreshElapsed ||
-      state.avgRefreshSeconds !== prev.avgRefreshSeconds ||
-      state.notifyEmail !== prev.notifyEmail
+      state.avgRefreshSeconds !== prev.avgRefreshSeconds
     ) {
       ui.renderFreshnessBar(
         state.freshness,
@@ -2158,8 +2178,6 @@ async function init(): Promise<void> {
         () => store.getState().checkFreshness(),
         state.refreshElapsed,
         state.avgRefreshSeconds,
-        state.notifyEmail,
-        (checked: boolean) => store.getState().setNotifyEmail(checked),
       );
     }
     if (state.selectedPointIndex !== prev.selectedPointIndex) {
@@ -2654,6 +2672,12 @@ async function init(): Promise<void> {
       loadFlightPireps(s.flight.id);
     }
 
+    // Mark this briefing seen (clears the cross-surface badge). Only for the
+    // owner viewing an actual pack; guarded to fire once per (flight, pack).
+    if (s.flight && s.flight.user_id === user.id && s.currentPack) {
+      maybeMarkFlightSeen(s.flight.id, s.currentPack.fetch_timestamp);
+    }
+
     // Refresh button visibility is handled by renderBriefingSharing above
     // (role-based). Here we only set the disabled/title state for past flights
     // (admins can still refresh past flights for historical briefings).
@@ -2689,11 +2713,26 @@ async function init(): Promise<void> {
         });
         // Update the flight in store with new auto-refresh fields
         store.getState().updateFlightAutoRefresh(updated.auto_refresh, updated.auto_refresh_hour);
+        // Enabling auto-refresh may promote the bell to "always" server-side;
+        // mirror the returned override so the notification control reflects it
+        // live (the server returns the flight's current value either way).
+        store.getState().updateFlightNotifyOverride(updated.notify_override ?? 'default');
         if (autoRefresh !== wasEnabled) {
           track(autoRefresh ? EVENTS.AUTO_REFRESH_ENABLED : EVENTS.AUTO_REFRESH_DISABLED);
         }
       } catch (err) {
         ui.renderError(t('autoRefresh.failedUpdate', { error: String(err) }));
+      }
+    });
+
+    // Render per-flight notification override (bell)
+    ui.renderNotifyOverrideBar(s.flight, user.id, past, accountBriefingUpdates, async (value) => {
+      if (!s.flight) return;
+      try {
+        const updated = await api.updateFlight(s.flight.id, { notify_override: value });
+        store.getState().updateFlightNotifyOverride(updated.notify_override);
+      } catch (err) {
+        ui.renderError(t('notify.override.failedUpdate', { error: String(err) }));
       }
     });
 

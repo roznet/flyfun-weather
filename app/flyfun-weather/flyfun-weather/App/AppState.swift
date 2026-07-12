@@ -350,11 +350,53 @@ final class AppState {
         pendingNavigation = nil
     }
 
+    // MARK: - Universal Links
+
+    /// Route an inbound Universal Link to a briefing, if it names one.
+    ///
+    /// Fires for the web Smart App Banner's "Open" button (whose `app-argument`
+    /// carries the current briefing URL) and for a tapped
+    /// `https://weather.flyfun.aero/briefing.html?flight=<id>` link. Reuses the
+    /// same cold-launch-safe `PendingNavigation` seam as App Intents and push
+    /// taps: writes the target to `PendingNavigationStore` and consumes it, so a
+    /// cold launch (where the scene `.active` hook consumes) and a warm foreground
+    /// both route through one path.
+    ///
+    /// Returns whether the URL was a recognized briefing link, so the caller can
+    /// fall through to the auth-callback handler for everything else (the
+    /// `/auth/callback` universal link and the reviewer token deep link).
+    @discardableResult
+    func handleUniversalLink(url: URL) -> Bool {
+        guard let target = Self.navigationTarget(for: url) else { return false }
+        PendingNavigationStore.set(target)
+        consumePendingNavigation()
+        return true
+    }
+
+    /// Parse an inbound Universal Link into a navigation target, if it names one.
+    ///
+    /// Recognizes only `https://weather.flyfun.aero/briefing.html?flight=<id>` —
+    /// the same URL the web Smart App Banner carries as its `app-argument`. The
+    /// auth callback (`/auth/callback`), unknown hosts/paths, and a missing or
+    /// empty `flight` param all return nil so the caller routes them elsewhere.
+    /// Pure + `nonisolated` so the path/param logic is unit-testable off the
+    /// MainActor and can't silently regress.
+    nonisolated static func navigationTarget(for url: URL) -> PendingNavigation? {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              comps.host == "weather.flyfun.aero",
+              comps.path == "/briefing.html",
+              let flight = comps.queryItems?.first(where: { $0.name == "flight" })?.value,
+              !flight.isEmpty
+        else { return nil }
+        return .briefing(flightId: flight)
+    }
+
     // MARK: - Push notifications & badge
 
     /// UserDefaults key for the last-uploaded APNs token hex, so sign-out can
     /// unregister the exact device row even after the token is no longer live.
     private static let apnsTokenKey = "apnsDeviceToken"
+    private static let wantsPushKey = "wantsPushEnabled"
 
     /// Ask for notification authorization and, if granted, register for remote
     /// notifications. Returns whether authorization was granted. Called when the
@@ -376,6 +418,62 @@ final class AppState {
         guard settings.authorizationStatus == .authorized ||
               settings.authorizationStatus == .provisional else { return }
         UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    /// Local record of whether the user *wants* push, distinct from `notify_push`
+    /// (the effective server pref = wants AND iOS-authorized). Seeded from the
+    /// current server pref on first read so an existing push-on user isn't flipped.
+    var wantsPush: Bool {
+        if UserDefaults.standard.object(forKey: Self.wantsPushKey) == nil {
+            let seed = userPreferences.preferences.pushEnabled
+            UserDefaults.standard.set(seed, forKey: Self.wantsPushKey)
+            return seed
+        }
+        return UserDefaults.standard.bool(forKey: Self.wantsPushKey)
+    }
+
+    func setWantsPush(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: Self.wantsPushKey)
+    }
+
+    /// Outcome of an in-app "turn push on" tap, so the view reacts without
+    /// touching UserNotifications / UIKit itself.
+    enum PushEnableResult { case enabled, promptDenied, needsSettings }
+
+    /// Turn push on from the in-app toggle. Records intent, then acts on iOS's
+    /// current authorization: prompt when undecided, report `needsSettings` when
+    /// already denied (iOS won't re-prompt), else register. Writes `notify_push`
+    /// only when it can actually be delivered.
+    func enablePush() async -> PushEnableResult {
+        setWantsPush(true)
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        switch status {
+        case .notDetermined:
+            let granted = await requestPushAuthorizationAndRegister()
+            if !granted { setWantsPush(false); return .promptDenied }
+        case .denied:
+            return .needsSettings   // keep intent; reconcile resumes on return
+        default:
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+        if let apiClient { await userPreferences.updateNotifyPush(true, using: apiClient) }
+        return .enabled
+    }
+
+    /// Keep `notify_push` honest with iOS: effective push = wants AND authorized.
+    /// If the user disabled notifications in iOS Settings, the server must stop
+    /// sending alerts iOS would drop and the in-app toggle must read OFF; when
+    /// they re-enable in Settings, the retained intent auto-resumes push. Call on
+    /// every `.active`, after the preferences refresh.
+    func reconcilePushAuthorization() async {
+        guard let apiClient else { return }
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        let authorized = status == .authorized || status == .provisional
+        let shouldBeOn = wantsPush && authorized
+        if userPreferences.preferences.pushEnabled != shouldBeOn {
+            await userPreferences.updateNotifyPush(shouldBeOn, using: apiClient)
+        }
+        await refreshPushRegistrationIfAuthorized()
     }
 
     /// Upload (upsert) this device's APNs token to the server. Called by the app

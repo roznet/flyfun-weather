@@ -43,8 +43,33 @@ final class UserPreferencesStore {
     /// Alert delivery is gated on this flag; the device stays registered either
     /// way so the badge keeps syncing (badge follows "a device is registered").
     func updateNotifyPush(_ enabled: Bool, using client: APIClient) async {
+        await put(NotifyPushUpdateRequest(notifyPush: enabled), field: "notify_push", client: client)
+    }
+
+    /// Enable/disable the email channel server-side, then refresh the cache.
+    func updateNotifyEmail(_ enabled: Bool, using client: APIClient) async {
+        await put(NotifyEmailUpdateRequest(notifyEmail: enabled), field: "notify_email", client: client)
+    }
+
+    /// Change the "Briefing updates" 3-stop (folds to scope + change-only).
+    func updateBriefingUpdates(_ updates: BriefingUpdates, using client: APIClient) async {
+        await put(
+            BriefingUpdatesUpdateRequest(notifyScope: updates.scope, notifyChangeOnly: updates.changeOnly),
+            field: "briefing_updates", client: client
+        )
+    }
+
+    /// Dismiss the one-time channel-invariant decay notice.
+    func dismissDecayNotice(using client: APIClient) async {
+        await put(NotifyDecayDismissRequest(notifyDecayNotice: false), field: "notify_decay_notice", client: client)
+    }
+
+    /// Shared PUT + cache-adopt for a partial preferences update. The server
+    /// merges the single changed key into `app_prefs_json` and returns the fresh
+    /// full preferences, which we adopt as the new cache.
+    private func put(_ request: some Encodable, field: String, client: APIClient) async {
         do {
-            let body = try JSONEncoder.weatherBrief.encode(NotifyPushUpdateRequest(notifyPush: enabled))
+            let body = try JSONEncoder.weatherBrief.encode(request)
             let fresh: PreferencesResponse = try await client.request(
                 "/api/user/preferences", method: "PUT", body: body
             )
@@ -53,7 +78,7 @@ final class UserPreferencesStore {
                 UserDefaults.standard.set(data, forKey: Self.defaultsKey)
             }
         } catch {
-            Self.logger.warning("Failed to update notify_push: \(error.localizedDescription)")
+            Self.logger.warning("Failed to update \(field): \(error.localizedDescription)")
         }
     }
 

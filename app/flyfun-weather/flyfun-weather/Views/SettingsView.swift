@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 #if DEBUG
 import TipKit
 #endif
@@ -15,6 +16,7 @@ struct SettingsView: View {
     @State private var isDeleting = false
     @State private var errorMessage: String?
     @State private var pushBusy = false
+    @State private var notifyBusy = false
     @State private var showPushDeniedAlert = false
     #if DEBUG
     @State private var tipsResetConfirmation: String?
@@ -38,15 +40,45 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("Briefing Push Alerts", isOn: Binding(
-                        get: { appState.userPreferences.preferences.pushEnabled },
+                    if notifyPrefs.decayNotice {
+                        Label(
+                            "Email was turned back on because you removed your last push device — otherwise you'd have no way to receive updates.",
+                            systemImage: "envelope.badge"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Picker("Briefing updates", selection: Binding(
+                        get: { notifyPrefs.briefingUpdates },
+                        set: { setBriefingUpdates($0) }
+                    )) {
+                        Text("Off").tag(BriefingUpdates.off)
+                        Text("Assessment changes").tag(BriefingUpdates.changes)
+                        Text("Every update").tag(BriefingUpdates.every)
+                    }
+                    .disabled(notifyBusy || appState.apiClient == nil)
+
+                    Toggle("Email", isOn: Binding(
+                        get: { notifyPrefs.emailEnabled },
+                        set: { setEmail($0) }
+                    ))
+                    .disabled(emailLocked || notifyBusy || appState.apiClient == nil)
+
+                    Toggle("Push", isOn: Binding(
+                        get: { notifyPrefs.pushEnabled },
                         set: { setPush($0) }
                     ))
                     .disabled(pushBusy || appState.apiClient == nil)
                 } header: {
                     Text("Notifications")
                 } footer: {
-                    Text("Get a push when a briefing finishes refreshing with changed conditions. Email delivery and per-flight overrides are managed on the website.")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("“Assessment changes” notifies when an update changes your flight's assessment — the GREEN/AMBER/RED headline or early outlook. Push is suppressed while you're looking at the app.")
+                        if emailLocked {
+                            Text("Email is your only channel — set Briefing updates to Off to stop, or enable Push.")
+                        }
+                    }
                 }
 
                 Section {
@@ -178,12 +210,29 @@ struct SettingsView: View {
                 Text("You have downloaded packs. They won't be accessible until you sign in again.")
             }
             .alert("Notifications Disabled", isPresented: $showPushDeniedAlert) {
-                Button("OK", role: .cancel) {}
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+                Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Enable notifications for FlyFun Weather in the iOS Settings app to receive briefing alerts.")
             }
+            .onDisappear { dismissDecayNoticeIfShown() }
         }
     }
+
+    /// Current notification preferences (server-cached).
+    private var notifyPrefs: PreferencesResponse { appState.userPreferences.preferences }
+
+    /// Push is a working channel only with a registered device and the flag on.
+    private var pushAvailableAndOn: Bool { notifyPrefs.hasPushDevice && notifyPrefs.pushEnabled }
+
+    /// Email is locked on only when there's no registered device at all — email
+    /// is then the sole *available* channel while updates are active, so it can't
+    /// be turned off (the only way to silence is Briefing updates = Off). When a
+    /// device exists, both toggles stay editable and turning off the last enabled
+    /// one reroutes to Off — mirroring the web model exactly (channel invariant).
+    private var emailLocked: Bool { notifyPrefs.briefingUpdates != .off && !notifyPrefs.hasPushDevice }
 
     /// Toggle the push channel: on turn-on request iOS authorization + register,
     /// and only persist `notify_push=true` once granted; on turn-off just persist
@@ -193,16 +242,63 @@ struct SettingsView: View {
         pushBusy = true
         Task {
             if enabled {
-                let granted = await appState.requestPushAuthorizationAndRegister()
-                if !granted {
+                switch await appState.enablePush() {
+                case .enabled:
+                    break   // enablePush already wrote notify_push = true
+                case .promptDenied, .needsSettings:
+                    // The user just declined the system prompt, or iOS is already
+                    // denied (no re-prompt possible) — point them at Settings. The
+                    // intent is kept so the foreground reconcile resumes push once
+                    // they authorize there.
                     showPushDeniedAlert = true
-                    pushBusy = false
-                    return
                 }
+            } else {
+                appState.setWantsPush(false)
+                if !notifyPrefs.emailEnabled && notifyPrefs.briefingUpdates != .off {
+                    // Turning off push while email is already off would strand the
+                    // user with no channel — reroute to Off (mirrors setEmail and
+                    // the web pushToggle reroute; the channel invariant).
+                    await appState.userPreferences.updateBriefingUpdates(.off, using: client)
+                }
+                await appState.userPreferences.updateNotifyPush(false, using: client)
             }
-            await appState.userPreferences.updateNotifyPush(enabled, using: client)
             pushBusy = false
         }
+    }
+
+    /// Change the "Briefing updates" 3-stop. Leaving Off with no channel on
+    /// re-enables email so scope≠off always keeps a working channel.
+    private func setBriefingUpdates(_ updates: BriefingUpdates) {
+        guard let client = appState.apiClient else { return }
+        notifyBusy = true
+        Task {
+            if updates != .off && !notifyPrefs.emailEnabled && !pushAvailableAndOn {
+                await appState.userPreferences.updateNotifyEmail(true, using: client)
+            }
+            await appState.userPreferences.updateBriefingUpdates(updates, using: client)
+            notifyBusy = false
+        }
+    }
+
+    /// Toggle the email channel. Turning off the only available channel means
+    /// "silence me" → reroute to Briefing updates = Off (belt-and-suspenders;
+    /// the toggle is disabled in that state, so this rarely runs).
+    private func setEmail(_ enabled: Bool) {
+        guard let client = appState.apiClient else { return }
+        notifyBusy = true
+        Task {
+            if !enabled && !pushAvailableAndOn && notifyPrefs.briefingUpdates != .off {
+                await appState.userPreferences.updateBriefingUpdates(.off, using: client)
+            }
+            await appState.userPreferences.updateNotifyEmail(enabled, using: client)
+            notifyBusy = false
+        }
+    }
+
+    /// Dismiss the one-time decay notice when the user leaves Settings.
+    private func dismissDecayNoticeIfShown() {
+        guard notifyPrefs.decayNotice, let client = appState.apiClient else { return }
+        Task { await appState.userPreferences.dismissDecayNotice(using: client) }
     }
 
     private func performDeleteAccount() async {

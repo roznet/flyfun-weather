@@ -126,7 +126,6 @@ export interface BriefingState {
    * uses this to show a "Generating summary…" placeholder in the digest panel
    * instead of the default "Summary not available" copy. */
   digestPending: boolean;
-  notifyEmail: boolean;
   advisoryAltitudeOverride: number | null;
   altitudeTable: AltitudeTableResult | null;
   altitudeTableLoading: boolean;
@@ -171,7 +170,6 @@ export interface BriefingState {
   refreshObservations: () => Promise<void>;
   /** Generate the AI summary on demand for a pack whose profile had AI off. */
   generateDigest: () => Promise<void>;
-  setNotifyEmail: (notify: boolean) => void;
   sendEmail: () => Promise<void>;
   loadAltAdvisories: () => Promise<void>;
   computeAltAdvisories: () => Promise<void>;
@@ -188,6 +186,7 @@ export interface BriefingState {
   setScenarioAsAlternate: (departureTime: string) => Promise<void>;
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => void;
   updateFlightPrivacy: (isPrivate: boolean) => void;
+  updateFlightNotifyOverride: (value: 'default' | 'notify' | 'mute') => void;
   subscribe: () => Promise<void>;
   unsubscribe: () => Promise<void>;
   setLayout: (layout: VizLayout) => void;
@@ -366,7 +365,6 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   refreshElapsed: null,
   avgRefreshSeconds: null,
   digestPending: false,
-  notifyEmail: false,
   advisoryAltitudeOverride: null,
   altitudeTable: null,
   altitudeTableLoading: false,
@@ -523,9 +521,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     try {
       const tracker: { elapsed: number | null } = { elapsed: null };
       const handleEvent = makeRefreshEventHandler(set, get, tracker);
-      const notifyEmail = get().notifyEmail;
       const newPack = await api.refreshBriefingStream(
-        flight.id, handleEvent, false, asOfDate, notifyEmail,
+        flight.id, handleEvent, false, asOfDate,
       );
       // Null = gated no-op with no pack (pending coverage — no model reaches
       // the date yet). Nothing new to render; clear the spinner and keep the
@@ -664,10 +661,6 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     } catch {
       set({ freshnessLoading: false });
     }
-  },
-
-  setNotifyEmail: (notify: boolean) => {
-    set({ notifyEmail: notify });
   },
 
   setSelectedModel: (model: string) => {
@@ -1107,6 +1100,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const flight = get().flight;
     if (!flight) return;
     set({ flight: { ...flight, private: isPrivate } });
+  },
+
+  updateFlightNotifyOverride: (value: 'default' | 'notify' | 'mute') => {
+    const flight = get().flight;
+    if (!flight) return;
+    set({ flight: { ...flight, notify_override: value } });
   },
 
   subscribe: async () => {

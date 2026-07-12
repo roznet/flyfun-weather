@@ -60,9 +60,10 @@ renders.
   adds zero coupling to data managers.
 - **Banners stay outside the shell** — freshness/error warnings must survive
   focus mode and are therefore pinned full-width above both panes.
-- **`data-section` is the contract** — section renderers tag their root with
-  `data-section`; the nav is generated from those tags, so adding a section to
-  the nav is just adding the attribute (+ a `NAV_LABELS` entry).
+- **`data-section` is the contract** — section roots are tagged with
+  `data-section` (statically in `web/briefing.html`); the nav is generated from
+  those tags, so adding a section to the nav is just adding the attribute (+ a
+  `NAV_LABELS` entry, and if it's a new group, a `NAV_GROUPS` entry).
 
 ## Gotchas
 
@@ -76,4 +77,5 @@ renders.
 - `web/ts/briefing-main.ts` — `initBriefingLayout()` call
 - `web/css/style.css` — `.layout-sidebar`, `.briefing-shell`, `.briefing-rail`,
   `.rail-summary`, `.rail-nav`, focus-mode rules
-- Renderers that tag `data-section`: `web/ts/managers/briefing-ui.ts`
+- Sections tagged with `data-section`: `web/briefing.html` (the nav/scroll-spy
+  source of truth; `briefing-ui.ts` only reads them)

@@ -12,6 +12,8 @@ import {
   fetchUsageSummary,
   fetchAdvisoryCatalog,
   fetchModelCatalog,
+  foldBriefingUpdates,
+  unfoldBriefingUpdates,
   type PreferencesResponse,
   type AdvisoryPreferences,
   type AdvisoryCatalogEntry,
@@ -802,6 +804,112 @@ function populateAccountForm(prefs: PreferencesResponse): void {
   if (deferToggle) {
     deferToggle.checked = prefs.defer_email_for_model_update ?? false;
   }
+
+  renderNotificationSettings(prefs);
+}
+
+/**
+ * Populate the Account › Notifications section (issue #371).
+ *
+ * Enforces the channel invariant — you can never disable the last *available*
+ * channel, so the silent dead-state ("scope on, no channel → nothing happens")
+ * is structurally impossible. The only way to silence is Briefing updates = Off:
+ *   - Web-only user (no device): Email is the sole channel, locked on while
+ *     Briefing updates ≠ Off.
+ *   - User with a device: both channels toggle freely, but turning off the last
+ *     enabled one reroutes Briefing updates to Off (the sanctioned way to stop).
+ * Push is conditional on a registered device.
+ */
+function renderNotificationSettings(prefs: PreferencesResponse): void {
+  const updatesSel = document.getElementById('notify-updates') as HTMLSelectElement | null;
+  const emailToggle = document.getElementById('toggle-notify-email') as HTMLInputElement | null;
+  const pushToggle = document.getElementById('toggle-notify-push') as HTMLInputElement | null;
+  if (!updatesSel || !emailToggle || !pushToggle) return;
+
+  const hasDevice = (prefs.push_device_count ?? 0) > 0;
+
+  // Localize the static labels via t() (the app has no [data-i18n] applier).
+  const setText = (id: string, key: string): void => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = t(key);
+  };
+  setText('notify-title', 'settings.notify.title');
+  setText('notify-section-hint', 'settings.notify.sectionHint');
+  setText('notify-decay-text', 'settings.notify.decayNotice');
+  setText('notify-updates-label', 'settings.notify.updates');
+  setText('notify-email-label', 'settings.notify.email');
+  setText('notify-push-label', 'settings.notify.push');
+  const optText: Record<string, string> = {
+    off: 'settings.notify.updates.off',
+    changes: 'settings.notify.updates.changes',
+    every: 'settings.notify.updates.every',
+  };
+  for (const opt of Array.from(updatesSel.options)) {
+    const key = optText[opt.value];
+    if (key) opt.textContent = t(key);
+  }
+
+  updatesSel.value = foldBriefingUpdates(prefs.notify_scope ?? 'auto', prefs.notify_change_only ?? true);
+  emailToggle.checked = prefs.notify_email ?? true;
+  pushToggle.checked = (prefs.notify_push ?? false) && hasDevice;
+  pushToggle.disabled = !hasDevice;
+
+  // One-time decay notice (email auto-re-enabled after last device removed).
+  const decayRow = document.getElementById('notify-decay-notice');
+  if (decayRow) decayRow.style.display = prefs.notify_decay_notice ? '' : 'none';
+
+  const setHint = (id: string, key: string): void => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = t(key);
+  };
+
+  const refresh = (): void => {
+    const silenced = updatesSel.value === 'off';
+
+    if (!hasDevice) {
+      // Email is the only available channel. Lock it on while active; the only
+      // way to stop is Briefing updates = Off (which unlocks it).
+      if (!silenced) emailToggle.checked = true;
+      emailToggle.disabled = !silenced;
+    } else {
+      emailToggle.disabled = false;
+      // Turning off the last enabled channel means "silence me" → reroute to Off.
+      if (!silenced && !emailToggle.checked && !pushToggle.checked) {
+        updatesSel.value = 'off';
+      }
+    }
+
+    const nowSilenced = updatesSel.value === 'off';
+    setHint(
+      'notify-updates-hint',
+      nowSilenced
+        ? 'settings.notify.updates.hintOff'
+        : updatesSel.value === 'every'
+          ? 'settings.notify.updates.hintEvery'
+          : 'settings.notify.updates.hint',
+    );
+    setHint('notify-push-hint', hasDevice ? 'settings.notify.push.hint' : 'settings.notify.push.hintNoDevice');
+    setHint(
+      'notify-email-hint',
+      emailToggle.disabled ? 'settings.notify.email.hintLocked' : 'settings.notify.email.hint',
+    );
+  };
+
+  refresh();
+  // Leaving Off with no channel on must enable one, or refresh()'s "both off →
+  // reroute to Off" branch would snap the dropdown straight back, stranding the
+  // user in a state they can't leave. Mirrors iOS setBriefingUpdates. Email is
+  // always available, so it's the least-surprising channel to switch on.
+  updatesSel.onchange = (): void => {
+    if (updatesSel.value !== 'off' && !emailToggle.checked && !pushToggle.checked) {
+      emailToggle.checked = true;
+    }
+    refresh();
+  };
+  // Channel toggles keep the reroute-to-Off behaviour (unchecking the last
+  // channel means "silence me").
+  emailToggle.onchange = refresh;
+  pushToggle.onchange = refresh;
 }
 
 // --- Advisory settings rendering ---
@@ -1073,6 +1181,26 @@ async function handleSave(): Promise<void> {
       synoptic_forecast_map_enabled: synopticEnabled,
       defer_email_for_model_update: deferModelUpdate,
     };
+
+    // Briefing notifications (issue #371). The 3-stop folds into scope +
+    // change-only; channels persist as-is (the invariant is enforced live in
+    // the form, so we never save an all-off active state).
+    const updatesSel = document.getElementById('notify-updates') as HTMLSelectElement | null;
+    const notifyEmailEl = document.getElementById('toggle-notify-email') as HTMLInputElement | null;
+    const notifyPushEl = document.getElementById('toggle-notify-push') as HTMLInputElement | null;
+    if (updatesSel && notifyEmailEl && notifyPushEl) {
+      const folded = unfoldBriefingUpdates(updatesSel.value as 'off' | 'changes' | 'every');
+      accountUpdate.notify_scope = folded.notify_scope;
+      accountUpdate.notify_change_only = folded.notify_change_only;
+      accountUpdate.notify_email = notifyEmailEl.checked;
+      // Push can only be on with a registered device (toggle is disabled otherwise).
+      accountUpdate.notify_push = notifyPushEl.checked && !notifyPushEl.disabled;
+    }
+    // Dismiss the one-time decay notice once the user has seen the section.
+    const decayRow = document.getElementById('notify-decay-notice');
+    if (decayRow && decayRow.style.display !== 'none') {
+      accountUpdate.notify_decay_notice = false;
+    }
     if (autorouterMode === 'password') {
       const arUsername = (document.getElementById('input-ar-username') as HTMLInputElement)?.value.trim();
       const arPassword = (document.getElementById('input-ar-password') as HTMLInputElement)?.value.trim();

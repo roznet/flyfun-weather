@@ -2,7 +2,7 @@
 
 > Per-model convective data pipeline, dual-method assessment, source inconsistencies, and recommendations.
 
-_Code references verified against the repo on 2026-06-20._
+_Code references verified against the repo on 2026-07-11._
 
 > 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [meteorology-decisions.md](./meteorology-decisions.md) §4–§5 — read before changing thresholds or the DD/NWP boundary.
 
@@ -11,7 +11,7 @@ _Code references verified against the repo on 2026-06-20._
 - `analysis/sounding/thermodynamics.py` — `compute_indices_core` (all three CAPE variants), `compute_derived_levels_core` (omega 700)
 - `analysis/sounding/__init__.py` — orchestrates the lite/full passes; sets `cape_raw_vs_calc_divergent`
 - `analysis/advisories/convective.py` — `ConvectiveEvaluator` (reads resolved slot + runs the cross-check)
-- `fetch/variables.py` (`NWP_CAPE_TYPE`, line 83), `fetch/grib/fill.py`, `analysis/spatial_interpolation.py`, `analysis/comparison.py`, `tasks/advise.py`
+- `fetch/variables.py` (`NWP_CAPE_TYPE`, line 84), `fetch/grib/fill.py`, `analysis/spatial_interpolation.py`, `analysis/comparison.py`, `tasks/advise.py`
 
 ## Overview
 
@@ -36,7 +36,7 @@ Convective assessment flows through four stages: **fetch** (Open-Meteo API + GRI
 - UKMO: type unknown
 - MétéoFr / GEM: not available
 
-Tracked in `NWP_CAPE_TYPE` dict (`variables.py:83`), stored as `nwp_cape_type` on `ThermodynamicIndices`.
+Tracked in `NWP_CAPE_TYPE` dict (`variables.py:84`), stored as `nwp_cape_type` on `ThermodynamicIndices`.
 
 ### GRIB2 Enrichment (GFS, ICON-EU, and ECMWF)
 

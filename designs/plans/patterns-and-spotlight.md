@@ -35,7 +35,8 @@ design doc and archived.
   public" was dropped; gating note in the module docstring).
 - Frontend: `web/ts/visualization/climatology-tab.ts`, `climatology-map.ts`,
   `climatology-datasets.ts`, `adapters/climatology-adapter.ts`,
-  `data/metrics-catalog.json`.
+  `web/ts/data/metrics-catalog.json` (also copied to the iOS app at
+  `app/.../Resources/metrics-catalog.json`).
 - **Not built**: the "Spotlight" per-airport drill-down — calendar
   heatmap, diurnal strip, featured-airport bust card, TAF-vs-models
   showdown, notable-bust → briefing-pack links. `calendar-heatmap.ts` /

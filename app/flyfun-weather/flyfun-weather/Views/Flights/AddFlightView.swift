@@ -12,16 +12,21 @@ struct AddFlightView: View {
     @State private var showRebriefConfirm = false
     @State private var showInterpretSheet = false
     @State private var showAutorouterSheet = false
-    /// True when the interpret sheet is shown as a pre-create confirmation
-    /// (because the route dropped tokens), so "Accept" proceeds to create.
-    @State private var confirmingInterpretBeforeCreate = false
-    /// Set when the pilot taps "Accept & Create" so the create runs from the
-    /// interpret sheet's `onDismiss` — i.e. only once that sheet is fully gone.
-    /// Dismissing the sheet and calling the parent `dismiss()` in the same turn
-    /// collides (SwiftUI drops the second transition), which left the form up
-    /// with the flight never appearing to be created. Sequencing via onDismiss
-    /// mirrors the web, which awaits the confirm modal's close before creating.
-    @State private var createAfterInterpretDismiss = false
+    /// Which submit a create/save flow is confirming through the interpret sheet.
+    /// `nil` means the sheet is the read-only preview opened by the "Interpret
+    /// route" button (no Accept button); `.create` / `.edit` add an Accept button
+    /// whose title matches the submit it will complete.
+    @State private var interpretConfirmContext: SubmitContext?
+    /// Set when the pilot taps Accept so the submit runs from the interpret
+    /// sheet's `onDismiss` — i.e. only once that sheet is fully gone. Dismissing
+    /// the sheet and calling the parent `dismiss()` in the same turn collides
+    /// (SwiftUI drops the second transition), which left the form up with the
+    /// flight never appearing to be created. Sequencing via onDismiss mirrors the
+    /// web, which awaits the confirm modal's close before submitting.
+    @State private var runSubmitAfterInterpretDismiss: SubmitContext?
+
+    /// Distinguishes the two submit paths that route through the interpret sheet.
+    private enum SubmitContext { case create, edit }
 
     /// Called with the created OR updated flight.
     let onCreated: (FlightResponse) -> Void
@@ -60,7 +65,7 @@ struct AddFlightView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(viewModel.submitTitle) { submit() }
-                        .disabled(!viewModel.canSubmit)
+                        .disabled(!viewModel.canSubmit || viewModel.isPreparingSubmit)
                         .accessibilityIdentifier("submitFlightButton")
                 }
             }
@@ -121,25 +126,39 @@ struct AddFlightView: View {
                 FlexibilityExplainer()
             }
             .sheet(isPresented: $showInterpretSheet, onDismiss: {
-                // Run the create only after the interpret sheet is fully gone, so
+                // Run the submit only after the interpret sheet is fully gone, so
                 // the parent `dismiss()` on success isn't competing with the
                 // sheet's own dismissal (which would otherwise be dropped).
-                guard createAfterInterpretDismiss else { return }
-                createAfterInterpretDismiss = false
-                Task { await performCreate() }
+                guard let context = runSubmitAfterInterpretDismiss else {
+                    // Dismissed without accepting (Cancel, or the read-only
+                    // preview). Release the submit guard if a confirmation flow
+                    // was holding it; harmless no-op for the preview path.
+                    interpretConfirmContext = nil
+                    viewModel.isPreparingSubmit = false
+                    return
+                }
+                runSubmitAfterInterpretDismiss = nil
+                interpretConfirmContext = nil
+                Task {
+                    switch context {
+                    case .create: await performCreate()
+                    case .edit: await continueEditAfterInterpret()
+                    }
+                    viewModel.isPreparingSubmit = false
+                }
             }) {
                 RouteInterpretSheet(
                     interpretation: viewModel.routeInterpretation,
                     rawRoute: viewModel.waypointsText,
                     isResolving: viewModel.isInterpreting,
-                    acceptTitle: confirmingInterpretBeforeCreate ? "Accept & Create" : nil,
+                    acceptTitle: acceptTitle(for: interpretConfirmContext),
                     onAccept: {
                         // Adopt the server's understood route (airways/SIDs/speed
-                        // tokens dropped) before creating, matching the web — the
-                        // create request then carries the resolved waypoints the
-                        // pilot just confirmed, not the raw typed tokens.
+                        // tokens dropped) before submitting, matching the web — the
+                        // request then carries the resolved waypoints the pilot just
+                        // confirmed, not the raw typed tokens.
                         viewModel.applyInterpretedRoute()
-                        createAfterInterpretDismiss = true
+                        runSubmitAfterInterpretDismiss = interpretConfirmContext
                         showInterpretSheet = false
                     },
                     onResolve: { await viewModel.resolveRoute() }
@@ -151,21 +170,83 @@ struct AddFlightView: View {
     // MARK: - Submit
 
     private func submit() {
-        if viewModel.isEditing {
-            // Only a forecast-affecting change triggers the re-briefing cost
-            // confirm (§4.4); aircraft-only edits save silently.
-            if viewModel.hasForecastAffectingChange {
-                showRebriefConfirm = true
-            } else {
-                Task { await submitEdit(regenerate: false) }
-            }
-        } else if viewModel.routeHasDroppedTokens {
-            // The route dropped tokens — show the interpretation so the pilot can
-            // confirm what we understood before creating (mirrors the web).
-            confirmingInterpretBeforeCreate = true
+        // Synchronous double-submit gate: `submit()` is the single entry from the
+        // toolbar button and runs on the main actor, so setting the flag here —
+        // before the first suspension in `prepare*` — atomically rejects a rapid
+        // second tap that would otherwise race through the new interpret phase and
+        // create a duplicate flight. Cleared at every terminal branch below.
+        guard !viewModel.isPreparingSubmit else { return }
+        viewModel.isPreparingSubmit = true
+        Task { viewModel.isEditing ? await prepareEdit() : await prepareCreate() }
+    }
+
+    /// Interpret the route on the server before creating (mirrors the web save
+    /// gate), then create directly on a clean route or route through the confirm
+    /// sheet when the resolver dropped tokens. On interpret failure we abort with
+    /// the error shown in the form — never submit the raw Field-15 tokens.
+    private func prepareCreate() async {
+        switch await viewModel.interpretRouteForSubmit() {
+        case .ready:
+            await performCreate()
+            viewModel.isPreparingSubmit = false
+        case .needsConfirmation:
+            interpretConfirmContext = .create
             showInterpretSheet = true
+            // Guard held through the confirm sheet; released in the sheet's onDismiss.
+        case .failed:
+            viewModel.isPreparingSubmit = false   // errorMessage is shown in the form
+        }
+    }
+
+    /// The edit sibling of `prepareCreate`: interpret only when the route text
+    /// changed (an untouched route is already clean), then run the re-briefing
+    /// gate. A dropped-token route pauses on the confirm sheet, whose Accept
+    /// continues via `continueEditAfterInterpret`.
+    private func prepareEdit() async {
+        if viewModel.routeChangedFromOriginal {
+            switch await viewModel.interpretRouteForSubmit() {
+            case .ready:
+                break
+            case .needsConfirmation:
+                interpretConfirmContext = .edit
+                showInterpretSheet = true
+                return   // guard held; released in the sheet's onDismiss
+            case .failed:
+                viewModel.isPreparingSubmit = false
+                return
+            }
+        }
+        await continueEditAfterInterpret()
+        viewModel.isPreparingSubmit = false
+    }
+
+    /// Post-interpretation edit gate: only a forecast-affecting change triggers
+    /// the re-briefing cost confirm (§4.4); aircraft-only edits save silently.
+    private func continueEditAfterInterpret() async {
+        // Submit-time interpretation may have normalized the route back to the
+        // stored one (e.g. the pilot added a `DCT`/speed token that the resolver
+        // drops). If that leaves nothing to save, treat it as a no-op edit and
+        // just dismiss — otherwise `saveEditedFlight`'s `canSubmit` guard returns
+        // nil with no feedback and the pilot's Save appears to do nothing. Shared
+        // by the direct edit path and the confirm-sheet accept path.
+        guard viewModel.hasChanges else {
+            dismiss()
+            return
+        }
+        if viewModel.hasForecastAffectingChange {
+            showRebriefConfirm = true
         } else {
-            Task { await performCreate() }
+            await submitEdit(regenerate: false)
+        }
+    }
+
+    /// Accept-button title for the interpret sheet, matching the submit it will
+    /// complete. `nil` (the read-only preview) shows no Accept button.
+    private func acceptTitle(for context: SubmitContext?) -> String? {
+        switch context {
+        case .create: return "Accept & Create"
+        case .edit: return "Accept & Save"
+        case nil: return nil
         }
     }
 
@@ -346,7 +427,7 @@ struct AddFlightView: View {
 
             if viewModel.waypoints.count >= 2 {
                 Button {
-                    confirmingInterpretBeforeCreate = false
+                    interpretConfirmContext = nil
                     showInterpretSheet = true
                 } label: {
                     HStack {
@@ -373,6 +454,11 @@ struct AddFlightView: View {
         .task(id: viewModel.waypointsText) {
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
+            // A submit is already interpreting this route (and `applyInterpretedRoute`
+            // rewrites the field, which would re-trigger this task). Skip the
+            // redundant debounced resolve while a submit is in flight — the submit
+            // path does its own interpret. Resumes normally on the next edit.
+            guard !viewModel.isPreparingSubmit else { return }
             await viewModel.resolveRoute()
         }
     }

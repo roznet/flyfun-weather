@@ -100,6 +100,145 @@ private func deviceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
 }
 
 @MainActor
+@Suite struct RouteSubmitInterpretationTests {
+    /// A Field-15 route with a speed/level token (`N0180VFR`) resolves cleanly
+    /// on the server (the token is silently dropped as syntax) → `.ready`, and
+    /// the field is rewritten to the interpreted waypoints so the raw token is
+    /// never submitted. This is the reported bug: without submit-time interpret,
+    /// `N0180VFR` reaches the server and is rejected as "must be 2-5 alphanumeric".
+    @Test func cleanRouteStripsFieldFifteenSyntaxAndIsReady() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(makeInterpretResponse(interpreted: ["EGKA", "EGKB"]))
+        let vm = AddFlightViewModel(repository: repo)
+        vm.waypointsText = "EGKA N0180VFR EGKB"
+
+        let outcome = await vm.interpretRouteForSubmit()
+
+        #expect(outcome == .ready)
+        #expect(vm.waypoints == ["EGKA", "EGKB"])          // N0180VFR stripped
+        #expect(repo.lastInterpretRawRoute == "EGKA N0180VFR EGKB")
+    }
+
+    /// The created flight carries the interpreted waypoints, not the raw tokens —
+    /// end-to-end proof that the speed/level token never reaches `createFlight`.
+    @Test func createAfterInterpretSubmitsInterpretedWaypoints() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(makeInterpretResponse(interpreted: ["EGKA", "EGKB"]))
+        repo.createFlightResult = .success(makeFlight(waypoints: ["EGKA", "EGKB"]))
+        let vm = AddFlightViewModel(repository: repo)
+        vm.waypointsText = "EGKA N0180VFR EGKB"
+
+        #expect(await vm.interpretRouteForSubmit() == .ready)
+        _ = await vm.createFlight()
+
+        #expect(repo.lastCreateRequest?.waypoints == ["EGKA", "EGKB"])
+    }
+
+    /// A route the resolver couldn't fully place (unknown token) defers to the
+    /// confirm sheet and leaves the raw field untouched so the sheet can show
+    /// exactly what the pilot typed vs. what was understood.
+    @Test func droppedTokenNeedsConfirmationAndKeepsRawField() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(
+            makeInterpretResponse(interpreted: ["EGKA", "EGKB"], skipped: ["ZZZZ"])
+        )
+        let vm = AddFlightViewModel(repository: repo)
+        vm.waypointsText = "EGKA ZZZZ EGKB"
+
+        let outcome = await vm.interpretRouteForSubmit()
+
+        #expect(outcome == .needsConfirmation)
+        #expect(vm.waypointsText == "EGKA ZZZZ EGKB")      // raw kept for the sheet
+    }
+
+    /// A retry that now interprets successfully must clear a prior failure's
+    /// banner even on the `.needsConfirmation` path, which never reaches
+    /// `createFlight()` where `errorMessage` is otherwise reset — otherwise a
+    /// stale "Couldn't interpret…" error lingers behind the confirm sheet.
+    @Test func interpretClearsStaleErrorOnNeedsConfirmation() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(
+            makeInterpretResponse(interpreted: ["EGKA", "EGKB"], skipped: ["ZZZZ"])
+        )
+        let vm = AddFlightViewModel(repository: repo)
+        vm.errorMessage = "Couldn't interpret the route: offline"
+        vm.waypointsText = "EGKA ZZZZ EGKB"
+
+        let outcome = await vm.interpretRouteForSubmit()
+
+        #expect(outcome == .needsConfirmation)
+        #expect(vm.errorMessage == nil)
+    }
+
+    /// A failed interpret (e.g. offline) aborts with an error rather than falling
+    /// back to submitting the raw tokens — matches the web, which aborts the save.
+    @Test func interpretFailureAbortsWithError() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .failure(MockError.injected("offline"))
+        let vm = AddFlightViewModel(repository: repo)
+        vm.waypointsText = "EGKA EGKB"
+
+        let outcome = await vm.interpretRouteForSubmit()
+
+        #expect(outcome == .failed)
+        #expect(vm.errorMessage != nil)
+    }
+
+    /// A route resolving to fewer than two usable waypoints is a non-starter and
+    /// must abort — never send a one-point route to create.
+    @Test func fewerThanTwoResolvedWaypointsFails() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(makeInterpretResponse(interpreted: ["EGKA"]))
+        let vm = AddFlightViewModel(repository: repo)
+        vm.waypointsText = "EGKA GARBAGE"
+
+        let outcome = await vm.interpretRouteForSubmit()
+
+        #expect(outcome == .failed)
+        #expect(vm.errorMessage != nil)
+    }
+
+    /// On edit, an untouched route needs no server round-trip (`routeChangedFromOriginal`
+    /// is false); a changed one does.
+    @Test func routeChangeDetectionGatesInterpretOnEdit() {
+        let repo = MockBriefingRepository()
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"])
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        #expect(vm.routeChangedFromOriginal == false)      // seeded verbatim
+
+        vm.waypointsText = "LFMD LFMT LFML"
+        #expect(vm.routeChangedFromOriginal == true)
+    }
+
+    /// Edit edge case (PR #369 review): the pilot adds flight-plan syntax that the
+    /// resolver strips, so the *interpreted* route collapses back to the stored
+    /// waypoints. `routeChangedFromOriginal` fires on the raw text (so interpret
+    /// runs), but after `applyInterpretedRoute` there is nothing left to save.
+    /// This pins that invariant — the view uses `hasChanges` here to dismiss as a
+    /// no-op rather than silently hitting `saveEditedFlight`'s `canSubmit` guard.
+    @Test func editRouteNormalizingBackToOriginalLeavesNoChanges() async {
+        let repo = MockBriefingRepository()
+        repo.interpretRouteResult = .success(
+            makeInterpretResponse(interpreted: ["LFMD", "LFML"], skipped: ["DCT"])
+        )
+        let flight = makeFlight(waypoints: ["LFMD", "LFML"])
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+
+        vm.waypointsText = "LFMD DCT LFML"                 // pilot adds a DCT token
+        #expect(vm.routeChangedFromOriginal)               // raw text differs → interpret runs
+        #expect(vm.hasChanges)
+
+        // Submit-time interpret drops DCT and resolves back to the original two
+        // waypoints; the dropped token means the confirm sheet is offered.
+        #expect(await vm.interpretRouteForSubmit() == .needsConfirmation)
+        vm.applyInterpretedRoute()                         // pilot accepts the sheet
+
+        #expect(vm.waypointsText == "LFMD LFML")
+        #expect(!vm.hasChanges)   // collapsed back → nothing to save (view dismisses, no silent no-op)
+    }
+}
+
+@MainActor
 @Suite struct RouteAutocompleteTests {
     @Test func lastTokenIsTheTrailingIdentifier() {
         #expect(RouteAutocompleteController.lastToken(in: "EGTF LFQ") == "LFQ")

@@ -1,9 +1,26 @@
 # iOS App Modernisation — UX & Visual Brainstorm
 
-> **Status: brainstorm / living doc (started 2026-06-23).** Not a committed plan.
-> Goal: rethink the iPhone/iPad app's UX flow first (frictionless, natural drill-down
-> from basic → expert), then dress it in a visual language inspired by Flighty /
-> Strava / Unifi. We map **data + actions → flows → UI affordances → visual skin**.
+> **Status: SHIPPED (verified 2026-07-11). This is now a historical plan, kept for the "why".**
+> Started as a brainstorm 2026-06-23; the whole §8 phase plan executed. Epic `#285` and
+> **all phases #286–#293 (P0–P7) are CLOSED.** The §0 baseline and the §4/§6 "DECIDED"
+> items are a **historical snapshot** — do not read them as the app's current shape.
+> The durable design (shared-state briefing, FocusIntent deep-links, cross-section config +
+> readout strip, route graph, map metrics, advisory-detail ladder, Skew-T pass, native
+> edit-flight) now lives in **shipped code** under `app/flyfun-weather/` and should be folded
+> into the `ios-app-*` design docs; this file can then be archived.
+>
+> **Where the build diverged from the plan (so you're not misled):** the shipped briefing
+> tabs are **Advisory · Discussion · Cross-Section · Map** (+ PIREPs when permitted), NOT the
+> §4.1/§6 "Brief · Cross-section · Skew-T · Map". There is **no single "Brief" scroll tab** and
+> **Skew-T is not a peer tab** — it's a detail reached from the cross-section (`selectedTab` maps
+> `.skewT → .crossSection`; see `SkewTTabView`/`SkewTDetailView`, `BriefingTab` in
+> `ViewModels/BriefingViewModel.swift`). Shared state (`activePoint`/`selectedModel`/`selectedPack`/
+> `focusIntent`), `cross_check`/`parameters_used` decode, and the advisory-detail endpoint all
+> landed as designed.
+>
+> _Original goal (for context):_ rethink the iPhone/iPad app's UX flow first (frictionless,
+> natural drill-down from basic → expert), then dress it in a visual language inspired by
+> Flighty / Strava / Unifi. We map **data + actions → flows → UI affordances → visual skin**.
 
 ## How to read this doc
 

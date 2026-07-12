@@ -4,7 +4,7 @@
 
 The app is built in three major phases, each delivering standalone value. The architecture (MVVM + Repository) is designed so each phase extends the previous without rewrites.
 
-> Status note: this is the original forward-looking roadmap. Several details below describe *intended* design that the shipped code diverged from — corrections are inlined. Notably the app does **not** use SwiftData (caching is file-based via `FileManager`); the shipped iOS PIREP feature is **flight-linked only** (no standalone PIREP, no community feed/map, no push notifications in the app yet); PIREP `source` is the string `"inflight"` (not the planned `.standalone`/`.manual` enum); and PIREP server routes live at `/api/pireps`, not `/api/observations`. The richer community/standalone PIREP surface (query by airport/bounds/radius, severity filters) currently lives on the **web/server** side (`api/pireps.py`, `web/pireps.html`), not in the app. See [Overview](./ios-app-overview.md) for the authoritative current status.
+> Status note: this is the original forward-looking roadmap. Several details below describe *intended* design that the shipped code diverged from — corrections are inlined. Notably the app does **not** use SwiftData (caching is file-based via `FileManager`); the shipped iOS PIREP feature is **flight-linked only** (no standalone PIREP, no community feed/map); PIREP `source` is the string `"inflight"` (not the planned `.standalone`/`.manual` enum); and PIREP server routes live at `/api/pireps` (batch at `/api/pireps/batch`), not `/api/observations`. APNs push has since shipped, but for *refresh-complete* deep-links (`Services/PushNotifications.swift`), not for PIREPs. App Intents / Siri Shortcuts also shipped (`AppIntents/`) — but note that is a briefing-navigation surface, NOT the voice-PIREP filing envisioned in 3a below (still unbuilt). The richer community/standalone PIREP surface (query by airport/bounds/radius, severity filters) currently lives on the **web/server** side (`api/pireps.py`, `web/pireps.html`), not in the app. See [Overview](./ios-app-overview.md) for the authoritative current status.
 
 The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversation that makes this app uniquely valuable. Phases 1 and 2 build the foundation and deliver value along the way.
 
@@ -50,16 +50,16 @@ The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversa
 
 Was built incrementally; cross-section parity with web has largely shipped. Renderer uses the same cross-section data structure as web (TypeScript `extractVizData` ported to Swift; see `Models/Domain/VizData.swift`). Each layer conforms to the `CrossSectionLayerProtocol` and draws on a SwiftUI `Canvas`.
 
-Shipped layers (`Views/CrossSection/Layers/*Layer.swift`, 13 layers):
-- `TerrainLayer`, `TemperatureLinesLayer`, `ReferenceLinesLayer`
-- `CloudBandsLayer`, `SoftCloudBandsLayer`, `NwpCloudBandsLayer`
+Shipped layer structs (`Views/CrossSection/Layers/`, 14):
+- `TerrainLayer`, `TemperatureLinesLayer`, `StabilityLinesLayer`, `ReferenceLinesLayer`
+- `NaturalCloudBandsLayer`, `SquareCloudBandsLayer`, `SoftCloudBandsLayer` (cloud struct names live in `CloudBandsNatural.swift`, not one-file-per-struct)
 - `IcingBandsLayer`, `IcingOgimetNwpBandsLayer`, `SfipBandsLayer`
 - `CATBandsLayer`, `InversionBandsLayer`
 - `NwpConvectiveBgLayer`, `ThermoConvectiveBgLayer`
 
-Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, `ColorScales`, `CoordTransform`. Skew-T detail is a separate on-demand view (`SkewTDetailView`).
+Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, `ColorScales`, `CoordTransform`. Skew-T detail is a separate on-demand view (`SkewTDetailView`, in `Views/CrossSection/`).
 
-## Phase 2 — Offline Briefing Viewer ✅ (offline resilience done; push + SwiftData pending)
+## Phase 2 — Offline Briefing Viewer ✅ (offline resilience + refresh-complete push shipped; SwiftData never adopted)
 
 **Goal**: Pilots sync briefing data before departure and view full briefing in flight without connectivity. Push notifications alert when briefings refresh.
 
@@ -70,7 +70,7 @@ Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, `ColorSc
 - **Companion sync consumption** — fetch lightweight payload, parse into models
 - **Offline storage** — SwiftData persistence; `CachingBriefingRepository` wraps online repo (cache-first, fallback to API, cache on success). On-demand caching of Skew-T and GRAMET once viewed. Auto-expire old briefings, manual clear
 - **Pre-flight sync** — per-flight "Sync for offline" button (downloads payload + map tiles). Sync status indicator. Background sync on Wi-Fi when departure is within configurable lead time
-- **Push notifications** — APNS registration. Server-side push on auto-refresh with new pack. Notification tap opens updated briefing. Badge count for unread updates
+- **Push notifications** ✅ (shipped — `Services/PushNotifications.swift`, `AppDelegate`) — remote-notification registration, device-token upload to `api/devices.py`, refresh-complete push deep-links into the flight via `PushSupport.pendingNavigation(from:)`, silent content-available badge-sync. Server-side push off by default (`APNS_*` env + migration). See [Briefing Refresh Notifications](./ios-app-briefing-notifications.md)
 - **Offline map tiles** — cache MapKit tiles along route corridor (±30nm, low-to-medium zoom) as part of pre-flight sync
 
 ## Phase 3 — In-Flight PIREP System 🚧 (3a partially shipped in app)
@@ -79,7 +79,7 @@ Supporting render helpers: `BandRendering`, `ConvectiveTowerRendering`, `ColorSc
 
 Three sub-phases, each delivering incremental value.
 
-> Shipped in the app so far (3a subset): GPS tracking (`FlightTrackingService`, projects position onto the route), the in-flight report card (`PirepReportingView` + `PirepViewModel`, one-tap severity, no pre-selected values to avoid confirmation bias), an offline queue (`PirepOfflineStore`, JSON file `pending_pireps.json`) that batch-syncs via the server's `POST /pireps/batch` with client UUIDs for dedup, and a read-only per-flight PIREP tab (`PirepListView`). All shipped reports are flight-linked with `source = "inflight"`. Standalone filing, community feed/map, voice/Siri, prompting engine (3b), and live sharing (3c) are NOT in the app.
+> Shipped in the app so far (3a subset): GPS tracking (`FlightTrackingService`, projects position onto the route), the in-flight report card (`PirepReportingView` + `PirepViewModel`, one-tap severity, no pre-selected values to avoid confirmation bias), an offline queue (`PirepOfflineStore`, per-user JSON file `pending_pireps.json`) that batch-syncs via the server's `POST /api/pireps/batch` with client UUIDs for dedup, and a read-only per-flight PIREP tab (`PirepListView`). All shipped reports are flight-linked with `source = "inflight"`. Standalone filing, community feed/map, voice/Siri, prompting engine (3b), and live sharing (3c) are NOT in the app.
 
 ### Phase 3a — PIREP Filing + Offline Sync
 
@@ -121,8 +121,8 @@ Pilots can file PIREPs in two contexts: during an active flight session (linked 
 
 - **Offline sync engine** (shipped — `PirepOfflineStore`, simpler than originally specced)
   - Unsent reports persisted to a JSON file (`pending_pireps.json`) via an `actor` queue
-  - Flushed by `sync(using:)` after a submit (`PirepViewModel`) and on app foreground (`AppState`) — there is **no** `NWPathMonitor`, no `syncStatus` enum, no exponential backoff, and no 50-chunk batching yet
-  - Idempotent: client UUIDs (`client_uuid`), server dedupes; entire queue POSTed via `submitPirepsBatch` → `POST /pireps/batch`, cleared on success
+  - Flushed by `sync(using:)` after a submit (`PirepViewModel`) and on app foreground (`AppState.syncPendingPireps`, triggered from `WeatherBriefApp` scenePhase) — no `syncStatus` enum, no exponential backoff, and no 50-chunk batching yet. The app *does* have an `NWPathMonitor` (`Services/NetworkMonitor.swift`, used by the flight-list/briefing VMs), but the PIREP queue is **not** wired to it, so there is no auto-flush on connectivity restore
+  - Idempotent: client UUIDs (`client_uuid`), server dedupes; entire queue POSTed via `submitPirepsBatch` → `POST /api/pireps/batch`, cleared on success
 
 - **Voice PIREP (Siri shortcut)**
   - Register "FlyFun PIREP" App Shortcut via `AppShortcutsProvider` + `AppIntent`

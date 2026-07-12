@@ -96,8 +96,14 @@ class WeatherbriefClient:
         return self._get(f"/flights/{flight_id}/packs/freshness")
 
     def refresh_briefing(self, flight_id: str) -> dict:
-        """Trigger a briefing refresh. Returns pack meta on success."""
-        return self._post(f"/flights/{flight_id}/packs/refresh")
+        """Trigger a briefing refresh. Returns pack meta on success.
+
+        Declares ``source=mcp`` so a completed refresh still emails the pilot
+        (an MCP/agent refresh is non-user-present, unlike an in-app manual one).
+        """
+        return self._post(
+            f"/flights/{flight_id}/packs/refresh", params={"source": "mcp"}
+        )
 
     def get_refresh_status(self, flight_id: str) -> dict:
         return self._get(f"/flights/{flight_id}/packs/refresh/status")

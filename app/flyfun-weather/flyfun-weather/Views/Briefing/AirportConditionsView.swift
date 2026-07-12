@@ -102,7 +102,7 @@ private struct AirportConditionCard: View {
             FlightCategoryBadge(category: condition.flightCategory)
 
             if let wind = condition.windSpeedKt, let dir = condition.windDirectionDeg {
-                Label("\(Int(dir))@\(Int(wind))kt", systemImage: "wind")
+                Label("\(Int(dir).paddedHeading)@\(Int(wind))kt", systemImage: "wind")
                     .font(.caption)
             }
 

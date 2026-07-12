@@ -42,7 +42,9 @@ enum RefreshDriver {
                     continuation.resume(returning: outcome)
                 }
                 do {
-                    let stream = await repository.refreshStream(flightId: flightId)
+                    // Siri/App-Intent refresh is non-user-present, so it still
+                    // emails on completion (closing the refresh-intent loop).
+                    let stream = await repository.refreshStream(flightId: flightId, source: .siri)
                     for try await event in stream {
                         switch event.type {
                         case "complete":

@@ -258,7 +258,7 @@ No re-fetch needed — everything required is already serialized on the snapshot
   polygon-less SIGMETs; SIGMETs *with* polygons match by geometry regardless, so a DB
   without FIR boundaries degrades gracefully (just drops the rare polygon-less SIGMET).
 - **euro_aip dependency**: SIGMET support (`RouteSigmetService`) requires euro_aip
-  `>=0.10.2`; the current pyproject pin is `>=0.12.0`. Earlier `0.9.x` PyPI releases
+  `>=0.10.2`; the current pyproject pin is `>=0.13.0`. Earlier `0.9.x` PyPI releases
   lacked it. Dev installs euro_aip editable from `~/Developer/public/rzflight/euro_aip`.
 
 ## Future Extensions

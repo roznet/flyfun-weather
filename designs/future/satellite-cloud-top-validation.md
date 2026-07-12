@@ -263,7 +263,6 @@ scripts/
   analyze_mtg_ctth_route.py    # multi-mode debug view per waypoint × timestep
   print_ctth_route_table.py    # pivot table from cached zips
   ctth_route_histogram.py      # parallax-corrected radius histogram
-  fetch_eumetsat_oca.py        # untracked; pre-existing broken attempt - ignore
 
 /tmp/eumetsat_ctth/cache/      # downloaded zips + extracted .nc files
                                # ~95 MB per 10-min product

@@ -21,10 +21,14 @@ always stored as separate `lat`/`lon` `Double`s in the API/Viz structs.
 
 One file per server response. Names below are the actual Swift type names.
 
-- `FlightResponse` (`FlightResponse.swift`) — a flight. Fields: `id` (slug), `userId`,
-  `profileId?`, `routeName`, `waypoints: [String]`, `departureTime` (ISO string), `targetDate`,
-  `targetTimeUtc`, `cruiseAltitudeFt`, `flightCeilingFt`, `flightDurationHours`, `` `private` ``,
-  `autoRefresh`, `autoRefreshHour?`, `createdAt`. Computed `departureDate`, `shortTitle`.
+- `FlightResponse` (`FlightResponse.swift`) — a flight. Core fields: `id` (slug), `userId`,
+  `profileId?`, `aircraftId?`/`aircraft` (`AircraftInfo?`), `routeName`, `waypoints: [String]`,
+  `departureTime` (ISO string), `targetDate`, `targetTimeUtc`, `cruiseAltitudeFt`, `flightCeilingFt`,
+  `flightDurationHours`, `` `private` ``, `autoRefresh`, `autoRefreshHour?`, `createdAt`. Plus
+  cross-feature fields: `latestBriefing` (`BriefingStatusInfo?`, inlined per-flight assessment),
+  `coverage` (`CoveragePending?`), `role`/`flexibility`/`altDepartureTime` (sharing + timing-
+  flexibility), `notifyOverride`. Computed `departureDate`, `shortTitle`, `isPast`, `isEditable`,
+  `effectiveFlexibility`.
 - `CreateFlightRequest` / `ParseFplRequest` / `ParseFplResponse` (`CreateFlightRequest.swift`) —
   create-flight body and ICAO-FPL parse round-trip.
 - `PackMetaResponse` + `DataStatus` (`PackMetaResponse.swift`) — one briefing pack's metadata.
@@ -47,8 +51,11 @@ One file per server response. Names below are the actual Swift type names.
   `AdvisoryParameterDef`, and airport-condition types (`AirportConditions`,
   `AirportConditionsSummary`, `RunwayEnd`, `AirportModelCondition`, `RunwayWind`).
 - `PirepResponse` + `PirepListResponse` + `SubmitPirepRequest` (`PirepResponse.swift`) — see PIREPs.
-- Other response files: `DigestResponse`, `ElevationResponse`, `PreferencesResponse`,
-  `RefreshEvent` (SSE), `SoundingProfileResponse`.
+- Other response files (one struct family each): `DigestResponse`, `ElevationResponse`,
+  `PreferencesResponse`, `RefreshEvent` (SSE) + `ActiveRefreshResponse`, `SoundingProfileResponse`,
+  `AdvisoryDetailResponse`, `AirportWeatherResponse`, `AlternatesResponse`, `AutorouterRoute`,
+  `HelpCatalogResponse`, `NotificationModels`, `ProfileResponse`, `RouteInterpretation`,
+  `TimeOptionsResponse`, `UsageSummaryResponse`. (Full list = `ls Models/API/`.)
 
 ## Domain tier — Viz structs (`Models/Domain/`)
 
@@ -68,7 +75,10 @@ unavailable }` with SwiftUI `color` + `label`. This is the GREEN/AMBER/RED route
 ## Persistence — JSON files, two actors (`Services/`)
 
 - `BriefingCacheStore` (`BriefingCacheStore.swift`) — `actor`. On-disk cache of pack endpoints under
-  Application Support (`BriefingCache/<flightId>/<timestamp>/<endpoint>.json`). Maintains an
+  Application Support, scoped per signed-in user
+  (`BriefingCache/users/<scope>/<flightId>/<timestamp>/<endpoint>.json`); writes are at-rest
+  encrypted (`.completeFileProtectionUntilFirstUserAuthentication`, `.atomic`) and excluded from
+  iCloud backup. Maintains an
   `index.json` of `CachedPackEntry` (`flightId`, `timestamp`, `flightTitle`, `assessment`,
   `downloadedAt`, `endpoints: Set<String>`, `totalBytes`, `departureTime?`). `requiredEndpoints` =
   advisories, digest, snapshot, route-analyses, elevation — a pack `isComplete` when all are present

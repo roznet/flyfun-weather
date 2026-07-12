@@ -40,8 +40,52 @@ server side is built and tested (`tests/test_briefing_notifications.py`):
   `remote-notification` background mode are added.
 
 Deployment must set the APNs secrets (see "APNs key management" below).
-Deferred: the per-flight `notify_override` control in the iOS UI (settable on the
-web today; the server + API support it).
+
+**Preferences UI + semantics (#371) — server + web + iOS.** The `notify_*` prefs
+are now fully controllable on both clients, with the semantics tightened:
+
+- **Clean WHEN/HOW split with unified presence** (`notify/dispatch.py`). One
+  channel-agnostic **WHEN** decision — `notify_qualifies` (scope + override +
+  change-only) **AND not `present`** — gates the badge and both channels. If it
+  passes, **HOW** is pure user preference: deliver on each enabled channel
+  (email/push), independent of who/what/where triggered the refresh. This is the
+  invariant that lets "push only, never email — even when I refresh on the web"
+  work: the channel choice knows nothing about the trigger.
+- **Presence** = "was the user actively watching this refresh finish?" Recorded
+  server-side in the refresh registry (`touch_watch`/`is_watched`, `WATCH_PRESENCE_TTL`
+  = 30s) from any UI holding the SSE stream (keepalive) or polling
+  `/packs/refresh/status`. The **same signal for web and iOS** (both share those
+  endpoints), and robust to the stream→poll handoff on navigate-away-and-back
+  (the 3s poll keeps it fresh; TTL exceeds the 15s SSE keepalive). The flight-list
+  poll (`/refresh/active`) deliberately does NOT count — being on the list ≠
+  viewing the briefing. Computed once in `_notify_refresh_complete`, uniform
+  across all three refresh paths (scheduler / sync / streaming).
+- **`?source=`** (`user` | `siri` | `mcp`; unknown → `user`, `scheduler` is
+  internal-only) rides on `BriefingUsage.triggered_by` for **usage attribution
+  only** — it no longer affects notifications (presence replaced the old
+  per-channel email rule). Legacy `scope="auto"` is read as "on"; the UI only
+  ever writes `all` or `off`.
+- **Channel invariant.** Channels never express "off": the only way to silence is
+  scope/override. The web + iOS Settings enforce this live (email locks on when
+  it's the sole available channel; turning off the last channel reroutes to
+  Briefing updates = Off). The **decay** fail-safe is server-side
+  (`preferences.apply_last_device_decay`, fired on BOTH device-loss paths —
+  `devices.unregister_device` on explicit sign-out, and `notify/push.py::_dispatch`
+  when an APNs send prunes the last dead token, the common
+  app-deleted-without-sign-out case): losing the *last* device while
+  `notify_email` is off **and scope ≠ off** re-enables email and
+  raises a one-time `notify_decay_notice` (surfaced in the prefs response,
+  dismissed by PUTting it false). Prefs also carry `push_device_count` so a
+  device-less web user sees an "install the app" push row.
+- **UI shape.** Account › Notifications: a **Briefing updates** 3-stop (Off /
+  Assessment changes / Every update) folding `notify_scope` + `notify_change_only`,
+  an **Email** toggle, and a device-conditional **Push** toggle. Per-flight: a
+  **bell** (Default / Always / Mute → `notify_override`) in the freshness bar
+  (web) / briefing toolbar (iOS), whose hint shows what Default resolves to. The
+  old per-refresh "Email me when done" checkbox is **retired** — server-side
+  presence subsumes it: a manual refresh you walk away from now notifies (the
+  poll/stream contact goes stale), and one you watch finish does not. `force_email`
+  / `?notify_email=` are gone.
 
 ## Related Docs
 
@@ -93,13 +137,13 @@ web today; the server + API support it).
 - **Send gating** — only on a *new* pack whose assessment changed or worsened (avoid
   "still green" spam). Configurable; default to meaningful-change-only.
 - **In-app suppression** — a user watching the SSE progress bar in-app shouldn't also get a
-  banner. This is largely **natural on iOS**: the app's `UNUserNotificationCenterDelegate.
-  willPresent` decides whether to show a banner while foregrounded (default: don't — just
-  update the badge / an in-app indicator). The remaining nuance is that an in-app manual
-  refresh and a Siri/background refresh are **both** `triggered_by="user"` today
-  (`refresh_registry` only knows `user | scheduler`), so the server can't distinguish "I'm
-  watching this" from "tell me when done". Baseline: client-side foreground suppression;
-  optional later server signal (`triggered_by="intent"` / `notify_on_complete`) for precision.
+  banner. **Resolved by server-side presence** (#371): the notification decision suppresses
+  entirely when the user is *watching this refresh finish*, detected from watch-contact in
+  `refresh_registry` (SSE keepalive or `/packs/refresh/status` poll; see the presence bullet
+  above) — the same signal for web and iOS, so "distinguish 'I'm watching this' from 'tell me
+  when done'" is a server decision now, not a client-only heuristic. iOS
+  `UNUserNotificationCenterDelegate.willPresent` foreground banner-suppression remains as a
+  harmless delivery backstop (badge still syncs).
 - **Endpoint** `POST /api/devices` (register/upsert) + `DELETE /api/devices/{token}`.
 
 ### Notification preferences
@@ -117,10 +161,14 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
   - Email → `notify_email` (default **on** if the account has an email).
   - iOS push → `notify_push` (default **off**; conditional UI — show device state
     ("2 devices") or an install hint; requires ≥1 `device_tokens` row).
-- **Scope** (*which refreshes* — single choice) → `notify_scope`:
-  - `auto` — only the scheduled near-departure auto-refresh (**default**; reproduces today).
-  - `all` — every completion, incl. manual / Siri / MCP.
-  - `off` — never, unless enabled per-flight.
+- **Scope** (*which refreshes* — single choice) → `notify_scope`. **As shipped (#371)**
+  the scope + change-only pair is presented as one **Briefing updates** 3-stop and the
+  manual-vs-automatic line moved to the per-channel email rule, so scope collapses to
+  on/off:
+  - `off` — never, unless a flight is set to Always per-flight.
+  - `all` — notifications on (the 3-stop's Assessment-changes / Every-update stops both
+    write `all`, differing only by `notify_change_only`).
+  - `auto` — **legacy** (pre-#371 default); read as "on", never written by the UI.
 - **Content filter** → `notify_change_only` (default **on**): only when the assessment
   changed/worsened (`compute_refresh_delta`), vs every completion.
 - **Timing** → migrate the existing `defer_email_for_model_update` into this group,
@@ -129,23 +177,27 @@ This generalizes into an explicit, channel-aware model with a per-flight overrid
 
 **Per-flight override** (flight settings — generalizes today's "email me when done"), on `FlightRow`:
 
-- `notify_override`: `default` (follow global) | `on` (notify for **any** completion of this
-  flight, even if global is `off`/`auto`) | `mute` (never for this flight). Channels always
-  follow the global channel selection.
+- `notify_override`: `default` (follow global scope + change filter) | `notify` (**always** —
+  notify for **any** completion of this flight, even if global is `off`/`auto` **and even when
+  the assessment is unchanged**; the change filter does not apply) | `mute` (never for this
+  flight). Channels always follow the global channel selection.
 
-**Effective decision** (evaluated in `notify/dispatch.py`, driven from `_notify_refresh_complete`):
+**Effective decision** (evaluated in `notify/dispatch.py::notify_qualifies` + presence, driven from `_notify_refresh_complete`). NOTE: as *shipped* (#371) the WHEN/HOW split is what the top-of-doc summary describes — the pseudocode below is the final form (an earlier draft gated email per-`triggered_by`; that was replaced by presence):
 
 ```
+# Single WHEN decision — presence AND the shared gate — drives badge + both channels:
+if present:  stop                          # user was watching this refresh finish
 if flight.notify_override == "mute":  stop
-elif flight.notify_override == "on":  send            # any completion
-else:                                                  # default → global scope
-    scope == "all"  → send
-    scope == "auto" → send only if triggered_by == "scheduler"
-    scope == "off"  → stop
-if notify_change_only and not delta.changed:  stop
-for each ON channel (email, push):  deliver
-    # push additionally suppressed if the app is foregrounded on this flight —
-    # a DELIVERY RULE, not a user setting (resolves the earlier ★ question)
+elif flight.notify_override == "notify":  qualifies    # ALWAYS — bypasses scope AND the change filter
+else:                                                  # default → global scope + change filter
+    scope == "off" → stop
+    else (all / legacy auto) → qualifies
+    if notify_change_only and not delta.changed:  stop
+advance the badge
+# HOW (channels) — pure user preference, trigger-agnostic:
+push  → deliver if notify_push
+email → deliver if notify_email
+# (?source= / triggered_by is usage attribution only — it does NOT gate notifications)
 ```
 
 ### UX principles
@@ -162,10 +214,17 @@ for each ON channel (email, push):  deliver
 
 ### Other choices worth offering / deciding
 
-- **★ DECIDED — per-flight notify is independent of auto-refresh.** They are two separate
-  controls today and stay separate: the notify override never enables or schedules
-  auto-refresh. (A per-flight "notify" is most useful precisely for manual/Siri refreshes
-  on a flight whose auto-refresh is off — the Siri-loop case.)
+- **★ DECIDED — per-flight notify stays a separate control, but auto-refresh seeds a smart
+  default.** The data model stays independent: the notify override never enables or schedules
+  auto-refresh, and a per-flight `notify` is still useful for manual/Siri refreshes on a flight
+  whose auto-refresh is off — the Siri-loop case. What changed (post-#371): the old auto-refresh
+  meant "email me whenever a new report is ready" — every scheduled run, unconditionally. The
+  new default (`notify_change_only` on) is quieter, gating on assessment change; but a report's
+  *detail* often moves while the assessment holds, so auto-refresh users would perceive it as
+  going silent. Fix: **enabling auto-refresh defaults that flight's bell to `notify`** (see
+  `api/flights.py::update_auto_refresh`) — restoring the every-completion ping (which is why
+  `notify` bypasses the change filter). It's a default, not a hard link: the user can drop the
+  bell back to `default` or `mute` afterward, and disabling auto-refresh leaves the bell as-is.
 - **Batching/digest** — the scheduler can finish several flights close together; a future
   digest could replace N separate pushes.
 - **Per-channel scope** — deliberately NOT in v1 (one scope for all channels); revisit only

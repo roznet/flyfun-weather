@@ -70,6 +70,7 @@ src/weatherbrief/
 │   ├── fronts.py       # Hewson front-crossing route models
 │   ├── diagnostic.py / diagnostic_codes.py # Per-point diagnostic flags + code catalog
 │   ├── verification.py # METAR/TAF verification + digest models
+│   ├── time_scan.py    # Timing-flexibility scan artifact (time_options.json; see plans/timing-scenario-plan)
 │   └── storage.py     # Flight, BriefingPackMeta
 ├── airports.py        # ICAO → lat/lon via euro_aip
 ├── pipeline.py        # Thin orchestrator: calls tasks/ modules in sequence
@@ -89,6 +90,7 @@ src/weatherbrief/
 │   ├── dwd_charts.py / metoffice_charts.py # Front-chart fetch/georeference tasks
 │   ├── alternates.py / alternate_requirement.py # EASA alternate requirement + selection (TAF/minima)
 │   ├── fronts.py # Hewson front-crossing computation for the route
+│   ├── time_scan.py / time_scan_runner.py # Timing-flexibility scan (candidate departure times graded vs plan)
 │   ├── edr_calibration.py # EDR turbulence calibration task (inert, see project_edr_calibration_inert)
 │   └── admin_digest_stats.py # Admin digest/usage stats
 ├── fetch/
@@ -123,12 +125,13 @@ src/weatherbrief/
 │   ├── airport_conditions.py / airport_consensus.py # Airport flight-category/wind + multi-model consensus
 │   ├── route_geometry.py / spatial_interpolation.py # Route geometry + spatial field interpolation helpers
 │   ├── alternate_requirement.py / sun.py # EASA alternate requirement logic, sun position/glare
+│   ├── operational_flags.py # Non-weather divert friction (cross-border) → OperationalFlag (#344)
 │   ├── advisories/    # Route advisory evaluators (22 registered hazard types — see advisories.md)
 │   │   ├── __init__.py      # evaluate_all(), get_catalog()
 │   │   ├── registry.py      # @register decorator, auto-discovery
 │   │   ├── _helpers.py      # Shared: format_extent, pct_above_threshold, terrain lookup
 │   │   ├── cloud_top.py     # Cloud top vs ceiling
-│   │   ├── convective.py    # Convective risk along route
+│   │   ├── convective.py / convective_character.py # Convective risk + storm-character detail along route
 │   │   ├── dd_nwp_agreement.py # DD-vs-NWP within-model cloud/icing agreement
 │   │   ├── fiki_icing.py / icing_escape.py / freezing_precip.py # FIKI icing, non-FIKI escape, freezing precip
 │   │   ├── flight_category.py # Airport ceiling/visibility (tunable MVFR/IFR thresholds)
@@ -194,6 +197,9 @@ src/weatherbrief/
 │   ├── account_export.py # GDPR Art. 20 export: user downloads JSON of all their data
 │   ├── donations.py   # Stripe donation checkout + webhook (see project_donations_live)
 │   ├── aircraft.py / pireps.py / debriefs.py # iOS companion: aircraft registry, PIREPs, post-flight debrief
+│   ├── devices.py / notifications.py # APNs device-token registration + cross-surface badge/seen-state endpoints
+│   ├── agent.py       # ChatGPT Custom GPT front-door mounted at /agent/v1 (see project_chatgpt_connector)
+│   ├── nav.py         # Slim airports SQLite download for native clients (iOS ICAO autocomplete, ETag-gated)
 │   ├── maps.py / hewson_map.py / climatology.py / airport_profile.py # Forecast/front/climatology map + airport-profile endpoints
 │   ├── synoptic_charts.py / _chart_serving.py # DWD/Met Office surface-front chart serving
 │   ├── eval_workbench.py # Digest eval workbench (admin/dev, gated; see eval-digest-workbench.md)
@@ -207,7 +213,11 @@ src/weatherbrief/
 │   ├── admin_email.py # Notifications: signup, feedback, welcome, feedback reply to user
 │   ├── magic_link_email.py # Magic-link / passwordless sign-in email
 │   ├── verification_email.py # Daily verification digest email
-│   └── admin_digest_email.py # Admin digest stats email
+│   ├── admin_digest_email.py # Admin digest stats email
+│   ├── donation_email.py # Stripe donation thank-you email
+│   ├── push.py         # Token-based APNs sender (alert + silent badge-sync; see ios-app-briefing-notifications.md)
+│   ├── badge.py        # Server-derived cross-surface unseen-briefing badge count
+│   └── dispatch.py     # Unified post-commit refresh-notification sink (email + push, shared notify_qualifies gate)
 ├── triage/
 │   ├── __main__.py    # CLI entry point for feedback triage
 │   ├── process.py     # AI triage via Claude CLI: classify, analyze, suggest reply
@@ -215,6 +225,7 @@ src/weatherbrief/
 │   └── security.py    # Triage input sanitization
 ├── analytics/         # Client-event ingest + admin analytics (events, enrich, digest, API)
 ├── mcp/               # fastmcp server + client (AI flight-planning tool surface, see project_mcp_server)
+├── connectors/        # Shared response shaping/guardrails for MCP + ChatGPT agent front-doors (views.py)
 ├── hewson/            # Hewson frontal-detection precompute + CLI (ERA5 cases)
 ├── frontal/           # Frontal-zone detection (contour fronts, TFP/θe) + CLI
 ├── era5/              # ERA5 reanalysis loader (front-calibration reference data)
@@ -420,7 +431,7 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/flights/{id}/packs/refresh/status` | GET | Refresh status for a specific flight |
 | `/api/admin/metrics` | GET | Queue depth, active refreshes, timing stats (admin) |
 
-The table above covers the core flight/pack/admin surface. Additional feature areas mount their own routers (see linked docs): iOS companion (`/api/aircraft`, `/api/pireps`, `/api/observations`, `/api/companion`, flight debriefs), forecast/front/climatology maps (`/api/maps`, `/api/hewson`, `/api/climatology`, `/api/airport-profile`), synoptic/front chart serving (`/api/charts`), METAR/TAF verification (`/api/verification`), Stripe donations (`/api/donations`, see project_donations_live), in-app messages, model/data-source metadata, and per-user API token management. The MCP server (fastmcp) exposes a separate tool surface.
+The table above covers the core flight/pack/admin surface. Additional feature areas mount their own routers (see linked docs): iOS companion (`/api/aircraft`, `/api/pireps`, `/api/observations`, `/api/companion`, flight debriefs), forecast/front/climatology maps (`/api/maps`, `/api/hewson`, `/api/climatology`, `/api/airport-profile`), synoptic/front chart serving (`/api/charts`), METAR/TAF verification (`/api/verification`), Stripe donations (`/api/donations`, see project_donations_live), APNs device tokens + cross-surface briefing badge/seen-state (`/api/devices`, `/api/flights/badge`, `/api/flights/{id}/seen`), the slim airport DB download (`/api/nav`), in-app messages, model/data-source metadata, and per-user API token management. The MCP server (fastmcp) exposes a separate tool surface; a ChatGPT Custom GPT front-door mounts at `/agent/v1` sharing response shaping via `connectors/` (see project_chatgpt_connector).
 
 **Shareable briefing links**: any authenticated user can view any flight's briefings via direct URL. Only the flight owner can refresh, delete, or trigger email. The frontend conditionally shows action buttons based on ownership.
 

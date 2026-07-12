@@ -94,6 +94,16 @@ class PreferencesResponse(BaseModel):
     notify_push: bool = False
     notify_scope: NotifyScope = "auto"
     notify_change_only: bool = True
+    # One-time fail-safe notice: set when the user's last push device was
+    # unregistered while email was off, so email was auto-re-enabled to keep at
+    # least one working channel (the channel invariant, decay branch). The
+    # client shows it once, then dismisses by PUTting ``notify_decay_notice: false``.
+    notify_decay_notice: bool = False
+    # Count of the user's registered APNs devices. Push is only actionable with
+    # ≥1 device — the web shows a disabled "install the app" row at 0, and both
+    # clients use this to render the channel-invariant (email locks on when
+    # push has no device to deliver to).
+    push_device_count: int = 0
     pirep_can_view: bool = False
     pirep_can_publish: bool = False
     donations_enabled: bool = False  # global: Stripe configured (gates the donate UI)
@@ -122,6 +132,7 @@ class PreferencesUpdate(BaseModel):
     notify_push: bool | None = None
     notify_scope: NotifyScope | None = None
     notify_change_only: bool | None = None
+    notify_decay_notice: bool | None = None  # only meaningful as false, to dismiss
 
     @field_validator("display_currency")
     @classmethod
@@ -227,6 +238,13 @@ def _parse_digest_config_from_prefs(raw: str) -> DigestConfig:
     return DigestConfig(**dc)
 
 
+def _count_push_devices(db: Session, user_id: str) -> int:
+    """Count the user's registered APNs device tokens (for conditional push UI)."""
+    from weatherbrief.notify.push import count_user_devices
+
+    return count_user_devices(db, user_id)
+
+
 def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> PreferencesResponse:
     """Build a PreferencesResponse from a DB row."""
     toggles = _parse_service_toggles(row.app_prefs_json)
@@ -246,6 +264,8 @@ def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> Prefe
         digest_config=_parse_digest_config_from_prefs(row.app_prefs_json),
         advisories=_parse_advisory_prefs(row.app_prefs_json),
         **_parse_notify_prefs(row.app_prefs_json),
+        notify_decay_notice=bool(prefs_data.get("notify_decay_notice", False)),
+        push_device_count=_count_push_devices(db, user_id),
         has_autorouter_creds=has_ar,
         autorouter_mode="password" if is_dev_mode() else "oauth",
         pirep_can_view=prefs_data.get("pirep_can_view", False),
@@ -333,6 +353,26 @@ def update_preferences(
         data["notify_scope"] = body.notify_scope
     if body.notify_change_only is not None:
         data["notify_change_only"] = body.notify_change_only
+    if body.notify_decay_notice is False:
+        # Only a dismissal is honored — the server owns *setting* the notice (the
+        # decay path); a client can't raise it, only acknowledge it.
+        data["notify_decay_notice"] = False
+
+    # Channel-invariant backstop (server-side): notifications can't be "on" with
+    # no *deliverable* channel, or nothing would ever fire — the silent
+    # dead-state. Mirror the client reroute (turning off the last channel means
+    # "silence me" → scope off) so the invariant holds for ANY writer — a direct
+    # PUT, or a client whose UI guard leaks — not just the web/iOS forms.
+    # ``notify_push`` alone is NOT a deliverable channel: it needs a registered
+    # device, so a `{email:false, push:true}` PUT with no device is still a
+    # dead-state (this is what the web/iOS UIs prevent by disabling the push
+    # toggle when device-less).
+    if data.get("notify_scope", "auto") != "off" and not data.get("notify_email", True):
+        push_deliverable = (
+            data.get("notify_push", False) and _count_push_devices(db, user_id) > 0
+        )
+        if not push_deliverable:
+            data["notify_scope"] = "off"
 
     if body.digest_config is not None:
         data["digest_config"] = body.digest_config.model_dump(exclude_none=True)
@@ -566,6 +606,38 @@ def load_notify_prefs(db: Session, user_id: str) -> dict:
     """
     row = db.get(UserPreferencesRow, user_id)
     return _parse_notify_prefs(row.app_prefs_json if row else "")
+
+
+def apply_last_device_decay(db: Session, user_id: str) -> bool:
+    """Fail-safe when a user unregisters their **last** push device.
+
+    A push-only user (``notify_email`` off) who loses their last device would be
+    left with no effective channel — a silent dead-state. Re-enable email and
+    raise a one-time ``notify_decay_notice`` so scope≠off always keeps at least
+    one working channel (channel invariant, decay branch of
+    ios-app-briefing-notifications.md). Returns True if it re-enabled email.
+
+    Idempotent, and scoped to the invariant it protects: a no-op when email is
+    already on, or when the user has explicitly silenced everything
+    (``notify_scope == "off"``) — the invariant only promises a working channel
+    *while notifications are on*, so decay must not resurrect email against an
+    explicit Off.
+    """
+    row = db.get(UserPreferencesRow, user_id)
+    if row is None:
+        return False
+    try:
+        data = json.loads(row.app_prefs_json) if row.app_prefs_json else {}
+    except json.JSONDecodeError:
+        data = {}
+    if data.get("notify_scope", "auto") == "off":
+        return False
+    if data.get("notify_email", True):
+        return False
+    data["notify_email"] = True
+    data["notify_decay_notice"] = True
+    row.app_prefs_json = json.dumps(data)
+    return True
 
 
 def can_view_pireps(db: Session, user_id: str) -> bool:

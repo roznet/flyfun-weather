@@ -3,6 +3,7 @@
 import type { PirepResponse, PirepFilters } from '../adapters/pirep-adapter';
 import { SEVERITY_COLORS, maxSeverity, hazardIconsRaw } from '../utils/pirep-helpers';
 import { escapeHtml } from '../utils';
+import { formatHeading } from '../units';
 
 const SEVERITY_LABELS: Record<string, string> = {
   none: 'None',
@@ -85,7 +86,7 @@ export function renderPirepDetailCard(pirep: PirepResponse): string {
   }
   if (pirep.temp_c != null) addRow('Temp', `${pirep.temp_c}°C`);
   if (pirep.wind_dir != null && pirep.wind_speed_kt != null) {
-    addRow('Wind', `${String(pirep.wind_dir).padStart(3, '0')}° / ${pirep.wind_speed_kt} kt`);
+    addRow('Wind', `${formatHeading(pirep.wind_dir)}° / ${pirep.wind_speed_kt} kt`);
   }
   if (pirep.aircraft_type) addRow('Aircraft', pirep.aircraft_type);
   addRow('Source', pirep.source);

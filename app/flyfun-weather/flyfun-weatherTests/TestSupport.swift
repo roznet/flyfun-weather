@@ -39,6 +39,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var aircraftResult: Result<[AircraftResponse], Error> = .success([])
     var createFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("createFlight"))
     var updateFlightResult: Result<UpdateFlightResponse, Error> = .failure(MockError.notStubbed("updateFlight"))
+    var interpretRouteResult: Result<InterpretRouteResponse, Error> = .failure(MockError.notStubbed("interpretRoute"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
 
     /// Optional per-call overrides for the pack-data path (BriefingViewModel
@@ -51,7 +52,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     // Call counters + captured args for behaviour assertions.
     private(set) var flightsCallCount = 0
     private(set) var submitPirepsBatchCallCount = 0
+    private(set) var interpretRouteCallCount = 0
     private(set) var lastUpdateRequest: UpdateFlightRequest?
+    private(set) var lastCreateRequest: CreateFlightRequest?
+    private(set) var lastInterpretRawRoute: String?
 
     /// Optional hook awaited *inside* `flights()` before it returns — lets a test
     /// gate the network so it can observe intermediate ViewModel state (e.g. the
@@ -63,7 +67,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         if let hook = beforeFlightsReturn { await hook() }
         return try flightsResult.get()
     }
-    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse { try createFlightResult.get() }
+    func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
+        lastCreateRequest = request
+        return try createFlightResult.get()
+    }
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse {
         lastUpdateRequest = request
         return try updateFlightResult.get()
@@ -73,7 +80,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func usageSummary() async throws -> UsageSummaryResponse {
         try JSONDecoder.weatherBrief.decode(UsageSummaryResponse.self, from: Data("{}".utf8))
     }
-    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse { throw MockError.notStubbed("interpretRoute") }
+    func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse {
+        interpretRouteCallCount += 1
+        lastInterpretRawRoute = rawRoute
+        return try interpretRouteResult.get()
+    }
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw MockError.notStubbed("routeDistance") }
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
@@ -101,7 +112,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data { throw MockError.notStubbed("skewtImage") }
     func grametImage(flightId: String, timestamp: String) async throws -> Data { throw MockError.notStubbed("grametImage") }
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse { throw MockError.notStubbed("soundingProfile") }
-    func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
+    func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         AsyncThrowingStream { $0.finish() }
     }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw MockError.notStubbed("refreshStatus") }
@@ -165,6 +176,34 @@ func makeUpdateResponse(
     obj["invalidation"] = invalidation.rawValue
     let data = try JSONSerialization.data(withJSONObject: obj)
     return try JSONDecoder.weatherBrief.decode(UpdateFlightResponse.self, from: data)
+}
+
+/// Build an `InterpretRouteResponse` fixture for stubbing
+/// `MockBriefingRepository.interpretRouteResult`. Defaults to a clean 2-point
+/// route (nothing skipped / off-route); pass `skipped` / `offRoute` to model a
+/// route the resolver dropped tokens from.
+func makeInterpretResponse(
+    interpreted: [String] = ["LFMD", "LFML"],
+    skipped: [String] = [],
+    offRoute: [String] = [],
+    originalTokens: [String]? = nil
+) -> InterpretRouteResponse {
+    let waypoints = interpreted.enumerated().map { idx, icao in
+        RouteWaypointInfo(
+            icao: icao,
+            name: icao,
+            lat: 43.0 + Double(idx),
+            lon: 6.0 + Double(idx),
+            timezone: "Europe/Paris"
+        )
+    }
+    return InterpretRouteResponse(
+        originalTokens: originalTokens ?? (interpreted + skipped + offRoute),
+        interpreted: interpreted,
+        skipped: skipped,
+        offRoute: offRoute,
+        waypoints: waypoints
+    )
 }
 
 func makePirepRequest(remarks: String = "test") -> SubmitPirepRequest {

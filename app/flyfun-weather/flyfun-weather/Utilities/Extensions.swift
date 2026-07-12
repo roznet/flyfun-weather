@@ -68,6 +68,15 @@ extension String {
     }
 }
 
+extension Int {
+    /// Zero-pad a compass heading/bearing to 3 digits (10° → "010"). Does NOT
+    /// append the ° symbol — call sites add °/@ as they do today. Single source
+    /// of truth for heading display (AirportConditionsView, PirepListView).
+    var paddedHeading: String {
+        String(format: "%03d", self)
+    }
+}
+
 extension URL {
     /// Extract a query parameter value by name.
     func queryParam(_ name: String) -> String? {

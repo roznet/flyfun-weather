@@ -499,13 +499,49 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
             if parts:
                 lines.append(f"  Sounding [{model}]: {', '.join(parts)}")
 
-        # NWP 3-level cloud cover (not available for ECMWF)
-        if sa.cloud_cover_low_pct is not None:
-            lines.append(
-                f"  NWP cloud [{model}]: Low={sa.cloud_cover_low_pct:.0f}%"
-                f", Mid={sa.cloud_cover_mid_pct:.0f}%"
-                f", High={sa.cloud_cover_high_pct:.0f}%"
-            )
+        # Cloud, split by provenance so the LLM (and the MCP client reading this
+        # via get_digest_context) can tell the model's *native* cloud envelope
+        # from the coarse bulk summary:
+        #
+        # 1. `nwp_cloud_layers` present → the model's own cloud decks (ECMWF/ICON
+        #    3-D cloud fraction or GFS GRIB) — the same signal the app
+        #    cross-section's NWP cloud layer draws. Emitted as "NWP cloud".
+        # 2. `nwp_cloud_layers is None` → no native envelope. This happens two
+        #    ways and both fall through here: ECMWF far-out (no GRIB enrichment
+        #    yet) AND Open-Meteo-only models (UKMO/MétéoFrance/GEM) that never
+        #    have native diagnostics at any lead time. Fall back to the bulk
+        #    Open-Meteo low/mid/high summary — real data, just coarse — under a
+        #    label that does NOT claim to be the native NWP layer and does NOT
+        #    imply a temporal gap. (The old code mislabeled this bulk triple as
+        #    "NWP cloud [ecmwf]: Low/Mid/High", the GFS-native paradigm applied
+        #    to a model whose native cloud is per-level 3-D fraction.)
+        # 3. `nwp_cloud_layers == []` → a native source exists and reports clear.
+        if sa.nwp_cloud_layers is None:
+            if sa.cloud_cover_low_pct is not None:
+                lines.append(
+                    f"  Bulk cloud [{model}] (Open-Meteo summary, no native NWP layer): "
+                    f"Low={sa.cloud_cover_low_pct:.0f}%"
+                    f", Mid={sa.cloud_cover_mid_pct:.0f}%"
+                    f", High={sa.cloud_cover_high_pct:.0f}%"
+                )
+            else:
+                lines.append(f"  NWP cloud [{model}]: no native NWP cloud layer")
+        elif not sa.nwp_cloud_layers:
+            lines.append(f"  NWP cloud [{model}]: none (model clear)")
+        else:
+            for cl in sa.nwp_cloud_layers:
+                cc_str = (
+                    f" CC={cl.mean_cloud_cover_pct:.0f}%"
+                    if cl.mean_cloud_cover_pct is not None else ""
+                )
+                t_str = (
+                    f" T={cl.mean_temperature_c:.0f}C"
+                    if cl.mean_temperature_c is not None else ""
+                )
+                lines.append(
+                    f"  NWP cloud [{model}]: {cl.coverage.value.upper()} "
+                    f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft{cc_str}{t_str}"
+                )
 
         if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
             conv = sa.convective

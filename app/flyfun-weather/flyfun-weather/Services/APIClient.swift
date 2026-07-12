@@ -191,10 +191,18 @@ actor APIClient {
     /// session isn't wrapped by `RollingBearerSession`); a non-2xx surfaces as
     /// `serverError`, which the caller already handles.
     func streamSSE(_ path: String, method: String = "POST") -> AsyncThrowingStream<RefreshEvent, Error> {
-        let url = baseURL.appendingPathComponent(path)
+        // `path` may carry a query string (e.g. `?source=user`); build the URL with
+        // `URL(string:relativeTo:)` so `?` is preserved. `appendingPathComponent`
+        // percent-encodes it into `%3F`, mangling the query into the path and yielding
+        // a 405 (no route matches that verb on the encoded path). Same rule as `requestDataURL`.
+        let url = URL(string: path, relativeTo: baseURL)
         let token = tokenStore.token
 
         return AsyncThrowingStream { continuation in
+            guard let url else {
+                continuation.finish(throwing: APIError.networkError(URLError(.badURL)))
+                return
+            }
             var request = URLRequest(url: url)
             request.httpMethod = method
             if let token {

@@ -119,40 +119,47 @@ connectivity solver, and it handles multi-deck-with-gaps routes that a greedy
 
 ## Interface
 
-```python
-def solve(
-    cost_field: list[list[float]],   # [point_i][alt_bin] -> cost (0 / finite / inf)
-    terrain_floor: list[float],      # [point_i] -> min occupiable altitude (ft)
-    ceiling: list[float],            # [point_i] -> max occupiable altitude (ft)
-    preferred_alt: int,              # planned cruise; a preference, not a bound
-    allowed_start_bins: set[int] | None = None,  # bins the path may begin in at point 0
-                                                 # (None = any). VFR: floor band at dep.
-    allowed_end_bins: set[int] | None = None,    # bins the path may end in at point N.
-                                                 # VFR: floor band at arrival.
-    rate_limit: float | None = None, # hook (decision 4) — unused in v1
-) -> Profile | Blockage: ...
-```
-
-- `Profile{ segments: [(dist_from_nm, dist_to_nm, alt_band_ft)], transitions, total_cost }`
-- `Blockage{ from_nm, to_nm, reason }`
-
-`solve()` selects the lexicographically-best path (decision 5) that begins in
-`allowed_start_bins` and ends in `allowed_end_bins` (decision 9), with edge transitions
-charged per the conservative column convention (decision 6).
-
-Each advisory implements only the hazard→cost mapping and the endpoint constraints. To
-keep the return from growing into a wide tuple, bundle them:
+As shipped (`vertical_profile.py`), the solver takes the bundled `CostModel` rather than
+unpacked axis arrays — the terrain floor and ceiling are baked into `cost_field` as `inf`
+cells rather than passed as separate per-point lists, which keeps `solve()` a pure grid
+search:
 
 ```python
 @dataclass(frozen=True)
 class CostModel:
-    cost_field: list[list[float]]
-    terrain_floor: list[float]
-    ceiling: list[float]
-    allowed_start_bins: set[int] | None
-    allowed_end_bins: set[int] | None
+    cost_field: list[list[float]]        # [point_i][alt_bin] -> 0 / finite / inf
+    distances_nm: list[float]            # x-axis label per point
+    bin_altitudes_ft: list[int]          # y-axis label per bin (multiples of 500)
+    allowed_start_bins: set[int] | None  # bins the path may begin in at point 0
+    allowed_end_bins: set[int] | None    # bins the path may end in at point N
 
-def build_cost_model(ctx: RouteContext, model: str) -> CostModel: ...
+def solve(
+    model: CostModel,
+    preferred_alt_ft: int,               # planned cruise; a preference, not a bound
+    rate_limit: float | None = None,     # hook (decision 4) — accepted, unused in v1
+) -> Profile | Blockage: ...
+```
+
+- `Profile{ segments: [Segment(dist_from_nm, dist_to_nm, alt_ft)], transitions: [Transition(from_nm, to_nm, from_alt_ft, to_alt_ft)], total_cost }`
+- `Blockage{ from_nm, to_nm, reason }`
+
+`solve()` selects the lexicographically-best path (decision 5) that begins in
+`allowed_start_bins` and ends in `allowed_end_bins` (decision 9), with edge transitions
+charged per the conservative column convention (decision 6). Path cost is a `_Cost`
+triple `(hazard, transitions, deviation)`; its ordering key is `(hazard, deviation,
+transitions)` — deviation before transitions per the correction below.
+
+Each advisory implements only its per-cell hazard→cost mapping; the shared
+`build_cost_model` (in `_helpers.py`, decision 3) does bin construction, terrain-floor /
+ceiling walling, and endpoint anchoring once:
+
+```python
+def build_cost_model(
+    ctx: RouteContext,
+    model: str,
+    cell_cost: Callable[[SoundingAnalysis, float], float],  # advisory's mapping
+    floor_margin_ft: float,                                 # clearance above terrain
+) -> CostModel | None: ...   # None when no route point carries this model's sounding
 ```
 
 ### Data sources (grounded in current models)

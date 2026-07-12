@@ -83,6 +83,14 @@ final class AddFlightViewModel {
 
     // Submission
     var isSubmitting: Bool = false
+    /// True from the moment the pilot taps Create/Save until the whole submit
+    /// flow (interpret → optional confirm sheet → create/save) settles. Unlike
+    /// `isSubmitting`, this covers the new pre-submit interpret round trip, whose
+    /// `await` would otherwise leave the button tappable long enough for a
+    /// double-tap to launch a second, independent create. The view sets it
+    /// synchronously in `submit()` (before any suspension) and disables the
+    /// button on it, so the second tap is rejected before it can spawn work.
+    var isPreparingSubmit: Bool = false
     var errorMessage: String?
     /// Streamed progress message shown while regenerating the briefing (§4.4).
     var statusMessage: String?
@@ -143,10 +151,16 @@ final class AddFlightViewModel {
         waypoints.count >= 2 && !isSubmitting && (!isEditing || hasChanges)
     }
 
+    /// Whether the typed route differs from the flight being edited (case- and
+    /// spacing-insensitive). Single source for the three change gates below.
+    private func routeDiffers(from original: FlightResponse) -> Bool {
+        waypoints != original.waypoints.map { $0.uppercased() }
+    }
+
     /// Any edited field differs from the original (gates the Save button).
     var hasChanges: Bool {
         guard let original = editingFlight else { return true }
-        if waypoints != original.waypoints.map({ $0.uppercased() }) { return true }
+        if routeDiffers(from: original) { return true }
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         if selectedAircraftId != original.aircraftId { return true }
@@ -156,6 +170,15 @@ final class AddFlightViewModel {
         if flexibility == .alternate, altDepartureChanged(from: original) { return true }
         guard let originalDate = original.departureDate else { return true }
         return abs(departureDate.timeIntervalSince(originalDate)) > 1
+    }
+
+    /// Whether the typed route differs from the flight being edited (case- and
+    /// spacing-insensitive). Gates submit-time interpretation on edit — an
+    /// untouched route is already clean, so it needs no round-trip. On create
+    /// there is no baseline, so this is always `true`.
+    var routeChangedFromOriginal: Bool {
+        guard let original = editingFlight else { return true }
+        return routeDiffers(from: original)
     }
 
     /// Whether the edited alt-departure instant differs from the flight's stored
@@ -172,7 +195,7 @@ final class AddFlightViewModel {
     /// they save without the re-briefing confirm (§4.4).
     var hasForecastAffectingChange: Bool {
         guard let original = editingFlight else { return false }
-        if waypoints != original.waypoints.map({ $0.uppercased() }) { return true }
+        if routeDiffers(from: original) { return true }
         if cruiseAltitudeFt != original.cruiseAltitudeFt { return true }
         if abs(flightDurationHours - original.flightDurationHours) > 0.01 { return true }
         // A profile carries model/method choices, so changing it can change the
@@ -202,6 +225,64 @@ final class AddFlightViewModel {
     func applyInterpretedRoute() {
         guard let interpreted = routeInterpretation?.interpreted, interpreted.count >= 2 else { return }
         waypointsText = interpreted.joined(separator: " ")
+    }
+
+    /// How a submit-time route interpretation resolved (mirrors the web's
+    /// `interpretAndConfirmRoute` save gate).
+    enum RouteSubmitInterpretation: Equatable {
+        /// Route resolved cleanly (nothing skipped / off-route). The interpreted
+        /// waypoints have already been written back to the field — safe to submit.
+        case ready
+        /// The resolver dropped tokens the pilot typed. The caller should present
+        /// the interpret sheet so the pilot can confirm before submitting.
+        case needsConfirmation
+        /// Interpretation failed, or resolved to fewer than two usable waypoints.
+        /// `errorMessage` is set; the caller must abort rather than submit raw tokens.
+        case failed
+    }
+
+    /// Interpret the typed route on the server *at submit time* and decide how the
+    /// create/save should proceed. Always awaited before the request goes out, so
+    /// raw ICAO Field-15 syntax — speed/level groups like `N0180VFR`, airway labels
+    /// (`Q230`), SIDs (`BEBEX7W`), `DCT` — is resolved to clean waypoints and never
+    /// sent verbatim (the server rejects those as "must be 2-5 alphanumeric").
+    ///
+    /// This mirrors the web save flow, which awaits `interpretAndConfirmRoute` and
+    /// aborts on failure rather than falling back to the raw input. Relying on the
+    /// debounced `resolveRoute()` alone is racy: a pilot who pastes a route and taps
+    /// Create before the debounce fires (or whose interpret call failed silently)
+    /// would otherwise submit the raw tokens.
+    func interpretRouteForSubmit() async -> RouteSubmitInterpretation {
+        // Clear any banner from a prior failed attempt: only createFlight()/
+        // saveEditedFlight() reset it, and the `.needsConfirmation` path reaches
+        // neither, so a now-successful interpret would otherwise leave a stale
+        // "Couldn't interpret…" error showing behind the confirm sheet.
+        errorMessage = nil
+        let route = waypointsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard waypoints.count >= 2 else {
+            errorMessage = "Enter at least two waypoints."
+            return .failed
+        }
+        isInterpreting = true
+        defer { isInterpreting = false }
+        do {
+            let result = try await repository.interpretRoute(rawRoute: route)
+            routeInterpretation = result
+            applyRouteTimeZones(from: result.waypoints)
+            guard result.interpreted.count >= 2 else {
+                errorMessage = "Couldn't resolve a route from \u{201C}\(route)\u{201D}. Check the waypoints and try again."
+                return .failed
+            }
+            if result.isClean {
+                applyInterpretedRoute()
+                return .ready
+            }
+            return .needsConfirmation
+        } catch {
+            errorMessage = "Couldn't interpret the route: \(error.localizedDescription)"
+            Self.logger.error("Route interpret failed at submit: \(error)")
+            return .failed
+        }
     }
 
     /// Resolve the typed route on the server: validates/normalises waypoints,

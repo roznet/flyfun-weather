@@ -4,7 +4,7 @@ import * as L from 'leaflet';
 import type {
   ForecastAirport, ForecastMapResponse, ModelForecast, ConsensusForecast, AltRequired,
 } from '../adapters/maps-adapter';
-import { formatVisibility, getUnitsRegion } from '../units';
+import { formatVisibility, getUnitsRegion, formatHeading } from '../units';
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
@@ -203,7 +203,7 @@ function visibilityLegendItems(): Array<{ color: string; label: string }> {
 
 function fmtWind(speed: number | null | undefined, dir: number | null | undefined, gust: number | null | undefined): string {
   if (speed == null) return '';
-  const dirStr = dir != null ? `${String(Math.round(dir)).padStart(3, '0')}/` : '';
+  const dirStr = dir != null ? `${formatHeading(dir)}/` : '';
   const gustStr = gust ? `G${Math.round(gust)}` : '';
   return `${dirStr}${Math.round(speed)}${gustStr} kt`;
 }

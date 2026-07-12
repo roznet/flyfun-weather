@@ -121,7 +121,7 @@ struct PirepRowView: View {
                 detailRow("Temp", String(format: "%.0f°C", temp))
             }
             if let dir = pirep.windDir, let spd = pirep.windSpeedKt {
-                detailRow("Wind", String(format: "%03d° / %d kt", dir, spd))
+                detailRow("Wind", "\(dir.paddedHeading)° / \(spd) kt")
             }
             if let ac = pirep.aircraftType {
                 detailRow("Aircraft", ac)

@@ -12,6 +12,7 @@ import type { SoundingProfileData, SoundingProfileLevel } from './types';
 import type { CompareModelDataset } from './compare-renderer';
 import { isDarkTheme } from '../interaction-utils';
 import { altitudeToPressure, pressureToAltitudeFt } from '../../utils/atmo';
+import { formatHeading } from '../../units';
 
 export interface SkewTInteractionCallbacks {
   /** Called with altitude in ft when hovering, undefined when leaving. */
@@ -166,7 +167,7 @@ export function attachSkewTInteraction(
     html += row('RH', level.relative_humidity_pct, '%');
     html += row('CC', level.cloud_area_fraction_pct, '%');
     if (level.wind_speed_kt != null && level.wind_direction_deg != null) {
-      html += `<div>${Math.round(level.wind_direction_deg)}°/${Math.round(level.wind_speed_kt)}kt</div>`;
+      html += `<div>${formatHeading(level.wind_direction_deg)}°/${Math.round(level.wind_speed_kt)}kt</div>`;
       if (data.track_deg != null) {
         const rel = (level.wind_direction_deg - data.track_deg) * Math.PI / 180;
         const hw = level.wind_speed_kt * Math.cos(rel);
@@ -391,7 +392,7 @@ export function attachSkewTCompareInteraction(
       html += `<td>${fmtV(level.temperature_c, '°C')}</td>`;
       html += `<td>${fmtV(level.dewpoint_c, '°C')}</td>`;
       if (level.wind_speed_kt != null && level.wind_direction_deg != null) {
-        html += `<td>${Math.round(level.wind_direction_deg)}°/${Math.round(level.wind_speed_kt)}kt</td>`;
+        html += `<td>${formatHeading(level.wind_direction_deg)}°/${Math.round(level.wind_speed_kt)}kt</td>`;
         if (ds.data.track_deg != null) {
           const rel = (level.wind_direction_deg - ds.data.track_deg) * Math.PI / 180;
           const hw = level.wind_speed_kt * Math.cos(rel);

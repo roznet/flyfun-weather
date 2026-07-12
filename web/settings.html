@@ -167,6 +167,35 @@
           </div>
         </div>
 
+        <div class="section" id="notifications-section">
+          <h3 id="notify-title">Notifications</h3>
+          <p class="muted section-hint" id="notify-section-hint">Choose whether, when, and how you're notified about briefing updates.</p>
+          <div class="form-row model-checkboxes" id="notify-decay-notice" style="display:none;">
+            <p class="field-hint" id="notify-decay-text">Email was turned back on because you removed your last push device — otherwise you'd have no way to receive updates.</p>
+          </div>
+          <div class="form-row">
+            <label for="notify-updates" id="notify-updates-label">Briefing updates</label>
+            <select id="notify-updates">
+              <option value="off">Off</option>
+              <option value="changes">Assessment changes</option>
+              <option value="every">Every update</option>
+            </select>
+            <span class="field-hint" id="notify-updates-hint">Notify when an update changes your flight's assessment (the GREEN/AMBER/RED headline or early outlook).</span>
+          </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="toggle-notify-email"> <span id="notify-email-label">Email</span>
+              <span class="field-hint" id="notify-email-hint">Deliver briefing updates by email.</span>
+            </label>
+          </div>
+          <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="toggle-notify-push"> <span id="notify-push-label">Push</span>
+              <span class="field-hint" id="notify-push-hint">Install the FlyFun iOS app to enable push.</span>
+            </label>
+          </div>
+        </div>
+
         <div class="section" id="autorouter-section">
           <h3>Autorouter (GRAMET)</h3>
           <p class="muted section-hint" id="ar-hint">

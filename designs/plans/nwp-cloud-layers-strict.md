@@ -4,11 +4,11 @@
 > strict-native refactor is live: `build_nwp_cloud_layers` returns native
 > (`nwp_3d`/`grib`) layers or `None` (no synth fallback;
 > `clouds.py:507`); Ogimet-NWP/IENG icing short-circuit to `[]` on
-> `None`/empty clouds (`icing.py:441,517`); the model field is typed
-> `list[EnhancedCloudLayer] | None` (`models/analysis.py:682`) and `None`
-> is preserved end-to-end (`__init__.py:466`); the frontend gates
+> `None`/empty clouds (`icing.py:442,517`); the model field is typed
+> `list[EnhancedCloudLayer] | None` (`models/analysis.py:726`) and `None`
+> is preserved end-to-end; the frontend gates
 > `nwp-cloud-bands` on `nwpCloudLayers !== null` and `nwp-convective-bg`
-> on `hasNwpConvective` (`data-extract.ts:452,474`). Tests:
+> on `hasNwpConvective` (`data-extract.ts:455,477`). Tests:
 > `tests/test_nwp_cloud_layers_from_cc.py`, plus `test_icing.py`/`test_clouds.py`.
 >
 > **Deferred (item 4, by design, not abandoned):** `decode.py` does NOT

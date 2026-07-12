@@ -8,17 +8,30 @@ path — auto (scheduler), in-app, and Siri/MCP — including the
 after commit means we never notify about a pack that could still roll back and
 never hold the pack transaction open across SMTP/APNs I/O.
 
-The gate is channel-agnostic; channels (email, push) are independent user
-choices layered on top:
+The **shared gate** (``notify_qualifies``) is channel- and trigger-agnostic —
+scope + per-flight override + the change filter. It drives the badge and is the
+base decision for both channels:
 
     if flight.notify_override == "mute":  stop
-    elif flight.notify_override == "notify":  qualifies      # any completion
-    else:                                                    # follow global scope
-        scope == "all"  → qualifies
-        scope == "auto" → qualifies iff triggered_by == "scheduler"
+    elif flight.notify_override == "notify":  qualifies      # ALWAYS — bypasses scope AND change filter
+    else:                                                    # follow global scope + change filter
         scope == "off"  → stop
-    if change_only and not changed:  stop
-    → advance the badge; deliver on each ON channel
+        else (on)       → qualifies       # "all"; legacy "auto" also means on
+        if change_only and not changed:  stop
+    → advance the badge
+
+The **per-channel trigger rule** then layers on top of a qualifying refresh
+(ios-app-briefing-notifications.md → cross-cutting semantics #5):
+
+    push  → fires on every qualifying refresh (the foregrounded client
+            self-suppresses the banner, so "am I looking?" needs no server signal)
+    email → fires only for a *non-user-present* refresh (scheduler / Siri / MCP /
+            background), NEVER for the user's own in-app manual refresh — email
+            can't self-suppress, and the user is already looking at the result.
+
+Which refreshes are "user-present" is decided by ``triggered_by``: only a plain
+in-app manual refresh is ``"user"``; Siri and MCP report their own source so
+they still email (closing the Siri refresh-intent loop).
 
 Everything is best-effort: a notification must NEVER break a refresh, so the
 whole thing is wrapped and each channel is guarded independently.
@@ -49,25 +62,35 @@ def notify_qualifies(
     scope: str,
     change_only: bool,
     changed: bool,
-    triggered_by: str,
 ) -> bool:
-    """Pure gate: does this completion qualify to notify (and light the badge)?
+    """Shared gate: does this completion qualify to notify (and light the badge)?
 
-    Independent of channels — the same decision drives both the badge advance
-    and whether any channel delivers (per-channel on/off is applied after).
+    Channel- and trigger-agnostic — scope + per-flight override + the change
+    filter. The caller combines this with *presence* (was the user watching the
+    refresh's UI stream) to form the single WHEN decision that gates the badge
+    and both channels.
+
+    Per-flight override precedence, evaluated first:
+
+    - ``mute`` → never, regardless of scope.
+    - ``notify`` → **always**: every completion for this flight, bypassing both
+      global ``scope`` and the ``change_only`` filter. This is the strong opt-in
+      and the default applied when auto-refresh is enabled — it restores the
+      pre-#366 "notify me whenever a new report is ready" behavior, which fires
+      even when the assessment is unchanged but the detail moved.
+    - ``default`` → follow global scope + the change filter. ``scope`` "off"
+      silences these flights; any other value — "all", or legacy "auto" — is on.
+
+    The manual-vs-automatic line is drawn by presence (in the caller), NOT here
+    and NOT per-channel — so a refresh the user watched finish is suppressed even
+    for a ``notify`` flight.
     """
     if notify_override == "mute":
         return False
     if notify_override == "notify":
-        qualifies = True
-    elif scope == "all":
-        qualifies = True
-    elif scope == "auto":
-        qualifies = triggered_by == "scheduler"
-    else:  # scope == "off"
-        qualifies = False
+        return True  # always — bypasses scope + change filter (see docstring)
 
-    if not qualifies:
+    if scope == "off":
         return False
     if change_only and not changed:
         return False
@@ -185,17 +208,26 @@ def notify_briefing_refresh(
     pack_dir: Path,
     *,
     user_id: str,
-    triggered_by: str,
-    force_email: bool = False,
+    present: bool,
 ) -> None:
-    """Evaluate the notification gate for a completed refresh and dispatch.
+    """Evaluate the notification decision for a completed refresh and dispatch.
 
     Called once per refresh from ``_notify_refresh_complete`` (after commit).
     Never raises — wrapped so a notification failure can't break a refresh.
 
-    ``force_email`` ensures exactly one email is sent for this refresh regardless
-    of the scope/change gate — the legacy "email me when done" checkbox routed
-    through this single gate so it can't double-send with the preference email.
+    Two cleanly-separated axes:
+
+    - **WHEN** — one channel-agnostic decision: the refresh qualifies
+      (scope + per-flight override + change filter) AND the user is not
+      ``present`` (actively watching the refresh's UI stream at completion).
+      This single boolean gates the badge and both channels — no per-channel,
+      per-trigger, or per-surface special-casing.
+    - **HOW** — pure user preference: deliver on each enabled channel (email,
+      push), independent of who / what / where triggered the refresh.
+
+    ``present`` is computed by the caller from the live UI refresh stream (see
+    ``api/packs.py``) — the same signal for web and iOS, so "don't notify me
+    about a refresh I just watched finish" works identically on both.
     """
     try:
         from weatherbrief.api.preferences import load_notify_prefs
@@ -204,28 +236,25 @@ def notify_briefing_refresh(
         prefs = load_notify_prefs(db, user_id)
         changed, delta = detect_change(db, flight.id, meta)
 
-        email_sent = False
-        if notify_qualifies(
+        # WHEN: one decision, channel- and trigger-agnostic. A user actively
+        # watching the refresh finish needs no notification (they saw it live).
+        if present or not notify_qualifies(
             notify_override=flight.notify_override,
             scope=prefs["notify_scope"],
             change_only=prefs["notify_change_only"],
             changed=changed,
-            triggered_by=triggered_by,
         ):
-            # Advance the badge state (independent of alert channel being on) and
-            # read the authoritative count for aps.badge.
-            record_notify_qualifying(db, user_id, flight.id, meta.fetch_timestamp)
-            badge = compute_badge_count(db, user_id)
+            return
 
-            if prefs["notify_email"]:
-                _send_email(db, user_id, flight, meta, pack_dir)
-                email_sent = True
-            if prefs["notify_push"]:
-                _send_push(db, user_id, flight, meta, delta, badge)
+        # Advance the badge (gated by the same single WHEN decision above) and
+        # read the authoritative count for aps.badge.
+        record_notify_qualifying(db, user_id, flight.id, meta.fetch_timestamp)
+        badge = compute_badge_count(db, user_id)
 
-        # Legacy per-refresh "email me when done" — send once if the gate above
-        # didn't already email for this refresh.
-        if force_email and not email_sent:
+        # HOW: pure channel preference — nothing about the trigger or surface.
+        if prefs["notify_email"]:
             _send_email(db, user_id, flight, meta, pack_dir)
+        if prefs["notify_push"]:
+            _send_push(db, user_id, flight, meta, delta, badge)
     except Exception:
         logger.warning("notify: dispatch failed for %s", getattr(flight, "id", "?"), exc_info=True)

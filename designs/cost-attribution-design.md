@@ -385,6 +385,7 @@ there are no donations or `active_users == 0`.
 |----------|--------|------|---------|
 | `/api/donations/checkout` | POST | User or anon | Create a Stripe Checkout Session (`{amount, currency, recurring}`) → returns redirect URL |
 | `/api/donations/webhook` | POST | Stripe sig | **Source of truth**: record/refund on `checkout.session.completed`, `charge.refunded`; verifies `STRIPE_WEBHOOK_SECRET`; idempotent on `provider_ref` |
+| `/api/donations/email-receipt` | POST | None (opt-in) | Send a one-off confirmation email for a just-completed donation; reads the Checkout `session_id` straight from Stripe (avoids racing the webhook); recipient derived from the donation (account email, else Checkout email) so a forged `session_id` can't spam an inbox |
 | `/api/donations/me` | GET | User | Viewer's donation total + program-average `impact` + retrospective `personal` panel (lifetime cost, "+N pilots"/forward overflow) (USD + `fx`) |
 | `/api/donations/summary` | GET | None | Public: this-year community coverage + `stats` trio (active pilots 30d, briefings all-time, AI words) + `run_cost` block |
 | `/api/donations/preview` | GET | User or anon | Adaptive-ladder translation of a prospective `?amount=&currency=` (personal path when logged-in w/ history, else program average) |

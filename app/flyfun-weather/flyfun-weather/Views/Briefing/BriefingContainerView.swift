@@ -10,6 +10,10 @@ struct BriefingContainerView: View {
     @State private var viewModel: BriefingViewModel?
     @State private var trackingService = FlightTrackingService()
     @State private var showingPirepSheet = false
+    /// Per-flight notification override (bell), tracked locally since `flight`
+    /// is immutable. Seeded from the flight in `.task`; updated optimistically.
+    @State private var notifyOverride: FlightNotifyOverride = .default
+    @State private var notifyOverrideBusy = false
 
     private static let dayTimeUTC: DateFormatter = {
         let fmt = DateFormatter()
@@ -82,6 +86,12 @@ struct BriefingContainerView: View {
                                     .font(.caption)
                             }
                         }
+                        // Hide the notify bell for flown flights (matches web's
+                        // renderNotifyOverrideBar isPast guard) — an override on a
+                        // past flight is a no-op.
+                        if flight.isEditable && !flight.isPast {
+                            notifyBellMenu
+                        }
                         BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,
                                             isInFlightWindow: isInFlightWindow, startTracking: startTracking)
                     }
@@ -97,7 +107,9 @@ struct BriefingContainerView: View {
         }
         .task {
             guard let repo = appState.repository else { return }
-            // Pick up server-side flag changes (e.g. pirep_can_publish)
+            notifyOverride = flight.notifyOverrideMode
+            // Pick up server-side flag changes (e.g. pirep_can_publish, and the
+            // account "Briefing updates" setting the bell's Default hint reflects)
             // before the toolbar decides whether to show the PIREP button.
             await appState.refreshUserPreferences()
             // Cache flight data for offline recovery
@@ -138,6 +150,63 @@ struct BriefingContainerView: View {
             // until the scan reaches a terminal state. Re-entry recreates the VM
             // via `.task` and restarts polling.
             viewModel?.stopTimeOptionsPolling()
+        }
+    }
+
+    /// Per-flight notification bell — Default / Always / Mute. Delivery still
+    /// uses the account channels; this controls "whether", not "how". The footer
+    /// shows what Default currently resolves to (and adapts when account = Off).
+    private var notifyBellMenu: some View {
+        Menu {
+            Picker("Notifications for this flight", selection: Binding(
+                get: { notifyOverride },
+                set: { setNotifyOverride($0) }
+            )) {
+                ForEach(FlightNotifyOverride.allCases) { mode in
+                    Label(mode.label, systemImage: mode.systemImage).tag(mode)
+                }
+            }
+            Section { Text(notifyOverrideHint) }
+        } label: {
+            Label("Notifications", systemImage: notifyOverride.systemImage)
+                .font(.caption)
+        }
+        .disabled(notifyOverrideBusy || appState.apiClient == nil)
+    }
+
+    /// Adaptive hint describing the current override / what Default resolves to.
+    private var notifyOverrideHint: String {
+        let account = appState.userPreferences.preferences.briefingUpdates
+        switch notifyOverride {
+        case .mute:
+            return "Muted — never notify for this flight"
+        case .notify:
+            return account == .off ? "Always — overriding account Off" : "Always notify for this flight"
+        case .default:
+            switch account {
+            case .off: return "Following account: Off"
+            case .changes: return "Following account: Assessment changes"
+            case .every: return "Following account: Every update"
+            }
+        }
+    }
+
+    /// Persist the per-flight override (optimistic; reverts on failure).
+    private func setNotifyOverride(_ value: FlightNotifyOverride) {
+        guard let repo = appState.repository, value != notifyOverride else { return }
+        let previous = notifyOverride
+        notifyOverride = value
+        notifyOverrideBusy = true
+        Task {
+            do {
+                _ = try await repo.updateFlight(
+                    flightId: flight.id,
+                    request: UpdateFlightRequest(notifyOverride: value.rawValue)
+                )
+            } catch {
+                notifyOverride = previous
+            }
+            notifyOverrideBusy = false
         }
     }
 

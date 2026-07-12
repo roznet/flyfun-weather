@@ -156,7 +156,7 @@ of truth — **not yet wired** (see next stages).
 Run in a worktree with a real `DATA_DIR` and a dev server:
 
 1. `python3 -m venv venv && source venv/bin/activate && pip install -e ".[dev]"`.
-2. `pytest tests/eval_workbench/ -q` — should pass (13 tests; pure logic).
+2. `pytest tests/eval_workbench/ -q` — should pass (17 tests; pure logic).
 3. Build a tiny corpus: `python scripts/pull_eval_corpus.py --from data/packs`
    (or via `export_eval_candidates.py` → manifest). Confirm
    `$EVAL_CORPUS_DIR/<id>/corpus_meta.json` written, payloads copied.

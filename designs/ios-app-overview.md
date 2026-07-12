@@ -11,12 +11,12 @@
 - [UI](./ios-app-ui.md) — cockpit constraints, screen layouts, report cards
 - [Sync & Prompting](./ios-app-sync-prompting.md) — offline queue, WebSocket, forecast-driven prompts
 - [Roadmap](./ios-app-roadmap.md) — phases, decisions, open questions
-- [App Intents](./ios-app-intents.md) — Siri / Shortcuts / Apple Intelligence surface (proposed)
-- [Briefing Refresh Notifications](./ios-app-briefing-notifications.md) — APNs push on refresh-complete (proposed)
+- [App Intents](./ios-app-intents.md) — Siri / Shortcuts / Spotlight surface (shipped, `AppIntents/`)
+- [Briefing Refresh Notifications](./ios-app-briefing-notifications.md) — APNs push on refresh-complete (shipped)
 
-## Current Implementation Status (2026-05-30)
+## Current Implementation Status (2026-07-11)
 
-Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (aircraft registry) and M1 (PIREP submit/view) implemented with offline queue flush. Live in-flight tracking ("Start Flight") shipped, plus cross-section parity with web (GRAMET/NWP/SFIP/Ogimet layers).
+Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (aircraft registry) and M1 (PIREP submit/view) implemented with offline queue flush. Live in-flight tracking ("Start Flight") shipped, plus cross-section parity with web (GRAMET/NWP/SFIP/Ogimet layers). APNs push (refresh-complete) and the App Intents / Siri Shortcuts surface have since shipped.
 
 ### What's built
 
@@ -45,7 +45,11 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 - Start/Stop toolbar button in `BriefingContainerView` (only during the in-flight window)
 - Live aircraft position drawn on the cross-section (`CrossSectionView`) and route map (`RouteMapView`); also used to pre-fill PIREP location/altitude
 
-**Pack management**: Pack history picker (toolbar dropdown with D-N labels + assessment badges). Server refresh with SSE streaming progress (stage, percentage). Active-refresh detection (polls for refreshes started elsewhere).
+**Pack management**: Pack history picker (toolbar dropdown with D-N labels + assessment badges). Server refresh with SSE streaming progress (stage, percentage). Active-refresh detection (polls for refreshes started elsewhere). Seamless pack sync — `BriefingViewModel.syncLatestPack()` (cheap, no-op if unchanged) fires on appear / pull-to-refresh / foreground / push, distinct from the ↻ full-refresh.
+
+**Push notifications (shipped)**: `Services/PushNotifications.swift` — `AppDelegate` (`UIApplicationDelegate` + `UNUserNotificationCenterDelegate`) registers for remote notifications, hex-encodes the device token, and posts it to the server (`api/devices.py`). Refresh-complete pushes deep-link into the flight/briefing via `PushSupport.pendingNavigation(from:)` → `PendingNavigation`. Server-side push is off by default (migration required, `APNS_*` env). See [Briefing Refresh Notifications](./ios-app-briefing-notifications.md).
+
+**App Intents / Siri Shortcuts (shipped)**: `AppIntents/` — flight/airport entities + queries, intents (CheckBriefing, OpenBriefing, OpenFlightList, RefreshBriefing, AirportWeather, FlightsOverview), `FlyFunShortcuts` provider, Spotlight donation. See [App Intents](./ios-app-intents.md).
 
 **Offline caching & resilience**:
 - `CachingBriefingRepository` wraps `OnlineBriefingRepository` with multi-tier fallback
@@ -65,10 +69,9 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 
 ### What's NOT built yet
 
-- Push notifications for briefing updates (Phase 2 M2)
 - SwiftData persistence (current cache is file-based)
 - True background refresh (auto-download runs only while the briefing screen is open / on foreground, not via `BGTaskScheduler` or a background `URLSession`)
-- Phase 3 M2: route/airport watches, APNs notifications, spatial matching
+- Phase 3 M2: route/airport watches, spatial matching (refresh-complete push itself has shipped; the watch/spatial-match layer has not)
 - Phase 3 M3: post-flight debrief, validation tooling
 - Phase 3a: voice PIREP (Siri shortcut), proactive prompting engine
 - Phase 3c: live PIREP sharing (WebSocket)

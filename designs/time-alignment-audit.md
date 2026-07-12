@@ -56,8 +56,10 @@ GRIB enrichment fetches data for **each UTC hour of the flight window**, not jus
    - **ICON-EU:** 1-hourly for 0–78h, 3-hourly for 78–120h
 3. Deduplicate and sort
 
+The GFS path also adds coverage hours the simple loop would miss: a non-zero-minute departure gets an extra bracket hour (`extra = 1 if minute > 0`) plus its floor (`minute=0`) hour, and the flooring `_snap_to_gfs_grid_floor(dep_delta)` native hour is always included so the preceding native step exists for forward-fill in the 3-hourly region (>120h).
+
 Edge cases:
-- `flight_duration_hours=0` → `ceil(0)+1 = 1` hour → departure hour only (same as a point-to-point enrichment)
+- `flight_duration_hours=0`, round departure → `max(1, ceil(0)+1+0) = 1` hour → departure hour only (same as a point-to-point enrichment)
 - GFS init after departure → `max(0, delta)` clamp → f000
 - Cross-midnight flights → hours in the next day that fall outside the 24h Open-Meteo cross-section are silently skipped (no matching `hourly.time.hour`)
 

@@ -194,7 +194,7 @@ if not status.fresh:
 
 Nine tracked source/model pairs (`SOURCE_REGISTRY` in `fetch/freshness/registry.py`): 3 direct GRIB (`ecmwf:direct`, `gfs:noaa`, `icon_eu:dwd`) + 6 Open-Meteo republishes (`gfs/ecmwf/icon/meteofrance/ukmo/gem:openmeteo`). Each `SourceConfig` carries schedule (cycles, delivery_offset, horizon) plus descriptive metadata (model/provider label, role, resolution, coverage, pressure_levels) feeding `/api/data-sources` and the help-page table.
 
-The legacy `fetch/model_status.py` module (`fetch_model_metadata`, `check_freshness`, `compute_next_update`) is no longer consumed by the freshness endpoint. `fetch_model_metadata` survives as a direct Open-Meteo init-time probe used by `tasks/alternates.py`, `tasks/standalone_verification.py`, and `frontal/` (grid + CLI).
+The legacy `fetch/model_status.py` module (`fetch_model_metadata`, `check_freshness`, `compute_next_update`) is no longer consumed by the freshness endpoint's per-request path. `fetch_model_metadata` survives as a direct Open-Meteo init-time probe: it backs the Open-Meteo marker population in `fetch/freshness/sources.py` (background loop, not per-call) and is called directly by `tasks/alternates.py`, `tasks/standalone_verification.py`, `hewson/precompute.py`, `frontal/` (grid + CLI), and pack building in `api/packs.py`.
 
 → Full doc: [freshness-markers.md](./freshness-markers.md)
 
@@ -223,6 +223,9 @@ grib_init_times, grib_skip_reasons = enrich_forecasts(
 | `icon_eu_levels.py` | Log-pressure interpolation from ICON-EU model levels to pressure levels |
 | `ecmwf_fetch.py` | Parse ECPDS filenames, scan delivery directory, find latest run. No HTTP — files land on local disk via ECPDS push |
 | `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points. Chunked ICON-EU decoder (`decode_icon_eu_per_point_chunked()`) processes one variable at a time with explicit `gc.collect()` between — peak ~270MB vs ~800MB. ECMWF decoders handle multi-grid files (first-wins per point) |
+| `decode_worker.py` | Thin process-pool worker entry points (Phase B-3): serialisable args only, GRIB bytes read from disk inside the worker. Escapes the GIL contention between concurrent `enrich_forecasts()` calls |
+| `ecmwf_watcher.py` | Background scanner: writes `.ready_{date}_{cycle}z` sentinel files when an ECMWF delivery run is complete. Manifest from `delivery_config.json` co-located with the data |
+| `precache.py` | Pre-warms ICON-EU/GFS byte-range cache for the `/maps.html` D-0..D-3 airport-profile selectables (issue #126). Shares the per-flight disk cache so warmed runs also speed briefings |
 | `fill.py` | Time-axis fill of GRIB-enriched fields. Linear interp for GFS cloud diagnostics (window-midpoint, see meteorology-decisions §3) and CLW/ICMR when `gfs_init` is provided; forward-fill for ICON-EU/ECMWF and the GFS fallback path. Also hosts `apply_gfs_rh_condensate_gate` — drops GFS phantom layers where pressure-level RH and condensate disagree with the averaged cover |
 | `cache.py` | Disk cache per model (`data/.cache/grib/{model}/{date}_{cycle}z/`). Per-model TTL via `MODEL_TTL_SECONDS` (GFS 24h, ICON-EU 12h; 12h fallback) — ECMWF reads local ECPDS disk so it isn't cached here |
 

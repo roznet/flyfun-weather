@@ -9,7 +9,7 @@ import { advisoryBand, isCompactBand, compareAdvisories } from '../helpers/advis
 import { formatAltitudeDeltaNote } from '../helpers/altitude-diff';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
-import { formatVisibility } from '../units';
+import { formatVisibility, formatHeading } from '../units';
 import {
   actionForAdvisory,
   planAdvisoryAction,
@@ -193,7 +193,7 @@ function aggregateActionMarkup(
 function formatRunwayPopup(allRunways: RunwayWind[]): string {
   if (allRunways.length === 0) return '';
   const rows = allRunways.map(r =>
-    `<tr><td>${escapeHtml(r.runway_id)}</td><td>${r.heading_deg.toFixed(0)}&deg;</td>` +
+    `<tr><td>${escapeHtml(r.runway_id)}</td><td>${formatHeading(r.heading_deg)}&deg;</td>` +
     `<td>${r.crosswind_kt.toFixed(0)}kt</td><td>${r.headwind_kt > 0 ? '+' : ''}${r.headwind_kt.toFixed(0)}kt</td></tr>`
   ).join('');
   return `
@@ -205,14 +205,10 @@ function formatRunwayPopup(allRunways: RunwayWind[]): string {
   `;
 }
 
-function roundWind(deg: number): string {
-  return String(Math.round(deg / 10) * 10).padStart(3, '0');
-}
-
 function formatWind(cond: AirportModelCondition): string {
   if (cond.wind_speed_kt == null || cond.wind_direction_deg == null) return '\u2014';
 
-  const dir = roundWind(cond.wind_direction_deg);
+  const dir = formatHeading(cond.wind_direction_deg, 10);
   const spd = cond.wind_speed_kt.toFixed(0);
   const gust = cond.wind_gust_kt != null ? `G${cond.wind_gust_kt.toFixed(0)}` : '';
   return `${dir}@${spd}${gust}`;

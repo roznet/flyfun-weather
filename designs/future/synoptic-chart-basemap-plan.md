@@ -121,12 +121,14 @@ catch standalone than after the renderer exists.
   ] }`. DWD always included; Met Office only if `_metoffice_charts_allowed`.
   Latest cycle per source via the shared base's `list_cycles`.
 - `GET /api/synoptic-charts/{source}/{run_cycle}/{chart_id}` (as built: no
-  `.{ext}` suffix on the route) → shared serve helper (`serve_chart_bytes`):
+  `.{ext}` suffix on the route) → shared serve helper (`serve_chart_bytes`,
+  which lives in `api/_chart_serving.py`, not in `synoptic_charts.py`):
   validate `source` slug, `run_cycle`, `chart_id` allowlist; long immutable
   `Cache-Control`; gate Met Office (404 not 403 so non-admins can't probe);
   404 if evicted.
 - Refactor the existing flight-scoped chart endpoints in `packs.py` to call the
-  same shared serve helper (behavior unchanged).
+  same shared serve helper (behavior unchanged). Both `synoptic_charts.py` and
+  `packs.py` import `serve_chart_bytes` + `SOURCES` from `_chart_serving.py`.
 
 ### Phase 3 — HewsonGridLayer pluggable projector
 

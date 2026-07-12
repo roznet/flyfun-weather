@@ -12,6 +12,10 @@ struct FlightListView: View {
     @State private var showSettings = false
     @State private var showSignOutWarning = false
     @State private var editingFlight: FlightResponse?
+    // Guards the one authoritative-reload retry in `applyPendingNavigation` so a
+    // deep-link to a just-created flight (push tap / Universal Link) isn't dropped
+    // against a stale cache-first list. Holds the flight id we've already retried.
+    @State private var reloadRetryFlightId: String?
     /// "Past" flights start collapsed (like the web app) so the list opens on
     /// what's upcoming/recent.
     @State private var pastExpanded = false
@@ -240,11 +244,26 @@ struct FlightListView: View {
             if let match = flights.first(where: { $0.id == flightId }) {
                 selectedFlight = match
                 appState.clearPendingNavigation()
-            } else if !vm.isOffline {
-                // Authoritative (online) list loaded and the flight isn't in it —
-                // it's gone; drop the target. When the list is offline/stale, keep
-                // the target: a later successful fetch may include a just-created
-                // flight the cache didn't have yet, so we retry after the next load.
+                reloadRetryFlightId = nil
+            } else if vm.isOffline || vm.isRefreshing {
+                // Offline/stale list, or a fresh fetch is still in flight — the
+                // target flight (e.g. one just created) may still arrive. Keep the
+                // target; the next load completion re-applies.
+                return
+            } else if reloadRetryFlightId != flightId {
+                // Settled online list without the flight. It may be a cache-first
+                // paint that predates a just-created flight, so force ONE
+                // authoritative reload and re-check before giving up — otherwise a
+                // push tap / Universal Link on a brand-new flight lands on the list
+                // instead of opening the briefing.
+                reloadRetryFlightId = flightId
+                Task {
+                    await vm.loadFlights()
+                    applyPendingNavigation()
+                }
+            } else {
+                // Authoritative reload still lacks it — it's genuinely gone. Drop.
+                reloadRetryFlightId = nil
                 appState.clearPendingNavigation()
             }
         }

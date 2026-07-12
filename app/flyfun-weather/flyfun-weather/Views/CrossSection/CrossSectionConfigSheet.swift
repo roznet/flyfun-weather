@@ -151,39 +151,72 @@ struct CrossSectionConfigSheet: View {
                 ForEach(CloudStyle.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
+            // NWP cloud has no native data for this model at this lead time (e.g.
+            // a far-out ECMWF flight with no 3-D cloud-fraction enrichment). The
+            // chart substitutes same-style DD clouds; tell the user why NWP looks
+            // off rather than leaving a blank layer. Mirrors web's greyed NWP
+            // toggle. (#nwp-cloud-layer-ios-web)
+            if axes.source == .nwp, csVM.unavailableLayers.contains(NwpFallback.nwpCloudsSignal) {
+                Label(
+                    "No native NWP cloud data for this model at this range — showing DD clouds instead.",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(Theme.textMuted)
+            }
         }
     }
 
     @ViewBuilder
     private func methodRow(for group: LayerGroup) -> some View {
         let active = csVM.activeMethod(for: group)
-        HStack {
-            swatch(LegendColors.color(forGroup: group))
-            Text(group.label)
-            Spacer()
-            Menu {
-                Button {
-                    csVM.setMethod(nil, for: group)
-                } label: {
-                    Label("None", systemImage: active == nil ? "checkmark" : "")
-                }
-                ForEach(CrossSectionLayer.methodGroupOrder[group] ?? [], id: \.self) { layerId in
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                swatch(LegendColors.color(forGroup: group))
+                Text(group.label)
+                Spacer()
+                Menu {
                     Button {
-                        csVM.setMethod(layerId, for: group)
+                        csVM.setMethod(nil, for: group)
                     } label: {
-                        if active == layerId {
-                            Label(CrossSectionLayer.methodLabels[layerId] ?? layerId, systemImage: "checkmark")
-                        } else {
-                            Text(CrossSectionLayer.methodLabels[layerId] ?? layerId)
+                        Label("None", systemImage: active == nil ? "checkmark" : "")
+                    }
+                    ForEach(CrossSectionLayer.methodGroupOrder[group] ?? [], id: \.self) { layerId in
+                        // A method with no data for this model (e.g. Ogimet-NWP
+                        // when there's no native NWP cloud) is greyed and marked,
+                        // mirroring web's disabled panel rows. (#nwp-cloud-layer-ios-web)
+                        let unavailable = csVM.unavailableLayers.contains(layerId)
+                        let base = CrossSectionLayer.methodLabels[layerId] ?? layerId
+                        let label = unavailable ? "\(base) — no data" : base
+                        Button {
+                            csVM.setMethod(layerId, for: group)
+                        } label: {
+                            if active == layerId {
+                                Label(label, systemImage: "checkmark")
+                            } else {
+                                Text(label)
+                            }
                         }
+                        .disabled(unavailable)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(active.flatMap { CrossSectionLayer.methodLabels[$0] } ?? "None")
+                            .foregroundStyle(active != nil ? Theme.primary : Theme.textMuted)
+                        Image(systemName: "chevron.up.chevron.down").font(.caption2)
                     }
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(active.flatMap { CrossSectionLayer.methodLabels[$0] } ?? "None")
-                        .foregroundStyle(active != nil ? Theme.primary : Theme.textMuted)
-                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
-                }
+            }
+            // The active method has no data for this model, so a DD/thermo
+            // fallback is drawn instead — say which, so the chart isn't a mystery.
+            if let active, csVM.unavailableLayers.contains(active),
+               let substitute = NwpFallback.ddSubstituteId(for: active) {
+                Label(
+                    "No data for this model — showing \(CrossSectionLayer.methodLabels[substitute] ?? substitute) instead.",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(Theme.textMuted)
             }
         }
     }

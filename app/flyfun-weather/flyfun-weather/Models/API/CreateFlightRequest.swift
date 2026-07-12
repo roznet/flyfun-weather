@@ -37,6 +37,9 @@ struct UpdateFlightRequest: Encodable {
     /// Pinned alternate departure (ISO 8601), or `""` to clear it. Omit for no
     /// change. Paired with `flexibility == .alternate`.
     var altDepartureTime: String? = nil
+    /// Per-flight briefing-notification override ("default" | "notify" | "mute");
+    /// omit for no change.
+    var notifyOverride: String? = nil
 }
 
 /// How much of the briefing an edit invalidated, returned alongside the updated

@@ -104,12 +104,56 @@ alembic current 2>/dev/null
 alembic heads 2>/dev/null
 ```
 
-If they differ, warn the user prominently:
+If they differ, DO NOT reflexively tell the user to run `alembic upgrade head` —
+first figure out *why* they differ. There are two very different causes and only
+one is fixed by an upgrade.
+
+### Know which DB you're looking at (avoid inspecting the wrong file)
+
+In dev, `.env` usually does **not** set `DATABASE_URL`. Instead it sets
+`DATA_DIR=${WORKING_DIR}/data`, and both the app (`get_engine()`) and
+`alembic/env.py::_get_url()` resolve the URL as:
+```
+sqlite:///{DATA_DIR}/flyfun.db      # => <worktree>/data/flyfun.db
+```
+So the real dev DB is **`data/flyfun.db`** — NOT `alembic.ini`'s literal
+`sqlalchemy.url` (a fallback alembic env.py overrides), and NOT the several stale
+siblings in `data/` (`weatherbrief.db`, `weather.db`, `triage.db`). If you inspect
+the schema directly (SQLAlchemy `inspect`, `sqlite3`), resolve the path the same
+way — never hardcode a default DB name, or you'll diagnose the wrong file. Confirm
+with: `python -c "import os; from dotenv import load_dotenv; load_dotenv(); print(os.environ.get('DATABASE_URL') or f\"sqlite:///{os.environ.get('DATA_DIR','data')}/flyfun.db\")"`.
+
+### Cause A — genuinely pending migration (stamp behind, schema behind)
+
+The normal case. Warn prominently and offer to run it:
 > Pending Alembic migrations detected. Run `alembic upgrade head` before starting, or the app may fail.
 
 Ask whether to run `alembic upgrade head` now or skip.
 
-**Note:** the worktree's `.env` (copied from main by `/worktree-init`) points `DATABASE_URL` and friends at main's DB by default, so this migration runs against the shared DB. If that's not what you want, stop and fork the DB first (see `worktree-init` Step 5).
+### Cause B — schema AHEAD of the stamp (create_all built it first)
+
+The app calls `Base.metadata.create_all()` on startup, which creates any **missing
+tables** from the *current* models — so a DB the app has already run against can
+hold a head-revision table/column while `alembic_version` still reads an older
+revision. Here `alembic upgrade head` will **fail**, not help — e.g.
+`duplicate column name: notify_override` or `table … already exists` — because it
+tries to re-create objects that are already there.
+
+If an upgrade fails that way (or before running it, if you suspect this), inspect
+the real DB (path resolved as above) for head's objects:
+- **All of head's objects already present and matching** → schema is effectively at
+  head; reconcile the marker only, non-destructively:
+  ```bash
+  alembic stamp head
+  ```
+  (updates `alembic_version`, runs no DDL — safe on a large dev DB).
+- **Only partially present** → do NOT force or drop anything. Stop and tell the
+  user; a partial create_all/migration divergence needs a human decision.
+
+Never run destructive DDL (drop column/table, batch-rebuild) on the dev DB to make
+a migration apply — `data/flyfun.db` can be >1 GB of real data.
+
+**Note:** the worktree's `.env` (copied from main by `/worktree-init`) points `DATA_DIR`/`DATABASE_URL` at main's DB by default, so any upgrade/stamp here acts on the shared DB. If that's not what you want, stop and fork the DB first (see `worktree-init` Step 5).
 
 ## Step 8 — Start the tmux session
 

@@ -30,7 +30,7 @@ Server-side work is phased to match the app roadmap. Endpoints listed below are 
 
 | Endpoint | Change |
 |----------|--------|
-| `/auth/login/google?platform=ios` | Callback redirects to `<scheme>://auth/callback?token=<jwt>`. Scheme comes from `?scheme=` (stored in session as `oauth_scheme`), defaulting to `flyfun`. |
+| `/auth/login/google?platform=ios` | Callback redirects to `<scheme>://auth/callback?code=<code>&state=<state>` (auth-code flow, H8 hardening; `?token=<jwt>` is the legacy fallback). Scheme comes from `?scheme=` (stored in session as `oauth_scheme`), defaulting to `flyfun`; `platform` stored as `oauth_platform`. Scheme allowlist is now exact-match (no loose `flyfun*` regex). |
 | `/auth/apple/token` | Native Apple identity token → flyfun JWT |
 
 Lives in `flyfun-common` (`flyfun_common/auth/router.py`), wired via `create_auth_router(...)` in `weatherbrief/api/app.py`.
@@ -41,7 +41,7 @@ Shipped as `/bundle` (not `/companion` as originally planned).
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/flights/{id}/packs/{ts}/bundle` | GET | Single gzipped JSON object keyed by cache-endpoint name (`advisories`, `snapshot`, `route-analyses`, `elevation`, `digest`) plus pre-computed sounding profiles for every (point, model). For full offline display + client Skew-T. |
+| `/api/flights/{id}/packs/{ts}/bundle` | GET | Single gzipped JSON object keyed by cache-endpoint name (`advisories`, `snapshot`, `route-analyses`, `elevation`, `digest`, `altitude-table`) plus pre-computed sounding profiles for every (point, model). For full offline display + client Skew-T. |
 
 Implementation notes (`packs.py::get_bundle`):
 - Response is `gzip`-compressed with `Content-Encoding: gzip`; an `X-Uncompressed-Length` header lets the client show accurate download progress (URLSession transparently decompresses).

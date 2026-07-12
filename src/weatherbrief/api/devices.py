@@ -93,3 +93,16 @@ def unregister_device(
         DeviceTokenRow.user_id == user_id,
     ).delete(synchronize_session=False)
     logger.info("Unregistered device token for %s", user_id)
+
+    # Decay / fail-safe: if that was the user's LAST device and they were
+    # push-only (email off), re-enable email so they aren't silently stranded
+    # with no working channel (channel invariant).
+    from weatherbrief.notify.push import count_user_devices
+
+    if count_user_devices(db, user_id) == 0:
+        from weatherbrief.api.preferences import apply_last_device_decay
+
+        if apply_last_device_decay(db, user_id):
+            logger.info(
+                "Re-enabled briefing email for %s after last device unregister", user_id
+            )

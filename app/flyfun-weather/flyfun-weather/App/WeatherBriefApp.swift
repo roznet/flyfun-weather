@@ -39,6 +39,10 @@ struct WeatherBriefApp: App {
             }
             .environment(appState)
             .onOpenURL { url in
+                // Universal Links (Smart App Banner "Open", tapped briefing links)
+                // route to a flight; everything else falls through to the
+                // auth-callback path (auth-callback universal link + reviewer token).
+                if appState.handleUniversalLink(url: url) { return }
                 appState.handleAuthCallback(url: url)
             }
             .onChange(of: scenePhase) {
@@ -48,14 +52,19 @@ struct WeatherBriefApp: App {
                     // list sees it before its own `.task` load runs.
                     appState.consumePendingNavigation()
                     Task { await appState.syncPendingPireps() }
-                    Task { await appState.refreshUserPreferences() }
+                    // Refresh prefs, then reconcile push against iOS's actual
+                    // authorization so the toggle/pref match reality (and a rotated
+                    // APNs token is re-registered). Chained so reconcile reads fresh
+                    // prefs, not a stale snapshot.
+                    Task {
+                        await appState.refreshUserPreferences()
+                        await appState.reconcilePushAuthorization()
+                    }
                     Task { await appState.refreshHelpCatalog() }
                     Task { await appState.pruneStaleCache() }
                     // Badge is server-authoritative: reconcile on every activation
-                    // (the correctness backstop for coalesced/missed silent pushes),
-                    // and re-upload a rotated APNs token when already authorized.
+                    // (the correctness backstop for coalesced/missed silent pushes).
                     Task { await appState.reconcileBadge() }
-                    Task { await appState.refreshPushRegistrationIfAuthorized() }
                 }
             }
         }
