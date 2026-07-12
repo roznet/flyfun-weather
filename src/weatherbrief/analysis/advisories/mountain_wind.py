@@ -180,7 +180,9 @@ class MountainWindEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0  # mountain points only
+            terrain_known = 0  # points with a known terrain elevation
+            mountain_pts = 0   # points where terrain exceeds the threshold
+            total = 0          # mountain points with wind data (assessable)
             affected = 0
             max_wind = 0.0
             wave_red = False          # corroborated point above the lower red bar
@@ -201,22 +203,37 @@ class MountainWindEvaluator:
                 terrain_ft = max_terrain_near_point(
                     ctx.elevation, rpa.distance_from_origin_nm
                 )
-                if terrain_ft is None or terrain_ft < terrain_threshold:
+                if terrain_ft is None:
+                    # No elevation data here — we cannot say whether there is
+                    # terrain, so this is UNAVAILABLE, not "no mountains" GREEN.
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    ridge_cells.append((dist, None))
+                    wave_cells.append((dist, None))
+                    continue
+                terrain_known += 1
+                if terrain_ft < terrain_threshold:
+                    # Terrain known and genuinely below the threshold — assessed
+                    # flat, no wave mechanism → GREEN.
                     ribbon_points.append((dist, HighlightSeverity.GREEN))
                     ridge_cells.append((dist, None))
                     wave_cells.append((dist, None))
                     continue
-                total += 1
+                mountain_pts += 1
 
                 wind = wind_at_altitude(
                     ctx.cross_sections, model, rpa.point_index,
                     terrain_ft + altitude_margin, rpa.forecast_hour,
                 )
                 if wind is None:
+                    # Mountain point but no wind lookup — cannot assess the wave
+                    # risk here. UNAVAILABLE, and it does NOT enter the assessed
+                    # denominator (so an all-no-wind mountain route is UNAVAILABLE,
+                    # not a "light winds (0kt)" GREEN).
                     ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
                     ridge_cells.append((dist, None))
                     wave_cells.append((dist, None))
                     continue
+                total += 1
 
                 speed_kt, _ = wind
                 if speed_kt > max_wind:
@@ -273,9 +290,19 @@ class MountainWindEvaluator:
                 adv_t(f"mountain_wind.sig_{s}", loc)
                 for s in sorted(wave_sigs)
             )
-            if total == 0:
+            if terrain_known == 0:
+                # No elevation profile at all — the terrain axis is unassessable.
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
+            elif mountain_pts == 0:
+                # Terrain known everywhere and below the threshold — assessed flat.
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("mountain_wind.no_terrain", loc)
+            elif total == 0:
+                # Mountains on route but no wind data at any of them — the grade
+                # and the (already-UNAVAILABLE) ribbon must agree: UNAVAILABLE.
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
             elif max_wind >= wind_red:
                 status = AdvisoryStatus.RED
                 detail = adv_t("mountain_wind.severe", loc, speed=f"{max_wind:.0f}", extent=ext)

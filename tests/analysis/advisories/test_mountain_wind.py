@@ -184,3 +184,28 @@ class TestMountainWindWaveCorroboration:
             params={"corroborated_red_kt": 35},
         )
         assert result.aggregate_status == AdvisoryStatus.AMBER
+
+    def test_mountains_but_no_wind_data_is_unavailable(self):
+        """Mountain points on route but no wind lookup for any of them.
+
+        Regression for #391: max_wind stayed 0.0 → GREEN "light winds (0kt)"
+        while the highlight ribbon already marked those points UNAVAILABLE. The
+        grade must agree — UNAVAILABLE, not a benign green.
+        """
+        from dataclasses import replace
+
+        ctx = replace(_ctx(32.0), cross_sections=[])  # no wind data anywhere
+        result = _evaluate(ctx)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_no_elevation_profile_is_unavailable(self):
+        """No elevation profile at all — terrain is unknown, not "no mountains".
+
+        Regression for #391: missing elevation used to read as GREEN "no
+        significant terrain". We cannot assert flat terrain we never saw.
+        """
+        from dataclasses import replace
+
+        ctx = replace(_ctx(45.0), elevation=None)
+        result = _evaluate(ctx)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
