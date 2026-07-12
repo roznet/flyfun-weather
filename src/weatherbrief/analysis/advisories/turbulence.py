@@ -91,7 +91,16 @@ class TurbulenceEvaluator:
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
-                if sounding is None:
+                vm = sounding.vertical_motion if sounding is not None else None
+                # "Assessed" for turbulence means we have a vertical-motion
+                # assessment: CAT comes from ``vm.cat_risk_layers`` (Richardson-
+                # derived, independent of omega) and strong-updraft from
+                # ``vm.max_w_fpm`` (omega) — both live on ``vm``. A sounding with
+                # no ``vm`` (lite analysis / old pack) can assess neither, so it
+                # is UNAVAILABLE, not a smooth-ride GREEN. We deliberately do NOT
+                # gate on omega: an omega-less model still has a complete CAT
+                # assessment and must grade normally (#391 — the #389 mistake).
+                if sounding is None or vm is None:
                     ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
                     region_cells.append((dist, None))
                     continue
@@ -101,28 +110,26 @@ class TurbulenceEvaluator:
                 strong_w_here = False
                 severe_layers: list = []
                 moderate_cruise_layers: list = []
-                vm = sounding.vertical_motion
 
-                if vm is not None:
-                    for layer in vm.cat_risk_layers:
-                        at_cruise = layer.base_ft <= cruise <= layer.top_ft
-                        if at_cruise and layer.risk != CATRiskLevel.NONE:
-                            point_affected = True
-                            if _CAT_ORDER.index(layer.risk) > _CAT_ORDER.index(worst_cat):
-                                worst_cat = layer.risk
-                            if layer.risk == CATRiskLevel.SEVERE:
-                                has_severe = True
-                        # Highlight geometry: severe counts anywhere in the
-                        # column, moderate only when it overlaps cruise.
+                for layer in vm.cat_risk_layers:
+                    at_cruise = layer.base_ft <= cruise <= layer.top_ft
+                    if at_cruise and layer.risk != CATRiskLevel.NONE:
+                        point_affected = True
+                        if _CAT_ORDER.index(layer.risk) > _CAT_ORDER.index(worst_cat):
+                            worst_cat = layer.risk
                         if layer.risk == CATRiskLevel.SEVERE:
-                            severe_layers.append(layer)
-                        elif layer.risk == CATRiskLevel.MODERATE and at_cruise:
-                            moderate_cruise_layers.append(layer)
+                            has_severe = True
+                    # Highlight geometry: severe counts anywhere in the
+                    # column, moderate only when it overlaps cruise.
+                    if layer.risk == CATRiskLevel.SEVERE:
+                        severe_layers.append(layer)
+                    elif layer.risk == CATRiskLevel.MODERATE and at_cruise:
+                        moderate_cruise_layers.append(layer)
 
-                    if vm.max_w_fpm is not None and abs(vm.max_w_fpm) > strong_w_fpm:
-                        if vm.max_w_level_ft is not None and abs(vm.max_w_level_ft - cruise) < 3000:
-                            point_affected = True
-                            strong_w_here = True
+                if vm.max_w_fpm is not None and abs(vm.max_w_fpm) > strong_w_fpm:
+                    if vm.max_w_level_ft is not None and abs(vm.max_w_level_ft - cruise) < 3000:
+                        point_affected = True
+                        strong_w_here = True
 
                 if point_affected:
                     affected += 1

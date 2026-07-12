@@ -139,9 +139,108 @@ class TestVMCCruise:
 
 
 class TestTurbulence:
-    def test_green_smooth(self, clear_context: RouteContext):
-        result = TurbulenceEvaluator.evaluate(clear_context, {"icing_coverage_pct_amber": 20, "strong_w_fpm": 200})
+    def test_green_smooth(self):
+        """Complete coverage with a clear vertical-motion assessment → GREEN.
+
+        A genuinely-smooth model has a ``VerticalMotionAssessment`` with no CAT
+        layers and no strong omega — the "assessed, nothing flagged" case, which
+        must still grade GREEN (distinct from the no-``vm`` UNAVAILABLE case
+        below).
+        """
+        from weatherbrief.models import (
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        clear_vm = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT,
+            cat_risk_layers=[],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=5000),
+                    vertical_motion=clear_vm,
+                )},
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_no_vertical_motion_is_unavailable(self):
+        """Soundings without a vertical-motion assessment cannot grade turbulence.
+
+        Regression for #391: a model with soundings but no ``vertical_motion``
+        (lite analysis / old pack) used to count total=N, affected=0 → GREEN
+        "smooth ride". Absent data is not a smooth ride; it is UNAVAILABLE.
+        """
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=5000),
+                    vertical_motion=None,
+                )},
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+        assert result.per_model[0].total_points == 0
+
+    def test_omega_less_model_with_cat_still_grades(self):
+        """An omega-less model still has a complete Richardson CAT assessment.
+
+        Guards against the over-correction #389 made and had to revert: gating
+        the point on omega (``max_w_fpm``) would blank a valid CAT verdict. Here
+        ``max_w_fpm`` is None but a MODERATE CAT layer sits at cruise → the
+        advisory must still flag, not go UNAVAILABLE.
+        """
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        vm = VerticalMotionAssessment(
+            classification=VerticalMotionClass.UNAVAILABLE,
+            max_w_fpm=None, max_w_level_ft=None,
+            cat_risk_layers=[CATRiskLayer(base_ft=7000, top_ft=10000, risk=CATRiskLevel.MODERATE)],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"icon_eu": SoundingAnalysis(
+                    indices=ThermodynamicIndices(freezing_level_ft=5000),
+                    vertical_motion=vm,
+                )},
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["icon_eu"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+        assert result.per_model[0].total_points == 10
 
     def test_turbulent_route(self, turbulent_context: RouteContext):
         """CAT at cruise along full route → AMBER or RED."""
