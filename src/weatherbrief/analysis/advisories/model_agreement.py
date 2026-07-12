@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
-    below_coverage,
+    EvidenceSample,
     format_extent,
     pct_above_threshold,
+    summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
@@ -15,6 +16,7 @@ from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    HighlightSeverity,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -80,14 +82,17 @@ class ModelAgreementEvaluator:
         poor_pct_amber = params.get("poor_pct_amber", 25)
         poor_pct_red = params.get("poor_pct_red", 50)
 
-        # Model agreement is cross-model — evaluated once, not per-model
-        total = 0
-        poor_count = 0
+        # Model agreement is cross-model — evaluated once, not per-model. One
+        # evidence sample per route point (#393): ``affected`` = a POOR-agreement
+        # point, so affected_nm is the geometry-accurate extent of the disagreeing
+        # segment and coverage is derived from the same list. This advisory emits
+        # no highlights (cross-model — the Compare view is its home), so the
+        # ribbon severity is bookkeeping only.
         moderate_count = 0
+        samples: list[EvidenceSample] = []
 
         for rpa in ctx.analyses:
-            if not rpa.model_divergence:
-                continue
+            dist = rpa.distance_from_origin_nm or 0.0
             # A divergence with ``mean is None`` is "metric absent for every
             # model", which the scorer records as ``agreement=GOOD`` — "nothing
             # to disagree about", NOT "models agreed" (see models/analysis.py
@@ -95,20 +100,28 @@ class ModelAgreementEvaluator:
             # such a point as good agreement (#391); only real comparisons
             # (``mean is not None``) establish agreement, so a point with no real
             # comparison is unassessable and drops out of the denominator.
-            real = [d for d in rpa.model_divergence if d.mean is not None]
+            real = [d for d in rpa.model_divergence if d.mean is not None] if rpa.model_divergence else []
             if not real:
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=False,
+                    severity=HighlightSeverity.UNAVAILABLE,
+                ))
                 continue
-            total += 1
 
             n_poor = sum(1 for d in real if d.agreement == AgreementLevel.POOR)
             has_poor = n_poor >= min_poor_vars
             has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in real)
 
-            if has_poor:
-                poor_count += 1
-            elif has_moderate:
+            if not has_poor and has_moderate:
                 moderate_count += 1
+            samples.append(EvidenceSample(
+                distance_nm=dist, assessed=True, affected=has_poor,
+                severity=HighlightSeverity.AMBER if has_poor else HighlightSeverity.GREEN,
+            ))
 
+        summary = summarize_evidence(samples, ctx.total_distance_nm)
+        total = summary.assessed
+        poor_count = summary.affected
         loc = ctx.locale
         if total == 0:
             status = AdvisoryStatus.UNAVAILABLE
@@ -125,7 +138,7 @@ class ModelAgreementEvaluator:
 
         # Coverage tolerance (#391): a "good agreement" verdict resting on real
         # comparisons at too few route points cannot vouch for the rest.
-        if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+        if status == AdvisoryStatus.GREEN and summary.below_coverage:
             status = AdvisoryStatus.UNAVAILABLE
             detail = adv_t("model_agreement.no_data", loc)
 
@@ -133,6 +146,7 @@ class ModelAgreementEvaluator:
             model="all", status=status, detail=detail,
             affected=poor_count, total=total,
             total_distance_nm=ctx.total_distance_nm,
+            affected_nm=summary.affected_nm,
         )]
 
         return RouteAdvisoryResult.from_per_model("model_agreement", per_model, params)
