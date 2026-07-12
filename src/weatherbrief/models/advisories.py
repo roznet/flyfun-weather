@@ -183,6 +183,18 @@ class HighlightRegion(BaseModel):
     top_ft: int | None = None
     kind: str                    # stable machine token, e.g. "cruise_imc", "tower"
     severity: HighlightSeverity  # amber | red (cutouts are only emitted for flagged areas)
+    # Stable, non-localised provenance tokens (#393). All additive and
+    # legacy-safe — old packs deserialize with them absent:
+    #   ``reason_code`` — the machine token for *why* this region fired (the
+    #     evaluator's per-point reason, e.g. "no_escape", "severe_cat"). Distinct
+    #     from ``kind`` (the geometry class) — several reasons can share a kind.
+    #   ``metric_id`` — the cross-section layer this region localises to, so a
+    #     chip can jump the user to the *right* layer rather than "the chart".
+    #   ``method_id`` — the analysis method that produced the region's evidence
+    #     (e.g. "ogimet_nwp", "sfip", "nwp_with_dd_floor"), when one controlled it.
+    reason_code: str | None = None
+    metric_id: str | None = None
+    method_id: str | None = None
 
 
 class AdvisoryHighlights(BaseModel):
@@ -325,6 +337,13 @@ class ModelAdvisoryResult(BaseModel):
     # issue #373). None on old packs and for evaluators that don't emit it. Never
     # affects the grade — it locates *where* the verdict comes from.
     highlights: AdvisoryHighlights | None = None
+    # Stable id of the analysis method that actually controlled this model's
+    # grade (#393) — ``sfip``, ``ogimet_nwp``, ``dewpoint_depression``, or a
+    # compound like ``nwp_with_dd_floor``. This is what a method badge on the
+    # chip must source from — NOT the user's selected method in settings, which
+    # may differ from the one that drove the result. None when the evaluator has
+    # no selectable method, and on old packs (legacy-safe).
+    primary_method_id: str | None = None
 
     @classmethod
     def build(
@@ -340,27 +359,33 @@ class ModelAdvisoryResult(BaseModel):
         cross_check: str | None = None,
         mitigations: list[Mitigation] | None = None,
         highlights: AdvisoryHighlights | None = None,
+        primary_method_id: str | None = None,
+        affected_nm: float | None = None,
     ) -> ModelAdvisoryResult:
         """Build a result, computing pct and nm from point counts.
 
         ``affected_mod`` is an optional higher-threshold count (e.g. convective
         MODERATE+); its pct/nm are derived the same way as the primary extent.
+
+        ``affected_nm`` is an optional geometry-accurate extent (#393): when the
+        evaluator derives grade and geometry from one ``EvidenceSample`` list, it
+        passes the midpoint-owned-cell distance of the *affected* points here. It
+        cannot then contradict ``affected_pct`` because both count the same
+        samples — the drift that reverted the earlier ribbon-derived attempt
+        (#391) is gone once one predicate feeds both. When omitted, ``affected_nm``
+        falls back to the proportional ``total_distance_nm * affected / total``.
         """
         # Explicit None check (not `or 0`) so a future caller can pass a genuine
         # 0 meaning "tracked this threshold, zero points qualified" (#302 review).
         mod = affected_mod if affected_mod is not None else 0
 
         # affected_nm is the nm form of affected_points and must stay consistent
-        # with affected_pct — all three key off the same ``affected`` count. A
-        # prior attempt to derive it from the highlights ribbon's flagged span was
-        # reverted (#391 review): the ribbon's amber/red membership does not match
-        # ``affected`` for every evaluator (enroute_precip counts light rain in
-        # ``affected`` but grades it ribbon-GREEN; the feasibility composites'
-        # ribbons carry corridor/precip/airport axes not in ``affected``), so a
-        # ribbon-derived affected_nm contradicted affected_pct on the same result.
-        # The genuinely geometry-accurate extent (midpoint-owned cells of the
-        # *affected* points) needs per-point distances threaded into build(); that
-        # belongs with the #393 single-assessment refactor, not here.
+        # with affected_pct — both key off the same ``affected`` count. Under the
+        # single-assessment refactor (#393) the evaluator may pass a
+        # geometry-accurate ``affected_nm`` (midpoint-owned cells of the affected
+        # points); it stays consistent because it counts the same samples that
+        # produced ``affected``. Absent it, we fall back to the proportion.
+        proportional_nm = round(total_distance_nm * affected / total, 1) if total > 0 else 0
         return cls(
             model=model,
             status=status,
@@ -368,7 +393,7 @@ class ModelAdvisoryResult(BaseModel):
             affected_points=affected,
             total_points=total,
             affected_pct=round(100 * affected / total, 1) if total > 0 else 0,
-            affected_nm=round(total_distance_nm * affected / total, 1) if total > 0 else 0,
+            affected_nm=round(affected_nm, 1) if affected_nm is not None else proportional_nm,
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,
             affected_mod_pct=round(100 * mod / total, 1) if total > 0 else 0,
@@ -376,6 +401,7 @@ class ModelAdvisoryResult(BaseModel):
             cross_check=cross_check,
             mitigations=mitigations if mitigations is not None else [],
             highlights=highlights,
+            primary_method_id=primary_method_id,
         )
 
 
@@ -409,6 +435,14 @@ class RouteAdvisoryResult(BaseModel):
     # model). Advice only — never alters ``aggregate_status``. Defaults empty so
     # old packs deserialize cleanly.
     aggregate_mitigations: list[Mitigation] = Field(default_factory=list)
+    # The model whose per-model result sources the aggregate view (#393): the
+    # first ``per_model`` entry whose status equals ``aggregate_status`` — the
+    # same representative that sets ``aggregate_detail`` / ``aggregate_mitigations``.
+    # Emitted so the client reads "which model's geometry do we highlight?" from
+    # the backend instead of reimplementing the rule (the deleted TS
+    # ``representativeModel()`` copy). None only when there are no per-model
+    # results, and on old packs (legacy-safe).
+    representative_model: str | None = None
 
     @classmethod
     def from_per_model(
@@ -440,6 +474,7 @@ class RouteAdvisoryResult(BaseModel):
             per_model=per_model,
             parameters_used=params,
             aggregate_mitigations=_aggregate_mitigations(per_model, agg),
+            representative_model=representative.model if representative else None,
         )
 
 

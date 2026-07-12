@@ -131,12 +131,21 @@ class FlaggedCell(NamedTuple):
     ``None`` base/top means a full column (the depth-unresolved convective
     ghost). Only flagged (AMBER/RED) points carry a ``FlaggedCell``; clean
     points pass ``None`` in :func:`build_regions`'s input.
+
+    ``reason_code`` / ``metric_id`` / ``method_id`` are optional stable,
+    non-localised provenance tokens (#393) carried onto the emitted
+    :class:`HighlightRegion` — see that model. They do not participate in
+    run-merging (only ``kind`` + ``severity`` do); the first cell of a run
+    supplies them for the merged region.
     """
 
     kind: str
     severity: HighlightSeverity
     base_ft: int | None
     top_ft: int | None
+    reason_code: str | None = None
+    metric_id: str | None = None
+    method_id: str | None = None
 
 
 def _cell_edges(distances: list[float], total_nm: float) -> tuple[list[float], list[float]]:
@@ -242,6 +251,12 @@ def build_regions(
             top_ft=max(tops) if tops else None,
             kind=cell.kind,
             severity=cell.severity,
+            # Provenance tokens (#393) come from the first cell of the run — all
+            # cells in a run share kind+severity and, by construction, the same
+            # reason/metric/method.
+            reason_code=cell.reason_code,
+            metric_id=cell.metric_id,
+            method_id=cell.method_id,
         ))
         i = j
     return regions

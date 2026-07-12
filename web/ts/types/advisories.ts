@@ -108,6 +108,12 @@ export interface HighlightRegion {
   top_ft?: number | null;
   kind: string;
   severity: HighlightSeverity;
+  /** Stable, non-localised provenance tokens (#393). Absent on old packs.
+   *  `reason_code` — why this region fired; `metric_id` — the cross-section
+   *  layer a chip jumps to; `method_id` — the analysis method behind it. */
+  reason_code?: string | null;
+  metric_id?: string | null;
+  method_id?: string | null;
 }
 
 /** Cross-section highlight geometry for one advisory × one model (#373).
@@ -132,6 +138,11 @@ export interface ModelAdvisoryResult {
   /** Cross-section highlight geometry (#373). Absent/null on old packs and for
    *  models/evaluators that don't emit it → the derive selector returns null. */
   highlights?: AdvisoryHighlights | null;
+  /** Stable id of the analysis method that controlled this model's grade (#393),
+   *  e.g. `ogimet_nwp`, `sfip`, `nwp_with_dd_floor`. The source for a method
+   *  badge on the chip — NOT the user's selected method. Absent on old packs and
+   *  for evaluators with no selectable method. */
+  primary_method_id?: string | null;
 }
 
 export interface RouteAdvisoryResult {
@@ -141,6 +152,11 @@ export interface RouteAdvisoryResult {
   per_model: ModelAdvisoryResult[];
   parameters_used: Record<string, number>;
   aggregate_mitigations?: Mitigation[];
+  /** The model whose per-model result sources the aggregate view (#393): the
+   *  first `per_model` entry whose status equals `aggregate_status`. Emitted by
+   *  the backend so the client no longer reimplements the rule. Absent on old
+   *  packs → `representativeModel()` falls back to the first per-model entry. */
+  representative_model?: string | null;
 }
 
 export type FlightCategory = 'VFR' | 'MVFR' | 'IFR' | 'LIFR';

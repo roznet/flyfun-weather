@@ -47,10 +47,12 @@ function advisory(
   id: string,
   aggStatus: RouteAdvisoryResult['aggregate_status'],
   perModel: ModelAdvisoryResult[],
+  representativeModel?: string | null,
 ): RouteAdvisoryResult {
   return {
     advisory_id: id, aggregate_status: aggStatus, aggregate_detail: '',
     per_model: perModel, parameters_used: {},
+    ...(representativeModel !== undefined ? { representative_model: representativeModel } : {}),
   };
 }
 
@@ -64,14 +66,20 @@ function manifest(advisories: RouteAdvisoryResult[]): RouteAdvisoriesManifest {
 // --- representative model ----------------------------------------------------
 
 describe('representativeModel', () => {
-  it('picks the first per-model entry whose status equals the aggregate', () => {
+  it('reads the backend representative_model field verbatim (#393)', () => {
     const adv = advisory('vmc_cruise', 'amber', [
       model('gfs', 'green'), model('ecmwf', 'amber'), model('icon', 'red'),
-    ]);
+    ], 'ecmwf');
     expect(representativeModel(adv)).toBe('ecmwf');
   });
 
-  it('falls back to the first per-model entry when none matches', () => {
+  it('trusts the backend field even when it differs from a naive status match', () => {
+    // The client no longer recomputes the rule — whatever the server picked wins.
+    const adv = advisory('vmc_cruise', 'amber', [model('gfs', 'green'), model('ecmwf', 'amber')], 'gfs');
+    expect(representativeModel(adv)).toBe('gfs');
+  });
+
+  it('falls back to the first per-model entry on old packs (no field)', () => {
     const adv = advisory('vmc_cruise', 'red', [model('gfs', 'green'), model('ecmwf', 'amber')]);
     expect(representativeModel(adv)).toBe('gfs');
   });

@@ -163,6 +163,30 @@ class TestFromPerModelAggregation:
         result = RouteAdvisoryResult.from_per_model("test", per_model, {})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
+    def test_representative_model_matches_detail_source(self):
+        """representative_model (#393) is the model whose detail/mitigations win."""
+        per_model = self._make_per_model([AdvisoryStatus.GREEN, AdvisoryStatus.AMBER, AdvisoryStatus.RED])
+        result = RouteAdvisoryResult.from_per_model(
+            "test", per_model, {}, aggregation=AdvisoryAggregation.MAJORITY,
+        )
+        # No majority → tie among singletons broken to worst = RED; representative
+        # is the first RED-status model, the same one sourcing aggregate_detail.
+        assert result.aggregate_status == AdvisoryStatus.RED
+        assert result.representative_model == "model_2"
+        assert result.aggregate_detail == "detail_red"
+
+    def test_representative_model_first_matching_status(self):
+        per_model = self._make_per_model([AdvisoryStatus.GREEN, AdvisoryStatus.AMBER, AdvisoryStatus.AMBER])
+        result = RouteAdvisoryResult.from_per_model(
+            "test", per_model, {}, aggregation=AdvisoryAggregation.MAJORITY,
+        )
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        assert result.representative_model == "model_1"  # first AMBER
+
+    def test_representative_model_none_when_no_per_model(self):
+        result = RouteAdvisoryResult.from_per_model("test", [], {})
+        assert result.representative_model is None
+
 
 # ---------------------------------------------------------------------------
 # evaluate_all() with aggregation parameter
