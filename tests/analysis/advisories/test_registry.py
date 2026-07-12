@@ -39,6 +39,30 @@ def test_evaluate_all_respects_enabled_ids(clear_context: RouteContext):
     assert results[0].advisory_id == "icing_escape"
 
 
+def test_throwing_evaluator_yields_unavailable_not_vanishing(clear_context, monkeypatch):
+    """A throwing evaluator must still appear, as UNAVAILABLE with a diagnostic.
+
+    Regression for #391: a bare `except` logged and dropped the result, so a
+    crashing evaluator silently disappeared from the briefing — reading as "not
+    a concern".
+    """
+    from weatherbrief.analysis.advisories import registry
+
+    registry._ensure_loaded()
+    cls = registry._EVALUATORS["turbulence"]
+
+    def _boom(ctx, params):
+        raise ValueError("kaboom")
+
+    monkeypatch.setattr(cls, "evaluate", staticmethod(_boom))
+    results = evaluate_all(clear_context, enabled_ids={"turbulence", "vmc_cruise"})
+
+    by_id = {r.advisory_id: r for r in results}
+    assert "turbulence" in by_id, "a crashing evaluator must not vanish"
+    assert by_id["turbulence"].aggregate_status == AdvisoryStatus.UNAVAILABLE
+    assert "ValueError" in by_id["turbulence"].aggregate_detail
+
+
 def test_evaluate_all_user_params(clear_context: RouteContext):
     """User parameter overrides are applied."""
     results = evaluate_all(
