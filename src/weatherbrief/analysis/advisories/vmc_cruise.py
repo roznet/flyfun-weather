@@ -24,6 +24,15 @@ from weatherbrief.models import (
 )
 
 
+# A clear (GREEN) verdict may only speak for the whole route when at least this
+# fraction of route points carried a sounding for the model. Below it, a clear
+# subset of a mostly-unassessed route is UNAVAILABLE — not GREEN (#391). This is
+# a data-coverage tolerance (missing-data handling), NOT a meteorological
+# threshold: a genuinely-clear, well-covered model still grades GREEN and any
+# flagged (AMBER/RED) verdict stands regardless of coverage.
+_MIN_ASSESSED_FRACTION = 0.5
+
+
 @register
 class VMCCruiseEvaluator:
     """Evaluates whether VMC can be maintained at cruise altitude."""
@@ -151,6 +160,17 @@ class VMCCruiseEvaluator:
                 else:
                     status = AdvisoryStatus.GREEN
                     detail = adv_t("vmc_cruise.clear", loc)
+
+            # Coverage tolerance (#391): a clear verdict on a sounding subset too
+            # small to represent the route becomes UNAVAILABLE — a clear subset
+            # does not establish the unassessed remainder is clear. A flagged
+            # (AMBER/RED) verdict is never downgraded.
+            if (
+                status == AdvisoryStatus.GREEN
+                and total < len(ctx.analyses) * _MIN_ASSESSED_FRACTION
+            ):
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
 
             # Build highlights only when the model has data (total > 0); an
             # all-UNAVAILABLE model gets no scrim/ribbon (highlights=None).

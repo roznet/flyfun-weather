@@ -137,6 +137,63 @@ class TestVMCCruise:
         result = VMCCruiseEvaluator.evaluate(cloudy_context, {"bkn_pct_amber": 25, "ovc_pct_red": 50})
         assert result.aggregate_status == AdvisoryStatus.RED
 
+    def test_clear_subset_below_coverage_is_unavailable(self):
+        """A clear verdict from a sounding subset too small to represent the route.
+
+        Regression for #391: 2 of 10 route points assessed (both clear) used to
+        grade GREEN, silently vouching for the 8 unassessed points. Below the
+        coverage tolerance a clear verdict is UNAVAILABLE.
+        """
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding=(
+                    {"gfs": SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))}
+                    if i < 2 else {}
+                ),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = VMCCruiseEvaluator.evaluate(ctx, {"bkn_pct_amber": 25, "ovc_pct_red": 50})
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_hazard_on_partial_coverage_still_flags(self):
+        """Real hazard on a partial-coverage subset still grades — never blanked.
+
+        2 of 10 points assessed, both OVC at cruise: the coverage tolerance only
+        downgrades a would-be-GREEN, never a flagged verdict (#391 trap).
+        """
+        from weatherbrief.models import CloudCoverage, EnhancedCloudLayer
+
+        ovc = EnhancedCloudLayer(base_ft=6000, top_ft=12000, coverage=CloudCoverage.OVC)
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding=(
+                    {"gfs": SoundingAnalysis(
+                        indices=ThermodynamicIndices(freezing_level_ft=5000),
+                        cloud_layers=[ovc],
+                    )}
+                    if i < 2 else {}
+                ),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = VMCCruiseEvaluator.evaluate(ctx, {"bkn_pct_amber": 25, "ovc_pct_red": 50})
+        assert result.aggregate_status == AdvisoryStatus.RED
+
 
 class TestTurbulence:
     def test_green_smooth(self):
@@ -552,6 +609,31 @@ class TestCloudTop:
         assert result.aggregate_status == AdvisoryStatus.GREEN
         for m in result.per_model:
             assert "No significant" in m.detail
+
+    def test_clear_subset_below_coverage_is_unavailable(self):
+        """Clear cloud-top verdict from too few assessed points → UNAVAILABLE.
+
+        Regression for #391: missing points shrank the denominator and a clear
+        2-of-10 subset stayed GREEN.
+        """
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding=(
+                    {"gfs": SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))}
+                    if i < 2 else {}
+                ),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = CloudTopEvaluator.evaluate(ctx, {"margin_ft": 1000, "pct_amber": 25})
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
 
 _FIKI_DEFAULTS = {
