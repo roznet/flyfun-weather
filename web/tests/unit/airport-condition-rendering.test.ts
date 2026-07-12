@@ -23,6 +23,7 @@ function fakeElement(): FakeElement {
 function condition(
   model: string,
   ceilingEvaluated: boolean | undefined,
+  overrides: Partial<AirportModelCondition> = {},
 ): AirportModelCondition {
   return {
     model,
@@ -36,10 +37,13 @@ function condition(
     wind_gust_kt: null,
     best_runway: null,
     all_runways: [],
+    ...overrides,
   };
 }
 
-function renderAirportConditions(): string {
+function renderAirportConditions(
+  arrivalCondition: AirportModelCondition = condition('ecmwf', undefined),
+): string {
   const section = fakeElement();
   const wrapper = fakeElement();
   vi.stubGlobal('document', {
@@ -63,7 +67,7 @@ function renderAirportConditions(): string {
       icao: 'LSGS',
       name: 'Sion',
       runway_ends: [],
-      conditions: [condition('ecmwf', undefined)],
+      conditions: [arrivalCondition],
     },
   };
 
@@ -83,5 +87,22 @@ describe('airport condition ceiling rendering', () => {
     expect(html).toContain('airport-summary-detail">N/A · vis');
     expect(html).toContain('<td>ceil CLR</td>');
     expect(html).toContain('<td>ceil N/A</td>');
+  });
+
+  it('renders an evidence-free condition with a muted category and valid wind', () => {
+    const html = renderAirportConditions(condition('ecmwf', false, {
+      visibility_sm: null,
+      wind_speed_kt: 35,
+      wind_direction_deg: 270,
+    }));
+    const row = html.match(
+      /<tr class="airport-condition-row">\s*<td class="airport-model">ECMWF<\/td>[\s\S]*?<\/tr>/,
+    )?.[0];
+
+    expect(row).toContain('badge-muted">N/A</span>');
+    expect(row).not.toContain('flight-cat-vfr');
+    expect(row).toContain('<td>vis N/A</td>');
+    expect(row).toContain('<td>ceil N/A</td>');
+    expect(row).toContain('270@35');
   });
 });

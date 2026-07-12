@@ -63,7 +63,11 @@ def _terminal_convective_risk(
     worst = ConvectiveRisk.NONE
     expected_points = 0
     evaluated_points = 0
-    controlling_methods: set[str] = set()
+    methods_by_status: dict[AdvisoryStatus, set[str]] = {
+        AdvisoryStatus.GREEN: set(),
+        AdvisoryStatus.AMBER: set(),
+        AdvisoryStatus.RED: set(),
+    }
     for rpa in ctx.analyses:
         dist = rpa.distance_from_origin_nm
         in_terminal = (
@@ -79,18 +83,21 @@ def _terminal_convective_risk(
             continue
         evaluated_points += 1
         method_id = convective_method_id(conv.method)
+        if method_id is not None:
+            methods_by_status[_terminal_convective_status(conv.risk_level)].add(
+                method_id
+            )
         if _CONV_RANK[conv.risk_level] > _CONV_RANK[worst]:
             worst = conv.risk_level
-            controlling_methods = {method_id} if method_id is not None else set()
-        elif conv.risk_level == worst and method_id is not None:
-            controlling_methods.add(method_id)
     return _TerminalConvectiveAssessment(
         risk=worst,
         any_evaluated=evaluated_points > 0,
         all_evaluated=(
             expected_points > 0 and evaluated_points == expected_points
         ),
-        method_ids=frozenset(controlling_methods),
+        method_ids=frozenset(
+            methods_by_status[_terminal_convective_status(worst)]
+        ),
     )
 
 
@@ -224,32 +231,20 @@ class FlightCategoryEvaluator:
         conv_radius_nm = params.get("conv_radius_nm", 25)
 
         per_model: list[ModelAdvisoryResult] = []
-
-        if ctx.airport_conditions is None:
-            per_model = [
-                build_non_spatial_result(
-                    model=model,
-                    status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", ctx.locale),
-                    unavailable_detail=adv_t("no_data", ctx.locale),
-                    expected_entities={"departure", "arrival"},
-                    evaluated_entities=set(),
-                    complete_entities=set(),
-                    affected_entities=set(),
-                    primary_method_id="airport_conditions",
-                )
-                for model in ctx.models
-            ]
-            return RouteAdvisoryResult.from_per_model(
-                "flight_category", per_model, params,
-            )
-
-        dep = ctx.airport_conditions.departure
-        arr = ctx.airport_conditions.arrival
+        dep = (
+            ctx.airport_conditions.departure
+            if ctx.airport_conditions is not None
+            else None
+        )
+        arr = (
+            ctx.airport_conditions.arrival
+            if ctx.airport_conditions is not None
+            else None
+        )
 
         for model in ctx.models:
-            dep_cond = dep.condition_for_model(model)
-            arr_cond = arr.condition_for_model(model)
+            dep_cond = dep.condition_for_model(model) if dep is not None else None
+            arr_cond = arr.condition_for_model(model) if arr is not None else None
 
             loc = ctx.locale
             parts = []
@@ -259,8 +254,20 @@ class FlightCategoryEvaluator:
             affected: set[str] = set()
             endpoint_controls: list[tuple[AdvisoryStatus, set[str]]] = []
             for entity, label_key, icao, cond, end in [
-                ("departure", "airport.dep", dep.icao, dep_cond, "dep"),
-                ("arrival", "airport.arr", arr.icao, arr_cond, "arr"),
+                (
+                    "departure",
+                    "airport.dep",
+                    dep.icao if dep is not None else "",
+                    dep_cond,
+                    "dep",
+                ),
+                (
+                    "arrival",
+                    "airport.arr",
+                    arr.icao if arr is not None else "",
+                    arr_cond,
+                    "arr",
+                ),
             ]:
                 ceiling_available = cond is not None and (
                     cond.ceiling_evaluated or cond.ceiling_ft is not None
@@ -288,7 +295,7 @@ class FlightCategoryEvaluator:
                 status = AdvisoryStatus.GREEN
                 condition_status: AdvisoryStatus | None = None
                 label = adv_t(label_key, loc)
-                part = f"{label} {icao}"
+                part = f"{label} {icao}".rstrip()
                 if condition_available:
                     assert cond is not None
                     condition_status = _classify_conditions(

@@ -358,7 +358,22 @@ class TestFlightCategoryEvaluator:
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
         assert [model.model for model in result.per_model] == ["gfs", "ecmwf"]
         assert all(model.status == AdvisoryStatus.UNAVAILABLE for model in result.per_model)
-        assert all(model.data_state == "unavailable" for model in result.per_model)
+        assert all(model.data_state == "partial" for model in result.per_model)
+
+    def test_no_airport_conditions_or_terminal_convection_is_unavailable(self):
+        model = FlightCategoryEvaluator.evaluate(
+            _make_ctx(
+                None,
+                models=["gfs"],
+                terminal_convective_risk=None,
+            ),
+            {},
+        ).per_model[0]
+
+        assert model.status == AdvisoryStatus.UNAVAILABLE
+        assert model.data_state == "unavailable"
+        assert model.total_points == 0
+        assert model.primary_method_id is None
 
     def test_per_model_detail(self):
         ac = _make_airport_conditions(
@@ -978,6 +993,35 @@ class TestTerminalConvective:
         assert model.status == AdvisoryStatus.RED
         assert model.primary_method_id == "flight_category_composite"
 
+    def test_same_terminal_high_and_extreme_methods_tie_at_red(self):
+        ctx = _terminal_conv_ctx(
+            ConvectiveRisk.EXTREME,
+            ConvectiveRisk.NONE,
+            dep_method="thermo",
+        )
+        first = ctx.analyses[0]
+        sounding = first.sounding["gfs"].model_copy(
+            update={
+                "convective": ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.HIGH,
+                    method="nwp",
+                )
+            }
+        )
+        ctx = replace(
+            ctx,
+            analyses=[
+                first.model_copy(update={"sounding": {"gfs": sounding}}),
+                *ctx.analyses[1:],
+            ],
+        )
+
+        model = FlightCategoryEvaluator.evaluate(ctx, {}).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.primary_method_id == "flight_category_composite"
+        assert "convective EXTREME" in model.detail
+
     def test_mid_route_convection_not_attributed_to_terminals(self):
         from weatherbrief.models import ConvectiveRisk
 
@@ -1013,4 +1057,19 @@ class TestTerminalConvective:
         assert model.status == AdvisoryStatus.RED
         assert model.data_state == "partial"
         assert model.affected_points == 1
+        assert "convective HIGH" in model.detail
+
+    def test_terminal_hazard_survives_missing_airport_domain(self):
+        ctx = replace(
+            _terminal_conv_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.NONE),
+            airport_conditions=None,
+        )
+
+        model = FlightCategoryEvaluator.evaluate(ctx, {}).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.data_state == "partial"
+        assert model.primary_method_id == "thermo"
+        assert model.affected_points == 1
+        assert "Dep" in model.detail
         assert "convective HIGH" in model.detail

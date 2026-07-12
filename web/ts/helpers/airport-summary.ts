@@ -18,15 +18,20 @@ import type { AirportModelCondition, FlightCategory } from '../types/advisories'
 // map consensus so a future category reorder can't drift between the two.
 import { median, CAT_ORDER } from '../visualization/weather-map-consensus';
 
+export function hasAirportConditionEvidence(
+  condition: AirportModelCondition,
+): boolean {
+  return condition.ceiling_evaluated === true
+    || condition.ceiling_ft != null
+    || condition.visibility_sm != null
+    || condition.visibility_m != null;
+}
+
 export function computeSummaryCondition(
   conditions: AirportModelCondition[],
   aggregation: 'worst' | 'majority',
 ): AirportModelCondition | null {
-  const evidenceConditions = conditions.filter(c =>
-    c.ceiling_evaluated === true
-    || c.ceiling_ft != null
-    || c.visibility_sm != null
-    || c.visibility_m != null);
+  const evidenceConditions = conditions.filter(hasAirportConditionEvidence);
   if (evidenceConditions.length === 0) return null;
 
   let winningCat: FlightCategory;
@@ -59,7 +64,7 @@ export function computeSummaryCondition(
         winningCat = c.flight_category;
       }
     }
-    pool = evidenceConditions;
+    pool = conditions;
   }
 
   const allRwysCombined = pool.flatMap(c => c.all_runways);

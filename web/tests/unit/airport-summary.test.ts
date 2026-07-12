@@ -79,6 +79,29 @@ describe('computeSummaryCondition', () => {
     expect(summary!.wind_speed_kt).toBe(22); // strongest wind
   });
 
+  it('worst mode keeps wind-only rows out of category voting but in wind reduction', () => {
+    const summary = computeSummaryCondition([
+      cond({
+        model: 'gfs',
+        flight_category: 'IFR',
+        ceiling_ft: 800,
+        visibility_sm: 2,
+        wind_speed_kt: 10,
+        wind_direction_deg: 180,
+      }),
+      cond({
+        model: 'ecmwf',
+        flight_category: 'VFR',
+        wind_speed_kt: 35,
+        wind_direction_deg: 270,
+      }),
+    ], 'worst');
+
+    expect(summary?.flight_category).toBe('IFR');
+    expect(summary?.wind_speed_kt).toBe(35);
+    expect(summary?.wind_direction_deg).toBe(270);
+  });
+
   it('majority mode: median within the winning-category pool only', () => {
     // 2 VFR + 1 IFR → category VFR; ceiling/wind come only from the VFR models.
     const summary = computeSummaryCondition([

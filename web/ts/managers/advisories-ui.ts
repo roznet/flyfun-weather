@@ -20,7 +20,10 @@ import {
   advisoryMethodLabel,
   isAssessedAdvisoryResult,
 } from '../visualization/advisory-methods';
-import { computeSummaryCondition } from '../helpers/airport-summary';
+import {
+  computeSummaryCondition,
+  hasAirportConditionEvidence,
+} from '../helpers/airport-summary';
 
 /** Live advisory catalog (names / descriptions / parameter defs) fetched from
  *  `/advisories/catalog`, preferred over the pack-baked copy so the (i) popups
@@ -258,8 +261,11 @@ function renderSummaryRow(cond: AirportModelCondition): string {
 }
 
 function renderConditionRow(cond: AirportModelCondition): string {
-  const catLabel = cond.flight_category;
-  const catClass = flightCatBadgeClass(cond.flight_category);
+  const hasConditionEvidence = hasAirportConditionEvidence(cond);
+  const catLabel = hasConditionEvidence ? cond.flight_category : 'N/A';
+  const catClass = hasConditionEvidence
+    ? flightCatBadgeClass(cond.flight_category)
+    : 'badge-muted';
   const vis = formatCondVis(cond) ?? 'N/A';
   const ceil = formatCeiling(cond);
 
