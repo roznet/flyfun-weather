@@ -162,9 +162,12 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
     });
   });
 
-  // --- Mock advisory catalog ---
+  // --- Mock advisory catalog (#387 shape: {advisories, categories}) ---
+  const catalogCategories = [...new Set(
+    (advisoriesData.catalog as { category: string }[]).map(e => e.category),
+  )].map(key => ({ key, diagnostics: key === 'model' }));
   await page.route('**/api/user/preferences/advisories/catalog', route =>
-    route.fulfill({ json: advisoriesData.catalog }),
+    route.fulfill({ json: { advisories: advisoriesData.catalog, categories: catalogCategories } }),
   );
 
   // --- Mock interpret-route ---

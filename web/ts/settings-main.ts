@@ -273,6 +273,9 @@ function switchProfile(profileId: number): void {
   if (profile) {
     populateProfileForm(profile);
   }
+  // Re-baseline the live preview against the newly-selected profile's saved
+  // settings so the diff never lingers on the previous profile (#390 review).
+  void refreshPreviewBaseline();
 }
 
 async function handleNewProfile(): Promise<void> {
@@ -1358,9 +1361,23 @@ function applyInterview(iv: Interview): void {
 
 // --- Live preview against a recent flight (#387, slice 4) ---
 
-/** Find the user's most recent owned flight with a briefing pack and compute the
- *  saved-settings baseline, then run an initial draft diff. Non-blocking: on any
- *  failure the preview panel simply stays hidden. */
+/** The active profile's *saved* advisory settings (persisted, not the live form)
+ *  — the baseline the draft form is diffed against. Reads from the profile the
+ *  page is currently editing so the diff is "what would change if I saved this",
+ *  not a comparison against some unrelated flight's profile. */
+function activeProfileSavedAdvisories(): { enabled?: Record<string, boolean> | null; params?: Record<string, Record<string, number>> | null; aggregation?: string } {
+  const p = profiles.find(pp => pp.id === activeProfileId);
+  const adv = p?.settings.advisories;
+  // Default aggregation to 'majority' to match the form default (populateProfileForm),
+  // so an unset saved aggregation doesn't read as a spurious diff.
+  return { enabled: adv?.enabled ?? null, params: adv?.params ?? null, aggregation: adv?.aggregation ?? 'majority' };
+}
+
+/** Find the user's most recent owned flight with a briefing pack (the pack the
+ *  preview evaluates against), then compute the baseline + initial draft diff.
+ *  Non-blocking: on any failure the preview panel simply stays hidden. The pack
+ *  supplies only the *weather*; the settings compared are always the active
+ *  profile's (baseline) vs the live form (draft). */
 async function initAdvisoryPreview(): Promise<void> {
   try {
     const { flights } = await fetchFlights();
@@ -1376,13 +1393,25 @@ async function initAdvisoryPreview(): Promise<void> {
       } catch { /* try the next flight */ }
     }
     if (!previewTarget) return;
+    await refreshPreviewBaseline();
+  } catch { /* preview stays hidden */ }
+}
 
-    // Baseline: previewed under the flight's *saved* settings (empty body).
-    const base = await previewAdvisories(previewTarget.flightId, previewTarget.ts, {});
+/** Recompute the baseline for the *currently active profile* and re-run the diff.
+ *  Called on init and whenever the edited profile changes, so the panel never
+ *  shows a stale diff against a previously-selected profile. */
+async function refreshPreviewBaseline(): Promise<void> {
+  if (!previewTarget) return;
+  try {
+    const base = await previewAdvisories(
+      previewTarget.flightId,
+      previewTarget.ts,
+      activeProfileSavedAdvisories(),
+    );
     previewBaseline = {};
     for (const a of base.manifest.advisories) previewBaseline[a.advisory_id] = a.aggregate_status;
-    runAdvisoryPreview();
-  } catch { /* preview stays hidden */ }
+    await runAdvisoryPreview();
+  } catch { /* leave the panel as-is */ }
 }
 
 /** Debounce preview recomputation as the pilot edits draft settings. */
@@ -1407,7 +1436,17 @@ async function runAdvisoryPreview(): Promise<void> {
   } catch { /* leave the last render in place */ }
 }
 
-/** Render the preview panel: which advisory ratings would change vs saved. */
+/** Sentinel status for an advisory that is disabled (absent from a manifest —
+ *  `evaluate_all` only returns *enabled* advisories, so "off" ≠ any real grade). */
+const PREVIEW_OFF = 'off';
+
+/** Render the preview panel: which advisory ratings would change vs saved.
+ *
+ *  Unions the advisory ids present in the baseline OR the draft so enable/disable
+ *  changes surface too — an advisory missing from a manifest is disabled (`off`),
+ *  not "no change". Iterating only the draft list (as before) silently dropped
+ *  both "just enabled" (undefined baseline) and "just disabled" (absent from
+ *  draft) — exactly the Setup-Assistant toggles this feature is meant to preview. */
 function renderPreviewDeltas(
   advisories: { advisory_id: string; aggregate_status: string }[],
 ): void {
@@ -1415,17 +1454,18 @@ function renderPreviewDeltas(
   if (!panel || !previewTarget) return;
   const nameById = new Map(catalog.map(e => [e.id, e.name]));
 
+  const draftById = new Map(advisories.map(a => [a.advisory_id, a.aggregate_status]));
+  const ids = new Set<string>([...Object.keys(previewBaseline), ...draftById.keys()]);
+
   const changes: { name: string; from: string; to: string }[] = [];
-  for (const a of advisories) {
-    const before = previewBaseline[a.advisory_id];
-    if (before != null && before !== a.aggregate_status) {
-      changes.push({
-        name: nameById.get(a.advisory_id) ?? a.advisory_id,
-        from: before,
-        to: a.aggregate_status,
-      });
+  for (const id of ids) {
+    const before = previewBaseline[id] ?? PREVIEW_OFF;
+    const after = draftById.get(id) ?? PREVIEW_OFF;
+    if (before !== after) {
+      changes.push({ name: nameById.get(id) ?? id, from: before, to: after });
     }
   }
+  changes.sort((a, b) => a.name.localeCompare(b.name));
 
   let html = `<div class="advisory-preview-head">`;
   html += `<span class="advisory-preview-title">${escapeHtml(t('settings.adv.previewTitle'))}</span>`;
@@ -1559,6 +1599,9 @@ async function handleSave(): Promise<void> {
       const updated = await updateProfile(activeProfileId, { settings: profileSettings });
       const idx = profiles.findIndex(p => p.id === activeProfileId);
       if (idx >= 0) profiles[idx] = updated;
+      // The saved settings just changed — re-baseline the preview so the next
+      // edit diffs against what was actually saved (#390 review).
+      void refreshPreviewBaseline();
     }
 
     // Save account-level preferences (locale + optional services + autorouter creds in dev mode)
