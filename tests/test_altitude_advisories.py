@@ -109,9 +109,16 @@ def test_descend_freezing_rain_has_no_escape():
     assert descend.per_model_ft == {"gfs": None}
 
 
-def test_descend_freezing_rain_one_model_annotated():
-    """When only one model shows FZRA, the other model's escape stands but the
-    FZRA model is excluded and called out."""
+def test_descend_freezing_rain_one_model_makes_escape_infeasible():
+    """When ANY model shows FZRA, descent is not a safe universal escape.
+
+    Regression for #391 (safety-relevant): the FZRA model contributes
+    per_model_ft=None (descending stays in freezing rain), which was filtered
+    out so min() of the remaining models still offered a descent — recommending
+    "descend to 6500ft" while gfs says descending keeps you in FZRA. The
+    meteorological altitude for the non-FZRA model is still reported, but the
+    advisory must be marked infeasible and call out the FZRA model.
+    """
     adv = compute_altitude_advisories({
         "gfs": _sounding(freezing_rain=True),
         "ecmwf": _sounding(freezing_level_ft=7000),
@@ -119,6 +126,7 @@ def test_descend_freezing_rain_one_model_annotated():
     descend = _descend(adv)
     assert descend.altitude_ft == 6500
     assert descend.per_model_ft["gfs"] is None
+    assert descend.feasible is False
     assert "gfs" in descend.reason
 
 

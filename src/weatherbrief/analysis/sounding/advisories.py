@@ -631,6 +631,13 @@ def _descend_below_icing(
         feasible = False
         reason += f" — below terrain clearance (terrain ~{terrain_elevation_ft:.0f}ft)"
     if fzra_models:
+        # A freezing-rain model's escape is None (descending stays in FZRA), and
+        # that None must NOT be silently dropped from the aggregate so min() of
+        # the *other* models offers a descent (#391 — safety-relevant). Any model
+        # showing freezing rain means descent is not a safe universal escape:
+        # keep the meteorological altitude but mark it infeasible, mirroring the
+        # terrain guard.
+        feasible = False
         reason += (
             f" (no descent escape for {', '.join(fzra_models)}: "
             "freezing precipitation profile)"
