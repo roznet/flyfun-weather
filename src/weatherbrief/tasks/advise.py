@@ -32,6 +32,15 @@ from weatherbrief.models import (
 
 logger = logging.getLogger(__name__)
 
+# The flight-level traffic light when we could not assess the flight at all
+# (issue #392). Uppercase to match the GREEN/AMBER/RED assessment strings; the
+# advisory-level sibling is the lowercase ``AdvisoryStatus.UNAVAILABLE``.
+#
+# Distinct from a NULL assessment, which keeps its existing meaning: no pack /
+# no briefing yet. UNAVAILABLE means we briefed the flight and came back with
+# nothing gradeable.
+ASSESSMENT_UNAVAILABLE = "UNAVAILABLE"
+
 
 @dataclass
 class AdvisoryResult:
@@ -632,21 +641,55 @@ def run_altitude_table_from_pack(
 # ---------------------------------------------------------------------------
 
 
+def advisories_ungradeable(manifest: RouteAdvisoriesManifest | None) -> bool:
+    """True when a manifest exists but *nothing in it graded* (issue #392).
+
+    The single test behind both the UNAVAILABLE assessment and the decision to
+    skip the LLM digest, so the two can never disagree about whether we have
+    anything to say.
+
+    ``None`` is deliberately **not** ungradeable: a pack whose advisory stage
+    never ran at all is the pre-existing NULL-assessment case (advisories are an
+    optional digest input), and that is a different failure from a stage that ran
+    and came back with nothing. Keeping them apart is what lets NULL go on
+    meaning "not assessed" while UNAVAILABLE means "assessed, and we have
+    nothing".
+
+    An empty advisory list counts as ungradeable — a manifest that graded zero
+    advisories graded nothing.
+    """
+    if manifest is None:
+        return False
+    return all(
+        adv.aggregate_status == AdvisoryStatus.UNAVAILABLE.value
+        for adv in manifest.advisories
+    )
+
+
 def derive_assessment_from_advisories(
     manifest: RouteAdvisoriesManifest,
 ) -> tuple[str, str]:
-    """Derive an overall assessment (GREEN/AMBER/RED) from an advisories manifest.
+    """Derive an overall assessment from an advisories manifest.
 
     Returns ``(assessment, reason)`` where assessment is the worst aggregate
     status across all advisories and reason summarises the RED/AMBER ones.
+
+    With nothing to grade the answer is ``UNAVAILABLE``, never GREEN: an empty
+    manifest means we could not assess the flight, not that we assessed it and
+    found it clear. Same rule the aggregation already follows
+    (``AdvisoryStatus.worst`` on an empty list) — this function used to
+    short-circuit past it.
     """
     statuses = [
         AdvisoryStatus(adv.aggregate_status)
         for adv in manifest.advisories
-        if adv.aggregate_status != "unavailable"
+        if adv.aggregate_status != AdvisoryStatus.UNAVAILABLE.value
     ]
     if not statuses:
-        return ("GREEN", "No advisory data available")
+        return (
+            ASSESSMENT_UNAVAILABLE,
+            "No advisory could be graded — no usable model data for this route",
+        )
 
     worst = AdvisoryStatus.worst(statuses)
     assessment = worst.value.upper()

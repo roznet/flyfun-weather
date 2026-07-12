@@ -31,6 +31,9 @@
     .assessment-green { background: #d1e7dd; color: #0f5132; border: 1px solid #198754; }
     .assessment-amber { background: #fff3cd; color: #664d03; border: 1px solid #cc8800; }
     .assessment-red   { background: #f8d7da; color: #842029; border: 1px solid #dc3545; }
+    /* Could not assess (#392) — a verdict (solid border), but colourless: it must
+       never read as a shade of green. Without this rule the banner is unstyled. */
+    .assessment-unavailable { background: #f8f9fa; color: #495057; border: 1px solid #868e96; }
     /* Long-range outlook — muted fill + dashed border, distinct from the verdict. */
     .outlook-trending_settled   { background: #f8f9fa; color: #0f5132; border: 1px dashed #198754; }
     .outlook-mixed_signals      { background: #f8f9fa; color: #555555; border: 1px dashed #aaaaaa; }

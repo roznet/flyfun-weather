@@ -596,7 +596,11 @@ async function init(): Promise<void> {
     const chip = (assessment: string) => {
       const cls = assessment === 'GREEN' ? 'badge-green'
         : assessment === 'AMBER' ? 'badge-amber'
-        : assessment === 'RED' ? 'badge-red' : 'badge-none';
+        : assessment === 'RED' ? 'badge-red'
+        // A departure slot we could not grade (#392). Before this it scored
+        // GREEN, which put "we have no data for this time" at the top of a list
+        // of times to move the flight to.
+        : assessment === 'UNAVAILABLE' ? 'badge-unavailable' : 'badge-none';
       return `<span class="badge ${cls}">${escapeHtml(assessment)}</span>`;
     };
 
@@ -674,8 +678,12 @@ async function init(): Promise<void> {
         perModel?: { model: string; map: Map<string, string> }[];
       };
       const dot = (status: string, col: DetailCol, id: string) => {
+        // #392: GREEN is a verdict, not a fallback. The old `else` branch painted
+        // every unrecognised status — UNAVAILABLE above all — green, so an
+        // advisory we could not grade showed as one we graded clear.
         const cls = status === 'RED' ? 'assessment-red-text'
-          : status === 'AMBER' ? 'assessment-amber-text' : 'assessment-green-text';
+          : status === 'AMBER' ? 'assessment-amber-text'
+          : status === 'GREEN' ? 'assessment-green-text' : 'assessment-muted-text';
         const lines = [`${nameOf(id)} — ${col.label}: ${status}`];
         for (const pm of col.perModel ?? []) {
           lines.push(`${pm.model.toUpperCase()}: ${pm.map.get(id) ?? 'GREEN'}`);
@@ -683,12 +691,15 @@ async function init(): Promise<void> {
         return `<span class="${cls}" title="${escapeHtml(lines.join('\n'))}">●</span>`;
       };
       // Current column: per-model split straight from the briefing's own
-      // advisories manifest (red/amber per model; absent = clear).
+      // advisories manifest. Absent = clear, so UNAVAILABLE has to be recorded
+      // explicitly — leaving it out would make the tooltip's `?? 'GREEN'`
+      // fallback report a model that graded nothing as a model that graded clear
+      // (#392).
       const currentPerModel = (state.routeAdvisories?.models ?? []).map((model) => {
         const map = new Map<string, string>();
         for (const adv of state.routeAdvisories?.advisories ?? []) {
           const pm = adv.per_model.find((m) => m.model === model);
-          if (pm && (pm.status === 'red' || pm.status === 'amber')) {
+          if (pm && (pm.status === 'red' || pm.status === 'amber' || pm.status === 'unavailable')) {
             map.set(adv.advisory_id, pm.status.toUpperCase());
           }
         }

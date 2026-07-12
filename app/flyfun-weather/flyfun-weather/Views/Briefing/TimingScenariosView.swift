@@ -428,7 +428,12 @@ private struct TimingDetailTable: View {
     }
 
     private func dot(_ status: String) -> some View {
-        let color: Color = status == "RED" ? Theme.red : status == "AMBER" ? Theme.amber : Theme.green
+        // #392: GREEN is a verdict, not a fallback. The old trailing `: Theme.green`
+        // painted every unrecognised status — UNAVAILABLE above all — green, so an
+        // advisory we could not grade showed as one we graded clear.
+        let color: Color = status == "RED" ? Theme.red
+            : status == "AMBER" ? Theme.amber
+            : status == "GREEN" ? Theme.green : Theme.textMuted
         return Image(systemName: "circle.fill")
             .font(.caption2)
             .foregroundStyle(color)

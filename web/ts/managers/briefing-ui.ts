@@ -348,6 +348,20 @@ export function renderAssessment(
     } else if (!pack.assessment) {
       el.className = 'assessment-banner assessment-none';
       el.textContent = t('briefing.noAssessment');
+    } else if (pack.assessment.toUpperCase() === 'UNAVAILABLE') {
+      // #392: we briefed the flight and nothing graded. Its own branch, ahead of
+      // the traffic-light one, for two reasons: there is no digest to offer (the
+      // pipeline skips it, and the endpoint refuses), so the generic branch would
+      // read this as "generation failed" and show a Generate button that 422s;
+      // and the copy has to say *we* couldn't assess it, not that it's clear.
+      //
+      // `assessment_reason` is deliberately not shown: for this state it is an
+      // internal English diagnostic, not the LLM's localized prose the other
+      // branches render, so it would leak English into fr/de/es.
+      el.className = 'assessment-banner assessment-unavailable';
+      el.innerHTML =
+        `<strong>${escapeHtml(t('briefing.unavailable'))}</strong>` +
+        ` <span class="assessment-note">${escapeHtml(t('briefing.unavailableNote'))}</span>`;
     } else {
       const level = pack.assessment.toUpperCase();
       el.className = `assessment-banner assessment-${level.toLowerCase()}`;
@@ -2228,6 +2242,15 @@ export function renderSynopsis(
   // running. The visible briefing is up; the digest is being generated.
   if (digestPending) {
     el.innerHTML = `<p class="muted">${t('digest.generating')}</p>`;
+    clearDigestFeedbackToolbar();
+    return;
+  }
+
+  // #392: nothing graded, so the pipeline never ran the digest — there is no
+  // summary and never will be for this pack. Say that, rather than the generic
+  // "not available" (which reads as a failure the user could retry).
+  if ((pack.assessment || '').toUpperCase() === 'UNAVAILABLE') {
+    el.innerHTML = `<p class="muted">${t('digest.noData')}</p>`;
     clearDigestFeedbackToolbar();
     return;
   }

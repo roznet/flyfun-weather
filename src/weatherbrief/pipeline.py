@@ -36,7 +36,7 @@ from weatherbrief.tasks.analyze import (  # noqa: F401  — backward compat re-e
 from weatherbrief.tasks.artifacts import load_fetch_meta, write_pack_meta
 from weatherbrief.tasks.fetch import run_fetch
 from weatherbrief.tasks.analyze import run_analysis
-from weatherbrief.tasks.advise import AdvisoryResult, run_advisories
+from weatherbrief.tasks.advise import AdvisoryResult, advisories_ungradeable, run_advisories
 from weatherbrief.tasks.dwd_charts import run_dwd_charts
 from weatherbrief.tasks.metoffice_charts import run_metoffice_charts
 from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
@@ -729,6 +729,19 @@ def execute_briefing(
             result.diagnostics.append(skewt_result.diagnostic)
         stage_timings["generate_skewt"] = perf_counter() - _t0
 
+    # #392: a digest cannot narrate data we do not have. When no advisory graded
+    # the route the pack is UNAVAILABLE, and the digest schema only lets the LLM
+    # answer GREEN/AMBER/RED — so asking it to summarise an empty manifest buys
+    # a confidently-worded traffic light built on nothing, and charges us for it.
+    # Skip the phase; the assessment clamp in api/packs.py owns the verdict.
+    run_digest_phase = options.generate_llm_digest and not advisories_ungradeable(
+        route_advisories_manifest
+    )
+    if options.generate_llm_digest and not run_digest_phase:
+        logger.warning(
+            "Skipping LLM digest — no advisory could be graded (assessment will be UNAVAILABLE)"
+        )
+
     # === 6.5 Briefing ready milestone ===
     # Visible briefing artifacts (snapshot + advisories + optional GRAMET) are
     # on disk by this point. Notify callers so they can render the briefing
@@ -738,7 +751,7 @@ def execute_briefing(
     # provisional row would be inserted and immediately overwritten by
     # finalize, with no user-visible benefit. Skip both the progress event
     # and the callback in that case.
-    if options.generate_llm_digest:
+    if run_digest_phase:
         _notify("briefing_ready", str(snapshot_path))
         if briefing_ready_callback is not None:
             try:
@@ -750,7 +763,7 @@ def execute_briefing(
                 )
 
     # === 7. Optional: LLM digest ===
-    if options.generate_llm_digest:
+    if run_digest_phase:
         _notify("llm_digest")
         _t0 = perf_counter()
         previous_digest = _load_previous_digest(pack_dir, days_out)

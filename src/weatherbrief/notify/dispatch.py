@@ -49,10 +49,15 @@ from sqlalchemy.orm import Session
 from weatherbrief.db.models import BriefingPackRow
 from weatherbrief.models import BriefingPackMeta, Flight
 from weatherbrief.models.observations import RefreshDelta
+from weatherbrief.tasks.advise import ASSESSMENT_UNAVAILABLE
 
 logger = logging.getLogger(__name__)
 
 # GREEN < AMBER < RED — higher is worse (mirrors metar-taf category ranking).
+# UNAVAILABLE is deliberately absent: it is not a rung on this ladder but the
+# absence of one, so it never produces a "worsened" delta in either direction
+# (`.get()` → None, and detect_change requires both ranks). Notification is
+# suppressed for it outright — see notify_briefing_refresh.
 _ASSESSMENT_RANK = {"GREEN": 0, "AMBER": 1, "RED": 2}
 
 
@@ -232,6 +237,19 @@ def notify_briefing_refresh(
     try:
         from weatherbrief.api.preferences import load_notify_prefs
         from weatherbrief.notify.badge import compute_badge_count, record_notify_qualifying
+
+        # #392: a briefing we could not assess is not news. It carries nothing a
+        # pilot can act on — it says our data is missing, not that their weather
+        # changed — so it stays out of push, email and the badge. The grey
+        # UNAVAILABLE badge is there when they next open the flight. Deliberately
+        # ahead of the WHEN gate: this holds regardless of scope or a per-flight
+        # "always notify" override, because there is nothing to notify *about*.
+        if (meta.assessment or "").upper() == ASSESSMENT_UNAVAILABLE:
+            logger.info(
+                "notify: skipping %s — assessment UNAVAILABLE (nothing to report)",
+                flight.id,
+            )
+            return
 
         prefs = load_notify_prefs(db, user_id)
         changed, delta = detect_change(db, flight.id, meta)
