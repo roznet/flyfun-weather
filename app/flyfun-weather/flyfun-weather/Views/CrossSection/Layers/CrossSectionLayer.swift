@@ -21,6 +21,10 @@ enum LayerGroup: String, CaseIterable {
     case turbulence
     case convection
     case reference
+    /// Advisory highlight (scrim + verdict ribbon, #374). Not a toggleable data
+    /// layer: its visibility is driven by the active advisory highlight, so it
+    /// never appears in the method/reference sections of the config sheet.
+    case highlight
 }
 
 extension LayerGroup {
@@ -45,6 +49,7 @@ extension LayerGroup {
         case .turbulence: "Turbulence"
         case .convection: "Convection"
         case .reference: "Reference"
+        case .highlight: "Highlight"
         }
     }
 }

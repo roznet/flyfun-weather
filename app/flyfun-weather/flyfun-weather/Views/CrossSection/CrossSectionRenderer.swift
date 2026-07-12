@@ -70,6 +70,13 @@ struct CrossSectionRenderer {
 
         // Axes and grid (drawn outside clip)
         drawAxes(context: &context, transform: transform, data: data)
+
+        // Advisory highlight (scrim + verdict ribbon, #374) renders last — top of
+        // the stack, above the axes, matching the web layer order. It is invoked
+        // outside the plot-area clip (the ribbon draws in the bottom margin) and
+        // manages its own clipping; it no-ops when `data.advisoryHighlights` is
+        // nil (no tracked advisory / old pack / model without highlight data).
+        HighlightLayer().render(context: &context, transform: transform, data: data)
     }
 
     /// The dynamic overlay: the scrub cursor rule + the live aircraft marker.
@@ -156,9 +163,12 @@ struct CrossSectionRenderer {
             gridPath.addLine(to: CGPoint(x: x, y: plot.bottom))
             context.stroke(gridPath, with: .color(gridColor), lineWidth: 0.5)
 
-            // Label
+            // Label — offset below the verdict-ribbon strip, which hugs the plot
+            // bottom at [+2, +8] (#374). Keep in sync with `HighlightLayer`'s
+            // ribbonGap/ribbonHeight so the ribbon never paints over the labels
+            // (mirrors the web's DISTANCE_LABEL_DY fix).
             let text = context.resolve(Text("\(Int(dist)) nm").font(.system(size: 9)).foregroundColor(textColor))
-            context.draw(text, at: CGPoint(x: x, y: plot.bottom + 4), anchor: .top)
+            context.draw(text, at: CGPoint(x: x, y: plot.bottom + Self.distanceLabelDY), anchor: .top)
 
             dist += distInterval
         }
@@ -205,6 +215,10 @@ struct CrossSectionRenderer {
         context.stroke(hLine, with: .color(crossColor), lineWidth: 0.5)
         context.stroke(vLine, with: .color(crossColor), lineWidth: 0.5)
     }
+
+    /// Distance tick labels sit below the advisory verdict ribbon ([+2, +8],
+    /// #374) with a small gap. Fits the 30pt bottom margin (label ends ~+22).
+    private static let distanceLabelDY: CGFloat = 11
 
     private func altitudeTickInterval(_ maxAlt: Double) -> Double {
         if maxAlt <= 8000 { return 1000 }

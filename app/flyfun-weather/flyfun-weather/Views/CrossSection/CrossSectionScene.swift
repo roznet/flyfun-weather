@@ -33,16 +33,28 @@ struct StaticCrossSectionScene: View, Equatable {
     /// than relying on the undocumented behaviour of `Canvas` re-running its
     /// closure while `EquatableView` skips `body`.
     let renderSize: CGSize
+    /// Advisory highlight geometry (#374), derived by the call site from the
+    /// tracked advisory × selected model (never stored). Passed separately from
+    /// `data` — whose identity is `dataVersion` — because it changes on its own
+    /// triggers (chip tap / visibility toggle) without a data rebuild; being a
+    /// small `Equatable` value it participates in the redraw gate directly.
+    var highlights: VizAdvisoryHighlights? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.dataVersion == rhs.dataVersion
             && lhs.themeId == rhs.themeId
             && lhs.renderSize == rhs.renderSize
             && lhs.enabledLayers == rhs.enabledLayers
+            && lhs.highlights == rhs.highlights
     }
 
     var body: some View {
         Canvas { context, size in
+            // Attach the derived highlight the way web briefing-main attaches
+            // `data.advisoryHighlights` before setData — the layer reads it from
+            // the data like every other layer.
+            var data = self.data
+            data.advisoryHighlights = highlights
             CrossSectionRenderer(data: data, enabledLayers: enabledLayers, themeId: themeId)
                 .renderStatic(context: &context, size: size)
         }
