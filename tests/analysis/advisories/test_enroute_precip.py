@@ -131,6 +131,23 @@ class TestEnroutePrecipEvaluator:
         result = _evaluate(_ctx(per_point), params={"snow_pct_amber": 30})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
+    def test_unassessable_points_do_not_dilute_percentage(self):
+        """Points with no precip assessment must leave the denominator.
+
+        Regression for #391: 2 moderate-snow points + 8 points with a sounding
+        but no precipitation assessment used to read 2/10 = 20% (AMBER, below the
+        25% red threshold). The 8 blanks are unassessable and must not dilute:
+        the honest reading is 2/2 = 100% → RED.
+        """
+        per_point = [
+            _sounding(PrecipPhase.SNOW, PrecipIntensity.MODERATE) if i < 2
+            else _sounding(with_precip=False)
+            for i in range(10)
+        ]
+        result = _evaluate(_ctx(per_point))
+        assert result.aggregate_status == AdvisoryStatus.RED
+        assert result.per_model[0].total_points == 2
+
 
 class TestVFRPrecipFeed:
 
