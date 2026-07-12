@@ -436,7 +436,7 @@ severity thresholds did not change.
 - **M_RH:** Ramp from 0 at 50% to 1.0 at 100%, steeper near saturation
 - **M_CLW:** Ramp from 0 to 1.0 over [0, 0.2] g/kg (requires GRIB2 CLW data)
 - **M_CLW_proxy:** Combines sounding DD score + NWP cloud cover factor (max of both)
-- **M_VV:** Boost for ascent (neg ω), penalty for subsidence; neutral when unavailable
+- **M_VV:** Boost for ascent (neg ω), penalty for subsidence; neutral at real ω=0; omitted when omega is structurally unavailable
 
 **Glaciation factor** (GFS/ICON-EU/ECMWF): When ICMR data is available, `M_CLW *= CLW / (CLW + ICE)`. Reduces icing when cloud is mostly glaciated.
 
