@@ -22,12 +22,31 @@ final class CrossSectionViewModel {
     /// Persisted across launches via `UserDefaults`.
     private(set) var themeId: CrossSectionThemeID
 
+    /// Advisory whose cross-section highlight (scrim + verdict ribbon, #374) is
+    /// tracked, or nil for none. Only the id is stored — the geometry is
+    /// re-derived from (advisories manifest × selected model) at render time, so
+    /// model switches and recalcs update the highlight with no stale-copy bugs,
+    /// and it no-ops gracefully when the advisory has no data (old pack).
+    /// Model/point changes do NOT clear it; lens application and manual layer
+    /// edits do (see `applyAdvisoryPreset` / `toggleLayer` / `setMethod` /
+    /// `applyPreset`).
+    private(set) var activeHighlightAdvisoryId: String?
+    /// Visibility of the active highlight. Deliberately NOT part of
+    /// `enabledLayers`: toggling it is a visibility control, not a lens edit —
+    /// it must neither flip the preset to Custom nor clear the highlight (and
+    /// keeping it out preserves the exact-map `currentPreset` comparison).
+    private(set) var highlightVisible = true
+
     /// `UserDefaults` key for the persisted theme choice.
     private static let themeDefaultsKey = "crossSectionThemeId"
     /// `UserDefaults` key for the persisted layer enablement map.
     private static let layersDefaultsKey = "crossSectionEnabledLayers"
     /// `UserDefaults` key for the persisted advisory-lens id (absent when none).
     private static let advisoryPresetDefaultsKey = "crossSectionAdvisoryPreset"
+    /// `UserDefaults` key for the persisted highlight advisory id (absent when
+    /// none). Mirrors the web, which persists `activeHighlightAdvisoryId` in its
+    /// viz settings; visibility intentionally resets to shown on relaunch.
+    private static let highlightAdvisoryDefaultsKey = "crossSectionHighlightAdvisory"
 
     init() {
         // Restore the last-chosen theme; fall back to GRAMET (the boot preset's
@@ -54,6 +73,7 @@ final class CrossSectionViewModel {
             enabledLayers = merged
         }
         activeAdvisoryPreset = UserDefaults.standard.string(forKey: Self.advisoryPresetDefaultsKey)
+        activeHighlightAdvisoryId = UserDefaults.standard.string(forKey: Self.highlightAdvisoryDefaultsKey)
         recomputeEffectiveLayers()
     }
 
@@ -74,6 +94,11 @@ final class CrossSectionViewModel {
             UserDefaults.standard.set(id, forKey: Self.advisoryPresetDefaultsKey)
         } else {
             UserDefaults.standard.removeObject(forKey: Self.advisoryPresetDefaultsKey)
+        }
+        if let id = activeHighlightAdvisoryId {
+            UserDefaults.standard.set(id, forKey: Self.highlightAdvisoryDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.highlightAdvisoryDefaultsKey)
         }
         // This is the single funnel for every `enabledLayers` mutation
         // (toggle/enable/preset/method/advisory-lens), so refresh the effective-
@@ -127,6 +152,7 @@ final class CrossSectionViewModel {
     func toggleLayer(_ id: String) {
         enabledLayers[id] = !(enabledLayers[id] ?? false)
         activeAdvisoryPreset = nil  // a manual edit is no longer a named lens
+        activeHighlightAdvisoryId = nil  // …and drops the advisory highlight (#374)
         persistLayerConfig()
     }
 
@@ -167,6 +193,7 @@ final class CrossSectionViewModel {
         if !map.isEmpty { enabledLayers = map }
         if let tid = preset.themeId { setTheme(tid) }
         activeAdvisoryPreset = nil
+        activeHighlightAdvisoryId = nil  // a layer preset drops the highlight (#374)
         persistLayerConfig()
     }
 
@@ -208,14 +235,68 @@ final class CrossSectionViewModel {
         }
         enabledLayers = m
         activeAdvisoryPreset = preset.id
+        // Applying a lens clears any prior highlight (web parity, #374): a bare
+        // lens from the picker therefore ends with no highlight, while the
+        // advisory-chip path re-sets it via `setHighlightAdvisory` AFTER this
+        // call — which is also what makes a same-chip re-tap toggle it off.
+        activeHighlightAdvisoryId = nil
         persistLayerConfig()
     }
 
     /// Clear the active lens (the picker's "None") without otherwise touching the
-    /// layer config.
+    /// layer config. Also drops the advisory highlight, like any lens change.
     func clearAdvisoryPreset() {
         activeAdvisoryPreset = nil
+        activeHighlightAdvisoryId = nil
         persistLayerConfig()
+    }
+
+    // MARK: - Advisory highlight (scrim + verdict ribbon, #374)
+
+    /// Track (or clear with nil) the advisory whose highlight the cross-section
+    /// renders. Setting a non-nil id force-shows the highlight (fresh intent — an
+    /// invisible highlight right after a chip tap looks broken); clearing leaves
+    /// the visibility flag alone.
+    func setHighlightAdvisory(_ advisoryId: String?) {
+        activeHighlightAdvisoryId = advisoryId
+        if advisoryId != nil { highlightVisible = true }
+        persistLayerConfig()
+    }
+
+    /// Show/hide the active highlight. A visibility control, NOT a lens edit —
+    /// it must not clear the highlight or the active lens (contrast
+    /// `toggleLayer`).
+    func setHighlightVisible(_ visible: Bool) {
+        highlightVisible = visible
+    }
+
+    /// The representative model for an advisory: the first `perModel` entry whose
+    /// status equals `aggregateStatus` (the same policy the server uses to choose
+    /// `aggregate_detail`), falling back to the first entry. The chip switches
+    /// the cross-section to this model so the highlight reflects the aggregate
+    /// verdict. Mirrors web `advisory-highlights.ts`.
+    static func representativeModel(for advisory: RouteAdvisoryResult) -> String? {
+        if let match = advisory.perModel.first(where: { $0.status == advisory.aggregateStatus }) {
+            return match.model
+        }
+        return advisory.perModel.first?.model
+    }
+
+    /// Derive the highlight geometry to render for (manifest × advisory × model),
+    /// or nil when the advisory is not highlighted / no longer exists / the model
+    /// has no entry / the pack carries no highlight data (old pack) — in every
+    /// case the highlight layer and its visibility toggle stay hidden. Mirrors
+    /// web `deriveHighlights`.
+    static func deriveHighlights(
+        manifest: AdvisoriesResponse?,
+        advisoryId: String?,
+        model: String
+    ) -> VizAdvisoryHighlights? {
+        guard let manifest, let advisoryId,
+              let advisory = manifest.advisories.first(where: { $0.advisoryId == advisoryId }),
+              let highlights = advisory.perModel.first(where: { $0.model == model })?.highlights
+        else { return nil }
+        return VizAdvisoryHighlights(from: highlights)
     }
 
     // MARK: - Methods (clouds/icing/turbulence/convection — one method per group)
@@ -235,6 +316,7 @@ final class CrossSectionViewModel {
             enabledLayers[id] = (id == layerId)
         }
         activeAdvisoryPreset = nil
+        activeHighlightAdvisoryId = nil  // a manual method edit drops the highlight (#374)
         persistLayerConfig()
     }
 

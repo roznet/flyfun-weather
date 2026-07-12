@@ -53,6 +53,12 @@ struct CrossSectionTheme: Sendable {
     var axisGrid: Color
     var axisWaypoint: Color
 
+    /// Dim-wash colour for the advisory-highlight scrim (#374). Web keeps the
+    /// light/dark variants in `highlight-layer.ts` keyed off the page theme; iOS
+    /// keys them off the chart theme instead (the wash covers the themed sky, and
+    /// only Light has a bright plot).
+    var scrimWash: Color
+
     // Terrain
     var terrainFill: RGB
     var terrainStroke: RGB
@@ -122,6 +128,7 @@ extension CrossSectionTheme {
         skyBackground: c(115, 149, 219),                 // #7395DB
         axisGrid: c(255, 255, 255, 0.35),
         axisWaypoint: c(255, 255, 255, 0.45),
+        scrimWash: c(0, 0, 0, 0.42),                     // web dark-theme wash
         terrainFill: RGB(r: 139, g: 115, b: 85),         // #8B7355
         terrainStroke: RGB(r: 107, g: 91, b: 69),        // #6B5B45
         freezingLevel: c(0, 188, 212),                   // #00bcd4
@@ -352,6 +359,7 @@ extension CrossSectionTheme {
         t.skyBackground = c(248, 249, 251)               // #F8F9FB
         t.axisGrid = c(20, 30, 50, 0.18)
         t.axisWaypoint = c(20, 30, 50, 0.32)
+        t.scrimWash = c(15, 23, 42, 0.34)                // web light-theme wash
         t.terrainFill = RGB(r: 164, g: 130, b: 86)       // #A48256
         t.terrainStroke = RGB(r: 122, g: 94, b: 61)      // #7A5E3D
         t.freezingLevel = c(2, 119, 189)                 // #0277BD

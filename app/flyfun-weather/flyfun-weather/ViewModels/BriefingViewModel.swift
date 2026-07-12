@@ -53,6 +53,11 @@ struct FocusIntent: Equatable {
     /// Advisory lens id to apply on the cross-section (e.g. "icing"); see
     /// `CrossSectionPresets`.
     var advisoryPresetId: String?
+    /// Concrete advisory instance behind the lens (e.g. "vmc_cruise"), set only
+    /// by advisory-card actions. Activates that advisory's cross-section
+    /// highlight (scrim + verdict ribbon, #374) when the pack carries highlight
+    /// geometry; a re-tap of the same advisory toggles the highlight off.
+    var advisoryId: String?
     var pointIndex: Int?
     var distanceNm: Double?
     var altitudeFt: Double?

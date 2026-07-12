@@ -42,8 +42,41 @@ struct ModelAdvisoryResult: Codable, Identifiable, Sendable {
     /// Per-model advice-only mitigations. Never alters `status`. Optional so old
     /// packs decode cleanly.
     let mitigations: [Mitigation]?
+    /// Cross-section highlight geometry (scrim regions + verdict ribbon, #374).
+    /// Absent/null on old packs and for evaluators that don't emit it — the
+    /// feature is then silently absent (chip behaves as before highlights).
+    let highlights: AdvisoryHighlights?
 
     var id: String { model }
+}
+
+/// Cross-section highlight geometry for one advisory × one model (#374).
+/// The backend owns the geometry; the client only renders it — so any advisory
+/// that gains an emitter server-side lights up here with no app change.
+struct AdvisoryHighlights: Codable, Sendable {
+    /// 1-D route verdict. Segments tile `[0, total_nm]` exactly (gapless).
+    let ribbon: [RibbonSegment]
+    /// 2-D scrim cutouts — where the hazard physically is (flagged areas only).
+    let regions: [HighlightRegion]
+    /// Distance of the advisory's peak (worst point) along the route, if any.
+    let peakDistNm: Double?
+}
+
+/// One run of the 1-D route verdict strip.
+struct RibbonSegment: Codable, Sendable {
+    let distFromNm: Double
+    let distToNm: Double
+    let severity: String  // "green" | "amber" | "red" | "unavailable"
+}
+
+/// One scrim cutout. `baseFt`/`topFt` both nil = full column (terrain-to-top).
+struct HighlightRegion: Codable, Sendable {
+    let distFromNm: Double
+    let distToNm: Double
+    let baseFt: Double?
+    let topFt: Double?
+    let kind: String
+    let severity: String
 }
 
 /// A decision that could improve a flagged sub-issue — advice only.

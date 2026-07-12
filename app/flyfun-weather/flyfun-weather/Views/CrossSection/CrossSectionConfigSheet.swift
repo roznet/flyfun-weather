@@ -8,6 +8,11 @@ import SwiftUI
 /// chrome (model-switching is more frequent than layer config).
 struct CrossSectionConfigSheet: View {
     @Bindable var csVM: CrossSectionViewModel
+    /// Whether an advisory highlight is active AND the selected model carries
+    /// geometry for it (#374) — gates the visibility toggle so it never shows a
+    /// dead control. Captured at presentation; it can't change while the sheet
+    /// is up (the model selector lives in the chart chrome, not here).
+    var highlightAvailable: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var showMore = false
 
@@ -17,6 +22,7 @@ struct CrossSectionConfigSheet: View {
                 presetSection
                 themeSection
                 advisoryLensSection
+                highlightSection
                 methodSection
                 referenceSection
                 if showMore { moreSection }
@@ -105,6 +111,28 @@ struct CrossSectionConfigSheet: View {
                 Text(p.caption)
             } else {
                 Text("Focus the chart on one hazard (icing, clouds, convection…).")
+            }
+        }
+    }
+
+    // MARK: Advisory highlight — visibility only, never a lens edit (#374)
+
+    /// Show/hide toggle for the active advisory highlight (scrim + verdict
+    /// ribbon). Only rendered while a highlight is active with data for the
+    /// selected model. Deliberately NOT a layer toggle: flipping it neither
+    /// switches the preset to Custom nor clears the highlight.
+    @ViewBuilder
+    private var highlightSection: some View {
+        if highlightAvailable {
+            Section {
+                Toggle(isOn: Binding(
+                    get: { csVM.highlightVisible },
+                    set: { csVM.setHighlightVisible($0) }
+                )) {
+                    Text("Advisory highlight")
+                }
+            } footer: {
+                Text("Dims the chart outside the advisory's flagged areas; the strip under the chart grades the whole route for it.")
             }
         }
     }

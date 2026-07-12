@@ -12,6 +12,55 @@ struct VizRouteData {
     let departureTime: String
     let flightDurationHours: Double
     let terrainProfile: [TerrainPoint]?
+    /// Advisory highlight geometry (scrim + verdict ribbon, #374) for the
+    /// tracked advisory × the rendered model. Unlike the fields above it is NOT
+    /// built by `extractVizData` (the geometry lives in the advisories manifest,
+    /// a separate artifact) — the cross-section scene attaches the derived value
+    /// just before rendering, mirroring web `briefing-main`. nil → the highlight
+    /// layer no-ops.
+    var advisoryHighlights: VizAdvisoryHighlights? = nil
+}
+
+/// Domain mirror of the API `AdvisoryHighlights` (#374). `Equatable` because the
+/// static cross-section scene's redraw gate compares it by value — the geometry
+/// is re-derived on every body evaluation, so identity can't be used.
+struct VizAdvisoryHighlights: Equatable {
+    struct Segment: Equatable {
+        let distFromNm: Double
+        let distToNm: Double
+        let severity: String
+    }
+
+    /// `baseFt`/`topFt` both nil = full column (terrain-to-top).
+    struct Region: Equatable {
+        let distFromNm: Double
+        let distToNm: Double
+        let baseFt: Double?
+        let topFt: Double?
+        let kind: String
+        let severity: String
+    }
+
+    let ribbon: [Segment]
+    let regions: [Region]
+    let peakDistNm: Double?
+
+    init(ribbon: [Segment], regions: [Region], peakDistNm: Double?) {
+        self.ribbon = ribbon
+        self.regions = regions
+        self.peakDistNm = peakDistNm
+    }
+
+    init(from api: AdvisoryHighlights) {
+        ribbon = api.ribbon.map {
+            Segment(distFromNm: $0.distFromNm, distToNm: $0.distToNm, severity: $0.severity)
+        }
+        regions = api.regions.map {
+            Region(distFromNm: $0.distFromNm, distToNm: $0.distToNm,
+                   baseFt: $0.baseFt, topFt: $0.topFt, kind: $0.kind, severity: $0.severity)
+        }
+        peakDistNm = api.peakDistNm
+    }
 }
 
 struct WaypointMarker {

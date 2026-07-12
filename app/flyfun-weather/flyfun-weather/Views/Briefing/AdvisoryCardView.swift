@@ -78,6 +78,7 @@ struct AdvisoryCardView: View {
                             target: .crossSection,
                             model: viewModel.selectedModel,
                             advisoryPresetId: preset.id,
+                            advisoryId: advisory.advisoryId,
                             pointIndex: viewModel.activePointIndex
                         ))
                     } label: {

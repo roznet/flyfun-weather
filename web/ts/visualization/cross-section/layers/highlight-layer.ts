@@ -15,6 +15,10 @@
  *
  * Geometry is derived reactively (briefing-main attaches `data.advisoryHighlights`);
  * this layer is pure rendering. It no-ops when there is no highlight data.
+ *
+ * SYNC: the iOS app mirrors this renderer (geometry constants + composition
+ * rules) in app/flyfun-weather/flyfun-weather/Views/CrossSection/Layers/
+ * HighlightLayer.swift (#374) — keep the two in lockstep.
  */
 
 import type {

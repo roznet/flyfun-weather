@@ -53,7 +53,9 @@ struct CrossSectionView: View {
         .onChange(of: viewModel.focusIntent) { applyFocusIntent() }
         .task { updateVizData(); applyFocusIntent() }
         .sheet(isPresented: $showingConfig) {
-            CrossSectionConfigSheet(csVM: csVM)
+            // The Highlight visibility toggle shows only while a highlight is
+            // active AND the selected model has geometry for it (#374).
+            CrossSectionConfigSheet(csVM: csVM, highlightAvailable: derivedHighlights != nil)
         }
         // Gate the cross-section tips on this tab being on screen so they never
         // fire from the Advisory/Map tabs (#312).
@@ -208,9 +210,13 @@ struct CrossSectionView: View {
             // thin cursor rule + aircraft marker live in a cheap overlay Canvas
             // that redraws every tick instead (#303). `themeId` is part of the gate
             // so a theme switch repaints the static layers, not just the overlay (#320).
+            // The derived advisory highlight (#374) rides the same gate: it's a
+            // small Equatable value, so re-deriving it each body pass is cheap and
+            // only an actual geometry change repaints the scene.
             StaticCrossSectionScene(data: vizData, enabledLayers: layers,
                                     dataVersion: csVM.dataVersion, themeId: themeId,
-                                    renderSize: canvasSize)
+                                    renderSize: canvasSize,
+                                    highlights: csVM.highlightVisible ? derivedHighlights : nil)
                 // `.equatable()` is load-bearing: it forces SwiftUI to gate the
                 // redraw on the custom `==` (dataVersion + layers + themeId + size). Without
                 // it the reconciler falls back to reflecting the stored properties, can't
@@ -292,6 +298,11 @@ struct CrossSectionView: View {
     private func applyFocusIntent() {
         guard let intent = viewModel.focusIntent,
               intent.target == .crossSection || intent.target == .skewT else { return }
+        // Same-advisory re-tap toggles the highlight OFF while the lens stays
+        // (#374): capture "already on" BEFORE the lens application below clears
+        // the highlight, then skip re-activation.
+        let highlightAlreadyOn = intent.advisoryId != nil
+            && csVM.activeHighlightAdvisoryId == intent.advisoryId
         // An advisory lens configures the whole view; a single layerId just
         // force-enables one layer. Apply the lens first so a layerId can refine it.
         if let presetId = intent.advisoryPresetId,
@@ -299,7 +310,33 @@ struct CrossSectionView: View {
             csVM.applyAdvisoryPreset(preset)
         }
         if let layerId = intent.layerId { csVM.enableLayer(layerId) }
-        if let dist = intent.distanceNm {
+        // Highlight activation (#374). Old packs / non-emitting advisories carry
+        // no highlight geometry, so the guard falls through and the action
+        // behaves exactly as before highlights existed.
+        var peakDistNm: Double?
+        if let advisoryId = intent.advisoryId, !highlightAlreadyOn,
+           case .loaded(let manifest) = viewModel.advisoriesState,
+           let advisory = manifest.advisories.first(where: { $0.advisoryId == advisoryId }),
+           advisory.perModel.contains(where: { $0.highlights != nil }) {
+            // Switch to the advisory's representative model so the highlight
+            // reflects the aggregate verdict. Assigned directly (not via
+            // `selectModel`) — a programmatic switch must not overwrite the
+            // user's sticky model preference.
+            if let rep = CrossSectionViewModel.representativeModel(for: advisory),
+               viewModel.availableModels.contains(rep) {
+                viewModel.selectedModel = rep
+            }
+            csVM.setHighlightAdvisory(advisoryId)  // also force-shows the highlight
+            peakDistNm = advisory.perModel
+                .first(where: { $0.model == viewModel.selectedModel })?
+                .highlights?.peakDistNm
+        }
+        if let peak = peakDistNm {
+            // Land the cursor (and the shared active point → readout/Skew-T
+            // linkage) on the advisory's peak.
+            scrubDistanceNm = peak
+            selectNearestPoint(to: peak)
+        } else if let dist = intent.distanceNm {
             scrubDistanceNm = dist
         } else if let pointDist = activePointDistanceNm {
             scrubDistanceNm = pointDist
@@ -308,6 +345,28 @@ struct CrossSectionView: View {
         // A skewT-targeted intent (#310) means "scroll to the embedded Skew-T".
         if intent.target == .skewT { scrollTarget = "skewt" }
         viewModel.clearFocusIntent()
+    }
+
+    /// Snap the shared active route point to the nearest analysis point (same
+    /// rule as `updateScrub` — soundings are discrete).
+    private func selectNearestPoint(to dist: Double) {
+        guard case .loaded(let analyses) = viewModel.routeAnalysesState else { return }
+        let nearest = analyses.analyses.min {
+            abs($0.distanceFromOriginNm - dist) < abs($1.distanceFromOriginNm - dist)
+        }
+        viewModel.activePointIndex = nearest?.pointIndex
+    }
+
+    /// Advisory highlight geometry for the tracked advisory × the rendered model
+    /// (#374). Derived, never stored — model switches and pack recalcs update it
+    /// automatically, and it degrades to nil (highlight + toggle hidden) when the
+    /// advisory is gone or the pack/model has no data.
+    private var derivedHighlights: VizAdvisoryHighlights? {
+        guard case .loaded(let manifest) = viewModel.advisoriesState else { return nil }
+        return CrossSectionViewModel.deriveHighlights(
+            manifest: manifest,
+            advisoryId: csVM.activeHighlightAdvisoryId,
+            model: viewModel.selectedModel)
     }
 
     private func goToSounding() {
