@@ -31,11 +31,21 @@ class AdvisoryStatus(str, Enum):
 
     @classmethod
     def worst(cls, statuses: list[AdvisoryStatus]) -> AdvisoryStatus:
-        """Return the most severe status, ignoring UNAVAILABLE."""
+        """Return the most severe status, ignoring UNAVAILABLE.
+
+        Nothing to grade — an empty list, or every input UNAVAILABLE — is
+        UNAVAILABLE, never GREEN. Absent data is not a clear sky, and the
+        callers that hand us an empty list (an evaluator with no airport
+        domain, say) mean "we could not assess this", not "we assessed it
+        and it is fine".
+        """
         _ORDER = [cls.GREEN, cls.AMBER, cls.RED]
+        valid = [s for s in statuses if s in _ORDER]
+        if not valid:
+            return cls.UNAVAILABLE
         result = cls.GREEN
-        for s in statuses:
-            if s in _ORDER and _ORDER.index(s) > _ORDER.index(result):
+        for s in valid:
+            if _ORDER.index(s) > _ORDER.index(result):
                 result = s
         return result
 
@@ -44,12 +54,12 @@ class AdvisoryStatus(str, Enum):
         """Return the most common status; ties broken by worst among tied.
 
         UNAVAILABLE values are ignored. If all are UNAVAILABLE or empty,
-        returns GREEN.
+        returns UNAVAILABLE — see :meth:`worst`.
         """
         _ORDER = [cls.GREEN, cls.AMBER, cls.RED]
         valid = [s for s in statuses if s in _ORDER]
         if not valid:
-            return cls.GREEN
+            return cls.UNAVAILABLE
         counts: dict[AdvisoryStatus, int] = {}
         for s in valid:
             counts[s] = counts.get(s, 0) + 1

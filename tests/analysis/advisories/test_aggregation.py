@@ -52,12 +52,73 @@ class TestAdvisoryStatusMajority:
         ]
         assert AdvisoryStatus.majority(statuses) == AdvisoryStatus.GREEN
 
-    def test_all_unavailable_returns_green(self):
+    def test_all_unavailable_returns_unavailable(self):
+        """Every model failed to assess → UNAVAILABLE. Missing is not clear."""
         statuses = [AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE]
-        assert AdvisoryStatus.majority(statuses) == AdvisoryStatus.GREEN
+        assert AdvisoryStatus.majority(statuses) == AdvisoryStatus.UNAVAILABLE
 
-    def test_empty_returns_green(self):
-        assert AdvisoryStatus.majority([]) == AdvisoryStatus.GREEN
+    def test_empty_returns_unavailable(self):
+        """Nothing to grade → UNAVAILABLE. An evaluator that hands us no models
+        (e.g. no airport domain) has not established that conditions are fine."""
+        assert AdvisoryStatus.majority([]) == AdvisoryStatus.UNAVAILABLE
+
+
+class TestAdvisoryStatusWorst:
+    """Unit tests for AdvisoryStatus.worst()."""
+
+    def test_picks_most_severe(self):
+        statuses = [AdvisoryStatus.GREEN, AdvisoryStatus.RED, AdvisoryStatus.AMBER]
+        assert AdvisoryStatus.worst(statuses) == AdvisoryStatus.RED
+
+    def test_unavailable_ignored_when_a_valid_status_exists(self):
+        statuses = [AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.AMBER]
+        assert AdvisoryStatus.worst(statuses) == AdvisoryStatus.AMBER
+
+    def test_all_unavailable_returns_unavailable(self):
+        statuses = [AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE]
+        assert AdvisoryStatus.worst(statuses) == AdvisoryStatus.UNAVAILABLE
+
+    def test_empty_returns_unavailable(self):
+        assert AdvisoryStatus.worst([]) == AdvisoryStatus.UNAVAILABLE
+
+
+class TestMissingDataNeverGradesGreen:
+    """The advisory-level half of "missing data must never read as clear".
+
+    The airport evaluators (flight_category, airport_wind, density_altitude,
+    llws) return ``from_per_model(id, [], params)`` when their domain is
+    absent. That empty list must not aggregate to GREEN.
+    """
+
+    def test_no_models_at_all_is_unavailable(self):
+        """An evaluator with no airport domain hands us an empty per_model list."""
+        result = RouteAdvisoryResult.from_per_model("airport_wind", [], {})
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    @pytest.mark.parametrize(
+        "aggregation",
+        [AdvisoryAggregation.MAJORITY, AdvisoryAggregation.WORST],
+    )
+    def test_every_model_unavailable_is_unavailable(self, aggregation):
+        per_model = [
+            ModelAdvisoryResult(
+                model=m, status=AdvisoryStatus.UNAVAILABLE, detail="no data available"
+            )
+            for m in ("gfs", "icon_eu", "ecmwf")
+        ]
+        result = RouteAdvisoryResult.from_per_model(
+            "turbulence", per_model, {}, aggregation=aggregation
+        )
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_one_valid_model_still_grades(self):
+        """A single assessable model is enough — we don't blank the advisory."""
+        per_model = [
+            ModelAdvisoryResult(model="gfs", status=AdvisoryStatus.UNAVAILABLE, detail=""),
+            ModelAdvisoryResult(model="ecmwf", status=AdvisoryStatus.GREEN, detail="smooth"),
+        ]
+        result = RouteAdvisoryResult.from_per_model("turbulence", per_model, {})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
 
 
 # ---------------------------------------------------------------------------
