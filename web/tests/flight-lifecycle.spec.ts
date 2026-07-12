@@ -18,6 +18,32 @@ function fixture(name: string) {
   return data;
 }
 
+function allGreenAdvisoriesFixture() {
+  const manifest = fixture('advisories.json');
+  manifest.advisories = manifest.advisories.map((advisory: any) => ({
+    ...advisory,
+    aggregate_status: 'green',
+    aggregate_detail: 'No significant conditions',
+    representative_model: advisory.per_model[0]?.model ?? null,
+    aggregate_mitigations: [],
+    per_model: advisory.per_model.map((model: any) => ({
+      ...model,
+      status: 'green',
+      detail: 'No significant conditions',
+      data_state: 'complete',
+      evidence_regions: [],
+      affected_points: 0,
+      affected_pct: 0,
+      affected_nm: 0,
+      affected_mod_points: 0,
+      affected_mod_pct: 0,
+      affected_mod_nm: 0,
+      mitigations: [],
+    })),
+  }));
+  return manifest;
+}
+
 /** Patch flight-facing dates to use FUTURE_DATE so flights aren't in the past.
  *  Only patches target_date and departure_time — NOT fetch_timestamp or other metadata. */
 function patchFlightDates(obj: Record<string, any>): Record<string, any> {
@@ -37,7 +63,45 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
   const enc = encodeURIComponent;
   const flightData = patchFlightDates({ ...fixture('flight.json'), id: FLIGHT_ID });
   const packMetaData = { ...fixture('pack_meta.json'), flight_id: FLIGHT_ID };
-  const advisoriesData = fixture('advisories.json');
+  // The shared #223 fixture intentionally contains representative, partial,
+  // unavailable, and legacy states. This end-to-end lifecycle scenario needs
+  // an all-green planned-altitude baseline before exercising the altitude table.
+  const advisoriesData = allGreenAdvisoriesFixture();
+
+  for (const advisory of advisoriesData.advisories) {
+    const advisoryLabel = advisory.advisory_id;
+    expect(advisory.aggregate_status, `${advisoryLabel} aggregate status`).toBe('green');
+    expect(advisory.aggregate_detail, `${advisoryLabel} aggregate detail`).toBe('No significant conditions');
+
+    const representative = advisory.per_model.find(
+      (model: any) => model.model === advisory.representative_model,
+    );
+    expect(representative, `${advisoryLabel} representative model`).toBeDefined();
+    expect(representative.status, `${advisoryLabel} representative status`).toBe(advisory.aggregate_status);
+    expect(representative.detail, `${advisoryLabel} representative detail`).toBe(advisory.aggregate_detail);
+
+    for (const model of advisory.per_model) {
+      const modelLabel = `${advisoryLabel}/${model.model}`;
+      expect(model.status, `${modelLabel} status`).toBe('green');
+      expect(model.detail, `${modelLabel} detail`).toBe('No significant conditions');
+      expect(model.data_state, `${modelLabel} data state`).toBe('complete');
+      expect(model.evidence_regions, `${modelLabel} evidence regions`).toEqual([]);
+      expect(model.affected_points, `${modelLabel} affected points`).toBe(0);
+      expect(model.affected_pct, `${modelLabel} affected percent`).toBe(0);
+      expect(model.affected_nm, `${modelLabel} affected distance`).toBe(0);
+    }
+  }
+
+  for (const advisory of advisoriesData.advisories) {
+    expect(advisory.aggregate_mitigations, `${advisory.advisory_id} aggregate mitigations`).toEqual([]);
+    for (const model of advisory.per_model) {
+      const modelLabel = `${advisory.advisory_id}/${model.model}`;
+      expect(model.affected_mod_points, `${modelLabel} moderate affected points`).toBe(0);
+      expect(model.affected_mod_pct, `${modelLabel} moderate affected percent`).toBe(0);
+      expect(model.affected_mod_nm, `${modelLabel} moderate affected distance`).toBe(0);
+      expect(model.mitigations, `${modelLabel} mitigations`).toEqual([]);
+    }
+  }
 
   // Precomputed altitude table (#259). The lever no longer triggers a full
   // recalc — it indexes this cached table client-side via overlayAltitudeStatuses

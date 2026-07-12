@@ -45,6 +45,13 @@ const MOCK_FORECAST: Record<string, unknown> = {
 };
 
 const MOCK_HOURS = { day: 0, date: '2026-04-06', hours: [6, 9, 12, 15, 18] };
+const MOCK_DAYS = {
+  days: [0, 1, 2, 3].map(day => ({
+    day,
+    date: `2026-04-${String(6 + day).padStart(2, '0')}`,
+    available: true,
+  })),
+};
 
 // ---------------------------------------------------------------------------
 // Route mocking
@@ -52,6 +59,7 @@ const MOCK_HOURS = { day: 0, date: '2026-04-06', hours: [6, 9, 12, 15, 18] };
 
 async function mockApis(page: import('@playwright/test').Page) {
   await page.route('**/auth/me', route => route.fulfill({ json: MOCK_USER }));
+  await page.route('**/api/maps/forecast/days', route => route.fulfill({ json: MOCK_DAYS }));
   await page.route('**/api/maps/forecast/hours*', route => route.fulfill({ json: MOCK_HOURS }));
   await page.route('**/api/maps/forecast*', route => {
     // Don't match /forecast/hours (already handled above)
