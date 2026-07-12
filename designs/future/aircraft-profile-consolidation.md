@@ -19,7 +19,7 @@ The overlap is not a tidy duplicate — each colliding field resolves in a
 | cruise speed (IAS) | `cruise_speed_kt` | `speed_kt` | **aircraft** — the one real resolver, `atmo.py:34` `resolve_cruise_speed_ias` |
 | ceiling | `ceiling_ft` | `flight_ceiling_ft` | **profile** server-side (`api/flights.py:756`); the aircraft's value is applied by exactly one web `change` handler (`flights-main.ts:989`) and is invisible to iOS, MCP, ChatGPT, and `update_flight` |
 | cruise altitude | — | `cruise_altitude_ft` | profile (no aircraft counterpart) |
-| IFR equipped | `is_ifr` | `flight_rules` + `interview.flying_type` | **nothing reads `is_ifr`** — it renders a settings badge and never enters the pipeline |
+| IFR equipped | `is_ifr` | `flight_rules` + `interview.flying_type` | **three fields, none of them whole.** `is_ifr` is read by nothing; `flight_rules`'s only consumer is one line of the digest prompt (`prompt_builder.py:89`) — no evaluator reads it; `interview.flying_type` is the only one with teeth (it toggles the `ifr_feasibility` advisory) |
 | FIKI equipped | `is_fiki` | `interview.icing_equipage` | **nothing reads `is_fiki`** — the interview answer drives the icing advisories instead |
 
 Three things follow.
@@ -138,9 +138,23 @@ The aircraft's flags stop being decorative:
 
 - **Effective flight rules** = `vfr_only` if `not aircraft.is_ifr` else
   `profile.flight_rules`. An IFR profile flown in a VFR-only aircraft is graded
-  VFR — the capability floor wins over the preference. This feeds
-  `BriefingOptions.flight_rules` (`api/packs.py:1113`), so the digest prompt and
-  the `vfr_feasibility` / `ifr_feasibility` advisories follow it for free.
+  VFR — the capability floor wins over the preference.
+
+  This is a bigger change than it looks, because **`profile.flight_rules` today
+  is almost inert**: its *only* consumer is one line of the LLM digest prompt
+  (`prompt_builder.py:89` → `PILOT CAPABILITY: VFR only | VFR + IFR`). No
+  evaluator reads it. (Beware: `"flight_rules"` is *also* an advisory **category**
+  name — the settings group holding `vfr_feasibility` + `ifr_feasibility`,
+  `registry.py:54` — same string, unrelated meaning. Don't mistake one for the
+  other.) What actually decides whether the IFR advisory runs is the advisory
+  `enabled` map, written by the interview's `flying_type` question.
+
+  So three fields currently answer "can you fly IFR", each doing a fraction of
+  the job: `aircraft.is_ifr` (nothing), `profile.flight_rules` (a prompt string),
+  `interview.flying_type` (the only one with teeth). They collapse to two —
+  aircraft = capability, profile = intent — and the derived *effective* value
+  drives **both** the digest line and `ifr_feasibility` eligibility, taking over
+  the job the interview question does by hand today.
 - **Icing advisories** derive from `aircraft.is_fiki` rather than a saved
   `enabled` map: FIKI ⇒ `fiki_icing`, otherwise ⇒ `icing_escape`. Threading
   `is_fiki` onto `RouteContext` is the one genuine engine change in this plan and
