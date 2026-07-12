@@ -4,18 +4,15 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EvidenceSample,
     FlaggedCell,
-    below_coverage,
-    build_regions,
-    build_ribbon,
     format_extent,
-    ribbon_peak,
+    summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
-    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     CloudCoverage,
@@ -77,23 +74,23 @@ class VMCCruiseEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
-            bkn_count = 0
             ovc_count = 0
-            # Per-point highlight geometry (#373). ribbon_points carries every
-            # route point (incl. no-sounding → UNAVAILABLE); region_cells carries
-            # a FlaggedCell only for BKN/OVC points, None otherwise.
-            ribbon_points: list[tuple[float, HighlightSeverity]] = []
-            region_cells: list[tuple[float, FlaggedCell | None]] = []
+            # One evidence sample per route point (#393) — grade counts and the
+            # highlight geometry both derive from this single list, so the BKN/OVC
+            # verdict and the ribbon cannot drift. ``ovc_count`` is the one
+            # sub-count the shared summary can't infer (the OVC-only red
+            # threshold), tracked alongside.
+            samples: list[EvidenceSample] = []
 
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
-                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
                     continue
-                total += 1
 
                 # Check cloud layers at cruise altitude, tracking the envelope
                 # (min base / max top) of layers that contain cruise for the
@@ -116,23 +113,26 @@ class VMCCruiseEvaluator:
                     ovc_count += 1
                     severity = HighlightSeverity.RED
                 elif worst_coverage == CloudCoverage.BKN:
-                    bkn_count += 1
                     severity = HighlightSeverity.AMBER
                 else:
                     severity = HighlightSeverity.GREEN
 
-                ribbon_points.append((dist, severity))
+                region = None
                 if severity in (HighlightSeverity.AMBER, HighlightSeverity.RED):
-                    region_cells.append((dist, FlaggedCell(
+                    region = FlaggedCell(
                         kind="cruise_imc",
                         severity=severity,
                         base_ft=int(env_base) if env_base is not None else None,
                         top_ft=int(env_top) if env_top is not None else None,
-                    )))
-                else:
-                    region_cells.append((dist, None))
+                        metric_id="cloud_cover",
+                    )
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True, severity=severity, region=region,
+                ))
 
-            affected = bkn_count + ovc_count
+            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            total = summary.assessed
+            affected = summary.affected  # bkn + ovc
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -157,25 +157,19 @@ class VMCCruiseEvaluator:
             # small to represent the route becomes UNAVAILABLE — a clear subset
             # does not establish the unassessed remainder is clear. A flagged
             # (AMBER/RED) verdict is never downgraded.
-            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+            if status == AdvisoryStatus.GREEN and summary.below_coverage:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
 
-            # Build highlights only when the model has data (total > 0); an
-            # all-UNAVAILABLE model gets no scrim/ribbon (highlights=None).
-            highlights = None
-            if total > 0:
-                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
-                highlights = AdvisoryHighlights(
-                    ribbon=ribbon,
-                    regions=build_regions(region_cells, ctx.total_distance_nm),
-                    peak_dist_nm=ribbon_peak(ribbon),
-                )
+            # Attach highlights only when the model has data (total > 0); an
+            # all-UNAVAILABLE model gets no scrim/ribbon.
+            highlights = summary.highlights if total > 0 else None
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=summary.affected_nm,
                 highlights=highlights,
             ))
 

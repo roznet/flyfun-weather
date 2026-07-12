@@ -4,19 +4,16 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EvidenceSample,
     FlaggedCell,
-    below_coverage,
-    build_regions,
-    build_ribbon,
     format_extent,
     pct_above_threshold,
-    ribbon_peak,
+    summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
-    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     HighlightSeverity,
@@ -81,23 +78,22 @@ class CloudTopEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
-            above_ceiling = 0
             max_top: float | None = None
-            # Per-point highlight geometry (#375). Binary per point: green =
-            # toppable or no cloud, amber = can't get on top here (the amount of
-            # amber tells the story); the cutout is the blocking deck.
-            ribbon_points: list[tuple[float, HighlightSeverity]] = []
-            region_cells: list[tuple[float, FlaggedCell | None]] = []
+            # One evidence sample per route point (#393): the grade count
+            # (above_ceiling) and the ribbon/scrim both derive from this list.
+            # Binary per point: green = toppable or no cloud, amber = can't get on
+            # top here; the cutout is the blocking deck.
+            samples: list[EvidenceSample] = []
 
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
-                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
                     continue
-                total += 1
 
                 # Only consider layers the pilot would actually encounter:
                 # base must be within margin of cruise altitude (close enough
@@ -109,8 +105,10 @@ class CloudTopEvaluator:
                     if cl.base_ft <= cruise + margin_ft and cl.base_ft <= ceiling
                 ]
                 if not reachable:
-                    ribbon_points.append((dist, HighlightSeverity.GREEN))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=True,
+                        severity=HighlightSeverity.GREEN,
+                    ))
                     continue
 
                 highest_top = max(cl.top_ft for cl in reachable)
@@ -118,23 +116,31 @@ class CloudTopEvaluator:
                     max_top = highest_top
 
                 if highest_top + margin_ft > ceiling:
-                    above_ceiling += 1
                     # The blocking deck: the reachable layers whose tops violate
                     # the ceiling margin.
                     blocking = [
                         cl for cl in reachable if cl.top_ft + margin_ft > ceiling
                     ]
-                    ribbon_points.append((dist, HighlightSeverity.AMBER))
-                    region_cells.append((dist, FlaggedCell(
-                        kind="blocking_deck",
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=True,
                         severity=HighlightSeverity.AMBER,
-                        base_ft=int(min(cl.base_ft for cl in blocking)),
-                        top_ft=int(max(cl.top_ft for cl in blocking)),
-                    )))
+                        region=FlaggedCell(
+                            kind="blocking_deck",
+                            severity=HighlightSeverity.AMBER,
+                            base_ft=int(min(cl.base_ft for cl in blocking)),
+                            top_ft=int(max(cl.top_ft for cl in blocking)),
+                            metric_id="cloud_cover",
+                        ),
+                    ))
                 else:
-                    ribbon_points.append((dist, HighlightSeverity.GREEN))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=True,
+                        severity=HighlightSeverity.GREEN,
+                    ))
 
+            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            total = summary.assessed
+            above_ceiling = summary.affected
             loc = ctx.locale
             if total == 0:
                 status = AdvisoryStatus.UNAVAILABLE
@@ -154,24 +160,18 @@ class CloudTopEvaluator:
             # is too small to represent the route becomes UNAVAILABLE — a clear
             # 2-of-20-points model has not established the other 18 are clear. A
             # flagged verdict is never downgraded (real hazard evidence stands).
-            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+            if status == AdvisoryStatus.GREEN and summary.below_coverage:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
 
             # Highlights (#375) only when the model has data.
-            highlights = None
-            if total > 0:
-                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
-                highlights = AdvisoryHighlights(
-                    ribbon=ribbon,
-                    regions=build_regions(region_cells, ctx.total_distance_nm),
-                    peak_dist_nm=ribbon_peak(ribbon),
-                )
+            highlights = summary.highlights if total > 0 else None
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=above_ceiling, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=summary.affected_nm,
                 highlights=highlights,
             ))
 
