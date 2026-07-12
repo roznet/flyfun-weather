@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryAggregation,
     AdvisoryCatalogEntry,
@@ -250,8 +251,6 @@ def evaluate_all(
             # through from_per_model, whose empty-list path we already rely on
             # elsewhere) so the deliberately-empty per_model is preserved.
             logger.warning("Advisory %s evaluation failed", adv_id, exc_info=True)
-            from weatherbrief.analysis.advisories.strings import adv_t
-
             results.append(RouteAdvisoryResult(
                 advisory_id=adv_id,
                 aggregate_status=AdvisoryStatus.UNAVAILABLE,

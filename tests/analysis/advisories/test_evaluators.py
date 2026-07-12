@@ -986,6 +986,37 @@ class TestVFRFeasibility:
         result = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS)
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
+    def test_thin_enroute_coverage_is_unavailable_even_with_vfr_airports(self):
+        """Thin en-route coverage → UNAVAILABLE despite confirmed-VFR airports (#391 review).
+
+        VFR feasibility is en-route-driven: a GREEN grade while 8 of 10 route
+        points have no sounding overstates confidence even when the airports and
+        the one covered corridor point are clear. The composite coverage guard
+        catches the corridor/precip-mapping leak the per-axis en-route guard
+        alone cannot.
+        """
+        from tests.analysis.advisories.conftest import _make_airport_conditions
+
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding=(
+                    {"gfs": SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))}
+                    if i < 2 else {}
+                ),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+            airport_conditions=_make_airport_conditions(models=["gfs"]),
+        )
+        result = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
     def test_red_ifr_airport(self, vfr_ifr_airport_context: RouteContext):
         """IFR at arrival airport → RED for VFR."""
         result = VFRFeasibilityEvaluator.evaluate(
@@ -1121,6 +1152,64 @@ class TestIFRFeasibility:
         assert _check_airport_ifr(ctx, "gfs", 200, 400)[0] == AdvisoryStatus.UNAVAILABLE
         result = IFRFeasibilityEvaluator.evaluate(ctx, _IFR_DEFAULTS)
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_thin_enroute_coverage_is_unavailable_even_with_ifr_airports(self):
+        """Thin en-route hazard coverage → UNAVAILABLE despite IFR-OK airports (#391 review).
+
+        The convective axis got no coverage guard (only icing did) and a real
+        airport axis could carry a would-be-GREEN composite past both — the
+        composite guard closes that.
+        """
+        from tests.analysis.advisories.conftest import _make_airport_conditions
+        from weatherbrief.models.airport_conditions import FlightCategory
+
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding=(
+                    {"gfs": SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))}
+                    if i < 2 else {}
+                ),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+            airport_conditions=_make_airport_conditions(
+                dep_category=FlightCategory.IFR, dep_ceiling_ft=800,
+                arr_category=FlightCategory.IFR, arr_ceiling_ft=900, models=["gfs"],
+            ),
+        )
+        result = IFRFeasibilityEvaluator.evaluate(ctx, _IFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_convective_hazard_partial_coverage_still_flags(self):
+        """HIGH convective at 2 of 10 assessed points still REDs — coverage never blanks a hazard."""
+        conv = ConvectiveAssessment(risk_level=ConvectiveRisk.HIGH, cape_jkg=2500)
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding=(
+                    {"gfs": SoundingAnalysis(
+                        indices=ThermodynamicIndices(freezing_level_ft=5000), convective=conv,
+                    )}
+                    if i < 2 else {}
+                ),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+            airport_conditions=None,
+        )
+        result = IFRFeasibilityEvaluator.evaluate(ctx, _IFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.RED
 
     def test_amber_lifr(self, ifr_lifr_context: RouteContext):
         """LIFR at arrival (ceiling 450ft >= 400ft min) → AMBER."""
