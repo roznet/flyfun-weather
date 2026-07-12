@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, NamedTuple
 from collections.abc import Callable
 
 from weatherbrief.models import (
+    AdvisoryHighlights,
     AdvisoryStatus,
     ElevationProfile,
     HighlightRegion,
@@ -387,6 +388,148 @@ def below_coverage(assessed: int, domain: int) -> bool:
     "nothing to assess" branch, not here).
     """
     return domain > 0 and assessed < domain * _MIN_ASSESSED_FRACTION
+
+
+class EvidenceSample(NamedTuple):
+    """One route point's evidence for one evaluator × one model (#393).
+
+    The single per-point record that feeds **both** the grade (counts) and the
+    highlight geometry (ribbon + regions). Emitting one list per model — instead
+    of maintaining a ``total``/``affected`` counter loop *and* a separate
+    ``ribbon_points``/``region_cells`` loop — is what keeps the verdict and the
+    highlight from silently drifting: :func:`summarize_evidence` derives every
+    downstream number from this one list.
+
+    Fields:
+        ``distance_nm`` — along-route position from origin.
+        ``assessed`` — could this point actually be graded (does the model carry
+            the data here)? ``False`` renders the ribbon UNAVAILABLE at this
+            point and excludes it from the coverage numerator.
+        ``severity`` — the per-point ribbon verdict (what the highlight shows).
+            Unassessed points should carry ``UNAVAILABLE``; points an evaluator's
+            relevance filter skips (above cruise, non-mountain) carry ``GREEN``.
+        ``affected`` — whether this point counts toward the grade's ``affected``
+            total. ``None`` (the common case) derives it as
+            ``severity in {AMBER, RED}``. A few evaluators pass it explicitly
+            because their ribbon and grade key on *different* predicates — e.g.
+            turbulence colours the ribbon RED for SEVERE CAT anywhere in the
+            column while the grade keys on the cruise band, and FIKI flags a
+            corridor cutout while the grade keys on cruise clear-air. Passing it
+            here keeps ``affected_nm`` consistent with ``affected_pct`` (both
+            count the same points) without forcing the ribbon to match.
+        ``in_domain`` — is this point part of the coverage *domain* (the
+            denominator :func:`below_coverage` measures against)? Default True.
+            ``mountain_wind`` sets it ``False`` for non-mountain points so
+            coverage is measured over mountain points only — a genuinely flat
+            route still grades rather than going UNAVAILABLE.
+        ``region`` — the scrim cutout (:class:`FlaggedCell`) for a flagged point,
+            or ``None``. Carries the region kind/altitude band plus the #393
+            provenance tokens.
+    """
+
+    distance_nm: float
+    assessed: bool
+    severity: HighlightSeverity
+    affected: bool | None = None
+    in_domain: bool = True
+    region: FlaggedCell | None = None
+
+
+def _sample_affected(sample: EvidenceSample) -> bool:
+    """Whether a sample counts toward the grade's ``affected`` total."""
+    if sample.affected is not None:
+        return sample.affected
+    return sample.severity in (HighlightSeverity.AMBER, HighlightSeverity.RED)
+
+
+class EvidenceSummary(NamedTuple):
+    """Everything :func:`summarize_evidence` derives from one evidence list (#393).
+
+    ``assessed`` is the grade denominator (``ModelAdvisoryResult.build``'s
+    ``total``); ``affected`` its numerator. ``domain`` is the coverage universe.
+    ``affected_nm`` is the geometry-accurate extent (midpoint-owned cells of the
+    affected points) to pass to ``build``. ``highlights`` is the ribbon + scrim
+    geometry. ``data_state`` is complete / partial / unavailable.
+    """
+
+    affected: int
+    assessed: int
+    domain: int
+    affected_nm: float
+    highlights: AdvisoryHighlights
+    data_state: str  # "complete" | "partial" | "unavailable"
+
+    @property
+    def below_coverage(self) -> bool:
+        """True when a would-be-GREEN verdict rests on too small a share of the domain.
+
+        The same predicate the evaluators call directly today
+        (``below_coverage(total, domain)``) — apply it only to a GREEN status, so
+        a flagged verdict on thin coverage is never diluted.
+        """
+        return below_coverage(self.assessed, self.domain)
+
+
+def summarize_evidence(
+    samples: list[EvidenceSample],
+    total_nm: float,
+    *,
+    peak_dist_nm: float | None = None,
+) -> EvidenceSummary:
+    """Derive grade counts, geometry-accurate extent, highlights and coverage (#393).
+
+    One shared reduction over the evaluator's per-point :class:`EvidenceSample`
+    list. Because the counts and the highlight both come from this single list,
+    the grade and the ribbon cannot disagree, and ``affected_nm`` — the
+    midpoint-owned-cell distance of the *affected* points — stays consistent with
+    ``affected_pct`` (both count the same points). This is the #391 geometry fix,
+    landed here where it belongs rather than as a second pass over the route.
+
+    ``peak_dist_nm`` overrides the highlight's jump-to-worst point; when ``None``
+    it defaults to :func:`ribbon_peak` (longest red run, else amber). The caller
+    decides whether to attach ``.highlights`` to the result (evaluators gate on
+    "the model has data").
+    """
+    pts = sorted(samples, key=lambda s: s.distance_nm)
+    distances = [s.distance_nm for s in pts]
+
+    domain = sum(1 for s in pts if s.in_domain)
+    assessed = sum(1 for s in pts if s.assessed and s.in_domain)
+    affected = sum(1 for s in pts if _sample_affected(s))
+
+    # Geometry-accurate extent: each affected point owns the interval to the
+    # midpoints of its neighbours; union (here, sum — cells are disjoint by
+    # construction) the qualifying intervals. Falls out of the same cell edges
+    # the ribbon uses, so extent and ribbon share one geometry.
+    affected_nm = 0.0
+    if pts:
+        lefts, rights = _cell_edges(distances, total_nm)
+        affected_nm = sum(
+            rights[i] - lefts[i] for i, s in enumerate(pts) if _sample_affected(s)
+        )
+
+    ribbon = build_ribbon([(s.distance_nm, s.severity) for s in pts], total_nm)
+    highlights = AdvisoryHighlights(
+        ribbon=ribbon,
+        regions=build_regions([(s.distance_nm, s.region) for s in pts], total_nm),
+        peak_dist_nm=peak_dist_nm if peak_dist_nm is not None else ribbon_peak(ribbon),
+    )
+
+    if domain == 0 or assessed == 0:
+        data_state = "unavailable"
+    elif below_coverage(assessed, domain):
+        data_state = "partial"
+    else:
+        data_state = "complete"
+
+    return EvidenceSummary(
+        affected=affected,
+        assessed=assessed,
+        domain=domain,
+        affected_nm=round(affected_nm, 1),
+        highlights=highlights,
+        data_state=data_state,
+    )
 
 
 def pct_above_threshold(
