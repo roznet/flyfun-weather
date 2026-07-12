@@ -69,9 +69,16 @@ def _check_airport_ifr(
 
     Returns (status, detail_fragment, dep_status, arr_status). The per-airport
     statuses colour the endpoint ribbon segments of the highlight (#375).
+
+    Missing airport data is UNAVAILABLE, never a hardcoded clear GREEN (#391):
+    the airport axis then simply doesn't contribute to the composite's ``worst``
+    aggregate instead of vouching for airports it never saw.
     """
     if ctx.airport_conditions is None:
-        return AdvisoryStatus.GREEN, "", AdvisoryStatus.GREEN, AdvisoryStatus.GREEN
+        return (
+            AdvisoryStatus.UNAVAILABLE, "",
+            AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE,
+        )
 
     dep = ctx.airport_conditions.departure
     arr = ctx.airport_conditions.arrival
@@ -86,9 +93,13 @@ def _check_airport_ifr(
         ("airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft),
         ("airport.arr", arr.icao, arr_cond, min_arr_ceiling_ft),
     ]:
+        if cond is None:
+            # No condition for this model at this airport — unassessable, not clear.
+            per_airport.append(AdvisoryStatus.UNAVAILABLE)
+            continue
         status = AdvisoryStatus.GREEN
         # LIFR is concerning for IFR
-        if cond is not None and cond.flight_category == FlightCategory.LIFR:
+        if cond.flight_category == FlightCategory.LIFR:
             label = adv_t(label_key, loc)
             # Check against minimum ceiling
             if cond.ceiling_ft is not None and cond.ceiling_ft < min_ceil:
@@ -375,7 +386,7 @@ class IFRFeasibilityEvaluator:
             loc = ctx.locale
             if (
                 total == 0
-                and airport_status == AdvisoryStatus.GREEN
+                and airport_status in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE)
                 and not airport_detail
             ):
                 per_model.append(ModelAdvisoryResult.build(

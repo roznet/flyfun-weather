@@ -823,6 +823,56 @@ class TestVFRFeasibility:
         assert result.aggregate_status == AdvisoryStatus.GREEN
         assert result.advisory_id == "vfr_feasibility"
 
+    def test_no_airport_axis_not_hardcoded_green(self):
+        """Missing airport data must not read as a clear airport axis (#391).
+
+        With no airport conditions AND no en-route soundings, the whole
+        composite is UNAVAILABLE — the airport axis no longer contributes a
+        hardcoded GREEN that would keep the aggregate green.
+        """
+        from weatherbrief.analysis.advisories.vfr_feasibility import _check_airport_vfr
+
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={},
+            )
+            for i in range(5)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+            airport_conditions=None,
+        )
+        assert _check_airport_vfr(ctx, "gfs")[0] == AdvisoryStatus.UNAVAILABLE
+        result = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_no_airport_but_clear_enroute_still_green(self):
+        """Real clear en-route with missing airport data still grades GREEN.
+
+        Guards against over-correcting the airport-axis fix into blanking a
+        composite that has genuine clear en-route evidence.
+        """
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))},
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+            airport_conditions=None,
+        )
+        result = VFRFeasibilityEvaluator.evaluate(ctx, _VFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
     def test_red_ifr_airport(self, vfr_ifr_airport_context: RouteContext):
         """IFR at arrival airport → RED for VFR."""
         result = VFRFeasibilityEvaluator.evaluate(
@@ -936,6 +986,28 @@ class TestIFRFeasibility:
         result = IFRFeasibilityEvaluator.evaluate(ifr_normal_context, _IFR_DEFAULTS)
         assert result.aggregate_status == AdvisoryStatus.GREEN
         assert result.advisory_id == "ifr_feasibility"
+
+    def test_no_airport_axis_not_hardcoded_green(self):
+        """Missing airport data → UNAVAILABLE airport axis, not clear GREEN (#391)."""
+        from weatherbrief.analysis.advisories.ifr_feasibility import _check_airport_ifr
+
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={},
+            )
+            for i in range(5)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+            airport_conditions=None,
+        )
+        assert _check_airport_ifr(ctx, "gfs", 200, 400)[0] == AdvisoryStatus.UNAVAILABLE
+        result = IFRFeasibilityEvaluator.evaluate(ctx, _IFR_DEFAULTS)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
 
     def test_amber_lifr(self, ifr_lifr_context: RouteContext):
         """LIFR at arrival (ceiling 450ft >= 400ft min) → AMBER."""
