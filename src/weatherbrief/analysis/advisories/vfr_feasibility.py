@@ -769,6 +769,7 @@ class VFRFeasibilityEvaluator:
                     min=500,
                     max=2000,
                     step=500,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="imc_pct_amber",

@@ -106,6 +106,7 @@ class DensityAltitudeEvaluator:
                     min=2000,
                     max=10000,
                     step=500,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="da_red_ft",
@@ -117,6 +118,7 @@ class DensityAltitudeEvaluator:
                     min=4000,
                     max=14000,
                     step=500,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="delta_amber_ft",

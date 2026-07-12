@@ -22,6 +22,11 @@ export interface Mitigation {
   reference?: string | null;
 }
 
+/** Curation tier driving progressive disclosure on the settings page (#387).
+ *  `pilot` params render inline on the advisory row; `advanced` params hide
+ *  behind the collapsed "Advanced" expander. Absent (old server) → 'advanced'. */
+export type AdvisoryAudience = 'pilot' | 'advanced';
+
 export interface AdvisoryParameterDef {
   key: string;
   label: string;
@@ -32,6 +37,9 @@ export interface AdvisoryParameterDef {
   min: number | null;
   max: number | null;
   step: number | null;
+  /** Progressive-disclosure tier (#387). Optional for old-server compat;
+   *  treat a missing value as 'advanced'. */
+  audience?: AdvisoryAudience;
 }
 
 export interface AdvisoryCatalogEntry {
@@ -43,6 +51,42 @@ export interface AdvisoryCatalogEntry {
   default_enabled: boolean;
   altitude_dependent: boolean;
   parameters: AdvisoryParameterDef[];
+}
+
+/** One category in the server-defined display order (#387). Labels stay
+ *  client-side (i18n); `diagnostics` marks the visually-distinct dev group. */
+export interface AdvisoryCategory {
+  key: string;
+  diagnostics: boolean;
+}
+
+/** Response of `/advisories/catalog` (#387): advisories in display order plus
+ *  the ordered category list. */
+export interface AdvisoryCatalogResponse {
+  advisories: AdvisoryCatalogEntry[];
+  categories: AdvisoryCategory[];
+}
+
+/** One answer to a setup-interview question (#387, slice 3). Declarative patch:
+ *  which advisories it enables/disables and which param values it sets. */
+export interface InterviewOption {
+  id: string;
+  label: string;
+  description: string;
+  enabled: Record<string, boolean>;
+  params: Record<string, Record<string, number>>;
+}
+
+export interface InterviewQuestion {
+  id: string;
+  title: string;
+  help: string;
+  options: InterviewOption[];
+}
+
+/** The declarative setup-interview served by `/advisories/interview` (#387). */
+export interface Interview {
+  questions: InterviewQuestion[];
 }
 
 /** Severity of a highlight element (scrim cutout / ribbon segment, #373). */

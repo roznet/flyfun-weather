@@ -47,6 +47,7 @@ class ProfileSettings(BaseModel):
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     digest_guidance: Literal["conservative", "balanced", "tolerant"] | None = None
     advisories: dict | None = None  # {enabled: {}, params: {}}
+    interview: dict | None = None  # setup-interview answers {question_id: option_id} (#387)
 
 
 class ProfileResponse(BaseModel):

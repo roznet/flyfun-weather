@@ -1,9 +1,15 @@
 /** Preferences adapter — fetch, save, and clear autorouter credentials. */
 
 import { apiFetch, type BookingConfig, type ModelCatalogEntry } from '../utils';
-import type { AdvisoryParameterDef, AdvisoryCatalogEntry } from '../types/advisories';
+import type {
+  AdvisoryParameterDef,
+  AdvisoryCatalogEntry,
+  AdvisoryCategory,
+  AdvisoryCatalogResponse,
+  Interview,
+} from '../types/advisories';
 
-export type { AdvisoryParameterDef, AdvisoryCatalogEntry };
+export type { AdvisoryParameterDef, AdvisoryCatalogEntry, AdvisoryCategory, AdvisoryCatalogResponse, Interview };
 
 export interface FlightDefaults {
   cruise_altitude_ft: number | null;
@@ -127,8 +133,25 @@ export async function completeSetup(): Promise<void> {
   });
 }
 
-export async function fetchAdvisoryCatalog(): Promise<AdvisoryCatalogEntry[]> {
-  return apiFetch<AdvisoryCatalogEntry[]>('/user/preferences/advisories/catalog');
+/**
+ * Fetch the advisory catalog (#387). The server returns advisories already in
+ * display order plus an ordered category list. Tolerates the legacy bare-array
+ * response (pre-#387 server) by synthesizing an empty category list, so the
+ * settings page falls back to grouping by first-seen category.
+ */
+export async function fetchAdvisoryCatalog(): Promise<AdvisoryCatalogResponse> {
+  const resp = await apiFetch<AdvisoryCatalogResponse | AdvisoryCatalogEntry[]>(
+    '/user/preferences/advisories/catalog',
+  );
+  if (Array.isArray(resp)) {
+    return { advisories: resp, categories: [] };
+  }
+  return resp;
+}
+
+/** Fetch the declarative setup-interview structure (#387, slice 3). */
+export async function fetchAdvisoryInterview(): Promise<Interview> {
+  return apiFetch<Interview>('/user/preferences/advisories/interview');
 }
 
 export async function fetchModelCatalog(): Promise<ModelCatalogEntry[]> {

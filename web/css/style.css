@@ -2829,6 +2829,267 @@ label {
   font-size: 0.78rem;
 }
 
+/* --- Progressive disclosure per advisory (#387) --- */
+
+.is-hidden {
+  display: none !important;
+}
+
+.advisory-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.advisory-toolbar-spacer {
+  flex: 1;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent, #2b7);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  text-decoration: underline;
+}
+
+.btn-link:hover {
+  opacity: 0.8;
+}
+
+/* Amber/red threshold pair rendered on one row ("warn / alert"). */
+.advisory-param-pair {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.advisory-param-pair .advisory-param {
+  gap: 0.25rem;
+}
+
+.advisory-param-sep {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+/* "· default X" hint shown only when a value differs from the catalog default. */
+.param-default {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* Collapsed "Advanced (n)" expander per advisory. */
+.advisory-advanced {
+  margin-top: 0.4rem;
+  padding-left: 1.6rem;
+}
+
+.advisory-advanced-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  list-style: revert;
+}
+
+.advisory-advanced-label {
+  font-weight: 500;
+}
+
+.advisory-modified-chip {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--amber-bg, #fff3cd);
+  color: var(--amber-fg, #8a6d00);
+  border: 1px solid var(--amber-border, #ffe08a);
+}
+
+.advisory-reset-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.1rem 0.45rem;
+}
+
+.advisory-reset-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+/* Diagnostics group (model category) — visually distinct dev signals. */
+.advisory-category-diagnostics {
+  opacity: 0.85;
+}
+
+.advisory-category-diagnostics .advisory-category-title {
+  color: var(--text-muted);
+  border-bottom-style: dashed;
+}
+
+/* Collapsed engine-level controls. */
+.engine-settings {
+  margin-top: 1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.engine-settings-summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.engine-settings-summary h4 {
+  display: inline;
+  margin: 0;
+}
+
+/* --- Setup assistant modal (interview, #387) --- */
+
+.interview-question {
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+  padding: 0.5rem 0.75rem 0.75rem;
+  margin: 0 0 0.75rem;
+}
+
+.interview-question legend {
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0 0.35rem;
+}
+
+.interview-help {
+  font-size: 0.78rem;
+  margin: 0.1rem 0 0.5rem;
+}
+
+.interview-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.5rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+  cursor: pointer;
+}
+
+.interview-option input {
+  grid-row: span 2;
+  align-self: center;
+}
+
+.interview-option-label {
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.interview-option-desc {
+  grid-column: 2;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.interview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* --- Live preview panel (#387, slice 4) --- */
+
+.advisory-preview {
+  margin-top: 1rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+}
+
+.advisory-preview-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-bottom: 0.4rem;
+}
+
+.advisory-preview-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.advisory-preview-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.advisory-preview-none {
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.advisory-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.advisory-preview-list li {
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.advisory-preview-name {
+  font-weight: 500;
+}
+
+.adv-status {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.03rem 0.35rem;
+  border-radius: 3px;
+  letter-spacing: 0.03em;
+}
+
+.adv-status-green {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.adv-status-amber {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.adv-status-red {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.adv-status-unavailable {
+  background: rgba(127, 127, 127, 0.15);
+  color: var(--text-muted);
+}
+
 /* --- Display mode toggle --- */
 
 .display-mode-toggle {

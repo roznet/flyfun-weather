@@ -11,15 +11,21 @@ import {
   unlinkAutorouter,
   fetchUsageSummary,
   fetchAdvisoryCatalog,
+  fetchAdvisoryInterview,
   fetchModelCatalog,
   foldBriefingUpdates,
   unfoldBriefingUpdates,
   type PreferencesResponse,
   type AdvisoryPreferences,
   type AdvisoryCatalogEntry,
+  type AdvisoryCategory,
   type AdvisoryParameterDef,
+  type Interview,
   type UsageSummary,
 } from './adapters/preferences-adapter';
+import { hideMetricInfo } from './components/info-popup';
+import type { InterviewOption } from './types/advisories';
+import { fetchFlights, fetchLatestPack, previewAdvisories } from './adapters/api-adapter';
 import {
   fetchProfiles,
   createProfile,
@@ -51,23 +57,24 @@ import { setUnitsPreference } from './units';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
-/** Category display order and labels.
- *  Any categories not listed here will appear at the end under their raw key. */
-const CATEGORY_KEYS: [string, string][] = [
-  ['icing', 'settings.cat.icing'],
-  ['cloud', 'settings.cat.cloud'],
-  ['precipitation', 'settings.cat.precipitation'],
-  ['turbulence', 'settings.cat.turbulence'],
-  ['convective', 'settings.cat.convective'],
-  ['wind', 'settings.cat.wind'],
-  ['airport', 'settings.cat.airport'],
-  ['model', 'settings.cat.model'],
-];
-
 /** Advisory id of the experimental front advisory (mirrors FRONTS_ADVISORY_ID in the backend). */
 const FRONTS_ADVISORY_ID = 'fronts';
 
 let catalog: AdvisoryCatalogEntry[] = [];
+/** Category display order served by the catalog endpoint (#387). Ordering is
+ *  backend-owned — there is no client-side CATEGORY_KEYS copy to drift. */
+let advisoryCategories: AdvisoryCategory[] = [];
+/** Setup-interview structure (#387, slice 3), fetched lazily on first open. */
+let interview: Interview | null = null;
+/** Stored interview answers for the active profile ({question_id: option_id}). */
+let interviewAnswers: Record<string, string> = {};
+
+/** Live-preview target (#387, slice 4): the user's most recent flight+pack the
+ *  draft settings are previewed against. Null until discovered / if none. */
+let previewTarget: { flightId: string; ts: string; label: string } | null = null;
+/** Per-advisory aggregate status under the *saved* settings — the diff baseline. */
+let previewBaseline: Record<string, string> = {};
+let previewTimer: number | undefined;
 let profiles: ProfileResponse[] = [];
 let activeProfileId: number | null = null;
 let aircraftList: AircraftResponse[] = [];
@@ -254,6 +261,8 @@ function populateProfileForm(profile: ProfileResponse): void {
   const advPrefs: AdvisoryPreferences = s.advisories ?? { enabled: null, params: null };
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
   if (aggSelect) aggSelect.value = advPrefs.aggregation ?? 'majority';
+  // Interview answers travel with the profile so the assistant pre-selects them.
+  interviewAnswers = { ...(s.interview ?? {}) };
   renderAdvisorySettings(catalog, advPrefs, s.auto_front_detection ?? false);
 }
 
@@ -456,6 +465,12 @@ function translateStaticElements(): void {
     const hint = sections[3].querySelector('.section-hint');
     if (hint) hint.textContent = t('page.settings.advisoriesHint');
   }
+  // Advisory toolbar + engine settings (#387)
+  set('#btn-setup-assistant', 'settings.adv.setupAssistant');
+  set('#btn-expand-all-advisories', 'settings.adv.expandAll');
+  set('#btn-collapse-all-advisories', 'settings.adv.collapseAll');
+  set('#engine-settings-title', 'settings.adv.engineSettings');
+  set('#engine-settings-hint', 'settings.adv.engineSettingsHint');
   set('label[for="advisory-aggregation"]', 'page.settings.summaryRating');
   set('label[for="input-icing-method"]', 'page.settings.icingMethod');
   set('label[for="input-cloud-source"]', 'page.settings.cloudSource');
@@ -526,7 +541,7 @@ async function init(): Promise<void> {
     }),
     fetchAdvisoryCatalog().catch(err => {
       showStatus(t('settings.failedLoad', { what: 'advisory catalog', error: String(err) }), true);
-      return [] as AdvisoryCatalogEntry[];
+      return { advisories: [] as AdvisoryCatalogEntry[], categories: [] as AdvisoryCategory[] };
     }),
     fetchModelCatalog().catch(err => {
       showStatus(t('settings.failedLoad', { what: 'model catalog', error: String(err) }), true);
@@ -534,7 +549,8 @@ async function init(): Promise<void> {
     }),
   ]);
 
-  catalog = catalogResult;
+  catalog = catalogResult.advisories;
+  advisoryCategories = catalogResult.categories;
   profiles = profilesResult;
   initModelCatalog(modelCatalog);
 
@@ -595,6 +611,30 @@ async function init(): Promise<void> {
     if (current.enabled) delete current.enabled[FRONTS_ADVISORY_ID];
     renderAdvisorySettings(catalog, current, masterOn);
   });
+
+  // Global expand/collapse all — toggles every per-advisory "Advanced" expander.
+  const setAllAdvancedOpen = (open: boolean): void => {
+    const settings = document.getElementById('advisory-settings');
+    if (!settings) return;
+    for (const d of settings.querySelectorAll<HTMLDetailsElement>('details.advisory-advanced')) {
+      d.open = open;
+    }
+  };
+  document.getElementById('btn-expand-all-advisories')?.addEventListener('click', () => setAllAdvancedOpen(true));
+  document.getElementById('btn-collapse-all-advisories')?.addEventListener('click', () => setAllAdvancedOpen(false));
+
+  // Setup assistant (interview) — opens the guided preset flow.
+  document.getElementById('btn-setup-assistant')?.addEventListener('click', () => {
+    void openSetupAssistant();
+  });
+
+  // Live preview (#387, slice 4): recompute the diff (debounced) whenever the
+  // advisory enables/params or aggregation change. Delegated on the container so
+  // it survives re-renders.
+  document.getElementById('advisory-settings')?.addEventListener('input', scheduleAdvisoryPreview);
+  document.getElementById('advisory-settings')?.addEventListener('change', scheduleAdvisoryPreview);
+  document.getElementById('advisory-aggregation')?.addEventListener('change', scheduleAdvisoryPreview);
+  void initAdvisoryPreview();
 
   // Save button
   const form = document.getElementById('settings-form') as HTMLFormElement;
@@ -914,6 +954,95 @@ function renderNotificationSettings(prefs: PreferencesResponse): void {
 
 // --- Advisory settings rendering ---
 
+/** True when the param is a pilot-tier personal-minimum / capability choice,
+ *  rendered inline. A missing audience (old server) is treated as advanced so a
+ *  param never leaks into the compact view unasked. */
+function isPilotParam(param: AdvisoryParameterDef): boolean {
+  return param.audience === 'pilot';
+}
+
+/** A param is "modified" when its saved value differs from the catalog default. */
+function isParamModified(value: number, param: AdvisoryParameterDef): boolean {
+  return value !== param.default;
+}
+
+/** Ordered category list for rendering. Uses the server-defined order (#387);
+ *  falls back to the entries' own (already server-sorted) first-seen order when
+ *  the category list is absent (legacy server). */
+function orderedCategories(entries: AdvisoryCatalogEntry[]): AdvisoryCategory[] {
+  if (advisoryCategories.length > 0) return advisoryCategories;
+  const seen = new Set<string>();
+  const out: AdvisoryCategory[] = [];
+  for (const e of entries) {
+    if (!seen.has(e.category)) {
+      seen.add(e.category);
+      out.push({ key: e.category, diagnostics: false });
+    }
+  }
+  return out;
+}
+
+/** Localized category label, falling back to a capitalized raw key. */
+function categoryLabel(key: string): string {
+  const tk = `settings.cat.${key}`;
+  const label = t(tk);
+  return label === tk ? key.charAt(0).toUpperCase() + key.slice(1) : label;
+}
+
+/** Split severity role out of a threshold param key for visual amber/red
+ *  pairing (#387, slice 2 — pairing only, no metadata). `green`/`amber` tokens
+ *  are the amber ("warn") trigger; `red` is the ("alert") trigger. Returns the
+ *  base quantity (key minus the severity token) and the role. */
+function paramSeverity(key: string): { base: string; role: 'warn' | 'alert' | null } {
+  let role: 'warn' | 'alert' | null = null;
+  const kept: string[] = [];
+  for (const part of key.split('_')) {
+    if (part === 'red') { role = 'alert'; continue; }
+    if (part === 'amber' || part === 'green') { role = role ?? 'warn'; continue; }
+    kept.push(part);
+  }
+  return { base: kept.join('_'), role };
+}
+
+/** Render a set of params, pairing amber/red thresholds of the same quantity
+ *  onto one visual row ("warn at / alert at"). Pairing is visual only. */
+function renderParamGroup(
+  advisoryId: string,
+  params: AdvisoryParameterDef[],
+  userParams: Record<string, number>,
+  enabled: boolean,
+): string {
+  // Index params of this group by (base, role) for pairing.
+  const byBaseRole = new Map<string, AdvisoryParameterDef>();
+  for (const p of params) {
+    const { base, role } = paramSeverity(p.key);
+    if (role) byBaseRole.set(`${base}|${role}`, p);
+  }
+  const consumed = new Set<string>();
+  let html = '';
+  for (const param of params) {
+    if (consumed.has(param.key)) continue;
+    const { base, role } = paramSeverity(param.key);
+    const partnerRole = role === 'warn' ? 'alert' : role === 'alert' ? 'warn' : null;
+    const partner = partnerRole ? byBaseRole.get(`${base}|${partnerRole}`) : undefined;
+    if (partner && !consumed.has(partner.key)) {
+      // Render as a paired row, warn (amber) first then alert (red).
+      const warn = role === 'warn' ? param : partner;
+      const alert = role === 'warn' ? partner : param;
+      consumed.add(warn.key);
+      consumed.add(alert.key);
+      html += `<div class="advisory-param-pair">`;
+      html += renderParamInput(advisoryId, warn, userParams[warn.key] ?? warn.default, enabled);
+      html += `<span class="advisory-param-sep">/</span>`;
+      html += renderParamInput(advisoryId, alert, userParams[alert.key] ?? alert.default, enabled);
+      html += `</div>`;
+    } else {
+      html += renderParamInput(advisoryId, param, userParams[param.key] ?? param.default, enabled);
+    }
+  }
+  return html;
+}
+
 function renderAdvisorySettings(
   entries: AdvisoryCatalogEntry[],
   userAdvisories: AdvisoryPreferences,
@@ -933,23 +1062,14 @@ function renderAdvisorySettings(
   const enabledMap = userAdvisories.enabled ?? {};
   const paramsMap = userAdvisories.params ?? {};
 
-  // Build ordered list of categories: known order first, then any extras
-  const knownKeys = new Set(CATEGORY_KEYS.map(([k]) => k));
-  const allCategories: [string, string][] = CATEGORY_KEYS.map(([k, tKey]) => [k, t(tKey)]);
-  for (const catKey of grouped.keys()) {
-    if (!knownKeys.has(catKey)) {
-      // Unknown category — capitalize key as label
-      allCategories.push([catKey, catKey.charAt(0).toUpperCase() + catKey.slice(1)]);
-    }
-  }
-
   let html = '';
-  for (const [catKey, catLabel] of allCategories) {
-    const catEntries = grouped.get(catKey);
+  for (const cat of orderedCategories(entries)) {
+    const catEntries = grouped.get(cat.key);
     if (!catEntries?.length) continue;
 
-    html += `<div class="advisory-category">`;
-    html += `<div class="advisory-category-title">${catLabel}</div>`;
+    html += `<div class="advisory-category${cat.diagnostics ? ' advisory-category-diagnostics' : ''}">`;
+    const label = cat.diagnostics ? t('settings.adv.diagnostics') : categoryLabel(cat.key);
+    html += `<div class="advisory-category-title">${escapeHtml(label)}</div>`;
 
     for (const entry of catEntries) {
       // The experimental front advisory is gated by the Auto Front Detection
@@ -967,26 +1087,46 @@ function renderAdvisorySettings(
       const frontsDisabled = isFronts && !autoFrontDetection;
       const userParams = paramsMap[entry.id] ?? {};
 
-      html += `<div class="advisory-setting">`;
+      const pilotParams = entry.parameters.filter(isPilotParam);
+      const advancedParams = entry.parameters.filter(p => !isPilotParam(p));
+
+      html += `<div class="advisory-setting" data-advisory-row="${entry.id}">`;
       html += `<div class="advisory-header">`;
       html += `<label class="checkbox-label">`;
       html += `<input type="checkbox" data-advisory-id="${entry.id}" ${isEnabled ? 'checked' : ''}${frontsDisabled ? ' disabled' : ''}>`;
-      html += ` ${entry.name}`;
-      html += `<span class="advisory-desc">${entry.short_description}</span>`;
-      html += `<button class="metric-info-btn advisory-settings-info-btn" data-advisory-id="${entry.id}" title="Advisory details" aria-label="Advisory details">i</button>`;
+      html += ` ${escapeHtml(entry.name)}`;
+      html += `<span class="advisory-desc">${escapeHtml(entry.short_description)}</span>`;
+      html += `<button type="button" class="metric-info-btn advisory-settings-info-btn" data-advisory-id="${entry.id}" title="Advisory details" aria-label="Advisory details">i</button>`;
       html += `</label>`;
       if (frontsDisabled) {
-        html += `<span class="advisory-desc muted">Requires Auto Front Detection (enable it above).</span>`;
+        html += `<span class="advisory-desc muted">${escapeHtml(t('settings.adv.requiresAutoFront'))}</span>`;
       }
       html += `</div>`;
 
-      if (entry.parameters.length > 0) {
+      // Pilot-tier params render inline (always visible, the compact view).
+      if (pilotParams.length > 0) {
         html += `<div class="advisory-params" data-params-for="${entry.id}">`;
-        for (const param of entry.parameters) {
-          const value = userParams[param.key] ?? param.default;
-          html += renderParamInput(entry.id, param, value, isEnabled);
-        }
+        html += renderParamGroup(entry.id, pilotParams, userParams, isEnabled);
         html += `</div>`;
+      }
+
+      // Advanced params hide behind a collapsed expander. A modified chip and
+      // the per-advisory reset live in the expander summary so a non-default
+      // value is never invisibly hidden.
+      if (advancedParams.length > 0) {
+        const modifiedCount = advancedParams.filter(
+          p => isParamModified(userParams[p.key] ?? p.default, p),
+        ).length;
+        html += `<details class="advisory-advanced" data-advanced-for="${entry.id}">`;
+        html += `<summary class="advisory-advanced-summary">`;
+        html += `<span class="advisory-advanced-label">${escapeHtml(t('settings.adv.advanced'))} (${advancedParams.length})</span>`;
+        html += `<span class="advisory-modified-chip${modifiedCount > 0 ? '' : ' is-hidden'}" data-modified-chip="${entry.id}">${escapeHtml(t('settings.adv.modified', { count: modifiedCount }))}</span>`;
+        html += `<button type="button" class="advisory-reset-btn" data-reset-advisory="${entry.id}" title="${escapeHtml(t('settings.adv.resetTitle'))}">${escapeHtml(t('settings.adv.reset'))}</button>`;
+        html += `</summary>`;
+        html += `<div class="advisory-params" data-advanced-params-for="${entry.id}">`;
+        html += renderParamGroup(entry.id, advancedParams, userParams, isEnabled);
+        html += `</div>`;
+        html += `</details>`;
       }
 
       html += `</div>`;
@@ -997,20 +1137,48 @@ function renderAdvisorySettings(
 
   container.innerHTML = html;
 
-  // Toggle param visibility when advisory is toggled
+  const catalogMap = new Map(entries.map(e => [e.id, e]));
+
+  // Toggle param disabled state when advisory is toggled (both inline + advanced).
   for (const cb of container.querySelectorAll<HTMLInputElement>('input[data-advisory-id]')) {
     cb.addEventListener('change', () => {
-      const paramsDiv = container.querySelector(`[data-params-for="${cb.dataset.advisoryId}"]`) as HTMLElement;
-      if (paramsDiv) {
-        for (const input of paramsDiv.querySelectorAll<HTMLInputElement>('input')) {
-          input.disabled = !cb.checked;
-        }
+      const id = cb.dataset.advisoryId!;
+      const row = container.querySelector(`[data-advisory-row="${id}"]`) as HTMLElement | null;
+      if (!row) return;
+      for (const input of row.querySelectorAll<HTMLInputElement>('input[data-advisory-param]')) {
+        input.disabled = !cb.checked;
       }
     });
   }
 
-  // Info popup for advisory details
-  const catalogMap = new Map(entries.map(e => [e.id, e]));
+  // Live-update the modified chip + default hints as advanced params are edited.
+  for (const input of container.querySelectorAll<HTMLInputElement>('input[data-advisory-param]')) {
+    input.addEventListener('input', () => {
+      const [advId] = input.dataset.advisoryParam!.split(':');
+      const entry = catalogMap.get(advId);
+      if (entry) refreshAdvisoryDerived(container, entry);
+    });
+  }
+
+  // Per-advisory reset to defaults.
+  for (const btn of container.querySelectorAll<HTMLButtonElement>('[data-reset-advisory]')) {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = btn.dataset.resetAdvisory!;
+      const entry = catalogMap.get(id);
+      if (!entry) return;
+      for (const param of entry.parameters) {
+        const input = container.querySelector<HTMLInputElement>(
+          `input[data-advisory-param="${id}:${param.key}"]`,
+        );
+        if (input) input.value = String(param.default);
+      }
+      refreshAdvisoryDerived(container, entry);
+      scheduleAdvisoryPreview();
+    });
+  }
+
+  // Info popup for advisory details.
   for (const btn of container.querySelectorAll<HTMLButtonElement>('.advisory-settings-info-btn')) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1020,6 +1188,31 @@ function renderAdvisorySettings(
       const currentParams = collectParamsFor(container, advId);
       showPopupContent(renderAdvisoryPopup(entry, currentParams));
     });
+  }
+
+  // Initial derived state (default hints hidden/shown for the saved values).
+  for (const entry of entries) refreshAdvisoryDerived(container, entry);
+}
+
+/** Recompute a row's derived UI in place: per-param "· default" hints and the
+ *  Advanced expander's "k modified" chip. Cheap; called on every edit. */
+function refreshAdvisoryDerived(container: HTMLElement, entry: AdvisoryCatalogEntry): void {
+  let modifiedAdvanced = 0;
+  for (const param of entry.parameters) {
+    const input = container.querySelector<HTMLInputElement>(
+      `input[data-advisory-param="${entry.id}:${param.key}"]`,
+    );
+    if (!input) continue;
+    const val = parseFloat(input.value);
+    const modified = !isNaN(val) && isParamModified(val, param);
+    const hint = input.parentElement?.querySelector('.param-default') as HTMLElement | null;
+    if (hint) hint.classList.toggle('is-hidden', !modified);
+    if (modified && !isPilotParam(param)) modifiedAdvanced += 1;
+  }
+  const chip = container.querySelector<HTMLElement>(`[data-modified-chip="${entry.id}"]`);
+  if (chip) {
+    chip.textContent = t('settings.adv.modified', { count: modifiedAdvanced });
+    chip.classList.toggle('is-hidden', modifiedAdvanced === 0);
   }
 }
 
@@ -1048,14 +1241,209 @@ function renderParamInput(
   const maxAttr = param.max != null ? ` max="${param.max}"` : '';
   const stepAttr = param.step != null ? ` step="${param.step}"` : '';
   const disabledAttr = enabled ? '' : ' disabled';
-  const unitStr = param.unit ? `<span class="param-unit">${param.unit}</span>` : '';
+  const unitStr = param.unit ? `<span class="param-unit">${escapeHtml(param.unit)}</span>` : '';
+  // "· default X" shown only when the value differs from the catalog default.
+  const modified = isParamModified(value, param);
+  const defaultHint = `<span class="param-default${modified ? '' : ' is-hidden'}">${escapeHtml(t('settings.adv.default', { value: param.default }))}</span>`;
 
   return `<div class="advisory-param">
-    <label title="${param.description}">${param.label}</label>
+    <label title="${escapeHtml(param.description)}">${escapeHtml(param.label)}</label>
     <input type="number" data-advisory-param="${advisoryId}:${param.key}"
       value="${value}"${minAttr}${maxAttr}${stepAttr}${disabledAttr}>
-    ${unitStr}
+    ${unitStr}${defaultHint}
   </div>`;
+}
+
+// --- Setup assistant (interview presets, #387 slice 3) ---
+
+/** Open the guided setup assistant — a small modal of identity questions whose
+ *  answers patch advisory enabled/params. Pre-selects stored answers; warns
+ *  before overwriting an owned key that the pilot manually modified. */
+async function openSetupAssistant(): Promise<void> {
+  if (!interview) {
+    try {
+      interview = await fetchAdvisoryInterview();
+    } catch (err) {
+      showStatus(t('settings.adv.interviewLoadFailed', { error: String(err) }), true);
+      return;
+    }
+  }
+  const iv = interview;
+
+  let html = `<div class="interview-modal">`;
+  html += `<h3 style="margin-top:0">${escapeHtml(t('settings.adv.interviewTitle'))}</h3>`;
+  html += `<p class="muted">${escapeHtml(t('settings.adv.interviewIntro'))}</p>`;
+  for (const q of iv.questions) {
+    const selected = interviewAnswers[q.id] ?? q.options[0]?.id ?? '';
+    html += `<fieldset class="interview-question">`;
+    html += `<legend>${escapeHtml(q.title)}</legend>`;
+    if (q.help) html += `<p class="muted interview-help">${escapeHtml(q.help)}</p>`;
+    for (const opt of q.options) {
+      html += `<label class="interview-option">`;
+      html += `<input type="radio" name="iv-${escapeHtml(q.id)}" value="${escapeHtml(opt.id)}"${opt.id === selected ? ' checked' : ''}>`;
+      html += `<span class="interview-option-label">${escapeHtml(opt.label)}</span>`;
+      if (opt.description) html += `<span class="interview-option-desc">${escapeHtml(opt.description)}</span>`;
+      html += `</label>`;
+    }
+    html += `</fieldset>`;
+  }
+  html += `<div class="interview-actions">`;
+  html += `<button type="button" class="btn-secondary" id="iv-cancel">${escapeHtml(t('settings.adv.interviewCancel'))}</button>`;
+  html += `<button type="button" class="btn-primary" id="iv-apply">${escapeHtml(t('settings.adv.interviewApply'))}</button>`;
+  html += `</div></div>`;
+
+  showPopupContent(html);
+  const popup = document.getElementById('metric-info-popup');
+  popup?.querySelector('#iv-cancel')?.addEventListener('click', () => hideMetricInfo());
+  popup?.querySelector('#iv-apply')?.addEventListener('click', () => applyInterview(iv));
+}
+
+/** Apply the selected interview options to the live form. */
+function applyInterview(iv: Interview): void {
+  const chosen: InterviewOption[] = [];
+  const answers: Record<string, string> = {};
+  for (const q of iv.questions) {
+    const radio = document.querySelector<HTMLInputElement>(`input[name="iv-${q.id}"]:checked`);
+    const opt = radio ? q.options.find(o => o.id === radio.value) : undefined;
+    if (opt) {
+      chosen.push(opt);
+      answers[q.id] = opt.id;
+    }
+  }
+
+  // Read current state and detect owned keys the pilot manually moved off default
+  // to a value the chosen options would overwrite — warn before clobbering.
+  const prefs = collectAdvisoryPrefs();
+  const curEnabled = prefs.enabled ?? {};
+  const curParams = prefs.params ?? {};
+  const catById = new Map(catalog.map(e => [e.id, e]));
+  const conflicts: string[] = [];
+  for (const opt of chosen) {
+    for (const [id, val] of Object.entries(opt.enabled)) {
+      const entry = catById.get(id);
+      const def = entry?.default_enabled ?? true;
+      const cur = curEnabled[id] ?? def;
+      if (cur !== def && cur !== val) conflicts.push(entry?.name ?? id);
+    }
+    for (const [id, ps] of Object.entries(opt.params)) {
+      const entry = catById.get(id);
+      for (const [key, val] of Object.entries(ps)) {
+        const pdef = entry?.parameters.find(p => p.key === key);
+        if (!pdef) continue;
+        const cur = curParams[id]?.[key] ?? pdef.default;
+        if (cur !== pdef.default && cur !== val) conflicts.push(`${entry?.name ?? id} · ${pdef.label}`);
+      }
+    }
+  }
+  if (conflicts.length > 0) {
+    if (!confirm(t('settings.adv.interviewOverwrite', { items: conflicts.join(', ') }))) return;
+  }
+
+  // Merge patches over collected prefs and re-render so the DOM reflects them.
+  prefs.enabled = curEnabled;
+  prefs.params = curParams;
+  for (const opt of chosen) {
+    for (const [id, val] of Object.entries(opt.enabled)) curEnabled[id] = val;
+    for (const [id, ps] of Object.entries(opt.params)) {
+      curParams[id] = { ...(curParams[id] ?? {}), ...ps };
+    }
+  }
+  interviewAnswers = answers;
+  const autoFront = (document.getElementById('toggle-auto-front-detection') as HTMLInputElement)?.checked ?? false;
+  renderAdvisorySettings(catalog, prefs, autoFront);
+  hideMetricInfo();
+  showStatus(t('settings.adv.interviewApplied'));
+  scheduleAdvisoryPreview();
+}
+
+// --- Live preview against a recent flight (#387, slice 4) ---
+
+/** Find the user's most recent owned flight with a briefing pack and compute the
+ *  saved-settings baseline, then run an initial draft diff. Non-blocking: on any
+ *  failure the preview panel simply stays hidden. */
+async function initAdvisoryPreview(): Promise<void> {
+  try {
+    const { flights } = await fetchFlights();
+    const candidates = flights.filter(f => f.role === 'owner' && f.latest_briefing);
+    for (const f of candidates) {
+      try {
+        const pack = await fetchLatestPack(f.id);
+        if (pack?.fetch_timestamp && pack.has_advisories !== false) {
+          const date = f.departure_time ? f.departure_time.slice(0, 10) : '';
+          previewTarget = { flightId: f.id, ts: pack.fetch_timestamp, label: `${f.route_name} · ${date}` };
+          break;
+        }
+      } catch { /* try the next flight */ }
+    }
+    if (!previewTarget) return;
+
+    // Baseline: previewed under the flight's *saved* settings (empty body).
+    const base = await previewAdvisories(previewTarget.flightId, previewTarget.ts, {});
+    previewBaseline = {};
+    for (const a of base.manifest.advisories) previewBaseline[a.advisory_id] = a.aggregate_status;
+    runAdvisoryPreview();
+  } catch { /* preview stays hidden */ }
+}
+
+/** Debounce preview recomputation as the pilot edits draft settings. */
+function scheduleAdvisoryPreview(): void {
+  if (!previewTarget) return;
+  window.clearTimeout(previewTimer);
+  previewTimer = window.setTimeout(() => void runAdvisoryPreview(), 700);
+}
+
+/** Recompute the preview under the current (draft) form settings and render the
+ *  per-advisory deltas vs the saved-settings baseline. */
+async function runAdvisoryPreview(): Promise<void> {
+  if (!previewTarget) return;
+  const prefs = collectAdvisoryPrefs();
+  try {
+    const draft = await previewAdvisories(previewTarget.flightId, previewTarget.ts, {
+      enabled: prefs.enabled,
+      params: prefs.params,
+      aggregation: prefs.aggregation,
+    });
+    renderPreviewDeltas(draft.manifest.advisories);
+  } catch { /* leave the last render in place */ }
+}
+
+/** Render the preview panel: which advisory ratings would change vs saved. */
+function renderPreviewDeltas(
+  advisories: { advisory_id: string; aggregate_status: string }[],
+): void {
+  const panel = document.getElementById('advisory-preview');
+  if (!panel || !previewTarget) return;
+  const nameById = new Map(catalog.map(e => [e.id, e.name]));
+
+  const changes: { name: string; from: string; to: string }[] = [];
+  for (const a of advisories) {
+    const before = previewBaseline[a.advisory_id];
+    if (before != null && before !== a.aggregate_status) {
+      changes.push({
+        name: nameById.get(a.advisory_id) ?? a.advisory_id,
+        from: before,
+        to: a.aggregate_status,
+      });
+    }
+  }
+
+  let html = `<div class="advisory-preview-head">`;
+  html += `<span class="advisory-preview-title">${escapeHtml(t('settings.adv.previewTitle'))}</span>`;
+  html += `<span class="advisory-preview-sub">${escapeHtml(t('settings.adv.previewSubtitle', { route: previewTarget.label }))}</span>`;
+  html += `</div>`;
+  if (changes.length === 0) {
+    html += `<p class="muted advisory-preview-none">${escapeHtml(t('settings.adv.previewNoChanges'))}</p>`;
+  } else {
+    html += `<ul class="advisory-preview-list">`;
+    for (const c of changes) {
+      html += `<li><span class="advisory-preview-name">${escapeHtml(c.name)}</span> `;
+      html += `<span class="adv-status adv-status-${escapeHtml(c.from)}">${escapeHtml(c.from.toUpperCase())}</span>`;
+      html += ` → <span class="adv-status adv-status-${escapeHtml(c.to)}">${escapeHtml(c.to.toUpperCase())}</span></li>`;
+    }
+    html += `</ul>`;
+  }
+  panel.innerHTML = html;
+  panel.classList.remove('is-hidden');
 }
 
 /** Collect advisory preferences from the form. */
@@ -1155,6 +1543,8 @@ async function handleSave(): Promise<void> {
     convective_method: convectiveMethod,
     digest_guidance: digestGuidance,
     advisories,
+    // Persist interview answers so re-running the assistant pre-selects them (#387).
+    interview: interviewAnswers,
   };
 
   // Account-level settings
