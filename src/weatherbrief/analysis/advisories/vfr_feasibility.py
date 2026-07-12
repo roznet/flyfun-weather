@@ -19,6 +19,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     apply_airport_endpoints,
+    below_coverage,
     build_cost_model,
     build_regions,
     build_ribbon,
@@ -886,6 +887,13 @@ class VFRFeasibilityEvaluator:
             enroute_status = _enroute_vfr_status(
                 total, imc_count, marginal_count, imc_pct_amber, imc_pct_red
             )
+            # Coverage tolerance (#391): a clear en-route cloud verdict from
+            # soundings at too small a share of the route is UNAVAILABLE, not
+            # clear — the same guard the standalone sibling (vmc_cruise) got in
+            # this PR. Contributes nothing to the composite's `worst` rather than
+            # a false GREEN; a flagged en-route verdict always stands.
+            if enroute_status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                enroute_status = AdvisoryStatus.UNAVAILABLE
             enroute_detail = ""
 
             if total > 0 and affected > 0:
@@ -941,6 +949,17 @@ class VFRFeasibilityEvaluator:
                     detail = adv_t("vfr.airports_ok", loc)
             else:
                 detail = " | ".join(detail_parts)
+
+            # Composite coverage tolerance (#391 review): VFR feasibility is
+            # fundamentally about the en-route cloud picture, so a GREEN grade
+            # while most of the route's soundings are missing overstates
+            # confidence — even when a single assessed corridor point or the
+            # missing-precip→GREEN mapping would otherwise carry it past the
+            # per-axis guards. Downgrade a would-be-GREEN composite to UNAVAILABLE
+            # on thin en-route coverage; a flagged (AMBER/RED) grade always stands.
+            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
 
             # 7. Mitigations (advice only — never change the grade). All derived
             # from a single continuous vertical profile over the (distance ×

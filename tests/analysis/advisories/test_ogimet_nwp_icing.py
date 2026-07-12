@@ -125,6 +125,36 @@ def test_ifr_icing_axis_unavailable_but_convective_still_drives_grade():
     assert result.aggregate_status == AdvisoryStatus.RED
 
 
+def test_mitigation_solver_does_not_price_unavailable_icing_as_clear():
+    """The escape cost model treats an Ogimet-NWP-unavailable cell as impassable.
+
+    Regression for #391 review: `_icing_cell_cost` used to return 0 (clear) for a
+    point whose icing method could not run (icing_zones=[]), so the mitigation
+    solver could route an altitude "escape" through an unassessed segment as if
+    confirmed ice-free. Above warm air, an unassessable cell must cost INF.
+    """
+    from weatherbrief.analysis.advisories.icing_escape import _icing_cell_cost
+    from weatherbrief.analysis.advisories.vertical_profile import INF
+
+    # Unassessable icing, cell above the freezing level (not guaranteed warm) →
+    # must be impassable, not free.
+    s = SoundingAnalysis(
+        indices=ThermodynamicIndices(freezing_level_ft=3000),
+        active_icing_available=False,
+        icing_zones=[],
+    )
+    assert _icing_cell_cost(s, 8000) == INF
+    # Below the freezing level is genuinely warm → still free regardless.
+    assert _icing_cell_cost(s, 1000) == 0.0
+    # An assessable, ice-free cell above warm air is free (no over-correction).
+    s_ok = SoundingAnalysis(
+        indices=ThermodynamicIndices(freezing_level_ft=3000),
+        active_icing_available=True,
+        icing_zones=[],
+    )
+    assert _icing_cell_cost(s_ok, 8000) == 0.0
+
+
 def test_ifr_real_icing_zone_on_ogimet_nwp_still_flags():
     """Real Ogimet-NWP icing zones (envelope present) still flag icing (no over-correction)."""
     envelope = [EnhancedCloudLayer(base_ft=4000, top_ft=10000, coverage=CloudCoverage.OVC)]

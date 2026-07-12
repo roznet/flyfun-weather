@@ -460,6 +460,13 @@ class IFRFeasibilityEvaluator:
                     extent=format_extent(conv_count, total, ctx.total_distance_nm),
                 )
 
+            # Coverage tolerance (#391): a no-convection verdict from soundings at
+            # too small a share of the route is UNAVAILABLE, not clear — the same
+            # guard the icing axis above already has (contributes nothing to
+            # `worst` rather than a false GREEN). Flagged convective verdicts stand.
+            if conv_status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                conv_status = AdvisoryStatus.UNAVAILABLE
+
             # 5. Combine all factors
             status = _worst_status(airport_status, icing_status, conv_status)
 
@@ -475,6 +482,16 @@ class IFRFeasibilityEvaluator:
                 detail = adv_t("ifr.acceptable", loc)
             else:
                 detail = " | ".join(detail_parts)
+
+            # Composite coverage tolerance (#391 review): mirror VFR — a GREEN IFR
+            # grade while most en-route soundings are missing overstates
+            # confidence even when a real-GREEN airport axis would carry it past
+            # the per-axis icing/convective guards. Downgrade a would-be-GREEN
+            # composite to UNAVAILABLE on thin en-route coverage; a flagged grade
+            # always stands.
+            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
 
             # 6. Highlights (#375) only when the model has en-route data. The
             # airport IFR-viability axis colours the endpoint ribbon segments.

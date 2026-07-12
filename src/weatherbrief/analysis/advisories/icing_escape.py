@@ -61,6 +61,13 @@ def _icing_cell_cost(sounding, alt_ft: float) -> float:
     fz = sounding.indices.freezing_level_ft if sounding.indices else None
     if fz is not None and alt_ft < fz:
         return 0.0
+    # Ogimet-NWP could not run at this point → icing_zones is "unknown", not
+    # "verified clear". Above warm air it must not be priced as free, or the
+    # escape solver could route an altitude recommendation through an unassessed
+    # segment as if confirmed ice-free (#391 review — advice-only, but the advice
+    # itself would be misleading in an icing scenario). Treat as impassable.
+    if not sounding.active_icing_available:
+        return INF
     worst = 0.0
     for z in sounding.icing_zones:
         if not (z.base_ft <= alt_ft <= z.top_ft):

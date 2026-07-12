@@ -437,7 +437,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 
 ## Gotchas
 
-- Evaluator exceptions are caught and logged — one failure doesn't break the whole advisory set
+- Evaluator exceptions are caught and logged — one failure doesn't break the whole advisory set. The failed evaluator is not dropped: the registry appends an explicit UNAVAILABLE `RouteAdvisoryResult` with a localized diagnostic `aggregate_detail` (via `adv_t("evaluation_failed", …)`), so a crash reads as "could not assess", never as a silently-absent "not a concern" (#391)
 - `ModelAgreementEvaluator` has `per_model=["all"]` (not actual model names) since it's cross-model
 - `format_extent` falls back to percentage-only if route has too few points for meaningful distance
 - `wind_at_altitude` picks the level via `pick_wind_at_pressure` and the hour via `at_time` — don't reintroduce a "first hourly" shortcut, it lags the route point's valid time on long legs
