@@ -763,6 +763,46 @@ class TestModelAgreement:
         )
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
+    def test_all_absent_metrics_is_unavailable_not_good(self):
+        """Divergences with every metric absent (mean=None) → UNAVAILABLE.
+
+        Regression for #391: ``agreement=GOOD`` on an all-absent metric means
+        "nothing to disagree about", not "models agreed". Branching on
+        ``agreement`` alone graded a route of all-absent divergences GREEN "Good
+        agreement across all models". Only real comparisons (mean not None)
+        establish agreement.
+        """
+        from weatherbrief.models import AgreementLevel, ModelDivergence
+
+        def _absent_divergence():
+            return [
+                ModelDivergence(
+                    variable=v, model_values={"gfs": None, "ecmwf": None},
+                    mean=None, spread=0.0, agreement=AgreementLevel.GOOD,
+                )
+                for v in ("temperature_c", "wind_speed_kt", "cloud_cover_pct")
+            ]
+
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(), "ecmwf": SoundingAnalysis()},
+                model_divergence=_absent_divergence(),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None,
+            models=["gfs", "ecmwf"], cruise_altitude_ft=8000,
+            flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = ModelAgreementEvaluator.evaluate(
+            ctx, {"min_poor_vars": 3, "poor_pct_amber": 25, "poor_pct_red": 50}
+        )
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
 
 # ---------------------------------------------------------------------------
 # VFR Feasibility

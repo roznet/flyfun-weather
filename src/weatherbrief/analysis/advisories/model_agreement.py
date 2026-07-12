@@ -84,11 +84,21 @@ class ModelAgreementEvaluator:
         for rpa in ctx.analyses:
             if not rpa.model_divergence:
                 continue
+            # A divergence with ``mean is None`` is "metric absent for every
+            # model", which the scorer records as ``agreement=GOOD`` — "nothing
+            # to disagree about", NOT "models agreed" (see models/analysis.py
+            # ModelDivergence docstring). Branching on ``agreement`` alone counts
+            # such a point as good agreement (#391); only real comparisons
+            # (``mean is not None``) establish agreement, so a point with no real
+            # comparison is unassessable and drops out of the denominator.
+            real = [d for d in rpa.model_divergence if d.mean is not None]
+            if not real:
+                continue
             total += 1
 
-            n_poor = sum(1 for d in rpa.model_divergence if d.agreement == AgreementLevel.POOR)
+            n_poor = sum(1 for d in real if d.agreement == AgreementLevel.POOR)
             has_poor = n_poor >= min_poor_vars
-            has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in rpa.model_divergence)
+            has_moderate = any(d.agreement == AgreementLevel.MODERATE for d in real)
 
             if has_poor:
                 poor_count += 1
