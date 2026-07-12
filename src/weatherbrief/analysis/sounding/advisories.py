@@ -603,22 +603,21 @@ def _descend_below_icing(
 
         per_model_ft[model_key] = max(escape, 0)
 
+    if fzra_models:
+        return AltitudeAdvisory(
+            advisory_type="descend_below_icing",
+            altitude_ft=None,
+            feasible=False,
+            reason=(
+                "Freezing precipitation profile (warm nose) — "
+                f"no descent escape for {', '.join(fzra_models)}"
+            ),
+            per_model_ft=per_model_ft,
+        )
+
     valid_alts = [v for v in per_model_ft.values() if v is not None]
 
     if not valid_alts:
-        if fzra_models:
-            # Icing exists but every model's profile is freezing rain —
-            # there is no descent escape to offer.
-            return AltitudeAdvisory(
-                advisory_type="descend_below_icing",
-                altitude_ft=None,
-                feasible=False,
-                reason=(
-                    "Freezing precipitation profile (warm nose) — "
-                    "descending does not exit icing"
-                ),
-                per_model_ft=per_model_ft,
-            )
         return None
 
     worst_case = min(valid_alts)
@@ -630,11 +629,6 @@ def _descend_below_icing(
     ):
         feasible = False
         reason += f" — below terrain clearance (terrain ~{terrain_elevation_ft:.0f}ft)"
-    if fzra_models:
-        reason += (
-            f" (no descent escape for {', '.join(fzra_models)}: "
-            "freezing precipitation profile)"
-        )
 
     return AltitudeAdvisory(
         advisory_type="descend_below_icing",

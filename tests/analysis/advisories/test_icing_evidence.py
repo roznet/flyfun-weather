@@ -216,6 +216,115 @@ def test_fiki_sld_does_not_raise_unrelated_transit_zone_severity(clear_context):
     )
 
 
+def test_fiki_severe_transit_zone_does_not_raise_unrelated_zone_severity(
+    clear_context,
+):
+    severe_zone = IcingZone(
+        base_ft=2000,
+        top_ft=3000,
+        risk=IcingRisk.SEVERE,
+        icing_type=IcingType.MIXED,
+    )
+    light_zone = IcingZone(
+        base_ft=5000,
+        top_ft=5500,
+        risk=IcingRisk.LIGHT,
+        icing_type=IcingType.RIME,
+    )
+    analyses = []
+    for rpa in clear_context.analyses:
+        sounding = rpa.sounding["gfs"].model_copy(
+            update={
+                "icing_zones": (
+                    [severe_zone, light_zone]
+                    if rpa.point_index == 0
+                    else []
+                )
+            }
+        )
+        analyses.append(rpa.model_copy(update={"sounding": {"gfs": sounding}}))
+    ctx = replace(clear_context, analyses=analyses, models=["gfs"])
+
+    model = FIKIIcingEvaluator.evaluate(ctx, {}).per_model[0]
+    departure = [
+        region
+        for region in model.evidence_regions
+        if region.reason_code == "fiki_departure_transit"
+    ]
+    severe_regions = [
+        region
+        for region in departure
+        if (region.lower_altitude_ft, region.upper_altitude_ft) == (2000, 3000)
+    ]
+    light_regions = [
+        region
+        for region in departure
+        if (region.lower_altitude_ft, region.upper_altitude_ft) == (5000, 5500)
+    ]
+
+    assert model.status == AdvisoryStatus.RED
+    assert severe_regions
+    assert all(region.severity == AdvisoryStatus.RED for region in severe_regions)
+    assert light_regions
+    assert all(region.severity == AdvisoryStatus.GREEN for region in light_regions)
+
+
+def test_fiki_cruise_and_terminal_concern_extent_is_unioned_without_double_counting(
+    clear_context,
+):
+    severe_zone = IcingZone(
+        base_ft=2000,
+        top_ft=3000,
+        risk=IcingRisk.SEVERE,
+        icing_type=IcingType.MIXED,
+    )
+    light_zone = IcingZone(
+        base_ft=4000,
+        top_ft=7500,
+        risk=IcingRisk.LIGHT,
+        icing_type=IcingType.RIME,
+    )
+    analyses = []
+    for rpa in clear_context.analyses:
+        if rpa.point_index == 0:
+            icing_zones = [severe_zone]
+        elif rpa.point_index == 1:
+            icing_zones = [light_zone]
+        else:
+            icing_zones = []
+        sounding = rpa.sounding["gfs"].model_copy(
+            update={"icing_zones": icing_zones}
+        )
+        analyses.append(rpa.model_copy(update={"sounding": {"gfs": sounding}}))
+    ctx = replace(clear_context, analyses=analyses, models=["gfs"])
+
+    model = FIKIIcingEvaluator.evaluate(ctx, {}).per_model[0]
+    region_severities = {
+        (
+            region.reason_code,
+            region.start_point_index,
+            region.end_point_index,
+            region.lower_altitude_ft,
+            region.upper_altitude_ft,
+        ): region.severity
+        for region in model.evidence_regions
+    }
+
+    assert model.status == AdvisoryStatus.RED
+    assert region_severities[
+        ("fiki_departure_transit", 0, 0, 2000, 3000)
+    ] == AdvisoryStatus.RED
+    assert region_severities[
+        ("fiki_departure_transit", 1, 1, 4000, 7500)
+    ] == AdvisoryStatus.AMBER
+    assert region_severities[
+        ("fiki_cruise_icing", 1, 1, 4000, 7500)
+    ] == AdvisoryStatus.AMBER
+    assert model.affected_points == 2
+    assert model.affected_pct == 20.0
+    assert model.affected_nm == 30.0
+
+
 def test_fiki_ogimet_nwp_missing_native_cloud_geometry_is_unavailable(clear_context):
     ctx = replace(clear_context, models=["gfs"], icing_method="ogimet_nwp")
     result = FIKIIcingEvaluator.evaluate(ctx, {})

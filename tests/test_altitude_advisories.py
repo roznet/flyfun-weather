@@ -109,17 +109,29 @@ def test_descend_freezing_rain_has_no_escape():
     assert descend.per_model_ft == {"gfs": None}
 
 
-def test_descend_freezing_rain_one_model_annotated():
-    """When only one model shows FZRA, the other model's escape stands but the
-    FZRA model is excluded and called out."""
+def test_descend_freezing_rain_one_model_blocks_cross_model_escape():
     adv = compute_altitude_advisories({
         "gfs": _sounding(freezing_rain=True),
         "ecmwf": _sounding(freezing_level_ft=7000),
     }, 8000, 18000)
     descend = _descend(adv)
-    assert descend.altitude_ft == 6500
-    assert descend.per_model_ft["gfs"] is None
+    assert descend.altitude_ft is None
+    assert descend.feasible is False
+    assert descend.per_model_ft == {"gfs": None, "ecmwf": 6500}
+    assert "no descent escape" in descend.reason
     assert "gfs" in descend.reason
+    assert "Descend below" not in descend.reason
+
+
+def test_descend_model_without_icing_does_not_block_finite_escape():
+    adv = compute_altitude_advisories({
+        "gfs": _sounding(freezing_level_ft=7000),
+        "ecmwf": SoundingAnalysis(),
+    }, 8000, 18000)
+    descend = _descend(adv)
+    assert descend.altitude_ft == 6500
+    assert descend.feasible is True
+    assert descend.per_model_ft == {"gfs": 6500, "ecmwf": None}
 
 
 def test_descend_fallback_to_icing_zone_base():

@@ -277,8 +277,6 @@ class FIKIIcingEvaluator:
             def aggregate_non_sld_severity(
                 point: _FIKIPointAssessment,
             ) -> AdvisoryStatus:
-                if severe_is_red and point.transit_worst == IcingRisk.SEVERE:
-                    return AdvisoryStatus.RED
                 if point.transit_thickness_ft >= transit_red:
                     return AdvisoryStatus.RED
                 if point.transit_thickness_ft >= transit_amber:
@@ -361,13 +359,21 @@ class FIKIIcingEvaluator:
                         )
                     )
 
+            terminal_concern_indices = {
+                sample.point_index
+                for sample in samples
+                if sample.reason_code
+                in {"fiki_departure_transit", "fiki_arrival_transit"}
+                and sample.severity in {AdvisoryStatus.AMBER, AdvisoryStatus.RED}
+            }
+            headline_affected = cruise_affected | terminal_concern_indices
             evaluated_indices = {point.point_index for point in available}
             summary = summarize_evidence(
                 route_points=ordered_analyses,
                 total_distance_nm=total_dist,
                 evaluated_point_indices=evaluated_indices,
                 complete_point_indices=evaluated_indices,
-                affected_point_indices=cruise_affected,
+                affected_point_indices=headline_affected,
                 evidence_samples=samples,
             )
 
