@@ -24,6 +24,15 @@ from weatherbrief.models import (
 )
 
 
+# A clear (GREEN) verdict may only speak for the whole route when at least this
+# fraction of route points carried a sounding for the model. Below it, a clear
+# subset of a mostly-unassessed route is UNAVAILABLE — not GREEN (#391). This is
+# a data-coverage tolerance (missing-data handling), NOT a meteorological
+# threshold: a genuinely-clear, well-covered model still grades GREEN and any
+# flagged (AMBER/RED) verdict stands regardless of coverage.
+_MIN_ASSESSED_FRACTION = 0.5
+
+
 @register
 class CloudTopEvaluator:
     """Evaluates whether the aircraft can fly above cloud tops near cruise altitude."""
@@ -148,6 +157,17 @@ class CloudTopEvaluator:
                 status = pct_above_threshold(above_ceiling, total, pct_amber, red_pct=60)
                 ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
                 detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
+
+            # Coverage tolerance (#391): a clear verdict on a sounding subset that
+            # is too small to represent the route becomes UNAVAILABLE — a clear
+            # 2-of-20-points model has not established the other 18 are clear. A
+            # flagged verdict is never downgraded (real hazard evidence stands).
+            if (
+                status == AdvisoryStatus.GREEN
+                and total < len(ctx.analyses) * _MIN_ASSESSED_FRACTION
+            ):
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
 
             # Highlights (#375) only when the model has data.
             highlights = None
