@@ -43,30 +43,48 @@ def _cloud_overlap_fraction(
     if not a or not b:
         return 0.0
 
-    def _union_length(layers: list[EnhancedCloudLayer]) -> float:
-        spans = sorted((cl.base_ft, cl.top_ft) for cl in layers)
+    def _merge(layers: list[EnhancedCloudLayer]) -> list[tuple[float, float]]:
+        """Collapse a model's layers into disjoint altitude spans.
+
+        A single model's layer list can self-overlap: ``_build_grib_layers``
+        emits the low/mid/high bands *and* a convective deck, and a convective
+        deck routinely spans all three. Both the union and the intersection
+        below assume disjoint spans, so we merge before measuring — otherwise
+        the pairwise intersection double-counts and the fraction can exceed 1.
+        """
+        spans = sorted(
+            (cl.base_ft, cl.top_ft) for cl in layers if cl.top_ft > cl.base_ft
+        )
         merged: list[list[float]] = []
         for base, top in spans:
             if merged and base <= merged[-1][1]:
                 merged[-1][1] = max(merged[-1][1], top)
             else:
                 merged.append([base, top])
-        return sum(top - base for base, top in merged)
+        return [(base, top) for base, top in merged]
 
-    def _intersect_length() -> float:
+    def _length(spans: list[tuple[float, float]]) -> float:
+        return sum(top - base for base, top in spans)
+
+    def _intersect_length(
+        sa: list[tuple[float, float]], sb: list[tuple[float, float]]
+    ) -> float:
         total = 0.0
-        for ca in a:
-            for cb in b:
-                lo = max(ca.base_ft, cb.base_ft)
-                hi = min(ca.top_ft, cb.top_ft)
+        for base_a, top_a in sa:
+            for base_b, top_b in sb:
+                lo = max(base_a, base_b)
+                hi = min(top_a, top_b)
                 if hi > lo:
                     total += hi - lo
         return total
 
-    union = _union_length(a) + _union_length(b) - _intersect_length()
+    spans_a = _merge(a)
+    spans_b = _merge(b)
+    intersection = _intersect_length(spans_a, spans_b)
+    union = _length(spans_a) + _length(spans_b) - intersection
     if union <= 0:
         return 1.0
-    return _intersect_length() / union
+    return intersection / union
 
 
 @register
