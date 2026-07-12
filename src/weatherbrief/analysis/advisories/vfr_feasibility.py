@@ -18,12 +18,12 @@ from collections.abc import Iterator
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    apply_airport_endpoints,
     build_cost_model,
     build_regions,
     build_ribbon,
     format_extent,
     ribbon_peak,
-    status_to_severity,
     to_mitigation_profile,
     worst_severity,
 )
@@ -421,16 +421,8 @@ def _build_vfr_highlights(
 
         ribbon_points.append((dist, worst_severity(cruise_sev, deck_sev, precip_sev)))
 
-    # Airport flight-category axis colours only the endpoint segments: worst-
-    # merge dep/arr status into the first/last route point.
-    if ribbon_points:
-        first = min(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
-        last = max(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
-        for idx, ap_status in ((first, dep_status), (last, arr_status)):
-            ap_sev = status_to_severity(ap_status)
-            if ap_sev in (HighlightSeverity.AMBER, HighlightSeverity.RED):
-                d, sev = ribbon_points[idx]
-                ribbon_points[idx] = (d, worst_severity(sev, ap_sev))
+    # Airport flight-category axis colours only the endpoint segments.
+    apply_airport_endpoints(ribbon_points, dep_status, arr_status)
 
     ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
     regions = (

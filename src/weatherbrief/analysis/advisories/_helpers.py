@@ -310,18 +310,26 @@ def icing_zones_in_altitude_range(
     return [z for z in zones if z.top_ft > floor_ft and z.base_ft < ceiling_ft]
 
 
-def has_relevant_icing(
-    zones: list[IcingZone],
-    cruise_altitude_ft: float,
-    buffer_ft: float = 2000,
-) -> bool:
-    """Check whether any icing zone overlaps [0, cruise_altitude + buffer].
+def apply_airport_endpoints(
+    ribbon_points: list[tuple[float, HighlightSeverity]],
+    dep_status: AdvisoryStatus,
+    arr_status: AdvisoryStatus,
+) -> None:
+    """Worst-merge departure/arrival status into the first/last ribbon points, in place.
 
-    Consistent with FIKI's cruise_icing_buffer_ft logic: icing far above the
-    cruise altitude is irrelevant for non-FIKI advisories.
+    The airport axis of a composite evaluator has no en-route extent: it colours only
+    the endpoint segments. GREEN/UNAVAILABLE airport statuses leave the ribbon alone so
+    a benign airport never overrides a flagged en-route point at the same distance.
     """
-    ceiling = cruise_altitude_ft + buffer_ft
-    return bool(icing_zones_in_altitude_range(zones, 0, ceiling))
+    if not ribbon_points:
+        return
+    first = min(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
+    last = max(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
+    for idx, ap_status in ((first, dep_status), (last, arr_status)):
+        ap_sev = status_to_severity(ap_status)
+        if ap_sev in (HighlightSeverity.AMBER, HighlightSeverity.RED):
+            d, sev = ribbon_points[idx]
+            ribbon_points[idx] = (d, worst_severity(sev, ap_sev))
 
 
 def min_icing_clearance(

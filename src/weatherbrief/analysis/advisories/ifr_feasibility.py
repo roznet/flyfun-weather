@@ -9,12 +9,12 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    apply_airport_endpoints,
     build_regions,
     build_ribbon,
     format_extent,
     min_icing_clearance,
     ribbon_peak,
-    status_to_severity,
     worst_severity,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -436,14 +436,7 @@ class IFRFeasibilityEvaluator:
             # airport IFR-viability axis colours the endpoint ribbon segments.
             highlights = None
             if total > 0:
-                if ribbon_points:
-                    first = min(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
-                    last = max(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
-                    for idx, ap_status in ((first, dep_status), (last, arr_status)):
-                        ap_sev = status_to_severity(ap_status)
-                        if ap_sev in (HighlightSeverity.AMBER, HighlightSeverity.RED):
-                            d, sev = ribbon_points[idx]
-                            ribbon_points[idx] = (d, worst_severity(sev, ap_sev))
+                apply_airport_endpoints(ribbon_points, dep_status, arr_status)
                 ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
                 highlights = AdvisoryHighlights(
                     ribbon=ribbon,

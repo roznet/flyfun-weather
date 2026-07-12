@@ -277,9 +277,8 @@ class IcingEscapeEvaluator:
                     continue
                 total += 1
 
-                # Same zones has_relevant_icing accepts — icing above
-                # cruise + buffer is deliberately GREEN on the ribbon too
-                # ("not relevant to your flight here" reads as clear).
+                # Icing above cruise + buffer is deliberately GREEN on the
+                # ribbon too ("not relevant to your flight here" reads as clear).
                 relevant_zones = icing_zones_in_altitude_range(
                     sounding.icing_zones,
                     0,
