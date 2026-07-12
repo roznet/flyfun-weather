@@ -309,6 +309,7 @@
   "advisories.openFrontsMap": "Ouvrir la carte des fronts",
   "advisories.locationUnavailable": "Position indisponible",
   "advisories.locationLegacy": "Briefing ancien — position indisponible",
+  "advisories.evidenceModelUnavailable": "Briefing ancien — modèle de preuve indisponible",
   "advisories.partialData": "Données partielles",
   "advisories.noDirectCompareLayer": "Aucune couche de comparaison directe n'est disponible pour cet élément de preuve.",
   "advisories.frontsUnavailable": "Les fronts ne sont pas disponibles pour ce briefing.",

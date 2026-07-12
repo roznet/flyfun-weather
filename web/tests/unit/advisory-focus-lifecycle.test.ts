@@ -471,6 +471,21 @@ describe('briefing store advisory focus lifecycle', () => {
     expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
   });
 
+  it('switches advisory manifests and clears focus in one alternate-view update', () => {
+    focusCloudTop();
+    const notifications: Array<ReturnType<typeof briefingStore.getState>> = [];
+    const unsubscribe = briefingStore.subscribe((state) => notifications.push(state));
+
+    briefingStore.getState().toggleAltView();
+    unsubscribe();
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      showingAlt: true,
+      activeAdvisoryFocus: null,
+    });
+  });
+
   it.each([12_000, null] as const)(
     'manual altitude override %s clears focus',
     (altitude) => {
@@ -618,6 +633,58 @@ describe('briefing store advisory focus lifecycle', () => {
     await reanchor;
 
     expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+  });
+
+  it('does not resurrect focus after alternate view is selected during reanchor', async () => {
+    const response = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    vi.spyOn(api, 'recalculateAdvisories').mockReturnValue(response.promise);
+    briefingStore.setState({
+      flight: { id: 'flight-1' } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+    });
+    focusCloudTop();
+    const reanchor = briefingStore.getState().reanchorAdvisories(12_000);
+
+    briefingStore.getState().toggleAltView();
+    response.resolve({ manifest: refreshedManifest(), wind_overlay: null });
+    await reanchor;
+
+    expect(briefingStore.getState().showingAlt).toBe(true);
+    expect(briefingStore.getState().activeAdvisoryFocus).toBeNull();
+  });
+
+  it('preserves an alternate-only focus selected while primary reanchor is pending', async () => {
+    const response = deferred<Awaited<ReturnType<typeof api.recalculateAdvisories>>>();
+    vi.spyOn(api, 'recalculateAdvisories').mockReturnValue(response.promise);
+    const altManifestBase = refreshedManifest();
+    const altManifest = {
+      ...altManifestBase,
+      advisories: altManifestBase.advisories.map((advisory) => ({
+        ...advisory,
+        representative_model: 'icon',
+        per_model: advisory.per_model.slice(0, 1).map((modelResult) => ({
+          ...modelResult,
+          model: 'icon',
+        })),
+      })),
+      models: ['icon'],
+    };
+    briefingStore.setState({
+      flight: { id: 'flight-1' } as never,
+      currentPack: { fetch_timestamp: '2026-07-11T10:00:00Z' } as never,
+      altAdvisories: altManifest,
+    });
+    focusCloudTop();
+    const reanchor = briefingStore.getState().reanchorAdvisories(12_000);
+
+    briefingStore.getState().toggleAltView();
+    const alternateFocus = activeFocus('icon', 'cloud_top');
+    briefingStore.getState().focusAdvisory(alternateFocus, 'clouds', view);
+    response.resolve({ manifest: refreshedManifest(), wind_overlay: null });
+    await reanchor;
+
+    expect(briefingStore.getState().showingAlt).toBe(true);
+    expect(briefingStore.getState().activeAdvisoryFocus).toBe(alternateFocus);
   });
 
   it('ignores an older reanchor response after a newer altitude request', async () => {

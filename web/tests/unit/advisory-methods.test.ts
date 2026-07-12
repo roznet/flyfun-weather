@@ -82,6 +82,17 @@ describe('advisoryMethodLabel', () => {
     }
   });
 
+  it('defines a distinct legacy evidence-model message in every locale', () => {
+    const locales: Record<string, Record<string, string>> = { en, fr, de, es };
+    const key = 'advisories.evidenceModelUnavailable';
+
+    for (const [locale, messages] of Object.entries(locales)) {
+      expect(messages[key], `${locale}.${key}`).toMatch(/\S/);
+      expect(messages[key], `${locale}.${key} distinction`)
+        .not.toBe(messages['advisories.locationLegacy']);
+    }
+  });
+
   it.each([
     ['dewpoint_depression', 'DD'],
     ['nwp', 'NWP'],

@@ -371,6 +371,7 @@
   "advisories.openFrontsMap": "Open fronts map",
   "advisories.locationUnavailable": "Location unavailable",
   "advisories.locationLegacy": "Older briefing — location unavailable",
+  "advisories.evidenceModelUnavailable": "Older briefing — evidence model unavailable",
   "advisories.partialData": "Partial data",
   "advisories.noDirectCompareLayer": "No direct comparison layer is available for this evidence.",
   "advisories.frontsUnavailable": "Fronts are unavailable for this briefing.",

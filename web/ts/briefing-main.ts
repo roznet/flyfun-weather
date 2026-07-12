@@ -1031,7 +1031,7 @@ async function init(): Promise<void> {
           'Older briefing — location unavailable',
         )
         : translatedOrFallback(
-          'advisories.locationLegacy',
+          'advisories.evidenceModelUnavailable',
           'Older briefing — evidence model unavailable',
         );
     }

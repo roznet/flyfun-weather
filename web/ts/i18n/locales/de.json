@@ -309,6 +309,7 @@
   "advisories.openFrontsMap": "Frontenkarte öffnen",
   "advisories.locationUnavailable": "Position nicht verfügbar",
   "advisories.locationLegacy": "Älteres Briefing — Position nicht verfügbar",
+  "advisories.evidenceModelUnavailable": "Älteres Briefing — Evidenzmodell nicht verfügbar",
   "advisories.partialData": "Teildaten",
   "advisories.noDirectCompareLayer": "Für diesen Nachweis ist keine direkt passende Vergleichsebene verfügbar.",
   "advisories.frontsUnavailable": "Fronten sind für dieses Briefing nicht verfügbar.",

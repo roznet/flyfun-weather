@@ -205,10 +205,15 @@ export function planAdvisoryAction(
   }
 
   if (kind === 'fronts-map') {
+    const allResultsUnavailable = advisory.per_model.length === 0
+      || advisory.per_model.every(result => (
+        result.status === 'unavailable'
+        || result.data_state === 'unavailable'
+      ));
     return {
       ...plan,
       layout: 'map',
-      disabledReasonKey: context.hasFronts
+      disabledReasonKey: context.hasFronts && !allResultsUnavailable
         ? null
         : 'advisories.frontsUnavailable',
     };

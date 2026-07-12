@@ -855,7 +855,9 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
           focusRevision === _advisoryFocusRevision
             ? state.activeAdvisoryFocus ?? focusSnapshot
             : state.activeAdvisoryFocus,
-          manifest,
+          state.showingAlt && state.altAdvisories
+            ? state.altAdvisories
+            : manifest,
         ),
       }));
     } catch (err) {
@@ -1087,7 +1089,11 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   },
 
   toggleAltView: () => {
-    set({ showingAlt: !get().showingAlt });
+    noteAdvisoryFocusIntent();
+    set((state) => ({
+      showingAlt: !state.showingAlt,
+      activeAdvisoryFocus: null,
+    }));
   },
 
   updateFlightAutoRefresh: (autoRefresh: boolean, hour: number | null) => {

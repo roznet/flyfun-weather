@@ -804,6 +804,38 @@ test.describe('Advisory evidence actions', () => {
     expect(await crossSectionDimAlphaWrites(page)).toBe(0);
   });
 
+  test('alternate-time view clears focus from every visualization surface', async ({ page }) => {
+    await useFullBriefingMode(page, { layout: 'split' });
+    const advisories = clone(fixture('advisories.json'));
+    await mockBriefingApi(page, {
+      advisories: { current: advisories },
+      routeFronts: { current: routeFrontsFixture() },
+      airportRequests: [],
+      flightOverrides: {
+        alt_departure_time: `${FUTURE_DATE}T20:00:00+00:00`,
+      },
+      packOverrides: { has_alt_advisories: true },
+      altAdvisories: clone(advisories),
+    });
+    await openBriefing(page);
+    await expect(page.locator('[data-alt-toggle="alt"]')).toBeVisible();
+
+    await page.locator('[data-advisory="cloud_top"] .advisory-action-btn').click();
+    await expect(page.locator('#advisory-focus-banner')).toBeVisible();
+    await expect.poll(() => focusPixelCount(page, '#viz-canvas-container canvas'))
+      .toBeGreaterThan(0);
+    await expect.poll(() => focusPixelCount(page, '#route-graph-container canvas'))
+      .toBeGreaterThan(0);
+    await expect(evidencePaths(page)).toHaveCount(2);
+
+    await page.locator('[data-alt-toggle="alt"]').click();
+
+    await expect(page.locator('#advisory-focus-banner')).toBeHidden();
+    await expect.poll(() => focusPixelCount(page, '#viz-canvas-container canvas')).toBe(0);
+    await expect.poll(() => focusPixelCount(page, '#route-graph-container canvas')).toBe(0);
+    await expect(evidencePaths(page)).toHaveCount(0);
+  });
+
   test('forecast confidence opens Compare with every model', async ({ page }) => {
     await useFullBriefingMode(page, {
       layout: 'cross-section',
@@ -1690,6 +1722,36 @@ test.describe('Advisory evidence actions', () => {
       .toContainText(/Fronts.*unavailable/);
   });
 
+  test('fronts action stays disabled when every result is unavailable', async ({ page }) => {
+    await useFullBriefingMode(page);
+    const refs: MockBriefingRefs = {
+      advisories: { current: clone(fixture('advisories.json')) },
+      routeFronts: { current: routeFrontsFixture() },
+      airportRequests: [],
+    };
+    const fronts = refs.advisories.current.advisories.find(
+      (advisory: any) => advisory.advisory_id === 'fronts',
+    );
+    fronts.aggregate_status = 'unavailable';
+    for (const result of fronts.per_model) {
+      result.status = 'unavailable';
+      result.data_state = 'unavailable';
+      result.evidence_regions = [];
+    }
+    await mockBriefingApi(page, refs);
+    await openBriefing(page);
+
+    const action = page.locator('[data-advisory="fronts"] .advisory-action-btn');
+    await expect(action).toBeDisabled();
+    await expect(action).toHaveAttribute('aria-disabled', 'true');
+    await expect(page.locator('[data-advisory="fronts"] .advisory-action-unavailable'))
+      .toContainText(/Fronts.*unavailable/);
+
+    await action.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(page.locator('#viz-layout-wrapper')).not.toHaveClass(/layout-map/);
+    await expect(page.locator('#map-container.leaflet-container')).toHaveCount(0);
+  });
+
   test('legacy and unavailable packs never fabricate a halo', async ({ page }) => {
     await useFullBriefingMode(page);
     const refs: MockBriefingRefs = {
@@ -1712,7 +1774,8 @@ test.describe('Advisory evidence actions', () => {
     await expect(page.locator('input[data-layer-id="freezing-level"]')).toBeChecked();
     await page.locator('#viz-controls [data-layout="split"]').click();
     await expect(page.locator('#map-container.leaflet-container')).toBeVisible();
-    await expect(page.locator('#advisory-focus-banner')).toContainText('Older briefing');
+    await expect(page.locator('#advisory-focus-banner'))
+      .toContainText('Older briefing — location unavailable');
     await expect(evidencePaths(page)).toHaveCount(0);
 
     refs.advisories.current = clone(fixture('advisories.json'));
@@ -1790,7 +1853,8 @@ test.describe('Advisory evidence actions', () => {
 
     await expect(page.locator('#viz-preset-select')).toHaveValue('clouds');
     await expect(page.locator('#viz-model-select')).toHaveValue('gfs');
-    await expect(page.locator('#advisory-focus-banner')).toContainText('Older briefing');
+    await expect(page.locator('#advisory-focus-banner'))
+      .toContainText('Older briefing — evidence model unavailable');
     await page.keyboard.press('Escape');
     await page.locator('#viz-controls [data-layout="split"]').click();
     await expect(evidencePaths(page)).toHaveCount(0);

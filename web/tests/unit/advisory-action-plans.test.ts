@@ -320,6 +320,30 @@ describe('planAdvisoryAction', () => {
     });
   });
 
+  it('disables fronts when every per-model result is unavailable', () => {
+    const advisory = frontsAdvisory();
+    for (const result of advisory.per_model) {
+      result.status = 'unavailable';
+      result.data_state = 'unavailable';
+      result.evidence_regions = [];
+    }
+
+    expect(planAdvisoryAction(
+      advisory,
+      actionContext({ hasFronts: true }),
+    ).disabledReasonKey).toBe('advisories.frontsUnavailable');
+  });
+
+  it('disables fronts when the per-model result set is empty', () => {
+    const advisory = frontsAdvisory();
+    advisory.per_model = [];
+
+    expect(planAdvisoryAction(
+      advisory,
+      actionContext({ hasFronts: true }),
+    ).disabledReasonKey).toBe('advisories.frontsUnavailable');
+  });
+
   it('falls back when the advisory model is unsupported even if it is available', () => {
     expectPlan(planAdvisoryAction(
       airportAdvisory('meteofrance'),
