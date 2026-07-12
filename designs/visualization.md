@@ -415,7 +415,14 @@ All six cloud layers (DD/NWP × Soft/Natural/Square) come from a single `cloudLa
   - `natural` → `paintNatural`, flat-bottom puffs with bumpy quadratic-Bezier tops; coverage encoded as horizontal fill fraction (SCT gaps, BKN touching, OVC continuous blanket).
   - `square` → `drawColumnBand`, solid filled rectangles per zone (no puffs, no feathering).
 
-Server-computed layers come from Python (`clouds.py:_synthesize_nwp_layers()`); the frontend receives ready-to-render `EnhancedCloudLayer` objects with base/top boundaries. Adjacent route points are matched by altitude overlap via `renderMatchedZones`; unmatched zones taper to midpoint. Single-point routes fall back to column bands.
+Server-computed layers come from
+`analysis/sounding/clouds.py:build_nwp_cloud_layers()`, using native per-level
+3-D cloud fraction or GRIB diagnostics with explicit boundaries. `None` means
+the required native NWP cloud geometry is unavailable; `[]` means the native
+source was assessed and found clear. The frontend receives ready-to-render
+`EnhancedCloudLayer` geometry with base/top boundaries. Adjacent route points
+are matched by altitude overlap via `renderMatchedZones`; unmatched zones taper
+to midpoint. Single-point routes fall back to column bands.
 
 The factory exposes `CLOUD_LAYER_BY_AXES`, `ALL_CLOUD_LAYER_IDS`, and `parseCloudLayerId(id)` helpers for the panel's compound source-checkbox + style-dropdown control (`controls/panel.ts:cloudCompoundHtml`).
 
