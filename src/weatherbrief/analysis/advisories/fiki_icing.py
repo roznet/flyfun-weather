@@ -11,6 +11,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    below_coverage,
     build_regions,
     build_ribbon,
     icing_zones_in_altitude_range,
@@ -359,6 +360,17 @@ class FIKIIcingEvaluator:
                 detail = adv_t("fiki.no_icing", loc)
             else:
                 detail = " | ".join(detail_parts)
+
+            # Coverage tolerance (#391): a clear FIKI verdict from assessable
+            # points at too small a share of the route cannot vouch for the rest
+            # (safety-sensitive icing evaluator). Flagged verdicts always stand.
+            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                per_model.append(ModelAdvisoryResult.build(
+                    model=model, status=AdvisoryStatus.UNAVAILABLE,
+                    detail=adv_t("no_data", loc), affected=0, total=total,
+                    total_distance_nm=total_dist,
+                ))
+                continue
 
             # Highlights (#375) — the model has data here (total > 0).
             ribbon = build_ribbon(ribbon_points, total_dist)

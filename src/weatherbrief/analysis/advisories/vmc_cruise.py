@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    below_coverage,
     build_regions,
     build_ribbon,
     format_extent,
@@ -22,15 +23,6 @@ from weatherbrief.models import (
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
-
-
-# A clear (GREEN) verdict may only speak for the whole route when at least this
-# fraction of route points carried a sounding for the model. Below it, a clear
-# subset of a mostly-unassessed route is UNAVAILABLE — not GREEN (#391). This is
-# a data-coverage tolerance (missing-data handling), NOT a meteorological
-# threshold: a genuinely-clear, well-covered model still grades GREEN and any
-# flagged (AMBER/RED) verdict stands regardless of coverage.
-_MIN_ASSESSED_FRACTION = 0.5
 
 
 @register
@@ -165,10 +157,7 @@ class VMCCruiseEvaluator:
             # small to represent the route becomes UNAVAILABLE — a clear subset
             # does not establish the unassessed remainder is clear. A flagged
             # (AMBER/RED) verdict is never downgraded.
-            if (
-                status == AdvisoryStatus.GREEN
-                and total < len(ctx.analyses) * _MIN_ASSESSED_FRACTION
-            ):
+            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
 

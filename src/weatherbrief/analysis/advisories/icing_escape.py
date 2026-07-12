@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    below_coverage,
     build_cost_model,
     build_regions,
     build_ribbon,
@@ -353,6 +354,14 @@ class IcingEscapeEvaluator:
                     detail = adv_t("icing_escape.warm_escape", loc, extent=ext)
                 else:
                     detail = adv_t("icing_escape.warm_escape", loc, extent=ext)
+
+            # Coverage tolerance (#391): an ice-free verdict from soundings at too
+            # small a share of the route cannot vouch for the unassessed rest —
+            # safety-sensitive for an icing evaluator. Flagged (no-escape/icing)
+            # verdicts always stand.
+            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
 
             # Escape mitigation from the shared vertical-profile solver (advice only,
             # never alters the grade above) — #335.

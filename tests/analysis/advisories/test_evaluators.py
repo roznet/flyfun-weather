@@ -88,6 +88,33 @@ class TestIcingEscape:
         assert result.aggregate_status == AdvisoryStatus.GREEN
         assert result.advisory_id == "icing_escape"
 
+    def test_clear_low_coverage_is_unavailable(self):
+        """Ice-free verdict from soundings at too few route points → UNAVAILABLE.
+
+        Safety-sensitive (#391 review): 2 of 10 points assessed (clear), rest have
+        no sounding — the icing evaluator must not vouch for the 8 unseen points.
+        """
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding=(
+                    {"gfs": SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))}
+                    if i < 2 else {}
+                ),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = IcingEscapeEvaluator.evaluate(
+            ctx, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20},
+        )
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
     def test_icing_with_warm_escape(self, icing_context: RouteContext):
         """Icing present but freezing level above terrain — escape viable."""
         result = IcingEscapeEvaluator.evaluate(icing_context, {"terrain_margin_ft": 1000, "tight_margin_ft": 2000, "icing_coverage_pct_amber": 20})
@@ -303,6 +330,62 @@ class TestTurbulence:
         """CAT at cruise along full route → AMBER or RED."""
         result = TurbulenceEvaluator.evaluate(turbulent_context, {"icing_coverage_pct_amber": 20, "strong_w_fpm": 200})
         assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+
+    def test_clear_low_coverage_is_unavailable(self):
+        """A smooth verdict from vm at too few route points → UNAVAILABLE (#391 review).
+
+        2 of 10 points carry a (clear) vertical-motion assessment; the rest have
+        none. A smooth grade cannot vouch for the 8 unassessed points.
+        """
+        from weatherbrief.models import VerticalMotionAssessment, VerticalMotionClass
+
+        clear_vm = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT, cat_risk_layers=[],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(vertical_motion=(clear_vm if i < 2 else None))},
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_hazard_low_coverage_still_flags(self):
+        """SEVERE CAT at 2 of 10 assessed points still REDs — coverage never blanks a hazard."""
+        from weatherbrief.models import (
+            CATRiskLayer,
+            CATRiskLevel,
+            VerticalMotionAssessment,
+            VerticalMotionClass,
+        )
+
+        severe_vm = VerticalMotionAssessment(
+            classification=VerticalMotionClass.QUIESCENT,
+            cat_risk_layers=[CATRiskLayer(base_ft=7000, top_ft=10000, risk=CATRiskLevel.SEVERE)],
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(vertical_motion=(severe_vm if i < 2 else None))},
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = TurbulenceEvaluator.evaluate(ctx, {"route_pct_amber": 20, "strong_w_fpm": 200})
+        assert result.aggregate_status == AdvisoryStatus.RED
 
 
 class TestConvective:
@@ -790,6 +873,36 @@ class TestModelAgreement:
                 forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
                 sounding={"gfs": SoundingAnalysis(), "ecmwf": SoundingAnalysis()},
                 model_divergence=_absent_divergence(),
+            )
+            for i in range(10)
+        ]
+        ctx = RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None,
+            models=["gfs", "ecmwf"], cruise_altitude_ft=8000,
+            flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+        result = ModelAgreementEvaluator.evaluate(
+            ctx, {"min_poor_vars": 3, "poor_pct_amber": 25, "poor_pct_red": 50}
+        )
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_good_agreement_low_coverage_is_unavailable(self):
+        """"Good agreement" from real comparisons at too few points → UNAVAILABLE (#391 review)."""
+        from weatherbrief.models import AgreementLevel, ModelDivergence
+
+        def _good_real():
+            return [ModelDivergence(
+                variable="temperature_c", model_values={"gfs": 5.0, "ecmwf": 6.0},
+                mean=5.5, spread=1.0, agreement=AgreementLevel.GOOD,
+            )]
+
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0, lon=2.0, distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(), "ecmwf": SoundingAnalysis()},
+                model_divergence=(_good_real() if i < 2 else []),
             )
             for i in range(10)
         ]

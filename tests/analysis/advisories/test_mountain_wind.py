@@ -209,3 +209,23 @@ class TestMountainWindWaveCorroboration:
         ctx = replace(_ctx(45.0), elevation=None)
         result = _evaluate(ctx)
         assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_light_wind_at_few_mountain_points_is_unavailable(self):
+        """"Light winds" when wind resolves at too few mountain points → UNAVAILABLE.
+
+        Regression for #391 review: the plateau spans points 4-6 (3 mountain
+        points); a cross-section that resolves wind at only one of them, calm,
+        used to grade GREEN "Light winds" for a mostly-unassessed mountain
+        segment. Coverage is measured over mountain points.
+        """
+        from dataclasses import replace
+
+        # Mountain points are 4, 5, 6. A cross-section whose forecasts only reach
+        # index 4 leaves wind_at_altitude returning None for points 5 and 6 → 1 of
+        # 3 mountain points covered (< 50%).
+        ctx = _ctx(10.0)  # light wind where resolvable
+        cs = ctx.cross_sections[0]
+        trimmed = cs.model_copy(update={"point_forecasts": cs.point_forecasts[:5]})
+        ctx = replace(ctx, cross_sections=[trimmed])
+        result = _evaluate(ctx)
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE

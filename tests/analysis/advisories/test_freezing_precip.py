@@ -115,6 +115,27 @@ def test_no_precip_data_is_unavailable():
     assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE
 
 
+def test_clear_verdict_low_coverage_is_unavailable():
+    """A "no signature" verdict from assessable points at too few of the route.
+
+    Regression for #391 review: 2 clear (dry, warm-profile) points among 8
+    unassessable ones used to grade GREEN "No freezing precipitation signature".
+    Below the coverage tolerance it is UNAVAILABLE.
+    """
+    bare = SoundingAnalysis()  # unassessable — no precip, no derived levels
+    ctx = _ctx([_dry(), _dry()] + [bare] * 8)
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_active_fzra_low_coverage_still_red():
+    """Active FZRA at a single assessed point among blanks still REDs (no blanking)."""
+    bare = SoundingAnalysis()
+    ctx = _ctx([_active_fzra()] + [bare] * 9)
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.RED
+
+
 def test_unassessable_points_do_not_dilute_primed_percentage():
     """Points with no precip AND no thermodynamic profile leave the denominator.
 

@@ -10,6 +10,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     apply_airport_endpoints,
+    below_coverage,
     build_regions,
     build_ribbon,
     format_extent,
@@ -433,6 +434,13 @@ class IFRFeasibilityEvaluator:
                         "ifr.icing_over", loc,
                         extent=format_extent(icing_count, icing_total, ctx.total_distance_nm),
                     )
+
+            # Coverage tolerance (#391): a no-icing verdict from icing-assessable
+            # points at too small a share of the route is UNAVAILABLE, not clear
+            # (contributes nothing to the composite's `worst` rather than a false
+            # GREEN). Flagged icing verdicts always stand.
+            if icing_status == AdvisoryStatus.GREEN and below_coverage(icing_total, len(ctx.analyses)):
+                icing_status = AdvisoryStatus.UNAVAILABLE
 
             # 4. Determine convective status
             conv_status = AdvisoryStatus.GREEN

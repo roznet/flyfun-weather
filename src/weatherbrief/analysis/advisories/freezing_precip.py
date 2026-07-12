@@ -23,6 +23,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    below_coverage,
     build_regions,
     build_ribbon,
     format_extent,
@@ -212,6 +213,18 @@ class FreezingPrecipEvaluator:
             else:
                 status = AdvisoryStatus.GREEN
                 detail = "No freezing precipitation signature"
+
+            # Coverage tolerance (#391): a "no signature" verdict from assessable
+            # points at too small a share of the route cannot vouch for the rest.
+            # The active-FZRA RED and primed AMBER paths above are untouched — a
+            # flagged verdict always stands on partial coverage.
+            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                per_model.append(ModelAdvisoryResult.build(
+                    model=model, status=AdvisoryStatus.UNAVAILABLE,
+                    detail=adv_t("no_data", loc), affected=0, total=total,
+                    total_distance_nm=ctx.total_distance_nm,
+                ))
+                continue
 
             # Highlights (#375) — the model has a precip signal here (the
             # no-signal case returned UNAVAILABLE above).

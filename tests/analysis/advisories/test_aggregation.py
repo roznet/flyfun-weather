@@ -297,15 +297,22 @@ class TestEvaluateAllAggregation:
             registry._EVALUATORS.pop("_test_unavailable", None)
 
 
-class TestAffectedNmGeometry:
-    """affected_nm follows route geometry, not a point-count proportion (#391)."""
+class TestAffectedNmConsistency:
+    """affected_nm stays consistent with affected_pct / affected_points (#391 review).
 
-    def test_uneven_route_uses_ribbon_span_not_proportion(self):
-        """Flagged extent = the amber/red ribbon span, not total_nm * affected/total.
+    A ribbon-derived affected_nm was reverted because the ribbon's amber/red
+    membership does not match ``affected`` for every evaluator, which produced a
+    result object whose affected_nm contradicted its affected_pct. affected_nm is
+    the nm form of the same ``affected`` count and must track it.
+    """
 
-        Route 0..200nm with 5 points clustered near the start; only the first
-        15nm is flagged. The point-count proportion (200 * 2/5 = 80nm) badly
-        overstates the extent; the ribbon span (15nm) is correct.
+    def test_affected_nm_tracks_affected_count(self):
+        """affected_nm and affected_pct both key off ``affected`` — no divergence.
+
+        Even when a highlights ribbon is present with a *different* flagged span,
+        affected_nm follows the count (2/5 of 200nm = 80nm), matching
+        affected_pct (40%). This is the consistency the ribbon-derived version
+        broke.
         """
         from weatherbrief.models import (
             AdvisoryHighlights,
@@ -322,10 +329,12 @@ class TestAffectedNmGeometry:
             affected=2, total=5, total_distance_nm=200,
             highlights=AdvisoryHighlights(ribbon=ribbon),
         )
-        assert result.affected_nm == 15.0
+        assert result.affected_nm == 80.0
+        assert result.affected_pct == 40.0
+        # nm / total_nm and pct/100 describe the same fraction.
+        assert result.affected_nm / result.total_nm == result.affected_pct / 100
 
-    def test_no_ribbon_falls_back_to_proportion(self):
-        """Evaluators that emit no ribbon keep the point-count proportion."""
+    def test_no_ribbon_same_proportion(self):
         result = ModelAdvisoryResult.build(
             model="gfs", status=AdvisoryStatus.AMBER, detail="",
             affected=2, total=5, total_distance_nm=200,

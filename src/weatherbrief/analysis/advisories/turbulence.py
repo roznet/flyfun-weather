@@ -5,6 +5,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    below_coverage,
     build_regions,
     build_ribbon,
     format_extent,
@@ -174,6 +175,12 @@ class TurbulenceEvaluator:
                 status = pct_above_threshold(affected, total, route_pct_amber, red_pct=50)
                 risk_label = worst_cat.value.upper() if worst_cat != CATRiskLevel.NONE else "Turbulence"
                 detail = adv_t("turbulence.risk_over", loc, risk=risk_label, extent=ext)
+
+            # Coverage tolerance (#391): a smooth verdict from soundings-with-vm at
+            # too small a share of the route cannot vouch for the unassessed rest.
+            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
 
             # Highlights (#375) only when the model has data.
             highlights = None

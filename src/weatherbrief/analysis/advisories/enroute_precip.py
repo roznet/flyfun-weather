@@ -29,6 +29,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    below_coverage,
     build_regions,
     build_ribbon,
     format_extent,
@@ -181,6 +182,13 @@ def classify_enroute_precip(
             ))
         if not parts:
             parts.append(adv_t("enroute_precip.clear", loc))
+
+    # Coverage tolerance (#391): a clear/light verdict from points with a precip
+    # assessment at too small a share of the route cannot vouch for the rest.
+    # A flagged snow/rain verdict always stands. (The VFR composite maps this
+    # UNAVAILABLE back to GREEN, so the composite is unaffected.)
+    if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+        return AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), affected, total, has_signal
 
     return status, " | ".join(parts), affected, total, has_signal
 

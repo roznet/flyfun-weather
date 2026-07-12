@@ -25,6 +25,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Keine Daten",
         "es": "Sin datos",
     },
+    "evaluation_failed": {
+        "en": "Evaluation failed ({error})",
+        "fr": "Échec de l'évaluation ({error})",
+        "de": "Auswertung fehlgeschlagen ({error})",
+        "es": "Fallo en la evaluación ({error})",
+    },
 
     # --- turbulence ---
     "turbulence.smooth": {

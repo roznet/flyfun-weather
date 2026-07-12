@@ -26,6 +26,7 @@ from __future__ import annotations
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
+    below_coverage,
     build_regions,
     build_ribbon,
     format_extent,
@@ -322,6 +323,20 @@ class MountainWindEvaluator:
             else:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("mountain_wind.light", loc, speed=f"{max_wind:.0f}")
+
+            # Coverage tolerance (#391): a "light winds" verdict when wind
+            # resolved at too few of the route's mountain points cannot vouch for
+            # the unassessed mountain segment. Coverage is measured over mountain
+            # points (mountain_pts), not the whole route — non-mountain points are
+            # legitimately GREEN, and the flat-route GREEN (mountain_pts == 0) is
+            # deliberately preserved (the "GREEN not UNAVAILABLE" UX).
+            if (
+                status == AdvisoryStatus.GREEN
+                and mountain_pts > 0
+                and below_coverage(total, mountain_pts)
+            ):
+                status = AdvisoryStatus.UNAVAILABLE
+                detail = adv_t("no_data", loc)
 
             # Highlights (#375): built whenever the route has points at all —
             # a no-mountain route gets the all-green ribbon its GREEN grade
