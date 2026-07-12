@@ -156,3 +156,78 @@ The detailed discovery and closure ledger is in
 [the meteorology audit](../audits/2026-07-10-issue-223-meteorology-audit.md), and
 future changes should use the permanent
 [meteorology review checklist](../../meteorology-review-checklist.md).
+
+## Post-`main` synchronization review and closure
+
+- Current-`main` base: `f5cb9aa7724a3024232a4d3756be69d4a588d1b9`
+- Initially reviewed synchronized HEAD: `e8190e471ec91f9124f47ea1d04d66827de8f716`
+- Resolved backend HEAD: `61e7d7488c0eb8afcf303bb5d79bb3836c038cde`
+- Resolved frontend HEAD: `f1bb310f464f1f639f521a6542881cf7946ce650`
+- Verdict after independent cross-review: **APPROVED**. No Critical or Important
+  meteorology, missing-data, attribution, evidence-domain, focus-lifecycle, or
+  action-availability finding remains in the reviewed fixes.
+
+The synchronized-branch review reproduced and closed these additional gaps:
+
+1. **Shared convective DD floor and completeness.** The route convective
+   evaluator applied the thermo safety floor, but terminal convection and IFR
+   feasibility read the quiet selected NWP track directly. Native NWP was also
+   considered complete when the required thermo-floor input was absent.
+   `61e7d748` adds one shared resolver for effective risk, source geometry,
+   `nwp_with_dd_floor` provenance, availability, and completeness across all
+   three consumers. No risk threshold, terminal radius, or top-clearance rule
+   changed.
+2. **Freezing-precipitation assessed domain.** One primed warm-nose profile was
+   diluted by precipitation-only points whose profile predicate could not be
+   assessed. `61e7d748` uses the profile-assessed domain for both the 5%
+   threshold and its displayed percentage while keeping the overall evidence
+   union and partial state.
+3. **Fronts action availability.** A present fronts artifact could leave the
+   action enabled even when every per-model advisory result was unavailable.
+   `f1bb310f` disables absent, empty, and all-unavailable fronts actions with the
+   localized explanation.
+4. **Alternate-time focus lifecycle.** Switching between planned and alternate
+   advisory manifests retained a focus from the previous context. `f1bb310f`
+   clears focus atomically and records user intent on the toggle.
+5. **Pending-reanchor race.** A primary-manifest reanchor response could clear a
+   newly selected alternate-only focus. `f1bb310f` reconciles against the live
+   effective alternate manifest when alternate view is active.
+6. **Legacy attribution copy.** Legacy location absence and missing evidence
+   model attribution now use distinct localized messages in all four locales.
+
+Red/green evidence:
+
+- Backend RED: five focused regressions failed for complete-versus-partial,
+  terminal/IFR GREEN-versus-RED, and freezing UNAVAILABLE-versus-AMBER; the
+  follow-up display assertion separately failed on `10nm/400nm (5%)`.
+- Backend GREEN: the four changed test files passed 127 tests; the full advisory
+  directory passed 426 tests; the broader advisory/method-context gate passed
+  520 tests.
+- Frontend RED: five focused Vitest assertions and three of four focused
+  Playwright cases failed for fronts availability, alternate focus clearing,
+  pending restoration, and legacy copy. The realistic alternate-only
+  `cloud_top`/`icon` race also failed before its fix.
+- Frontend GREEN: all 36 Vitest files passed 613 tests; the focused Advisory
+  evidence Playwright group passed 27 tests; the final focus-lifecycle re-review
+  passed 31 tests.
+- TypeScript still reports only the unchanged baseline errors at
+  `web/ts/eval/label-panel.ts:233` and `:242`; scoped and whole-worktree
+  `git diff --check` passed.
+
+Final integrated verification and acceptance:
+
+- Full Python:
+  `GOOGLE_CLIENT_ID=test-client GOOGLE_CLIENT_SECRET=test-secret venv/bin/pytest -q`
+  — 3520 passed, 12 skipped, 16 deselected; 485 warnings in 116.16s.
+- Full Vitest: `cd web && npx vitest run` — 36 files, 613 passed.
+- Full Playwright: `cd web && npx playwright test` — 59 passed in 25.0s.
+- Focused Advisory evidence actions Playwright group — 27 passed.
+- Post-fix manual acceptance: **PASS** — standalone manual acceptance
+  `3/3 passed`; focused Advisory evidence actions Playwright group
+  `27/27 passed`; combined `30/30 passed`; visual inspection `6/6` refreshed
+  screenshots acceptable.
+- The map screenshots contain some gray gaps from external OSM tile loading;
+  application overlays and layouts remain intact.
+
+No production build was run. Screenshot publication, branch push, and pull
+request creation remain intentionally pending explicit user approval.
