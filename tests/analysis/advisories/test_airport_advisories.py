@@ -251,6 +251,40 @@ class TestAirportWindEvaluator:
         result = AirportWindEvaluator.evaluate(ctx, {})
         assert len(result.per_model) == 0
 
+    def test_windless_rows_are_unavailable_not_calm(self):
+        """No crosswind AND no gust at both ends → UNAVAILABLE, not calm GREEN.
+
+        Regression for #391: a condition row with no best_runway (crosswind
+        None) and no gust used to grade GREEN "calm", affirmatively reporting a
+        wind-less airport as benign.
+        """
+        ac = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            # No dep_wind / arr_wind and no gusts → crosswind None, gust None.
+        )
+        ctx = _make_ctx(ac, models=["gfs"])
+        result = AirportWindEvaluator.evaluate(ctx, {})
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
+    def test_calm_wind_still_green(self):
+        """A genuinely calm airport (0 crosswind) still grades GREEN.
+
+        Guards against over-correcting the wind-less UNAVAILABLE fix into
+        blanking real calm conditions.
+        """
+        calm = RunwayWind(runway_id="09L", heading_deg=90.0, crosswind_kt=0.0, headwind_kt=0.0)
+        ac = _make_airport_conditions(
+            dep_cats={"gfs": FlightCategory.VFR},
+            arr_cats={"gfs": FlightCategory.VFR},
+            dep_wind={"gfs": calm},
+            arr_wind={"gfs": calm},
+            wind_speed_kt=0.0,
+        )
+        ctx = _make_ctx(ac, models=["gfs"])
+        result = AirportWindEvaluator.evaluate(ctx, {})
+        assert result.aggregate_status == AdvisoryStatus.GREEN
+
     def test_custom_thresholds(self):
         rwy = RunwayWind(runway_id="09L", heading_deg=90.0, crosswind_kt=12.0, headwind_kt=15.0)
         ac = _make_airport_conditions(

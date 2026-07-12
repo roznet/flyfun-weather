@@ -48,6 +48,12 @@ def _wind_status(
     gust_red: float,
 ) -> AdvisoryStatus:
     """Determine wind status from crosswind and gust against thresholds."""
+    # No crosswind AND no gust means we have no wind data to grade — the row is
+    # unassessable, not calm (#391). A genuinely calm airport still has a
+    # crosswind of 0.0 (best_runway present with 0 wind), which grades GREEN.
+    if crosswind_kt is None and gust_kt is None:
+        return AdvisoryStatus.UNAVAILABLE
+
     status = AdvisoryStatus.GREEN
 
     if crosswind_kt is not None:
@@ -159,7 +165,12 @@ class AirportWindEvaluator:
                 s = _wind_status(xwind, cond.wind_gust_kt, xwind_green, xwind_red, gust_green, gust_red)
                 statuses.append(s)
 
-                wind_str = _format_wind_detail(cond, rwy_id, loc)
+                # A wind-less row is UNAVAILABLE (see _wind_status) — say so
+                # rather than rendering it as "calm".
+                if s == AdvisoryStatus.UNAVAILABLE:
+                    wind_str = adv_t("no_data", loc)
+                else:
+                    wind_str = _format_wind_detail(cond, rwy_id, loc)
                 label = adv_t(label_key, loc)
                 parts.append(f"{label} {icao}: {wind_str}")
 
