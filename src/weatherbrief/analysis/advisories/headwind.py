@@ -94,6 +94,12 @@ class HeadwindEvaluator:
             category="wind",
             altitude_dependent=True,
             parameters=[
+                # Intentional audience split (#387 design table): only the amber
+                # threshold is a pilot planning choice — the average-headwind you
+                # tolerate before it's worth noting. The red bar (40kt) is an
+                # extreme-day calibration almost nobody retunes, so it stays
+                # advanced. This is the one amber/red pair deliberately not tier-
+                # paired; the amber renders inline and the red lives under Advanced.
                 AdvisoryParameterDef(
                     key="mean_amber_kt",
                     label="Avg headwind (amber)",
@@ -116,6 +122,7 @@ class HeadwindEvaluator:
                     min=20,
                     max=80,
                     step=5,
+                    # audience="advanced" (default) — see the note above.
                 ),
             ],
         )
