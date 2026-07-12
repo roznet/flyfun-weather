@@ -3014,6 +3014,21 @@ def _recompute_airport_conditions(
     return None
 
 
+def _owned_flight_pack_with_analyses(db, flight_id, timestamp, user_id):
+    """Owner-gate a flight, resolve its pack dir, and require route_analyses.json.
+
+    Shared prologue for the advisory recalculate + preview endpoints — both are
+    owner-only and both re-evaluate from the pack's persisted route analyses, so
+    both need exactly this (flight ownership, pack dir, analyses-on-disk 404).
+    Kept in one place so the validation can't drift between the two endpoints.
+    """
+    flight = _load_owned_flight(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    if not (pack_dir / "route_analyses.json").exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available")
+    return flight, pack_dir
+
+
 def _load_advisory_profile(db, flight, user_id, request, pack_dir, *, db_path: str = ""):
     """Load advisory profile settings and build a recompute-conditions callback.
 
@@ -3098,12 +3113,7 @@ def recalculate_advisories(
     # pack dir, so a mere viewer of a shared flight must not be able to overwrite
     # the owner's stored artifacts under the viewer's own profile/thresholds.
     # (Mirror of compute_alt_advisories, which is also owner-gated.)
-    flight = _load_owned_flight(db, flight_id, user_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
-
-    ra_path = pack_dir / "route_analyses.json"
-    if not ra_path.exists():
-        raise HTTPException(status_code=404, detail="Route analyses not available for recalculation")
+    flight, pack_dir = _owned_flight_pack_with_analyses(db, flight_id, timestamp, user_id)
 
     enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, auto_front_detection = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
@@ -3207,12 +3217,7 @@ def preview_advisories(
     from weatherbrief.models import AdvisoryAggregation
     from weatherbrief.tasks.advise import run_advisories_from_pack
 
-    flight = _load_owned_flight(db, flight_id, user_id)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
-
-    ra_path = pack_dir / "route_analyses.json"
-    if not ra_path.exists():
-        raise HTTPException(status_code=404, detail="Route analyses not available for preview")
+    flight, pack_dir = _owned_flight_pack_with_analyses(db, flight_id, timestamp, user_id)
 
     (_saved_enabled_ids, saved_enabled_map, saved_params, saved_agg, adv_models,
      icing_method, cloud_method, convective_method, recompute_conds, locale,

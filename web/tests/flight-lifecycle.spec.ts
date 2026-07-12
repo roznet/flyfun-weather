@@ -394,7 +394,11 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
   await page.click('a[href="/settings.html"]');
   await page.waitForURL(/settings\.html/);
 
-  // Change aggregation mode
+  // Change aggregation mode. `#advisory-aggregation` now lives inside the
+  // collapsed "Engine settings" <details> (#387); a closed <details> hides its
+  // subtree from the render tree, so open it before interacting or Playwright's
+  // actionability check times out.
+  await page.locator('#engine-settings').evaluate(el => { (el as HTMLDetailsElement).open = true; });
   await page.selectOption('#advisory-aggregation', 'worst');
 
   // Submit settings form
