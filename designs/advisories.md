@@ -240,6 +240,16 @@ no migration (pure JSON). There is **no** `aggregate_highlights` — the cross-s
 is per-model, and the web chip switches to the representative model (the same
 policy as `aggregate_detail`) to cover the aggregate view at the UI level.
 
+**Evidence contract (#393).** Three additive, legacy-safe provenance fields make
+the chips do more without new geometry: `RouteAdvisoryResult.representative_model`
+(the model whose per-model result sources the aggregate view — emitted from the
+backend so the web client reads it instead of reimplementing the rule; the old TS
+`representativeModel()` copy is deleted), `ModelAdvisoryResult.primary_method_id`
+(stable id of the method that controlled *this model's* grade — for a method
+badge, not the user's selected method), and `HighlightRegion.reason_code` /
+`metric_id` / `method_id` (stable non-localised tokens; `metric_id` lets a chip
+jump to the right cross-section layer). Old packs deserialize with all absent.
+
 Design decisions (don't relitigate): **backend owns the geometry** (which zones
 fired depends on evaluator thresholds/altitude buffers/user params — re-deriving
 client-side would drift and iOS would need a third copy); **distance-space (`nm`)**
@@ -279,6 +289,36 @@ Compare mode), `convective_character`, `fronts` and `sun` (dedicated layers).
 
 iOS rendering is #374; the geometry is data-driven so iOS picks all emitters up
 with no further backend work.
+
+## Single-assessment evidence helper (`_helpers.py`, #393)
+
+The nine single-axis evaluators (`vmc_cruise`, `cloud_top`, `turbulence`,
+`freezing_precip`, `mountain_wind`, `icing_escape`, `fiki_icing`,
+`enroute_precip`, `model_agreement`) emit **one `EvidenceSample` list per model**
+inside their per-point loop, and `summarize_evidence` derives *everything* from
+it — grade counts, geometry, coverage — so the verdict and the highlight can no
+longer come from two loops that drift (the class of bug #391 kept hitting).
+
+- **`EvidenceSample(distance_nm, assessed, severity, affected=None, in_domain=True, region=None)`** —
+  one route point's evidence. `severity` is the ribbon verdict; `affected`
+  (defaults to `severity in {AMBER,RED}`) is the grade count. They're passed
+  *separately* where an evaluator keys ribbon and grade on different predicates —
+  turbulence (SEVERE-anywhere ribbon vs cruise-band grade), FIKI (corridor cutout
+  vs cruise clear-air grade), enroute_precip (light rain: green ribbon, counts in
+  affected). `in_domain=False` drops a point from the coverage denominator
+  (mountain_wind measures coverage over mountain points only). `region` is the
+  `FlaggedCell` scrim cutout.
+- **`summarize_evidence(samples, total_nm, peak_dist_nm=None)`** → `EvidenceSummary(affected, assessed, domain, affected_nm, highlights, data_state)`.
+  `affected_nm` is the **midpoint-owned-cell** distance of the affected points (the
+  #391 geometry fix, landed here): each point owns the interval to its neighbours'
+  midpoints, and the affected cells are summed — so extent and ribbon share one
+  geometry and `affected_nm` can't contradict `affected_pct` (both count the same
+  samples). `ModelAdvisoryResult.build` takes an optional `affected_nm=` override
+  for exactly this. `data_state` is complete/partial/unavailable; `.below_coverage`
+  is the existing `below_coverage(assessed, domain)` predicate, applied **only to a
+  would-be-GREEN** verdict — never #389's binary `partial→UNAVAILABLE`, so a
+  flagged verdict on thin coverage always stands. Evaluators keep their own
+  extent-threshold sub-counts (e.g. vmc_cruise's OVC-only red bar) locally.
 
 ## Shared Helpers (`_helpers.py`)
 
