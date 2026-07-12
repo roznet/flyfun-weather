@@ -136,9 +136,30 @@ ID, `api/flights.py:236`), so retiring the profile defaults cannot disturb them.
 
 The aircraft's flags stop being decorative:
 
-- **Effective flight rules** = `vfr_only` if `not aircraft.is_ifr` else
-  `profile.flight_rules`. An IFR profile flown in a VFR-only aircraft is graded
-  VFR — the capability floor wins over the preference.
+**The two IFR fields are genuinely different concepts and both survive.**
+`aircraft.is_ifr` = *can this machine fly IFR*. `profile.flight_rules` = *do I
+want this trip analysed as an IFR trip*. An IFR-capable plane flown under a
+VFR-only profile is a normal, deliberate combination — and interpretation is a
+job only the profile can do (a future digest system prompt may well read
+advisories differently under VFR-only rules). They are not duplicates; they are
+capability and intent.
+
+- **Effective flight rules** = capability **AND** intent:
+  `vfr_only` if `not aircraft.is_ifr` else `profile.flight_rules`.
+  - IFR plane + VFR-only profile → VFR (intent restricts — the common case).
+  - VFR-only plane + IFR profile → VFR (capability restricts — grading IFR
+    feasibility for a plane that cannot fly IFR is meaningless).
+
+  **The AND must never be silent.** `aircraft.is_ifr` defaults to `False` and is
+  currently set by nothing, so a naive AND would quietly downgrade the IFR
+  profile of any pilot who didn't tick the box — their `ifr_feasibility` advisory
+  would just stop appearing. Three guards, all required:
+  1. Onboarding asks IFR/FIKI explicitly, so `False` is a deliberate answer, not
+     an unset default (S3).
+  2. The migration backfills `is_ifr` from the existing
+     `flight_rules != 'vfr_only'`, so no one's behaviour changes on upgrade (§5).
+  3. When a profile says IFR but the selected aircraft is not IFR-equipped, the
+     flight-creation pane and settings **say so** — never a silent degrade (S2).
 
   This is a bigger change than it looks, because **`profile.flight_rules` today
   is almost inert**: its *only* consumer is one line of the LLM digest prompt
