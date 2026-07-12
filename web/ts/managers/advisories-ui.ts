@@ -36,6 +36,13 @@ function formatCondVis(cond: AirportModelCondition): string | null {
 /** Advisory categories hidden in compact mode (informational, not actionable). */
 const COMPACT_HIDDEN_CATEGORIES = new Set(['model']);
 
+/** Per-element scope for the delegated listeners renderAdvisories attaches. The
+ *  section element persists across renders while its innerHTML is replaced, so
+ *  without this the delegated handlers would accumulate — after N renders one
+ *  chip click would fire N times (and e.g. re-toggle the advisory highlight
+ *  straight back off). Each render aborts the previous render's listeners. */
+const delegatedListeners = new WeakMap<HTMLElement, AbortController>();
+
 const STATUS_ORDER: AdvisoryStatus[] = ['red', 'amber', 'green', 'unavailable'];
 
 function statusBadgeClass(status: AdvisoryStatus): string {
@@ -366,6 +373,13 @@ export function renderAdvisories(
   const section = $('advisories-wrapper');
   if (!el) return;
 
+  // Drop the previous render's delegated listeners before wiring this one's
+  // (they also close over the previous render's manifest/catalog).
+  delegatedListeners.get(el)?.abort();
+  const listenerScope = new AbortController();
+  delegatedListeners.set(el, listenerScope);
+  const signal = listenerScope.signal;
+
   if (!manifest || manifest.advisories.length === 0) {
     el.innerHTML = `<p class="muted">${t('advisories.noAdvisories')}</p>`;
     if (section) section.style.display = 'none';
@@ -651,7 +665,7 @@ export function renderAdvisories(
         showPopupContent(renderFrontsInfo());
       });
     }
-  });
+  }, { signal });
 
   // Wire mitigation lightbulb popups (#330, event delegation). Tap/click — or
   // Enter/Space while focused — opens the "Options to improve" list, reliable on
@@ -667,14 +681,14 @@ export function renderAdvisories(
   el.addEventListener('click', (e) => {
     const hint = (e.target as HTMLElement).closest('.advisory-mitigation-hint--tappable') as HTMLElement | null;
     if (hint) showMitigations(hint);
-  });
+  }, { signal });
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const hint = (e.target as HTMLElement).closest('.advisory-mitigation-hint--tappable') as HTMLElement | null;
     if (!hint) return;
     e.preventDefault();
     showMitigations(hint);
-  });
+  }, { signal });
 
   // Wire per-model badge popups (event delegation). Tap/click — or Enter/Space
   // while focused — shows that model's detail, reliable on touch where the
@@ -692,7 +706,7 @@ export function renderAdvisories(
   el.addEventListener('click', (e) => {
     const badge = (e.target as HTMLElement).closest('.adv-model-badge--tappable') as HTMLElement | null;
     if (badge) showModelDetail(badge);
-  });
+  }, { signal });
 
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -700,7 +714,7 @@ export function renderAdvisories(
     if (!badge) return;
     e.preventDefault();
     showModelDetail(badge);
-  });
+  }, { signal });
 
   // Wire advisory cross-section chips (#219, event delegation). Configures the
   // cross-section for the advisory's preset and jumps to it.
@@ -710,7 +724,7 @@ export function renderAdvisories(
       if (!btn) return;
       const advId = btn.dataset.advisoryId;
       if (advId) onAdvisoryChip(advId);
-    });
+    }, { signal });
   }
 
   // Wire runway info popups (event delegation)
@@ -732,6 +746,6 @@ export function renderAdvisories(
       if (cond && cond.all_runways.length > 0) {
         showPopupContent(formatRunwayPopup(cond.all_runways));
       }
-    });
+    }, { signal });
   }
 }
