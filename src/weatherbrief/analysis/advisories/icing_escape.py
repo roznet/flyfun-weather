@@ -4,16 +4,14 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EvidenceSample,
     FlaggedCell,
-    below_coverage,
     build_cost_model,
-    build_regions,
-    build_ribbon,
     format_extent,
     icing_zones_in_altitude_range,
     max_terrain_near_point,
     pct_above_threshold,
-    ribbon_peak,
+    summarize_evidence,
     to_mitigation_profile,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -27,7 +25,6 @@ from weatherbrief.analysis.advisories.vertical_profile import (
 )
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
-    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     HighlightSeverity,
@@ -266,15 +263,14 @@ class IcingEscapeEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
-            affected = 0
             no_escape_count = 0
             has_tight_margin = False
-            # Per-point highlight geometry (#375). Every route point contributes
-            # a ribbon severity; affected points also contribute an icing-band
-            # cutout (envelope of the relevant zones).
-            ribbon_points: list[tuple[float, HighlightSeverity]] = []
-            region_cells: list[tuple[float, FlaggedCell | None]] = []
+            # One evidence sample per route point (#393): the grade counts
+            # (affected / no-escape) and the ribbon/scrim geometry both come from
+            # this single list. Every assessed point gets a ribbon severity;
+            # flagged points also carry an icing-band cutout (envelope of the
+            # relevant zones) plus a reason_code for provenance.
+            samples: list[EvidenceSample] = []
 
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
@@ -283,10 +279,11 @@ class IcingEscapeEvaluator:
                     # No sounding, or the active icing method could not run here
                     # (e.g. Ogimet-NWP with no native cloud envelope) — its empty
                     # icing_zones is absent data, not a clear sky. UNAVAILABLE.
-                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
                     continue
-                total += 1
 
                 # Icing above cruise + buffer is deliberately GREEN on the
                 # ribbon too ("not relevant to your flight here" reads as clear).
@@ -296,11 +293,11 @@ class IcingEscapeEvaluator:
                     ctx.cruise_altitude_ft + icing_altitude_buffer_ft,
                 )
                 if not relevant_zones:
-                    ribbon_points.append((dist, HighlightSeverity.GREEN))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=True,
+                        severity=HighlightSeverity.GREEN,
+                    ))
                     continue
-
-                affected += 1
 
                 # Get freezing level and terrain
                 fz_level_ft = None
@@ -317,21 +314,34 @@ class IcingEscapeEvaluator:
                 if fz_level_ft is None or terrain_ft is None:
                     no_escape_count += 1
                     severity = HighlightSeverity.RED
+                    reason = "no_escape_unknown"
                 elif fz_level_ft < terrain_ft + terrain_margin:
                     no_escape_count += 1
                     severity = HighlightSeverity.RED
+                    reason = "no_escape"
                 else:
                     if fz_level_ft < terrain_ft + tight_margin:
                         has_tight_margin = True
+                        reason = "tight_margin"
+                    else:
+                        reason = "warm_escape"
                     severity = HighlightSeverity.AMBER
 
-                ribbon_points.append((dist, severity))
-                region_cells.append((dist, FlaggedCell(
-                    kind="icing_band",
-                    severity=severity,
-                    base_ft=int(min(z.base_ft for z in relevant_zones)),
-                    top_ft=int(max(z.top_ft for z in relevant_zones)),
-                )))
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True, severity=severity,
+                    region=FlaggedCell(
+                        kind="icing_band",
+                        severity=severity,
+                        base_ft=int(min(z.base_ft for z in relevant_zones)),
+                        top_ft=int(max(z.top_ft for z in relevant_zones)),
+                        reason_code=reason,
+                        metric_id="icing",
+                    ),
+                ))
+
+            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            total = summary.assessed
+            affected = summary.affected
 
             # Determine model status
             loc = ctx.locale
@@ -366,7 +376,7 @@ class IcingEscapeEvaluator:
             # small a share of the route cannot vouch for the unassessed rest —
             # safety-sensitive for an icing evaluator. Flagged (no-escape/icing)
             # verdicts always stand.
-            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+            if status == AdvisoryStatus.GREEN and summary.below_coverage:
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
 
@@ -376,19 +386,13 @@ class IcingEscapeEvaluator:
 
             # Highlights (#375) only when the model has data. Peak: the no-escape
             # (red) run center first, else the longest amber run center.
-            highlights = None
-            if total > 0:
-                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
-                highlights = AdvisoryHighlights(
-                    ribbon=ribbon,
-                    regions=build_regions(region_cells, ctx.total_distance_nm),
-                    peak_dist_nm=ribbon_peak(ribbon),
-                )
+            highlights = summary.highlights if total > 0 else None
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=summary.affected_nm,
                 mitigations=mitigations,
                 highlights=highlights,
             ))

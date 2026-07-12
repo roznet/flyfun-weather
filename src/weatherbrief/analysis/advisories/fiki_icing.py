@@ -10,19 +10,16 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EvidenceSample,
     FlaggedCell,
-    below_coverage,
-    build_regions,
-    build_ribbon,
     icing_zones_in_altitude_range,
     min_icing_clearance,
-    ribbon_peak,
+    summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
-    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     HighlightSeverity,
@@ -203,11 +200,12 @@ class FIKIIcingEvaluator:
             cruise_clear = 0
             cruise_total = 0
             total = 0
-            # Per-point highlight geometry (#375): the ribbon mirrors the loop's
-            # own per-point classification — transit thickness/severity/SLD in
-            # the departure/arrival corridors, cruise clear-air everywhere.
-            ribbon_points: list[tuple[float, HighlightSeverity]] = []
-            region_cells: list[tuple[float, FlaggedCell | None]] = []
+            # One evidence sample per route point (#393). The ribbon severity
+            # (corridor transit thickness/severity/SLD + cruise clear-air) and
+            # the grade's ``affected`` (cruise NOT clear-air) key on different
+            # predicates, so each sample carries both — a corridor cutout can be
+            # flagged while the cruise-clear grade is not.
+            samples: list[EvidenceSample] = []
 
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
@@ -216,8 +214,10 @@ class FIKIIcingEvaluator:
                     # No sounding, or the active icing method could not run here
                     # (Ogimet-NWP with no native cloud envelope) — absent icing,
                     # not clear. UNAVAILABLE; excluded from both denominators.
-                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
                     continue
                 total += 1
 
@@ -267,16 +267,23 @@ class FIKIIcingEvaluator:
                 relevant_zones = icing_zones_in_altitude_range(
                     zones, 0, cruise_alt + cruise_buffer_ft
                 )
+                region = None
                 if severity != HighlightSeverity.GREEN and relevant_zones:
-                    region_cells.append((dist, FlaggedCell(
+                    region = FlaggedCell(
                         kind="icing_band",
                         severity=severity,
                         base_ft=int(min(z.base_ft for z in relevant_zones)),
                         top_ft=int(max(z.top_ft for z in relevant_zones)),
-                    )))
-                else:
-                    region_cells.append((dist, None))
-                ribbon_points.append((dist, severity))
+                        metric_id="icing",
+                    )
+                # Grade ``affected`` = cruise NOT clear-air; ribbon ``severity``
+                # includes corridor transit — deliberately decoupled (#393).
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True, severity=severity,
+                    affected=not point_clear, region=region,
+                ))
+
+            summary = summarize_evidence(samples, total_dist)
 
             # --- derive severity from the three metrics ---
             clear_pct = (
@@ -364,21 +371,13 @@ class FIKIIcingEvaluator:
             # Coverage tolerance (#391): a clear FIKI verdict from assessable
             # points at too small a share of the route cannot vouch for the rest
             # (safety-sensitive icing evaluator). Flagged verdicts always stand.
-            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+            if status == AdvisoryStatus.GREEN and summary.below_coverage:
                 per_model.append(ModelAdvisoryResult.build(
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
                     detail=adv_t("no_data", loc), affected=0, total=total,
                     total_distance_nm=total_dist,
                 ))
                 continue
-
-            # Highlights (#375) — the model has data here (total > 0).
-            ribbon = build_ribbon(ribbon_points, total_dist)
-            highlights = AdvisoryHighlights(
-                ribbon=ribbon,
-                regions=build_regions(region_cells, total_dist),
-                peak_dist_nm=ribbon_peak(ribbon),
-            )
 
             affected = cruise_total - cruise_clear
             per_model.append(
@@ -389,7 +388,8 @@ class FIKIIcingEvaluator:
                     affected=affected,
                     total=cruise_total,
                     total_distance_nm=total_dist,
-                    highlights=highlights,
+                    affected_nm=summary.affected_nm,
+                    highlights=summary.highlights,  # model has data here (total > 0)
                 )
             )
 
