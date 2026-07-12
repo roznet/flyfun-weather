@@ -73,9 +73,17 @@ def _check_airport_vfr(
 
     Returns (status, detail_fragment, dep_status, arr_status). The per-airport
     statuses colour the endpoint ribbon segments of the highlight (#375).
+
+    Missing airport data is UNAVAILABLE, never a hardcoded clear GREEN (#391):
+    the airport axis then simply doesn't contribute to the composite's ``worst``
+    aggregate (which ignores UNAVAILABLE) instead of vouching for airports it
+    never saw.
     """
     if ctx.airport_conditions is None:
-        return AdvisoryStatus.GREEN, "", AdvisoryStatus.GREEN, AdvisoryStatus.GREEN
+        return (
+            AdvisoryStatus.UNAVAILABLE, "",
+            AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE,
+        )
 
     dep = ctx.airport_conditions.departure
     arr = ctx.airport_conditions.arrival
@@ -87,16 +95,19 @@ def _check_airport_vfr(
 
     loc = ctx.locale
     for label_key, icao, cond in [("airport.dep", dep.icao, dep_cond), ("airport.arr", arr.icao, arr_cond)]:
+        if cond is None:
+            # No condition for this model at this airport — unassessable, not clear.
+            per_airport.append(AdvisoryStatus.UNAVAILABLE)
+            continue
         status = AdvisoryStatus.GREEN
-        if cond is not None:
-            label = adv_t(label_key, loc)
-            cat = cond.flight_category
-            if cat in (FlightCategory.IFR, FlightCategory.LIFR):
-                status = AdvisoryStatus.RED
-                parts.append(f"{label} {icao} {cat.value}")
-            elif cat == FlightCategory.MVFR:
-                status = AdvisoryStatus.AMBER
-                parts.append(f"{label} {icao} MVFR")
+        label = adv_t(label_key, loc)
+        cat = cond.flight_category
+        if cat in (FlightCategory.IFR, FlightCategory.LIFR):
+            status = AdvisoryStatus.RED
+            parts.append(f"{label} {icao} {cat.value}")
+        elif cat == FlightCategory.MVFR:
+            status = AdvisoryStatus.AMBER
+            parts.append(f"{label} {icao} MVFR")
         per_airport.append(status)
 
     detail = " | ".join(parts) if parts else ""
@@ -859,7 +870,7 @@ class VFRFeasibilityEvaluator:
             loc = ctx.locale
             if (
                 total == 0
-                and airport_status == AdvisoryStatus.GREEN
+                and airport_status in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE)
                 and not airport_detail
                 and corridor_status == AdvisoryStatus.GREEN
             ):
