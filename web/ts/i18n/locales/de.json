@@ -456,7 +456,7 @@
   "settings.adv.advanced": "Erweitert",
   "settings.adv.modified": "{count} geändert",
   "settings.adv.reset": "Zurücksetzen",
-  "settings.adv.resetTitle": "Parameter dieses Hinweises auf Standardwerte zurücksetzen",
+  "settings.adv.resetTitle": "Erweiterte Parameter auf Standardwerte zurücksetzen (Ihre persönlichen Minima bleiben unverändert)",
   "settings.adv.default": "· Standard {value}",
   "settings.adv.diagnostics": "Diagnose",
   "settings.adv.requiresAutoFront": "Erfordert automatische Frontenerkennung (in den Engine-Einstellungen aktivieren).",

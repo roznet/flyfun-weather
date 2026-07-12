@@ -646,6 +646,13 @@ async function init(): Promise<void> {
   document.getElementById('advisory-settings')?.addEventListener('input', () => scheduleAdvisoryPreview());
   document.getElementById('advisory-settings')?.addEventListener('change', () => scheduleAdvisoryPreview());
   document.getElementById('advisory-aggregation')?.addEventListener('change', () => scheduleAdvisoryPreview());
+  // The engine axes are part of the draft the preview evaluates (collectEngineDraft),
+  // so they have to re-trigger it too — they live outside #advisory-settings and
+  // are not covered by the delegated listeners above.
+  for (const id of ['input-icing-method', 'input-cloud-source', 'input-cloud-style',
+                    'input-convective-method', 'advisory-model-checkboxes']) {
+    document.getElementById(id)?.addEventListener('change', () => scheduleAdvisoryPreview());
+  }
   void initAdvisoryPreview();
 
   // Save button
@@ -1172,7 +1179,13 @@ function renderAdvisorySettings(
     });
   }
 
-  // Per-advisory reset to defaults.
+  // Per-advisory reset — scoped to the *advanced* params only. The button lives
+  // in the Advanced expander's summary, next to a "k modified" chip that counts
+  // advanced params alone, so resetting the whole advisory would silently wipe
+  // the inline pilot-tier values (crosswind limits, ceiling/visibility minima)
+  // this feature exists to protect — a pilot seeing "0 modified" would click it
+  // expecting a no-op (#390 review). Pilot params stay visible and editable
+  // inline, each with its own "· default" hint.
   for (const btn of container.querySelectorAll<HTMLButtonElement>('[data-reset-advisory]')) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1180,6 +1193,7 @@ function renderAdvisorySettings(
       const entry = catalogMap.get(id);
       if (!entry) return;
       for (const param of entry.parameters) {
+        if (isPilotParam(param)) continue;
         const input = container.querySelector<HTMLInputElement>(
           `input[data-advisory-param="${id}:${param.key}"]`,
         );
@@ -1370,16 +1384,34 @@ function applyInterview(iv: Interview): void {
 
 // --- Live preview against a recent flight (#387, slice 4) ---
 
-/** The active profile's *saved* advisory settings (persisted, not the live form)
- *  — the baseline the draft form is diffed against. Reads from the profile the
- *  page is currently editing so the diff is "what would change if I saved this",
- *  not a comparison against some unrelated flight's profile. */
-function activeProfileSavedAdvisories(): { enabled?: Record<string, boolean> | null; params?: Record<string, Record<string, number>> | null; aggregation?: string } {
-  const p = profiles.find(pp => pp.id === activeProfileId);
-  const adv = p?.settings.advisories;
-  // Default aggregation to 'majority' to match the form default (populateProfileForm),
-  // so an unset saved aggregation doesn't read as a spurious diff.
-  return { enabled: adv?.enabled ?? null, params: adv?.params ?? null, aggregation: adv?.aggregation ?? 'majority' };
+/** The engine axes of the settings form — which models vote, and the icing/cloud/
+ *  convective grading methods. These change how the *same* weather is graded, so
+ *  the live preview has to send the draft values or it silently predicts the
+ *  wrong outcome for a Save that also changes them (#390 review). Shared with
+ *  `handleSave` so the two can't drift. */
+function collectEngineDraft(): {
+  advisory_models: string[] | null;
+  icing_method: string;
+  cloud_method: string;
+  convective_method: string;
+} {
+  const advisoryModels: string[] = [];
+  const advContainer = document.getElementById('advisory-model-checkboxes');
+  if (advContainer) {
+    for (const cb of advContainer.querySelectorAll<HTMLInputElement>('input[data-adv-model]')) {
+      if (cb.checked) advisoryModels.push(cb.dataset.advModel!);
+    }
+  }
+  const cloudSource = (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value || 'nwp';
+  const cloudStyle = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'square';
+  return {
+    // null = "no explicit selection" ⇒ server defaults. Same encoding as the save
+    // payload, so preview and save resolve models identically.
+    advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
+    icing_method: (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd',
+    cloud_method: composeCloudMethod(cloudSource, cloudStyle),
+    convective_method: (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo',
+  };
 }
 
 /** Find the user's most recent owned flight with a briefing pack (the pack the
@@ -1435,15 +1467,23 @@ async function updatePreview(refreshBaseline: boolean): Promise<void> {
   const seq = ++previewSeq;
   const prefs = collectAdvisoryPrefs();
   const needBaseline = refreshBaseline || previewBaselineCache === null;
+  // Both halves are scoped to the profile being *edited*, not the profile bound
+  // to the flight that supplies the preview weather — for a multi-profile pilot
+  // those differ, and the flight's profile may carry a different engine config
+  // entirely (#390 review). The baseline sends nothing but the profile, so the
+  // server grades it under that profile's saved settings verbatim.
+  const profileId = activeProfileId;
   try {
     const [base, draft] = await Promise.all([
       needBaseline
-        ? previewAdvisories(previewTarget.flightId, previewTarget.ts, activeProfileSavedAdvisories())
+        ? previewAdvisories(previewTarget.flightId, previewTarget.ts, { profile_id: profileId })
         : Promise.resolve(null),
       previewAdvisories(previewTarget.flightId, previewTarget.ts, {
+        profile_id: profileId,
         enabled: prefs.enabled,
         params: prefs.params,
         aggregation: prefs.aggregation,
+        ...collectEngineDraft(),
       }),
     ]);
     if (seq !== previewSeq) return;  // a newer request superseded this one
@@ -1556,14 +1596,9 @@ async function handleSave(): Promise<void> {
     return;
   }
 
-  // Collect advisory models
-  const advisoryModels: string[] = [];
-  const advContainer = document.getElementById('advisory-model-checkboxes');
-  if (advContainer) {
-    for (const cb of advContainer.querySelectorAll<HTMLInputElement>('input[data-adv-model]')) {
-      if (cb.checked) advisoryModels.push(cb.dataset.advModel!);
-    }
-  }
+  // Advisory models + grading methods — the same collector the live preview uses,
+  // so what was previewed is what gets saved.
+  const engine = collectEngineDraft();
 
   const flightRules = (document.getElementById('input-flight-rules') as HTMLSelectElement)?.value || 'vfr_ifr';
   const grametEnabled = (document.getElementById('toggle-gramet') as HTMLInputElement)?.checked ?? true;
@@ -1571,11 +1606,6 @@ async function handleSave(): Promise<void> {
   const icingSeverityEnhance = (document.getElementById('toggle-icing-enhance') as HTMLInputElement)?.checked ?? false;
   const autoFrontDetection = (document.getElementById('toggle-auto-front-detection') as HTMLInputElement)?.checked ?? false;
   const computeAlternates = (document.getElementById('toggle-compute-alternates') as HTMLInputElement)?.checked ?? false;
-  const icingMethod = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd';
-  const cloudSourceValue = (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value || 'nwp';
-  const cloudStyleValue = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'square';
-  const cloudMethod = composeCloudMethod(cloudSourceValue, cloudStyleValue);
-  const convectiveMethod = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo';
   const digestGuidance = (document.getElementById('input-digest-guidance') as HTMLSelectElement)?.value || 'balanced';
   const advisories = collectAdvisoryPrefs();
   // The front advisory enable is only meaningful when the master is on; when it
@@ -1592,16 +1622,13 @@ async function handleSave(): Promise<void> {
     flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
     speed_kt: speed != null && !isNaN(speed) ? speed : null,
     models,
-    advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
     flight_rules: flightRules,
     gramet_enabled: grametEnabled,
     llm_digest_enabled: llmDigestEnabled,
     icing_severity_enhance: icingSeverityEnhance,
     auto_front_detection: autoFrontDetection,
     compute_alternates: computeAlternates,
-    icing_method: icingMethod,
-    cloud_method: cloudMethod,
-    convective_method: convectiveMethod,
+    ...engine,
     digest_guidance: digestGuidance,
     advisories,
     // Persist interview answers so re-running the assistant pre-selects them (#387).

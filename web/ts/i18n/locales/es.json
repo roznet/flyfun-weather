@@ -456,7 +456,7 @@
   "settings.adv.advanced": "Avanzado",
   "settings.adv.modified": "{count} modificado(s)",
   "settings.adv.reset": "Restablecer",
-  "settings.adv.resetTitle": "Restablecer los parámetros de este aviso a los valores predeterminados",
+  "settings.adv.resetTitle": "Restablecer los parámetros avanzados a los valores predeterminados (sus mínimos personales no se modifican)",
   "settings.adv.default": "· predet. {value}",
   "settings.adv.diagnostics": "Diagnóstico",
   "settings.adv.requiresAutoFront": "Requiere detección automática de frentes (actívala en los ajustes del motor).",

@@ -544,7 +544,7 @@
   "settings.adv.advanced": "Advanced",
   "settings.adv.modified": "{count} modified",
   "settings.adv.reset": "Reset",
-  "settings.adv.resetTitle": "Reset this advisory's parameters to defaults",
+  "settings.adv.resetTitle": "Reset the advanced parameters above to defaults (your personal minimums are left unchanged)",
   "settings.adv.default": "· default {value}",
   "settings.adv.diagnostics": "Diagnostics",
   "settings.adv.requiresAutoFront": "Requires Auto Front Detection (enable it in Engine settings).",

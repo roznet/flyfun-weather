@@ -456,7 +456,7 @@
   "settings.adv.advanced": "Avancé",
   "settings.adv.modified": "{count} modifié(s)",
   "settings.adv.reset": "Réinitialiser",
-  "settings.adv.resetTitle": "Réinitialiser les paramètres de cet avis aux valeurs par défaut",
+  "settings.adv.resetTitle": "Réinitialiser les paramètres avancés aux valeurs par défaut (vos minimums personnels restent inchangés)",
   "settings.adv.default": "· défaut {value}",
   "settings.adv.diagnostics": "Diagnostics",
   "settings.adv.requiresAutoFront": "Nécessite la détection automatique des fronts (activez-la dans les réglages du moteur).",

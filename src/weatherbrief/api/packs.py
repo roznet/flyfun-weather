@@ -3029,7 +3029,10 @@ def _owned_flight_pack_with_analyses(db, flight_id, timestamp, user_id):
     return flight, pack_dir
 
 
-def _load_advisory_profile(db, flight, user_id, request, pack_dir, *, db_path: str = ""):
+def _load_advisory_profile(
+    db, flight, user_id, request, pack_dir, *, db_path: str = "",
+    profile_id: int | None = None,
+):
     """Load advisory profile settings and build a recompute-conditions callback.
 
     Shared by recalculate_advisories and altitude_table endpoints.
@@ -3044,13 +3047,22 @@ def _load_advisory_profile(db, flight, user_id, request, pack_dir, *, db_path: s
 
     ``request`` may be ``None`` for non-request callers (the timing-scan
     background runner) — pass ``db_path`` explicitly then.
+
+    ``profile_id`` overrides the flight's bound profile. Only the settings-page
+    preview passes it: that page edits an *arbitrary* profile, which is usually
+    not the one attached to the flight whose pack supplies the preview weather
+    (#390 review). Every other caller evaluates the flight as it will actually be
+    briefed, so they leave it ``None`` and get ``flight.profile_id``. Callers
+    passing it MUST have owner-gated the profile first — this function's
+    ``load_profile_settings`` silently degrades an unowned id to empty settings.
     """
     from weatherbrief.analysis.advisories import resolve_enabled_ids
     from weatherbrief.api.preferences import load_user_locale
     from weatherbrief.api.profiles import load_profile_settings
     from weatherbrief.models import AdvisoryAggregation
 
-    profile_settings = load_profile_settings(db, flight.profile_id, user_id)
+    effective_profile_id = profile_id if profile_id is not None else flight.profile_id
+    profile_settings = load_profile_settings(db, effective_profile_id, user_id)
     adv_config = profile_settings.get("advisories", {})
     enabled_map = adv_config.get("enabled")
     # Treat the saved map as overrides, not an allow-list: advisories absent from
@@ -3173,18 +3185,37 @@ def recalculate_advisories(
 
 
 class PreviewAdvisoriesRequest(BaseModel):
-    """Draft advisory overrides for the non-persisting preview (#387, slice 4).
+    """Draft settings for the non-persisting advisory preview (#387, slice 4).
 
-    Any field left ``None`` falls back to the flight's saved profile, so a bare
-    ``{}`` body previews the currently-saved settings (used as the baseline for
-    the settings-page diff).
+    Two modes, distinguished by which fields are *present* in the JSON (not by
+    their value — an explicit ``null`` is a meaningful draft value, e.g.
+    ``advisory_models: null`` meaning "all models"):
+
+    * **Baseline** — send only ``profile_id``. Every axis then comes from that
+      profile's saved settings: the "before" side of the settings-page diff.
+    * **Draft** — send ``profile_id`` plus the axes being edited. Any axis left
+      out still falls back to that profile's saved value.
+
+    ``profile_id`` is the profile *being edited*, which is generally NOT the
+    profile bound to the flight whose pack supplies the preview weather. Omitting
+    it falls back to the flight's own profile.
     """
 
+    profile_id: int | None = None
     enabled: dict[str, bool] | None = None
     params: dict[str, dict[str, float]] | None = None
     # Constrained so a typo'd value fails validation (422) rather than being
     # silently ignored and falling back to the saved aggregation (#390 review).
     aggregation: Literal["worst", "majority"] | None = None
+    # Engine axes. These live on the same settings form as the advisory params
+    # and materially change how the same weather is graded (icing/cloud/
+    # convective method, which models vote), so the preview must evaluate the
+    # *draft* values — otherwise it silently previews something other than what
+    # Save will produce (#390 review).
+    advisory_models: list[str] | None = None
+    icing_method: str | None = None
+    cloud_method: str | None = None
+    convective_method: str | None = None
 
 
 @router.post("/{timestamp}/advisories/preview", response_model=RecalculateAdvisoriesResponse)
@@ -3208,27 +3239,54 @@ def preview_advisories(
     ``route_advisories.json``, and it deliberately skips the fronts recompute
     side-effect that recalculate performs.
 
-    Engine methods/models and the airport-condition recompute come from the saved
-    profile — only the advisory enable/param/aggregation axes (the ones tuned on
-    the settings page) are overridden. Owner-only like recalculate, though nothing
-    is persisted.
+    Settings are resolved against ``body.profile_id`` — the profile *being
+    edited* — not the profile bound to the flight supplying the pack: the two are
+    usually different for a multi-profile pilot, and grading under the flight's
+    profile would preview an engine config the pilot never asked for (#390
+    review). Any axis absent from the body falls back to that profile's saved
+    value, so a body of just ``{profile_id}`` yields the saved-settings baseline.
+    Owner-only like recalculate, though nothing is persisted.
     """
     from weatherbrief.analysis.advisories import resolve_enabled_ids
+    from weatherbrief.api.profiles import load_profile
     from weatherbrief.models import AdvisoryAggregation
     from weatherbrief.tasks.advise import run_advisories_from_pack
 
     flight, pack_dir = _owned_flight_pack_with_analyses(db, flight_id, timestamp, user_id)
 
-    (_saved_enabled_ids, saved_enabled_map, saved_params, saved_agg, adv_models,
-     icing_method, cloud_method, convective_method, recompute_conds, locale,
-     _auto_front) = _load_advisory_profile(db, flight, user_id, request, pack_dir)
+    # Owner-gate the previewed profile. _load_advisory_profile would silently fall
+    # back to empty settings for someone else's id (previewing catalog defaults
+    # rather than erroring), so reject it here instead.
+    if body.profile_id is not None:
+        try:
+            previewed_profile = load_profile(db, body.profile_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if previewed_profile.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Profile not found")
 
-    # Draft overrides from the body; fall back to the saved profile when absent.
-    enabled_map = body.enabled if body.enabled is not None else saved_enabled_map
+    (_saved_enabled_ids, saved_enabled_map, saved_params, saved_agg, saved_models,
+     saved_icing, saved_cloud, saved_convective, recompute_conds, locale,
+     _auto_front) = _load_advisory_profile(
+        db, flight, user_id, request, pack_dir, profile_id=body.profile_id,
+    )
+
+    # Draft overrides from the body; fall back to the previewed profile's saved
+    # value for any axis the caller did not send. Keyed on *presence* in the JSON
+    # rather than on None, so an explicit null (e.g. advisory_models: null = "all
+    # models") reads as a draft value instead of "not overridden".
+    sent = body.model_fields_set
+    enabled_map = body.enabled if "enabled" in sent else saved_enabled_map
     enabled_ids = resolve_enabled_ids(enabled_map)
-    user_params = body.params if body.params is not None else saved_params
+    user_params = body.params if "params" in sent else saved_params
     # body.aggregation is already validated to worst/majority/None by Pydantic.
     aggregation = AdvisoryAggregation(body.aggregation) if body.aggregation else saved_agg
+    adv_models = body.advisory_models if "advisory_models" in sent else saved_models
+    icing_method = body.icing_method if "icing_method" in sent else saved_icing
+    cloud_method = body.cloud_method if "cloud_method" in sent else saved_cloud
+    convective_method = (
+        body.convective_method if "convective_method" in sent else saved_convective
+    )
 
     # NOTE: no fronts recompute and persist=False — a preview must never touch
     # the pack dir.

@@ -90,7 +90,29 @@ def _route_analyses() -> dict:
     }
 
 
-def _seed(app_db) -> tuple[str, str, Path]:
+def _make_profile(session, *, name: str, settings: dict, user_id: str = DEV_USER_ID) -> int:
+    """Persist a flight profile and return its id."""
+    from weatherbrief.db.models import FlightProfileRow
+
+    row = FlightProfileRow(
+        user_id=user_id, name=name, is_default=False, settings_json=json.dumps(settings),
+    )
+    session.add(row)
+    session.flush()
+    return row.id
+
+
+def _crosswind_profile_settings(red_kt: float, cloud_method: str = "square_nwp") -> dict:
+    return {
+        "cloud_method": cloud_method,
+        "advisories": {
+            "enabled": {"airport_wind": True},
+            "params": {"airport_wind": {"crosswind_red_kt": red_kt}},
+        },
+    }
+
+
+def _seed(app_db, profile_id: int | None = None) -> tuple[str, str, Path]:
     fid = "egkb_lfat-" + hashlib.sha256(b"preview").hexdigest()[:4]
     session = app_db()
     flight = Flight(
@@ -98,6 +120,7 @@ def _seed(app_db) -> tuple[str, str, Path]:
         waypoints=["EGKB", "LFAT"], departure_time=_DEP,
         cruise_altitude_ft=5000, flight_ceiling_ft=18000,
         flight_duration_hours=2.0, created_at=_NOW - timedelta(days=1),
+        profile_id=profile_id,
     )
     save_flight(session, flight, DEV_USER_ID)
     meta = BriefingPackMeta(
@@ -171,3 +194,108 @@ def test_preview_rejects_invalid_aggregation(client, app_db):
         json={"aggregation": "bogus"},
     )
     assert resp.status_code == 422, resp.text
+
+
+def _seed_two_profiles(app_db) -> tuple[str, str, int, int]:
+    """A flight bound to profile A, plus an unrelated profile B (the one being edited)."""
+    session = app_db()
+    bound_id = _make_profile(session, name="Bound", settings=_crosswind_profile_settings(22))
+    edited_id = _make_profile(
+        session, name="Edited",
+        settings=_crosswind_profile_settings(44, cloud_method="square_dd"),
+    )
+    session.commit()
+    session.close()
+    flight_id, ts, _ = _seed(app_db, profile_id=bound_id)
+    return flight_id, ts, bound_id, edited_id
+
+
+def test_preview_scopes_settings_to_the_edited_profile(client, app_db):
+    """Settings resolve from ``profile_id`` — the profile being *edited* — not the
+    profile bound to the flight whose pack supplies the weather (#390 review).
+
+    The settings page edits an arbitrary profile; the preview target is just "the
+    pilot's most recent flight with a pack", so for a multi-profile pilot the two
+    routinely differ. Grading under the flight's profile silently previews the
+    wrong settings.
+    """
+    flight_id, ts, _bound_id, edited_id = _seed_two_profiles(app_db)
+
+    resp = client.post(
+        f"/api/flights/{flight_id}/packs/{ts}/advisories/preview",
+        json={"profile_id": edited_id},
+    )
+    assert resp.status_code == 200, resp.text
+    advisories = {a["advisory_id"]: a for a in resp.json()["manifest"]["advisories"]}
+    # 44 = the edited profile's saved value; 22 would mean it graded under the
+    # flight's own (bound) profile.
+    assert advisories["airport_wind"]["parameters_used"]["crosswind_red_kt"] == 44
+
+
+def test_preview_without_profile_id_falls_back_to_the_flight_profile(client, app_db):
+    """Omitting profile_id keeps the pre-#390 behaviour: the flight's own profile."""
+    flight_id, ts, _bound_id, _edited_id = _seed_two_profiles(app_db)
+
+    resp = client.post(f"/api/flights/{flight_id}/packs/{ts}/advisories/preview", json={})
+    assert resp.status_code == 200, resp.text
+    advisories = {a["advisory_id"]: a for a in resp.json()["manifest"]["advisories"]}
+    assert advisories["airport_wind"]["parameters_used"]["crosswind_red_kt"] == 22
+
+
+def test_preview_rejects_another_users_profile(client, app_db):
+    """A profile the caller doesn't own 404s rather than silently previewing defaults."""
+    session = app_db()
+    session.add(UserRow(
+        id="other-user", provider="local", provider_sub="other",
+        email="other@localhost", display_name="Other", approved=True,
+    ))
+    session.flush()
+    foreign_id = _make_profile(
+        session, name="Theirs", settings=_crosswind_profile_settings(99),
+        user_id="other-user",
+    )
+    session.commit()
+    session.close()
+
+    flight_id, ts, _ = _seed(app_db)
+    resp = client.post(
+        f"/api/flights/{flight_id}/packs/{ts}/advisories/preview",
+        json={"profile_id": foreign_id},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_preview_threads_draft_engine_settings(client, app_db, monkeypatch):
+    """Draft engine axes (models, icing/cloud/convective method) reach the evaluator.
+
+    They live on the same settings form and change how identical weather is graded,
+    so a preview that ignored them would predict an outcome the Save won't produce.
+    Fields *absent* from the body still fall back to the edited profile's saved
+    value; an explicit ``null`` is a draft value ("no model selection ⇒ defaults"),
+    not "unset".
+    """
+    from weatherbrief.tasks import advise
+
+    captured: dict = {}
+    real = advise.run_advisories_from_pack
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(advise, "run_advisories_from_pack", spy)
+
+    flight_id, ts, _bound_id, edited_id = _seed_two_profiles(app_db)
+    resp = client.post(
+        f"/api/flights/{flight_id}/packs/{ts}/advisories/preview",
+        json={
+            "profile_id": edited_id,
+            "icing_method": "ogimet_nwp",
+            "advisory_models": None,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["icing_method"] == "ogimet_nwp"       # draft override
+    assert captured["advisory_models"] is None            # explicit null, not the saved value
+    assert captured["cloud_method"] == "square_dd"        # absent → edited profile's saved value
+    assert captured["persist"] is False

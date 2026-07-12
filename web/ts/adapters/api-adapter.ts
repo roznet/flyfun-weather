@@ -709,9 +709,17 @@ export async function previewAdvisories(
   flightId: string,
   timestamp: string,
   body: {
+    // The profile being edited (not the previewed flight's own profile). Omitted
+    // keys fall back to that profile's saved settings, so `{profile_id}` alone
+    // yields the saved-settings baseline.
+    profile_id?: number | null;
     enabled?: Record<string, boolean> | null;
     params?: Record<string, Record<string, number>> | null;
     aggregation?: string;
+    advisory_models?: string[] | null;
+    icing_method?: string;
+    cloud_method?: string;
+    convective_method?: string;
   },
   cruiseAltitudeFt?: number,
 ): Promise<RecalculateAdvisoriesResult> {
