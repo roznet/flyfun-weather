@@ -63,17 +63,78 @@ class MyEvaluator:
 
 The `@register` decorator auto-discovers evaluators at import time. New evaluators: create file, implement protocol, add `@register` — no central config changes needed.
 
+Issue #223 adds a **one-assessment contract** for migrated evaluators. Each
+evaluator first records the available per-point (or non-spatial entity)
+assessments, then derives status, localized detail, extent, provenance, and
+`evidence_regions` from those same records. A browser renderer must never repeat
+the meteorological threshold calculation to decide where an advisory applies.
+
 ## Three-Level Aggregation
 
-Every evaluator follows the same pattern:
+Migrated spatial evaluators follow the same evidence-first pattern:
 
-1. **Point level**: Iterate route points, count affected vs total per model
-2. **Model level**: `ModelAdvisoryResult.build(status, detail, affected, total, total_distance_nm)` — computes percentage and distance metrics
-3. **Route level**: `RouteAdvisoryResult.from_per_model(id, per_model, params, aggregation=)` — aggregates per-model statuses using the chosen mode
+1. **Assessment level**: Record route-point availability, local severity or
+   contributing condition, stable reason/metric/method identifiers, and optional
+   altitude bounds. Non-spatial evaluators record the equivalent expected
+   entities, such as departure and arrival.
+2. **Model level**: `summarize_evidence()` validates route order, derives
+   `data_state`, unique affected-point counts, midpoint-cell distance, and
+   contiguous `AdvisoryEvidenceRegion` objects. The evaluator derives its grade
+   and detail from the same assessment records and builds one
+   `ModelAdvisoryResult`.
+3. **Route level**: `RouteAdvisoryResult.from_per_model(...)` aggregates model
+   statuses and records the exact `representative_model` that owns
+   `aggregate_detail` and `aggregate_mitigations`.
 
-Aggregation is controlled by `AdvisoryAggregation` enum (`WORST` or `MAJORITY`). The registry passes the aggregation mode; individual evaluators always produce per-model results without knowing the aggregation strategy.
+`total_points` and all percentage thresholds use only the assessments that
+actually ran. Missing expected route points still make the result partial or
+unavailable, but they never dilute a hazard by entering the denominator as
+clear. The compatibility tuple returned by older helpers may retain its legacy
+route-sounding count; migrated grades and displayed percentages use the
+evidence summary.
 
-Detail text comes from the worst-performing model. Shared classmethods on the models eliminated ~115 lines of boilerplate.
+Aggregation is controlled by `AdvisoryAggregation` (`WORST` or `MAJORITY`). The
+registry passes the aggregation mode; evaluators produce per-model results
+without duplicating aggregation policy. `UNAVAILABLE` models are ignored only
+when at least one valid model result exists. Empty and all-unavailable inputs
+aggregate to `UNAVAILABLE`, never GREEN.
+
+The representative model is the first per-model result whose status equals the
+aggregate status. Aggregate detail and mitigations always come from that same
+result; the frontend consumes `representative_model` instead of reimplementing
+this choice.
+
+### Evidence geometry and distance
+
+`AdvisoryEvidenceRegion` stores inclusive stable route-point indices, optional
+paired altitude bounds, local severity, a non-localized `reason_code`, and
+optional metric/method provenance. Regions split at route gaps or changes in
+severity, reason, method, or altitude bounds. Evidence is never merged across
+forecast models.
+
+For point-based evidence, each route point owns a distance cell from the
+midpoint to its previous point to the midpoint to its next point, clipped at the
+route ends. `affected_nm` is the union length of the qualifying cells. This is
+the authoritative extent for migrated evaluators and the same geometry the web
+focus resolver paints; it replaces the old point-count proportion on unevenly
+spaced routes.
+
+### Missing-data and failure safety
+
+- `complete` means every required input was available for the expected domain;
+  `partial` means usable evidence exists but required inputs are missing; and
+  `unavailable` means no sufficient valid input exists.
+- Complete data with no hazard may be GREEN. Partial AMBER/RED evidence remains
+  hazard-bearing, but partial data that would otherwise be GREEN is reported as
+  `UNAVAILABLE` rather than clear or an invented AMBER uncertainty penalty.
+- `data_state=None` is legacy/unknown, not proof of complete data. Old grades may
+  still display, but evidence highlighting and method attribution are not
+  inferred.
+- Optional cross-check inputs do not make the primary method partial unless the
+  evaluator's documented authoritative method requires them.
+- Evaluator exceptions are logged and returned as explicit per-model
+  `UNAVAILABLE` results so an evaluation failure cannot disappear from the
+  advisory set.
 
 **Localized detail text** (`strings.py`): evaluators build detail strings via `adv_t(key, locale, **params)` against the `_STRINGS` catalog (en/fr/de/es), keyed `<evaluator>.<msg>`. Aviation abbreviations (VFR, OVC, BKN, FL, kt, ICAO codes…) are never translated. `ctx.locale` flows in from the flight profile and is honored on recalc.
 
@@ -91,8 +152,15 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `IcingEscapeEvaluator` | icing | Non-FIKI: can we descend below freezing to escape icing? Checks FZ level vs terrain + margin. Altitude-aware: ignores icing above cruise + buffer. Any no-escape point → amber; `no_escape_pct_red` escalates to red. `icing_coverage_pct_amber` warns when escapable icing covers a significant portion of the route | `terrain_margin_ft`, `tight_margin_ft`, `icing_altitude_buffer_ft`, `icing_coverage_pct_amber` (20%), `no_escape_pct_red` (15%) |
-| `FIKIIcingEvaluator` | icing | FIKI-equipped: evaluates icing layer thickness and severity (transit OK, loiter not) | `thickness_amber_ft`, `thickness_red_ft`, `severe_is_red` |
+| `FIKIIcingEvaluator` | icing | FIKI-equipped: evaluates departure/arrival transit thickness, route-wide phase-relevant SLD/SEVERE icing, and cruise clearance. Each evidence zone keeps its local severity; headline extent is the union of cruise concern and AMBER/RED terminal concern points, without double-counting a point present in both | `transit_thickness_amber_ft`, `transit_thickness_red_ft`, `severe_is_red` |
 | `FreezingPrecipEvaluator` | icing | Freezing rain / ice pellets: active FZRA/PL surface phase anywhere → RED (exceeds all icing certification, incl. FIKI; below-cloud hazard invisible to in-cloud icing methods). Freezing-rain-shaped profile without active precip (warm nose over sub-zero surface, via `detect_warm_nose`) → AMBER above coverage threshold | `primed_pct_amber` (5%) |
+
+The sounding-level `descend_below_icing` guidance is conservative across
+models: if any icing-bearing model has a freezing-rain profile, the aggregate
+descent escape is `None`/infeasible even when another model offers a finite
+escape. An ordinary model with no icing contributes `None` but does not block a
+finite escape from an icing-bearing model. Freezing-rain profiles with an empty
+icing-zone set are outside this approved correction and are not claimed here.
 
 ### Cloud
 
@@ -105,14 +173,14 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
-| `EnroutePrecipEvaluator` | precipitation | Precipitation along the route as the en-route **visibility proxy** (no model forecasts visibility at altitude; surface phase/intensity from `PrecipitationAssessment` works for all 7 models). Snow is the VFR killer: any snow ≥ amber threshold → AMBER, widespread moderate+ snow → RED. Moderate+ rain → AMBER (capped — rain degrades, rarely prohibits). FZRA/PL count toward extent only; severity owned by `freezing_precip`. Shared classifier (`classify_enroute_precip`) feeds the VFR composite capped at AMBER | `snow_pct_amber` (5%), `snow_moderate_pct_red` (25%), `rain_pct_amber` (30%) |
+| `EnroutePrecipEvaluator` | precipitation | Precipitation along the route as the en-route **visibility proxy** (no model forecasts visibility at altitude; surface phase/intensity comes from `PrecipitationAssessment`). Snow is the VFR killer: any snow ≥ amber threshold → AMBER, widespread moderate+ snow → RED. Moderate+ rain → AMBER (capped — rain degrades, rarely prohibits). FZRA/PL count toward extent only; severity is owned by `freezing_precip`. Percentages use only points with an evaluated precipitation assessment; sounding-only points with no precipitation assessment make the result partial but do not enter the denominator. The shared classifier feeds the VFR composite capped at AMBER | `snow_pct_amber` (5%), `snow_moderate_pct_red` (25%), `rain_pct_amber` (30%) |
 
 ### Turbulence
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `TurbulenceEvaluator` | turbulence | CAT layers at cruise + strong vertical motion. SEVERE CAT anywhere → RED | `route_pct_amber`, `strong_w_fpm` |
-| `MountainWindEvaluator` | turbulence | Wind speed near significant terrain corroborated by wave signatures: an inversion overlapping ridge top (−1000/+4000ft band) or an OSCILLATING vertical-motion classification. Signature present → RED bar drops from `wind_red_kt` to `corroborated_red_kt` ("rotor day" vs "windy ridge"). Cross-ridge direction deliberately NOT assessed (1-D terrain profile — ridge orientation unknown). Only evaluates where terrain > threshold | `terrain_threshold_ft`, `altitude_margin_ft`, `wind_amber_kt`, `wind_red_kt` (40), `corroborated_red_kt` (30) |
+| `MountainWindEvaluator` | turbulence | Wind speed near significant terrain corroborated by wave signatures: an inversion overlapping ridge top (−1000/+2000ft band) or an OSCILLATING vertical-motion classification. Signature present → RED bar drops from `wind_red_kt` to `corroborated_red_kt` ("rotor day" vs "windy ridge"). The tight +2000 ft upper bound excludes elevated frontal inversions that do not establish a ridge-top wave mechanism. Cross-ridge direction deliberately NOT assessed (1-D terrain profile — ridge orientation unknown). Only evaluates where terrain > threshold | `terrain_threshold_ft`, `altitude_margin_ft`, `wind_amber_kt`, `wind_red_kt` (40), `corroborated_red_kt` (30) |
 
 ### Other
 
@@ -120,7 +188,7 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 |-----------|----------|-------|----------------|
 | `ConvectiveEvaluator` | convective | Route points with convective risk ≥ threshold. Altitude-aware: ignores convection whose tops are below `cruise_ft - top_clearance_ft`. HIGH/EXTREME → instant RED. LOW risk capped at AMBER (prevents false alarms for marginal instability). **Grade floors at the DD (thermo) tier** even when the active track is the model-native NWP one (`convective_method` defaults to `"nwp"`) — a quiet NWP never suppresses a DD HIGH (#283; safety asymmetry). Also emits a per-model, **details-only** `cross_check` note via `convective_cross_check` (DD risk vs the model's native *firing* signal — precip/cover/deep-tower, #283): `dd_not_corroborated` (DD MODERATE+ but the scheme is quiet) or `model_active_dd_quiet` (the scheme fired where DD is quiet). The note never affects the grade. **This is the single source of truth for convective DD-vs-NWP divergence** (see `DDvsNWPAgreementEvaluator`). | `min_risk`, `affected_pct_amber`, `affected_pct_red`, `top_clearance_ft` (2000) |
 | `HeadwindEvaluator` | wind | Route-average cruise-level headwind + trip-time delta vs still air. TAS is derived from `ctx.cruise_speed_ias_kt` (aircraft/profile cruise IAS via `atmo.resolve_cruise_speed_ias`, converted to TAS at cruise altitude), falling back to `total_distance_nm / flight_duration_hours` — both ride on `RouteContext` so recalc-from-pack still works. Altitude-aware (cross-section winds at the evaluated altitude → the altitude table shows the wind trade per level; falls back to precomputed `wind_components`). Informational bias: AMBER on mean ≥ 20kt, RED only ≥ 40kt; tailwinds report minutes saved | `mean_amber_kt` (20), `mean_red_kt` (40) |
-| `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). Evaluated once, not per-model. **Disabled by default** — user must enable via profile | `min_poor_vars` (3), `poor_pct_amber`, `poor_pct_red` |
+| `ModelAgreementEvaluator` | model | Cross-model divergence (POOR/MODERATE agreement). A `ModelDivergence` with `mean=None` is an absent metric even if its stored agreement is GOOD: all-absent metrics are unavailable, mixed valid/absent metrics are partial, and a numeric mean remains assessed even when one model value is null. Evaluated once, not per-model. **Disabled by default** — user must enable via profile | `min_poor_vars` (3), `poor_pct_amber`, `poor_pct_red` |
 | `DDvsNWPAgreementEvaluator` | model | Within-model agreement: compares DD (thermodynamic) vs NWP tracks per model at each route point. Checks freezing-level delta and cloud layer Jaccard (only when NWP has real boundaries — `source="nwp_3d"` or `"grib"`, never `"synthesized"` which is circular). Surfaces e.g. mid-level decks GFS sees that DD misses, or ECMWF cirrus ice-supersaturation that `cc` rejects. **Convective divergence is intentionally NOT checked here** — now that the NWP convective track is model-native (#283), DD-vs-NWP convective disagreement is reported by the richer, convective-specific inline `cross_check` on `ConvectiveEvaluator`; duplicating it here would double-count the same divergence. **Disabled by default** — dev/calibration signal, not pilot-facing | `freezing_delta_ft` (2000), `cloud_overlap_min` (30%), `amber_pct` (30), `red_pct` (60) |
 
 ### Airport
@@ -132,12 +200,27 @@ Detail text comes from the worst-performing model. Shared classmethods on the mo
 | `DensityAltitudeEvaluator` | airport | Density altitude at departure + arrival from forecast T/QNH at the expected times + field elevation (terrain profile). Triggers on absolute DA OR DA-above-field (hot-day performance loss). UNAVAILABLE without temperature/terrain — never green-by-absence | `da_amber_ft` (5000), `da_red_ft` (8000), `delta_amber_ft` (3000), `delta_red_ft` (5000) |
 | `LLWSEvaluator` | airport | Low-level wind shear at departure + arrival: 0–1km bulk shear from the airport-point sounding (catches the nocturnal LLJ AirportWind can't see) OR gust factor (gust − sustained). Surface-based inversion reported alongside significant shear. Worst of dep/arr | `shear_amber_kt` (20), `shear_red_kt` (30), `gust_factor_amber_kt` (15) |
 
+Airport provenance identifies the axis that controls the emitted grade.
+`FlightCategoryEvaluator` uses `airport_conditions` when ceiling/visibility
+controls, the normalized convective method when terminal convection controls,
+and `flight_category_composite` when multiple methods tie at the controlling
+grade. This includes HIGH/EXTREME observations from different methods that both
+map to RED. Terminal convection remains actionable when the top-level airport
+conditions artifact is missing.
+`AirportWindEvaluator` uses `runway_components`, `wind_gust`, or
+`runway_wind_with_gust` when both axes tie at the controlling severity.
+`LLWSEvaluator` uses `bulk_shear`, `gust_factor`, or `llws_composite` for the
+same tie case. A calm wind statement requires an assessed zero sustained-wind
+observation; missing direction/runway data alone never manufactures calm or a
+zero crosswind. Method badges are shown only for assessed `complete`/`partial`
+results whose status is not `UNAVAILABLE`.
+
 ### Feasibility (Composite)
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `VFRFeasibilityEvaluator` | feasibility | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage), climb-out/descent corridor decks (BKN/OVC fully below cruise within `terminal_corridor_nm` of either end — OVC→RED, BKN→AMBER, see meteorology-decisions §10), and en-route precipitation (shared `classify_enroute_precip`, capped at AMBER in the composite). Worst of sub-assessments wins | `cloud_clearance_ft`, `imc_pct_amber`, `imc_pct_red`, `terminal_corridor_nm` (5) |
-| `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (uses shared `has_relevant_icing()` helper aligned with FIKI advisory), convective risk along route | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_pct_amber`, `icing_pct_red`, `icing_altitude_buffer_ft` |
+| `IFRFeasibilityEvaluator` | feasibility | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (uses shared `has_relevant_icing()` helper aligned with FIKI advisory), and convective risk along route. Ceiling and visibility availability are tracked independently: assessed-clear ceiling is evidence, missing axes make a clear airport result partial/unavailable, and a known ceiling hazard survives missing companion axes | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `icing_pct_amber`, `icing_pct_red`, `icing_altitude_buffer_ft` |
 
 ### Sun
 
@@ -213,7 +296,9 @@ Two generators in `vfr_feasibility.py`:
 
 ## Shared Helpers (`_helpers.py`)
 
-- **`format_extent(affected, total, total_distance_nm)`** → `"30nm/55nm (55%)"` — human-readable spatial extent
+- **`format_extent(affected, total, total_distance_nm)`** → legacy
+  count-proportional `"30nm/55nm (55%)"` formatter for unmigrated evaluators;
+  migrated evidence extents come from `summarize_evidence()` route geometry
 - **`icing_zones_in_altitude_range(zones, floor_ft, ceiling_ft)`** → filter zones overlapping an altitude band
 - **`has_relevant_icing(zones, cruise_altitude_ft, buffer_ft=2000)`** → True if any zone overlaps `[0, cruise + buffer]`. Used by IFR feasibility, icing escape, and FIKI evaluators to ignore icing far above cruise altitude
 - **`min_icing_clearance(zones, cruise_altitude_ft)`** → minimum vertical distance (ft) from cruise to nearest icing zone. Used by FIKI evaluator
@@ -221,6 +306,21 @@ Two generators in `vfr_feasibility.py`:
 - **`terrain_at_distance(elevation, distance_nm)`** → binary search + linear interpolation for terrain altitude
 - **`max_terrain_near_point(elevation, distance_nm, radius_nm=5)`** → peak elevation within radius
 - **`wind_at_altitude(cross_sections, model, point_index, target_alt_ft, target_time)`** → wind at the pressure level nearest a target altitude, for the hourly forecast nearest `target_time` (not the first hour — matters on multi-hour legs). Delegates the level pick to `analysis/wind.py:pick_wind_at_pressure`
+
+## Evidence Helpers (`evidence.py`)
+
+- **`summarize_evidence(...)`** → validates stable route order, computes
+  complete/partial/unavailable state, midpoint-cell extent, and coalesced
+  evidence regions from one set of per-point assessments
+- **`data_state_from_domains(...)` / `combine_data_states(...)`** → classify one
+  expected domain or combine independent composite axes without losing a
+  missing-data warning
+- **`guard_status_for_data_state(status, state)`** → converts unavailable input,
+  and partial results that would otherwise look GREEN, to `UNAVAILABLE` while
+  preserving independently supported AMBER/RED hazards
+- **`build_non_spatial_result(...)`** → applies the same availability and
+  provenance contract to airport/entity evaluators without manufacturing route
+  geometry
 
 ## User Parameters
 
@@ -272,20 +372,68 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - **Altitude table button**: opens a popup rendering the `/advisories/altitude-table` sweep — per-altitude advisory grid with best-below/best-above-cruise picks
 - **Profile selector** (`ProfileSelectorConfig`, owner-only): dropdown to switch the flight's advisory profile, re-running advisories with that profile's enabled/params/aggregation
 - **Alt-time toggle**: switches the displayed advisories between the planned departure and `alt_departure_time` (`routeAdvisories` vs `altAdvisories`)
-- **Advisory chips** (`handleAdvisoryChip`): clickable per-advisory chips that cross-link to the relevant map/cross-section context
+- **Advisory actions**: aggregate chips use the backend representative model;
+  per-model detail popups provide a model-specific "Show on chart" action
 - Recalculate button triggers POST endpoint and re-renders. The top-level entry point is `renderAdvisories(...)` in `briefing-main.ts`, fed by `getEffectiveAdvisories(state)`
+
+**Evidence focus** (`visualization/advisory-focus.ts`):
+
+- `activeAdvisoryFocus` is ephemeral store state, separate from persisted
+  `VizSettings`. It stores advisory/model identifiers plus resolved highlight
+  surfaces and emphasis layer IDs; regions are always looked up again in the
+  current advisory manifest.
+- Hazard preset focus renders backend regions on the cross-section, route graph,
+  and route map. Preset emphasis changes opacity without mutating the user's
+  enabled-layer settings.
+- Recalculation keeps the identifiers and resolves the replacement manifest;
+  focus clears if the advisory/model disappears. Explicit close, generic preset
+  selection, briefing change, unrelated model changes, and status-only altitude
+  override/probe actions also clear it. Full altitude reanchor temporarily
+  clears focus and restores only the reconciled current-request snapshot, so a
+  late response cannot overwrite a newer altitude, newly selected focus, or an
+  intervening generic-preset/clear intent. Repeated reanchors retain the
+  original snapshot only while that focus revision is still current.
+- Legacy or unavailable evidence can still open the useful preset, but the UI
+  shows location unavailable and does not guess regions or provenance. Partial
+  evidence carries an explicit partial-data treatment.
+- Spatial actions validate requested/representative/selected/fallback models
+  against both the advisory results and current route data. Fallback-selected
+  models do not acquire fabricated representative attribution; with no valid
+  model, the generic preset still applies without creating focus.
+- Method badges require an assessed (`complete`/`partial`) non-`UNAVAILABLE`
+  model result. Status-only altitude overlays clear representative, method, and
+  evidence metadata even if the overlaid headline status did not change.
+
+**Typed context actions** (`visualization/advisory-actions.ts`):
+
+- `model_agreement` opens cross-model Compare and selects a comparable layer only
+  when an evidence metric has an existing mapping.
+- `dd_nwp_agreement` opens same-model DD/NWP method context; it does not misuse
+  cross-model Compare or fabricate an unsupported second line.
+- `airport_wind` and `flight_category` open a departure/arrival drawer that
+  reuses `AirportProfilePanel` and visibly reports any supported-model fallback.
+- `fronts` opens the route map, enables the existing fronts overlay, and fits the
+  route/front context; the action is disabled with an explanation when the
+  fronts artifact is absent.
 
 **Info popup** (`components/info-popup.ts`):
 - Full description, category, parameter table with values used
 - Reuses shared modal infrastructure from metrics info popups
 
-**Store**: `briefingStore.routeAdvisories` + `recalculateAdvisories()` action.
+**Store**: `briefingStore.routeAdvisories` plus `recalculateAdvisories()` for the
+manifest, and non-persisted `activeAdvisoryFocus` plus focus/clear/context actions
+for the current evidence view.
 
 ## Key Choices
 
 - **Protocol over inheritance** — evaluators are peer classes, no hierarchy. Easier to test and extend.
 - **Immutable RouteContext** — frozen dataclass prevents accidental mutation across evaluators.
 - **Configurable aggregation** — MAJORITY (default, most common status, ties→worst) or WORST (conservative). Set per-profile in `advisories.aggregation`.
+- **Representative-model attribution** — aggregate detail, mitigations, evidence
+  focus, and method badges refer to the same backend-selected model.
+- **Missing is not clear** — migrated evaluators expose complete/partial/
+  unavailable state and preserve hazard evidence without allowing partial-clear
+  or all-unavailable inputs to appear GREEN.
 - **Lazy evaluation** — advisories evaluated fresh each time, not cached. Enables fast parameter tuning.
 - **Altitude-aware icing** — IFR feasibility, icing escape, and FIKI all filter icing by altitude relevance. Icing above `cruise_altitude_ft + buffer` (default 2000ft) is ignored. Prevents false alerts from high-altitude icing a pilot will never encounter. Buffer is tunable per evaluator via `icing_altitude_buffer_ft`.
 - **Cloud top filtering** — only considers layers pilot would enter (base ≤ ceiling). High cirrus above ceiling is irrelevant.
@@ -295,9 +443,12 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 
 ## Gotchas
 
-- Evaluator exceptions are caught and logged — one failure doesn't break the whole advisory set
+- Evaluator exceptions are caught and logged, and the failed advisory remains in
+  the manifest as explicit unavailable per-model results
 - `ModelAgreementEvaluator` has `per_model=["all"]` (not actual model names) since it's cross-model
-- `format_extent` falls back to percentage-only if route has too few points for meaningful distance
+- Do not use `ModelAdvisoryResult.build()` point proportions for migrated spatial
+  evaluators; their display extent comes from `summarize_evidence()` midpoint
+  geometry
 - `wind_at_altitude` picks the level via `pick_wind_at_pressure` and the hour via `at_time` — don't reintroduce a "first hourly" shortcut, it lags the route point's valid time on long legs
 
 ## References

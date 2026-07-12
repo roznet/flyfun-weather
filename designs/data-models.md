@@ -99,7 +99,7 @@ Root object for one fetch run: `(route, target_date, fetch_date, days_out, depar
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `WindComponent` | Headwind/crosswind decomposition | `headwind_kt` (+HW/-TW), `crosswind_kt` (+right/-left) |
-| `ModelDivergence` | Cross-model comparison | `variable`, `spread`, `agreement` (GOOD/MODERATE/POOR) |
+| `ModelDivergence` | Cross-model comparison | `variable`, nullable per-model `model_values`, nullable `mean`, `spread`, `agreement` (GOOD/MODERATE/POOR). `mean=None` means the metric is absent even when the compatibility agreement value is GOOD |
 
 ### Sounding Analysis Models
 
@@ -109,11 +109,11 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 |-------|---------|------------|
 | `ThermodynamicIndices` | Profile-level indices | LCL/LFC/EL (pressure + altitude), CAPE (surface/MU/ML), CIN, lifted index, showalter, K-index, total totals, precipitable water, freezing/-10C/-20C levels, bulk shear 0-6km/0-1km. **Raw NWP values:** nwp_cape_jkg, nwp_cape_type (sb/ml/mu/unknown), nwp_cin_jkg, nwp_lifted_index, nwp_freezing_level_ft, cape_raw_vs_calc_divergent |
 | `DerivedLevel` | Per-pressure-level derived values | altitude_ft, temperature_c, dewpoint_c, wet_bulb_c, dewpoint_depression_c, theta_e_k, lapse_rate_c_per_km, relative_humidity_pct, omega_pa_s, w_fpm, richardson_number, bv_freq_squared_per_s2, cloud_liquid_water_g_m3, cloud_liquid_water_g_kg, ice_mixing_ratio_g_kg, icing_index (Ogimet-DD 0–100), icing_index_nwp (Ogimet-NWP 0–100), sfip_raw, sfip_100, sfip_severity, sfip_variant ("full"/"proxy"/"interp"), clw_interpolated, precip_phase |
-| `EnhancedCloudLayer` | Cloud layer from dewpoint depression or NWP diagnostics | base/top (ft + hPa), thickness, mean_temperature_c, coverage (FEW/SCT/BKN/OVC), mean_dewpoint_depression_c, mean_cloud_cover_pct, theoretical_max_top_ft, source ("dd"/"grib"/"synthesized") |
+| `EnhancedCloudLayer` | Cloud layer from dewpoint depression or NWP diagnostics | base/top (ft + hPa), thickness, mean_temperature_c, coverage (FEW/SCT/BKN/OVC), mean_dewpoint_depression_c, mean_cloud_cover_pct, theoretical_max_top_ft, source (`"dd"`/`"grib"`/`"nwp_3d"`; legacy-compatible `"synthesized"` only) |
 | `NWPCloudDiagnostics` | NWP-surface diagnostics (GRIB) | low/mid/high (NWPCloudLayerDiag each), convective_cover_pct, convective_base_ft, convective_top_ft, total_cover_pct, boundary_cover_pct, ceiling_ft, freezing_level_ft (ECMWF `deg0l`) |
 | `InversionLayer` | Temperature inversion from lapse rate | base/top (ft + hPa), strength_c, surface_based |
 | `IcingZone` | Grouped icing zone (Ogimet-DD or Ogimet-NWP) | base/top (ft + hPa), risk, icing_type (RIME/MIXED/CLEAR), sld_risk, mean_temperature_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index |
-| `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant ("full"/"proxy") |
+| `SfipZone` | Grouped SFIP icing zone | base/top (ft + hPa), risk, icing_type, mean_sfip_100, mean_temperature_c, mean_rh_pct, variant (`"full"`/`"full_no_vv"`/`"interp"`/`"interp_no_vv"`/`"proxy"`/`"proxy_no_vv"`) |
 | `SldZone` | Supercooled Large Droplet zone | base/top (ft + hPa), risk, mechanism ("warm_nose"/"coalescence"), mean_temperature_c |
 | `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, k_index, total_totals, severe_modifiers, regime (`ConvectiveRegime`), drivers/suppressors lists, elevated_convection, base_ft/top_ft (unified bounds), cover_pct (NWP only), method ("thermo"/"nwp"/"nwp_hybrid") |
 | `ConvectiveRegime` | Enum: dominant convective regime | THERMAL, WEAK_INSTABILITY, LOADED_GUN, ACTIVE (`.label` → title-case) |
@@ -124,14 +124,30 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |
 | `CATRiskLayer` | CAT risk identified by Richardson number | base_ft, top_ft, base/top_pressure_hpa, richardson_number, risk |
 | `VerticalMotionAssessment` | Vertical motion + turbulence | classification, max_omega_pa_s, max_w_fpm, max_w_level_ft, cat_risk_layers, e_shear_layers, convective_contamination |
-| `SoundingAnalysis` | Container per model | indices, parcel_path, derived_levels, cloud_layers, nwp_cloud_layers, dd_cloud_layers, icing_zones, icing_ogimet_dd_zones, icing_ogimet_nwp_zones, sfip_zones, ieng_icing_zones, sld_zones, inversion_layers, convective, convective_thermo, convective_nwp, precipitation, vertical_motion, cloud_cover_{low,mid,high}_pct, surface visibility_m/temperature_2m_c/dewpoint_2m_c, nwp_cloud_diagnostics, cloud_method_effective. **Field semantics:** `cloud_layers`/`icing_zones` are the "active" slots (resolved per user preference by `_resolve_analyses()`). `dd_cloud_layers`/`icing_ogimet_dd_zones` are immutable DD sources, reconstructed by the `_sync_dd_sources` validator on load. `convective` is the active slot; `convective_thermo`/`convective_nwp` retain both derivations. `cloud_method_effective` records which method was actually applied: "dd", "nwp" (GRIB), or "nwp_synthesized" (Open-Meteo + DD heuristics). All downstream consumers read only the active slots. |
+| `SoundingAnalysis` | Container per model | indices, parcel_path, derived_levels, cloud_layers, nwp_cloud_layers, dd_cloud_layers, icing_zones, icing_ogimet_dd_zones, icing_ogimet_nwp_zones, sfip_zones, ieng_icing_zones, sld_zones, inversion_layers, convective, convective_thermo, convective_nwp, precipitation, vertical_motion, cloud_cover_{low,mid,high}_pct, surface visibility_m/temperature_2m_c/dewpoint_2m_c, nwp_cloud_diagnostics, cloud_method_effective. **Field semantics:** `cloud_layers`/`icing_zones` are the "active" slots (resolved per user preference by `_resolve_analyses()`). `dd_cloud_layers`/`icing_ogimet_dd_zones` are immutable DD sources, reconstructed by the `_sync_dd_sources` validator on load. `nwp_cloud_layers=None` means no native NWP envelope is available; `[]` means the native source was assessed and found clear. `convective` is the active slot; `convective_thermo`/`convective_nwp` retain both derivations. `cloud_method_effective` is `"dd"` for DD or an NWP-request fallback to DD, `"nwp"` for native `grib`/`nwp_3d` geometry (including an available empty list), `"nwp_synthesized"` only for legacy synthesized geometry, and `None` for mixed/unknown provenance. All downstream consumers read only the active slots. |
+
+### Airport condition availability
+
+`AirportModelCondition.ceiling_evaluated` distinguishes an assessed clear sky
+from a missing ceiling source. `ceiling_evaluated=True` with `ceiling_ft=None`
+means the sounding or native NWP ceiling diagnostic ran and found no ceiling;
+`ceiling_evaluated=False` with `ceiling_ft=None` means no ceiling source was
+available. Airport and VFR evaluators use this flag together with visibility,
+terminal-convection, wind, runway-component, and sounding availability so a
+known hazard can survive partial input while an incomplete clear result becomes
+`UNAVAILABLE`.
+
+The frontend preserves the same distinction: an evaluated null ceiling renders
+as `CLR`, an unevaluated null ceiling renders as `N/A`, and a row with no
+ceiling/visibility evidence gets a muted `N/A` category rather than a VFR vote.
+Independent wind evidence may still be displayed and reduced.
 
 ### Altitude Advisories
 
 | Model | Purpose | Key fields |
 |-------|---------|------------|
 | `VerticalRegime` | A vertical slice with uniform conditions | floor_ft, ceiling_ft, in_cloud, icing_risk, icing_type, cloud_coverage, cat_risk, strong_vertical_motion, label + diagnostic fields (mean_temperature_c, mean_dewpoint_depression_c, mean_wet_bulb_c, mean_rh_pct, mean_icing_index, sld_risk, inversion_strength_c, inversion_surface_based) |
-| `AltitudeAdvisory` | Actionable altitude recommendation | advisory_type, altitude_ft, feasible, reason, per_model_ft |
+| `AltitudeAdvisory` | Actionable altitude recommendation | advisory_type, altitude_ft, feasible, reason, per_model_ft. For `descend_below_icing`, an icing-bearing freezing-rain model makes the aggregate altitude null/infeasible; an ordinary no-icing model's null does not veto another model's finite escape |
 | `AltitudeAdvisories` | Complete altitude picture for a waypoint | regimes (per-model), advisories, cruise_in_icing, cruise_icing_risk |
 
 ### WaypointAnalysis
@@ -140,7 +156,7 @@ All analysis for one waypoint. Contains:
 - `wind_components: dict[str, WindComponent]` — model → wind decomposition
 - `sounding: dict[str, SoundingAnalysis]` — model → full sounding analysis
 - `altitude_advisories: AltitudeAdvisories | None` — dynamic vertical regimes and altitude advisories
-- `model_divergence: list[ModelDivergence]` — up to ~18 metrics compared across models (only emitted when ≥2 models report the value; see `tasks/analyze.py`)
+- `model_divergence: list[ModelDivergence]` — metrics compared across the model map. Individual values may be null and an all-null entry has `mean=None`; consumers must not treat its compatibility `agreement=GOOD` as assessed agreement
 
 ### RoutePointAnalysis
 
@@ -329,13 +345,48 @@ See [digest.md](./digest.md) for the digest-stage classifier (`classify_llm_exce
 | `AdvisoryAggregation` | Enum: WORST, MAJORITY | how per-model statuses combine |
 | `AdvisoryParameterDef` | Tunable parameter metadata | key, label, description, type (number/percent/altitude/speed/boolean), unit, default, min, max, step |
 | `AdvisoryCatalogEntry` | Evaluator metadata for UI | id, name, short_description, description, category (icing/cloud/turbulence/convective/model), default_enabled, altitude_dependent, parameters |
-| `ModelAdvisoryResult` | One advisory, one model | status, detail, affected_points, total_points, affected_pct, affected_nm, total_nm, cross_check (details-only DD-vs-model divergence). `build()` classmethod computes pct/nm from counts |
-| `RouteAdvisoryResult` | Aggregate across models | advisory_id, aggregate_status, aggregate_detail, per_model list, parameters_used. `from_per_model()` classmethod aggregates (default MAJORITY, ties broken by worst; detail from a representative model) |
+| `AdvisoryEvidenceRegion` | One validated spatial evidence region for one model | inclusive `start_point_index`/`end_point_index`; optional paired lower/upper altitude bounds; GREEN/AMBER/RED local severity; stable `reason_code`; optional `metric_id` and `method_id` |
+| `ModelAdvisoryResult` | One advisory, one model | status, detail, affected/total point and nautical-mile extents, `cross_check`, additive `data_state`, `primary_method_id`, `evidence_regions`, and mitigations |
+| `RouteAdvisoryResult` | Aggregate across models | advisory_id, aggregate_status/detail, `representative_model`, per_model list, parameters_used, aggregate_mitigations. `from_per_model()` aggregates (default MAJORITY, ties→worst) and sources detail/mitigations/model from one representative result |
 | `RouteAdvisoriesManifest` | Top-level container | advisories, catalog, route_name, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, models, aggregation, airport_conditions |
 | `AltitudeAdvisoryRow` | One row of the altitude table | altitude_ft, statuses (advisory_id→status), red/amber/green_count |
 | `AltitudeTableResult` | Altitude-dependent advisory sweep | rows (desc by altitude), advisory_ids, advisory_names, cruise/ceiling/step_ft, best_below_cruise, best_above_cruise |
 
 See [advisories.md](./advisories.md) for the evaluator framework.
+
+### Advisory evidence compatibility and geometry
+
+`ModelAdvisoryResult.data_state` is `"complete"`, `"partial"`,
+`"unavailable"`, or `None`. `None` is the additive legacy default: it means the
+pack/evaluator did not provide this metadata and must not be interpreted as
+complete. `primary_method_id` is stable provenance for the method that controlled
+the model grade. A region-level `method_id` overrides it only for that region.
+
+Evidence regions inherit the containing model; they never duplicate or merge
+model attribution. Their altitude bounds must be both present or both absent,
+their indices and bounds must be ordered, their reason code must be non-empty,
+and their severity cannot be UNAVAILABLE. Empty regions mean assessed-clear only
+when a migrated spatial result explicitly says `data_state="complete"`; an empty
+list is also normal for non-spatial results.
+
+For migrated spatial results, `total_points` is the number of evaluated
+assessments, not the full expected route count. Missing expected points are
+represented by `data_state` and never enter a percentage denominator as clear.
+`affected_points` is the unique union of controlling evidence domains; for
+example FIKI cruise and terminal concern at the same point count once, while
+each evidence region retains its own local severity.
+
+Migrated spatial evaluators do not derive nautical miles from
+`affected_points / total_points`. `analysis/advisories/evidence.py` assigns each
+stable route point the cell bounded by neighbouring midpoints (clipped to route
+start/end) and sums the union of qualifying cells. Legacy/unmigrated callers of
+`ModelAdvisoryResult.build()` retain the older count-based estimate for backward
+compatibility.
+
+`RouteAdvisoryResult.representative_model` is the same per-model result used for
+`aggregate_detail` and `aggregate_mitigations`. Empty or all-unavailable
+per-model inputs aggregate to UNAVAILABLE; the frontend does not repeat this
+selection or merge evidence across forecast models.
 
 ## Enums
 

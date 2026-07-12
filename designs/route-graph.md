@@ -89,10 +89,12 @@ interface RouteGraphMetric {
 ```
 VizRouteData.points[]          (existing — headwind, crosswind, CAPE, CIN, cloud cover)
   + RoutePointAnalysis          (model_divergence → temperature_c, precipitation_mm, pressure_msl_hpa)
+  + resolved advisory focus     (current manifest, one attributed model, backend regions)
       ↓
 RouteGraphMetric.getValue(point) → number | null
       ↓
 RouteGraphRenderer.render()
+  ├── advisory focus → affected-distance backgrounds behind plotted data
   ├── left metric  → left Y-axis scale + line/bars
   ├── right metric → right Y-axis scale + line/bars
   └── hover overlay (synced with cross-section)
@@ -149,6 +151,18 @@ interface RouteGraphTransform {
 
 ### Rendering
 
+**Advisory focus backgrounds (#223):** When the active focus requests the
+`route-graph` surface, each validated evidence region paints its resolved
+midpoint-cell distance interval across the plot area before either metric is
+drawn. The fill/outline is severity-coloured and hatched; partial data uses the
+explicit partial pattern. Regions belong to the one attributed model (aggregate
+actions use backend `representative_model`, model-detail actions use that model)
+and are never merged across models.
+
+The paint order is plot background → X grid → advisory focus → zero reference
+lines → left/right series → axes/border. Focus does not affect metric values,
+Y-axis scaling, hover, or selection behavior.
+
 **Lines:** Smooth monotone cubic spline (Fritsch-Carlson) connecting `(distanceNm, value)` pairs. Gaps where value is `null`. Consistent with cross-section line rendering.
 
 **Bars:** Drawn from the zero line to the value, centered on each route point, width = half-step to each neighbor. Fill color from metric definition. Opacity 0.6 for readability. Zero/null values skipped.
@@ -192,6 +206,16 @@ Defaults: `routeGraphVisible: true`, `routeGraphLeftMetric: 'headwind'`, `routeG
 
 Persisted to localStorage via existing `wb_vizSettings` mechanism.
 
+Advisory focus is deliberately not another `VizSettings` field. The briefing
+store keeps ephemeral `activeAdvisoryFocus` identifiers, and the shared selector
+re-resolves regions from the current manifest on render/recalculation. Focus
+clears on explicit close, generic preset or briefing changes, unrelated model
+changes, status-only altitude overrides/probes, or when recalculation removes the
+advisory/model. Full altitude reanchor accepts only the current request and
+reconciles any restored focus against its returned manifest. This keeps route
+graph, cross-section, and map focus synchronized without persisting stale
+geometry or allowing a late response to repaint an older focus.
+
 ## File Organization
 
 ```
@@ -218,8 +242,23 @@ Backend per-model surface plumbing: `tasks/analyze.py` collects the divergence v
 - **Compact height (150px)** — The cross-section is the primary visualization. The route graph is supplementary and shouldn't dominate vertical space.
 - **No X-axis labels** — Avoids duplicate labels. The cross-section's distance axis serves both.
 - **Dual Y-axis** — Allows comparing metrics with different units/scales (wind in kt vs temperature in °C).
+- **Backend-owned focus** — The graph paints supplied evidence intervals only;
+  it does not apply meteorological thresholds to scalar series to invent a
+  highlight.
 - **model_divergence for surface values** — Temperature, precipitation, and QNH (`pressure_msl_hpa`) are carried per-model in model_divergence. Adding QNH there meant one collector line in `analyze.py` rather than a new per-point store, at the cost of it also appearing in the comparison table (parked at advanced tier).
+- **Absent divergence is not agreement** — `ModelDivergence.mean=None` means no
+  model supplied that metric at the point, even when the compatibility
+  agreement field is `GOOD`. Scalar getters leave null per-model values as
+  gaps, and advisory focus never invents evidence from an absent metric.
 - **Canonical units on VizPoint, convert at the edge** — `qnhHpa` stays in hPa; region conversion happens in `getValue`/`unit`/`getMetricLabel` via `units.ts`, so a units-preference change needs no data re-extraction and the comparison table can keep showing canonical hPa.
+
+## Deferred display ambiguity
+
+The ceiling-DD/NWP getters still return `null` above the current 5000 ft AGL
+graph cap, which visually conflates “above scale” with genuinely unavailable.
+Issue #223 does not silently change that metric or its range. A distinct
+above-scale affordance remains an evidence-dependent follow-up and should gain a
+regression test when its UX is designed.
 
 ## References
 

@@ -127,17 +127,25 @@ whichever are present, so adding a new effect kind is one field + one store bran
 
 - `groups` / `lines` — method-resolved cross-section layers (clean-slate: reset groups OFF, enable the preferred layer of each named group).
 - `routeGraph` / `map` — companion route-graph metrics + route-map color metric/altitude.
+- `highlights` / `emphasize` (#223) — surfaces that may paint backend advisory
+  evidence, plus an opt-in request to dim non-context layers without changing
+  which layers are enabled.
 - `skewtOverlays` (#308) — overlay bands to pre-enable on the Skew-T; **clean-slate** like `groups` (listed bands ON, all others OFF). An empty array = "all bands off" (the Basic/Learn view).
 - `skewtSidePanel` (#308) — primary dual-axis side-panel variable. Convective gets omega (`vertical_velocity` = `w_fpm`, positive = up) — it distinguishes "high CAPE but capped/subsiding" from "CAPE + synoptic lift = going off".
 - `interpretation` (#308) — a short "how to read it" blurb behind the caption's (i) / "Help me read this graph" button; the **same text seeds the MCP explanation**. Getter `advisoryPresetInterpretation()`; falls back to `caption`.
 
 `resolveAdvisoryPreset(preset, preferredMethods)` → `ResolvedView` (concrete layer
-map + skewt overlay map + side-panel id). The store's `applyAdvisoryPreset()` writes
+map, highlight surfaces, emphasis-layer allow-list, skewt overlay map, and
+side-panel id). The store's `applyAdvisoryPreset()` writes
 the resolved view into `vizSettings` (incl. `skewtOverlays` / `skewtPrimaryVar` +
 `activePreset`); `briefing-main` then pushes the Skew-T lens into the live
 `SkewTRenderer` via `renderer.applyPreset()` whenever `activePreset` changes, so one
 lens configures map + cross-section + Skew-T coherently. A manual Skew-T overlay/var
 edit calls `markVizCustom()` → the dropdown reflects "Custom" (mirrors the cross-section).
+
+Only an advisory action binds the resolved highlight/emphasis directives to an
+evidence focus. Choosing the same lens from the generic preset dropdown changes
+the view but does not fabricate advisory evidence.
 
 `ADVISORY_TO_PRESET` maps advisory ids → preset ids for card chips; `ADVISORY_OVERRIDES`
 layers per-advisory extras (e.g. FIKI warm-nose lines) onto a shared preset.
@@ -150,6 +158,108 @@ layers per-advisory extras (e.g. FIKI warm-nose lines) onto a shared preset.
 source of truth, no server-side copy of the mapping), and focuses the requested surface
 (`view=skewt` scrolls to the Skew-T). The MCP `get_advisory_detail` builds this link in
 its `web_url` (`_advisory_web_url`), pointing convective at the highest-CAPE peak point.
+
+### Advisory evidence focus (#223)
+
+`activeAdvisoryFocus` is top-level, ephemeral briefing-store state, not part of
+persisted `VizSettings`. It stores `advisoryId`, one model, requested highlight
+surfaces, preset-derived `emphasizeLayers`, and whether legacy aggregate model
+attribution is known; it does not cache regions.
+`resolveAdvisoryFocus()` looks up that advisory/model in the current manifest,
+validates every region against the current stable route-point geometry, and
+ignores only malformed regions while keeping the briefing usable.
+
+Aggregate actions prefer an explicitly requested model, then a valid backend
+`representative_model`, then the selected model when it exists in both the
+advisory and route data, then the first deterministic valid per-model fallback.
+Spatial/method focus requires the model to exist in both datasets. A selected or
+first-result fallback may apply the useful lens, but is not relabelled as backend
+or user-request attribution and therefore paints no guessed evidence. When no
+valid model exists, a legacy preset action still applies the generic lens without
+creating focus. The per-model detail popup offers a model-specific **Show on
+chart** action. Evidence is never merged across models.
+
+Method badges come only from `primary_method_id` or a consistent region-level
+override on an assessed (`complete`/`partial`) non-`UNAVAILABLE` result, never
+from legacy metadata, the selected preset, or a preference setting.
+For airport weather, `flight_category_composite` is the truthful label when
+ceiling/visibility and terminal convection tie, or when different convective
+methods produce the same controlling grade (including HIGH/EXTREME both mapping
+to RED). A missing controlling source does not receive a guessed badge.
+
+**Rendering and emphasis:**
+
+- Cross-section evidence with altitude bounds is a translucent hatched band.
+  Evidence without altitude bounds is a thin route rail rather than a fabricated
+  full-depth weather layer. Bands render with weather context and below
+  hover/selection annotations; rails remain visible above terrain.
+- Route graph evidence is a hatched affected-distance background behind the
+  plotted lines/bars.
+- Route map evidence is a 32px segment halo/outline below the normal metric
+  route, preserving the user's configured metric colours and widths.
+- Partial data adds an explicit dashed/hatched treatment and a partial-data key.
+  The focus banner names the advisory and model; Compare mode keeps the same
+  model label so the overlay cannot be mistaken for cross-model consensus.
+- Emphasis lowers the opacity of enabled layers outside the preset-derived
+  allow-list to `0.22`.
+  It never toggles or overwrites enabled layers. The renderer derives emphasis
+  from the freshly resolved focus, so a stale raw identifier cannot dim layers
+  after its advisory/model stopped resolving.
+- FIKI bands use each backend region's local severity. The renderer does not
+  recolour every terminal zone to the route headline or recompute the headline
+  extent; the backend supplies the unique union of cruise and terminal concern
+  points.
+
+**Lifecycle:** focusing another advisory replaces the current focus. Explicit
+close, generic preset selection, briefing/pack change, or an unrelated model
+change clears it. Recalculation retains the advisory/model identifiers and
+resolves the new manifest, clearing focus only if either disappears. Clearing an
+active preset removes emphasis; manual layer exploration can retain the evidence
+outline. A status-only altitude-table override or probe clears focus because it
+cannot supply model-specific replacement geometry; the overlaid results also
+clear representative/provenance/evidence metadata even when a headline status
+is unchanged. A full reanchor temporarily clears focus and restores only a
+reconciled snapshot from the current full-manifest response, without allowing an
+older request to overwrite a newer altitude, a newly selected focus, or an
+intervening generic-preset/clear intent. Repeated reanchors carry the original
+snapshot forward only while that focus-intent revision remains current.
+Legacy/unknown or unavailable evidence may still apply the useful lens, but
+shows a restrained location-unavailable state, suppresses unknown model and
+method attribution, and paints no guessed region. Renderer instances receive
+the fresh resolved focus on every view update; layout transitions clear or
+destroy old renderers so a previously painted surface cannot linger.
+
+**Typed context actions** (`advisory-actions.ts`):
+
+- `model_agreement` opens cross-model Compare, enables available models, and maps
+  an evidence metric to an existing comparable layer when supported:
+  `freezing_level_ft→freezing-level`, cloud coverage/cover→NWP cloud bands,
+  Ogimet/SFIP/CAT risks→their existing band layers, and thermo/NWP convective
+  risks→their existing convective backgrounds. Otherwise the current compare
+  layer is retained and the UI explains that there is no direct mapping.
+- `dd_nwp_agreement` opens same-model DD/NWP context and highlights the evidence
+  range; it does not present within-model method disagreement as model Compare.
+- `airport_wind` and `flight_category` open an accessible departure/arrival
+  briefing drawer that reuses `AirportProfilePanel`. Departure uses planned
+  departure time; arrival uses departure plus flight duration. Supported models
+  are ECMWF, GFS, and ICON, with visible fallback preference in that order.
+  Airport actions preserve the advisory-attributed model for that explanation
+  even when it is not route-renderable, while the actual profile model must be
+  both supported and route-available. The drawer traps focus, localizes close
+  controls, and destroys the panel/aborts its SSE stream on close or briefing
+  replacement.
+- `fronts` opens the route map, enables the existing fronts layer, fits the
+  route/front context, and is disabled with an explanation when the artifact is
+  absent. Because axes load asynchronously, the late fit is guarded by the
+  current renderer, model, fronts artifact, visibility, and action-intent epoch
+  so a stale response cannot refit a newer view.
+
+Airport cards preserve assessed-clear versus missing input. A null ceiling with
+`ceiling_evaluated=true` renders `CLR`; an unevaluated null renders `N/A`. A
+model row with no ceiling or visibility evidence uses a muted `N/A` category and
+is excluded from category voting, while independent wind data may still render
+and participate in the wind reduction. If every model lacks condition evidence,
+no VFR-looking summary is manufactured.
 
 ## Data Flow
 
@@ -404,6 +514,8 @@ A separate canvas-based chart rendered below the cross-section for scalar weathe
 - **Dual Y-axes**: left and right metrics independently selectable
 - **12 metrics**: headwind, crosswind, temperature, ISA deviation, precipitation, cloud cover, CAPE, CIN, QNH (region-aware unit), freezing level, ceiling-DD (sounding AGL), ceiling-NWP (NWP AGL)
 - **Render types**: line (monotone cubic spline) and bar charts
+- **Advisory focus**: model-specific backend evidence intervals render as
+  partial-aware backgrounds behind the plotted metrics
 - **State**: `VizSettings` extended with `routeGraphVisible`, `routeGraphLeftMetric`, `routeGraphRightMetric`, persisted to localStorage
 - **Controls**: dropdown selectors below the graph, integrated into the controls panel
 
@@ -436,7 +548,7 @@ Leaflet-based geographic visualization showing weather metrics as colored route 
 | temp-at-level | Temperature at FL | Yes | Blue→White→Red diverging |
 | model-agreement | Model Agreement | | Green/Orange/Red discrete |
 | icing-risk-at-level | Icing Risk at FL | Yes | Green→Yellow→Orange→Red |
-| sfip-at-level | SFIP at FL | Yes | Green→Yellow→Orange→Red |
+| sfip-at-level | SFIP at FL | Yes | `<15` none, `15–<30` light, `30–<55` moderate, `≥55` severe |
 | cat-risk-at-level | CAT Risk at FL | Yes | Green→Yellow→Orange→Red |
 | cloud-at-level | Cloud at FL | Yes | Gray 0-100% |
 
@@ -450,6 +562,9 @@ Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `clou
 - **Waypoints**: Circle markers (theme-aware colors) with ICAO tooltip on hover.
 - **Tiles**: OSM standard (light) or CartoDB Dark Matter (dark), switched via `theme-changed` event.
 - **Highlight**: Temporary weight increase (+3px) on hovered segment.
+- **Advisory evidence halo**: a separate wide, severity-coloured route underlay
+  follows resolved midpoint-cell paths. Partial evidence uses a dashed halo; the
+  normal metric polylines remain on top, so their colours are unchanged.
 - **Auto-fit**: Bounds fit route with 30px padding on data load.
 
 ### Hover Sync
@@ -467,6 +582,9 @@ All three visualizations synchronize through callbacks in `briefing-main.ts`:
 - `mapWidthMetric`: default `'cloud-cover-total'`
 - `mapAltitudeFt`: for level-dependent metrics (default = cruise altitude)
 
+`activeAdvisoryFocus` is intentionally outside `VizSettings` and is not persisted
+to localStorage.
+
 ### Key Choices
 
 - **Leaflet over Canvas** — built-in pan/zoom, waypoint tooltips, basemap tiles; simpler for geographic rendering
@@ -482,6 +600,9 @@ Single source of truth for all color/opacity functions used by cross-section ban
 - Map colors: `riskMapColor()`, `cloudCoverMapColor()`, `headwindMapColor()`, `capeMapColor()`, `freezingLevelMapColor()`, `ceilingMapColor()`, `temperatureMapColor()`, `crosswindMapColor()`, `agreementMapColor()`
 - Width: `linearWidth(value, max, minW, maxW)` — linear interpolation for segment width
 - Cloud opacity: modulated by coverage so SCT layers render lighter than OVC
+- Route-map SFIP uses the backend/catalog severity boundaries exactly: `<15`
+  none, `15–<30` light, `30–<55` moderate, `≥55` severe. The display does not
+  retain the former 20/50/80 reclassification.
 
 ## Compare Mode
 
@@ -513,12 +634,19 @@ Two types of comparable layers:
 
 Consensus and overlay-soft modes use a single base RGB per layer from the theme. Both DD and NWP cloud layers use `theme.nwpClouds.brightRgb` for consistent appearance.
 
+When an advisory focus is active in Compare layout, its evidence remains scoped
+to the attributed model and the focus label names that model. Compare consensus
+continues to describe the selected comparable layer across models; it does not
+geometrically merge advisory regions.
+
 ## Gotchas
 
 - Y-axis is altitude in feet (0 at bottom), not pressure — `altitudeToPressureHpa()` in scales.ts for any pressure conversions
 - `VizPoint.altitudeLines` values can be `null` (model doesn't provide that level)
 - Convective tower top fallback logic is deliberately conservative — prefers undersized towers over misleading oversized ones
 - Layer rendering must handle empty arrays gracefully (no data for that layer/model)
+- A legacy `data_state` or unavailable focus must not receive guessed geometry or
+  a method badge; the preset may still open for context
 
 ## References
 

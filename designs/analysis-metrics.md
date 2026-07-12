@@ -19,7 +19,23 @@ WeatherBrief computes ~85 metrics from NWP model data across 7 weather models (G
 - **Derived** — calculated from API/GRIB2 data using MetPy or physics formulas
 - **Assessed** — classified from derived values using aviation-specific thresholds
 
-When an API field is unavailable for a model, derived alternatives fill the gap so that all assessments work across all models.
+When an API field is unavailable, a documented physical fallback may fill the
+gap. If the authoritative method has no documented fallback, the assessment is
+partial or unavailable; absence must not be interpreted as a clear value.
+
+### Issue #223 audit boundary
+
+Issue #223 made **objective computation and contract corrections**: SFIP
+`_no_vv` variants normalize the weights of present inputs, DD/NWP cloud Jaccard
+merges each side before intersecting the unions, native-cloud absence is distinct
+from assessed-clear geometry, and the route-map display uses the existing SFIP
+15/30/55 boundaries instead of the former 20/50/80 display mapping.
+
+These are not meteorological recalibrations. The audited SFIP risk boundaries,
+DD cloud/okta cut-points, Ogimet curves, convective thresholds, turbulence/Ri
+rules, SLD rules, and advisory severity thresholds remain unchanged. Any future
+calibration change requires literature, an independent oracle, or observations;
+see [meteorology-decisions.md](./meteorology-decisions.md).
 
 ### Raw Value Preservation
 
@@ -194,9 +210,11 @@ Surface (a1) single-level scalar fields. Stored in `NWPCloudDiagnostics` model.
 | Convective cloud top | hcct | `convective_top_ft` | m→ft | Cb top; base falls back to LCL |
 | Freezing level | deg0l | `freezing_level_ft` + overwrites `hourly.freezing_level_m` | m→ft | Model-native 0°C isotherm height |
 
-**Native convective indices (processed — issue #294):** `kx` (K-index) and `totalx` (Total Totals) are decoded from the a1 file into `nwp_k_index` / `nwp_total_totals` (pass-through index values, no unit conversion) and copied onto `ThermodynamicIndices`. They are model-native at full IFS resolution — preferred over the MetPy-derived K/TT (computed from the coarse Open-Meteo/GRIB sounding) by the convective character advisory. These are the fields Windy uses to drive ECMWF thunder icons.
+**Native convective indices (processed — issue #294):** `kx` (K-index) and `totalx` (Total Totals) are decoded from the a1 file into `nwp_k_index` / `nwp_total_totals` and copied onto `ThermodynamicIndices`. ECMWF delivers `kx` in Kelvin, so `_k_index_to_c()` normalizes it to °C before storage and before the convective-character thresholds are applied; Total Totals is offset-immune and is stored as delivered. They are model-native at full IFS resolution — preferred over the MetPy-derived K/TT (computed from the coarse Open-Meteo/GRIB sounding) by the convective character advisory. These are the fields Windy uses to drive ECMWF thunder icons.
 
-**Surface fields delivered but not yet processed:** `10fg` (wind gusts), `10u`/`10v` (10m wind), `2t`/`2d` (screen T/Td), `blh` (boundary layer height), `capes` (CAPE-shear), `cp` (convective precipitation), `degm10l` (-10°C level), `fzra` (freezing rain accum), `lsp` (large-scale precip), `msl`/`sp` (pressure), `ptype` (precip type code), `sf` (snowfall), `tp` (total precip), `vis` (visibility). `cp` is the highest-value remaining follow-up — convective precip as a native realized-convection signal to complement Open-Meteo `showers`.
+**Native convective precipitation (processed — issue #283):** `cp` is decoded from the a1 file, differenced across successive valid times from its accumulated-since-initialization value, converted to `convective_precip_mm_h`, and consumed as the ECMWF native realized-convection signal. It can fire the NWP convective track when the model supplies convective precipitation without a diagnosed tower and is preferred over Open-Meteo `showers` by convective-character reporting.
+
+**Surface fields delivered but not yet processed:** `10fg` (wind gusts), `10u`/`10v` (10m wind), `2t`/`2d` (screen T/Td), `blh` (boundary layer height), `capes` (CAPE-shear), `degm10l` (-10°C level), `fzra` (freezing rain accum), `lsp` (large-scale precip), `msl`/`sp` (pressure), `ptype` (precip type code), `sf` (snowfall), `tp` (total precip), `vis` (visibility).
 
 **ECMWF specifics:** ECPDS push delivery to `ECMWF_GRIB_DIR` (no HTTP, no cache). Coverage is the `ifs-ens-cf` subscription grid: Europe + US at 0.25°. Cycles: 00/12z deliver 0–168h, 06/18z deliver 0–144h (horizon is read from files on disk, not from stream name — robust to the 50r1 `scda`→`oper` merge on 12-May-2026). Publication delay ~6–8h after init. Post-amendment cadence is hourly 0–90h then 3h tail on pressure-level data; surface fields are 3h throughout. Intermediate gap hours within the flight window are filled by per-level **linear time interpolation** (`fetch/grib/fill.py::_linear_interp_pressure_levels` — T, RH, wind, geopotential, omega, CLW/ICMR, cloud cover; dewpoint re-derived via Magnus from interpolated T+RH). Files may contain multiple geographic sub-grids; cfgrib splits them into separate Datasets and the decoder uses first-wins per point.
 
@@ -292,7 +310,15 @@ Returns `None` when neither source is available (model has no native NWP cloud e
 
 Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000–45000ft).
 
-**Source tracking:** Each `EnhancedCloudLayer` carries `source` ("dd"/"grib"/"nwp_3d"; legacy "synthesized" no longer produced). `SoundingAnalysis.cloud_method_effective` records what was actually used: "dd", "nwp" (when any layer source is "grib"), or "nwp_synthesized" (non-grib native sources, i.e. "nwp_3d").
+**Source tracking:** Each `EnhancedCloudLayer` carries `source`
+(`"dd"`/`"grib"`/`"nwp_3d"`; legacy `"synthesized"` is accepted but no longer
+produced). `SoundingAnalysis.cloud_method_effective` records what was actually
+used: `"dd"` for DD/default fallback and `"nwp"` for native GRIB or per-level 3D
+geometry, including an available empty native list. A legacy all-synthesized
+layer set remains explicitly `"nwp_synthesized"`: NWP bulk cover constrained by
+a DD-derived envelope is compound provenance and must never be presented as
+equivalent to native NWP base/top geometry. Mixed or unknown source sets leave
+the effective method unknown rather than guessing.
 
 **Dual cloud data sources** — a known inconsistency:
 - **DD (sounding-derived):** from dewpoint depression at pressure levels (8–28 levels, coarse vertical resolution)
@@ -334,13 +360,20 @@ Same Ogimet index but uses NWP model cloud cover as cloud signal.
 
 **Formula:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude) × glaciation(CLW, ICMR)`
 
-**Requires a model-native cloud envelope:** `assess_icing_zones_ogimet_nwp` returns `[]` immediately when no NWP cloud layers exist — it refuses to fabricate icing zones from bulk percentages alone (would produce calls the cross-section can't anchor to a cloud band). Gating is `is_in_cloud_layer(lv, nwp_clouds)`.
+**Requires a model-native cloud envelope:** NWP cloud geometry has two distinct
+states: `nwp_cloud_layers is None` means the method is unavailable, while
+`nwp_cloud_layers == []` means native geometry was assessed and found clear.
+`assess_icing_zones_ogimet_nwp` emits no zones for either state, so advisory
+availability must be derived from the retained geometry state rather than from
+the zone list alone. It refuses to fabricate icing zones from bulk percentages
+(which would produce calls the cross-section cannot anchor to a cloud band).
+Gating is `is_in_cloud_layer(lv, nwp_clouds)`.
 
 Within cloud, severity is scaled by the NWP cloud fraction at altitude from `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`), which checks **all** diagnostic layers regardless of ICAO band and returns the highest cover for any layer whose base/top (± margin) contains the altitude; falls back to bulk ICAO band percentages when diagnostics unavailable. When CLW/ICMR microphysics are present, a temperature-floored glaciation factor further reduces the index in glaciated cloud. Per-level index stored in `icing_index_nwp` (separate from `icing_index` used by Ogimet-DD) to prevent overwriting.
 
 #### 3.2c IENG (alternative)
 
-`assess_icing_zones_ieng` — the Ogimet **layered** temperature curve scaled directly by NWP cloud fraction (no DD attenuation, no glaciation). Like Ogimet-NWP it gates on `is_in_cloud_layer()` against the NWP cloud layers and returns `[]` when no model-native cloud envelope exists. A convective component is added when CAPE > 100. Stored as `ieng_icing_zones`. Uses the shared `_index_to_risk()` mapping below.
+`assess_icing_zones_ieng` — the Ogimet **layered** temperature curve scaled directly by NWP cloud fraction (no DD attenuation, no glaciation). Like Ogimet-NWP it gates on `is_in_cloud_layer()` against native NWP cloud layers. It emits no zones both for unavailable (`None`) and assessed-clear (`[]`) geometry, so consumers must preserve that distinction from `nwp_cloud_layers`. A convective component is added when CAPE > 100. Stored as `ieng_icing_zones`. Uses the shared `_index_to_risk()` mapping below.
 
 #### 3.2d SFIP-NWP
 
@@ -385,13 +418,18 @@ A second icing index computed alongside Ogimet, based on fuzzy-logic membership 
 | Variant | Name | When | Inputs | Weights |
 |---------|------|------|--------|---------|
 | `full` | SFIP_O | GFS, ECMWF, or ICON-EU (CLW from GRIB2 + ω) | T, RH, CLW, ω | 0.35, 0.15, 0.35, 0.15 |
-| `full_no_vv` | SFIP_O | CLW from GRIB2 but ω unavailable | T, RH, CLW, 0 | 0.35, 0.15, 0.35, 0.15 |
+| `full_no_vv` | SFIP_O | CLW from GRIB2 but ω unavailable | T, RH, CLW | normalized 0.35/0.15/0.35 → 41.2%/17.6%/41.2% |
 | `interp` | SFIP_O | CLW spatially/vertically interpolated + ω | T, RH, CLW(interp), ω | 0.35, 0.15, 0.35, 0.15 |
-| `interp_no_vv` | SFIP_O | CLW interpolated, no ω | T, RH, CLW(interp), 0 | 0.35, 0.15, 0.35, 0.15 |
+| `interp_no_vv` | SFIP_O | CLW interpolated, no ω | T, RH, CLW(interp) | normalized 0.35/0.15/0.35 → 41.2%/17.6%/41.2% |
 | `proxy` | SFIP_4 | No CLW, has ω (UKMO, or ECMWF outside direct-GRIB coverage) | T, RH, DD+cloud proxy, ω | 0.40, 0.25, 0.25, 0.10 |
-| `proxy_no_vv` | SFIP_4 | No CLW, no ω (MétéoFr, GEM) | T, RH, DD+cloud proxy, 0 | 0.40, 0.25, 0.25, 0.10 |
+| `proxy_no_vv` | SFIP_4 | No CLW, no ω (MétéoFr, GEM) | T, RH, DD+cloud proxy | normalized 0.40/0.25/0.25 → 44.4%/27.8%/27.8% |
 
-The `_no_vv` suffix indicates omega (vertical velocity) is unavailable for the model — M_VV contributes 0 and its weight is dead.
+The `_no_vv` suffix indicates omega (vertical velocity) is structurally
+unavailable. The VV member and its weight are omitted, and the remaining weights
+are normalized to sum to one. A real `omega_pa_s=0.0` is still an available,
+neutral VV observation and retains the original four-member weights. This was an
+objective missing-member correction; the SFIP membership functions and 15/30/55
+severity thresholds did not change.
 
 **Membership functions** (all return 0.0–1.0 except VV which returns −0.3 to +0.5):
 - **M_T:** Piecewise linear ramp peaking 1.0 in [−5, −14]°C, then **exponential decay** below −14°C: `exp(−k × (|T| − 14))` with `k=0.4` (`_TEMP_DECAY_K`). SLW concentration drops roughly exponentially as ice nucleation dominates at colder temperatures. This aligns SFIP's effective range with the Ogimet layered formula (which cuts off at −14°C) while maintaining a smooth tail for residual mixed-phase icing. Reference values: −15°C → 0.67, −17°C → 0.30, −20°C → 0.09.
@@ -490,10 +528,17 @@ Aggregates cloud, icing, turbulence, and vertical motion data into vertical regi
 
 | Advisory | Aggregation | Logic |
 |----------|------------|-------|
-| `descend_below_icing` | min() across models | Per model: min(freezing level, lowest icing-cloud base) − 500ft |
+| `descend_below_icing` | min() across models | Per model: max(freezing level, lowest icing-cloud base) − 500ft; either warmer air or clear air exits icing, so the higher valid escape is used before taking the conservative cross-model minimum |
 | `climb_above_icing` | max() across models | Per model: max(highest icing top, highest cloud-in-icing top) + 500ft. `feasible` if ≤ ceiling. |
 | `cat_turbulence` | worst across models | Reports worst CAT layer altitude and risk level. |
 | `strong_vertical_motion` | max \|w\| across models | Flags altitudes with \|w\| > 200 ft/min. |
+
+Freezing precipitation overrides the ordinary `min()` aggregation when the
+affected model also has icing zones: one model with a warm-nose/freezing-rain
+profile makes descent escape infeasible for the aggregate, even if another
+model has a finite escape altitude. A model with no icing simply contributes a
+`None` per-model altitude and does not veto another model's finite escape.
+Empty-zone freezing-rain profiles were not changed by this correction.
 
 ### 3.6 Precipitation Assessment
 
@@ -503,7 +548,7 @@ Classifies precipitation phase at each pressure level and detects hazardous prof
 
 **Per-level phase classification** (two methods, GRIB2 preferred):
 1. **GRIB2 ice fraction** (when CLWMR + ICMR available): `ice_frac = ICMR / (CLWMR + ICMR)`. >0.8 = snow, 0.2–0.8 = mixed, <0.2 = rain.
-2. **Wet-bulb temperature** (fallback): Tw < −5°C = snow, −5 to 0°C = mixed, >0°C = rain.
+2. **Wet-bulb temperature** (fallback): Tw < 0°C = snow, 0 to 1.3°C inclusive = mixed/wet snow, and >1.3°C = rain. These are the shared melting-physics boundaries from meteorology decision §17; GRIB ice fraction still takes precedence where available.
 
 **Warm nose detection:** Identifies temperature inversions where T > 0°C exists between sub-zero layers. Cold surface + warm nose above = freezing rain risk. Deep cold surface layer + significant warm nose = ice pellets.
 
@@ -516,6 +561,11 @@ Classifies precipitation phase at each pressure level and detects hazardous prof
 **Surface intensity** from hourly precipitation total: <1 mm/h = light, 1–4 = moderate, >4 = heavy.
 
 **Output:** `PrecipitationAssessment` with surface phase/intensity, `PrecipitationZone` list (vertical zones grouped by phase), warm-nose altitudes, and rain/snow amounts.
+
+`EnroutePrecipEvaluator` computes snow/rain percentages over points that carry a
+`PrecipitationAssessment`, not over every point that merely has a sounding.
+Missing precipitation assessments still make the expected route domain partial;
+they do not dilute an observed hazard by acting as clear votes.
 
 ### 3.7 Wind Components
 
@@ -538,6 +588,30 @@ Compares each metric across models. Spread = max − min (circular statistics fo
 | Poor | spread > poor_threshold |
 
 Poor agreement signals forecast uncertainty — brief conservatively.
+
+`ModelDivergence.mean=None` is the canonical absent-metric signal. The comparison
+artifact may still store `spread=0` and `agreement=GOOD` for an all-null value
+map, but that means there was nothing to compare, not unanimous agreement.
+`ModelAgreementEvaluator` therefore excludes those entries from the assessed
+denominator: all-absent metrics are unavailable, valid plus absent metrics are
+partial, and a numeric mean remains valid when only some individual model values
+are null.
+
+### 3.9 DD/NWP Cloud Interval Agreement
+
+`DDvsNWPAgreementEvaluator` compares same-model DD and native NWP cloud
+altitude coverage with interval Jaccard:
+
+```text
+J = length(merge(DD) ∩ merge(NWP)) / length(merge(DD) ∪ merge(NWP))
+```
+
+Each side is first canonicalized (finite, positive spans only) and merged across
+overlapping or touching layers. The two merged unions are then intersected once,
+so internal overlaps cannot be double-counted and `J` stays in `[0, 1]`. Two
+empty canonical sets agree (`J=1`); exactly one empty set disagrees (`J=0`). This
+is an objective set-geometry correction. The existing `cloud_overlap_min` and
+route-level AMBER/RED disagreement thresholds are unchanged.
 
 ---
 
