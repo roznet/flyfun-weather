@@ -298,25 +298,35 @@ const icingRiskAtLevel: MapMetric = {
   ],
 };
 
+// SFIP 0-100 → icing tier. These MUST track `sfip_to_risk` in
+// analysis/sounding/sfip.py (_SFIP_NONE / _SFIP_LIGHT / _SFIP_MODERATE).
+// The map previously used a private 20/50/80 scale, so a score the backend
+// graded as LIGHT icing rendered green "Low" here.
+const SFIP_LIGHT = 15;
+const SFIP_MODERATE = 30;
+const SFIP_SEVERE = 55;
+
+function sfipRisk(v: number): string {
+  if (v >= SFIP_SEVERE) return 'severe';
+  if (v >= SFIP_MODERATE) return 'moderate';
+  if (v >= SFIP_LIGHT) return 'light';
+  return 'none';
+}
+
 const sfipAtLevel: MapMetric = {
   id: 'sfip-at-level',
   label: 'SFIP at FL',
   unit: '',
   altitudeDependent: true,
   getValue: (p, altFt) => sfipAtAlt(p.sfipZones, altFt ?? 0),
-  getColor: (v) => {
-    if (v <= 20) return '#22c55e';
-    if (v <= 50) return '#facc15';
-    if (v <= 80) return '#f97316';
-    return '#ef4444';
-  },
+  getColor: (v) => riskMapColor(sfipRisk(v)),
   getWidth: (v) => linearWidth(v, 100, 3, 25),
-  formatValue: (v) => `SFIP ${Math.round(v)}`,
+  formatValue: (v) => `SFIP ${Math.round(v)} (${sfipRisk(v)})`,
   legendStops: [
-    { value: 0, label: 'Low (0-20)', color: '#22c55e' },
-    { value: 35, label: 'Med (20-50)', color: '#facc15' },
-    { value: 65, label: 'High (50-80)', color: '#f97316' },
-    { value: 90, label: 'Very High (80+)', color: '#ef4444' },
+    { value: 0, label: `None (<${SFIP_LIGHT})`, color: riskMapColor('none') },
+    { value: SFIP_LIGHT, label: `Light (${SFIP_LIGHT}-${SFIP_MODERATE})`, color: riskMapColor('light') },
+    { value: SFIP_MODERATE, label: `Moderate (${SFIP_MODERATE}-${SFIP_SEVERE})`, color: riskMapColor('moderate') },
+    { value: SFIP_SEVERE, label: `Severe (${SFIP_SEVERE}+)`, color: riskMapColor('severe') },
   ],
 };
 

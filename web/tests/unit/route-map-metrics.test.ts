@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { getMapMetricById, MAP_METRICS } from '../../ts/visualization/route-map/metrics';
+import { riskMapColor } from '../../ts/visualization/scales';
 import {
   makeVizPoint, makeAltitudeLines, makeIcingZone, makeCloudLayer,
   makeCatLayer, makeSfipZone,
@@ -106,12 +107,15 @@ describe('sfip-at-level', () => {
     expect(m().getValue(point, 6000)).toBe(25);
   });
 
-  it('color thresholds map SFIP to risk colors', () => {
-    expect(m().getColor(10)).toBe('#22c55e');  // <=20 green
-    expect(m().getColor(20)).toBe('#22c55e');
-    expect(m().getColor(35)).toBe('#facc15');  // <=50 yellow
-    expect(m().getColor(70)).toBe('#f97316');  // <=80 orange
-    expect(m().getColor(90)).toBe('#ef4444');  // >80 red
+  it('color thresholds map SFIP to the shared icing-risk colors', () => {
+    // Boundaries track the backend's sfip_to_risk() (15/30/55), and the colors
+    // come from the shared risk scale rather than a private palette — so the
+    // map speaks the same vocabulary as the icing-risk metric beside it.
+    expect(m().getColor(10)).toBe(riskMapColor('none'));
+    expect(m().getColor(20)).toBe(riskMapColor('light'));
+    expect(m().getColor(35)).toBe(riskMapColor('moderate'));
+    expect(m().getColor(70)).toBe(riskMapColor('severe'));
+    expect(m().getColor(90)).toBe(riskMapColor('severe'));
   });
 });
 
@@ -221,5 +225,39 @@ describe('headwind-only / tailwind-only', () => {
     const m = getMetric('tailwind');
     expect(m.getValue(makeVizPoint({ headwindKt: -20 }))).toBe(20);
     expect(m.getValue(makeVizPoint({ headwindKt: 15 }))).toBe(0);
+  });
+});
+
+describe('sfip-at-level honours the backend icing tiers', () => {
+  // The map used to classify SFIP on a private 20/50/80 scale while the
+  // backend's sfip_to_risk() used 15/30/55, so a score the backend graded as
+  // LIGHT icing rendered as green "Low" on the map. These boundaries MUST
+  // track _SFIP_NONE / _SFIP_LIGHT / _SFIP_MODERATE in analysis/sounding/sfip.py.
+  const tierAt = (score: number) => {
+    const m = getMetric('sfip-at-level');
+    return m.formatValue!(score);
+  };
+
+  it.each([
+    [0, 'none'],
+    [14.9, 'none'],
+    [15, 'light'],
+    [29.9, 'light'],
+    [30, 'moderate'],
+    [54.9, 'moderate'],
+    [55, 'severe'],
+    [100, 'severe'],
+  ])('SFIP %s is %s', (score, tier) => {
+    expect(tierAt(score as number)).toContain(tier as string);
+  });
+
+  it('a score the backend calls LIGHT is not coloured as none', () => {
+    const m = getMetric('sfip-at-level');
+    expect(m.getColor(18)).not.toBe(m.getColor(0));
+  });
+
+  it('legend boundaries match the backend thresholds', () => {
+    const m = getMetric('sfip-at-level');
+    expect(m.legendStops!.map((s) => s.value)).toEqual([0, 15, 30, 55]);
   });
 });
