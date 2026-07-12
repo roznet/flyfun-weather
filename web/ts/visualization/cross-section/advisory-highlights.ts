@@ -8,10 +8,10 @@
  * stale-copy bugs, and a vanished advisory (old pack / recalc dropped it) simply
  * derives to `null`.
  *
- * Also home to the representative-model policy, mirroring the Python
- * `RouteAdvisoryResult.from_per_model` / `_aggregate_mitigations` semantics: the
- * first per-model entry whose status equals the aggregate status. The chip switches
- * the cross-section to this model so the highlight reflects the aggregate verdict.
+ * The representative-model choice (which model's geometry the chip switches the
+ * cross-section to) is decided by the backend and shipped as
+ * `RouteAdvisoryResult.representative_model` (#393). The client just reads it —
+ * the former line-for-line TypeScript reimplementation of the Python rule is gone.
  */
 
 import type {
@@ -25,15 +25,15 @@ import type {
 export const HIGHLIGHT_LAYER_ID = 'advisory-highlight';
 
 /**
- * The representative model for an advisory: the first `per_model` entry whose
- * status equals `aggregate_status` (the same policy Python uses to choose
- * `aggregate_detail` / `aggregate_mitigations`), falling back to the first
- * per-model entry. Returns `null` only when there are no per-model results.
+ * The representative model for an advisory — the model whose geometry the chip
+ * highlights. Read straight from the backend's `representative_model` field
+ * (#393), which the server derives with the same rule it uses for
+ * `aggregate_detail` / `aggregate_mitigations`. Falls back to the first
+ * per-model entry only for old packs that predate the field. Returns `null`
+ * only when there are no per-model results.
  */
 export function representativeModel(adv: RouteAdvisoryResult): string | null {
-  const match = adv.per_model.find((m) => m.status === adv.aggregate_status);
-  if (match) return match.model;
-  return adv.per_model[0]?.model ?? null;
+  return adv.representative_model ?? adv.per_model[0]?.model ?? null;
 }
 
 /** Find one advisory by id in a manifest (or null). */
