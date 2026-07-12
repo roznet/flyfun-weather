@@ -674,7 +674,29 @@ def mark_setup_complete(
 
 @router.get("/advisories/catalog")
 def get_advisory_catalog():
-    """Return the full advisory catalog for settings UI."""
-    from weatherbrief.analysis.advisories import get_catalog
+    """Return the full advisory catalog for the settings UI (#387).
 
-    return [entry.model_dump() for entry in get_catalog()]
+    ``advisories`` are served in registry display order (category, then
+    within-category); ``categories`` is the ordered category list (keys +
+    diagnostics flag, labels stay client-side i18n) the settings page renders
+    in the served order rather than from a client-side ``CATEGORY_KEYS`` copy.
+    """
+    from weatherbrief.analysis.advisories import get_catalog, get_category_order
+
+    return {
+        "advisories": [entry.model_dump() for entry in get_catalog()],
+        "categories": get_category_order(),
+    }
+
+
+@router.get("/advisories/interview")
+def get_advisory_interview():
+    """Return the declarative setup-interview structure (#387, slice 3).
+
+    Served as a sibling of the catalog so web and iOS share one preset
+    definition. The client stores chosen answers under
+    ``settings_json.interview`` for idempotent re-runs.
+    """
+    from weatherbrief.analysis.advisories import get_interview
+
+    return get_interview().model_dump()

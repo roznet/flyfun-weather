@@ -701,6 +701,27 @@ export async function recalculateAdvisories(
   );
 }
 
+/**
+ * Preview advisories under draft settings WITHOUT persisting (#387, slice 4).
+ * A bare `{}` body previews the flight's saved settings (the diff baseline).
+ */
+export async function previewAdvisories(
+  flightId: string,
+  timestamp: string,
+  body: {
+    enabled?: Record<string, boolean> | null;
+    params?: Record<string, Record<string, number>> | null;
+    aggregation?: string;
+  },
+  cruiseAltitudeFt?: number,
+): Promise<RecalculateAdvisoriesResult> {
+  const qs = cruiseAltitudeFt != null ? `?cruise_altitude_ft=${cruiseAltitudeFt}` : '';
+  return apiFetch<RecalculateAdvisoriesResult>(
+    `/flights/${encodeURIComponent(flightId)}/packs/${encodeURIComponent(timestamp)}/advisories/preview${qs}`,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
 export async function fetchAltitudeTable(
   flightId: string,
   timestamp: string,

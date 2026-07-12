@@ -19,6 +19,50 @@ logger = logging.getLogger(__name__)
 
 _EVALUATORS: dict[str, type[AdvisoryEvaluator]] = {}
 
+# Category display order for the settings page (#387). Ordered by pilot-input
+# density, NOT meteorological family — airport/flight-rules/wind first (the
+# choices most pilots actually tune), diagnostics-only categories last. The
+# catalog is served in this order so every client (web/iOS/MCP) renders the
+# same layout without a client-side ``CATEGORY_KEYS`` copy that drifts.
+# ``model`` is the "Diagnostics" group — both its advisories are disabled-by-
+# default dev signals — rendered visually distinct at the bottom.
+CATEGORY_ORDER: list[str] = [
+    "airport",
+    "flight_rules",
+    "wind",
+    "icing",
+    "cloud",
+    "convective",
+    "precipitation",
+    "turbulence",
+    "sun",
+    "fronts",
+    "model",
+]
+
+# Categories rendered as the visually-distinct "Diagnostics" group (dev signals,
+# disabled-by-default). Kept backend-side so the flag travels with the ordered
+# category list and clients need no hard-coded exception.
+_DIAGNOSTICS_CATEGORIES: frozenset[str] = frozenset({"model"})
+
+# Display order of advisories *within* each category. An advisory not listed
+# here sorts after the listed ones (in registration order); a category absent
+# from this map keeps registration order entirely. Ordering lives in the
+# registry, not the client.
+ENTRY_ORDER: dict[str, list[str]] = {
+    "airport": ["flight_category", "airport_wind", "density_altitude", "llws"],
+    "flight_rules": ["vfr_feasibility", "ifr_feasibility"],
+    "wind": ["headwind"],
+    "icing": ["icing_escape", "fiki_icing", "freezing_precip"],
+    "cloud": ["cloud_top", "vmc_cruise"],
+    "convective": ["convective", "convective_character"],
+    "precipitation": ["enroute_precip"],
+    "turbulence": ["turbulence", "mountain_wind"],
+    "sun": ["sun"],
+    "fronts": ["fronts"],
+    "model": ["model_agreement", "dd_nwp_agreement"],
+}
+
 
 def register(cls: type[AdvisoryEvaluator]) -> type[AdvisoryEvaluator]:
     """Class decorator that registers an advisory evaluator."""
@@ -27,10 +71,49 @@ def register(cls: type[AdvisoryEvaluator]) -> type[AdvisoryEvaluator]:
     return cls
 
 
+def _catalog_sort_key(
+    entry: AdvisoryCatalogEntry, registration_index: int
+) -> tuple[int, int, int]:
+    """Sort key placing entries in (category, within-category) display order.
+
+    Unlisted categories sort after listed ones; within a category an unlisted
+    entry sorts after listed ones, both falling back to registration order so
+    the sort stays deterministic and stable.
+    """
+    cat_idx = (
+        CATEGORY_ORDER.index(entry.category)
+        if entry.category in CATEGORY_ORDER
+        else len(CATEGORY_ORDER)
+    )
+    order = ENTRY_ORDER.get(entry.category, [])
+    entry_idx = order.index(entry.id) if entry.id in order else len(order)
+    return (cat_idx, entry_idx, registration_index)
+
+
 def get_catalog() -> list[AdvisoryCatalogEntry]:
-    """Return catalog entries for all registered evaluators."""
+    """Return catalog entries for all registered evaluators, in display order."""
     _ensure_loaded()
-    return [cls.catalog_entry() for cls in _EVALUATORS.values()]
+    indexed = list(enumerate(cls.catalog_entry() for cls in _EVALUATORS.values()))
+    indexed.sort(key=lambda pair: _catalog_sort_key(pair[1], pair[0]))
+    return [entry for _, entry in indexed]
+
+
+def get_category_order() -> list[dict[str, object]]:
+    """Return the ordered category list served alongside the catalog (#387).
+
+    Only categories that actually have registered advisories are returned, in
+    ``CATEGORY_ORDER`` (unknown categories appended). Labels stay client-side
+    (i18n); each entry carries its stable ``key`` plus a ``diagnostics`` flag so
+    the client renders the Diagnostics group distinctly without its own list.
+    """
+    _ensure_loaded()
+    present = {cls.catalog_entry().category for cls in _EVALUATORS.values()}
+    ordered = [c for c in CATEGORY_ORDER if c in present]
+    ordered += sorted(c for c in present if c not in CATEGORY_ORDER)
+    return [
+        {"key": key, "diagnostics": key in _DIAGNOSTICS_CATEGORIES}
+        for key in ordered
+    ]
 
 
 def get_altitude_dependent_ids() -> set[str]:

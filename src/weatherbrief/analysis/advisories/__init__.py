@@ -72,4 +72,5 @@ class AdvisoryEvaluator(Protocol):
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult: ...
 
 
-from weatherbrief.analysis.advisories.registry import evaluate_all, get_altitude_dependent_ids, get_catalog, resolve_enabled_ids  # noqa: E402, F401
+from weatherbrief.analysis.advisories.registry import evaluate_all, get_altitude_dependent_ids, get_catalog, get_category_order, resolve_enabled_ids  # noqa: E402, F401
+from weatherbrief.analysis.advisories.interview import get_interview  # noqa: E402, F401

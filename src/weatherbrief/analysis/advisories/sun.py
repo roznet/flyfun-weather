@@ -105,6 +105,7 @@ class SunEvaluator:
                     min=0,
                     max=1,
                     step=1,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="sunset_margin_min",
@@ -116,6 +117,7 @@ class SunEvaluator:
                     min=0,
                     max=120,
                     step=5,
+                    audience="pilot",
                 ),
             ],
         )

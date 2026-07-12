@@ -89,6 +89,7 @@ class AirportWindEvaluator:
                     description="Crosswind threshold for amber status",
                     type="speed", unit="kt",
                     default=15, min=5, max=30, step=5,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="crosswind_red_kt",
@@ -96,6 +97,7 @@ class AirportWindEvaluator:
                     description="Crosswind threshold for red status",
                     type="speed", unit="kt",
                     default=25, min=15, max=40, step=5,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="gust_green_kt",
@@ -103,6 +105,7 @@ class AirportWindEvaluator:
                     description="Gust threshold for amber status",
                     type="speed", unit="kt",
                     default=25, min=10, max=40, step=5,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="gust_red_kt",
@@ -110,6 +113,7 @@ class AirportWindEvaluator:
                     description="Gust threshold for red status",
                     type="speed", unit="kt",
                     default=35, min=20, max=50, step=5,
+                    audience="pilot",
                 ),
             ],
         )

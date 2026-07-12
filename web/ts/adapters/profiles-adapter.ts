@@ -20,6 +20,9 @@ export interface ProfileSettings {
   flight_rules: string | null;
   digest_guidance: string | null;
   advisories: AdvisoryPreferences | null;
+  /** Setup-interview answers (#387, slice 3): {question_id: option_id}. Stored
+   *  for idempotent re-runs — the assistant pre-selects these. */
+  interview?: Record<string, string> | null;
 }
 
 export interface ProfileResponse {

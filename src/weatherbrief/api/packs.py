@@ -3162,6 +3162,100 @@ def recalculate_advisories(
     )
 
 
+class PreviewAdvisoriesRequest(BaseModel):
+    """Draft advisory overrides for the non-persisting preview (#387, slice 4).
+
+    Any field left ``None`` falls back to the flight's saved profile, so a bare
+    ``{}`` body previews the currently-saved settings (used as the baseline for
+    the settings-page diff).
+    """
+
+    enabled: dict[str, bool] | None = None
+    params: dict[str, dict[str, float]] | None = None
+    aggregation: str | None = None
+
+
+@router.post("/{timestamp}/advisories/preview", response_model=RecalculateAdvisoriesResponse)
+def preview_advisories(
+    flight_id: str,
+    timestamp: str,
+    request: Request,
+    body: PreviewAdvisoriesRequest,
+    cruise_altitude_ft: int | None = None,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Preview advisories under *draft* settings WITHOUT persisting (#387, slice 4).
+
+    The settings page needs to show "what would change" before the pilot saves,
+    but :func:`recalculate_advisories` reads the *saved* profile and **writes**
+    the recomputed artifacts into the pack (owner-gated for that reason) — it
+    cannot preview a draft. This endpoint instead takes explicit
+    ``{enabled, params, aggregation}`` overrides in the body, runs the evaluators
+    with ``persist=False``, and returns the manifest. It writes nothing: no
+    ``route_advisories.json``, and it deliberately skips the fronts recompute
+    side-effect that recalculate performs.
+
+    Engine methods/models and the airport-condition recompute come from the saved
+    profile — only the advisory enable/param/aggregation axes (the ones tuned on
+    the settings page) are overridden. Owner-only like recalculate, though nothing
+    is persisted.
+    """
+    from weatherbrief.analysis.advisories import resolve_enabled_ids
+    from weatherbrief.models import AdvisoryAggregation
+    from weatherbrief.tasks.advise import run_advisories_from_pack
+
+    flight = _load_owned_flight(db, flight_id, user_id)
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+
+    ra_path = pack_dir / "route_analyses.json"
+    if not ra_path.exists():
+        raise HTTPException(status_code=404, detail="Route analyses not available for preview")
+
+    (_saved_enabled_ids, saved_enabled_map, saved_params, saved_agg, adv_models,
+     icing_method, cloud_method, convective_method, recompute_conds, locale,
+     _auto_front) = _load_advisory_profile(db, flight, user_id, request, pack_dir)
+
+    # Draft overrides from the body; fall back to the saved profile when absent.
+    enabled_map = body.enabled if body.enabled is not None else saved_enabled_map
+    enabled_ids = resolve_enabled_ids(enabled_map)
+    user_params = body.params if body.params is not None else saved_params
+    aggregation = (
+        AdvisoryAggregation(body.aggregation)
+        if body.aggregation in ("worst", "majority")
+        else saved_agg
+    )
+
+    # NOTE: no fronts recompute and persist=False — a preview must never touch
+    # the pack dir.
+    advisory_result = run_advisories_from_pack(
+        pack_dir,
+        cruise_altitude_ft=cruise_altitude_ft,
+        flight_ceiling_ft=flight.flight_ceiling_ft,
+        advisory_models=adv_models,
+        enabled_ids=enabled_ids,
+        advisory_enabled=enabled_map,
+        user_params=user_params,
+        aggregation=aggregation,
+        airport_conditions_recompute=recompute_conds,
+        icing_method=icing_method,
+        cloud_method=cloud_method,
+        convective_method=convective_method,
+        locale=locale,
+        cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
+        flight_duration_hours=flight.flight_duration_hours,
+        persist=False,
+    )
+
+    if advisory_result.manifest is None:
+        raise HTTPException(status_code=500, detail=advisory_result.error or "Advisory preview failed")
+
+    return RecalculateAdvisoriesResponse(
+        manifest=advisory_result.manifest,
+        wind_overlay=advisory_result.wind_overlay,
+    )
+
+
 def _build_snapshot_from_pack(pack_dir: Path, briefing_data: dict):
     """Reconstruct the full ForecastSnapshot (briefing + forecasts) from a pack.
 

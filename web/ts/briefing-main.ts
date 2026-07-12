@@ -511,7 +511,7 @@ async function init(): Promise<void> {
   // Load the live advisory catalog so the (i) popups show current copy
   // (descriptions / parameter defs) instead of whatever was baked into the pack
   // at generation time. Fire-and-forget: re-render advisories when it arrives.
-  fetchAdvisoryCatalog().then(entries => {
+  fetchAdvisoryCatalog().then(({ advisories: entries }) => {
     setLiveAdvisoryCatalog(entries);
     const s = store.getState();
     if (s.flight) {

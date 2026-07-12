@@ -133,6 +133,7 @@ class FlightCategoryEvaluator:
                     min=500,
                     max=5000,
                     step=500,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="amber_vis_sm",
@@ -144,6 +145,7 @@ class FlightCategoryEvaluator:
                     min=1,
                     max=10,
                     step=1,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="red_ceiling_ft",
@@ -155,6 +157,7 @@ class FlightCategoryEvaluator:
                     min=100,
                     max=3000,
                     step=100,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="red_vis_sm",
@@ -166,6 +169,7 @@ class FlightCategoryEvaluator:
                     min=0.5,
                     max=5,
                     step=0.5,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="conv_radius_nm",

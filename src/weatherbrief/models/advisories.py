@@ -218,6 +218,15 @@ class AdvisoryParameterDef(BaseModel):
     min: float | None = None
     max: float | None = None
     step: float | None = None
+    # Curation tier driving progressive disclosure on the settings page (#387).
+    # "pilot"    — a personal-minimum / aircraft-capability choice, rendered
+    #              inline on the advisory row (high value, per-pilot/per-plane).
+    # "advanced" — meteorological calibration; hidden behind the collapsed
+    #              "Advanced" expander. Default so newly added params are
+    #              safe-by-default (never leak into the compact view unasked).
+    # Deliberately exactly two values — this is a curation mechanism, not a tag
+    # taxonomy or a user-facing filter.
+    audience: Literal["pilot", "advanced"] = "advanced"
 
 
 class AdvisoryCatalogEntry(BaseModel):
@@ -244,6 +253,46 @@ class AdvisoryCatalogEntry(BaseModel):
     # hint set is scan-class ∪ {timing_hint=True}.
     timing_hint: bool = False
     parameters: list[AdvisoryParameterDef] = Field(default_factory=list)
+
+
+class InterviewOption(BaseModel):
+    """One answer to a setup-interview question (#387, slice 3).
+
+    An option is a declarative patch over advisory settings: which advisories it
+    enables/disables and which parameter values it sets. Applying an option
+    writes ONLY the keys it declares. By construction every option of a question
+    declares the same key set (so switching answers is reversible), and sibling
+    questions declare *disjoint* keys (so answers never conflict on merge).
+    """
+
+    id: str
+    label: str
+    description: str = ""
+    # {advisory_id: enabled}
+    enabled: dict[str, bool] = Field(default_factory=dict)
+    # {advisory_id: {param_key: value}}
+    params: dict[str, dict[str, float]] = Field(default_factory=dict)
+
+
+class InterviewQuestion(BaseModel):
+    """One setup-interview question — an ordered set of mutually exclusive options."""
+
+    id: str
+    title: str
+    help: str = ""
+    options: list[InterviewOption] = Field(default_factory=list)
+
+
+class Interview(BaseModel):
+    """The declarative setup-interview structure served to clients (#387).
+
+    Ordered questions; each option carries the patch it would apply. Lives in the
+    advisories package (backend) so web and iOS share one definition. The client
+    stores the chosen answers under ``settings_json.interview`` for idempotent
+    re-runs.
+    """
+
+    questions: list[InterviewQuestion] = Field(default_factory=list)
 
 
 class ModelAdvisoryResult(BaseModel):

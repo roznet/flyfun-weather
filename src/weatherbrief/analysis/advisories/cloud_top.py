@@ -55,6 +55,7 @@ class CloudTopEvaluator:
                     min=500,
                     max=3000,
                     step=500,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="pct_amber",

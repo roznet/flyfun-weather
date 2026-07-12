@@ -298,7 +298,7 @@ with no further backend work.
 
 ## User Parameters
 
-Each evaluator declares parameters with `AdvisoryParameterDef` (key, label, type, unit, default, min, max, step). At evaluation time:
+Each evaluator declares parameters with `AdvisoryParameterDef` (key, label, type, unit, default, min, max, step, **audience**). At evaluation time:
 
 ```python
 params = {**defaults_from_catalog, **user_overrides}
@@ -306,6 +306,16 @@ result = evaluator.evaluate(ctx, params)
 ```
 
 User overrides stored in `flight_profiles.settings_json` under `advisories: {enabled: {id: bool}, params: {id: {key: val}}, aggregation: "worst"|"majority"}`. Recalculation endpoint loads the flight's profile settings (including aggregation mode), re-evaluates without re-fetching weather data.
+
+### Audience tiers + catalog ordering (#387)
+
+`AdvisoryParameterDef.audience` (`"pilot" | "advanced"`, default `"advanced"`) is a **curation mechanism** for progressive disclosure on the settings page — not a filter or tag taxonomy, and it never affects evaluation. `"pilot"` params are personal-minimum / aircraft-capability choices rendered **inline** on the advisory row (~17 today: crosswind/gust limits, ceiling/vis minima, DA thresholds, cloud/headwind margins, VFR/IFR feasibility floors, sun near-sunset gating); everything else is `"advanced"` (meteorological calibration) and hides behind a collapsed **Advanced (n)** expander. New params default to `"advanced"` so they never leak into the compact view unasked. A test bounds the pilot-tier count (≤ 25) so the compact page stays compact.
+
+**Ordering is backend-owned** — there is no client-side `CATEGORY_KEYS` copy to drift. `registry.CATEGORY_ORDER` (by pilot-input density: `airport, flight_rules, wind, icing, cloud, convective, precipitation, turbulence, sun, fronts, model`) plus `ENTRY_ORDER` (within-category order) sort `get_catalog()`; `get_category_order()` returns the ordered category list (`{key, diagnostics}`) served alongside the catalog. `model` is flagged `diagnostics` (both its advisories are disabled-by-default dev signals) so the client renders it as a distinct "Diagnostics" group. iOS/MCP inherit the served order for free.
+
+### Setup interview presets (#387)
+
+`analysis/advisories/interview.py:get_interview()` returns a declarative `Interview` (in `models/advisories.py`): ordered `InterviewQuestion`s, each `InterviewOption` a patch `{enabled: {id: bool}, params: {id: {key: val}}}`. It **cannot** be derived from `audience` — one answer spans advisories (FIKI enables `fiki_icing` AND disables `icing_escape`). Invariants relied on by clients: every option of a question declares the **same key set** (re-answering is reversible) and sibling questions declare **disjoint keys** (answers never conflict). Built off the live catalog so the "standard"/default options carry real catalog defaults. v1 questions: flight rules (VFR-only hides `ifr_feasibility`), icing equipage (FIKI pair), minimums style (standard vs conservative personal minima). The client stores chosen answers under `settings_json.interview` for idempotent re-runs.
 
 ## Pipeline Integration
 
@@ -327,12 +337,14 @@ Also supports `run_advisories_from_pack()` for re-evaluation from saved artifact
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `.../packs/{ts}/advisories` | GET | Return saved advisories JSON |
-| `.../packs/{ts}/advisories/recalculate` | POST | Re-evaluate with user prefs (enabled IDs + param overrides) |
+| `.../packs/{ts}/advisories/recalculate` | POST | Re-evaluate with the flight's **saved** prefs and **persist** the recomputed artifacts into the pack dir (owner-only) |
+| `.../packs/{ts}/advisories/preview` | POST | Non-persisting **draft** preview (#387): explicit `{enabled, params, aggregation}` body → runs evaluators with `persist=False`, writes nothing (no `route_advisories.json`, no fronts recompute), returns the manifest. Powers the settings-page live diff |
 | `.../packs/{ts}/advisories/altitude-table` | GET | Return the precomputed altitude table persisted at refresh (#259) — cheap cached path the slider indexes into; 404 on pre-precompute packs (client falls back to POST sweep) |
 | `.../packs/{ts}/advisories/altitude-table` | POST | Altitude sweep (`step_ft` 500–5000, default 2000) → `AltitudeTableResult` |
 | `.../packs/{ts}/advisories/alt` | GET | Return saved alt-departure advisories JSON |
 | `.../packs/{ts}/advisories/alt/compute` | POST | Compute alt-departure advisories on-demand (requires flight `alt_departure_time`) |
-| `.../advisories/catalog` | GET | Catalog of all evaluators + parameter defs (on the preferences router) |
+| `.../advisories/catalog` | GET | `{advisories: […in display order], categories: [{key, diagnostics}]}` (#387; on the preferences router). Tolerant clients also accept the legacy bare array |
+| `.../advisories/interview` | GET | Declarative setup-interview preset structure (#387; on the preferences router) |
 
 Recalculate loads route analyses + elevation + cross-sections from disk, applies user preferences, returns fresh manifest. Recalculate and altitude-table share `_load_advisory_profile()` to resolve enabled IDs, param overrides, aggregation, advisory models, icing/cloud/convective methods, and locale.
 
@@ -354,6 +366,8 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - Reuses shared modal infrastructure from metrics info popups
 
 **Store**: `briefingStore.routeAdvisories` + `recalculateAdvisories()` action.
+
+**Settings page** (`settings-main.ts` `renderAdvisorySettings`, #387): renders categories/entries in the **served** order (no client `CATEGORY_KEYS`). Per advisory row: enable toggle + `audience:"pilot"` params **inline**; `audience:"advanced"` params behind a collapsed **Advanced (n)** `<details>` expander carrying a "k modified" chip (non-default advanced values are never invisibly hidden), a per-advisory **Reset**, and a per-param "· default X" hint on modified values. Amber/red threshold pairs of one quantity render on a single visual row (`renderParamGroup`, pairing only — no new metadata). The `model` category renders as a distinct **Diagnostics** group; engine-level controls (aggregation, advisory-model checkboxes, icing/cloud/convective method selectors, auto front detection) live in a collapsed **Engine settings** `<details>`. Global **Expand all / Collapse all**. A **Setup assistant** button opens the interview modal (`openSetupAssistant`/`applyInterview`) — radio-per-question, pre-selecting `settings_json.interview`, warning before overwriting a manually-modified owned key. A debounced **live preview panel** (`initAdvisoryPreview`/`runAdvisoryPreview`) previews the draft settings against the user's most recent flight+pack via `POST …/advisories/preview` (baseline = empty-body preview of saved settings) and lists per-advisory `AMBER→GREEN`-style deltas — labelled a preview, persists nothing.
 
 ## Key Choices
 

@@ -104,6 +104,7 @@ class HeadwindEvaluator:
                     min=5,
                     max=50,
                     step=5,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="mean_red_kt",

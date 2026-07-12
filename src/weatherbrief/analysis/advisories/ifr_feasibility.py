@@ -265,6 +265,7 @@ class IFRFeasibilityEvaluator:
                     min=0,
                     max=1000,
                     step=100,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="min_arr_ceiling_ft",
@@ -276,6 +277,7 @@ class IFRFeasibilityEvaluator:
                     min=100,
                     max=1500,
                     step=100,
+                    audience="pilot",
                 ),
                 AdvisoryParameterDef(
                     key="icing_pct_amber",
