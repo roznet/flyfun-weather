@@ -15,11 +15,13 @@ import {
   fetchModelCatalog,
   foldBriefingUpdates,
   unfoldBriefingUpdates,
+  ENGINE_METHOD_DEFAULTS_FALLBACK,
   type PreferencesResponse,
   type AdvisoryPreferences,
   type AdvisoryCatalogEntry,
   type AdvisoryCategory,
   type AdvisoryParameterDef,
+  type EngineMethodDefaults,
   type Interview,
   type UsageSummary,
 } from './adapters/preferences-adapter';
@@ -63,6 +65,12 @@ let catalog: AdvisoryCatalogEntry[] = [];
 /** Category display order served by the catalog endpoint (#387). Ordering is
  *  backend-owned — there is no client-side CATEGORY_KEYS copy to drift. */
 let advisoryCategories: AdvisoryCategory[] = [];
+/** Declared engine grading-method defaults served by the catalog endpoint (#403).
+ *  The settings form reads its icing/cloud/convective fallbacks from here (not
+ *  hardcoded literals) so the UI default cannot drift from the backend, and prunes
+ *  a method equal to the default on save. Seeded with the fallback so it is always
+ *  concrete before the catalog loads. */
+let engineDefaults: EngineMethodDefaults = ENGINE_METHOD_DEFAULTS_FALLBACK;
 /** Setup-interview structure (#387, slice 3), fetched lazily on first open. */
 let interview: Interview | null = null;
 /** Stored interview answers for the active profile ({question_id: option_id}). */
@@ -240,20 +248,21 @@ function populateProfileForm(profile: ProfileResponse): void {
   const computeAlternatesToggle = document.getElementById('toggle-compute-alternates') as HTMLInputElement;
   if (computeAlternatesToggle) computeAlternatesToggle.checked = s.compute_alternates ?? true;  // default-on (graduated)
 
-  // Icing method selector
+  // Icing method selector. Absent → the declared backend default (#403), so the
+  // form shows the method absence actually grades on, not a hardcoded guess.
   const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;
-  if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? 'ogimet_nwp';
+  if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? engineDefaults.icing_method;
 
   // Cloud source + style selectors (composed into s.cloud_method like 'soft_nwp', 'square_dd', etc.).
   const cloudSourceSelect = document.getElementById('input-cloud-source') as HTMLSelectElement;
   const cloudStyleSelect = document.getElementById('input-cloud-style') as HTMLSelectElement;
-  const { source: cloudSource, style: cloudStyle } = parseCloudMethod(s.cloud_method ?? 'square_nwp');
+  const { source: cloudSource, style: cloudStyle } = parseCloudMethod(s.cloud_method ?? engineDefaults.cloud_method);
   if (cloudSourceSelect) cloudSourceSelect.value = cloudSource;
   if (cloudStyleSelect) cloudStyleSelect.value = cloudStyle;
 
   // Convective method selector
   const convectiveMethodSelect = document.getElementById('input-convective-method') as HTMLSelectElement;
-  if (convectiveMethodSelect) convectiveMethodSelect.value = s.convective_method ?? 'nwp';
+  if (convectiveMethodSelect) convectiveMethodSelect.value = s.convective_method ?? engineDefaults.convective_method;
 
   // Digest guidance selector
   const guidanceSelect = document.getElementById('input-digest-guidance') as HTMLSelectElement;
@@ -548,7 +557,7 @@ async function init(): Promise<void> {
     }),
     fetchAdvisoryCatalog().catch(err => {
       showStatus(t('settings.failedLoad', { what: 'advisory catalog', error: String(err) }), true);
-      return { advisories: [] as AdvisoryCatalogEntry[], categories: [] as AdvisoryCategory[] };
+      return { advisories: [] as AdvisoryCatalogEntry[], categories: [] as AdvisoryCategory[], engine_method_defaults: ENGINE_METHOD_DEFAULTS_FALLBACK };
     }),
     fetchModelCatalog().catch(err => {
       showStatus(t('settings.failedLoad', { what: 'model catalog', error: String(err) }), true);
@@ -558,6 +567,7 @@ async function init(): Promise<void> {
 
   catalog = catalogResult.advisories;
   advisoryCategories = catalogResult.categories;
+  engineDefaults = catalogResult.engine_method_defaults ?? ENGINE_METHOD_DEFAULTS_FALLBACK;
   profiles = profilesResult;
   initModelCatalog(modelCatalog);
 
@@ -1408,9 +1418,11 @@ function collectEngineDraft(): {
     // null = "no explicit selection" ⇒ server defaults. Same encoding as the save
     // payload, so preview and save resolve models identically.
     advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
-    icing_method: (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || 'ogimet_dd',
+    // Empty-select fallbacks are the declared backend defaults (#403), not the old
+    // ogimet_dd/thermo literals that disagreed with what the form displayed.
+    icing_method: (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || engineDefaults.icing_method,
     cloud_method: composeCloudMethod(cloudSource, cloudStyle),
-    convective_method: (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || 'thermo',
+    convective_method: (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || engineDefaults.convective_method,
   };
 }
 

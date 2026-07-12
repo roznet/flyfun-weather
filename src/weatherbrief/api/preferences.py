@@ -23,6 +23,7 @@ from flyfun_common.credentials import (
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserPreferencesRow
 
+from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
 from weatherbrief.api.user_migrations import run_pending_migrations
 
 logger = logging.getLogger(__name__)
@@ -177,9 +178,9 @@ def _parse_service_toggles(raw: str) -> dict:
         "gramet_enabled": data.get("gramet_enabled", True),
         "llm_digest_enabled": data.get("llm_digest_enabled", True),
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
-        "icing_method": data.get("icing_method", "ogimet_nwp"),
-        "cloud_method": data.get("cloud_method", "square_nwp"),
-        "convective_method": data.get("convective_method", "nwp"),
+        "icing_method": data.get("icing_method", ENGINE_METHOD_DEFAULTS["icing_method"]),
+        "cloud_method": data.get("cloud_method", ENGINE_METHOD_DEFAULTS["cloud_method"]),
+        "convective_method": data.get("convective_method", ENGINE_METHOD_DEFAULTS["convective_method"]),
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
         "display_currency": data.get("display_currency", "auto"),
@@ -578,7 +579,7 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": "ogimet_nwp", "cloud_method": "square_nwp", "convective_method": "nwp", "units_region": "auto", "display_currency": "auto", "defer_email_for_model_update": False}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": ENGINE_METHOD_DEFAULTS["icing_method"], "cloud_method": ENGINE_METHOD_DEFAULTS["cloud_method"], "convective_method": ENGINE_METHOD_DEFAULTS["convective_method"], "units_region": "auto", "display_currency": "auto", "defer_email_for_model_update": False}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 
@@ -680,6 +681,11 @@ def get_advisory_catalog():
     within-category); ``categories`` is the ordered category list (keys +
     diagnostics flag, labels stay client-side i18n) the settings page renders
     in the served order rather than from a client-side ``CATEGORY_KEYS`` copy.
+
+    ``engine_method_defaults`` (#403) carries the declared icing/cloud/convective
+    method defaults so the settings page reads them from the backend instead of
+    hardcoding fallbacks — the UI default and the runtime default then cannot
+    drift, and the client can prune a method equal to the default on save.
     """
     from weatherbrief.analysis.advisories import get_catalog, get_category_order
 
@@ -687,6 +693,7 @@ def get_advisory_catalog():
     return {
         "advisories": [entry.model_dump() for entry in catalog],
         "categories": get_category_order(catalog),
+        "engine_method_defaults": ENGINE_METHOD_DEFAULTS,
     }
 
 

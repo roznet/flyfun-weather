@@ -6,10 +6,20 @@ import type {
   AdvisoryCatalogEntry,
   AdvisoryCategory,
   AdvisoryCatalogResponse,
+  EngineMethodDefaults,
   Interview,
 } from '../types/advisories';
 
-export type { AdvisoryParameterDef, AdvisoryCatalogEntry, AdvisoryCategory, AdvisoryCatalogResponse, Interview };
+export type { AdvisoryParameterDef, AdvisoryCatalogEntry, AdvisoryCategory, AdvisoryCatalogResponse, EngineMethodDefaults, Interview };
+
+/** Client-side fallback for the engine method defaults (#403), used only when
+ *  talking to an old server that predates `engine_method_defaults` on the catalog
+ *  response. Must mirror `ENGINE_METHOD_DEFAULTS` in the Python backend. */
+export const ENGINE_METHOD_DEFAULTS_FALLBACK: EngineMethodDefaults = {
+  icing_method: 'ogimet_nwp',
+  cloud_method: 'square_nwp',
+  convective_method: 'nwp',
+};
 
 export interface FlightDefaults {
   cruise_altitude_ft: number | null;
@@ -144,9 +154,11 @@ export async function fetchAdvisoryCatalog(): Promise<AdvisoryCatalogResponse> {
     '/user/preferences/advisories/catalog',
   );
   if (Array.isArray(resp)) {
-    return { advisories: resp, categories: [] };
+    return { advisories: resp, categories: [], engine_method_defaults: ENGINE_METHOD_DEFAULTS_FALLBACK };
   }
-  return resp;
+  // Old server may omit engine_method_defaults — fall back so the settings page
+  // always has a concrete default to render and prune against (#403).
+  return { ...resp, engine_method_defaults: resp.engine_method_defaults ?? ENGINE_METHOD_DEFAULTS_FALLBACK };
 }
 
 /** Fetch the declarative setup-interview structure (#387, slice 3). */

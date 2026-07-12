@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-07-12",
+    "title": "Grading methods now default to the NWP models your settings page always showed",
+    "category": "change",
+    "highlight": false,
+    "body": "The icing, cloud, and convective **grading methods** now have a single declared default — **Ogimet (NWP)** icing, **NWP** cloud, and **NWP** convective — resolved when a profile has never explicitly chosen one. Previously an unset method silently fell back to the older dew-point / thermodynamic methods, even though the settings page displayed the NWP options as the defaults. If you had never touched these controls, your briefings now grade on the methods your settings page has always claimed. Any profile that explicitly selected a method is unaffected."
+  }
+]
