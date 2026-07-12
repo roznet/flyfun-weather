@@ -119,16 +119,25 @@ class FreezingPrecipEvaluator:
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
-                if sounding is None:
+                precip = sounding.precipitation if sounding is not None else None
+                # "Assessed" for freezing precip means the point carries a signal
+                # source: an active-precip phase (``precipitation``) OR a
+                # thermodynamic profile to detect a warm nose (``derived_levels``).
+                # A sounding with neither cannot be assessed and must NOT enter
+                # the denominator — otherwise unassessable points dilute the
+                # primed-profile percentage below its threshold (#391).
+                point_source = precip is not None or bool(
+                    sounding.derived_levels if sounding is not None else None
+                )
+                if sounding is None or not point_source:
                     ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
                     region_cells.append((dist, None))
                     continue
                 total += 1
+                has_signal_source = True
 
                 active = False
-                precip = sounding.precipitation
                 if precip is not None:
-                    has_signal_source = True
                     if (
                         precip.surface_phase in _ACTIVE_PHASES
                         or precip.freezing_rain_risk
@@ -141,7 +150,6 @@ class FreezingPrecipEvaluator:
                 primed = False
                 nose_top: float | None = None
                 if sounding.derived_levels:
-                    has_signal_source = True
                     fz_risk, _, nose_top, ice_pellets = detect_warm_nose(
                         sounding.derived_levels
                     )

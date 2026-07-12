@@ -113,3 +113,17 @@ def test_no_precip_data_is_unavailable():
     ctx = _ctx([bare] * 10)
     result = FreezingPrecipEvaluator.evaluate(ctx, {})
     assert result.per_model[0].status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_unassessable_points_do_not_dilute_primed_percentage():
+    """Points with no precip AND no thermodynamic profile leave the denominator.
+
+    Regression for #391: 1 primed point among 24 unassessable (no precip, no
+    derived_levels) points used to read 1/25 = 4% < 5% → GREEN, even though the
+    only assessable point was primed. The honest reading is 1/1 = 100% → AMBER.
+    """
+    bare = SoundingAnalysis()  # unassessable — no precip, no derived levels
+    ctx = _ctx([_primed()] + [bare] * 24)
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+    assert result.per_model[0].total_points == 1
