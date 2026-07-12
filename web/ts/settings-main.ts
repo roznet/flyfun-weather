@@ -57,6 +57,7 @@ import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
 import { setUnitsPreference } from './units';
 import { initInfoPopup, showPopupContent, hideMetricInfo } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
+import { buildParamDefaults, pruneAdvisoryParams, pruneEngineMethod } from './helpers/profile-sparsify';
 
 /** Advisory id of the experimental front advisory (mirrors FRONTS_ADVISORY_ID in the backend). */
 const FRONTS_ADVISORY_ID = 'fronts';
@@ -1401,9 +1402,9 @@ function applyInterview(iv: Interview): void {
  *  `handleSave` so the two can't drift. */
 function collectEngineDraft(): {
   advisory_models: string[] | null;
-  icing_method: string;
-  cloud_method: string;
-  convective_method: string;
+  icing_method: string | null;
+  cloud_method: string | null;
+  convective_method: string | null;
 } {
   const advisoryModels: string[] = [];
   const advContainer = document.getElementById('advisory-model-checkboxes');
@@ -1414,15 +1415,24 @@ function collectEngineDraft(): {
   }
   const cloudSource = (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value || 'nwp';
   const cloudStyle = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'square';
+  // Empty-select fallbacks are the declared backend defaults (#403), not the old
+  // ogimet_dd/thermo literals that disagreed with what the form displayed.
+  const icing = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || engineDefaults.icing_method;
+  const cloud = composeCloudMethod(cloudSource, cloudStyle);
+  const convective = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || engineDefaults.convective_method;
   return {
     // null = "no explicit selection" ⇒ server defaults. Same encoding as the save
     // payload, so preview and save resolve models identically.
     advisory_models: advisoryModels.length > 0 ? advisoryModels : null,
-    // Empty-select fallbacks are the declared backend defaults (#403), not the old
-    // ogimet_dd/thermo literals that disagreed with what the form displayed.
-    icing_method: (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || engineDefaults.icing_method,
-    cloud_method: composeCloudMethod(cloudSource, cloudStyle),
-    convective_method: (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || engineDefaults.convective_method,
+    // Prune a method equal to its declared default → null, i.e. "follow the
+    // default" (#403 Part B). Sent as an explicit null (never omitted): the
+    // preview endpoint keys on JSON presence, so a null reads as the draft value
+    // and grades on the resolved default; on save the server deletes the stored
+    // key. Absence resolves to the same default server-side, so this is lossless
+    // for grading and lets an already-dense profile shrink.
+    icing_method: pruneEngineMethod(icing, engineDefaults.icing_method),
+    cloud_method: pruneEngineMethod(cloud, engineDefaults.cloud_method),
+    convective_method: pruneEngineMethod(convective, engineDefaults.convective_method),
   };
 }
 
@@ -1565,23 +1575,27 @@ function collectAdvisoryPrefs(): AdvisoryPreferences {
   if (!container) return { enabled: null, params: null };
 
   const enabled: Record<string, boolean> = {};
-  const params: Record<string, Record<string, number>> = {};
+  const rawParams: Record<string, Record<string, number>> = {};
 
-  // Collect enabled states
+  // Collect enabled states. Enable flags are deliberately NOT sparsified (#402):
+  // `fronts` false equals the catalog default yet is a meaningful override, so the
+  // full map is always sent.
   for (const cb of container.querySelectorAll<HTMLInputElement>('input[data-advisory-id]')) {
     const id = cb.dataset.advisoryId!;
     enabled[id] = cb.checked;
   }
 
-  // Collect parameter values
+  // Collect parameter values, then prune any equal to the catalog default (#403
+  // Part B) — absence resolves to the same default server-side, so this is
+  // lossless for grading and lets an already-dense profile shrink on save.
   for (const input of container.querySelectorAll<HTMLInputElement>('input[data-advisory-param]')) {
     const [advId, paramKey] = input.dataset.advisoryParam!.split(':');
     const val = parseFloat(input.value);
-    if (!isNaN(val)) {
-      if (!params[advId]) params[advId] = {};
-      params[advId][paramKey] = val;
-    }
+    if (isNaN(val)) continue;
+    if (!rawParams[advId]) rawParams[advId] = {};
+    rawParams[advId][paramKey] = val;
   }
+  const params = pruneAdvisoryParams(rawParams, buildParamDefaults(catalog));
 
   const aggSelect = document.getElementById('advisory-aggregation') as HTMLSelectElement;
   const aggregation = (aggSelect?.value === 'majority' ? 'majority' : 'worst') as 'worst' | 'majority';

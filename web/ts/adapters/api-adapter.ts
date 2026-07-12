@@ -717,9 +717,12 @@ export async function previewAdvisories(
     params?: Record<string, Record<string, number>> | null;
     aggregation?: string;
     advisory_models?: string[] | null;
-    icing_method?: string;
-    cloud_method?: string;
-    convective_method?: string;
+    // An explicit null means "follow the declared default" (#403) — the preview
+    // endpoint keys on JSON presence, so a null grades on the resolved default
+    // rather than the profile's saved value.
+    icing_method?: string | null;
+    cloud_method?: string | null;
+    convective_method?: string | null;
   },
   cruiseAltitudeFt?: number,
 ): Promise<RecalculateAdvisoriesResult> {

@@ -242,6 +242,50 @@ def test_preview_without_profile_id_falls_back_to_the_flight_profile(client, app
     assert advisories["airport_wind"]["parameters_used"]["crosswind_red_kt"] == 22
 
 
+def test_preview_dense_at_default_grades_identically_to_sparse(client, app_db):
+    """No-op guard (#403 Part B): a *dense* profile whose engine methods and
+    advisory params are all at their defaults grades **byte-identically** to a
+    *sparse* profile that omits them — the property that proves pruning a value at
+    its default never changes a grade (so any grading change could only come from
+    the Part A default flip, never from Part B).
+    """
+    from weatherbrief.analysis.advisories import get_catalog
+    from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
+
+    cat = {e.id: e for e in get_catalog()}
+    aw_default = next(p.default for p in cat["airport_wind"].parameters if p.key == "crosswind_red_kt")
+
+    enabled = {"airport_wind": True, "vmc_cruise": True, "cloud_top": True}
+    dense = {
+        # Engine methods all stated at their declared defaults …
+        **ENGINE_METHOD_DEFAULTS,
+        # … and a param frozen at its catalog default.
+        "advisories": {"enabled": enabled, "params": {"airport_wind": {"crosswind_red_kt": aw_default}}},
+    }
+    sparse = {"advisories": {"enabled": enabled}}  # no engine keys, no params
+
+    session = app_db()
+    dense_id = _make_profile(session, name="Dense", settings=dense)
+    sparse_id = _make_profile(session, name="Sparse", settings=sparse)
+    session.commit()
+    session.close()
+
+    flight_id, ts, _ = _seed(app_db)
+
+    def graded(pid: int):
+        r = client.post(
+            f"/api/flights/{flight_id}/packs/{ts}/advisories/preview",
+            json={"profile_id": pid},
+        )
+        assert r.status_code == 200, r.text
+        return {
+            a["advisory_id"]: (a["aggregate_status"], a["parameters_used"])
+            for a in r.json()["manifest"]["advisories"]
+        }
+
+    assert graded(dense_id) == graded(sparse_id)
+
+
 def test_preview_rejects_another_users_profile(client, app_db):
     """A profile the caller doesn't own 404s rather than silently previewing defaults."""
     session = app_db()
