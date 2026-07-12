@@ -112,6 +112,36 @@ def test_dd_floor_emits_compound_provenance_with_thermo_geometry(clear_context):
     ) == (5000, 25000)
 
 
+def test_native_nwp_without_thermo_floor_is_partial_not_clear(clear_context):
+    active = {
+        index: _assessment(ConvectiveRisk.NONE)
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(clear_context, {"gfs": active})
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.data_state == "partial"
+    assert model.status == AdvisoryStatus.UNAVAILABLE
+
+
+def test_native_nwp_hazard_without_thermo_floor_is_partial_red(clear_context):
+    active = {
+        index: _assessment(
+            ConvectiveRisk.HIGH if index == 0 else ConvectiveRisk.NONE,
+            base_ft=5000,
+            top_ft=25000,
+        )
+        for index in range(len(clear_context.analyses))
+    }
+    ctx = _with_assessments(clear_context, {"gfs": active})
+
+    model = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS).per_model[0]
+
+    assert model.data_state == "partial"
+    assert model.status == AdvisoryStatus.RED
+
+
 def test_disconnected_nwp_cells_remain_disconnected(clear_context):
     active = {
         index: _assessment(

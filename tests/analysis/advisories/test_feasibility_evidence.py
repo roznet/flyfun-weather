@@ -516,6 +516,45 @@ def test_ifr_convective_evidence_uses_active_method_and_geometry(
     assert {region.method_id for region in model.evidence_regions} == {"thermo"}
 
 
+def test_ifr_quiet_nwp_does_not_suppress_thermo_high(ifr_normal_context):
+    analyses = []
+    for rpa in ifr_normal_context.analyses:
+        sounding = rpa.sounding["gfs"].model_copy(
+            update={
+                "convective": ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.NONE,
+                    method="nwp",
+                ),
+                "convective_nwp": ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.NONE,
+                    method="nwp",
+                ),
+                "convective_thermo": ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.HIGH,
+                    base_ft=3000,
+                    top_ft=20000,
+                    method="thermo",
+                ),
+            }
+        )
+        analyses.append(rpa.model_copy(update={"sounding": {"gfs": sounding}}))
+    ctx = replace(
+        ifr_normal_context,
+        analyses=analyses,
+        models=["gfs"],
+        convective_method="nwp",
+    )
+
+    model = IFRFeasibilityEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert model.status == AdvisoryStatus.RED
+    assert model.data_state == "complete"
+    assert model.primary_method_id == "nwp_with_dd_floor"
+    assert {region.method_id for region in model.evidence_regions} == {
+        "nwp_with_dd_floor"
+    }
+
+
 def test_ifr_cape_fallback_uses_thermo_provenance(ifr_convective_context):
     analyses = []
     for rpa in ifr_convective_context.analyses:

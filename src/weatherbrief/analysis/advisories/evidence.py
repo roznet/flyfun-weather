@@ -8,6 +8,8 @@ from typing import Collection, Literal, Sequence
 from weatherbrief.models import (
     AdvisoryEvidenceRegion,
     AdvisoryStatus,
+    ConvectiveAssessment,
+    ConvectiveRisk,
     Mitigation,
     ModelAdvisoryResult,
     RoutePointAnalysis,
@@ -418,3 +420,75 @@ def convective_method_id(value: str | None) -> str | None:
         "thermo": "thermo",
         "nwp_cape_fallback": "thermo",
     }.get(value or "")
+
+
+_CONVECTIVE_RISK_ORDER = [
+    ConvectiveRisk.NONE,
+    ConvectiveRisk.MARGINAL,
+    ConvectiveRisk.LOW,
+    ConvectiveRisk.MODERATE,
+    ConvectiveRisk.HIGH,
+    ConvectiveRisk.EXTREME,
+]
+
+
+@dataclass(frozen=True)
+class ResolvedConvectivePoint:
+    """One selected convective track after applying the DD safety floor."""
+
+    selected: ConvectiveAssessment | None
+    source: ConvectiveAssessment | None
+    risk_level: ConvectiveRisk | None
+    selected_method_id: str | None
+    method_id: str | None
+    floor_controls: bool
+    available: bool
+    complete: bool
+
+
+def resolve_convective_point(
+    sounding: SoundingAnalysis | None,
+) -> ResolvedConvectivePoint:
+    """Resolve selected-track risk, DD floor, provenance, and completeness."""
+    selected = sounding.convective if sounding is not None else None
+    if selected is None:
+        return ResolvedConvectivePoint(
+            selected=None,
+            source=None,
+            risk_level=None,
+            selected_method_id=None,
+            method_id=None,
+            floor_controls=False,
+            available=False,
+            complete=False,
+        )
+
+    selected_method_id = convective_method_id(selected.method)
+    thermo = sounding.convective_thermo if sounding is not None else None
+    # A selected thermo/CAPE track is itself the DD evidence on legacy packs.
+    # Native NWP is independent and requires the separate thermo track so its
+    # documented safety floor can be evaluated.
+    if thermo is None and selected_method_id != "nwp":
+        thermo = selected
+    complete = selected_method_id != "nwp" or thermo is not None
+    floor_controls = (
+        thermo is not None
+        and _CONVECTIVE_RISK_ORDER.index(thermo.risk_level)
+        > _CONVECTIVE_RISK_ORDER.index(selected.risk_level)
+    )
+    source = thermo if floor_controls else selected
+    method_id = (
+        "nwp_with_dd_floor"
+        if floor_controls and selected_method_id == "nwp"
+        else selected_method_id
+    )
+    return ResolvedConvectivePoint(
+        selected=selected,
+        source=source,
+        risk_level=source.risk_level,
+        selected_method_id=selected_method_id,
+        method_id=method_id,
+        floor_controls=floor_controls,
+        available=True,
+        complete=complete,
+    )

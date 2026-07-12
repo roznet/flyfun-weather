@@ -8,7 +8,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import pct_above_threshold
 from weatherbrief.analysis.advisories.evidence import (
     EvidenceSample,
-    convective_method_id,
+    resolve_convective_point,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -250,11 +250,13 @@ class ConvectiveEvaluator:
                         ):
                             xcheck_worst_dd_risk = thermo_conv.risk_level
 
-                active = sounding.convective
-                if active is None:
+                resolved = resolve_convective_point(sounding)
+                active = resolved.selected
+                if active is None or resolved.risk_level is None:
                     continue
                 evaluated.add(point_index)
-                complete.add(point_index)
+                if resolved.complete:
+                    complete.add(point_index)
 
                 # Guardrail (#283): the active track may now be the model-native
                 # NWP track (convective_method defaults to "nwp"), whose risk can
@@ -265,16 +267,10 @@ class ConvectiveEvaluator:
                 # the divergence is surfaced via the cross-check below and the
                 # dd_nwp_agreement advisory, not blended into the DD tier. When
                 # the active track is DD this is a no-op.
-                graded_risk = active.risk_level
-                floor_controls = (
-                    thermo_conv is not None
-                    and _RISK_ORDER.index(thermo_conv.risk_level)
-                    > _RISK_ORDER.index(active.risk_level)
-                )
-                if floor_controls:
-                    graded_risk = thermo_conv.risk_level
+                graded_risk = resolved.risk_level
+                floor_controls = resolved.floor_controls
 
-                active_method_id = convective_method_id(active.method)
+                active_method_id = resolved.selected_method_id
                 active_methods.append(active_method_id)
                 active_risk_idx = _RISK_ORDER.index(active.risk_level)
                 if (
@@ -288,10 +284,8 @@ class ConvectiveEvaluator:
                     active_path_risks.append(
                         (active.risk_level, active_method_id)
                     )
-                native_nwp_floor = floor_controls and active_method_id == "nwp"
-                method_id = (
-                    "nwp_with_dd_floor" if native_nwp_floor else active_method_id
-                )
+                native_nwp_floor = resolved.method_id == "nwp_with_dd_floor"
+                method_id = resolved.method_id
 
                 risk_idx = _RISK_ORDER.index(graded_risk)
                 if risk_idx < _RISK_ORDER.index(min_risk):
@@ -335,7 +329,8 @@ class ConvectiveEvaluator:
                 if active.cover_pct is not None:
                     max_cover_pct = max(max_cover_pct or 0, active.cover_pct)
 
-                source = thermo_conv if floor_controls else active
+                source = resolved.source
+                assert source is not None
                 lower_altitude_ft, upper_altitude_ft = _evidence_altitude_bounds(
                     source.base_ft,
                     source.top_ft,

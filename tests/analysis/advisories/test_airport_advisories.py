@@ -950,6 +950,48 @@ class TestTerminalConvective:
         assert model.status == AdvisoryStatus.RED
         assert model.primary_method_id == "thermo"
 
+    def test_quiet_nwp_does_not_suppress_terminal_thermo_high(self):
+        ctx = _terminal_conv_ctx(
+            ConvectiveRisk.NONE,
+            ConvectiveRisk.NONE,
+            dep_method="nwp",
+            arr_method="nwp",
+        )
+        analyses = []
+        for rpa in ctx.analyses:
+            sounding = rpa.sounding["gfs"]
+            active = sounding.convective
+            thermo = (
+                ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.HIGH,
+                    base_ft=3000,
+                    top_ft=20000,
+                    method="thermo",
+                )
+                if rpa.distance_from_origin_nm <= 25
+                else ConvectiveAssessment(
+                    risk_level=ConvectiveRisk.NONE,
+                    method="thermo",
+                )
+            )
+            sounding = sounding.model_copy(
+                update={
+                    "convective_nwp": active,
+                    "convective_thermo": thermo,
+                }
+            )
+            analyses.append(
+                rpa.model_copy(update={"sounding": {"gfs": sounding}})
+            )
+        ctx = replace(ctx, analyses=analyses, convective_method="nwp")
+
+        model = FlightCategoryEvaluator.evaluate(ctx, {}).per_model[0]
+
+        assert model.status == AdvisoryStatus.RED
+        assert model.data_state == "complete"
+        assert model.primary_method_id == "nwp_with_dd_floor"
+        assert "convective HIGH" in model.detail
+
     def test_condition_controlled_hazard_keeps_airport_provenance(self):
         conditions = _make_airport_conditions(
             dep_cats={"gfs": FlightCategory.IFR},

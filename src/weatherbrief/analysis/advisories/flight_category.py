@@ -18,7 +18,7 @@ from typing import Literal
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.evidence import (
     build_non_spatial_result,
-    convective_method_id,
+    resolve_convective_point,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
@@ -49,7 +49,7 @@ _CONV_RANK: dict[ConvectiveRisk, int] = {r: i for i, r in enumerate(_CONV_ORDER)
 class _TerminalConvectiveAssessment:
     risk: ConvectiveRisk
     any_evaluated: bool
-    all_evaluated: bool
+    all_complete: bool
     method_ids: frozenset[str]
 
 
@@ -63,6 +63,7 @@ def _terminal_convective_risk(
     worst = ConvectiveRisk.NONE
     expected_points = 0
     evaluated_points = 0
+    complete_points = 0
     methods_by_status: dict[AdvisoryStatus, set[str]] = {
         AdvisoryStatus.GREEN: set(),
         AdvisoryStatus.AMBER: set(),
@@ -77,23 +78,24 @@ def _terminal_convective_risk(
         if not in_terminal:
             continue
         expected_points += 1
-        sounding = rpa.sounding.get(model)
-        conv = sounding.convective if sounding is not None else None
-        if conv is None:
+        resolved = resolve_convective_point(rpa.sounding.get(model))
+        if not resolved.available or resolved.risk_level is None:
             continue
         evaluated_points += 1
-        method_id = convective_method_id(conv.method)
+        if resolved.complete:
+            complete_points += 1
+        method_id = resolved.method_id
         if method_id is not None:
-            methods_by_status[_terminal_convective_status(conv.risk_level)].add(
+            methods_by_status[_terminal_convective_status(resolved.risk_level)].add(
                 method_id
             )
-        if _CONV_RANK[conv.risk_level] > _CONV_RANK[worst]:
-            worst = conv.risk_level
+        if _CONV_RANK[resolved.risk_level] > _CONV_RANK[worst]:
+            worst = resolved.risk_level
     return _TerminalConvectiveAssessment(
         risk=worst,
         any_evaluated=evaluated_points > 0,
-        all_evaluated=(
-            expected_points > 0 and evaluated_points == expected_points
+        all_complete=(
+            expected_points > 0 and complete_points == expected_points
         ),
         method_ids=frozenset(
             methods_by_status[_terminal_convective_status(worst)]
@@ -288,7 +290,7 @@ class FlightCategoryEvaluator:
                 if (
                     ceiling_available
                     and visibility_available
-                    and conv.all_evaluated
+                    and conv.all_complete
                 ):
                     complete.add(entity)
 

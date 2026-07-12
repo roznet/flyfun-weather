@@ -119,6 +119,7 @@ class FreezingPrecipEvaluator:
         for model in ctx.models:
             evaluated: set[int] = set()
             complete: set[int] = set()
+            profile_assessed: set[int] = set()
             active_points: set[int] = set()
             primed_points: set[int] = set()
             samples: list[EvidenceSample] = []
@@ -145,6 +146,8 @@ class FreezingPrecipEvaluator:
 
                 point_index = rpa.point_index
                 evaluated.add(point_index)
+                if profile_usable:
+                    profile_assessed.add(point_index)
                 if precip_usable and profile_usable:
                     complete.add(point_index)
                 stored_bounds = _complete_bounds(
@@ -215,15 +218,15 @@ class FreezingPrecipEvaluator:
             primed_summary = summarize_evidence(
                 route_points=ordered_analyses,
                 total_distance_nm=ctx.total_distance_nm,
-                evaluated_point_indices=evaluated,
-                complete_point_indices=complete,
+                evaluated_point_indices=profile_assessed,
+                complete_point_indices=profile_assessed,
                 affected_point_indices=primed_points,
                 evidence_samples=(),
             )
 
             primed_pct = (
-                100 * len(primed_points) / summary.total_points
-                if summary.total_points
+                100 * len(primed_points) / len(profile_assessed)
+                if profile_assessed
                 else 0
             )
 

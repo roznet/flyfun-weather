@@ -209,6 +209,25 @@ def test_primed_profile_without_precip_track_is_partial_amber():
     assert model.data_state == "partial"
 
 
+def test_primed_threshold_uses_only_profile_assessed_points():
+    primed = _primed().model_copy(update={"precipitation": None})
+    precip_only = SoundingAnalysis(
+        precipitation=PrecipitationAssessment(),
+        derived_levels=_invalid_profile_levels(),
+    )
+
+    model = FreezingPrecipEvaluator.evaluate(
+        _ctx([primed] + [precip_only] * 20),
+        {},
+    ).per_model[0]
+
+    assert model.status == AdvisoryStatus.AMBER
+    assert model.data_state == "partial"
+    assert model.affected_points == 1
+    assert model.total_points == 21
+    assert "(100%)" in model.detail
+
+
 def test_clear_profile_without_precip_track_is_guarded_unavailable():
     sounding = _dry().model_copy(update={"precipitation": None})
     model = FreezingPrecipEvaluator.evaluate(_ctx([sounding]), {}).per_model[0]

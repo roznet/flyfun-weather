@@ -15,11 +15,11 @@ from weatherbrief.analysis.advisories.evidence import (
     DataState,
     EvidenceSample,
     combine_data_states,
-    convective_method_id,
     data_state_from_domains,
     icing_metric_id,
     icing_method_id,
     icing_method_is_available,
+    resolve_convective_point,
     summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -60,6 +60,7 @@ class IFRPointAssessment:
     point_index: int
     icing_available: bool
     convective_available: bool
+    convective_complete: bool
     icing_affected: bool
     convective_affected: bool
     convective_risk: ConvectiveRisk
@@ -221,21 +222,22 @@ def _assess_enroute_hazards(
                     )
                 )
 
-        conv = sounding.convective if sounding is not None else None
-        convective_available = conv is not None
+        conv = resolve_convective_point(sounding)
+        convective_available = conv.available
         convective_affected = False
         convective_risk = ConvectiveRisk.NONE
         convective_method: str | None = None
         convective_samples: list[EvidenceSample] = []
-        if conv is not None:
+        if conv.available and conv.risk_level is not None:
             convective_risk = conv.risk_level
-            convective_method = convective_method_id(conv.method)
+            convective_method = conv.method_id
             risk_idx = _CONVECTIVE_SEVERITY_INDEX.get(conv.risk_level, 0)
             if risk_idx >= convective_min_risk_idx:
                 convective_affected = True
+                assert conv.source is not None
                 lower_altitude_ft, upper_altitude_ft = _finite_altitude_bounds(
-                    conv.base_ft,
-                    conv.top_ft,
+                    conv.source.base_ft,
+                    conv.source.top_ft,
                 )
                 convective_samples.append(
                     EvidenceSample(
@@ -263,6 +265,7 @@ def _assess_enroute_hazards(
                 point_index=rpa.point_index,
                 icing_available=icing_available,
                 convective_available=convective_available,
+                convective_complete=conv.complete,
                 icing_affected=bool(icing_samples),
                 convective_affected=convective_affected,
                 convective_risk=convective_risk,
@@ -433,6 +436,11 @@ class IFRFeasibilityEvaluator:
                 for point in point_assessments
                 if point.convective_available
             }
+            convective_complete = {
+                point.point_index
+                for point in point_assessments
+                if point.convective_complete
+            }
             icing_points = {
                 point.point_index
                 for point in point_assessments
@@ -445,7 +453,7 @@ class IFRFeasibilityEvaluator:
             }
             affected_points = icing_points | convective_points
             route_evaluated = icing_evaluated | convective_evaluated
-            route_complete = icing_evaluated & convective_evaluated
+            route_complete = icing_evaluated & convective_complete
             evidence_samples = [
                 sample
                 for point in point_assessments
@@ -472,7 +480,7 @@ class IFRFeasibilityEvaluator:
                 route_points=ordered_analyses,
                 total_distance_nm=ctx.total_distance_nm,
                 evaluated_point_indices=convective_evaluated,
-                complete_point_indices=convective_evaluated,
+                complete_point_indices=convective_complete,
                 affected_point_indices=convective_points,
                 evidence_samples=(),
             )
