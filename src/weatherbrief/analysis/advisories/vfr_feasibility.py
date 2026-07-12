@@ -17,11 +17,21 @@ from collections.abc import Iterator
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
     build_cost_model,
+    build_regions,
+    build_ribbon,
     format_extent,
+    ribbon_peak,
+    status_to_severity,
     to_mitigation_profile,
+    worst_severity,
 )
-from weatherbrief.analysis.advisories.enroute_precip import classify_enroute_precip
+from weatherbrief.analysis.advisories.enroute_precip import (
+    classify_enroute_precip,
+    classify_precip_point,
+    precip_point_severity,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.advisories.vertical_profile import (
@@ -34,9 +44,11 @@ from weatherbrief.analysis.advisories.vertical_profile import (
 )
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     CloudCoverage,
+    HighlightSeverity,
     Mitigation,
     MitigationKind,
     ModelAdvisoryResult,
@@ -53,16 +65,17 @@ def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
 def _check_airport_vfr(
     ctx: RouteContext,
     model: str,
-) -> tuple[AdvisoryStatus, str]:
+) -> tuple[AdvisoryStatus, str, AdvisoryStatus, AdvisoryStatus]:
     """Check departure and arrival airport conditions for VFR feasibility.
 
     Uses the flight category (VFR/MVFR/IFR/LIFR) which already encodes
     ceiling and visibility thresholds per aviation standards.
 
-    Returns (status, detail_fragment).
+    Returns (status, detail_fragment, dep_status, arr_status). The per-airport
+    statuses colour the endpoint ribbon segments of the highlight (#375).
     """
     if ctx.airport_conditions is None:
-        return AdvisoryStatus.GREEN, ""
+        return AdvisoryStatus.GREEN, "", AdvisoryStatus.GREEN, AdvisoryStatus.GREEN
 
     dep = ctx.airport_conditions.departure
     arr = ctx.airport_conditions.arrival
@@ -70,23 +83,63 @@ def _check_airport_vfr(
     arr_cond = arr.condition_for_model(model)
 
     parts: list[str] = []
-    worst = AdvisoryStatus.GREEN
+    per_airport: list[AdvisoryStatus] = []
 
     loc = ctx.locale
     for label_key, icao, cond in [("airport.dep", dep.icao, dep_cond), ("airport.arr", arr.icao, arr_cond)]:
-        if cond is None:
-            continue
-        label = adv_t(label_key, loc)
-        cat = cond.flight_category
-        if cat in (FlightCategory.IFR, FlightCategory.LIFR):
-            worst = _worst_status(worst, AdvisoryStatus.RED)
-            parts.append(f"{label} {icao} {cat.value}")
-        elif cat == FlightCategory.MVFR:
-            worst = _worst_status(worst, AdvisoryStatus.AMBER)
-            parts.append(f"{label} {icao} MVFR")
+        status = AdvisoryStatus.GREEN
+        if cond is not None:
+            label = adv_t(label_key, loc)
+            cat = cond.flight_category
+            if cat in (FlightCategory.IFR, FlightCategory.LIFR):
+                status = AdvisoryStatus.RED
+                parts.append(f"{label} {icao} {cat.value}")
+            elif cat == FlightCategory.MVFR:
+                status = AdvisoryStatus.AMBER
+                parts.append(f"{label} {icao} MVFR")
+        per_airport.append(status)
 
     detail = " | ".join(parts) if parts else ""
-    return worst, detail
+    worst = _worst_status(*per_airport)
+    return worst, detail, per_airport[0], per_airport[1]
+
+
+def _point_enroute_vfr(
+    sounding,
+    altitude_ft: float,
+    cloud_clearance_ft: float,
+) -> tuple[str, float | None, float | None]:
+    """Classify one point's en-route cloud clearance at ``altitude_ft``.
+
+    Returns ``(cls, env_base_ft, env_top_ft)`` where ``cls`` is ``"imc"``
+    (inside a BKN/OVC layer), ``"marginal"`` (clearance < threshold), or
+    ``"clear"``; the envelope covers the BKN/OVC layer(s) containing the
+    altitude (``None`` unless in cloud). Single source of the per-point
+    classification, shared by :func:`_check_enroute_vfr` (grade) and the
+    highlight geometry (#375) so the two cannot drift.
+    """
+    in_cloud = False
+    marginal = False
+    env_base: float | None = None
+    env_top: float | None = None
+
+    for cl in sounding.cloud_layers:
+        if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
+            continue
+        # Check if the altitude is inside the cloud layer
+        if cl.base_ft <= altitude_ft <= cl.top_ft:
+            in_cloud = True
+            env_base = cl.base_ft if env_base is None else min(env_base, cl.base_ft)
+            env_top = cl.top_ft if env_top is None else max(env_top, cl.top_ft)
+            continue
+        # Check vertical clearance from cloud base or top
+        min_dist = min(abs(altitude_ft - cl.base_ft), abs(altitude_ft - cl.top_ft))
+        if min_dist < cloud_clearance_ft:
+            marginal = True
+
+    if in_cloud:
+        return "imc", env_base, env_top
+    return ("marginal" if marginal else "clear"), None, None
 
 
 def _check_enroute_vfr(
@@ -109,7 +162,6 @@ def _check_enroute_vfr(
     imc_count = 0
     marginal_count = 0
     clear_count = 0
-    cruise = altitude_ft
 
     for rpa in ctx.analyses:
         sounding = rpa.sounding.get(model)
@@ -117,26 +169,10 @@ def _check_enroute_vfr(
             continue
         total += 1
 
-        in_cloud = False
-        marginal = False
-
-        for cl in sounding.cloud_layers:
-            if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
-                continue
-            # Check if cruise altitude is inside the cloud layer
-            if cl.base_ft <= cruise <= cl.top_ft:
-                in_cloud = True
-                break
-            # Check vertical clearance from cloud base or top
-            dist_to_base = abs(cruise - cl.base_ft)
-            dist_to_top = abs(cruise - cl.top_ft)
-            min_dist = min(dist_to_base, dist_to_top)
-            if min_dist < cloud_clearance_ft:
-                marginal = True
-
-        if in_cloud:
+        cls, _, _ = _point_enroute_vfr(sounding, altitude_ft, cloud_clearance_ft)
+        if cls == "imc":
             imc_count += 1
-        elif marginal:
+        elif cls == "marginal":
             marginal_count += 1
         else:
             clear_count += 1
@@ -186,8 +222,9 @@ def _corridor_points(
     model: str,
     corridor_nm: float,
     phase: str,
-) -> Iterator[tuple[float, bool, bool, float | None]]:
-    """Yield ``(distance_nm, has_ovc, has_bkn, base_agl_ft)`` for each corridor point.
+) -> Iterator[tuple[float, bool, bool, float | None, float | None, float | None]]:
+    """Yield ``(distance_nm, has_ovc, has_bkn, base_agl_ft, deck_base_ft, deck_top_ft)``
+    for each corridor point.
 
     Single source of truth for both corridor membership and the transitable-deck
     condition, shared by the corridor grade (``_check_corridor_vfr``) and the
@@ -205,7 +242,9 @@ def _corridor_points(
     ``base_agl_ft`` is the height **above terrain** of the lowest blocking deck's
     base (``None`` when the point carries no deck) — the VFR room available
     *beneath* the deck, used by the mitigation's reachability gate. The grade
-    ignores it.
+    ignores it. ``deck_base_ft``/``deck_top_ft`` are the MSL envelope of the
+    deck layers at this point (``None`` when no deck) — the corridor-deck
+    cutout geometry for the highlight (#375).
 
     Points are yielded in ``ctx.analyses`` order (callers that need distance order
     sort the result).
@@ -228,6 +267,7 @@ def _corridor_points(
         has_ovc = False
         has_bkn = False
         lowest_base_ft: float | None = None
+        deck_top_ft: float | None = None
         for cl in sounding.cloud_layers:
             if cl.coverage not in (CloudCoverage.BKN, CloudCoverage.OVC):
                 continue
@@ -238,8 +278,10 @@ def _corridor_points(
                     has_bkn = True
                 if lowest_base_ft is None or cl.base_ft < lowest_base_ft:
                     lowest_base_ft = cl.base_ft
+                if deck_top_ft is None or cl.top_ft > deck_top_ft:
+                    deck_top_ft = cl.top_ft
         base_agl_ft = (lowest_base_ft - floor) if lowest_base_ft is not None else None
-        yield d, has_ovc, has_bkn, base_agl_ft
+        yield d, has_ovc, has_bkn, base_agl_ft, lowest_base_ft, deck_top_ft
 
 
 def _check_corridor_vfr(
@@ -276,7 +318,7 @@ def _check_corridor_vfr(
     for phase, key, icao, fallback in phases:
         has_ovc = False
         has_bkn = False
-        for _d, p_ovc, p_bkn, _base in _corridor_points(ctx, model, corridor_nm, phase):
+        for _d, p_ovc, p_bkn, _base, _db, _dt in _corridor_points(ctx, model, corridor_nm, phase):
             has_ovc = has_ovc or p_ovc
             has_bkn = has_bkn or p_bkn
 
@@ -288,6 +330,119 @@ def _check_corridor_vfr(
             parts.append(adv_t(key, loc, cov="BKN", icao=icao or fallback))
 
     return worst, parts
+
+
+def _build_vfr_highlights(
+    ctx: RouteContext,
+    model: str,
+    cloud_clearance_ft: float,
+    corridor_nm: float,
+    dep_status: AdvisoryStatus,
+    arr_status: AdvisoryStatus,
+) -> AdvisoryHighlights:
+    """Highlight geometry for the VFR composite (#375).
+
+    Regions are the union of the firing sub-axes, each with its own kind:
+    ``cruise_imc`` (cloud segments intersecting the cruise line, same geometry
+    as ``vmc_cruise``), and ``climb_deck``/``descent_deck`` (the corridor deck
+    bands near departure/arrival). The ribbon is the worst firing sub-axis at
+    each x — with en-route precipitation contributing per the shared classifier
+    capped at AMBER (matching the composite's cap) — and the airport
+    flight-category axis colouring only the endpoint segments.
+    """
+    cruise = ctx.cruise_altitude_ft
+
+    # Corridor decks by distance: dist → (severity, deck_base, deck_top).
+    corridor: dict[str, dict[float, tuple[HighlightSeverity, float | None, float | None]]] = {}
+    for phase in ("climb", "descent"):
+        by_dist: dict[float, tuple[HighlightSeverity, float | None, float | None]] = {}
+        for d, p_ovc, p_bkn, _base, deck_base, deck_top in _corridor_points(
+            ctx, model, corridor_nm, phase
+        ):
+            if p_ovc:
+                by_dist[d] = (HighlightSeverity.RED, deck_base, deck_top)
+            elif p_bkn:
+                by_dist[d] = (HighlightSeverity.AMBER, deck_base, deck_top)
+        corridor[phase] = by_dist
+
+    ribbon_points: list[tuple[float, HighlightSeverity]] = []
+    cruise_cells: list[tuple[float, FlaggedCell | None]] = []
+    climb_cells: list[tuple[float, FlaggedCell | None]] = []
+    descent_cells: list[tuple[float, FlaggedCell | None]] = []
+
+    for rpa in ctx.analyses:
+        dist = rpa.distance_from_origin_nm or 0.0
+        sounding = rpa.sounding.get(model)
+        if sounding is None:
+            ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+            cruise_cells.append((dist, None))
+            climb_cells.append((dist, None))
+            descent_cells.append((dist, None))
+            continue
+
+        # Cruise-line cloud axis (same geometry as vmc_cruise): IMC → red,
+        # marginal clearance → amber (ribbon only, the near-miss layer is not
+        # a cutout).
+        cls, env_base, env_top = _point_enroute_vfr(sounding, cruise, cloud_clearance_ft)
+        if cls == "imc":
+            cruise_sev = HighlightSeverity.RED
+            cruise_cells.append((dist, FlaggedCell(
+                kind="cruise_imc",
+                severity=cruise_sev,
+                base_ft=int(env_base) if env_base is not None else None,
+                top_ft=int(env_top) if env_top is not None else None,
+            )))
+        else:
+            cruise_sev = (
+                HighlightSeverity.AMBER if cls == "marginal" else HighlightSeverity.GREEN
+            )
+            cruise_cells.append((dist, None))
+
+        # Corridor-deck axes.
+        deck_sev = HighlightSeverity.GREEN
+        for phase, cells in (("climb", climb_cells), ("descent", descent_cells)):
+            hit = corridor[phase].get(dist)
+            if hit is None:
+                cells.append((dist, None))
+                continue
+            sev, deck_base, deck_top = hit
+            deck_sev = worst_severity(deck_sev, sev)
+            cells.append((dist, FlaggedCell(
+                kind="climb_deck" if phase == "climb" else "descent_deck",
+                severity=sev,
+                base_ft=int(deck_base) if deck_base is not None else None,
+                top_ft=int(deck_top) if deck_top is not None else None,
+            )))
+
+        # En-route precipitation axis, capped at AMBER like the composite grade.
+        precip_sev = precip_point_severity(
+            classify_precip_point(sounding.precipitation), cap_amber=True
+        )
+
+        ribbon_points.append((dist, worst_severity(cruise_sev, deck_sev, precip_sev)))
+
+    # Airport flight-category axis colours only the endpoint segments: worst-
+    # merge dep/arr status into the first/last route point.
+    if ribbon_points:
+        first = min(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
+        last = max(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
+        for idx, ap_status in ((first, dep_status), (last, arr_status)):
+            ap_sev = status_to_severity(ap_status)
+            if ap_sev in (HighlightSeverity.AMBER, HighlightSeverity.RED):
+                d, sev = ribbon_points[idx]
+                ribbon_points[idx] = (d, worst_severity(sev, ap_sev))
+
+    ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+    regions = (
+        build_regions(cruise_cells, ctx.total_distance_nm)
+        + build_regions(climb_cells, ctx.total_distance_nm)
+        + build_regions(descent_cells, ctx.total_distance_nm)
+    )
+    return AdvisoryHighlights(
+        ribbon=ribbon,
+        regions=regions,
+        peak_dist_nm=ribbon_peak(ribbon),
+    )
 
 
 # Severity order for the strict-improvement check on the cruise_imc mitigation.
@@ -694,7 +849,9 @@ class VFRFeasibilityEvaluator:
 
         for model in ctx.models:
             # 1. Airport conditions
-            airport_status, airport_detail = _check_airport_vfr(ctx, model)
+            airport_status, airport_detail, dep_status, arr_status = (
+                _check_airport_vfr(ctx, model)
+            )
 
             # 2. En-route cloud clearance
             total, imc_count, marginal_count, _ = _check_enroute_vfr(
@@ -793,11 +950,22 @@ class VFRFeasibilityEvaluator:
                 enroute_status, loc,
             )
 
+            # 8. Highlights (#375) only when the model has en-route data. The
+            # multi-kind cutouts (cruise IMC + corridor decks) are the point of
+            # this composite's geometry.
+            highlights = None
+            if total > 0:
+                highlights = _build_vfr_highlights(
+                    ctx, model, cloud_clearance_ft, corridor_nm,
+                    dep_status, arr_status,
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 mitigations=mitigations,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("vfr_feasibility", per_model, params)

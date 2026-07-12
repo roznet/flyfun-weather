@@ -142,11 +142,14 @@ enum CrossSectionPresets {
 
     /// advisory_id → lens id (card chips). Mirrors web ADVISORY_TO_PRESET.
     static let advisoryToPreset: [String: String] = [
-        "icing_escape": "icing", "fiki_icing": "icing",
+        "icing_escape": "icing", "fiki_icing": "icing", "freezing_precip": "icing",
         "cloud_top": "clouds", "vmc_cruise": "clouds",
         "convective": "convective",
         "turbulence": "turbulence", "mountain_wind": "turbulence",
         "vfr_feasibility": "vfr", "ifr_feasibility": "ifr",
+        // enroute_precip is a visibility proxy → the VFR lens; the web
+        // override's routeGraph swap has no iOS equivalent (#375).
+        "enroute_precip": "vfr",
     ]
 
     /// Per-advisory extras unioned onto the base lens. Mirrors web
@@ -155,6 +158,7 @@ enum CrossSectionPresets {
     /// time by `applyAdvisoryPreset`'s `m[id] != nil` guard.
     static let advisoryOverrides: [String: (groups: [LayerGroup], lines: [String])] = [
         "fiki_icing": (groups: [], lines: ["minus-10c", "minus-20c", "sld-bands"]),
+        "freezing_precip": (groups: [], lines: ["sld-bands"]),
     ]
 
     /// The lens a given advisory's chip should apply, or nil if it has no chip.

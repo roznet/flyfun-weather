@@ -25,6 +25,9 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
     format_extent,
     max_terrain_near_point,
     wind_at_altitude,
@@ -33,8 +36,11 @@ from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    HighlightSeverity,
+    InversionLayer,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
     SoundingAnalysis,
@@ -55,11 +61,17 @@ _INV_ABOVE_FT = 2000.0
 def _wave_signatures(
     sounding: SoundingAnalysis | None,
     terrain_ft: float,
-) -> set[str]:
-    """Wave-supporting signatures at one point: 'inversion' and/or 'oscillating'."""
+) -> tuple[set[str], InversionLayer | None]:
+    """Wave-supporting signatures at one point: 'inversion' and/or 'oscillating'.
+
+    Also returns the corroborating ridge-top inversion layer (``None`` when the
+    signature is oscillation-only) — its band is the ``wave_signature`` cutout
+    geometry for the highlight (#375).
+    """
     sigs: set[str] = set()
+    inv_layer: InversionLayer | None = None
     if sounding is None:
-        return sigs
+        return sigs, inv_layer
     vm = sounding.vertical_motion
     if vm is not None and vm.classification == VerticalMotionClass.OSCILLATING:
         sigs.add("oscillating")
@@ -68,8 +80,9 @@ def _wave_signatures(
     for inv in sounding.inversion_layers:
         if inv.top_ft > lo and inv.base_ft < hi:
             sigs.add("inversion")
+            inv_layer = inv
             break
-    return sigs
+    return sigs, inv_layer
 
 
 @register
@@ -172,12 +185,26 @@ class MountainWindEvaluator:
             max_wind = 0.0
             wave_red = False          # corroborated point above the lower red bar
             wave_sigs: set[str] = set()  # signatures seen at strong-wind points
+            # Per-point highlight geometry (#375). Non-mountain points are GREEN
+            # ("not relevant to your flight here"), matching the grade's skip;
+            # mountain points with no wind data are UNAVAILABLE. Two cutout
+            # kinds: ridge_wind (the terrain-hugging affected band) and
+            # wave_signature (the corroborating inversion on rotor-day points).
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            ridge_cells: list[tuple[float, FlaggedCell | None]] = []
+            wave_cells: list[tuple[float, FlaggedCell | None]] = []
+            peak_dist: float | None = None
+            peak_speed = 0.0
 
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 terrain_ft = max_terrain_near_point(
                     ctx.elevation, rpa.distance_from_origin_nm
                 )
                 if terrain_ft is None or terrain_ft < terrain_threshold:
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    ridge_cells.append((dist, None))
+                    wave_cells.append((dist, None))
                     continue
                 total += 1
 
@@ -186,19 +213,59 @@ class MountainWindEvaluator:
                     terrain_ft + altitude_margin, rpa.forecast_hour,
                 )
                 if wind is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    ridge_cells.append((dist, None))
+                    wave_cells.append((dist, None))
                     continue
 
                 speed_kt, _ = wind
                 if speed_kt > max_wind:
                     max_wind = speed_kt
 
-                if speed_kt >= wind_amber:
-                    affected += 1
-                    sigs = _wave_signatures(rpa.sounding.get(model), terrain_ft)
-                    if sigs:
-                        wave_sigs |= sigs
-                        if speed_kt >= corroborated_red:
-                            wave_red = True
+                if speed_kt < wind_amber:
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    ridge_cells.append((dist, None))
+                    wave_cells.append((dist, None))
+                    continue
+
+                affected += 1
+                sigs, inv_layer = _wave_signatures(rpa.sounding.get(model), terrain_ft)
+                if sigs:
+                    wave_sigs |= sigs
+                    if speed_kt >= corroborated_red:
+                        wave_red = True
+
+                # Red here = very strong wind regardless, or the rotor-day combo
+                # (wave signature + the lower corroborated bar) — the same two
+                # triggers as the route grade, located per point.
+                point_red = speed_kt >= wind_red or (
+                    bool(sigs) and speed_kt >= corroborated_red
+                )
+                severity = (
+                    HighlightSeverity.RED if point_red else HighlightSeverity.AMBER
+                )
+                ribbon_points.append((dist, severity))
+                ridge_cells.append((dist, FlaggedCell(
+                    kind="ridge_wind",
+                    severity=severity,
+                    base_ft=int(terrain_ft),
+                    top_ft=int(terrain_ft + altitude_margin),
+                )))
+                # The corroborating inversion band visually explains why the RED
+                # threshold dropped ("rotor day").
+                if point_red and inv_layer is not None:
+                    wave_cells.append((dist, FlaggedCell(
+                        kind="wave_signature",
+                        severity=HighlightSeverity.RED,
+                        base_ft=int(inv_layer.base_ft),
+                        top_ft=int(inv_layer.top_ft),
+                    )))
+                else:
+                    wave_cells.append((dist, None))
+
+                if speed_kt > peak_speed:
+                    peak_speed = speed_kt
+                    peak_dist = dist
 
             loc = ctx.locale
             ext = format_extent(affected, total, ctx.total_distance_nm)
@@ -229,10 +296,25 @@ class MountainWindEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = adv_t("mountain_wind.light", loc, speed=f"{max_wind:.0f}")
 
+            # Highlights (#375): built whenever the route has points at all —
+            # a no-mountain route gets the all-green ribbon its GREEN grade
+            # implies (not None). Peak = the strongest-wind affected point.
+            highlights = None
+            if ribbon_points:
+                highlights = AdvisoryHighlights(
+                    ribbon=build_ribbon(ribbon_points, ctx.total_distance_nm),
+                    regions=(
+                        build_regions(ridge_cells, ctx.total_distance_nm)
+                        + build_regions(wave_cells, ctx.total_distance_nm)
+                    ),
+                    peak_dist_nm=peak_dist,
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("mountain_wind", per_model, params)

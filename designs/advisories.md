@@ -250,24 +250,35 @@ re-run `evaluate_all`. The ribbon (per-point verdict) and the card badge
 (route-level, extent-thresholded grade) deliberately use **different mappings** — a
 GREEN advisory with a short amber ribbon run is correct.
 
-**Emitting helpers** (`_helpers.py`, below): the two emitting evaluators build the
-geometry inside the per-point loops they already run:
+**Emitters** (#373 shipped `vmc_cruise` + `convective`; #375 added the rest).
+Every emitter builds the geometry inside the per-point loop it already runs and
+builds highlights only when the model has data (`total > 0`); shared
+conventions: no sounding → UNAVAILABLE ribbon segment; points skipped by an
+evaluator's relevance filters (altitude buffers, terrain thresholds) are
+ribbon-GREEN ("not relevant to your flight here" reads as clear); unless noted,
+`peak_dist_nm` = `ribbon_peak` (center of the longest red run, else amber).
 
-- `vmc_cruise` — ribbon: OVC→red, BKN→amber, else green, no sounding→unavailable.
-  Regions `kind="cruise_imc"`, band = envelope of the cloud layer(s) containing
-  cruise. `peak_dist_nm` via `ribbon_peak` (longest red run, else amber).
-- `convective` — ribbon: HIGH/EXTREME→red, LOW/MODERATE (≥ `min_risk`)→amber, else
-  (below floor / tops below cruise / no convection)→green, no sounding→unavailable.
-  Regions reuse the evaluator's own base/top resolution (`check_top_ft`, model
-  base/top with thermo-EL fallback): `kind="tower"` only when **both** base and
-  top resolve, else `kind="tower_unresolved"` full-column ghost (nwp_precip /
-  cover-only, or a resolved top with unknown base — never draw a bounded box that
-  implies a base the model lacks). `peak_dist_nm`
-  = the affected point with the worst graded risk, ties → highest CAPE (matches the
-  MCP deep-link peak). Both build highlights only when the model has data (`total > 0`).
+| Evaluator | Ribbon (per-point verdict) | Region kinds |
+|-----------|----------------------------|--------------|
+| `vmc_cruise` | OVC→red, BKN→amber, else green | `cruise_imc` — envelope of the layer(s) containing cruise |
+| `convective` | HIGH/EXTREME→red, ≥`min_risk`→amber, below floor / tops-below-cruise→green | `tower` only when **both** base and top resolve (evaluator's own `check_top_ft` resolution, thermo fallback), else `tower_unresolved` full-column ghost — never a bounded box implying a base the model lacks. Peak = worst graded risk, ties → highest CAPE (matches the MCP deep-link) |
+| `icing_escape` | green = no *relevant* icing (post `has_relevant_icing` — icing above cruise+buffer is deliberately green) · amber = icing with viable warm-air escape (incl. tight-margin) · red = no escape (fz below terrain+margin, or fz/terrain unknown at an affected point) | `icing_band` — envelope of the relevant zones |
+| `fiki_icing` | corridor points grade the transit column exactly as the route grade (SLD / SEVERE-when-`severe_is_red` / thickness ≥ red → red; thickness ≥ amber → amber); everywhere, icing within the cruise buffer → amber; thin transit-able icing away from cruise stays green | `icing_band` — envelope of zones overlapping `[0, cruise+buffer]` |
+| `turbulence` | red = SEVERE CAT **anywhere in the column** (the cutout showing where it sits is the ambiguity the highlight resolves — may exceed the badge, which keys on the cruise band) · amber = MODERATE CAT overlapping cruise or strong updraft near cruise · LIGHT stays green | `cat_layer` — envelope of the triggering layers. Strong-w resolves to a single level, not a band → no `strong_updraft` cutout (skip rather than invent geometry) |
+| `cloud_top` | binary: amber = can't get on top here, else green (the *amount* of amber tells the story) | `blocking_deck` — reachable layers whose `top + margin > ceiling` |
+| `vfr_feasibility` | worst firing sub-axis per x: cruise IMC→red / marginal clearance→amber (ribbon only), corridor deck OVC→red / BKN→amber, en-route precip per shared classifier **capped amber**; airport flight-category colours only the endpoint segments | `cruise_imc` + `climb_deck` / `descent_deck` (deck envelope over its corridor span) — the multi-kind case |
+| `ifr_feasibility` | worst per x of icing (amber) / convective (HIGH/EXTREME red, else amber); airport IFR-viability (LIFR amber, below-minimums red) colours the endpoints | `icing_band` (zones within the cruise buffer) + `tower`/`tower_unresolved` (same conventions as `convective`) |
+| `mountain_wind` | non-mountain points green; mountain points: no wind data→unavailable, wind ≥ red or (signature + ≥ corroborated red)→red, ≥ amber→amber. Peak = strongest-wind affected point. All-green ribbon on a flat route (GREEN-not-UNAVAILABLE choice), not `None` | `ridge_wind` (terrain → terrain+`altitude_margin_ft`) + `wave_signature` (the corroborating inversion band, red points only — visually explains the dropped RED bar). Envelope-merging absorbs bumpy-terrain noise into per-run rectangles; if a real rotor-day pack still reads noisy, dropping to ribbon-only is a one-line change |
+| `freezing_precip` | red = active FZRA/PL surface phase · amber = primed profile (warm nose, no active precip) · green otherwise | `freezing_precip_column` — `base=None` (surface) → warm-nose top from `detect_warm_nose`, falling back to a fixed shallow AGL band (terrain + 3000 ft) when the nose top doesn't resolve |
+| `enroute_precip` | mirrors `classify_precip_point` (shared with the VFR composite): moderate+ snow→red, any snow / moderate+ rain / FZRA-PL→amber, light/dry→green | `precip_column` — full column (`base/top = None`) |
 
-Remaining advisories (#375) and iOS rendering (#374) are follow-ups; only `vmc_cruise`
-and `convective` emit today.
+Not emitting (deliberate, #375): `headwind` (scalar — route graph is its home),
+airport advisories (`flight_category`, `airport_wind`, `density_altitude`,
+`llws` — point-in-space), `model_agreement`/`dd_nwp_agreement` (cross-model —
+Compare mode), `convective_character`, `fronts` and `sun` (dedicated layers).
+
+iOS rendering is #374; the geometry is data-driven so iOS picks all emitters up
+with no further backend work.
 
 ## Shared Helpers (`_helpers.py`)
 
@@ -275,6 +286,8 @@ and `convective` emit today.
 - **`build_ribbon(per_point, total_nm)`** → `list[RibbonSegment]` — merge consecutive same-severity route points into runs; boundaries fall midway between adjacent points; tiles `[0, total_nm]` exactly (sorted/non-overlapping/gapless invariants tested). No-sounding points → `UNAVAILABLE` (#373)
 - **`build_regions(per_point, total_nm)`** → `list[HighlightRegion]` — merge consecutive same-`kind`/`severity` flagged points (a `FlaggedCell` per flagged point, `None` otherwise) into one cutout using the **envelope** (min `base_ft` / max `top_ft`); all-`None` run stays a full column. Same cell-midpoint x-boundaries as the ribbon (#373)
 - **`ribbon_peak(segments)`** → center of the longest RED run, else longest AMBER run, else `None` — generic worst-point for evaluators whose peak is pure ribbon extent (`vmc_cruise`); richer peaks (convective's highest-CAPE) are computed in the evaluator (#373)
+- **`status_to_severity(status)`** / **`worst_severity(*sevs)`** → map a sub-axis `AdvisoryStatus` onto the ribbon scale and worst-of merge per-point severities — used by the composites for the multi-axis ribbon and the airport endpoint colouring (#375). `worst_severity` ranks UNAVAILABLE lowest so a flagged verdict overrides a data gap, never the reverse
+- **`classify_precip_point(precip)`** / **`precip_point_severity(cls, cap_amber=)`** (in `enroute_precip.py`) → single source of the per-point precip phase/intensity bucketing, shared by `classify_enroute_precip` (grade) and the ribbon builders (standalone + VFR composite with `cap_amber=True`) so geometry cannot drift from the grade (#375)
 - **`icing_zones_in_altitude_range(zones, floor_ft, ceiling_ft)`** → filter zones overlapping an altitude band
 - **`has_relevant_icing(zones, cruise_altitude_ft, buffer_ft=2000)`** → True if any zone overlaps `[0, cruise + buffer]`. Used by IFR feasibility, icing escape, and FIKI evaluators to ignore icing far above cruise altitude
 - **`min_icing_clearance(zones, cruise_altitude_ft)`** → minimum vertical distance (ft) from cruise to nearest icing zone. Used by FIKI evaluator
@@ -333,7 +346,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - **Altitude table button**: opens a popup rendering the `/advisories/altitude-table` sweep — per-altitude advisory grid with best-below/best-above-cruise picks
 - **Profile selector** (`ProfileSelectorConfig`, owner-only): dropdown to switch the flight's advisory profile, re-running advisories with that profile's enabled/params/aggregation
 - **Alt-time toggle**: switches the displayed advisories between the planned departure and `alt_departure_time` (`routeAdvisories` vs `altAdvisories`)
-- **Advisory chips** (`handleAdvisoryChip`): clickable per-advisory chips that cross-link to the relevant map/cross-section context
+- **Advisory chips** (`handleAdvisoryChip`): clickable per-advisory chips that cross-link to the relevant map/cross-section context. Since #375 `freezing_precip` (→ `icing` preset + `sld-bands` override) and `enroute_precip` (→ `vfr` preset + precipitation route-graph override) also have chips; the mapping lives in `ADVISORY_TO_PRESET` (`web/ts/visualization/cross-section/advisory-presets.ts`), mirrored in iOS `CrossSectionPresets.swift`
 - Recalculate button triggers POST endpoint and re-renders. The top-level entry point is `renderAdvisories(...)` in `briefing-main.ts`, fed by `getEffectiveAdvisories(state)`
 
 **Info popup** (`components/info-popup.ts`):

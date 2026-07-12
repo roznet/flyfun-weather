@@ -9,13 +9,22 @@ Evaluates three flight phases:
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import min_icing_clearance
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    icing_zones_in_altitude_range,
+    min_icing_clearance,
+    ribbon_peak,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    HighlightSeverity,
     IcingRisk,
     IcingZone,
     ModelAdvisoryResult,
@@ -193,35 +202,77 @@ class FIKIIcingEvaluator:
             cruise_clear = 0
             cruise_total = 0
             total = 0
+            # Per-point highlight geometry (#375): the ribbon mirrors the loop's
+            # own per-point classification — transit thickness/severity/SLD in
+            # the departure/arrival corridors, cruise clear-air everywhere.
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            region_cells: list[tuple[float, FlaggedCell | None]] = []
 
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
                     continue
                 total += 1
 
-                dist = rpa.distance_from_origin_nm
                 zones = sounding.icing_zones
+                t, sev, sld = _transit_icing(zones, cruise_alt)
 
                 # --- departure / arrival transit icing ---
+                in_corridor = False
                 if dist <= proximity_nm:
-                    t, sev, sld = _transit_icing(zones, cruise_alt)
+                    in_corridor = True
                     dep_max_thickness = max(dep_max_thickness, t)
                     dep_worst = _worst_risk(dep_worst, sev)
                     dep_sld = dep_sld or sld
 
                 if dist >= total_dist - proximity_nm:
-                    t, sev, sld = _transit_icing(zones, cruise_alt)
+                    in_corridor = True
                     arr_max_thickness = max(arr_max_thickness, t)
                     arr_worst = _worst_risk(arr_worst, sev)
                     arr_sld = arr_sld or sld
 
                 # --- cruise clear-air check ---
                 cruise_total += 1
-                if not zones:
+                point_clear = (
+                    not zones
+                    or _min_icing_clearance(zones, cruise_alt) >= cruise_buffer_ft
+                )
+                if point_clear:
                     cruise_clear += 1
-                elif _min_icing_clearance(zones, cruise_alt) >= cruise_buffer_ft:
-                    cruise_clear += 1
+
+                # --- per-point ribbon verdict + icing-band cutout (#375) ---
+                # Corridor points grade the transit column exactly as the route
+                # grade does (SLD / SEVERE / thickness); everywhere the cruise
+                # clear-air check contributes amber when icing sits within the
+                # cruise buffer. Thin transit-able icing away from cruise stays
+                # green.
+                if in_corridor and (
+                    sld
+                    or (severe_is_red and sev == IcingRisk.SEVERE)
+                    or t >= transit_red
+                ):
+                    severity = HighlightSeverity.RED
+                elif (in_corridor and t >= transit_amber) or not point_clear:
+                    severity = HighlightSeverity.AMBER
+                else:
+                    severity = HighlightSeverity.GREEN
+
+                relevant_zones = icing_zones_in_altitude_range(
+                    zones, 0, cruise_alt + cruise_buffer_ft
+                )
+                if severity != HighlightSeverity.GREEN and relevant_zones:
+                    region_cells.append((dist, FlaggedCell(
+                        kind="icing_band",
+                        severity=severity,
+                        base_ft=int(min(z.base_ft for z in relevant_zones)),
+                        top_ft=int(max(z.top_ft for z in relevant_zones)),
+                    )))
+                else:
+                    region_cells.append((dist, None))
+                ribbon_points.append((dist, severity))
 
             # --- derive severity from the three metrics ---
             clear_pct = (
@@ -306,6 +357,14 @@ class FIKIIcingEvaluator:
             else:
                 detail = " | ".join(detail_parts)
 
+            # Highlights (#375) — the model has data here (total > 0).
+            ribbon = build_ribbon(ribbon_points, total_dist)
+            highlights = AdvisoryHighlights(
+                ribbon=ribbon,
+                regions=build_regions(region_cells, total_dist),
+                peak_dist_nm=ribbon_peak(ribbon),
+            )
+
             affected = cruise_total - cruise_clear
             per_model.append(
                 ModelAdvisoryResult.build(
@@ -315,6 +374,7 @@ class FIKIIcingEvaluator:
                     affected=affected,
                     total=cruise_total,
                     total_distance_nm=total_dist,
+                    highlights=highlights,
                 )
             )
 

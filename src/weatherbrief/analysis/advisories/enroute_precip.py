@@ -27,13 +27,21 @@ every divert/descent option, which is worth a composite caution).
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    format_extent,
+    ribbon_peak,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    HighlightSeverity,
     ModelAdvisoryResult,
     PrecipIntensity,
     PrecipPhase,
@@ -49,6 +57,46 @@ _DEFAULTS = {
     "snow_moderate_pct_red": 25.0,
     "rain_pct_amber": 30.0,
 }
+
+
+def classify_precip_point(precip) -> str | None:
+    """Classify one point's precipitation assessment into a hazard class.
+
+    Returns ``"snow_moderate"`` (moderate+ snow/mixed), ``"snow"`` (lighter
+    snow/mixed), ``"sig"`` (moderate+ rain, or FZRA/PL counted for visibility
+    extent only), ``"light"`` (light rain — comfort, not a hazard), or ``None``
+    (dry / no assessment). Single source of the per-point phase/intensity
+    bucketing, shared by :func:`classify_enroute_precip` and the highlight
+    ribbons (#375) so the geometry cannot drift from the grade.
+    """
+    if precip is None:
+        return None
+    phase = precip.surface_phase
+    intensity = precip.surface_intensity
+    if phase == PrecipPhase.DRY or intensity == PrecipIntensity.NONE:
+        return None
+    if phase in _SNOW_PHASES:
+        return "snow_moderate" if intensity in _SIGNIFICANT else "snow"
+    if phase in _FREEZING_PHASES:
+        # Visibility extent only — severity owned by freezing_precip.
+        return "sig"
+    if intensity in _SIGNIFICANT:
+        return "sig"
+    return "light"
+
+
+def precip_point_severity(cls: str | None, *, cap_amber: bool = False) -> HighlightSeverity:
+    """Ribbon severity for a :func:`classify_precip_point` class (#375).
+
+    Moderate+ snow → red (amber when ``cap_amber``, matching the VFR
+    composite's cap); any snow or significant rain/FZRA/PL → amber; light/dry
+    → green.
+    """
+    if cls == "snow_moderate":
+        return HighlightSeverity.AMBER if cap_amber else HighlightSeverity.RED
+    if cls in ("snow", "sig"):
+        return HighlightSeverity.AMBER
+    return HighlightSeverity.GREEN
 
 
 def classify_enroute_precip(
@@ -84,18 +132,14 @@ def classify_enroute_precip(
         if precip is None:
             continue
         has_signal = True
-        phase = precip.surface_phase
-        intensity = precip.surface_intensity
-        if phase == PrecipPhase.DRY or intensity == PrecipIntensity.NONE:
+        cls = classify_precip_point(precip)
+        if cls is None:
             continue
-        if phase in _SNOW_PHASES:
+        if cls in ("snow", "snow_moderate"):
             snow_pts += 1
-            if intensity in _SIGNIFICANT:
+            if cls == "snow_moderate":
                 snow_moderate_pts += 1
-        elif phase in _FREEZING_PHASES:
-            # Visibility extent only — severity owned by freezing_precip.
-            sig_rain_pts += 1
-        elif intensity in _SIGNIFICANT:
+        elif cls == "sig":
             sig_rain_pts += 1
         else:
             light_pts += 1
@@ -205,13 +249,50 @@ class EnroutePrecipEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            status, detail, affected, total, _ = classify_enroute_precip(
+            status, detail, affected, total, has_signal = classify_enroute_precip(
                 ctx, model, params,
             )
+
+            # Per-point highlight geometry (#375): full-column precip cutouts
+            # (the hazard is the whole column below the melting layer) + a
+            # ribbon mirroring classify_precip_point. Skipped when the model
+            # has no precipitation signal (status UNAVAILABLE).
+            highlights = None
+            if has_signal and total > 0:
+                ribbon_points: list[tuple[float, HighlightSeverity]] = []
+                region_cells: list[tuple[float, FlaggedCell | None]] = []
+                for rpa in ctx.analyses:
+                    dist = rpa.distance_from_origin_nm or 0.0
+                    sounding = rpa.sounding.get(model)
+                    if sounding is None:
+                        ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                        region_cells.append((dist, None))
+                        continue
+                    severity = precip_point_severity(
+                        classify_precip_point(sounding.precipitation)
+                    )
+                    ribbon_points.append((dist, severity))
+                    if severity in (HighlightSeverity.AMBER, HighlightSeverity.RED):
+                        region_cells.append((dist, FlaggedCell(
+                            kind="precip_column",
+                            severity=severity,
+                            base_ft=None,
+                            top_ft=None,
+                        )))
+                    else:
+                        region_cells.append((dist, None))
+                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+                highlights = AdvisoryHighlights(
+                    ribbon=ribbon,
+                    regions=build_regions(region_cells, ctx.total_distance_nm),
+                    peak_dist_nm=ribbon_peak(ribbon),
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("enroute_precip", per_model, params)
