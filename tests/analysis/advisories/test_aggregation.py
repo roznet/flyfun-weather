@@ -295,3 +295,39 @@ class TestEvaluateAllAggregation:
         finally:
             registry._EVALUATORS.pop("_test_custom_detail", None)
             registry._EVALUATORS.pop("_test_unavailable", None)
+
+
+class TestAffectedNmGeometry:
+    """affected_nm follows route geometry, not a point-count proportion (#391)."""
+
+    def test_uneven_route_uses_ribbon_span_not_proportion(self):
+        """Flagged extent = the amber/red ribbon span, not total_nm * affected/total.
+
+        Route 0..200nm with 5 points clustered near the start; only the first
+        15nm is flagged. The point-count proportion (200 * 2/5 = 80nm) badly
+        overstates the extent; the ribbon span (15nm) is correct.
+        """
+        from weatherbrief.models import (
+            AdvisoryHighlights,
+            HighlightSeverity,
+            RibbonSegment,
+        )
+
+        ribbon = [
+            RibbonSegment(dist_from_nm=0.0, dist_to_nm=15.0, severity=HighlightSeverity.RED),
+            RibbonSegment(dist_from_nm=15.0, dist_to_nm=200.0, severity=HighlightSeverity.GREEN),
+        ]
+        result = ModelAdvisoryResult.build(
+            model="gfs", status=AdvisoryStatus.AMBER, detail="",
+            affected=2, total=5, total_distance_nm=200,
+            highlights=AdvisoryHighlights(ribbon=ribbon),
+        )
+        assert result.affected_nm == 15.0
+
+    def test_no_ribbon_falls_back_to_proportion(self):
+        """Evaluators that emit no ribbon keep the point-count proportion."""
+        result = ModelAdvisoryResult.build(
+            model="gfs", status=AdvisoryStatus.AMBER, detail="",
+            affected=2, total=5, total_distance_nm=200,
+        )
+        assert result.affected_nm == 80.0
