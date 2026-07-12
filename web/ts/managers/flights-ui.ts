@@ -17,6 +17,9 @@ function assessmentClass(assessment: string | null): string {
     case 'GREEN': return 'badge-green';
     case 'AMBER': return 'badge-amber';
     case 'RED': return 'badge-red';
+    // A real verdict ("we could not assess this"), so it carries the bordered
+    // badge rather than badge-none, which means "no verdict at all" (#392).
+    case 'UNAVAILABLE': return 'badge-unavailable';
     default: return 'badge-none';
   }
 }

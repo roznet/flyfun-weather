@@ -33,6 +33,7 @@ from pydantic import AnyHttpUrl, Field
 from weatherbrief.connectors.views import (
     CONVECTIVE_NOTE as _CONVECTIVE_NOTE,
     advisory_detail as _advisory_detail,
+    assessment_note as _assessment_note,
     alternates_hook as _alternates_hook,
     briefing_freshness_status as _briefing_freshness_status,
     convective_detail as _convective_detail,
@@ -285,8 +286,10 @@ def list_flights() -> dict[str, Any]:
     """List the user's upcoming flights with briefing status.
 
     Returns each flight's route, departure time, and weather assessment
-    (GREEN/AMBER/RED) from the latest briefing. Use this to see which
-    flights need attention or have stale briefings.
+    (GREEN/AMBER/RED/UNAVAILABLE) from the latest briefing. Use this to see
+    which flights need attention or have stale briefings.
+
+    UNAVAILABLE means we produced a briefing but no advisory could be graded (no usable model data) — it is NOT a clear sky and must never be narrated as reassuring; say we could not assess the flight.
     """
     try:
         with _get_client() as client:
@@ -442,8 +445,10 @@ def get_briefing(
 ) -> dict[str, Any]:
     """Get the latest weather briefing for a flight.
 
-    Returns the overall assessment (GREEN/AMBER/RED), route advisories,
-    AI weather digest, and a link to the full interactive briefing.
+    Returns the overall assessment (GREEN/AMBER/RED/UNAVAILABLE), route
+    advisories, AI weather digest, and a link to the full interactive briefing.
+
+    UNAVAILABLE means we produced a briefing but no advisory could be graded (no usable model data) — it is NOT a clear sky and must never be narrated as reassuring; say we could not assess the flight.
 
     Each advisory carries neutral drill-in hooks: ``cross_check_present`` (model
     scheme reconciliation) and ``aggregate_mitigations_present`` (advice-only
@@ -509,6 +514,11 @@ def get_briefing(
             "briefing_timestamp": timestamp,
             "web_url": _flight_web_url(flight_id),
         }
+
+        # #392: tell the agent what UNAVAILABLE means before it improvises.
+        _assess_note = _assessment_note(pack.get("assessment"))
+        if _assess_note:
+            result["assessment_note"] = _assess_note
 
         if not fresh_status["is_fresh"]:
             result["stale_models"] = fresh_status.get("stale_models", [])
