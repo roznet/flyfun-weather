@@ -250,10 +250,15 @@ def evaluate_all(
             # through from_per_model, whose empty-list path we already rely on
             # elsewhere) so the deliberately-empty per_model is preserved.
             logger.warning("Advisory %s evaluation failed", adv_id, exc_info=True)
+            from weatherbrief.analysis.advisories.strings import adv_t
+
             results.append(RouteAdvisoryResult(
                 advisory_id=adv_id,
                 aggregate_status=AdvisoryStatus.UNAVAILABLE,
-                aggregate_detail=f"Evaluation failed: {type(exc).__name__}",
+                aggregate_detail=adv_t(
+                    "evaluation_failed", getattr(ctx, "locale", None),
+                    error=type(exc).__name__,
+                ),
                 per_model=[],
                 parameters_used=params,
             ))

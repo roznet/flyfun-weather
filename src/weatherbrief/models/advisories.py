@@ -350,22 +350,17 @@ class ModelAdvisoryResult(BaseModel):
         # 0 meaning "tracked this threshold, zero points qualified" (#302 review).
         mod = affected_mod if affected_mod is not None else 0
 
-        # Affected extent (nm). Prefer the flagged (amber/red) span of the
-        # ``highlights`` ribbon when present: the ribbon partitions
-        # ``[0, total_nm]`` by the midpoint-owned-cell convention (each point owns
-        # the interval to the midpoints of its neighbours), so its flagged runs
-        # are the true along-route extent — correct on unevenly-spaced routes,
-        # unlike ``total_distance_nm * affected / total``, a point-count
-        # proportion that misplaces extent when point spacing varies (#391). Falls
-        # back to the proportion when the evaluator emits no ribbon.
-        affected_nm = round(total_distance_nm * affected / total, 1) if total > 0 else 0.0
-        if highlights is not None and highlights.ribbon:
-            affected_nm = round(sum(
-                seg.dist_to_nm - seg.dist_from_nm
-                for seg in highlights.ribbon
-                if seg.severity in (HighlightSeverity.AMBER, HighlightSeverity.RED)
-            ), 1)
-
+        # affected_nm is the nm form of affected_points and must stay consistent
+        # with affected_pct — all three key off the same ``affected`` count. A
+        # prior attempt to derive it from the highlights ribbon's flagged span was
+        # reverted (#391 review): the ribbon's amber/red membership does not match
+        # ``affected`` for every evaluator (enroute_precip counts light rain in
+        # ``affected`` but grades it ribbon-GREEN; the feasibility composites'
+        # ribbons carry corridor/precip/airport axes not in ``affected``), so a
+        # ribbon-derived affected_nm contradicted affected_pct on the same result.
+        # The genuinely geometry-accurate extent (midpoint-owned cells of the
+        # *affected* points) needs per-point distances threaded into build(); that
+        # belongs with the #393 single-assessment refactor, not here.
         return cls(
             model=model,
             status=status,
@@ -373,7 +368,7 @@ class ModelAdvisoryResult(BaseModel):
             affected_points=affected,
             total_points=total,
             affected_pct=round(100 * affected / total, 1) if total > 0 else 0,
-            affected_nm=affected_nm,
+            affected_nm=round(total_distance_nm * affected / total, 1) if total > 0 else 0,
             total_nm=round(total_distance_nm, 1),
             affected_mod_points=mod,
             affected_mod_pct=round(100 * mod / total, 1) if total > 0 else 0,

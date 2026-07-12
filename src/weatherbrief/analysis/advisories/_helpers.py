@@ -351,6 +351,29 @@ def min_icing_clearance(
     return min_dist
 
 
+# A clear (GREEN) verdict may only speak for the whole domain when at least this
+# fraction of it was assessable. Below it, a clear subset of a mostly-unassessed
+# domain is UNAVAILABLE — not GREEN (#391). Data-coverage tolerance (missing-data
+# handling), NOT a meteorological threshold.
+_MIN_ASSESSED_FRACTION = 0.5
+
+
+def below_coverage(assessed: int, domain: int) -> bool:
+    """True when a would-be-GREEN verdict rests on too small a share of its domain.
+
+    ``assessed`` is the count of units the evaluator could actually grade;
+    ``domain`` is the assessable universe it speaks for (route points for most
+    evaluators, mountain points for ``mountain_wind``). Used to downgrade a
+    would-be-GREEN to UNAVAILABLE when coverage is thin (#391) — a clear subset
+    does not establish the unassessed remainder is clear. Only ever applied to a
+    GREEN verdict; a flagged (AMBER/RED) verdict always stands, so real hazard
+    evidence on partial coverage is never diluted. Returns False for an empty
+    domain (``domain == 0`` is handled as UNAVAILABLE by the evaluators' own
+    "nothing to assess" branch, not here).
+    """
+    return domain > 0 and assessed < domain * _MIN_ASSESSED_FRACTION
+
+
 def pct_above_threshold(
     affected: int,
     total: int,

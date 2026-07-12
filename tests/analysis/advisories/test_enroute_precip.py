@@ -131,6 +131,19 @@ class TestEnroutePrecipEvaluator:
         result = _evaluate(_ctx(per_point), params={"snow_pct_amber": 30})
         assert result.aggregate_status == AdvisoryStatus.GREEN
 
+    def test_clear_verdict_low_coverage_is_unavailable(self):
+        """A dry/clear verdict from precip data at too few route points → UNAVAILABLE.
+
+        Regression for #391 review: 2 dry (assessed) points among 8 with no precip
+        assessment used to grade GREEN, vouching for the 8 unassessed points.
+        """
+        per_point = [
+            _sounding() if i < 2 else _sounding(with_precip=False)
+            for i in range(10)
+        ]
+        result = _evaluate(_ctx(per_point))
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+
     def test_unassessable_points_do_not_dilute_percentage(self):
         """Points with no precip assessment must leave the denominator.
 

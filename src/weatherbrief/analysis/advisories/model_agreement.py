@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories._helpers import (
+    below_coverage,
+    format_extent,
+    pct_above_threshold,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
@@ -118,6 +122,12 @@ class ModelAgreementEvaluator:
                 detail = adv_t("model_agreement.mostly_good", loc, extent=format_extent(moderate_count, total, ctx.total_distance_nm))
             else:
                 detail = adv_t("model_agreement.poor", loc, extent=format_extent(poor_count, total, ctx.total_distance_nm))
+
+        # Coverage tolerance (#391): a "good agreement" verdict resting on real
+        # comparisons at too few route points cannot vouch for the rest.
+        if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+            status = AdvisoryStatus.UNAVAILABLE
+            detail = adv_t("model_agreement.no_data", loc)
 
         per_model = [ModelAdvisoryResult.build(
             model="all", status=status, detail=detail,
