@@ -683,9 +683,10 @@ def get_advisory_catalog():
     """
     from weatherbrief.analysis.advisories import get_catalog, get_category_order
 
+    catalog = get_catalog()
     return {
-        "advisories": [entry.model_dump() for entry in get_catalog()],
-        "categories": get_category_order(),
+        "advisories": [entry.model_dump() for entry in catalog],
+        "categories": get_category_order(catalog),
     }
 
 

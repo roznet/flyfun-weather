@@ -23,7 +23,6 @@ import {
   type Interview,
   type UsageSummary,
 } from './adapters/preferences-adapter';
-import { hideMetricInfo } from './components/info-popup';
 import type { InterviewOption } from './types/advisories';
 import { fetchFlights, fetchLatestPack, previewAdvisories } from './adapters/api-adapter';
 import {
@@ -54,7 +53,7 @@ import {
 import { initTheme } from './theme';
 import { initI18n, t, setLocale, getLocale, getDateLocale } from './i18n/i18n';
 import { setUnitsPreference } from './units';
-import { initInfoPopup, showPopupContent } from './components/info-popup';
+import { initInfoPopup, showPopupContent, hideMetricInfo } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 
 /** Advisory id of the experimental front advisory (mirrors FRONTS_ADVISORY_ID in the backend). */
@@ -72,9 +71,9 @@ let interviewAnswers: Record<string, string> = {};
 /** Live-preview target (#387, slice 4): the user's most recent flight+pack the
  *  draft settings are previewed against. Null until discovered / if none. */
 let previewTarget: { flightId: string; ts: string; label: string } | null = null;
-/** Per-advisory aggregate status under the *saved* settings — the diff baseline. */
-let previewBaseline: Record<string, string> = {};
 let previewTimer: number | undefined;
+/** Monotonic ticket so only the most recent preview response is rendered (#390). */
+let previewSeq = 0;
 let profiles: ProfileResponse[] = [];
 let activeProfileId: number | null = null;
 let aircraftList: AircraftResponse[] = [];
@@ -275,7 +274,7 @@ function switchProfile(profileId: number): void {
   }
   // Re-baseline the live preview against the newly-selected profile's saved
   // settings so the diff never lingers on the previous profile (#390 review).
-  void refreshPreviewBaseline();
+  scheduleAdvisoryPreview(true);
 }
 
 async function handleNewProfile(): Promise<void> {
@@ -634,9 +633,11 @@ async function init(): Promise<void> {
   // Live preview (#387, slice 4): recompute the diff (debounced) whenever the
   // advisory enables/params or aggregation change. Delegated on the container so
   // it survives re-renders.
-  document.getElementById('advisory-settings')?.addEventListener('input', scheduleAdvisoryPreview);
-  document.getElementById('advisory-settings')?.addEventListener('change', scheduleAdvisoryPreview);
-  document.getElementById('advisory-aggregation')?.addEventListener('change', scheduleAdvisoryPreview);
+  // Arrow-wrapped so the DOM Event isn't passed as the `immediate` arg (edits
+  // must use the debounce, not fire immediately).
+  document.getElementById('advisory-settings')?.addEventListener('input', () => scheduleAdvisoryPreview());
+  document.getElementById('advisory-settings')?.addEventListener('change', () => scheduleAdvisoryPreview());
+  document.getElementById('advisory-aggregation')?.addEventListener('change', () => scheduleAdvisoryPreview());
   void initAdvisoryPreview();
 
   // Save button
@@ -1393,46 +1394,46 @@ async function initAdvisoryPreview(): Promise<void> {
       } catch { /* try the next flight */ }
     }
     if (!previewTarget) return;
-    await refreshPreviewBaseline();
+    void scheduleAdvisoryPreview(true);
   } catch { /* preview stays hidden */ }
 }
 
-/** Recompute the baseline for the *currently active profile* and re-run the diff.
- *  Called on init and whenever the edited profile changes, so the panel never
- *  shows a stale diff against a previously-selected profile. */
-async function refreshPreviewBaseline(): Promise<void> {
-  if (!previewTarget) return;
-  try {
-    const base = await previewAdvisories(
-      previewTarget.flightId,
-      previewTarget.ts,
-      activeProfileSavedAdvisories(),
-    );
-    previewBaseline = {};
-    for (const a of base.manifest.advisories) previewBaseline[a.advisory_id] = a.aggregate_status;
-    await runAdvisoryPreview();
-  } catch { /* leave the panel as-is */ }
-}
-
-/** Debounce preview recomputation as the pilot edits draft settings. */
-function scheduleAdvisoryPreview(): void {
+/** Debounce preview recomputation. Pass ``immediate`` for baseline-changing
+ *  events (init, profile switch, save) so the panel updates without the typing
+ *  debounce; edits use the default 700ms debounce. */
+function scheduleAdvisoryPreview(immediate = false): void {
   if (!previewTarget) return;
   window.clearTimeout(previewTimer);
-  previewTimer = window.setTimeout(() => void runAdvisoryPreview(), 700);
+  if (immediate) {
+    void updatePreview();
+  } else {
+    previewTimer = window.setTimeout(() => void updatePreview(), 700);
+  }
 }
 
-/** Recompute the preview under the current (draft) form settings and render the
- *  per-advisory deltas vs the saved-settings baseline. */
-async function runAdvisoryPreview(): Promise<void> {
+/** Recompute the preview and render it. Fetches the baseline (active profile's
+ *  saved settings) and the draft (live form) together under one monotonic ticket
+ *  so out-of-order responses can never render a stale diff (#390 review): a rapid
+ *  edit or profile switch bumps ``previewSeq``, and any older in-flight response
+ *  whose ticket is no longer current is discarded. Baseline+draft come from the
+ *  same fetch pass, so the two halves of the diff are always consistent. */
+async function updatePreview(): Promise<void> {
   if (!previewTarget) return;
+  const seq = ++previewSeq;
   const prefs = collectAdvisoryPrefs();
   try {
-    const draft = await previewAdvisories(previewTarget.flightId, previewTarget.ts, {
-      enabled: prefs.enabled,
-      params: prefs.params,
-      aggregation: prefs.aggregation,
-    });
-    renderPreviewDeltas(draft.manifest.advisories);
+    const [base, draft] = await Promise.all([
+      previewAdvisories(previewTarget.flightId, previewTarget.ts, activeProfileSavedAdvisories()),
+      previewAdvisories(previewTarget.flightId, previewTarget.ts, {
+        enabled: prefs.enabled,
+        params: prefs.params,
+        aggregation: prefs.aggregation,
+      }),
+    ]);
+    if (seq !== previewSeq) return;  // a newer request superseded this one
+    const baseline: Record<string, string> = {};
+    for (const a of base.manifest.advisories) baseline[a.advisory_id] = a.aggregate_status;
+    renderPreviewDeltas(baseline, draft.manifest.advisories);
   } catch { /* leave the last render in place */ }
 }
 
@@ -1448,6 +1449,7 @@ const PREVIEW_OFF = 'off';
  *  both "just enabled" (undefined baseline) and "just disabled" (absent from
  *  draft) — exactly the Setup-Assistant toggles this feature is meant to preview. */
 function renderPreviewDeltas(
+  baseline: Record<string, string>,
   advisories: { advisory_id: string; aggregate_status: string }[],
 ): void {
   const panel = document.getElementById('advisory-preview');
@@ -1455,11 +1457,11 @@ function renderPreviewDeltas(
   const nameById = new Map(catalog.map(e => [e.id, e.name]));
 
   const draftById = new Map(advisories.map(a => [a.advisory_id, a.aggregate_status]));
-  const ids = new Set<string>([...Object.keys(previewBaseline), ...draftById.keys()]);
+  const ids = new Set<string>([...Object.keys(baseline), ...draftById.keys()]);
 
   const changes: { name: string; from: string; to: string }[] = [];
   for (const id of ids) {
-    const before = previewBaseline[id] ?? PREVIEW_OFF;
+    const before = baseline[id] ?? PREVIEW_OFF;
     const after = draftById.get(id) ?? PREVIEW_OFF;
     if (before !== after) {
       changes.push({ name: nameById.get(id) ?? id, from: before, to: after });
@@ -1601,7 +1603,7 @@ async function handleSave(): Promise<void> {
       if (idx >= 0) profiles[idx] = updated;
       // The saved settings just changed — re-baseline the preview so the next
       // edit diffs against what was actually saved (#390 review).
-      void refreshPreviewBaseline();
+      scheduleAdvisoryPreview(true);
     }
 
     // Save account-level preferences (locale + optional services + autorouter creds in dev mode)

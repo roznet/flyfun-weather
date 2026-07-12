@@ -98,16 +98,25 @@ def get_catalog() -> list[AdvisoryCatalogEntry]:
     return [entry for _, entry in indexed]
 
 
-def get_category_order() -> list[dict[str, object]]:
+def get_category_order(
+    entries: list[AdvisoryCatalogEntry] | None = None,
+) -> list[dict[str, object]]:
     """Return the ordered category list served alongside the catalog (#387).
 
     Only categories that actually have registered advisories are returned, in
     ``CATEGORY_ORDER`` (unknown categories appended). Labels stay client-side
     (i18n); each entry carries its stable ``key`` plus a ``diagnostics`` flag so
     the client renders the Diagnostics group distinctly without its own list.
+
+    Pass ``entries`` (e.g. the list ``get_catalog()`` already built) to avoid
+    re-invoking every evaluator's ``catalog_entry()`` a second time on the hot
+    catalog-endpoint path; omit it and the categories are derived directly.
     """
     _ensure_loaded()
-    present = {cls.catalog_entry().category for cls in _EVALUATORS.values()}
+    if entries is None:
+        present = {cls.catalog_entry().category for cls in _EVALUATORS.values()}
+    else:
+        present = {e.category for e in entries}
     ordered = [c for c in CATEGORY_ORDER if c in present]
     ordered += sorted(c for c in present if c not in CATEGORY_ORDER)
     return [

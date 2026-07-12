@@ -161,3 +161,13 @@ def test_preview_empty_body_uses_saved_settings(client, app_db):
     )
     assert resp.status_code == 200, resp.text
     assert not (pack_dir / "route_advisories.json").exists()
+
+
+def test_preview_rejects_invalid_aggregation(client, app_db):
+    """A typo'd aggregation fails validation (422) rather than being silently ignored."""
+    flight_id, ts, _ = _seed(app_db)
+    resp = client.post(
+        f"/api/flights/{flight_id}/packs/{ts}/advisories/preview",
+        json={"aggregation": "bogus"},
+    )
+    assert resp.status_code == 422, resp.text

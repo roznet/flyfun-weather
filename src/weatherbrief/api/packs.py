@@ -3172,7 +3172,9 @@ class PreviewAdvisoriesRequest(BaseModel):
 
     enabled: dict[str, bool] | None = None
     params: dict[str, dict[str, float]] | None = None
-    aggregation: str | None = None
+    # Constrained so a typo'd value fails validation (422) rather than being
+    # silently ignored and falling back to the saved aggregation (#390 review).
+    aggregation: Literal["worst", "majority"] | None = None
 
 
 @router.post("/{timestamp}/advisories/preview", response_model=RecalculateAdvisoriesResponse)
@@ -3220,11 +3222,8 @@ def preview_advisories(
     enabled_map = body.enabled if body.enabled is not None else saved_enabled_map
     enabled_ids = resolve_enabled_ids(enabled_map)
     user_params = body.params if body.params is not None else saved_params
-    aggregation = (
-        AdvisoryAggregation(body.aggregation)
-        if body.aggregation in ("worst", "majority")
-        else saved_agg
-    )
+    # body.aggregation is already validated to worst/majority/None by Pydantic.
+    aggregation = AdvisoryAggregation(body.aggregation) if body.aggregation else saved_agg
 
     # NOTE: no fronts recompute and persist=False — a preview must never touch
     # the pack dir.
