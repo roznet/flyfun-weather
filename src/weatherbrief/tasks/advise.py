@@ -130,6 +130,13 @@ def _resolve_analyses(
             if swap_icing:
                 if icing_method == "ogimet_nwp":
                     updates["icing_zones"] = list(sounding.icing_ogimet_nwp_zones)
+                    # Ogimet-NWP needs a model-native cloud envelope. Without
+                    # one it returns [] (assess_icing_zones_ogimet_nwp bails on
+                    # `not clouds`), which is "method unavailable", NOT "ran,
+                    # found nothing". Flag it so the icing evaluators grade
+                    # UNAVAILABLE rather than clear-by-absence (#391).
+                    if not sounding.nwp_cloud_layers:
+                        updates["active_icing_available"] = False
                 elif icing_method == "sfip_nwp":
                     updates["icing_zones"] = [
                         IcingZone(

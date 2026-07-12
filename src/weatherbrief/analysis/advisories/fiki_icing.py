@@ -211,7 +211,10 @@ class FIKIIcingEvaluator:
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
-                if sounding is None:
+                if sounding is None or not sounding.active_icing_available:
+                    # No sounding, or the active icing method could not run here
+                    # (Ogimet-NWP with no native cloud envelope) — absent icing,
+                    # not clear. UNAVAILABLE; excluded from both denominators.
                     ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
                     region_cells.append((dist, None))
                     continue

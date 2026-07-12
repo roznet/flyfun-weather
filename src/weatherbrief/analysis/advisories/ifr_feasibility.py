@@ -126,7 +126,7 @@ def _check_enroute_hazards(
     cruise_altitude_ft: float,
     icing_altitude_buffer_ft: float,
 ) -> tuple[
-    int, int, int, int, ConvectiveRisk,
+    int, int, int, int, int, ConvectiveRisk,
     list[tuple[float, HighlightSeverity]],
     list[tuple[float, FlaggedCell | None]],
     list[tuple[float, FlaggedCell | None]],
@@ -137,8 +137,12 @@ def _check_enroute_hazards(
     a point counts as "icing affected" only when an icing zone is within
     *icing_altitude_buffer_ft* of cruise altitude.
 
-    Returns (total, affected, icing_count, conv_count, worst_conv_risk,
-    ribbon_points, icing_cells, conv_cells).
+    Returns (total, icing_total, affected, icing_count, conv_count,
+    worst_conv_risk, ribbon_points, icing_cells, conv_cells).
+    - total: points with a sounding (convective denominator)
+    - icing_total: points where the active icing method could run (icing
+      denominator) — a point on Ogimet-NWP with no native cloud envelope cannot
+      assess icing and is excluded so absent icing is not graded clear (#391)
     - affected: number of unique points with icing OR convective risk
     - icing_count / conv_count: individual counts for detail messages
     - ribbon_points / icing_cells / conv_cells: per-point highlight geometry
@@ -148,6 +152,7 @@ def _check_enroute_hazards(
       one list each).
     """
     total = 0
+    icing_total = 0
     affected = 0
     icing_count = 0
     conv_count = 0
@@ -166,8 +171,16 @@ def _check_enroute_hazards(
             continue
         total += 1
 
+        # The active icing method may be unable to run here (Ogimet-NWP with no
+        # native cloud envelope): then its empty icing_zones is absent data, not
+        # "no icing". Assess icing only when it could run, and keep a separate
+        # denominator so absent icing never dilutes toward a clear grade (#391).
+        icing_available = sounding.active_icing_available
+        if icing_available:
+            icing_total += 1
         has_icing = (
-            bool(sounding.icing_zones)
+            icing_available
+            and bool(sounding.icing_zones)
             and min_icing_clearance(sounding.icing_zones, cruise_altitude_ft)
             < icing_altitude_buffer_ft
         )
@@ -229,11 +242,16 @@ def _check_enroute_hazards(
         if has_icing or has_convective:
             affected += 1
 
-        icing_sev = HighlightSeverity.AMBER if has_icing else HighlightSeverity.GREEN
+        if not icing_available:
+            icing_sev = HighlightSeverity.UNAVAILABLE
+        elif has_icing:
+            icing_sev = HighlightSeverity.AMBER
+        else:
+            icing_sev = HighlightSeverity.GREEN
         ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
 
     return (
-        total, affected, icing_count, conv_count, worst_conv_risk,
+        total, icing_total, affected, icing_count, conv_count, worst_conv_risk,
         ribbon_points, icing_cells, conv_cells,
     )
 
@@ -376,7 +394,7 @@ class IFRFeasibilityEvaluator:
             # 2. En-route hazards (single pass — no double-counting), including
             # the per-point highlight geometry (#375).
             (
-                total, affected, icing_count, conv_count, worst_conv_risk,
+                total, icing_total, affected, icing_count, conv_count, worst_conv_risk,
                 ribbon_points, icing_cells, conv_cells,
             ) = _check_enroute_hazards(
                 ctx, model, convective_min_risk,
@@ -399,8 +417,13 @@ class IFRFeasibilityEvaluator:
             # 3. Determine icing status
             icing_status = AdvisoryStatus.GREEN
             icing_detail = ""
-            if total > 0 and icing_count > 0:
-                icing_pct = 100.0 * icing_count / total
+            if total > 0 and icing_total == 0:
+                # Points exist but the active icing method could run at none of
+                # them → the icing axis is unassessable, not clear (#391). It
+                # contributes UNAVAILABLE (ignored by `worst`) instead of GREEN.
+                icing_status = AdvisoryStatus.UNAVAILABLE
+            elif icing_total > 0 and icing_count > 0:
+                icing_pct = 100.0 * icing_count / icing_total
                 if icing_pct >= icing_pct_red:
                     icing_status = AdvisoryStatus.RED
                 elif icing_pct >= icing_pct_amber:
@@ -408,7 +431,7 @@ class IFRFeasibilityEvaluator:
                 if icing_status != AdvisoryStatus.GREEN:
                     icing_detail = adv_t(
                         "ifr.icing_over", loc,
-                        extent=format_extent(icing_count, total, ctx.total_distance_nm),
+                        extent=format_extent(icing_count, icing_total, ctx.total_distance_nm),
                     )
 
             # 4. Determine convective status
