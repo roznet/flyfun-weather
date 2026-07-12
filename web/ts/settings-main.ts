@@ -74,6 +74,9 @@ let previewTarget: { flightId: string; ts: string; label: string } | null = null
 let previewTimer: number | undefined;
 /** Monotonic ticket so only the most recent preview response is rendered (#390). */
 let previewSeq = 0;
+/** Cached baseline (active profile's saved settings → per-advisory status).
+ *  Refetched only on baseline-changing events, not on every edit (#390 round-4). */
+let previewBaselineCache: Record<string, string> | null = null;
 let profiles: ProfileResponse[] = [];
 let activeProfileId: number | null = null;
 let aircraftList: AircraftResponse[] = [];
@@ -263,6 +266,11 @@ function populateProfileForm(profile: ProfileResponse): void {
   // Interview answers travel with the profile so the assistant pre-selects them.
   interviewAnswers = { ...(s.interview ?? {}) };
   renderAdvisorySettings(catalog, advPrefs, s.auto_front_detection ?? false);
+  // Re-baseline the live preview against this profile's saved settings. Placed
+  // here (not in switchProfile) so EVERY entry point that loads a profile's form
+  // — switch, new, duplicate, reset-to-template — re-baselines, not just the
+  // switcher (#390 round-4). No-op until initAdvisoryPreview discovers a target.
+  scheduleAdvisoryPreview(true);
 }
 
 function switchProfile(profileId: number): void {
@@ -270,11 +278,8 @@ function switchProfile(profileId: number): void {
   renderProfileSelector();
   const profile = profiles.find(p => p.id === profileId);
   if (profile) {
-    populateProfileForm(profile);
+    populateProfileForm(profile);  // also re-baselines the preview
   }
-  // Re-baseline the live preview against the newly-selected profile's saved
-  // settings so the diff never lingers on the previous profile (#390 review).
-  scheduleAdvisoryPreview(true);
 }
 
 async function handleNewProfile(): Promise<void> {
@@ -612,6 +617,9 @@ async function init(): Promise<void> {
     const current = collectAdvisoryPrefs();
     if (current.enabled) delete current.enabled[FRONTS_ADVISORY_ID];
     renderAdvisorySettings(catalog, current, masterOn);
+    // This flips the fronts advisory's enabled state programmatically (no input
+    // event fires), so nudge the preview to reflect it (#390 round-4).
+    scheduleAdvisoryPreview();
   });
 
   // Global expand/collapse all — toggles every per-advisory "Advanced" expander.
@@ -1398,32 +1406,40 @@ async function initAdvisoryPreview(): Promise<void> {
   } catch { /* preview stays hidden */ }
 }
 
-/** Debounce preview recomputation. Pass ``immediate`` for baseline-changing
- *  events (init, profile switch, save) so the panel updates without the typing
- *  debounce; edits use the default 700ms debounce. */
-function scheduleAdvisoryPreview(immediate = false): void {
+/** Schedule a preview recompute. Pass ``baselineChanged`` for events that alter
+ *  the *saved* settings (init, profile switch/new/duplicate/reset, save): those
+ *  run immediately and re-fetch the baseline. Plain edits pass nothing — they
+ *  debounce (700ms) and reuse the cached baseline (it hasn't changed). */
+function scheduleAdvisoryPreview(baselineChanged = false): void {
   if (!previewTarget) return;
   window.clearTimeout(previewTimer);
-  if (immediate) {
-    void updatePreview();
+  if (baselineChanged) {
+    void updatePreview(true);
   } else {
-    previewTimer = window.setTimeout(() => void updatePreview(), 700);
+    previewTimer = window.setTimeout(() => void updatePreview(false), 700);
   }
 }
 
-/** Recompute the preview and render it. Fetches the baseline (active profile's
- *  saved settings) and the draft (live form) together under one monotonic ticket
- *  so out-of-order responses can never render a stale diff (#390 review): a rapid
- *  edit or profile switch bumps ``previewSeq``, and any older in-flight response
- *  whose ticket is no longer current is discarded. Baseline+draft come from the
- *  same fetch pass, so the two halves of the diff are always consistent. */
-async function updatePreview(): Promise<void> {
+/** Recompute the preview and render it, under one monotonic ticket so
+ *  out-of-order responses can never render a stale diff (#390): a rapid edit or
+ *  profile switch bumps ``previewSeq`` and any older in-flight response is
+ *  discarded.
+ *
+ *  The baseline (active profile's *saved* settings) only changes on
+ *  baseline-changing events, so it is cached and re-fetched only when
+ *  ``refreshBaseline`` (or the cache is empty) — a debounced edit re-fetches
+ *  just the draft, halving the server-side evaluation cost per keystroke (#390
+ *  round-4). */
+async function updatePreview(refreshBaseline: boolean): Promise<void> {
   if (!previewTarget) return;
   const seq = ++previewSeq;
   const prefs = collectAdvisoryPrefs();
+  const needBaseline = refreshBaseline || previewBaselineCache === null;
   try {
     const [base, draft] = await Promise.all([
-      previewAdvisories(previewTarget.flightId, previewTarget.ts, activeProfileSavedAdvisories()),
+      needBaseline
+        ? previewAdvisories(previewTarget.flightId, previewTarget.ts, activeProfileSavedAdvisories())
+        : Promise.resolve(null),
       previewAdvisories(previewTarget.flightId, previewTarget.ts, {
         enabled: prefs.enabled,
         params: prefs.params,
@@ -1431,9 +1447,12 @@ async function updatePreview(): Promise<void> {
       }),
     ]);
     if (seq !== previewSeq) return;  // a newer request superseded this one
-    const baseline: Record<string, string> = {};
-    for (const a of base.manifest.advisories) baseline[a.advisory_id] = a.aggregate_status;
-    renderPreviewDeltas(baseline, draft.manifest.advisories);
+    if (base) {
+      const m: Record<string, string> = {};
+      for (const a of base.manifest.advisories) m[a.advisory_id] = a.aggregate_status;
+      previewBaselineCache = m;
+    }
+    renderPreviewDeltas(previewBaselineCache ?? {}, draft.manifest.advisories);
   } catch { /* leave the last render in place */ }
 }
 
