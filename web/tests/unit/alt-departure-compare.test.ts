@@ -8,9 +8,10 @@
  * better time to fly: the exact defect #392 exists to remove, one hop below the
  * assessment itself.
  *
- * The rule now mirrors the backend's own candidate diff (`tasks/time_scan.py`
- * `_compare`): only advisories that BOTH sides graded are comparable, and if
- * nothing is comparable there is no verdict to give.
+ * The comparability rule now matches the backend's candidate diff
+ * (`tasks/time_scan.py` `_diff_manifests`): only advisories that BOTH sides
+ * graded are comparable, and if nothing is comparable there is no verdict to
+ * give. The scoring differs on purpose — see the helper's docstring.
  */
 
 import { describe, it, expect } from 'vitest';

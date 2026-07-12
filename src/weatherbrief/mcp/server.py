@@ -33,8 +33,8 @@ from pydantic import AnyHttpUrl, Field
 from weatherbrief.connectors.views import (
     CONVECTIVE_NOTE as _CONVECTIVE_NOTE,
     advisory_detail as _advisory_detail,
-    assessment_note as _assessment_note,
     alternates_hook as _alternates_hook,
+    assessment_note as _assessment_note,
     briefing_freshness_status as _briefing_freshness_status,
     convective_detail as _convective_detail,
     summarize_advisories as _summarize_advisories,

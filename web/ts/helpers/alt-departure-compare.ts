@@ -15,9 +15,16 @@ interface AdvisoryCounts {
 /**
  * Compare an alternate departure time against the planned one.
  *
- * Only advisories that **both** sides actually graded are comparable — the same
- * rule the backend uses when it diffs two scan candidates (`tasks/time_scan.py`
- * `_compare`: "either side unavailable → not comparable").
+ * Only advisories that **both** sides actually graded are comparable. That
+ * comparability rule is the one the backend applies when it diffs two scan
+ * candidates (`tasks/time_scan.py` `_diff_manifests`, which skips a pair as soon
+ * as either side is unavailable).
+ *
+ * The *scoring* is deliberately not shared: `_diff_manifests` sums a per-advisory
+ * severity delta to rank candidates by margin, whereas this tallies red/amber and
+ * breaks ties on fewer ambers — the altitude table's rule, which is what a
+ * Better/Same/Worse chip needs. Only the "absent data is not comparable" half is
+ * common to both, so don't assume the two stay in lockstep.
  *
  * This used to tally red/amber over each manifest whole, counting UNAVAILABLE as
  * neither. An alt time where nothing graded therefore scored {red: 0, amber: 0},
