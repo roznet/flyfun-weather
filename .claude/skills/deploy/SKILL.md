@@ -262,11 +262,15 @@ ssh <user>@<server> "cd flyfun-weather && git fetch origin && git checkout -B pr
 ```
 This leaves the server **on the `prod-prev` branch** (fine for an emergency revert). The normal Deploy step 2 below does `git checkout main && git pull`, so the next deploy automatically returns the server to `main` — no manual cleanup needed. **If migrations ran in the bad deploy**, decide whether they need an `alembic downgrade` *before* rolling back — schema changes are not undone by checking out an older commit.
 
-## Close "Addresses" issues after deploy
+## Notify (and close deferred) issues after deploy
 
-PRs that close an issue on **deploy** (as opposed to on merge) use `Addresses #N` / `Refs #N` / `Related to #N` in their body — these keywords do NOT trigger GitHub's auto-close on merge, so the issue is still open now. Once the deploy is live and healthy, post a comment and close those issues.
+This step is **primarily a notification step**. Most issues in this repo are self-filed working notes (~93% — the tracker records whether the *work* is done, not whether it's live), so they use `Closes #N` and are **already closed at merge**. For those, this step just posts "Deployed to …" so anyone watching knows it's now live. That comment is the notification — GitHub notifies subscribers of comments on closed issues, so an issue does **not** need to stay open to tell someone it shipped.
 
-> Why a keyword whitelist: `Closes`/`Fixes`/`Resolves` already closed the issue at merge time. Plain `#N` mentions may be passing references ("see #50 for context") and should NOT trigger a close. Only the explicit `Addresses`/`Refs`/`References`/`Related to` set is treated as close-on-deploy intent.
+The close half only fires for the **exception**: issues filed by an *outside reporter*, where a PR deliberately used `Addresses #N` / `Refs #N` / `Related to #N` to defer the close until the fix is actually reachable. Those keywords don't trigger GitHub's auto-close, so the issue is still open here. Rare — about a dozen issues in this project's history.
+
+> Why a keyword whitelist: plain `#N` mentions may be passing references ("see #50 for context") and must NOT trigger anything. Only an explicit keyword counts. Note the regex below matches the auto-close keywords too — that's deliberate, so already-closed issues still get the "Deployed" comment.
+>
+> **Do not "fix" a missed close by loosening this regex to match bare `#N`.** If a shipped issue is still open, the PR simply omitted the keyword — close it by hand and fix the PR habit (see `.github/PULL_REQUEST_TEMPLATE.md`). A batch of PRs did exactly this in July 2026 (#372/#368/#367/#380 …), leaving #364/#366/#371/#379 open long after they shipped.
 
 ### Steps
 
@@ -309,11 +313,11 @@ Runs **only after** the health check returns 200 — never close issues if the d
    done
    ```
 
-> **Gotcha**: GitHub's auto-close keywords (`Closes`/`Fixes`/`Resolves`) fire on **either** the PR body or the merged commit message. With "Rebase and merge", original commit messages are preserved — so even if the PR body uses `Addresses #N`, a `Closes #N` in the commit message body will close the issue at merge time. When writing commit messages for close-on-deploy PRs, use `Addresses #N` (or just `#N`) in the commit body too.
+> **Gotcha**: GitHub's auto-close keywords (`Closes`/`Fixes`/`Resolves`) fire on **either** the PR body or the merged commit message. With "Rebase and merge", original commit messages are preserved — so even if the PR body uses `Addresses #N`, a `Closes #N` in the commit message body will close the issue at merge time. This only matters for the rare deferred-close (outside-reporter) PRs: for those, use `Addresses #N` in the commit body too. For everything else, `Closes #N` firing at merge is the *desired* behavior.
 >
 > **Also**: GitHub's auto-close only matches `Fixes #N`, not `Fixes issue #N` (the word "issue" between keyword and `#` breaks it). PR #139 was an example — its body said "Fixes issue #133" so neither GitHub nor an earlier version of this regex caught it. The regex above includes an optional `issue` token to handle that variant on the deploy side; prefer dropping the word "issue" in PR bodies so GitHub's own auto-close fires at merge time.
 
-3. Summarize what was closed at the end (or say "no Addresses-linked issues to close" if the list is empty).
+3. Summarize at the end: which issues were **notified** (already closed at merge — the common case) and which were **closed** (deferred outside-reporter issues). Say "no linked issues in this deploy" if the list is empty.
 
 ### Skip conditions
 

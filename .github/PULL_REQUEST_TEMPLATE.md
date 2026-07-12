@@ -1,41 +1,36 @@
 <!--
-  Issue-linking is REQUIRED for anything that resolves a tracked issue.
-  Recent PRs referenced issues as a bare "#N" (or only in the title) with no
-  close keyword — so GitHub never auto-closed them AND the deploy/archive skills
-  (which match a keyword whitelist, not bare "#N") skipped them too, leaving
-  shipped work open. Pick the right keyword below and put it in BOTH this body
-  and the commit message (rebase-merge preserves commit bodies, so GitHub reads
-  either one).
+  Link the issue with a keyword. Default is `Closes #N` — see below.
+  A bare "#N" (or the number only in the PR title) closes NOTHING: GitHub's
+  auto-close needs a keyword, and the deploy skill's regex needs one too. That
+  gap is what left #364/#366/#371/#379 open long after they shipped.
 -->
 
 ## What & why
 
 
-## Issue linkage — choose one keyword (see comment above)
+## Issue linkage
 
 <!--
-  This project deploys `main` continuously via the /deploy skill, and ships iOS
-  through the App Store — so "merged" is NOT "live for users". Match the keyword
-  to WHEN the work actually reaches users:
+  DEFAULT — `Closes #N`  (use this unless the issue was filed by an outside user)
+    Closes at merge, automatically, with zero bookkeeping. ~93% of issues in this
+    repo are self-filed working notes: the tracker records whether the WORK is
+    done, not whether it's live. "Is it live" is recorded by the deploy comment,
+    the ios/* tags, and the What's New release stream — not by the open/closed
+    bit. Applies to iOS work too (the ios/* tag says which build shipped it).
 
-  • Web / server / MCP work  →  `Addresses #N`
-      Not live at merge; goes live on the next deploy. The /deploy skill closes
-      it AFTER the health check passes. (Do NOT use `Closes #N` — that closes at
-      merge, before the deploy.)
+  EXCEPTION — `Addresses #N`  (issue filed by an outside reporter)
+    Defers the close to deploy, so a reporter who's subscribed isn't told it's
+    fixed before they can actually use it. The /deploy skill closes these after
+    the health check passes. Rare — about a dozen issues in this project's
+    history. Put the keyword in the COMMIT MESSAGE too: rebase-merge preserves
+    commit bodies, so a stray `Closes #N` there will auto-close at merge and
+    defeat the deferral.
 
-  • iOS-only work            →  `Addresses #N`  (never `Closes #N`)
-      Not live until Apple APPROVES the build. The /archive skill closes it after
-      approval (Step 11). If an iOS-only issue should not be swept up by a server
-      deploy, say so in the body so /deploy leaves it for /archive.
-
-  • Docs / tests / refactor with no user-facing surface  →  `Closes #N`
-      Fine to close at merge — there's nothing to deploy or approve.
-
-  • Passing reference only (context, not resolved)  →  bare `#N` or "see #N"
-      Intentionally NOT matched by any close automation.
+  NEITHER — bare `#N` / "see #N"
+    A passing reference, not a resolution. Intentionally matched by no automation.
 -->
 
-Addresses #
+Closes #
 
 ## Testing / verification
 
