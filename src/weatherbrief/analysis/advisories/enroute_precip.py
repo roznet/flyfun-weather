@@ -127,10 +127,14 @@ def classify_enroute_precip(
         sounding = rpa.sounding.get(model)
         if sounding is None:
             continue
-        total += 1
         precip = sounding.precipitation
         if precip is None:
+            # Sounding present but no precipitation assessment — unassessable for
+            # this evaluator. It must NOT count into the denominator, or it
+            # dilutes the snow/rain percentage (2 snow points among 8 blanks
+            # would read 20%, not 100%) — #391.
             continue
+        total += 1
         has_signal = True
         cls = classify_precip_point(precip)
         if cls is None:
@@ -264,7 +268,10 @@ class EnroutePrecipEvaluator:
                 for rpa in ctx.analyses:
                     dist = rpa.distance_from_origin_nm or 0.0
                     sounding = rpa.sounding.get(model)
-                    if sounding is None:
+                    # No sounding, or a sounding with no precipitation assessment,
+                    # is unassessable → UNAVAILABLE ribbon (matches the grade's
+                    # denominator, which now excludes these points).
+                    if sounding is None or sounding.precipitation is None:
                         ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
                         region_cells.append((dist, None))
                         continue
