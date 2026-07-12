@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
     build_cost_model,
+    build_regions,
+    build_ribbon,
     format_extent,
-    has_relevant_icing,
+    icing_zones_in_altitude_range,
     max_terrain_near_point,
     pct_above_threshold,
+    ribbon_peak,
     to_mitigation_profile,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -22,8 +26,10 @@ from weatherbrief.analysis.advisories.vertical_profile import (
 )
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    HighlightSeverity,
     IcingRisk,
     IcingType,
     Mitigation,
@@ -256,18 +262,32 @@ class IcingEscapeEvaluator:
             affected = 0
             no_escape_count = 0
             has_tight_margin = False
+            # Per-point highlight geometry (#375). Every route point contributes
+            # a ribbon severity; affected points also contribute an icing-band
+            # cutout (envelope of the relevant zones).
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            region_cells: list[tuple[float, FlaggedCell | None]] = []
 
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
                     continue
                 total += 1
 
-                if not has_relevant_icing(
+                # Same zones has_relevant_icing accepts — icing above
+                # cruise + buffer is deliberately GREEN on the ribbon too
+                # ("not relevant to your flight here" reads as clear).
+                relevant_zones = icing_zones_in_altitude_range(
                     sounding.icing_zones,
-                    ctx.cruise_altitude_ft,
-                    icing_altitude_buffer_ft,
-                ):
+                    0,
+                    ctx.cruise_altitude_ft + icing_altitude_buffer_ft,
+                )
+                if not relevant_zones:
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    region_cells.append((dist, None))
                     continue
 
                 affected += 1
@@ -281,14 +301,27 @@ class IcingEscapeEvaluator:
                     ctx.elevation, rpa.distance_from_origin_nm
                 )
 
+                # No-escape: freezing level below terrain + margin, or fz/terrain
+                # unknown at an affected point — the same points the grade counts
+                # as no-escape. Escape viable (incl. tight-margin) → amber.
                 if fz_level_ft is None or terrain_ft is None:
                     no_escape_count += 1
-                    continue
-
-                if fz_level_ft < terrain_ft + terrain_margin:
+                    severity = HighlightSeverity.RED
+                elif fz_level_ft < terrain_ft + terrain_margin:
                     no_escape_count += 1
-                elif fz_level_ft < terrain_ft + tight_margin:
-                    has_tight_margin = True
+                    severity = HighlightSeverity.RED
+                else:
+                    if fz_level_ft < terrain_ft + tight_margin:
+                        has_tight_margin = True
+                    severity = HighlightSeverity.AMBER
+
+                ribbon_points.append((dist, severity))
+                region_cells.append((dist, FlaggedCell(
+                    kind="icing_band",
+                    severity=severity,
+                    base_ft=int(min(z.base_ft for z in relevant_zones)),
+                    top_ft=int(max(z.top_ft for z in relevant_zones)),
+                )))
 
             # Determine model status
             loc = ctx.locale
@@ -323,11 +356,23 @@ class IcingEscapeEvaluator:
             # never alters the grade above) — #335.
             mitigations = _icing_escape_mitigations(ctx, model, terrain_margin, status, loc)
 
+            # Highlights (#375) only when the model has data. Peak: the no-escape
+            # (red) run center first, else the longest amber run center.
+            highlights = None
+            if total > 0:
+                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+                highlights = AdvisoryHighlights(
+                    ribbon=ribbon,
+                    regions=build_regions(region_cells, ctx.total_distance_nm),
+                    peak_dist_nm=ribbon_peak(ribbon),
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 mitigations=mitigations,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("icing_escape", per_model, params)

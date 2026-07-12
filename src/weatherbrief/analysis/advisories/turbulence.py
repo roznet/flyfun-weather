@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    format_extent,
+    pct_above_threshold,
+    ribbon_peak,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     CATRiskLevel,
+    HighlightSeverity,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -72,31 +81,76 @@ class TurbulenceEvaluator:
             affected = 0
             has_severe = False
             worst_cat = CATRiskLevel.NONE
+            # Per-point highlight geometry (#375). Ribbon: SEVERE CAT anywhere in
+            # the column → red (the cutout showing where it sits is exactly the
+            # ambiguity the highlight resolves); MODERATE CAT overlapping the
+            # cruise band or a strong updraft near cruise → amber; else green.
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            region_cells: list[tuple[float, FlaggedCell | None]] = []
 
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
                     continue
                 total += 1
 
                 point_affected = False
+                strong_w_here = False
+                severe_layers: list = []
+                moderate_cruise_layers: list = []
                 vm = sounding.vertical_motion
 
                 if vm is not None:
                     for layer in vm.cat_risk_layers:
-                        if layer.base_ft <= cruise <= layer.top_ft and layer.risk != CATRiskLevel.NONE:
+                        at_cruise = layer.base_ft <= cruise <= layer.top_ft
+                        if at_cruise and layer.risk != CATRiskLevel.NONE:
                             point_affected = True
                             if _CAT_ORDER.index(layer.risk) > _CAT_ORDER.index(worst_cat):
                                 worst_cat = layer.risk
                             if layer.risk == CATRiskLevel.SEVERE:
                                 has_severe = True
+                        # Highlight geometry: severe counts anywhere in the
+                        # column, moderate only when it overlaps cruise.
+                        if layer.risk == CATRiskLevel.SEVERE:
+                            severe_layers.append(layer)
+                        elif layer.risk == CATRiskLevel.MODERATE and at_cruise:
+                            moderate_cruise_layers.append(layer)
 
                     if vm.max_w_fpm is not None and abs(vm.max_w_fpm) > strong_w_fpm:
                         if vm.max_w_level_ft is not None and abs(vm.max_w_level_ft - cruise) < 3000:
                             point_affected = True
+                            strong_w_here = True
 
                 if point_affected:
                     affected += 1
+
+                # Per-point ribbon verdict + CAT-layer cutout (#375). Strong-w is
+                # resolved to a single level (max_w_level_ft), not a band — it
+                # contributes amber to the ribbon but no strong_updraft cutout
+                # (skip the kind rather than invent geometry).
+                if severe_layers:
+                    severity = HighlightSeverity.RED
+                    band = severe_layers
+                elif moderate_cruise_layers or strong_w_here:
+                    severity = HighlightSeverity.AMBER
+                    band = moderate_cruise_layers
+                else:
+                    severity = HighlightSeverity.GREEN
+                    band = []
+
+                ribbon_points.append((dist, severity))
+                if band:
+                    region_cells.append((dist, FlaggedCell(
+                        kind="cat_layer",
+                        severity=severity,
+                        base_ft=int(min(la.base_ft for la in band)),
+                        top_ft=int(max(la.top_ft for la in band)),
+                    )))
+                else:
+                    region_cells.append((dist, None))
 
             ext = format_extent(affected, total, ctx.total_distance_nm)
             loc = ctx.locale
@@ -114,10 +168,21 @@ class TurbulenceEvaluator:
                 risk_label = worst_cat.value.upper() if worst_cat != CATRiskLevel.NONE else "Turbulence"
                 detail = adv_t("turbulence.risk_over", loc, risk=risk_label, extent=ext)
 
+            # Highlights (#375) only when the model has data.
+            highlights = None
+            if total > 0:
+                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+                highlights = AdvisoryHighlights(
+                    ribbon=ribbon,
+                    regions=build_regions(region_cells, ctx.total_distance_nm),
+                    peak_dist_nm=ribbon_peak(ribbon),
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("turbulence", per_model, params)

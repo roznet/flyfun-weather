@@ -7,14 +7,25 @@ and convective activity into a single go/no-go style assessment for IFR flights.
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, min_icing_clearance
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    format_extent,
+    min_icing_clearance,
+    ribbon_peak,
+    status_to_severity,
+    worst_severity,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     ConvectiveRisk,
+    HighlightSeverity,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -50,16 +61,17 @@ def _check_airport_ifr(
     model: str,
     min_dep_ceiling_ft: float,
     min_arr_ceiling_ft: float,
-) -> tuple[AdvisoryStatus, str]:
+) -> tuple[AdvisoryStatus, str, AdvisoryStatus, AdvisoryStatus]:
     """Check departure and arrival airport conditions for IFR feasibility.
 
     IFR flights accept IFR conditions, but LIFR triggers amber and
     ceilings below configurable minimums trigger red.
 
-    Returns (status, detail_fragment).
+    Returns (status, detail_fragment, dep_status, arr_status). The per-airport
+    statuses colour the endpoint ribbon segments of the highlight (#375).
     """
     if ctx.airport_conditions is None:
-        return AdvisoryStatus.GREEN, ""
+        return AdvisoryStatus.GREEN, "", AdvisoryStatus.GREEN, AdvisoryStatus.GREEN
 
     dep = ctx.airport_conditions.departure
     arr = ctx.airport_conditions.arrival
@@ -68,33 +80,32 @@ def _check_airport_ifr(
 
     loc = ctx.locale
     parts: list[str] = []
-    worst = AdvisoryStatus.GREEN
+    per_airport: list[AdvisoryStatus] = []
 
     for label_key, icao, cond, min_ceil in [
         ("airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft),
         ("airport.arr", arr.icao, arr_cond, min_arr_ceiling_ft),
     ]:
-        if cond is None:
-            continue
-        label = adv_t(label_key, loc)
-        cat = cond.flight_category
-
+        status = AdvisoryStatus.GREEN
         # LIFR is concerning for IFR
-        if cat == FlightCategory.LIFR:
+        if cond is not None and cond.flight_category == FlightCategory.LIFR:
+            label = adv_t(label_key, loc)
             # Check against minimum ceiling
             if cond.ceiling_ft is not None and cond.ceiling_ft < min_ceil:
-                worst = _worst_status(worst, AdvisoryStatus.RED)
+                status = AdvisoryStatus.RED
                 parts.append(adv_t(
                     "ifr.lifr_below_min", loc,
                     label=label, icao=icao,
                     ceiling=cond.ceiling_ft, min=int(min_ceil),
                 ))
             else:
-                worst = _worst_status(worst, AdvisoryStatus.AMBER)
+                status = AdvisoryStatus.AMBER
                 parts.append(adv_t("ifr.lifr", loc, label=label, icao=icao))
+        per_airport.append(status)
 
     detail = " | ".join(parts) if parts else ""
-    return worst, detail
+    worst = _worst_status(*per_airport)
+    return worst, detail, per_airport[0], per_airport[1]
 
 
 def _check_enroute_hazards(
@@ -103,26 +114,44 @@ def _check_enroute_hazards(
     convective_min_risk_idx: int,
     cruise_altitude_ft: float,
     icing_altitude_buffer_ft: float,
-) -> tuple[int, int, int, int, ConvectiveRisk]:
+) -> tuple[
+    int, int, int, int, ConvectiveRisk,
+    list[tuple[float, HighlightSeverity]],
+    list[tuple[float, FlaggedCell | None]],
+    list[tuple[float, FlaggedCell | None]],
+]:
     """Check en-route icing and convective hazards in a single pass.
 
     Uses the same clearance-based icing check as the FIKI advisory:
     a point counts as "icing affected" only when an icing zone is within
     *icing_altitude_buffer_ft* of cruise altitude.
 
-    Returns (total, affected, icing_count, conv_count, worst_conv_risk).
+    Returns (total, affected, icing_count, conv_count, worst_conv_risk,
+    ribbon_points, icing_cells, conv_cells).
     - affected: number of unique points with icing OR convective risk
     - icing_count / conv_count: individual counts for detail messages
+    - ribbon_points / icing_cells / conv_cells: per-point highlight geometry
+      (#375) — the ribbon is the worst of the two axes at each x (icing amber,
+      convective amber or red for HIGH/EXTREME); the two cell lists carry the
+      ``icing_band`` and ``tower``/``tower_unresolved`` cutouts (multi-kind, so
+      one list each).
     """
     total = 0
     affected = 0
     icing_count = 0
     conv_count = 0
     worst_conv_risk = ConvectiveRisk.NONE
+    ribbon_points: list[tuple[float, HighlightSeverity]] = []
+    icing_cells: list[tuple[float, FlaggedCell | None]] = []
+    conv_cells: list[tuple[float, FlaggedCell | None]] = []
 
     for rpa in ctx.analyses:
+        dist = rpa.distance_from_origin_nm or 0.0
         sounding = rpa.sounding.get(model)
         if sounding is None:
+            ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+            icing_cells.append((dist, None))
+            conv_cells.append((dist, None))
             continue
         total += 1
 
@@ -132,6 +161,7 @@ def _check_enroute_hazards(
             < icing_altitude_buffer_ft
         )
         has_convective = False
+        conv_sev = HighlightSeverity.GREEN
 
         conv = sounding.convective
         if conv is not None:
@@ -140,15 +170,61 @@ def _check_enroute_hazards(
                 has_convective = True
                 if risk_idx > _CONVECTIVE_SEVERITY_INDEX.get(worst_conv_risk, 0):
                     worst_conv_risk = conv.risk_level
+                conv_sev = (
+                    HighlightSeverity.RED
+                    if conv.risk_level in (ConvectiveRisk.HIGH, ConvectiveRisk.EXTREME)
+                    else HighlightSeverity.AMBER
+                )
 
         if has_icing:
             icing_count += 1
+            # The triggering zones: those within the buffer of cruise.
+            band = [
+                z for z in sounding.icing_zones
+                if z.base_ft < cruise_altitude_ft + icing_altitude_buffer_ft
+                and z.top_ft > cruise_altitude_ft - icing_altitude_buffer_ft
+            ]
+            icing_cells.append((dist, FlaggedCell(
+                kind="icing_band",
+                severity=HighlightSeverity.AMBER,
+                base_ft=int(min(z.base_ft for z in band)) if band else None,
+                top_ft=int(max(z.top_ft for z in band)) if band else None,
+            )))
+        else:
+            icing_cells.append((dist, None))
+
         if has_convective:
             conv_count += 1
+            # Same geometry conventions as the convective emitter (#373): a
+            # bounded tower only when BOTH base and top resolve, else a
+            # full-column ghost.
+            if conv.base_ft is not None and conv.top_ft is not None:
+                conv_cells.append((dist, FlaggedCell(
+                    kind="tower",
+                    severity=conv_sev,
+                    base_ft=int(conv.base_ft),
+                    top_ft=int(conv.top_ft),
+                )))
+            else:
+                conv_cells.append((dist, FlaggedCell(
+                    kind="tower_unresolved",
+                    severity=conv_sev,
+                    base_ft=None,
+                    top_ft=None,
+                )))
+        else:
+            conv_cells.append((dist, None))
+
         if has_icing or has_convective:
             affected += 1
 
-    return total, affected, icing_count, conv_count, worst_conv_risk
+        icing_sev = HighlightSeverity.AMBER if has_icing else HighlightSeverity.GREEN
+        ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
+
+    return (
+        total, affected, icing_count, conv_count, worst_conv_risk,
+        ribbon_points, icing_cells, conv_cells,
+    )
 
 
 @register
@@ -278,16 +354,20 @@ class IFRFeasibilityEvaluator:
 
         for model in ctx.models:
             # 1. Airport conditions
-            airport_status, airport_detail = _check_airport_ifr(
-                ctx, model, min_dep_ceiling_ft, min_arr_ceiling_ft
+            airport_status, airport_detail, dep_status, arr_status = (
+                _check_airport_ifr(
+                    ctx, model, min_dep_ceiling_ft, min_arr_ceiling_ft
+                )
             )
 
-            # 2. En-route hazards (single pass — no double-counting)
-            total, affected, icing_count, conv_count, worst_conv_risk = (
-                _check_enroute_hazards(
-                    ctx, model, convective_min_risk,
-                    ctx.cruise_altitude_ft, icing_altitude_buffer_ft,
-                )
+            # 2. En-route hazards (single pass — no double-counting), including
+            # the per-point highlight geometry (#375).
+            (
+                total, affected, icing_count, conv_count, worst_conv_risk,
+                ribbon_points, icing_cells, conv_cells,
+            ) = _check_enroute_hazards(
+                ctx, model, convective_min_risk,
+                ctx.cruise_altitude_ft, icing_altitude_buffer_ft,
             )
 
             loc = ctx.locale
@@ -352,10 +432,33 @@ class IFRFeasibilityEvaluator:
             else:
                 detail = " | ".join(detail_parts)
 
+            # 6. Highlights (#375) only when the model has en-route data. The
+            # airport IFR-viability axis colours the endpoint ribbon segments.
+            highlights = None
+            if total > 0:
+                if ribbon_points:
+                    first = min(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
+                    last = max(range(len(ribbon_points)), key=lambda i: ribbon_points[i][0])
+                    for idx, ap_status in ((first, dep_status), (last, arr_status)):
+                        ap_sev = status_to_severity(ap_status)
+                        if ap_sev in (HighlightSeverity.AMBER, HighlightSeverity.RED):
+                            d, sev = ribbon_points[idx]
+                            ribbon_points[idx] = (d, worst_severity(sev, ap_sev))
+                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+                highlights = AdvisoryHighlights(
+                    ribbon=ribbon,
+                    regions=(
+                        build_regions(icing_cells, ctx.total_distance_nm)
+                        + build_regions(conv_cells, ctx.total_distance_nm)
+                    ),
+                    peak_dist_nm=ribbon_peak(ribbon),
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("ifr_feasibility", per_model, params)

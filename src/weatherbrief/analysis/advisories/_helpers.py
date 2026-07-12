@@ -247,6 +247,38 @@ def build_regions(
     return regions
 
 
+# Rank for worst-of merging of per-point highlight severities. UNAVAILABLE ranks
+# lowest: it only enters a merge when a flagged verdict should override it (an
+# airport-axis endpoint colour over a data gap) — never the other way round.
+_SEVERITY_RANK = {
+    HighlightSeverity.UNAVAILABLE: -1,
+    HighlightSeverity.GREEN: 0,
+    HighlightSeverity.AMBER: 1,
+    HighlightSeverity.RED: 2,
+}
+
+_STATUS_TO_SEVERITY = {
+    AdvisoryStatus.GREEN: HighlightSeverity.GREEN,
+    AdvisoryStatus.AMBER: HighlightSeverity.AMBER,
+    AdvisoryStatus.RED: HighlightSeverity.RED,
+    AdvisoryStatus.UNAVAILABLE: HighlightSeverity.UNAVAILABLE,
+}
+
+
+def status_to_severity(status: AdvisoryStatus) -> HighlightSeverity:
+    """Map a sub-axis :class:`AdvisoryStatus` onto the ribbon severity scale.
+
+    Used by the composite evaluators (#375) to fold an airport-axis status into
+    the endpoint ribbon segments.
+    """
+    return _STATUS_TO_SEVERITY[status]
+
+
+def worst_severity(*severities: HighlightSeverity) -> HighlightSeverity:
+    """Worst-of merge for per-point ribbon severities (composites, #375)."""
+    return max(severities, key=lambda s: _SEVERITY_RANK[s])
+
+
 def ribbon_peak(segments: list[RibbonSegment]) -> float | None:
     """Center of the longest RED run, else the longest AMBER run, else ``None``.
 

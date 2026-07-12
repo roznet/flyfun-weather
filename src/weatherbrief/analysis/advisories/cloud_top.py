@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent, pct_above_threshold
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    format_extent,
+    pct_above_threshold,
+    ribbon_peak,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    HighlightSeverity,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -73,10 +82,18 @@ class CloudTopEvaluator:
             total = 0
             above_ceiling = 0
             max_top: float | None = None
+            # Per-point highlight geometry (#375). Binary per point: green =
+            # toppable or no cloud, amber = can't get on top here (the amount of
+            # amber tells the story); the cutout is the blocking deck.
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            region_cells: list[tuple[float, FlaggedCell | None]] = []
 
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
                     continue
                 total += 1
 
@@ -90,6 +107,8 @@ class CloudTopEvaluator:
                     if cl.base_ft <= cruise + margin_ft and cl.base_ft <= ceiling
                 ]
                 if not reachable:
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    region_cells.append((dist, None))
                     continue
 
                 highest_top = max(cl.top_ft for cl in reachable)
@@ -98,6 +117,21 @@ class CloudTopEvaluator:
 
                 if highest_top + margin_ft > ceiling:
                     above_ceiling += 1
+                    # The blocking deck: the reachable layers whose tops violate
+                    # the ceiling margin.
+                    blocking = [
+                        cl for cl in reachable if cl.top_ft + margin_ft > ceiling
+                    ]
+                    ribbon_points.append((dist, HighlightSeverity.AMBER))
+                    region_cells.append((dist, FlaggedCell(
+                        kind="blocking_deck",
+                        severity=HighlightSeverity.AMBER,
+                        base_ft=int(min(cl.base_ft for cl in blocking)),
+                        top_ft=int(max(cl.top_ft for cl in blocking)),
+                    )))
+                else:
+                    ribbon_points.append((dist, HighlightSeverity.GREEN))
+                    region_cells.append((dist, None))
 
             loc = ctx.locale
             if total == 0:
@@ -114,10 +148,21 @@ class CloudTopEvaluator:
                 ext = format_extent(above_ceiling, total, ctx.total_distance_nm)
                 detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
 
+            # Highlights (#375) only when the model has data.
+            highlights = None
+            if total > 0:
+                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+                highlights = AdvisoryHighlights(
+                    ribbon=ribbon,
+                    regions=build_regions(region_cells, ctx.total_distance_nm),
+                    peak_dist_nm=ribbon_peak(ribbon),
+                )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=above_ceiling, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("cloud_top", per_model, params)

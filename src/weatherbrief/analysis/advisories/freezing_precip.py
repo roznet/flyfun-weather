@@ -21,20 +21,35 @@ Two tiers per route point per model:
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.analysis.advisories._helpers import format_extent
+from weatherbrief.analysis.advisories._helpers import (
+    FlaggedCell,
+    build_regions,
+    build_ribbon,
+    format_extent,
+    ribbon_peak,
+    terrain_at_distance,
+)
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.precipitation import detect_warm_nose
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    HighlightSeverity,
     ModelAdvisoryResult,
     PrecipPhase,
     RouteAdvisoryResult,
 )
 
 _ACTIVE_PHASES = (PrecipPhase.FREEZING_RAIN, PrecipPhase.ICE_PELLETS)
+
+# Fallback depth of the freezing-precip column cutout when the warm-nose top
+# doesn't resolve at a flagged point: a fixed shallow AGL band (#375). The
+# hazard column is surface → warm-nose top; without the nose top we still show
+# where along the route it is, honestly shallow rather than full-column.
+_FALLBACK_COLUMN_AGL_FT = 3000
 
 
 @register
@@ -95,12 +110,22 @@ class FreezingPrecipEvaluator:
             has_signal_source = False
             loc = ctx.locale
 
+            # Per-point highlight geometry (#375): ribbon red = active FZRA/PL
+            # surface phase, amber = primed profile (warm nose, no active
+            # precip); the cutout is the hazard column, surface → warm-nose top.
+            ribbon_points: list[tuple[float, HighlightSeverity]] = []
+            region_cells: list[tuple[float, FlaggedCell | None]] = []
+
             for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
                 sounding = rpa.sounding.get(model)
                 if sounding is None:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
                     continue
                 total += 1
 
+                active = False
                 precip = sounding.precipitation
                 if precip is not None:
                     has_signal_source = True
@@ -109,16 +134,45 @@ class FreezingPrecipEvaluator:
                         or precip.freezing_rain_risk
                     ):
                         active_pts += 1
-                        continue
+                        active = True
 
-                # Primed: freezing-rain profile shape without active precip.
+                # Warm-nose profile shape (also the cutout's top at active
+                # points). Primed = the shape without active precip.
+                primed = False
+                nose_top: float | None = None
                 if sounding.derived_levels:
                     has_signal_source = True
-                    fz_risk, _, _, ice_pellets = detect_warm_nose(
+                    fz_risk, _, nose_top, ice_pellets = detect_warm_nose(
                         sounding.derived_levels
                     )
-                    if fz_risk or ice_pellets:
+                    if not active and (fz_risk or ice_pellets):
                         primed_pts += 1
+                        primed = True
+
+                if active:
+                    severity = HighlightSeverity.RED
+                elif primed:
+                    severity = HighlightSeverity.AMBER
+                else:
+                    # Includes sounding-without-precip-data points: the model-
+                    # level no-signal case is already UNAVAILABLE overall.
+                    severity = HighlightSeverity.GREEN
+
+                ribbon_points.append((dist, severity))
+                if severity in (HighlightSeverity.AMBER, HighlightSeverity.RED):
+                    if nose_top is None:
+                        terrain_ft = terrain_at_distance(ctx.elevation, dist) or 0.0
+                        nose_top = terrain_ft + _FALLBACK_COLUMN_AGL_FT
+                    # base_ft=None renders down to the surface — exactly the
+                    # below-cloud hazard column.
+                    region_cells.append((dist, FlaggedCell(
+                        kind="freezing_precip_column",
+                        severity=severity,
+                        base_ft=None,
+                        top_ft=int(nose_top),
+                    )))
+                else:
+                    region_cells.append((dist, None))
 
             if total == 0 or not has_signal_source:
                 per_model.append(ModelAdvisoryResult.build(
@@ -151,10 +205,20 @@ class FreezingPrecipEvaluator:
                 status = AdvisoryStatus.GREEN
                 detail = "No freezing precipitation signature"
 
+            # Highlights (#375) — the model has a precip signal here (the
+            # no-signal case returned UNAVAILABLE above).
+            ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
+            highlights = AdvisoryHighlights(
+                ribbon=ribbon,
+                regions=build_regions(region_cells, ctx.total_distance_nm),
+                peak_dist_nm=ribbon_peak(ribbon),
+            )
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=active_pts + primed_pts, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                highlights=highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("freezing_precip", per_model, params)

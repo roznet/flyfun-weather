@@ -95,6 +95,10 @@ const RESET_GROUPS: ReadonlySet<LayerGroup> = new Set<LayerGroup>([
 export const ADVISORY_OVERRIDES: Record<string, Partial<AdvisoryPreset>> = {
   // FIKI: add layer-thickness / warm-nose context (−10/−20 °C + SLD warm-nose).
   fiki_icing: { lines: ['minus-10c', 'minus-20c', 'sld-bands'] },
+  // Freezing precip: the SLD/warm-nose bands ARE the hazard signature (#375).
+  freezing_precip: { lines: ['sld-bands'] },
+  // En-route precip: swap the route graph to the precipitation trace (#375).
+  enroute_precip: { routeGraph: { left: 'precipitation', right: 'ceiling-nwp' } },
 };
 
 export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
@@ -226,11 +230,15 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
  * types — see the issue's "Out of scope").
  */
 export const ADVISORY_TO_PRESET: Record<string, string> = {
-  icing_escape: 'icing', fiki_icing: 'icing',
+  icing_escape: 'icing', fiki_icing: 'icing', freezing_precip: 'icing',
   cloud_top: 'clouds', vmc_cruise: 'clouds',
   convective: 'convective',
   turbulence: 'turbulence', mountain_wind: 'turbulence',
   vfr_feasibility: 'vfr', ifr_feasibility: 'ifr',
+  // enroute_precip is a visibility proxy → the VFR lens (clouds + obscuration
+  // + ceilings) reads better than bare Clouds; the override above swaps the
+  // route graph to precipitation (#375).
+  enroute_precip: 'vfr',
 };
 
 export function getAdvisoryPreset(id: string): AdvisoryPreset | undefined {
