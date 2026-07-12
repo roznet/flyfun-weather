@@ -3085,7 +3085,8 @@ label {
   color: var(--red);
 }
 
-.adv-status-unavailable {
+.adv-status-unavailable,
+.adv-status-off {
   background: rgba(127, 127, 127, 0.15);
   color: var(--text-muted);
 }
