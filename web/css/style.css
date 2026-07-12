@@ -551,6 +551,9 @@ label {
 .badge-amber { background: var(--amber-bg); color: var(--amber); }
 .badge-red { background: var(--red-bg); color: var(--red); }
 .badge-none { background: var(--bg); color: var(--text-muted); }
+/* Could not assess (#392). Same muted fill as badge-none, but it is a real
+   verdict rather than an absent one, so it carries a border to look deliberate. */
+.badge-unavailable { background: var(--bg); color: var(--text-muted); border: 1px solid var(--text-muted); }
 /* Long-range early outlook — soft, dashed badge (a tendency, not a verdict),
    matching the briefing-banner outlook palette. */
 .badge-outlook { font-weight: 600; }
@@ -875,6 +878,11 @@ label {
 /* Pending coverage — flight saved beyond the forecast horizon. Neutral, dashed,
    informational: it's a "check back on <date>", never a verdict or a failure. */
 .assessment-coverage { background: var(--bg); color: var(--text-muted); border: 1px dashed var(--border); }
+/* Could not assess (#392) — we briefed the flight and came back with nothing
+   gradeable. Solid border like the traffic lights (this IS the pack's verdict,
+   unlike the dashed informational states) but deliberately colourless: it must
+   never read as a shade of green. */
+.assessment-unavailable { background: var(--bg); color: var(--text-muted); border: 1px solid var(--text-muted); }
 
 /* Long-range outlook banner — deliberately distinct from the solid GREEN/AMBER/RED
    traffic light: a muted fill + dashed border + an "early outlook" tag so it reads
@@ -909,6 +917,9 @@ label {
   opacity: 0.5;
 }
 
+/* Ungradeable (#392) — the dot for an advisory we could not grade. Muted, so it
+   is visibly not a green. */
+.assessment-muted-text { color: var(--text-muted); }
 .assessment-green-text { color: var(--green); }
 .assessment-amber-text { color: var(--amber); }
 .assessment-red-text { color: var(--red); }

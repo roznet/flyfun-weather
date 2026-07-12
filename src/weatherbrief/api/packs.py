@@ -1322,6 +1322,8 @@ def _build_pack_meta(
             result.alt_advisory_result.manifest,
         )
 
+    from weatherbrief.tasks.advise import ASSESSMENT_UNAVAILABLE
+
     # Assessment: prefer the digest's, fall back to the advisories manifest.
     # The manifest is in-memory on the BriefingResult after phase 3; only
     # fall through to the on-disk read when callers (e.g. legacy unit tests)
@@ -1345,10 +1347,26 @@ def _build_pack_meta(
     # None, which would otherwise trip this fallback and flash a traffic light on
     # a D-8+ flight). Gate on the regime via days_out, not on digest presence.
     is_long_range = days_out > ecmwf_grib_horizon_days()
-    if assessment is None and outlook is None and not is_long_range:
-        assessment, assessment_reason = _assessment_from_advisories(
+    derived_assessment: str | None = None
+    derived_reason: str | None = None
+    if not is_long_range:
+        derived_assessment, derived_reason = _assessment_from_advisories(
             result.route_advisories_manifest, pack_path,
         )
+    if assessment is None and outlook is None and not is_long_range:
+        assessment, assessment_reason = derived_assessment, derived_reason
+
+    # #392: absent data must never read as a verdict — not even the LLM's. The
+    # digest narrates the advisories; it cannot conjure data we don't have, and
+    # its schema only lets it answer GREEN/AMBER/RED, so an empty manifest gets
+    # a confident traffic light out of it. The deterministic derivation is the
+    # one that knows whether anything actually graded, so it wins here.
+    #
+    # In practice the pipeline skips the digest entirely in this case (see
+    # pipeline.py phase 7) — this clamp is the backstop that also covers the
+    # on-demand /digest/generate path and any caller that hands us a digest.
+    if derived_assessment == ASSESSMENT_UNAVAILABLE and outlook is None:
+        assessment, assessment_reason = derived_assessment, derived_reason
 
     # Compact RED/AMBER breakdown for the flights-list card chips. Denormalized
     # from the same in-memory manifest used for the assessment above — the list
@@ -3414,6 +3432,26 @@ def generate_digest(
         except Exception:
             logger.warning("Could not load advisories for on-demand digest", exc_info=True)
     previous_digest = _load_previous_digest(pack_dir, snapshot.days_out)
+
+    # #392: refuse to narrate a pack whose advisories all came back ungradeable.
+    # The pipeline already skips the digest for these and the web hides the
+    # Generate button, but the endpoint is reachable directly — and letting it
+    # through would overwrite the honest UNAVAILABLE with an LLM GREEN derived
+    # from an empty manifest.
+    #
+    # Only when a manifest exists and graded nothing. A pack with no advisories
+    # file at all is the pre-existing NULL-assessment case (advisories are an
+    # optional prompt input), and that path keeps working as before.
+    from weatherbrief.tasks.advise import advisories_ungradeable
+
+    if advisories_ungradeable(route_advisories):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No advisory could be graded for this pack — there is no weather "
+                "data to summarise"
+            ),
+        )
 
     try:
         target_time = _parse_target_time(briefing_data)

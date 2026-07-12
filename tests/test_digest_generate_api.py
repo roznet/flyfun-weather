@@ -178,3 +178,63 @@ def test_generate_happy_path(client, app_db, monkeypatch):
     session.close()
     assert reloaded.has_digest is True
     assert reloaded.assessment == "RED"
+
+
+def test_generate_422_when_nothing_graded(client, app_db, monkeypatch):
+    """#392: refuse to narrate a pack whose advisories all came back ungradeable.
+
+    The pipeline already skips the digest for these and the web hides the button,
+    but the endpoint is reachable directly — and a digest here would overwrite the
+    honest UNAVAILABLE with an LLM GREEN derived from an empty manifest.
+    """
+    from weatherbrief.models import (
+        AdvisoryStatus,
+        RouteAdvisoriesManifest,
+        RouteAdvisoryResult,
+    )
+
+    flight, meta = _seed(app_db, has_digest=False, llm_digest_requested=False)
+    ts = meta.fetch_timestamp.isoformat()
+    pack_dir = Path(pack_dir_for(DEV_USER_ID, flight.id, ts))
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "briefing.json").write_text(
+        json.dumps({"days_out": 2, "departure_time": _DEP.isoformat()})
+    )
+    (pack_dir / "route_advisories.json").write_text(
+        RouteAdvisoriesManifest(
+            advisories=[
+                RouteAdvisoryResult(
+                    advisory_id="icing.fiki",
+                    aggregate_status=AdvisoryStatus.UNAVAILABLE,
+                    per_model=[],
+                ),
+            ],
+        ).model_dump_json()
+    )
+
+    from weatherbrief.fetch.variables import ModelRegion
+
+    monkeypatch.setattr(
+        "weatherbrief.api.packs._build_snapshot_from_pack",
+        lambda pack_dir, briefing: SimpleNamespace(days_out=2),
+    )
+    monkeypatch.setattr(
+        "weatherbrief.api.packs._build_route_config", lambda flight, db_path: None,
+    )
+    monkeypatch.setattr(
+        "weatherbrief.fetch.variables.detect_model_region",
+        lambda route: ModelRegion.EUROPE,
+    )
+
+    called: list[int] = []
+
+    def _must_not_run(**_k):
+        called.append(1)
+        raise AssertionError("the LLM must not be called for an ungradeable pack")
+
+    monkeypatch.setattr("weatherbrief.tasks.outputs.run_llm_digest", _must_not_run)
+
+    resp = client.post(f"/api/flights/{flight.id}/packs/{ts}/digest/generate")
+
+    assert resp.status_code == 422, resp.text
+    assert called == []

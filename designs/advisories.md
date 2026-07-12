@@ -330,7 +330,61 @@ Also supports `run_advisories_from_pack()` for re-evaluation from saved artifact
 
 **Altitude table** (`analysis/advisories/altitude_table.py` → `compute_altitude_table`, driven by `run_altitude_table_from_pack`): sweeps the *altitude-dependent* evaluators (`get_altitude_dependent_ids()`, derived from each catalog entry's `altitude_dependent` flag) across an altitude range at `step_ft` intervals, returning an `AltitudeTableResult` with per-altitude advisory rows plus `best_below_cruise`/`best_above_cruise` picks. Pure analysis module — does NOT import from `tasks/`. `diff_altitude_rows()` (with `row_for_altitude`) is the canonical altitude-diff primitive — "which advisories improve/worsen at altitude X vs the planned row" — shared by the digest prompt builder (the deterministic `=== ALTITUDE OPTIONS ===` block; see [digest.md](./digest.md)) and mirrored by a client TypeScript twin (`web/ts/helpers/altitude-diff.ts`). The table is **precomputed at briefing time and fed into the digest input** so the LLM phrases the altitude trade-off without inventing numbers (#259).
 
-**Alt departure** (`run_alt_from_pack` + `derive_assessment_from_advisories`): re-runs analysis + advisories against the already-fetched forecast at a flight's `alt_departure_time`, writing `route_advisories_alt.json` and deriving an overall GREEN/AMBER/RED assessment (worst aggregate status) for the alt scenario.
+**Alt departure** (`run_alt_from_pack` + `derive_assessment_from_advisories`): re-runs analysis + advisories against the already-fetched forecast at a flight's `alt_departure_time`, writing `route_advisories_alt.json` and deriving an overall assessment (worst aggregate status) for the alt scenario.
+
+## The flight-level assessment — and its UNAVAILABLE state (#392)
+
+`derive_assessment_from_advisories` folds the manifest into the single traffic
+light a pilot sees on the flight list, the briefing banner, the timing grid, the
+digest email and the MCP/ChatGPT responses. It has **four** states, not three.
+
+| Value | Means |
+|-------|-------|
+| `GREEN`/`AMBER`/`RED` | worst aggregate status across the advisories that graded |
+| `UNAVAILABLE` | we briefed the flight and **nothing graded** — absent data, not a clear sky |
+| `NULL` | no pack / not briefed yet. A *different* state; don't collapse the two |
+
+Before #392 the empty case short-circuited to `GREEN` ("No advisory data
+available") — the reason string was honest, the colour was not. That is the
+opposite of what `AdvisoryStatus.worst([])` already did one layer down.
+
+**Two producers, one verdict.** The pack's assessment is normally the **LLM
+digest's**, not this function's (`api/packs.py::_build_pack_meta` prefers
+`result.digest.assessment`; the derived value is the provisional/fallback, and is
+always the one used for alt-departure and the time-scan grid). The digest schema
+only permits GREEN/AMBER/RED, so an empty manifest gets a *confident* traffic
+light out of it. Fixing the derivation alone would therefore have changed nothing
+for a normal briefing. Hence:
+
+- **`advisories_ungradeable(manifest)`** (`tasks/advise.py`) is the single test
+  behind both consumers, so they cannot disagree. `None` is deliberately **not**
+  ungradeable — a stage that never ran is the NULL case, not the UNAVAILABLE one.
+- **`pipeline.py` phase 7 skips the digest** when nothing graded. There is nothing
+  to narrate and the LLM would charge us to invent a verdict.
+- **`api/packs.py` clamps** the assessment to UNAVAILABLE regardless of what the
+  digest said — the backstop covering the on-demand `/digest/generate` path (which
+  also 422s) and any caller that hands us a digest.
+- **`notify/dispatch.py` suppresses** push, email and the badge for UNAVAILABLE.
+  It is not weather news and the pilot cannot act on it; the grey badge is there
+  when they next open the flight. This holds even for a per-flight "always
+  notify" override — there is nothing to notify *about*.
+
+**The trigger is binary** — *zero* graded advisories. Partial coverage still
+grades on what graded (one real GREEN among nineteen gaps is a GREEN); the grey
+advisory cards carry the gaps. No coverage threshold, deliberately: it would need
+calibration and a judgement on which advisories are "core".
+
+**Rendering is nearly free** — web `assessmentClass` already defaults to a grey
+badge and iOS's `Assessment` enum already has an `.unavailable` case. Only the
+briefing *banner* needed a new CSS class (`.assessment-unavailable`), since it
+builds its class by string interpolation.
+
+**Known gap:** the `assessment_reason` contract (`"icing=RED, cloud=AMBER"` —
+red/amber only) cannot express a gap, so a *per-advisory* UNAVAILABLE is still
+invisible in the timing-grid dots, which fall back to `?? 'GREEN'`. The dot
+colour mappings no longer paint unknown statuses green, but closing this properly
+means extending the reason format — which changes user-visible email/report copy
+for normal packs.
 
 ## API Endpoints
 
