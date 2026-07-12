@@ -129,7 +129,9 @@ class BriefingPackMeta(BaseModel):
     # built with the profile's AI toggle off carries False, which the UI uses
     # to show "AI summary off for this profile" + a Generate button instead.
     llm_digest_requested: bool = True
-    assessment: Optional[str] = None  # GREEN/AMBER/RED from digest (short range)
+    # GREEN/AMBER/RED from the digest (short range), or UNAVAILABLE when nothing
+    # could be graded (#392). NULL = not briefed yet — a different state.
+    assessment: Optional[str] = None
     assessment_reason: Optional[str] = None
     # Compact RED/AMBER advisory breakdown denormalized at briefing-build time
     # so the flights-list card renders the per-flight summary chips without
@@ -157,7 +159,8 @@ class BriefingPackMeta(BaseModel):
     model_sources: dict[str, str] = Field(default_factory=dict)
     models_skipped_region: list[str] = Field(default_factory=list)
     diagnostics: list[Diagnostic] = Field(default_factory=list)
-    alt_assessment: Optional[str] = None  # GREEN/AMBER/RED for alt departure
+    # GREEN/AMBER/RED/UNAVAILABLE for the alt departure time (#392).
+    alt_assessment: Optional[str] = None
     alt_assessment_reason: Optional[str] = None
     has_alt_advisories: bool = False
     # DWD Surface Analysis & Forecast — references the shared chart cache.

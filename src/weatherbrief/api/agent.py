@@ -175,8 +175,8 @@ def list_flights(
     """List the user's upcoming flights with briefing status.
 
     Returns each flight's route, departure time, and weather assessment
-    (GREEN/AMBER/RED) from the latest briefing. Use this to see which flights
-    need attention or have stale briefings.
+    (GREEN/AMBER/RED/UNAVAILABLE) from the latest briefing. Use this to see
+    which flights need attention or have stale briefings.
     """
     flights = flights_api.list_all_flights(
         response=Response(), past_limit=None, past_offset=0, user_id=user_id, db=db,
@@ -276,9 +276,9 @@ def get_briefing(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Latest weather briefing for a flight: overall assessment
-    (GREEN/AMBER/RED), route advisories, AI digest, and a link to the full
-    briefing. Status: ready (fresh), stale (models updated since), processing
-    (generating), none (call refreshBriefing first).
+    (GREEN/AMBER/RED/UNAVAILABLE), route advisories, AI digest, and a link to
+    the full briefing. Status: ready (fresh), stale (models updated since),
+    processing (generating), none (call refreshBriefing first).
     """
     pack, timestamp, status = _resolve_latest_pack(db, user_id, flight_id)
     if status is not None:
@@ -295,6 +295,10 @@ def get_briefing(
         "briefing_timestamp": timestamp,
         "web_url": _flight_web_url(flight_id),
     }
+    # #392: tell the agent what UNAVAILABLE means before it improvises.
+    _assess_note = views.assessment_note(pack.assessment)
+    if _assess_note:
+        result["assessment_note"] = _assess_note
     if not fresh["is_fresh"]:
         result["stale_models"] = fresh.get("stale_models", [])
         result["stale_note"] = fresh["stale_note"]

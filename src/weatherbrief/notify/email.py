@@ -26,6 +26,13 @@ _ASSESSMENT_COLORS = {
     "GREEN": ("#d1e7dd", "#0f5132"),
     "AMBER": ("#fff3cd", "#664d03"),
     "RED": ("#f8d7da", "#842029"),
+    # Could not assess (#392) — deliberately colourless rather than falling through
+    # to the default grey by accident. Automatic briefing notifications are
+    # suppressed for this state (notify/dispatch.py), but the on-demand "email me
+    # this briefing" endpoint still sends: the user explicitly asked for it, and
+    # silently dropping their request would be worse than an honest empty-handed
+    # email.
+    "UNAVAILABLE": ("#f8f9fa", "#495057"),
 }
 
 # Long-range outlook — muted palette (paired with a dashed border) so it reads

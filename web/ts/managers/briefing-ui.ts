@@ -44,6 +44,7 @@ import {
   riskCssClass,
   variableToMetricId,
 } from '../helpers/metrics-helper';
+import { compareAdvisories } from '../helpers/alt-departure-compare';
 import { formatHeading } from '../units';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
@@ -211,37 +212,6 @@ const ASSESSMENT_BADGE_LETTER: Record<AdvisoryStatus, string> = {
   unavailable: '?',
 };
 
-interface AdvisoryCounts {
-  red: number;
-  amber: number;
-  green: number;
-}
-
-function countAdvisoryStatuses(manifest: RouteAdvisoriesManifest | null): AdvisoryCounts {
-  const counts: AdvisoryCounts = { red: 0, amber: 0, green: 0 };
-  if (!manifest) return counts;
-  for (const a of manifest.advisories) {
-    if (a.aggregate_status === 'red') counts.red++;
-    else if (a.aggregate_status === 'amber') counts.amber++;
-    else if (a.aggregate_status === 'green') counts.green++;
-  }
-  return counts;
-}
-
-/**
- * Compare two advisory tallies using the same rule as the altitude table:
- * fewer reds wins, ties broken by fewer ambers.
- */
-function compareAdvisoryCounts(
-  alt: AdvisoryCounts,
-  primary: AdvisoryCounts,
-): 'better' | 'same' | 'worse' {
-  if (alt.red < primary.red) return 'better';
-  if (alt.red > primary.red) return 'worse';
-  if (alt.amber < primary.amber) return 'better';
-  if (alt.amber > primary.amber) return 'worse';
-  return 'same';
-}
 
 function renderAdvisoryChips(manifest: RouteAdvisoriesManifest): string {
   const catalog = new Map(manifest.catalog.map(e => [e.id, e.name]));
@@ -406,31 +376,42 @@ export function renderAssessment(
   }
 
   const altLevel = pack.alt_assessment.toUpperCase();
+  const altUnavailable = altLevel === 'UNAVAILABLE';
   const altTime = formatDepartureTime(flight.alt_departure_time);
+  // `alt_assessment_reason` for UNAVAILABLE is an internal English diagnostic,
+  // not localized prose — same reason the main banner withholds it (#392).
   const chipsHtml = altAdvisories
     ? renderAdvisoryChips(altAdvisories)
-    : (pack.alt_assessment_reason ? escapeHtml(pack.alt_assessment_reason) : '');
+    : (!altUnavailable && pack.alt_assessment_reason
+        ? escapeHtml(pack.alt_assessment_reason)
+        : '');
 
-  // Only show comparison when both manifests are available
-  let cmpHtml = '';
-  if (routeAdvisories && altAdvisories) {
-    const cmp = compareAdvisoryCounts(
-      countAdvisoryStatuses(altAdvisories),
-      countAdvisoryStatuses(routeAdvisories),
-    );
-    const label = cmp === 'better' ? 'Better' : cmp === 'worse' ? 'Worse' : 'Same';
-    cmpHtml = `<span class="alt-cmp alt-cmp-${cmp}">${label}</span>`;
-  }
+  // Withhold the chip entirely when the two times share nothing gradeable —
+  // "Better"/"Worse"/"Same" would all be inventions (#392).
+  const cmp = compareAdvisories(altAdvisories, routeAdvisories);
+  const cmpHtml = cmp
+    ? `<span class="alt-cmp alt-cmp-${cmp}">${
+        cmp === 'better' ? 'Better' : cmp === 'worse' ? 'Worse' : 'Same'
+      }</span>`
+    : '';
+
+  // The traffic-light words have a `-text` colour class each; UNAVAILABLE is not
+  // one of them and must not fall through to an unstyled (or green) word.
+  const levelClass = altUnavailable
+    ? 'assessment-muted-text'
+    : `assessment-${altLevel.toLowerCase()}-text`;
 
   altEl.style.display = '';
   altEl.className = 'alt-assessment-banner';
   altEl.innerHTML = `
     <div class="alt-assessment-header">
       <strong>Alternate Departure Time ${escapeHtml(altTime)}:</strong>
-      <span class="alt-assessment-level assessment-${altLevel.toLowerCase()}-text">${altLevel}</span>
+      <span class="alt-assessment-level ${levelClass}">${escapeHtml(altLevel)}</span>
       ${cmpHtml}
     </div>
-    <div class="alt-assessment-chips">${chipsHtml}</div>
+    <div class="alt-assessment-chips">${
+      altUnavailable && !altAdvisories ? escapeHtml(t('briefing.unavailableNote')) : chipsHtml
+    }</div>
   `;
 }
 

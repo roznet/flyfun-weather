@@ -70,7 +70,15 @@ struct AdvisoryTabView: View {
         if let pack = viewModel.pack {
             if let assessment = pack.assessment {
                 let severity = Assessment(rawValue: assessment.lowercased()) ?? .unavailable
-                heroCard(accent: severity.color, reason: pack.assessmentReason) {
+                // #392: for UNAVAILABLE the server's `assessmentReason` is an
+                // internal English diagnostic ("No advisory could be graded — …"),
+                // not the LLM's localized prose every other grade carries. Showing
+                // it would leak English into fr/de/es, so substitute the localized
+                // copy — the same substitution the web banner makes.
+                let reason = severity == .unavailable
+                    ? String(localized: "We have no usable model data for this route. Treat this as missing information, not as clear weather.")
+                    : pack.assessmentReason
+                heroCard(accent: severity.color, reason: reason) {
                     AssessmentStringBadge(status: assessment)
                 }
             } else if let outlook = pack.outlook {

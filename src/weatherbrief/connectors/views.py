@@ -16,6 +16,16 @@ from __future__ import annotations
 
 from typing import Any
 
+ASSESSMENT_UNAVAILABLE_NOTE = (
+    "assessment=UNAVAILABLE means we produced a briefing but NO advisory could "
+    "be graded — we have no usable model data for this route. It is NOT a clear "
+    "sky and NOT a mild GREEN: it is the absence of an assessment. Never narrate "
+    "it as reassuring or imply the weather looks fine; say plainly that we could "
+    "not assess this flight, and point the pilot at other sources. "
+    "assessment_reason for this state is an internal English diagnostic — "
+    "paraphrase it, don't quote it."
+)
+
 CROSS_CHECK_NOTE = (
     "Cross-check notes are display-only context for discussion, not a "
     "downgrade signal. Explain the grade with them; do not argue it down."
@@ -49,6 +59,22 @@ ALTERNATES_NOTE = (
     "currency — is NOT evaluated here. Combine these with airport/AIP data "
     "before advising a pilot on a divert."
 )
+
+
+def assessment_note(assessment: str | None) -> str | None:
+    """The UNAVAILABLE guardrail for an agent, or None when the grade speaks for
+    itself (#392).
+
+    GREEN/AMBER/RED need no gloss — an agent reads them correctly. UNAVAILABLE is
+    the one value whose plain-English name invites a wrong reading ("nothing was
+    flagged, so it must be fine"), and it is the one where a reassuring narration
+    is most dangerous. The note rides in the payload rather than the tool
+    docstring because the ChatGPT connector caps its OpenAPI descriptions at
+    ~300 chars — same reasoning as CROSS_CHECK_NOTE / MITIGATION_NOTE.
+    """
+    if (assessment or "").upper() == "UNAVAILABLE":
+        return ASSESSMENT_UNAVAILABLE_NOTE
+    return None
 
 
 def briefing_freshness_status(freshness: dict) -> dict[str, Any]:

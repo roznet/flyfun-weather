@@ -36,7 +36,7 @@ class TimeConfirmation(BaseModel):
     or filled at scan time when the candidate is in-window)."""
 
     models_checked: list[str]
-    assessment: str  # GREEN / AMBER / RED
+    assessment: str  # GREEN / AMBER / RED / UNAVAILABLE (#392)
     assessment_reason: str = ""
     # Per-model RED/AMBER breakdown, same "id=STATUS, ..." format as
     # assessment_reason ({"gfs": "airport_weather=RED", ...}); a model with
@@ -62,7 +62,7 @@ class TimeCandidate(BaseModel):
     departure_shift_hours: float
     valid_times: list[datetime] = Field(default_factory=list)
 
-    assessment: str  # GREEN / AMBER / RED (per ``models_used``)
+    assessment: str  # GREEN / AMBER / RED / UNAVAILABLE (per ``models_used``)
     assessment_reason: str = ""
     models_used: list[str] = Field(default_factory=list)
 

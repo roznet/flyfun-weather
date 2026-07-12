@@ -14,6 +14,11 @@ enum IntentDialogs {
             return "Your \(route) flight hasn't been briefed yet."
         }
         if let assessment = briefing.assessment?.uppercased() {
+            // #392: "graded unavailable" reads as a verdict. It is the absence of
+            // one — say so, in the same register as the web/iOS copy.
+            if assessment == "UNAVAILABLE" {
+                return "I couldn't assess your \(route) flight — there's no usable model data for that route yet."
+            }
             var line = "Your \(route) flight is graded \(assessment.lowercased())."
             if let top = briefing.advisorySummary?.top, !top.isEmpty {
                 let names = top.prefix(2).map(\.name).joined(separator: " and ")
@@ -34,7 +39,9 @@ enum IntentDialogs {
         guard !upcoming.isEmpty else { return "You have no upcoming flights." }
         let listLimit = 5
         let lines = upcoming.prefix(listLimit).map { flight -> String in
-            let status = flight.latestBriefing?.assessment?.lowercased()
+            let rawAssessment = flight.latestBriefing?.assessment?.uppercased()
+            let status = (rawAssessment == "UNAVAILABLE" ? "couldn't be assessed" : nil)
+                ?? flight.latestBriefing?.assessment?.lowercased()
                 ?? flight.latestBriefing?.outlook.map(humanize)
                 ?? "not yet briefed"
             return "\(flight.shortTitle), \(status)"

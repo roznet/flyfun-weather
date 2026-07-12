@@ -53,7 +53,10 @@ let currentArea: Area = 'staging';
 function badge(letter: string | null | undefined): string {
   if (!letter) return '<span class="badge unl">—</span>';
   const c = letter[0].toUpperCase();
-  return `<span class="badge ${c}">${c}</span>`;
+  // Only G/A/R have a CSS rule; anything else (notably UNAVAILABLE -> 'U') would
+  // render unstyled. Fall back to the neutral "no verdict" pill (#392).
+  const cls = c === 'G' || c === 'A' || c === 'R' ? c : 'unl';
+  return `<span class="badge ${cls}">${c}</span>`;
 }
 
 /** HTML-escape a dynamic value before interpolating into an innerHTML string. */
