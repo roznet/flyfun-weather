@@ -28,18 +28,16 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EvidenceSample,
     FlaggedCell,
     below_coverage,
-    build_regions,
-    build_ribbon,
     format_extent,
-    ribbon_peak,
+    summarize_evidence,
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
-    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     HighlightSeverity,
@@ -261,52 +259,63 @@ class EnroutePrecipEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
+            # The extent-thresholded grade (snow/rain sub-percentages) stays in
+            # the shared classifier; VFR feasibility reuses it too. The evidence
+            # list drives the geometry-accurate affected_nm and the highlight, and
+            # keys off the SAME per-point predicate (``classify_precip_point``), so
+            # the grade's ``affected`` and the ribbon cannot drift (#393).
             status, detail, affected, total, has_signal = classify_enroute_precip(
                 ctx, model, params,
             )
 
-            # Per-point highlight geometry (#375): full-column precip cutouts
-            # (the hazard is the whole column below the melting layer) + a
-            # ribbon mirroring classify_precip_point. Skipped when the model
-            # has no precipitation signal (status UNAVAILABLE).
-            highlights = None
-            if has_signal and total > 0:
-                ribbon_points: list[tuple[float, HighlightSeverity]] = []
-                region_cells: list[tuple[float, FlaggedCell | None]] = []
-                for rpa in ctx.analyses:
-                    dist = rpa.distance_from_origin_nm or 0.0
-                    sounding = rpa.sounding.get(model)
-                    # No sounding, or a sounding with no precipitation assessment,
-                    # is unassessable → UNAVAILABLE ribbon (matches the grade's
-                    # denominator, which now excludes these points).
-                    if sounding is None or sounding.precipitation is None:
-                        ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                        region_cells.append((dist, None))
-                        continue
-                    severity = precip_point_severity(
-                        classify_precip_point(sounding.precipitation)
+            # One evidence sample per route point. ``severity`` (ribbon) maps
+            # light rain to GREEN; ``affected`` (grade) counts any precipitation
+            # incl. light rain — deliberately different, so each is passed
+            # explicitly. Full-column precip cutouts (hazard = whole column below
+            # the melting layer) on flagged points only.
+            samples: list[EvidenceSample] = []
+            for rpa in ctx.analyses:
+                dist = rpa.distance_from_origin_nm or 0.0
+                sounding = rpa.sounding.get(model)
+                # No sounding, or a sounding with no precipitation assessment, is
+                # unassessable → UNAVAILABLE ribbon (matches the grade's
+                # denominator, which excludes these points).
+                if sounding is None or sounding.precipitation is None:
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
+                    continue
+                cls = classify_precip_point(sounding.precipitation)
+                severity = precip_point_severity(cls)
+                region = None
+                if severity in (HighlightSeverity.AMBER, HighlightSeverity.RED):
+                    region = FlaggedCell(
+                        kind="precip_column",
+                        severity=severity,
+                        base_ft=None,
+                        top_ft=None,
+                        metric_id="precipitation",
                     )
-                    ribbon_points.append((dist, severity))
-                    if severity in (HighlightSeverity.AMBER, HighlightSeverity.RED):
-                        region_cells.append((dist, FlaggedCell(
-                            kind="precip_column",
-                            severity=severity,
-                            base_ft=None,
-                            top_ft=None,
-                        )))
-                    else:
-                        region_cells.append((dist, None))
-                ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
-                highlights = AdvisoryHighlights(
-                    ribbon=ribbon,
-                    regions=build_regions(region_cells, ctx.total_distance_nm),
-                    peak_dist_nm=ribbon_peak(ribbon),
-                )
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True, severity=severity,
+                    affected=cls is not None, region=region,
+                ))
+
+            summary = summarize_evidence(samples, ctx.total_distance_nm)
+
+            # Highlights only when the model has a precipitation signal (the
+            # no-signal case grades UNAVAILABLE). ``affected``/``total`` stay the
+            # classifier's authoritative counts (equal to the summary's, by the
+            # shared predicate); affected_nm is the summary's geometry-accurate
+            # extent of the same affected points.
+            highlights = summary.highlights if has_signal and total > 0 else None
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=summary.affected_nm,
                 highlights=highlights,
             ))
 
