@@ -85,20 +85,29 @@ class ModelAgreementEvaluator:
         samples: list[EvidenceSample] = []
 
         for rpa in ctx.analyses:
-            if not rpa.model_divergence:
+            divergences = rpa.model_divergence
+            if not divergences:
+                continue
+            valid_divergences = [
+                divergence
+                for divergence in divergences
+                if divergence.mean is not None
+            ]
+            if not valid_divergences:
                 continue
             point_index = rpa.point_index
             evaluated.add(point_index)
-            complete.add(point_index)
+            if len(valid_divergences) == len(divergences):
+                complete.add(point_index)
 
             poor = [
                 divergence
-                for divergence in rpa.model_divergence
+                for divergence in valid_divergences
                 if divergence.agreement == AgreementLevel.POOR
             ]
             moderate = [
                 divergence
-                for divergence in rpa.model_divergence
+                for divergence in valid_divergences
                 if divergence.agreement == AgreementLevel.MODERATE
             ]
             has_poor = len(poor) >= min_poor_vars

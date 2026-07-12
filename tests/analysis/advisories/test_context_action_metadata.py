@@ -140,6 +140,97 @@ def test_model_agreement_missing_route_divergence_is_unavailable(
     assert result.per_model[0].primary_method_id == "model_divergence"
 
 
+def test_model_agreement_all_absent_metrics_are_unavailable_not_good(
+    clear_context: RouteContext,
+):
+    absent = ModelDivergence(
+        variable="cape_jkg",
+        model_values={"gfs": None, "ecmwf": None},
+        mean=None,
+        spread=0.0,
+        agreement=AgreementLevel.GOOD,
+    )
+    ctx = replace(
+        clear_context,
+        analyses=[
+            point.model_copy(update={"model_divergence": [absent]})
+            for point in clear_context.analyses
+        ],
+    )
+
+    result = ModelAgreementEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert result.status == AdvisoryStatus.UNAVAILABLE
+    assert result.data_state == "unavailable"
+    assert result.total_points == 0
+    assert result.affected_points == 0
+    assert result.evidence_regions == []
+
+
+def test_model_agreement_mixed_valid_and_absent_metrics_is_partial(
+    clear_context: RouteContext,
+):
+    valid = ModelDivergence(
+        variable="temperature_c",
+        model_values={"gfs": 10.0, "ecmwf": 13.0},
+        mean=11.5,
+        spread=3.0,
+        agreement=AgreementLevel.MODERATE,
+    )
+    absent = ModelDivergence(
+        variable="cape_jkg",
+        model_values={"gfs": None, "ecmwf": None},
+        mean=None,
+        spread=0.0,
+        agreement=AgreementLevel.GOOD,
+    )
+    ctx = replace(
+        clear_context,
+        analyses=[
+            point.model_copy(update={"model_divergence": [valid, absent]})
+            for point in clear_context.analyses
+        ],
+    )
+
+    result = ModelAgreementEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert result.status == AdvisoryStatus.UNAVAILABLE
+    assert result.data_state == "partial"
+    assert result.total_points == 10
+    assert result.affected_points == 0
+    assert result.affected_mod_points == 10
+    assert result.affected_mod_pct == 100.0
+    assert {
+        (region.reason_code, region.metric_id)
+        for region in result.evidence_regions
+    } == {("moderate_model_agreement", "temperature_c")}
+
+
+def test_model_agreement_numeric_mean_with_null_model_value_remains_complete(
+    clear_context: RouteContext,
+):
+    divergence = ModelDivergence(
+        variable="temperature_c",
+        model_values={"gfs": 10.0, "ecmwf": 12.0, "icon": None},
+        mean=11.0,
+        spread=2.0,
+        agreement=AgreementLevel.GOOD,
+    )
+    ctx = replace(
+        clear_context,
+        analyses=[
+            point.model_copy(update={"model_divergence": [divergence]})
+            for point in clear_context.analyses
+        ],
+    )
+
+    result = ModelAgreementEvaluator.evaluate(ctx, {}).per_model[0]
+
+    assert result.status == AdvisoryStatus.GREEN
+    assert result.data_state == "complete"
+    assert result.total_points == 10
+
+
 def test_model_agreement_moderate_only_evidence_stays_outside_poor_extent(
     clear_context: RouteContext,
 ):

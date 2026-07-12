@@ -91,7 +91,6 @@ def assess_enroute_precip(
         ctx.analyses,
         key=lambda rpa: (rpa.distance_from_origin_nm, rpa.point_index),
     )
-    sounding_points: set[int] = set()
     signal_points: set[int] = set()
     snow_points: set[int] = set()
     moderate_snow_points: set[int] = set()
@@ -104,7 +103,6 @@ def assess_enroute_precip(
         if sounding is None:
             continue
         point_index = rpa.point_index
-        sounding_points.add(point_index)
         precip = sounding.precipitation
         if precip is None:
             continue
@@ -141,7 +139,7 @@ def assess_enroute_precip(
         )
 
     has_signal = bool(signal_points)
-    evaluated_points = sounding_points if has_signal else set()
+    evaluated_points = signal_points
     affected_points = snow_points | significant_rain_points | light_points
     summary = summarize_evidence(
         route_points=ordered_analyses,

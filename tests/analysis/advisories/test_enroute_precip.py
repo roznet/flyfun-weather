@@ -214,6 +214,43 @@ def test_partial_clear_precipitation_is_unavailable_not_clear():
     assert model.status == AdvisoryStatus.UNAVAILABLE
 
 
+def test_partial_hazard_uses_only_precip_assessed_points_for_percentages():
+    ctx = _ctx(
+        [
+            _sounding(PrecipPhase.SNOW, PrecipIntensity.MODERATE),
+            _sounding(PrecipPhase.SNOW, PrecipIntensity.MODERATE),
+            *[_sounding(with_precip=False) for _ in range(8)],
+        ]
+    )
+
+    assessment = enroute_precip_module.assess_enroute_precip(ctx, "gfs")
+
+    assert assessment.status == AdvisoryStatus.RED
+    assert assessment.evaluated_point_indices == frozenset({0, 1})
+    assert assessment.complete_point_indices == frozenset({0, 1})
+    assert assessment.summary.data_state == "partial"
+    assert assessment.summary.total_points == 2
+    assert assessment.summary.affected_points == 2
+    assert assessment.summary.affected_pct == 100.0
+    assert assessment.summary.affected_mod_points == 2
+    assert assessment.summary.affected_mod_pct == 100.0
+    assert assessment.summary.affected_nm == 30.0
+
+    model = _evaluate(ctx).per_model[0]
+    assert model.status == AdvisoryStatus.RED
+    assert model.data_state == "partial"
+    assert model.total_points == 2
+    assert "(100%)" in model.detail
+
+    status, _, affected, legacy_total, has_signal = classify_enroute_precip(ctx, "gfs")
+    assert (status, affected, legacy_total, has_signal) == (
+        AdvisoryStatus.RED,
+        2,
+        10,
+        True,
+    )
+
+
 class TestEnroutePrecipEvaluator:
 
     def test_dry_route_is_green(self):
