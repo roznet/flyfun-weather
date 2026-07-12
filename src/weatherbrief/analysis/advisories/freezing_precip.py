@@ -22,12 +22,10 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EvidenceSample,
     FlaggedCell,
-    below_coverage,
-    build_regions,
-    build_ribbon,
     format_extent,
-    ribbon_peak,
+    summarize_evidence,
     terrain_at_distance,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -35,7 +33,6 @@ from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.sounding.precipitation import detect_warm_nose
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
-    AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
     HighlightSeverity,
@@ -105,17 +102,15 @@ class FreezingPrecipEvaluator:
         per_model: list[ModelAdvisoryResult] = []
 
         for model in ctx.models:
-            total = 0
             active_pts = 0
             primed_pts = 0
-            has_signal_source = False
             loc = ctx.locale
 
-            # Per-point highlight geometry (#375): ribbon red = active FZRA/PL
-            # surface phase, amber = primed profile (warm nose, no active
+            # One evidence sample per route point (#393): ribbon red = active
+            # FZRA/PL surface phase, amber = primed profile (warm nose, no active
             # precip); the cutout is the hazard column, surface → warm-nose top.
-            ribbon_points: list[tuple[float, HighlightSeverity]] = []
-            region_cells: list[tuple[float, FlaggedCell | None]] = []
+            # active/primed sub-counts are tracked alongside for the tiered grade.
+            samples: list[EvidenceSample] = []
 
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
@@ -131,11 +126,11 @@ class FreezingPrecipEvaluator:
                     sounding.derived_levels if sounding is not None else None
                 )
                 if sounding is None or not point_source:
-                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                    region_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
                     continue
-                total += 1
-                has_signal_source = True
 
                 active = False
                 if precip is not None:
@@ -167,26 +162,31 @@ class FreezingPrecipEvaluator:
                     # level no-signal case is already UNAVAILABLE overall.
                     severity = HighlightSeverity.GREEN
 
-                ribbon_points.append((dist, severity))
+                region = None
                 if severity in (HighlightSeverity.AMBER, HighlightSeverity.RED):
                     if nose_top is None:
                         terrain_ft = terrain_at_distance(ctx.elevation, dist) or 0.0
                         nose_top = terrain_ft + _FALLBACK_COLUMN_AGL_FT
                     # base_ft=None renders down to the surface — exactly the
                     # below-cloud hazard column.
-                    region_cells.append((dist, FlaggedCell(
+                    region = FlaggedCell(
                         kind="freezing_precip_column",
                         severity=severity,
                         base_ft=None,
                         top_ft=int(nose_top),
-                    )))
-                else:
-                    region_cells.append((dist, None))
+                        metric_id="precipitation",
+                    )
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True, severity=severity, region=region,
+                ))
 
-            if total == 0 or not has_signal_source:
+            summary = summarize_evidence(samples, ctx.total_distance_nm)
+            total = summary.assessed
+
+            if total == 0:
                 per_model.append(ModelAdvisoryResult.build(
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
-                    detail=adv_t("no_data", loc), affected=0, total=max(total, 0),
+                    detail=adv_t("no_data", loc), affected=0, total=0,
                     total_distance_nm=ctx.total_distance_nm,
                 ))
                 continue
@@ -218,7 +218,7 @@ class FreezingPrecipEvaluator:
             # points at too small a share of the route cannot vouch for the rest.
             # The active-FZRA RED and primed AMBER paths above are untouched — a
             # flagged verdict always stands on partial coverage.
-            if status == AdvisoryStatus.GREEN and below_coverage(total, len(ctx.analyses)):
+            if status == AdvisoryStatus.GREEN and summary.below_coverage:
                 per_model.append(ModelAdvisoryResult.build(
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
                     detail=adv_t("no_data", loc), affected=0, total=total,
@@ -226,20 +226,12 @@ class FreezingPrecipEvaluator:
                 ))
                 continue
 
-            # Highlights (#375) — the model has a precip signal here (the
-            # no-signal case returned UNAVAILABLE above).
-            ribbon = build_ribbon(ribbon_points, ctx.total_distance_nm)
-            highlights = AdvisoryHighlights(
-                ribbon=ribbon,
-                regions=build_regions(region_cells, ctx.total_distance_nm),
-                peak_dist_nm=ribbon_peak(ribbon),
-            )
-
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=active_pts + primed_pts, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                highlights=highlights,
+                affected_nm=summary.affected_nm,
+                highlights=summary.highlights,
             ))
 
         return RouteAdvisoryResult.from_per_model("freezing_precip", per_model, params)

@@ -25,12 +25,12 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
+    EvidenceSample,
     FlaggedCell,
-    below_coverage,
     build_regions,
-    build_ribbon,
     format_extent,
     max_terrain_near_point,
+    summarize_evidence,
     wind_at_altitude,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -182,19 +182,16 @@ class MountainWindEvaluator:
 
         for model in ctx.models:
             terrain_known = 0  # points with a known terrain elevation
-            mountain_pts = 0   # points where terrain exceeds the threshold
-            total = 0          # mountain points with wind data (assessable)
-            affected = 0
             max_wind = 0.0
             wave_red = False          # corroborated point above the lower red bar
             wave_sigs: set[str] = set()  # signatures seen at strong-wind points
-            # Per-point highlight geometry (#375). Non-mountain points are GREEN
-            # ("not relevant to your flight here"), matching the grade's skip;
-            # mountain points with no wind data are UNAVAILABLE. Two cutout
-            # kinds: ridge_wind (the terrain-hugging affected band) and
-            # wave_signature (the corroborating inversion on rotor-day points).
-            ribbon_points: list[tuple[float, HighlightSeverity]] = []
-            ridge_cells: list[tuple[float, FlaggedCell | None]] = []
+            # One evidence sample per route point (#393). Non-mountain points are
+            # GREEN but out of the coverage domain (``in_domain=False``) so
+            # coverage is measured over mountain points only — a flat route grades
+            # GREEN, not UNAVAILABLE. Mountain points with no wind are in-domain
+            # but unassessed. The sample's region is the ridge_wind band; the
+            # wave_signature overlay (red points only) is built separately below.
+            samples: list[EvidenceSample] = []
             wave_cells: list[tuple[float, FlaggedCell | None]] = []
             peak_dist: float | None = None
             peak_speed = 0.0
@@ -207,19 +204,22 @@ class MountainWindEvaluator:
                 if terrain_ft is None:
                     # No elevation data here — we cannot say whether there is
                     # terrain, so this is UNAVAILABLE, not "no mountains" GREEN.
-                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                    ridge_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False, in_domain=False,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
                     wave_cells.append((dist, None))
                     continue
                 terrain_known += 1
                 if terrain_ft < terrain_threshold:
                     # Terrain known and genuinely below the threshold — assessed
-                    # flat, no wave mechanism → GREEN.
-                    ribbon_points.append((dist, HighlightSeverity.GREEN))
-                    ridge_cells.append((dist, None))
+                    # flat, no wave mechanism → GREEN, out of the mountain domain.
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=True, in_domain=False,
+                        severity=HighlightSeverity.GREEN,
+                    ))
                     wave_cells.append((dist, None))
                     continue
-                mountain_pts += 1
 
                 wind = wind_at_altitude(
                     ctx.cross_sections, model, rpa.point_index,
@@ -227,26 +227,28 @@ class MountainWindEvaluator:
                 )
                 if wind is None:
                     # Mountain point but no wind lookup — cannot assess the wave
-                    # risk here. UNAVAILABLE, and it does NOT enter the assessed
-                    # denominator (so an all-no-wind mountain route is UNAVAILABLE,
-                    # not a "light winds (0kt)" GREEN).
-                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-                    ridge_cells.append((dist, None))
+                    # risk here. UNAVAILABLE, in-domain but unassessed (so an
+                    # all-no-wind mountain route is UNAVAILABLE, not a "light
+                    # winds (0kt)" GREEN).
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=False, in_domain=True,
+                        severity=HighlightSeverity.UNAVAILABLE,
+                    ))
                     wave_cells.append((dist, None))
                     continue
-                total += 1
 
                 speed_kt, _ = wind
                 if speed_kt > max_wind:
                     max_wind = speed_kt
 
                 if speed_kt < wind_amber:
-                    ribbon_points.append((dist, HighlightSeverity.GREEN))
-                    ridge_cells.append((dist, None))
+                    samples.append(EvidenceSample(
+                        distance_nm=dist, assessed=True, in_domain=True,
+                        severity=HighlightSeverity.GREEN,
+                    ))
                     wave_cells.append((dist, None))
                     continue
 
-                affected += 1
                 sigs, inv_layer = _wave_signatures(rpa.sounding.get(model), terrain_ft)
                 if sigs:
                     wave_sigs |= sigs
@@ -262,13 +264,17 @@ class MountainWindEvaluator:
                 severity = (
                     HighlightSeverity.RED if point_red else HighlightSeverity.AMBER
                 )
-                ribbon_points.append((dist, severity))
-                ridge_cells.append((dist, FlaggedCell(
-                    kind="ridge_wind",
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True, in_domain=True,
                     severity=severity,
-                    base_ft=int(terrain_ft),
-                    top_ft=int(terrain_ft + altitude_margin),
-                )))
+                    region=FlaggedCell(
+                        kind="ridge_wind",
+                        severity=severity,
+                        base_ft=int(terrain_ft),
+                        top_ft=int(terrain_ft + altitude_margin),
+                        metric_id="wind_speed",
+                    ),
+                ))
                 # The corroborating inversion band visually explains why the RED
                 # threshold dropped ("rotor day").
                 if point_red and inv_layer is not None:
@@ -277,6 +283,7 @@ class MountainWindEvaluator:
                         severity=HighlightSeverity.RED,
                         base_ft=int(inv_layer.base_ft),
                         top_ft=int(inv_layer.top_ft),
+                        metric_id="wind_speed",
                     )))
                 else:
                     wave_cells.append((dist, None))
@@ -284,6 +291,13 @@ class MountainWindEvaluator:
                 if speed_kt > peak_speed:
                     peak_speed = speed_kt
                     peak_dist = dist
+
+            summary = summarize_evidence(
+                samples, ctx.total_distance_nm, peak_dist_nm=peak_dist,
+            )
+            mountain_pts = summary.domain   # points where terrain exceeds threshold
+            total = summary.assessed        # mountain points with wind data
+            affected = summary.affected
 
             loc = ctx.locale
             ext = format_extent(affected, total, ctx.total_distance_nm)
@@ -333,29 +347,32 @@ class MountainWindEvaluator:
             if (
                 status == AdvisoryStatus.GREEN
                 and mountain_pts > 0
-                and below_coverage(total, mountain_pts)
+                and summary.below_coverage
             ):
                 status = AdvisoryStatus.UNAVAILABLE
                 detail = adv_t("no_data", loc)
 
             # Highlights (#375): built whenever the route has points at all —
             # a no-mountain route gets the all-green ribbon its GREEN grade
-            # implies (not None). Peak = the strongest-wind affected point.
+            # implies (not None). The ridge_wind regions come from the evidence
+            # samples; the wave_signature overlay (red points only) is appended.
+            # Peak = the strongest-wind affected point.
             highlights = None
-            if ribbon_points:
+            if samples:
                 highlights = AdvisoryHighlights(
-                    ribbon=build_ribbon(ribbon_points, ctx.total_distance_nm),
+                    ribbon=summary.highlights.ribbon,
                     regions=(
-                        build_regions(ridge_cells, ctx.total_distance_nm)
+                        summary.highlights.regions
                         + build_regions(wave_cells, ctx.total_distance_nm)
                     ),
-                    peak_dist_nm=peak_dist,
+                    peak_dist_nm=summary.highlights.peak_dist_nm,
                 )
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
+                affected_nm=summary.affected_nm,
                 highlights=highlights,
             ))
 
