@@ -254,14 +254,39 @@ class FIKIIcingEvaluator:
                 # clear-air check contributes amber when icing sits within the
                 # cruise buffer. Thin transit-able icing away from cruise stays
                 # green.
+                # ``reason_code`` is derived here, in the same branch as the
+                # severity, so the two cannot drift. It matters for this advisory
+                # more than for any other: a RED icing band means three quite
+                # different things, and the colour tells them apart from nothing.
+                #   ``sld``              — supercooled large droplets. Not a
+                #     severity call: FIKI certification does not cover SLD, so the
+                #     approval simply does not apply here.
+                #   ``severe_icing``     — beyond the aircraft's capability.
+                #   ``thick_transit``    — the layer is merely *thick*. A FIKI
+                #     aircraft can transit it; the exposure is long.
+                # And the AMBER split is this advisory's whole thesis (see the
+                # module docstring — FIKI can transit icing but not loiter in it):
+                #   ``icing_at_cruise``  — ice sits within the cruise buffer. You
+                #     would be *loitering* in it, which is the thing FIKI cannot do.
+                #   ``transit_exposure`` — thickness on the climb/descent only.
+                # Precedence runs most-consequential first; a point can satisfy
+                # several predicates and the code names the one that decides.
+                reason: str | None = None
                 if in_corridor and (
                     sld
                     or (severe_is_red and sev == IcingRisk.SEVERE)
                     or t >= transit_red
                 ):
                     severity = HighlightSeverity.RED
+                    if sld:
+                        reason = "sld"
+                    elif severe_is_red and sev == IcingRisk.SEVERE:
+                        reason = "severe_icing"
+                    else:
+                        reason = "thick_transit"
                 elif (in_corridor and t >= transit_amber) or not point_clear:
                     severity = HighlightSeverity.AMBER
+                    reason = "icing_at_cruise" if not point_clear else "transit_exposure"
                 else:
                     severity = HighlightSeverity.GREEN
 
@@ -275,6 +300,7 @@ class FIKIIcingEvaluator:
                         severity=severity,
                         base_ft=int(min(z.base_ft for z in relevant_zones)),
                         top_ft=int(max(z.top_ft for z in relevant_zones)),
+                        reason_code=reason,
                         metric_id="icing",
                         # The icing method behind these zones (#408).
                         method_id=sounding.icing_method_effective,

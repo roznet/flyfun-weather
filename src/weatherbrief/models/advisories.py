@@ -185,9 +185,26 @@ class HighlightRegion(BaseModel):
     severity: HighlightSeverity  # amber | red (cutouts are only emitted for flagged areas)
     # Stable, non-localised provenance tokens (#393). All additive and
     # legacy-safe — old packs deserialize with them absent:
-    #   ``reason_code`` — the machine token for *why* this region fired (the
-    #     evaluator's per-point reason, e.g. "no_escape", "severe_cat"). Distinct
-    #     from ``kind`` (the geometry class) — several reasons can share a kind.
+    #   ``reason_code`` — the machine token for *why* this region fired. Distinct
+    #     from ``kind`` (the geometry class) and from ``severity``. It is emitted
+    #     ONLY where an advisory can fire for genuinely different reasons that
+    #     share a kind AND a severity — where neither the shape nor the colour
+    #     tells them apart, and the difference changes the pilot's decision:
+    #       ``icing_escape``  no_escape | no_escape_unknown | tight_margin | warm_escape
+    #         (RED splits "we know you are trapped" from "we cannot tell")
+    #       ``fiki_icing``    sld | severe_icing | thick_transit          (RED)
+    #                         icing_at_cruise | transit_exposure          (AMBER)
+    #         (SLD is a certification wall, not a severity; and loitering in ice
+    #          is the one thing a FIKI aircraft cannot do)
+    #       ``convective``    active_track | thermo_floor
+    #         (did the model's own scheme see the storm, or was it quiet and the
+    #          thermodynamics floored it up?)
+    #     Every other evaluator deliberately emits ``None``: their reason IS the
+    #     advisory's definition (cloud_top = "tops above your ceiling"), or it is
+    #     already carried by ``kind`` (vfr_feasibility's cruise_imc / climb_deck /
+    #     descent_deck) or by ``severity`` (vmc_cruise's BKN amber vs OVC red).
+    #     Do not "complete" them for tidiness — a reason that restates the
+    #     definition is noise.
     #   ``metric_id`` — the cross-section layer this region localises to, so a
     #     chip can jump the user to the *right* layer rather than "the chart".
     #   ``method_id`` — the analysis method that produced the region's evidence:

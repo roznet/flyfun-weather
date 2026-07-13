@@ -204,10 +204,21 @@ class ConvectiveEvaluator:
                 # dd_nwp_agreement advisory, not blended into the DD tier. When
                 # the active track is DD this is a no-op.
                 graded_risk = conv.risk_level
+                # Did the thermo floor decide this point, or the active track?
+                # Both produce an identical RED tower, and the difference is the
+                # whole story: "the model's own convective scheme sees storms"
+                # versus "the model is quiet, but the thermodynamics are loaded".
+                # This is the compound provenance we deliberately keep OUT of
+                # ``method_id`` — that field answers "which layer do I draw?" and
+                # the answer is still the active track's. ``reason_code`` answers
+                # "why is this flagged?", which is a different question.
+                floored_by_thermo = False
                 if thermo_conv is not None and _RISK_ORDER.index(
                     thermo_conv.risk_level
                 ) > _RISK_ORDER.index(graded_risk):
                     graded_risk = thermo_conv.risk_level
+                    floored_by_thermo = True
+                reason = "thermo_floor" if floored_by_thermo else "active_track"
 
                 risk_idx = _RISK_ORDER.index(graded_risk)
                 if risk_idx < _RISK_ORDER.index(min_risk):
@@ -292,6 +303,7 @@ class ConvectiveEvaluator:
                         severity=severity,
                         base_ft=int(check_base_ft),
                         top_ft=int(check_top_ft),
+                        reason_code=reason,
                         metric_id="convective_risk",
                         method_id=conv_method,
                     )))
@@ -303,6 +315,7 @@ class ConvectiveEvaluator:
                         severity=severity,
                         base_ft=None,
                         top_ft=None,
+                        reason_code=reason,
                         metric_id="convective_risk",
                         method_id=conv_method,
                     )))
