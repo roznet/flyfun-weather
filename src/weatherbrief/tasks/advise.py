@@ -145,10 +145,15 @@ def _resolve_analyses(
                     # one it returns [] (assess_icing_zones_ogimet_nwp bails on
                     # `not clouds`), which is "method unavailable", NOT "ran,
                     # found nothing". Flag it so the icing evaluators grade
-                    # UNAVAILABLE rather than clear-by-absence (#391).
+                    # UNAVAILABLE rather than clear-by-absence (#391). Leave
+                    # ``icing_method_effective`` unset when it could not run —
+                    # there is no honest method to badge (#408).
                     if not sounding.nwp_cloud_layers:
                         updates["active_icing_available"] = False
+                    else:
+                        updates["icing_method_effective"] = "ogimet_nwp"
                 elif icing_method == "sfip_nwp":
+                    updates["icing_method_effective"] = "sfip_nwp"
                     updates["icing_zones"] = [
                         IcingZone(
                             base_ft=z.base_ft,
@@ -168,6 +173,12 @@ def _resolve_analyses(
             if swap_convective:
                 nwp = sounding.convective_nwp
                 updates["convective"] = nwp if nwp is not None else sounding.convective_thermo
+                # Record which track actually graded (#408). "thermo" whenever
+                # the model-native NWP convective was absent and we silently fell
+                # back — the honesty gap this closes: a pilot who asked for NWP
+                # convective grades on thermo wherever ``convective_nwp`` is None,
+                # and until now nothing recorded that it happened.
+                updates["convective_method_effective"] = "nwp" if nwp is not None else "thermo"
 
             if updates:
                 new_soundings[key] = sounding.model_copy(update=updates)

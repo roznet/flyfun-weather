@@ -295,6 +295,39 @@ def worst_severity(*severities: HighlightSeverity) -> HighlightSeverity:
     return max(severities, key=lambda s: _SEVERITY_RANK[s])
 
 
+def driving_method_id(
+    highlights: AdvisoryHighlights | None,
+    status: AdvisoryStatus,
+) -> str | None:
+    """The stamped ``method_id`` of the region that drove this model's grade (#408).
+
+    The provenance rollup for :attr:`ModelAdvisoryResult.primary_method_id`: the
+    flagged region whose severity matches the model's ``status`` is the one that
+    controlled the grade, so its ``method_id`` is the analysis method a chip
+    badges. Read from the very ``highlights`` the grade already produced — never
+    a second pass over the route — so the badged method cannot drift from the
+    geometry it came from (the #393 single-source principle).
+
+    Returns None when nothing drove the grade to a flagged region (a
+    GREEN/UNAVAILABLE model has no regions), and when the evaluator stamped no
+    method on its cells at all (a non-method-controlled axis — the ``method_id``
+    the docstring reserves as "when one controlled it"). The first *stamped*
+    match wins, so a composite whose ribbon mixes a method-bearing axis
+    (icing_band) with a method-less one (tower) badges the method that actually
+    carries a label.
+    """
+    if highlights is None:
+        return None
+    target = _STATUS_TO_SEVERITY.get(status)
+    if target is None:
+        return None
+    return next(
+        (r.method_id for r in highlights.regions
+         if r.severity == target and r.method_id is not None),
+        None,
+    )
+
+
 def ribbon_peak(segments: list[RibbonSegment]) -> float | None:
     """Center of the longest RED run, else the longest AMBER run, else ``None``.
 

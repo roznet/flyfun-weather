@@ -118,7 +118,7 @@ nwp_layers = build_nwp_cloud_layers(
 - **No synthesized tier.** Open-Meteo bulk `cloud_cover_low/mid/high_pct` are intentionally NOT synthesized into layers here — downstream consumers (Ogimet-NWP / IENG icing, cross-section NWP toggle) need a clean "native or absent" signal. (Synthesis from bulk %, with DD/inversion/LCL narrowing, still lives behind the disabled `apply_nwp_coverage` overlay — see `_APPLY_NWP_COVERAGE_OVERLAY` in `sounding/__init__.py`.)
 - Coverage mapping: ≥87.5% → OVC, ≥50% → BKN, ≥25% → SCT, ≥12.5% → FEW (3D source uses peak deck CAF).
 - Each `EnhancedCloudLayer` carries `source` field ("dd"/"nwp_3d"/"grib").
-- `SoundingAnalysis.cloud_method_effective` tracks what method was actually used ("dd", "nwp", "nwp_synthesized").
+- `SoundingAnalysis.cloud_method_effective` tracks what method was actually used ("dd", "nwp", "nwp_synthesized"). Its siblings `icing_method_effective` and `convective_method_effective` do the same for the icing and convective axes (#408) — the effective, not requested, method, so a fallback is recorded; the icing/cloud advisory chips badge `method_id` from them.
 
 **Cloud top uncertainty enrichment:** For convective (CAPE > 500): `theoretical_max_top_ft = EL`. For stratiform: `theoretical_max_top_ft = -20°C level`. Only set when exceeding sounding-derived cloud top.
 
@@ -434,12 +434,12 @@ Route-point analysis (`analyze_all_route_points()`) adds interpolated time based
 
 **Method resolution for advisories** (`tasks/advise.py`): Before advisory evaluation, `_resolve_analyses()` returns new `RoutePointAnalysis` objects with the user's preferred method resolved into the active slots — originals are never mutated (uses `model_copy()`). Returns the original list unchanged when no swap is needed.
 - `icing_method="ogimet_dd"`: no swap needed (default in `icing_zones`)
-- `icing_method="ogimet_nwp"`: resolves `icing_ogimet_nwp_zones` → `icing_zones`
-- `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` into `icing_zones`
+- `icing_method="ogimet_nwp"`: resolves `icing_ogimet_nwp_zones` → `icing_zones`. Sets `icing_method_effective="ogimet_nwp"` when it ran; leaves it None (+ `active_icing_available=False`) when there is no native cloud envelope to run against (#408)
+- `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` into `icing_zones`. Sets `icing_method_effective="sfip_nwp"`
 - `cloud_method="dd"`: no swap needed (default in `cloud_layers`)
 - `cloud_method="nwp"`: resolves `nwp_cloud_layers` → `cloud_layers` (falls back to `dd_cloud_layers` if NWP unavailable). Sets `cloud_method_effective` to "nwp" (grib sources), "nwp_synthesized" (synthesized sources), or "dd" (fallback)
 - `convective_method="thermo"`: no swap needed (default `convective` = `convective_thermo`)
-- `convective_method="nwp"`: resolves `convective_nwp` → `convective` (falls back to `convective_thermo` if the model has no NWP convective scheme)
+- `convective_method="nwp"`: resolves `convective_nwp` → `convective` (falls back to `convective_thermo` if the model has no NWP convective scheme). Sets `convective_method_effective` to "nwp" or "thermo" (fallback) — recording the silent fallback that used to go unlogged (#408)
 
 **Immutable DD source fields**: `SoundingAnalysis` stores `dd_cloud_layers` and `icing_ogimet_dd_zones` at construction. These preserve the original DD data so resolution can always fall back. Excluded from serialization (redundant in default state); a `model_validator` reconstructs them from `cloud_layers`/`icing_zones` when loading old JSON.
 

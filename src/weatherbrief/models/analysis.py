@@ -757,6 +757,22 @@ class SoundingAnalysis(BaseModel):
     # "nwp_synthesized" (synthesized from Open-Meteo + DD heuristics).
     cloud_method_effective: Optional[str] = None
 
+    # Which icing / convective method _resolve_analyses actually graded on — the
+    # EFFECTIVE method, which diverges from the requested one exactly where a
+    # fallback fired (#408), the sibling of ``cloud_method_effective``. The
+    # icing/cloud evidence regions and ``primary_method_id`` source their method
+    # badge from these, so a chip can tell a pilot the truth under fallback
+    # ("graded on thermo, though you asked for NWP") instead of the requested
+    # label that lies at the point it matters.
+    #   ``icing_method_effective`` — "ogimet_nwp" / "ogimet_dd" / "sfip_nwp";
+    #     left None when the method could not run at all (pairs with
+    #     ``active_icing_available=False``: an unavailable method has no honest
+    #     label to badge).
+    #   ``convective_method_effective`` — "nwp" / "thermo"; "thermo" whenever the
+    #     model-native NWP convective was absent and it silently fell back.
+    icing_method_effective: Optional[str] = None
+    convective_method_effective: Optional[str] = None
+
     # Whether the *active* icing method (the one resolved into ``icing_zones`` by
     # _resolve_analyses) could actually run at this point. Ogimet-NWP requires a
     # model-native cloud envelope; on a model without one it returns [] — which

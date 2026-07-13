@@ -6,6 +6,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
+    driving_method_id,
     format_extent,
     summarize_evidence,
 )
@@ -125,6 +126,9 @@ class VMCCruiseEvaluator:
                         base_ft=int(env_base) if env_base is not None else None,
                         top_ft=int(env_top) if env_top is not None else None,
                         metric_id="cloud_cover",
+                        # The cloud method that actually produced these layers —
+                        # "nwp" / "nwp_synthesized" / "dd" under fallback (#408).
+                        method_id=sounding.cloud_method_effective,
                     )
                 samples.append(EvidenceSample(
                     distance_nm=dist, assessed=True, severity=severity, region=region,
@@ -171,6 +175,7 @@ class VMCCruiseEvaluator:
                 total_distance_nm=ctx.total_distance_nm,
                 affected_nm=summary.affected_nm,
                 highlights=highlights,
+                primary_method_id=driving_method_id(highlights, status),
             ))
 
         return RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, params)
