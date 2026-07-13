@@ -307,77 +307,45 @@ def driving_method_id(
     highlights: AdvisoryHighlights | None,
     status: AdvisoryStatus,
 ) -> str | None:
-    """The stamped ``method_id`` of the region that drove this model's grade (#408).
+    """The effective analysis method behind a flagged grade's evidence (#408).
 
-    The provenance rollup for :attr:`ModelAdvisoryResult.primary_method_id`: the
-    analysis method a chip badges. Read from the very ``highlights`` the grade
-    already produced — never a second pass over the route — so the badged method
-    cannot drift from the geometry it came from (the #393 single-source
-    principle).
+    Sources :attr:`ModelAdvisoryResult.primary_method_id` — the method a chip
+    badges — from the very ``highlights`` the grade produced, so the badge cannot
+    drift from the geometry it came from (the #393 single-source principle).
 
-    The driving region is normally the stamped one whose severity equals the
-    grade. But several evaluators cap their per-point region severity below the
-    grade the extent can reach — ``cloud_top`` decks are always AMBER yet ≥60%
-    coverage grades RED; ``ifr_feasibility`` icing bands are AMBER yet
-    ``icing_pct`` can grade RED; ``fiki_icing``'s clear-cruise fraction can grade
-    RED off AMBER points. Requiring an exact severity match dropped the badge on
-    exactly those RED grades — the worst case, where a pilot most needs to know
-    the method (#409 review). So the lookup degrades in two steps:
+    **Every caller passes the regions of a SINGLE method-bearing axis.** The four
+    single-axis evaluators (``vmc_cruise``, ``cloud_top``, ``icing_escape``,
+    ``fiki_icing``) each emit one region kind; the ``ifr_feasibility`` composite
+    resolves its method per-axis and passes only its icing regions (#409). Within
+    one axis every flagged region carries that axis's effective method, so the
+    badge is simply the method of the flagged evidence — there is no need to
+    match a region's severity to the grade's. An earlier version did match, and
+    leaked an edge case in *each* direction: a grade escalating past capped-low
+    regions by extent (``cloud_top`` ≥60% AMBER decks → RED), and a grade landing
+    *below* the only regions present (``vmc_cruise`` sub-red OVC → AMBER off
+    RED-severity regions). Dropping the severity match removes the whole class.
 
-    1. **Exact stamped match** — a stamped region at the grade severity drove it.
-    2. **Escalated by extent** — no region reached the grade severity at all, so
-       it escalated past every capped region by percentage; badge the
-       method-bearing axis that produced those regions (its highest-severity
-       stamped region). BUT if an *unstamped* region did reach the grade severity
-       (the method-less convective ``tower`` in the IFR composite), that axis
-       drove the grade — return None rather than misattribute it to a lesser
-       method-bearing axis.
+    The **highest-severity stamped region** is the representative — the one that
+    most drove the grade when a model graded different route points on different
+    effective methods (cloud NWP at some points, DD fallback at others).
 
-    Returns None for a GREEN/UNAVAILABLE grade (no regions), when only
-    method-less regions exist (a non-method-controlled axis — the ``method_id``
-    the contract reserves as "when one controlled it"), and in the unstamped-axis
-    case above.
+    Returns None for an unflagged grade (GREEN/UNAVAILABLE — the badge explains a
+    concern; isolated sub-threshold regions under a GREEN grade are not one), and
+    when no region carries a method (a DD no-swap axis, or a non-method
+    evaluator — the ``method_id`` the contract reserves for "when one controlled
+    it").
     """
     if highlights is None:
         return None
-    target = _STATUS_TO_SEVERITY.get(status)
-    if target is None:
+    if status not in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
         return None
-    regions = highlights.regions
-
-    # 1. A stamped region exactly at the grade severity is the driving region.
-    exact = next(
-        (r.method_id for r in regions
-         if r.severity == target and r.method_id is not None),
-        None,
-    )
-    if exact is not None:
-        return exact
-
-    # An unstamped region reached the grade severity → a method-less axis drove
-    # it (e.g. the convective tower). Don't badge a lesser method-bearing axis.
-    if any(r.severity == target for r in regions):
+    stamped = [r for r in highlights.regions if r.method_id is not None]
+    if not stamped:
         return None
-
-    # 2. No region reached the grade severity: it escalated past every capped
-    # region by extent. Badge the method-bearing axis behind the highest region
-    # *strictly below* the grade — the ones the percentage climbed over. A
-    # would-be-flagged grade with no lower region (e.g. GREEN — no regions at
-    # all) correctly yields no badge.
-    target_rank = _SEVERITY_RANK[target]
-    below = [
-        r for r in regions
-        if r.method_id is not None and _SEVERITY_RANK[r.severity] < target_rank
-    ]
-    if not below:
-        return None
-    # Ties (several method-bearing regions at the same severity below the grade)
-    # break on list order, which is route order — arbitrary but deterministic.
-    # Reachable only within a single method-bearing axis (composites resolve
-    # their method per-axis before calling this), so a tie means the same axis
-    # graded different route points on different effective methods; any is a fair
-    # representative for the badge.
-    return max(below, key=lambda r: _SEVERITY_RANK[r.severity]).method_id
+    # Ties (same-severity stamped regions on different effective methods within
+    # the one axis) break on route order — arbitrary but deterministic; any is a
+    # fair representative for a single badge.
+    return max(stamped, key=lambda r: _SEVERITY_RANK[r.severity]).method_id
 
 
 def ribbon_peak(segments: list[RibbonSegment]) -> float | None:
