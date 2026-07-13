@@ -25,6 +25,7 @@ from weatherbrief.analysis.advisories.enroute_precip import EnroutePrecipEvaluat
 from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
 from weatherbrief.analysis.advisories.ifr_feasibility import IFRFeasibilityEvaluator
+from weatherbrief.analysis.advisories.vfr_feasibility import VFRFeasibilityEvaluator
 from weatherbrief.analysis.advisories.vmc_cruise import VMCCruiseEvaluator
 from weatherbrief.tasks.advise import _resolve_analyses
 from weatherbrief.models import (
@@ -602,3 +603,66 @@ class TestConvectiveEvaluatorBadgesEffective:
         result = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
         rep = next(m for m in result.per_model if m.model == result.representative_model)
         assert rep.primary_method_id == "thermo"
+
+
+class TestCompositeRegionProvenance:
+    """The feasibility composites carry provenance on every region they emit.
+
+    They reuse other evaluators' geometry, and originally propagated none of it:
+    `vfr_feasibility` emitted no `metric_id`/`method_id` at all, and
+    `ifr_feasibility`'s convective towers carried no method (correct when
+    convective had none — stale once it did). A region's provenance describes
+    *that region*, independent of which axis won the composite grade; only
+    `primary_method_id` is gated on the winning axis.
+    """
+
+    @staticmethod
+    def _regions(result):
+        out = []
+        for pm in result.per_model:
+            if pm.highlights:
+                out.extend(pm.highlights.regions)
+        return out
+
+    def test_vfr_cloud_regions_carry_cloud_provenance(self):
+        ctx = _ctx(
+            [
+                SoundingAnalysis(
+                    cloud_layers=[
+                        EnhancedCloudLayer(base_ft=3000, top_ft=12000, coverage=CloudCoverage.OVC)
+                    ],
+                    nwp_cloud_layers=None,
+                )
+                for _ in range(6)
+            ],
+            cloud_method="square_nwp",   # requested NWP; no native layers → DD
+        )
+        result = VFRFeasibilityEvaluator.evaluate(ctx, _defaults(VFRFeasibilityEvaluator))
+        regions = self._regions(result)
+        assert regions, "expected flagged cloud regions"
+        assert all(r.metric_id == "cloud_cover" for r in regions)
+        # The honesty point: requested NWP, graded on DD, region says DD.
+        assert all(r.method_id == "dd" for r in regions)
+
+    def test_ifr_convective_towers_carry_convective_provenance(self):
+        ctx = _ctx(
+            [
+                SoundingAnalysis(
+                    convective_nwp=None,   # no native track → thermo fallback
+                    convective_thermo=ConvectiveAssessment(
+                        risk_level=ConvectiveRisk.HIGH, cape_jkg=2500,
+                        base_ft=3000, top_ft=30000,
+                    ),
+                )
+                for _ in range(6)
+            ],
+            convective_method="nwp",
+        )
+        result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))
+        towers = [
+            r for r in self._regions(result) if r.kind in ("tower", "tower_unresolved")
+        ]
+        assert towers, "expected flagged convective towers"
+        assert all(r.metric_id == "convective_risk" for r in towers)
+        # Was None before: the composite never propagated convective's method.
+        assert all(r.method_id == "thermo" for r in towers)

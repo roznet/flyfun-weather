@@ -190,8 +190,15 @@ class HighlightRegion(BaseModel):
     #     from ``kind`` (the geometry class) — several reasons can share a kind.
     #   ``metric_id`` — the cross-section layer this region localises to, so a
     #     chip can jump the user to the *right* layer rather than "the chart".
-    #   ``method_id`` — the analysis method that produced the region's evidence
-    #     (e.g. "ogimet_nwp", "sfip", "nwp_with_dd_floor"), when one controlled it.
+    #   ``method_id`` — the analysis method that produced the region's evidence:
+    #     the *effective* one, so it names the method that actually ran rather
+    #     than the one the user asked for (#408). Values are the `*_method_effective`
+    #     tokens — clouds "dd" / "nwp" / "nwp_synthesized", icing "ogimet_dd" /
+    #     "ogimet_nwp" / "sfip_nwp", convection "nwp" / "thermo". Never a compound
+    #     token: when the convective thermo floor raises a quiet NWP grade it moves
+    #     the severity, not the source, so the region still reads "nwp" — the
+    #     geometry a chip draws is the NWP track's. ``None`` for the evaluators
+    #     with no user-selectable method axis (turbulence, mountain_wind, precip).
     reason_code: str | None = None
     metric_id: str | None = None
     method_id: str | None = None

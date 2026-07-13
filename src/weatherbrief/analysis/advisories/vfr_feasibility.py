@@ -23,6 +23,7 @@ from weatherbrief.analysis.advisories._helpers import (
     build_cost_model,
     build_regions,
     build_ribbon,
+    driving_method_id,
     format_extent,
     ribbon_peak,
     to_mitigation_profile,
@@ -403,6 +404,11 @@ def _build_vfr_highlights(
                 severity=cruise_sev,
                 base_ft=int(env_base) if env_base is not None else None,
                 top_ft=int(env_top) if env_top is not None else None,
+                metric_id="cloud_cover",
+                # The cloud method that actually produced these layers — "nwp" /
+                # "nwp_synthesized" / "dd" under fallback (#408). Clouds are this
+                # composite's only method-bearing axis.
+                method_id=sounding.cloud_method_effective,
             )))
         else:
             cruise_sev = (
@@ -424,6 +430,8 @@ def _build_vfr_highlights(
                 severity=sev,
                 base_ft=int(deck_base) if deck_base is not None else None,
                 top_ft=int(deck_top) if deck_top is not None else None,
+                metric_id="cloud_cover",
+                method_id=sounding.cloud_method_effective,
             )))
 
         # En-route precipitation axis, capped at AMBER like the composite grade.
@@ -983,12 +991,24 @@ class VFRFeasibilityEvaluator:
                     dep_status, arr_status,
                 )
 
+            # primary_method_id: clouds are this composite's only method-bearing
+            # axis — the airport and precipitation axes carry none, and every
+            # region it emits (cruise_imc / climb_deck / descent_deck) is a cloud
+            # region. So driving_method_id over the pooled list is single-axis and
+            # correct; the only risk is *borrowing* it for a grade the clouds did
+            # not drive. Gate on the cloud axis reaching the composite status, the
+            # same guard ifr_feasibility applies to its icing axis (#409).
+            cloud_status = _worst_status(enroute_status, corridor_status)
+            cloud_primary = driving_method_id(highlights, status)
+            primary_method_id = cloud_primary if cloud_status == status else None
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 mitigations=mitigations,
                 highlights=highlights,
+                primary_method_id=primary_method_id,
             ))
 
         return RouteAdvisoryResult.from_per_model("vfr_feasibility", per_model, params)

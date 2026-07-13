@@ -215,8 +215,11 @@ def _check_enroute_hazards(
                 severity=HighlightSeverity.AMBER,
                 base_ft=int(min(z.base_ft for z in band)) if band else None,
                 top_ft=int(max(z.top_ft for z in band)) if band else None,
-                # icing is the method-controlled axis of this composite (#408);
-                # the tower/convective cells below carry no method label.
+                metric_id="icing",
+                # Icing is the axis this composite *badges* (see primary_method_id
+                # below): it is the only one gated against the grade. The
+                # convective cells carry their own method too — a region's
+                # provenance is about that region, not about which axis won.
                 method_id=sounding.icing_method_effective,
             )))
         else:
@@ -233,6 +236,8 @@ def _check_enroute_hazards(
                     severity=conv_sev,
                     base_ft=int(conv.base_ft),
                     top_ft=int(conv.top_ft),
+                    metric_id="convective_risk",
+                    method_id=sounding.convective_method_effective,
                 )))
             else:
                 conv_cells.append((dist, FlaggedCell(
@@ -240,6 +245,8 @@ def _check_enroute_hazards(
                     severity=conv_sev,
                     base_ft=None,
                     top_ft=None,
+                    metric_id="convective_risk",
+                    method_id=sounding.convective_method_effective,
                 )))
         else:
             conv_cells.append((dist, None))

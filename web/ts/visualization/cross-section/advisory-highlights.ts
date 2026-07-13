@@ -45,9 +45,10 @@ export function representativeModel(adv: RouteAdvisoryResult): string | null {
 const ADVISORY_METHOD_GROUP: Record<string, 'clouds' | 'icing' | 'convection'> = {
   vmc_cruise: 'clouds',
   cloud_top: 'clouds',
+  vfr_feasibility: 'clouds',   // composite; clouds are its only method-bearing axis
   icing_escape: 'icing',
   fiki_icing: 'icing',
-  ifr_feasibility: 'icing',
+  ifr_feasibility: 'icing',    // composite; icing is the axis it badges
   convective: 'convection',
 };
 
