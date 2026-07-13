@@ -67,7 +67,7 @@ export interface AdvisoryCategory {
  *  `engineDefaults.icing_methdo` fails the build. */
 export interface EngineMethodDefaults {
   icing_method: string;
-  cloud_method: string;
+  cloud_source: string;
   convective_method: string;
 }
 

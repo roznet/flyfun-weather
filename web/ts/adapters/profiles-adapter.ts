@@ -15,7 +15,7 @@ export interface ProfileSettings {
   auto_front_detection: boolean | null;
   compute_alternates: boolean | null;
   icing_method: string | null;
-  cloud_method: string | null;
+  cloud_source: 'dd' | 'nwp' | null;
   convective_method: string | null;
   flight_rules: string | null;
   digest_guidance: string | null;

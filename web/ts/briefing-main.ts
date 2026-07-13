@@ -9,7 +9,7 @@ import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
-import { fetchAdvisoryCatalog, foldBriefingUpdates, type BriefingUpdates } from './adapters/preferences-adapter';
+import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
 import { copyFlightShareLink, redirectToLogin, renderUserInfo, initModelCatalog, isFlightPast, formatDepartureTime, escapeHtml } from './utils';
 import { pressureToAltitudeFt } from './utils/atmo';
@@ -32,6 +32,7 @@ import {
 import { applyNwpFallback, getSubstitutedLayers } from './visualization/cross-section/nwp-fallback';
 import {
   advisoryMethodOverrides,
+  deriveGradedMethods,
   deriveHighlights,
   findAdvisory,
   peakPointPosition,
@@ -222,28 +223,35 @@ async function init(): Promise<void> {
   setUnitsPreference(user.units_region);
   renderUserInfo(user, 'briefing');
 
-  // Load model catalog + preferred methods (non-blocking)
-  let preferredMethods: Record<string, string> = {};
+  // Preferred (graded) methods for the compact cross-section, derived from the
+  // loaded advisory manifest + the catalog's engine-method defaults (#410). The
+  // manifest's per-model `primary_method_id` is the method each advisory actually
+  // graded on (reflecting backend fallback), so a DD-graded profile yields DD
+  // layers. Account-level engine methods are retired; this is the honest source.
+  let engineDefaults: EngineMethodDefaults = ENGINE_METHOD_DEFAULTS_FALLBACK;
+  let preferredMethods: Record<string, string> = deriveGradedMethods(null, engineDefaults);
+
+  /** Recompute `preferredMethods` from the current manifest + engine defaults,
+   *  then (in compact mode) re-apply the preferred-only layer set so a manifest
+   *  that loads after compact was entered still collapses correctly. */
+  function refreshPreferredMethods(): void {
+    preferredMethods = deriveGradedMethods(store.getState().routeAdvisories, engineDefaults);
+    if (store.getState().displayMode === 'compact') {
+      store.getState().setLayersBatch(
+        getCompactLayerOverrides(preferredMethods, store.getState().vizSettings.cloudStyle),
+      );
+    }
+  }
+
+  // Load model catalog + account notification prefs (non-blocking). Engine
+  // methods no longer come from account prefs (#410) — only notify_* is read.
   import('./adapters/preferences-adapter').then(({ fetchModelCatalog, fetchPreferences }) => {
     fetchModelCatalog().then(initModelCatalog).catch(() => {});
     fetchPreferences()
       .then((prefs) => {
-        preferredMethods = { clouds: prefs.cloud_method, icing: prefs.icing_method, convection: prefs.convective_method };
         accountBriefingUpdates = foldBriefingUpdates(prefs.notify_scope, prefs.notify_change_only);
       })
-      .catch(() => {})
-      .finally(() => {
-        // Reconcile compact-mode layers once prefs have settled. Covers two paths:
-        // (a) user toggled compact before the prefs fetch resolved, leaving
-        //     non-preferred layers from full mode silently rendering;
-        // (b) page booted directly into compact (default / persisted) with stale
-        //     extras in localStorage that the panel can't expose to toggle off.
-        if (store.getState().displayMode === 'compact') {
-          store.getState().setLayersBatch(getCompactLayerOverrides(preferredMethods));
-        } else {
-          renderVisualization(store.getState());
-        }
-      });
+      .catch(() => {});
   });
 
   // Initialize metric info popup
@@ -278,7 +286,7 @@ async function init(): Promise<void> {
     if (presetId && isAdvisoryPreset(presetId)) {
       const preset = getAdvisoryPreset(presetId);
       if (preset) {
-        store.getState().applyAdvisoryPreset(presetId, resolveAdvisoryPreset(preset, preferredMethods));
+        store.getState().applyAdvisoryPreset(presetId, resolveAdvisoryPreset(preset, preferredMethods, store.getState().vizSettings.cloudStyle));
         return;
       }
     }
@@ -312,7 +320,7 @@ async function init(): Promise<void> {
       ? advisoryMethodOverrides(adv!, rep, preferredMethods)
       : preferredMethods;
     // Phase 1 (#219): apply the lens (also clears any prior highlight).
-    store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, methods));
+    store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, methods, s.vizSettings.cloudStyle));
     if (turningOn) {
       if (rep) store.getState().setSelectedModel(rep);
       store.getState().setHighlightAdvisory(advisoryId);
@@ -390,7 +398,7 @@ async function init(): Promise<void> {
       const methods = hasHighlights
         ? advisoryMethodOverrides(adv!, targetModel, preferredMethods)
         : preferredMethods;
-      store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, methods));
+      store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, methods, s.vizSettings.cloudStyle));
     }
 
     // Highlight (#373): an `?advisory=` deep-link behaves like a card chip —
@@ -546,8 +554,12 @@ async function init(): Promise<void> {
   // Load the live advisory catalog so the (i) popups show current copy
   // (descriptions / parameter defs) instead of whatever was baked into the pack
   // at generation time. Fire-and-forget: re-render advisories when it arrives.
-  fetchAdvisoryCatalog().then(({ advisories: entries }) => {
+  fetchAdvisoryCatalog().then(({ advisories: entries, engine_method_defaults }) => {
     setLiveAdvisoryCatalog(entries);
+    // Adopt the declared engine-method defaults so the graded-method derivation
+    // falls back to the same values the backend grades absence on (#410, #403).
+    if (engine_method_defaults) engineDefaults = engine_method_defaults;
+    refreshPreferredMethods();
     const s = store.getState();
     if (s.flight) {
       renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
@@ -1760,6 +1772,12 @@ async function init(): Promise<void> {
       const isOwner = !!user && state.flight?.user_id === user.id;
       ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor, state.routeAdvisories?.cruise_altitude_ft ?? null);
     }
+    // The manifest carries the profile's graded methods (#410) — recompute the
+    // preferred methods that drive the compact cross-section (and re-apply the
+    // compact layer set if active) before the render block below reads them.
+    if (state.routeAdvisories !== prev.routeAdvisories) {
+      refreshPreferredMethods();
+    }
     if (state.flight !== prev.flight) {
       ui.renderBriefingSharing(state.flight, sharingHandlers);
     }
@@ -1866,7 +1884,7 @@ async function init(): Promise<void> {
         // back to each group's defaultEnabled layer so we never strand non-preferred
         // layers enabled while their checkbox is hidden.
         if (state.displayMode === 'compact') {
-          store.getState().setLayersBatch(getCompactLayerOverrides(preferredMethods));
+          store.getState().setLayersBatch(getCompactLayerOverrides(preferredMethods, state.vizSettings.cloudStyle));
         } else {
           renderVisualization(state);
         }

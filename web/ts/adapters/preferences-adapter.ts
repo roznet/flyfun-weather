@@ -17,7 +17,7 @@ export type { AdvisoryParameterDef, AdvisoryCatalogEntry, AdvisoryCategory, Advi
  *  response. Must mirror `ENGINE_METHOD_DEFAULTS` in the Python backend. */
 export const ENGINE_METHOD_DEFAULTS_FALLBACK: EngineMethodDefaults = {
   icing_method: 'ogimet_nwp',
-  cloud_method: 'square_nwp',
+  cloud_source: 'nwp',
   convective_method: 'nwp',
 };
 
@@ -47,9 +47,6 @@ export interface PreferencesResponse {
   gramet_enabled: boolean;
   llm_digest_enabled: boolean;
   icing_severity_enhance: boolean;
-  icing_method: string;
-  cloud_method: string;
-  convective_method: string;
   locale: string;
   units_region: string;
   display_currency: string;

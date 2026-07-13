@@ -88,10 +88,14 @@ def test_explicit_dd_thermo_methods_are_honoured_unchanged():
 
 
 def test_engine_method_defaults_constant_values():
-    """The declared defaults match the settings-page placeholders."""
+    """The declared defaults match the settings-page placeholders.
+
+    #410 split the cloud axis: the key is now ``cloud_source`` (bare ``"nwp"``),
+    with the render style owned by the client.
+    """
     assert ENGINE_METHOD_DEFAULTS == {
         "icing_method": "ogimet_nwp",
-        "cloud_method": "square_nwp",
+        "cloud_source": "nwp",
         "convective_method": "nwp",
     }
 
@@ -105,12 +109,13 @@ def test_catalog_endpoint_exposes_engine_method_defaults():
     assert resp["engine_method_defaults"] == ENGINE_METHOD_DEFAULTS
 
 
-def test_legacy_service_toggle_defaults_use_the_constant():
-    """The legacy account-level preferences parsing defaults resolve to the same
-    constant (Part A point 4)."""
+def test_service_toggles_no_longer_expose_engine_methods():
+    """#410 retired the account-level engine methods entirely (they were empty
+    for every user, never written, never read by the pipeline). The legacy
+    service-toggle parser must no longer surface them."""
     from weatherbrief.api.preferences import _parse_service_toggles
 
     toggles = _parse_service_toggles("")  # no stored blob → all defaults
-    assert toggles["icing_method"] == ENGINE_METHOD_DEFAULTS["icing_method"]
-    assert toggles["cloud_method"] == ENGINE_METHOD_DEFAULTS["cloud_method"]
-    assert toggles["convective_method"] == ENGINE_METHOD_DEFAULTS["convective_method"]
+    assert "icing_method" not in toggles
+    assert "cloud_method" not in toggles
+    assert "convective_method" not in toggles

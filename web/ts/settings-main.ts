@@ -92,34 +92,6 @@ let aircraftList: AircraftResponse[] = [];
 let editingAircraftId: number | null = null;
 let autorouterMode: 'oauth' | 'password' = 'oauth';
 
-/** Parse the persisted cloud_method ('soft_nwp', 'square_dd', 'natural_nwp', 'dd', 'nwp', etc.) into source+style. */
-function parseCloudMethod(value: string): { source: 'dd' | 'nwp'; style: 'soft' | 'natural' | 'square' } {
-  const lower = (value ?? '').toLowerCase();
-  // Style-prefixed forms: soft_nwp, soft_dd, square_nwp, square_dd, natural_nwp, natural_dd
-  if (lower.startsWith('soft_')) {
-    return { style: 'soft', source: lower === 'soft_nwp' ? 'nwp' : 'dd' };
-  }
-  if (lower.startsWith('square_')) {
-    return { style: 'square', source: lower === 'square_nwp' ? 'nwp' : 'dd' };
-  }
-  if (lower.startsWith('natural_')) {
-    return { style: 'natural', source: lower === 'natural_nwp' ? 'nwp' : 'dd' };
-  }
-  // Legacy bare-source forms ('dd' / 'nwp') used to mean the old hatched
-  // layer style. Map them to natural (the replacement rendering for that slot).
-  if (lower === 'nwp') return { style: 'natural', source: 'nwp' };
-  if (lower === 'dd') return { style: 'natural', source: 'dd' };
-  // Unknown → fall back to recommended.
-  return { style: 'square', source: 'nwp' };
-}
-
-/** Compose source+style back into a cloud_method string for persistence.
- *  Uses `natural_<source>` for the natural style — avoids the bare `dd`/`nwp`
- *  form that the user_migration in api/user_migrations.py rewrites to square_nwp. */
-function composeCloudMethod(source: string, style: string): string {
-  return `${style}_${source}`;                   // 'soft_nwp', 'square_dd', 'natural_nwp', etc.
-}
-
 /** Default advisory models: all default briefing models except best_match. */
 function defaultAdvisoryModelKeys(): string[] {
   return defaultModelKeys().filter(k => k !== 'best_match');
@@ -254,12 +226,11 @@ function populateProfileForm(profile: ProfileResponse): void {
   const icingMethodSelect = document.getElementById('input-icing-method') as HTMLSelectElement;
   if (icingMethodSelect) icingMethodSelect.value = s.icing_method ?? engineDefaults.icing_method;
 
-  // Cloud source + style selectors (composed into s.cloud_method like 'soft_nwp', 'square_dd', etc.).
+  // Cloud source selector. Absent → the declared backend default (#403). The
+  // render style is a client-only viz preference (localStorage), not a profile
+  // setting (#410).
   const cloudSourceSelect = document.getElementById('input-cloud-source') as HTMLSelectElement;
-  const cloudStyleSelect = document.getElementById('input-cloud-style') as HTMLSelectElement;
-  const { source: cloudSource, style: cloudStyle } = parseCloudMethod(s.cloud_method ?? engineDefaults.cloud_method);
-  if (cloudSourceSelect) cloudSourceSelect.value = cloudSource;
-  if (cloudStyleSelect) cloudStyleSelect.value = cloudStyle;
+  if (cloudSourceSelect) cloudSourceSelect.value = s.cloud_source ?? engineDefaults.cloud_source;
 
   // Convective method selector
   const convectiveMethodSelect = document.getElementById('input-convective-method') as HTMLSelectElement;
@@ -491,7 +462,6 @@ function translateStaticElements(): void {
   set('label[for="advisory-aggregation"]', 'page.settings.summaryRating');
   set('label[for="input-icing-method"]', 'page.settings.icingMethod');
   set('label[for="input-cloud-source"]', 'page.settings.cloudSource');
-  set('label[for="input-cloud-style"]', 'page.settings.cloudStyle');
   set('label[for="input-convective-method"]', 'page.settings.convectiveMethod');
   // Translate select options for flight rules
   const frSelect = document.getElementById('input-flight-rules') as HTMLSelectElement;
@@ -660,7 +630,7 @@ async function init(): Promise<void> {
   // The engine axes are part of the draft the preview evaluates (collectEngineDraft),
   // so they have to re-trigger it too — they live outside #advisory-settings and
   // are not covered by the delegated listeners above.
-  for (const id of ['input-icing-method', 'input-cloud-source', 'input-cloud-style',
+  for (const id of ['input-icing-method', 'input-cloud-source',
                     'input-convective-method', 'advisory-model-checkboxes']) {
     document.getElementById(id)?.addEventListener('change', () => scheduleAdvisoryPreview());
   }
@@ -1403,7 +1373,7 @@ function applyInterview(iv: Interview): void {
 function collectEngineDraft(): {
   advisory_models: string[] | null;
   icing_method: string | null;
-  cloud_method: string | null;
+  cloud_source: 'dd' | 'nwp' | null;
   convective_method: string | null;
 } {
   const advisoryModels: string[] = [];
@@ -1413,12 +1383,12 @@ function collectEngineDraft(): {
       if (cb.checked) advisoryModels.push(cb.dataset.advModel!);
     }
   }
-  const cloudSource = (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value || 'nwp';
-  const cloudStyle = (document.getElementById('input-cloud-style') as HTMLSelectElement)?.value || 'square';
+  // The select offers only 'nwp' / 'dd'; narrow to the ProfileSettings union.
+  const cloudSource: 'dd' | 'nwp' =
+    (document.getElementById('input-cloud-source') as HTMLSelectElement)?.value === 'dd' ? 'dd' : 'nwp';
   // Empty-select fallbacks are the declared backend defaults (#403), not the old
   // ogimet_dd/thermo literals that disagreed with what the form displayed.
   const icing = (document.getElementById('input-icing-method') as HTMLSelectElement)?.value || engineDefaults.icing_method;
-  const cloud = composeCloudMethod(cloudSource, cloudStyle);
   const convective = (document.getElementById('input-convective-method') as HTMLSelectElement)?.value || engineDefaults.convective_method;
   return {
     // null = "no explicit selection" ⇒ server defaults. Same encoding as the save
@@ -1431,7 +1401,7 @@ function collectEngineDraft(): {
     // key. Absence resolves to the same default server-side, so this is lossless
     // for grading and lets an already-dense profile shrink.
     icing_method: pruneEngineMethod(icing, engineDefaults.icing_method),
-    cloud_method: pruneEngineMethod(cloud, engineDefaults.cloud_method),
+    cloud_source: pruneEngineMethod(cloudSource, engineDefaults.cloud_source) as 'dd' | 'nwp' | null,
     convective_method: pruneEngineMethod(convective, engineDefaults.convective_method),
   };
 }

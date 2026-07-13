@@ -42,7 +42,7 @@ class ProfileSettings(BaseModel):
     auto_front_detection: bool | None = None  # experimental front detection (#196)
     compute_alternates: bool | None = None  # weather-based divert candidates, D-2 inward (#210)
     icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", or "sfip_nwp"
-    cloud_method: str | None = None  # "dd" or "nwp"
+    cloud_source: Literal["dd", "nwp"] | None = None  # grading source (#410 — split from render style)
     convective_method: str | None = None  # "thermo" or "nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     digest_guidance: Literal["conservative", "balanced", "tolerant"] | None = None

@@ -99,7 +99,7 @@ def test_omitted_key_is_untouched_partial_writer_safe(client, app_db):
     """A partial writer that omits keys never wipes unrelated ones."""
     pid = _create(client, {
         "icing_method": "ogimet_dd",
-        "cloud_method": "square_dd",
+        "cloud_source": "dd",
         "cruise_altitude_ft": 6000,
     })
     # Partial PUT touching only the altitude — the audit's core safety property.
@@ -107,7 +107,7 @@ def test_omitted_key_is_untouched_partial_writer_safe(client, app_db):
     stored = _raw(app_db, pid)
     assert stored["cruise_altitude_ft"] == 7000
     assert stored["icing_method"] == "ogimet_dd"
-    assert stored["cloud_method"] == "square_dd"
+    assert stored["cloud_source"] == "dd"
 
 
 def test_resave_dense_profile_shrinks(client, app_db):
@@ -116,7 +116,7 @@ def test_resave_dense_profile_shrinks(client, app_db):
     deleted. Proves the server can *delete*, which a dict.update() merge cannot."""
     dense = {
         "icing_method": "ogimet_nwp",
-        "cloud_method": "square_nwp",
+        "cloud_source": "nwp",
         "convective_method": "nwp",
         "advisories": {
             "enabled": {"airport_wind": True},
@@ -132,7 +132,7 @@ def test_resave_dense_profile_shrinks(client, app_db):
     # complete but with its params emptied (all were at default).
     pruned = {
         "icing_method": None,
-        "cloud_method": None,
+        "cloud_source": None,
         "convective_method": None,
         "advisories": {"enabled": {"airport_wind": True}, "params": {}},
     }
@@ -140,7 +140,7 @@ def test_resave_dense_profile_shrinks(client, app_db):
 
     stored = _raw(app_db, pid)
     assert "icing_method" not in stored
-    assert "cloud_method" not in stored
+    assert "cloud_source" not in stored
     assert "convective_method" not in stored
     assert stored["advisories"]["params"] == {}
 
@@ -152,12 +152,12 @@ def test_all_default_save_persists_no_engine_keys_or_params(client, app_db):
     pid = _create(client, {"cruise_altitude_ft": 5500})
     _put(client, pid, {
         "icing_method": None,
-        "cloud_method": None,
+        "cloud_source": None,
         "convective_method": None,
         "advisories": {"enabled": {"cloud_top": True}, "params": {}},
     })
     stored = _raw(app_db, pid)
     assert "icing_method" not in stored
-    assert "cloud_method" not in stored
+    assert "cloud_source" not in stored
     assert "convective_method" not in stored
     assert stored["advisories"]["params"] == {}

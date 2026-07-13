@@ -69,13 +69,13 @@ def _ctx(
     soundings: list[SoundingAnalysis],
     *,
     icing_method: str | None = None,
-    cloud_method: str | None = None,
+    cloud_source: str | None = None,
     convective_method: str | None = None,
 ) -> RouteContext:
     resolved = _resolve_analyses(
         _analyses(soundings),
         icing_method=icing_method,
-        cloud_method=cloud_method,
+        cloud_source=cloud_source,
         convective_method=convective_method,
     )
     return RouteContext(
@@ -196,10 +196,11 @@ class TestExplicitDdThermoStillBadges:
         assert eff.cloud_method_effective == "dd"
         assert eff.convective_method_effective == "thermo"
 
-    def test_styled_dd_cloud_method_badges_dd(self):
-        """The settings page persists a composed ``<style>_<source>`` form."""
+    def test_dd_source_badges_dd(self):
+        """Since #410 ``_resolve_analyses`` takes a bare ``cloud_source`` — the
+        legacy ``<style>_<source>`` form is reduced upstream at the read boundary."""
         s = SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))
-        resolved = _resolve_analyses(_analyses([s]), "ogimet_dd", "square_dd", "thermo")
+        resolved = _resolve_analyses(_analyses([s]), "ogimet_dd", "dd", "thermo")
         assert resolved[0].sounding["gfs"].cloud_method_effective == "dd"
 
 
@@ -290,7 +291,7 @@ class TestCloudEvaluatorsBadgeEffective:
         The exact lie #408 prevents: labelling the region with the requested
         NWP method when the grade actually rode DD layers.
         """
-        ctx = _ctx([self._ovc_sounding() for _ in range(6)], cloud_method="square_nwp")
+        ctx = _ctx([self._ovc_sounding() for _ in range(6)], cloud_source="nwp")
         result = VMCCruiseEvaluator.evaluate(ctx, _defaults(VMCCruiseEvaluator))
         assert result.aggregate_status == AdvisoryStatus.RED
         methods = _region_method_ids(result)
@@ -307,7 +308,7 @@ class TestCloudEvaluatorsBadgeEffective:
         clear = SoundingAnalysis(cloud_layers=[], nwp_cloud_layers=None)
         ctx = _ctx(
             [self._ovc_sounding(), self._ovc_sounding(), clear, clear, clear, clear],
-            cloud_method="square_nwp",
+            cloud_source="nwp",
         )
         result = VMCCruiseEvaluator.evaluate(ctx, _defaults(VMCCruiseEvaluator))
         assert result.aggregate_status == AdvisoryStatus.AMBER  # 33% OVC < 50 red
@@ -320,7 +321,7 @@ class TestCloudEvaluatorsBadgeEffective:
             cloud_layers=[EnhancedCloudLayer(base_ft=7000, top_ft=17500, coverage=CloudCoverage.BKN)],
             nwp_cloud_layers=None,
         )
-        ctx = _ctx([s for _ in range(6)], cloud_method="square_nwp")
+        ctx = _ctx([s for _ in range(6)], cloud_source="nwp")
         result = CloudTopEvaluator.evaluate(ctx, _defaults(CloudTopEvaluator))
         # 6/6 blocking → 100% coverage → RED, though every region is AMBER-capped.
         assert result.aggregate_status == AdvisoryStatus.RED
@@ -635,7 +636,7 @@ class TestCompositeRegionProvenance:
                 )
                 for _ in range(6)
             ],
-            cloud_method="square_nwp",   # requested NWP; no native layers → DD
+            cloud_source="nwp",   # requested NWP; no native layers → DD
         )
         result = VFRFeasibilityEvaluator.evaluate(ctx, _defaults(VFRFeasibilityEvaluator))
         regions = self._regions(result)

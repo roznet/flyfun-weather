@@ -156,7 +156,7 @@ function layerTogglesHtml(
     if (effectiveHidden.has(group.group)) continue;
     const isCompactCollapse = displayMode === 'compact' && COMPACT_GROUPS.has(group.group);
     const layersToRender = isCompactCollapse
-      ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group])]
+      ? [getPreferredLayerForGroup(group.group, group.layers, preferredMethods?.[group.group], cloudStyle)]
       : group.layers;
 
     html += `<div class="viz-layer-group">`;

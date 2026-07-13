@@ -20,6 +20,10 @@ import {
   softNwpCloudBandsLayer,
   squareCloudBandsLayer,
   squareNwpCloudBandsLayer,
+  CLOUD_LAYER_BY_AXES,
+  ALL_CLOUD_LAYER_IDS,
+  type CloudSource,
+  type CloudStyle,
 } from './layers/cloud-bands-factory';
 import { iengIcingBandsLayer } from './layers/ieng-icing-bands';
 import { sldBandsLayer } from './layers/sld-bands';
@@ -106,31 +110,45 @@ export interface LayerGroupInfo {
   layers: CrossSectionLayer[];
 }
 
-/** Maps preference values to layer IDs for groups that collapse in compact mode. */
+/** Maps preference values to layer IDs for groups that collapse in compact mode.
+ *  Clouds are handled separately (see {@link getPreferredLayerForGroup}): their
+ *  preferred value is a bare SOURCE composed with the client-only render STYLE
+ *  (`vizSettings.cloudStyle`) into a concrete layer id (#410). */
 const PREFERRED_METHOD_LAYER: Record<string, Record<string, string>> = {
-  clouds: {
-    // Legacy bare-source forms (pre-natural style). Kept for back-compat
-    // with prefs that never went through user_migration 001.
-    dd: 'cloud-bands',
-    nwp: 'nwp-cloud-bands',
-    natural_dd: 'cloud-bands',
-    natural_nwp: 'nwp-cloud-bands',
-    soft_dd: 'soft-cloud-bands',
-    soft_nwp: 'soft-nwp-cloud-bands',
-    square_dd: 'square-cloud-bands',
-    square_nwp: 'square-nwp-cloud-bands',
-  },
   icing: { ogimet_dd: 'icing-bands', ogimet_nwp: 'icing-ogimet-nwp-bands', sfip_nwp: 'sfip-bands', ieng: 'ieng-icing-bands' },
   turbulence: { ri: 'cat-bands', e_shear: 'e-shear-bands' },
   convection: { thermo: 'thermo-convective-bg', nwp: 'nwp-convective-bg' },
 };
 
-/** Return the preferred layer for a group based on the user's preference method. */
+/** Map a preferred clouds value — a bare source (`dd` / `nwp`), including the
+ *  backend's `nwp_synthesized` which renders on the NWP band — to a concrete
+ *  {@link CloudSource}. Returns null for an empty/unknown value. */
+function cloudSourceFromPreferred(preferred: string | undefined): CloudSource | null {
+  if (preferred === 'dd') return 'dd';
+  if (preferred === 'nwp' || preferred === 'nwp_synthesized') return 'nwp';
+  return null;
+}
+
+/** Return the preferred layer for a group based on the user's preference method.
+ *  For the clouds group the preferred value is a bare SOURCE that is fused with
+ *  the client-only render STYLE (`cloudStyle`) to pick the concrete layer id —
+ *  mirrors iOS `cloudLayerId(source:style:)` (#410). Other groups key directly
+ *  on the method id. */
 export function getPreferredLayerForGroup(
   group: LayerGroup,
   layers: CrossSectionLayer[],
   preferredMethod: string | undefined,
+  cloudStyle: CloudStyle = 'square',
 ): CrossSectionLayer {
+  if (group === 'clouds') {
+    const source = cloudSourceFromPreferred(preferredMethod);
+    if (source) {
+      const layerId = CLOUD_LAYER_BY_AXES[source][cloudStyle];
+      const found = layers.find(l => l.id === layerId);
+      if (found) return found;
+    }
+    return layers.find(l => l.defaultEnabled) ?? layers[0];
+  }
   const map = PREFERRED_METHOD_LAYER[group];
   if (map && preferredMethod) {
     const layerId = map[preferredMethod];
@@ -144,12 +162,22 @@ export function getPreferredLayerForGroup(
  * Return layer overrides for entering compact mode: enable only the preferred
  * layer in each compact group, disable the rest. When a group has no known
  * preferred method (empty/missing/unknown), falls back to the group's
- * defaultEnabled layer so compact mode always shows something.
+ * defaultEnabled layer so compact mode always shows something. The clouds group
+ * additionally needs the current `cloudStyle` to fuse with its source (#410).
  */
 export function getCompactLayerOverrides(
   preferredMethods: Record<string, string>,
+  cloudStyle: CloudStyle = 'square',
 ): Record<string, boolean> {
   const overrides: Record<string, boolean> = {};
+  // Clouds: collapse to the single (source × style) layer. The source comes from
+  // the graded profile; the style is the client-only viz preference (#410).
+  const cloudLayers = ALL_LAYERS.filter((l) => l.group === 'clouds');
+  const preferredCloud = getPreferredLayerForGroup('clouds', cloudLayers, preferredMethods.clouds, cloudStyle);
+  for (const layerId of ALL_CLOUD_LAYER_IDS) {
+    overrides[layerId] = layerId === preferredCloud.id;
+  }
+  // Other method-bearing groups: bare method id → layer id.
   for (const [group, methodMap] of Object.entries(PREFERRED_METHOD_LAYER)) {
     const groupLayers = ALL_LAYERS.filter((l) => l.group === group);
     const preferred = getPreferredLayerForGroup(

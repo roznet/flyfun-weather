@@ -34,6 +34,7 @@
 
 import type { LayerGroup } from '../types';
 import { getAllLayers, getPreferredLayerForGroup } from './layer-registry';
+import type { CloudStyle } from './layers/cloud-bands-factory';
 import { SKEWT_OVERLAYS } from '../skewt/overlay-bands';
 import { t } from '../../i18n/i18n';
 
@@ -351,6 +352,7 @@ export interface ResolvedView {
 export function resolveAdvisoryPreset(
   preset: AdvisoryPreset,
   preferredMethods: Record<string, string>,
+  cloudStyle: CloudStyle = 'square',
 ): ResolvedView {
   const view: ResolvedView = {};
   const allLayers = getAllLayers();
@@ -364,7 +366,7 @@ export function resolveAdvisoryPreset(
     // 2. ON the method-resolved preferred layer of each named group.
     for (const g of preset.groups ?? []) {
       const groupLayers = allLayers.filter(x => x.group === g);
-      enabled[getPreferredLayerForGroup(g, groupLayers, preferredMethods[g]).id] = true;
+      enabled[getPreferredLayerForGroup(g, groupLayers, preferredMethods[g], cloudStyle).id] = true;
     }
     // 3. explicit lines / extras.
     for (const id of preset.lines ?? []) enabled[id] = true;

@@ -341,5 +341,7 @@ def test_preview_threads_draft_engine_settings(client, app_db, monkeypatch):
     assert resp.status_code == 200, resp.text
     assert captured["icing_method"] == "ogimet_nwp"       # draft override
     assert captured["advisory_models"] is None            # explicit null, not the saved value
-    assert captured["cloud_method"] == "square_dd"        # absent → edited profile's saved value
+    # absent from body → edited profile's saved value, read through the #410
+    # legacy fallback: the seeded ``cloud_method="square_dd"`` reduces to source "dd".
+    assert captured["cloud_source"] == "dd"
     assert captured["persist"] is False

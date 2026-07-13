@@ -90,15 +90,16 @@ describe('config integrity', () => {
 
 describe('resolveAdvisoryPreset — method resolution', () => {
   it('icing preset enables the method-resolved icing + cloud layer', () => {
+    // Clouds fuse a bare source with the cloudStyle arg (#410): nwp × soft.
     const view = resolveAdvisoryPreset(getAdvisoryPreset('icing')!, {
-      clouds: 'soft_nwp', icing: 'sfip_nwp', convection: 'nwp',
-    });
+      clouds: 'nwp', icing: 'sfip_nwp', convection: 'nwp',
+    }, 'soft');
     const en = view.enabledLayers!;
     // icing method → sfip-bands on, other icing methods off
     expect(en['sfip-bands']).toBe(true);
     expect(en['icing-ogimet-nwp-bands']).toBe(false);
     expect(en['icing-bands']).toBe(false);
-    // clouds method → soft-nwp on, other cloud styles off
+    // clouds source+style → soft-nwp on, other cloud styles off
     expect(en['soft-nwp-cloud-bands']).toBe(true);
     expect(en['cloud-bands']).toBe(false);
     // explicit line + always-on context. terrain is NOT in the resolved view
@@ -129,7 +130,7 @@ describe('resolveAdvisoryPreset — method resolution', () => {
 
   it('clean slate: layers in reset groups not named by the preset are turned OFF', () => {
     // clouds preset names only clouds; icing/convection/turbulence bands must be off.
-    const en = resolveAdvisoryPreset(getAdvisoryPreset('clouds')!, { clouds: 'soft_nwp' }).enabledLayers!;
+    const en = resolveAdvisoryPreset(getAdvisoryPreset('clouds')!, { clouds: 'nwp' }, 'soft').enabledLayers!;
     expect(en['icing-ogimet-nwp-bands']).toBe(false);
     expect(en['sfip-bands']).toBe(false);
     expect(en['nwp-convective-bg']).toBe(false);
@@ -144,7 +145,7 @@ describe('resolveAdvisoryPreset — method resolution', () => {
   });
 
   it('vfr map has no cruise altitude target (level-independent metric)', () => {
-    const view = resolveAdvisoryPreset(getAdvisoryPreset('vfr')!, { clouds: 'soft_nwp' });
+    const view = resolveAdvisoryPreset(getAdvisoryPreset('vfr')!, { clouds: 'nwp' }, 'soft');
     expect(view.map?.metric).toBe('nwp-ceiling');
     // altitude not 'cruise' → altitudeFt left undefined (store leaves slider as-is)
     expect(view.map && 'altitudeFt' in view.map ? view.map.altitudeFt : 'absent').toBe('absent');

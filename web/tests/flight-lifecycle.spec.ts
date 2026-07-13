@@ -97,7 +97,7 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
             llm_digest_enabled: true,
             icing_severity_enhance: false,
             icing_method: 'ogimet_dd',
-            cloud_method: 'dd',
+            cloud_source: 'dd',
             convective_method: 'thermo',
             flight_rules: 'vfr_ifr',
             advisories: { enabled: null, params: null, aggregation: 'majority' },
@@ -155,9 +155,6 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
         gramet_enabled: true,
         llm_digest_enabled: true,
         icing_severity_enhance: false,
-        icing_method: 'ogimet_dd',
-        cloud_method: 'dd',
-        convective_method: 'thermo',
       },
     });
   });

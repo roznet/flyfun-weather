@@ -47,18 +47,21 @@ describe('getDefaultEnabled', () => {
 
 describe('getCompactLayerOverrides', () => {
   it('enables exactly the preferred layer per group, disables siblings', () => {
+    // Clouds preferred value is now a bare SOURCE fused with the cloudStyle arg
+    // (#410) — here source 'nwp' × style 'soft' → soft-nwp-cloud-bands.
     const overrides = getCompactLayerOverrides({
-      clouds: 'soft_nwp',
+      clouds: 'nwp',
       icing: 'ogimet_nwp',
       turbulence: 'ri',
       convection: 'nwp',
-    });
+    }, 'soft');
 
     // Clouds: only soft-nwp-cloud-bands enabled
     expect(overrides['soft-nwp-cloud-bands']).toBe(true);
     expect(overrides['soft-cloud-bands']).toBe(false);
     expect(overrides['nwp-cloud-bands']).toBe(false);
     expect(overrides['cloud-bands']).toBe(false);
+    expect(overrides['square-nwp-cloud-bands']).toBe(false);
 
     // Icing: only ogimet-nwp
     expect(overrides['icing-ogimet-nwp-bands']).toBe(true);
@@ -115,8 +118,11 @@ describe('getPreferredLayerForGroup', () => {
   const icingGroupLayers = allLayers.filter((l) => l.group === 'icing');
 
   it('returns the layer matching the preferred method', () => {
-    expect(getPreferredLayerForGroup('clouds', cloudGroupLayers, 'soft_nwp').id)
+    // Clouds fuse a bare source with the cloudStyle arg (#410).
+    expect(getPreferredLayerForGroup('clouds', cloudGroupLayers, 'nwp', 'soft').id)
       .toBe('soft-nwp-cloud-bands');
+    expect(getPreferredLayerForGroup('clouds', cloudGroupLayers, 'dd', 'square').id)
+      .toBe('square-cloud-bands');
     expect(getPreferredLayerForGroup('icing', icingGroupLayers, 'ogimet_nwp').id)
       .toBe('icing-ogimet-nwp-bands');
   });

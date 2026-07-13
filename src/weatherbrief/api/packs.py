@@ -1072,7 +1072,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     auto_front_detection = False  # experimental front-detection artifact (#195)
     compute_alternates = True  # weather-based divert candidates, D-2 inward (#210); default-on (graduated)
     icing_method = None
-    cloud_method = None
+    cloud_source = None
     convective_method = None
     digest_guidance = None
     locale = None
@@ -1080,6 +1080,9 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     profile_name_for_digest = None
     profile_settings: dict = {}
     if db is not None:
+        from weatherbrief.analysis.advisories.engine_methods import (
+            cloud_source_from_settings,
+        )
         from weatherbrief.api.preferences import (
             load_autorouter_token,
             load_units_region,
@@ -1108,7 +1111,9 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         auto_front_detection = profile_settings.get("auto_front_detection", False)
         compute_alternates = profile_settings.get("compute_alternates", True)
         icing_method = profile_settings.get("icing_method")
-        cloud_method = profile_settings.get("cloud_method")
+        # #410: read the split ``cloud_source``, honouring a legacy fused
+        # ``cloud_method`` until the profile migration has run in prod.
+        cloud_source = cloud_source_from_settings(profile_settings)
         convective_method = profile_settings.get("convective_method")
         flight_rules = profile_settings.get("flight_rules")  # "vfr_only" or "vfr_ifr"
         digest_guidance = profile_settings.get("digest_guidance")
@@ -1166,8 +1171,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     # BriefingOptions field stays for direct pipeline callers (tests/debug).
     if icing_method:
         options.icing_method = icing_method
-    if cloud_method:
-        options.cloud_method = cloud_method
+    if cloud_source:
+        options.cloud_source = cloud_source
     if convective_method:
         options.convective_method = convective_method
     if models:
@@ -2919,7 +2924,7 @@ def compute_alt_advisories(
     route = _build_route_config(flight, db_path)
 
     # Load advisory profile
-    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, _auto_front_detection = \
+    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, _auto_front_detection = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     advisory_result = run_alt_from_pack(
@@ -2933,7 +2938,7 @@ def compute_alt_advisories(
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
         icing_method=icing_method,
-        cloud_method=cloud_method,
+        cloud_source=cloud_source,
         convective_method=convective_method,
         locale=locale,
     )
@@ -3055,7 +3060,7 @@ def _load_advisory_profile(
 
     Shared by recalculate_advisories and altitude_table endpoints.
     Returns (enabled_ids, enabled_map, user_params, aggregation, adv_models,
-    icing_method, cloud_method, convective_method, recompute_conds_callback,
+    icing_method, cloud_source, convective_method, recompute_conds_callback,
     locale, auto_front_detection).
 
     ``enabled_map`` is the raw ``{id: bool}`` map (``None`` when the profile has
@@ -3075,6 +3080,7 @@ def _load_advisory_profile(
     ``load_profile_settings`` silently degrades an unowned id to empty settings.
     """
     from weatherbrief.analysis.advisories import resolve_enabled_ids
+    from weatherbrief.analysis.advisories.engine_methods import cloud_source_from_settings
     from weatherbrief.api.preferences import load_user_locale
     from weatherbrief.api.profiles import load_profile_settings
     from weatherbrief.models import AdvisoryAggregation
@@ -3092,7 +3098,7 @@ def _load_advisory_profile(
 
     adv_models = profile_settings.get("advisory_models")
     icing_method = profile_settings.get("icing_method")
-    cloud_method = profile_settings.get("cloud_method")
+    cloud_source = cloud_source_from_settings(profile_settings)
     convective_method = profile_settings.get("convective_method")
     auto_front_detection = bool(profile_settings.get("auto_front_detection", False))
     if request is not None:
@@ -3108,7 +3114,7 @@ def _load_advisory_profile(
             db_path=db_path, models=advisory_model_names,
         )
 
-    return enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, auto_front_detection
+    return enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, auto_front_detection
 
 
 class RecalculateAdvisoriesResponse(BaseModel):
@@ -3145,7 +3151,7 @@ def recalculate_advisories(
     # (Mirror of compute_alt_advisories, which is also owner-gated.)
     flight, pack_dir = _owned_flight_pack_with_analyses(db, flight_id, timestamp, user_id)
 
-    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, auto_front_detection = \
+    enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, auto_front_detection = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     # Experimental front detection (#196): keep route_fronts.json in sync with
@@ -3186,7 +3192,7 @@ def recalculate_advisories(
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
         icing_method=icing_method,
-        cloud_method=cloud_method,
+        cloud_source=cloud_source,
         convective_method=convective_method,
         locale=locale,
         cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
@@ -3232,7 +3238,7 @@ class PreviewAdvisoriesRequest(BaseModel):
     # Save will produce (#390 review).
     advisory_models: list[str] | None = None
     icing_method: str | None = None
-    cloud_method: str | None = None
+    cloud_source: str | None = None  # #410 — bare "dd"/"nwp" (was fused cloud_method)
     convective_method: str | None = None
 
 
@@ -3301,7 +3307,7 @@ def preview_advisories(
     aggregation = AdvisoryAggregation(body.aggregation) if body.aggregation else saved_agg
     adv_models = body.advisory_models if "advisory_models" in sent else saved_models
     icing_method = body.icing_method if "icing_method" in sent else saved_icing
-    cloud_method = body.cloud_method if "cloud_method" in sent else saved_cloud
+    cloud_source = body.cloud_source if "cloud_source" in sent else saved_cloud
     convective_method = (
         body.convective_method if "convective_method" in sent else saved_convective
     )
@@ -3319,7 +3325,7 @@ def preview_advisories(
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
         icing_method=icing_method,
-        cloud_method=cloud_method,
+        cloud_source=cloud_source,
         convective_method=convective_method,
         locale=locale,
         cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
@@ -3551,7 +3557,7 @@ def altitude_table(
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
 
-    enabled_ids, _enabled_map, user_params, aggregation, adv_models, icing_method, cloud_method, convective_method, recompute_conds, locale, _auto_front_detection = \
+    enabled_ids, _enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, _auto_front_detection = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
     result = run_altitude_table_from_pack(
@@ -3565,7 +3571,7 @@ def altitude_table(
         aggregation=aggregation,
         airport_conditions_recompute=recompute_conds,
         icing_method=icing_method,
-        cloud_method=cloud_method,
+        cloud_source=cloud_source,
         convective_method=convective_method,
         locale=locale,
         cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),

@@ -135,7 +135,7 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
             route = _build_route_config(flight, db_path)
             (
                 enabled_ids, enabled_map, user_params, aggregation, adv_models,
-                icing_method, cloud_method, convective_method, recompute_conds,
+                icing_method, cloud_source, convective_method, recompute_conds,
                 locale, _afd,
             ) = _load_advisory_profile(
                 db, flight, flight.user_id, None, pack_dir, db_path=db_path,
@@ -153,7 +153,7 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
                 airports_db_path=db_path,
                 airport_conditions_recompute=recompute_conds,
                 icing_method=icing_method,
-                cloud_method=cloud_method,
+                cloud_source=cloud_source,
                 convective_method=convective_method,
                 locale=locale,
             )
@@ -271,7 +271,7 @@ def _run_confirm_job(
             route = _build_route_config(flight, db_path)
             (
                 enabled_ids, enabled_map, user_params, aggregation, adv_models,
-                icing_method, cloud_method, convective_method, recompute_conds,
+                icing_method, cloud_source, convective_method, recompute_conds,
                 locale, _afd,
             ) = _load_advisory_profile(
                 db, flight, flight.user_id, None, pack_dir, db_path=db_path,
@@ -288,7 +288,7 @@ def _run_confirm_job(
                 airports_db_path=db_path,
                 airport_conditions_recompute=recompute_conds,
                 icing_method=icing_method,
-                cloud_method=cloud_method,
+                cloud_source=cloud_source,
                 convective_method=convective_method,
                 locale=locale,
             )
