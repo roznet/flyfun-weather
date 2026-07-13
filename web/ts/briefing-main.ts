@@ -34,6 +34,7 @@ import {
   advisoryMethodOverrides,
   deriveHighlights,
   findAdvisory,
+  peakPointPosition,
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
 import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
@@ -315,6 +316,12 @@ async function init(): Promise<void> {
     if (turningOn) {
       if (rep) store.getState().setSelectedModel(rep);
       store.getState().setHighlightAdvisory(advisoryId);
+      // Jump to the worst point (#223): the backend already knows which point
+      // earned the grade. Move the cursor there so the Skew-T — which follows
+      // selectedPointIndex — shows the sounding the verdict actually came from,
+      // rather than wherever the cursor happened to be left.
+      const peak = peakPointPosition(adv!, rep, s.routeAnalyses?.analyses ?? []);
+      if (peak != null) store.getState().setSelectedPoint(peak);
     }
     if (store.getState().vizSettings.layout === 'map') store.getState().setLayout('split');
     document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -345,12 +352,16 @@ async function init(): Promise<void> {
 
     // Route point — by point_index, clamped to a real analysis entry.
     const pointRaw = params.get('point');
+    let explicitPoint = false;
     if (pointRaw != null) {
       const idx = Number.parseInt(pointRaw, 10);
       if (Number.isFinite(idx)) {
         // analyses are addressed by array position elsewhere; map point_index → position.
         const pos = s.routeAnalyses.analyses.findIndex(a => a.point_index === idx);
-        if (pos >= 0) store.getState().setSelectedPoint(pos);
+        if (pos >= 0) {
+          store.getState().setSelectedPoint(pos);
+          explicitPoint = true;
+        }
       }
     }
 
@@ -388,6 +399,12 @@ async function init(): Promise<void> {
     if (advisoryId && preset && hasHighlights) {
       if (!explicitModel && targetModel) store.getState().setSelectedModel(targetModel);
       store.getState().setHighlightAdvisory(advisoryId);
+      // Jump to the worst point (#223), unless the link named a point itself —
+      // an explicit `?point=` is the sharer's intent and wins over the derived peak.
+      if (!explicitPoint) {
+        const peak = peakPointPosition(adv!, targetModel, s.routeAnalyses?.analyses ?? []);
+        if (peak != null) store.getState().setSelectedPoint(peak);
+      }
     }
 
     // Surface — focus the Skew-T (or the compare/static variant) and scroll to it.

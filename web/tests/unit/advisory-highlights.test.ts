@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   advisoryMethodOverrides,
+  peakPointPosition,
   representativeModel,
   deriveHighlights,
   findAdvisory,
@@ -266,5 +267,64 @@ describe('advisoryMethodOverrides — show the config the advisory was graded un
       ],
     } as any;
     expect(advisoryMethodOverrides(a, 'ecmwf', { icing: 'ogimet_dd' }).icing).toBe('sfip_nwp');
+  });
+});
+
+describe('peakPointPosition — jump to the worst point (#223)', () => {
+  const ANALYSES = [
+    { distance_from_origin_nm: 0 },
+    { distance_from_origin_nm: 25 },
+    { distance_from_origin_nm: 50 },
+    { distance_from_origin_nm: 75 },
+    { distance_from_origin_nm: 100 },
+  ];
+  const adv = (model: string, peak: number | null) => ({
+    advisory_id: 'convective',
+    representative_model: model,
+    per_model: [{
+      model, status: 'red', detail: '',
+      highlights: { ribbon: [], regions: [], peak_dist_nm: peak },
+    }],
+  }) as any;
+
+  it('picks the route point nearest the backend peak', () => {
+    // peak at 52 nm -> nearest analysis is index 2 (50 nm), not 3 (75 nm)
+    expect(peakPointPosition(adv('gfs', 52), 'gfs', ANALYSES)).toBe(2);
+  });
+
+  it('resolves an exact match', () => {
+    expect(peakPointPosition(adv('gfs', 75), 'gfs', ANALYSES)).toBe(3);
+  });
+
+  it('clamps to the ends', () => {
+    expect(peakPointPosition(adv('gfs', -10), 'gfs', ANALYSES)).toBe(0);
+    expect(peakPointPosition(adv('gfs', 999), 'gfs', ANALYSES)).toBe(4);
+  });
+
+  it('returns null with no peak — a GREEN advisory has nothing to point at', () => {
+    // The cursor must be left alone rather than moved somewhere arbitrary.
+    expect(peakPointPosition(adv('gfs', null), 'gfs', ANALYSES)).toBeNull();
+  });
+
+  it('returns null when the model has no highlights', () => {
+    const a = { advisory_id: 'x', per_model: [{ model: 'gfs', status: 'green', detail: '' }] } as any;
+    expect(peakPointPosition(a, 'gfs', ANALYSES)).toBeNull();
+  });
+
+  it('uses the peak of the model being shown, not another', () => {
+    const a = {
+      advisory_id: 'convective',
+      representative_model: 'gfs',
+      per_model: [
+        { model: 'gfs', status: 'red', detail: '', highlights: { ribbon: [], regions: [], peak_dist_nm: 10 } },
+        { model: 'ecmwf', status: 'red', detail: '', highlights: { ribbon: [], regions: [], peak_dist_nm: 90 } },
+      ],
+    } as any;
+    expect(peakPointPosition(a, 'ecmwf', ANALYSES)).toBe(4);   // 90 -> 100nm
+    expect(peakPointPosition(a, 'gfs', ANALYSES)).toBe(0);     // 10 -> 0nm
+  });
+
+  it('returns null with no analyses', () => {
+    expect(peakPointPosition(adv('gfs', 50), 'gfs', [])).toBeNull();
   });
 });

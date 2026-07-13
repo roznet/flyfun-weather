@@ -96,6 +96,40 @@ export function advisoryMethodOverrides(
   return { ...preferredMethods, [group]: value };
 }
 
+/**
+ * The route-point position to jump to when an advisory is focused — the "worst
+ * point" (#223's jump-to-worst-point, the last piece of the Skew-T linkage).
+ *
+ * The backend already ships `AdvisoryHighlights.peak_dist_nm` (#373): the point
+ * that earned the grade, in route distance. It had no consumer until now — the
+ * chip lit up the chart but left the cursor wherever it happened to be, so the
+ * Skew-T kept showing an unrelated point.
+ *
+ * Returns an **array position** into `analyses` (what `setSelectedPoint` wants),
+ * not a `point_index`. `null` when the advisory has no peak — a GREEN advisory
+ * has nothing to point at, and we leave the user's cursor alone rather than
+ * moving it somewhere arbitrary.
+ */
+export function peakPointPosition(
+  adv: RouteAdvisoryResult,
+  model: string | null,
+  analyses: Array<{ distance_from_origin_nm: number }>,
+): number | null {
+  const peak = adv.per_model.find((m) => m.model === model)?.highlights?.peak_dist_nm;
+  if (peak == null || !analyses.length) return null;
+
+  let best = -1;
+  let bestGap = Infinity;
+  for (let i = 0; i < analyses.length; i++) {
+    const gap = Math.abs(analyses[i].distance_from_origin_nm - peak);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = i;
+    }
+  }
+  return best >= 0 ? best : null;
+}
+
 /** Find one advisory by id in a manifest (or null). */
 export function findAdvisory(
   manifest: RouteAdvisoriesManifest | null,
