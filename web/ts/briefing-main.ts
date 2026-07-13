@@ -31,6 +31,7 @@ import {
 } from './visualization/cross-section/advisory-presets';
 import { applyNwpFallback, getSubstitutedLayers } from './visualization/cross-section/nwp-fallback';
 import {
+  advisoryMethodOverrides,
   deriveHighlights,
   findAdvisory,
   representativeModel,
@@ -296,14 +297,22 @@ async function init(): Promise<void> {
     // Same-chip re-click toggles the highlight OFF (lens stays): applyAdvisoryPreset
     // clears the highlight, and we skip re-setting it below (#373).
     const alreadyOn = s.vizSettings.activeHighlightAdvisoryId === advisoryId;
-    // Phase 1 (#219): apply the lens (also clears any prior highlight).
-    store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
-    // Phase 2 (#373): when the advisory carries highlight geometry, switch to its
-    // representative model and enable the highlight. Old packs (no highlight data)
-    // fall through as pure Phase 1 — chip behaves exactly as before.
     const adv = findAdvisory(getEffectiveAdvisories(s), advisoryId);
-    if (adv && !alreadyOn && adv.per_model.some((m) => !!m.highlights)) {
-      const rep = representativeModel(adv);
+    // Phase 2 (#373): only advisories carrying highlight geometry light up.
+    // Old packs (no highlight data) fall through as pure Phase 1.
+    const turningOn = !!adv && !alreadyOn && adv.per_model.some((m) => !!m.highlights);
+    // Show the configuration the *advisory* was graded under: its representative
+    // model, and the analysis methods its evidence actually came from. These
+    // usually match the user's settings, and diverge exactly where it matters —
+    // when the requested method could not run and the backend fell back. Toggling
+    // the highlight back off returns to the user's own methods.
+    const rep = turningOn ? representativeModel(adv!) : null;
+    const methods = turningOn
+      ? advisoryMethodOverrides(adv!, rep, preferredMethods)
+      : preferredMethods;
+    // Phase 1 (#219): apply the lens (also clears any prior highlight).
+    store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, methods));
+    if (turningOn) {
       if (rep) store.getState().setSelectedModel(rep);
       store.getState().setHighlightAdvisory(advisoryId);
     }
@@ -352,24 +361,33 @@ async function init(): Promise<void> {
     const preset = presetId && isAdvisoryPreset(presetId)
       ? getAdvisoryPreset(presetId)
       : (advisoryId ? getPresetForAdvisory(advisoryId) : undefined);
+
+    // Resolve the advisory before applying the lens, so — exactly like a card
+    // chip — the lens can be resolved with the methods the advisory was graded
+    // under rather than the user's Settings. A bare `?preset=` link has no
+    // advisory instance, so it keeps the user's own methods.
+    const adv = advisoryId ? findAdvisory(getEffectiveAdvisories(s), advisoryId) : null;
+    const hasHighlights = !!adv && adv.per_model.some((m) => !!m.highlights);
+    const explicitModel = !!(model && s.routeAnalyses.models.includes(model));
+    // An explicit `?model=` wins, and then the methods must come from *that*
+    // model — it is the one whose evidence will be on screen.
+    const targetModel = !hasHighlights
+      ? null
+      : (explicitModel ? model! : representativeModel(adv!));
+
     if (preset) {
-      store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, preferredMethods));
+      const methods = hasHighlights
+        ? advisoryMethodOverrides(adv!, targetModel, preferredMethods)
+        : preferredMethods;
+      store.getState().applyAdvisoryPreset(preset.id, resolveAdvisoryPreset(preset, methods));
     }
 
     // Highlight (#373): an `?advisory=` deep-link behaves like a card chip —
     // enable the scrim/ribbon and switch to the advisory's representative model,
-    // UNLESS an explicit `?model=` param was honored above (it wins). A bare
-    // `?preset=` link has no advisory instance, so it gets no highlight.
-    if (advisoryId && preset) {
-      const adv = findAdvisory(getEffectiveAdvisories(s), advisoryId);
-      if (adv && adv.per_model.some((m) => !!m.highlights)) {
-        const explicitModel = !!(model && s.routeAnalyses.models.includes(model));
-        if (!explicitModel) {
-          const rep = representativeModel(adv);
-          if (rep) store.getState().setSelectedModel(rep);
-        }
-        store.getState().setHighlightAdvisory(advisoryId);
-      }
+    // UNLESS an explicit `?model=` param was honored above (it wins).
+    if (advisoryId && preset && hasHighlights) {
+      if (!explicitModel && targetModel) store.getState().setSelectedModel(targetModel);
+      store.getState().setHighlightAdvisory(advisoryId);
     }
 
     // Surface — focus the Skew-T (or the compare/static variant) and scroll to it.

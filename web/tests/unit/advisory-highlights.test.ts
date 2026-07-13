@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
+  advisoryMethodOverrides,
   representativeModel,
   deriveHighlights,
   findAdvisory,
@@ -198,5 +199,72 @@ describe('store clearing rules', () => {
     store.getState().setHighlightAdvisory('vmc_cruise');
     store.getState().setSelectedModel('ecmwf');
     expect(store.getState().vizSettings.activeHighlightAdvisoryId).toBe('vmc_cruise');
+  });
+});
+
+describe('advisoryMethodOverrides — show the config the advisory was graded under', () => {
+  const adv = (id: string, model: string, method: string | null) => ({
+    advisory_id: id,
+    aggregate_status: 'amber',
+    aggregate_detail: '',
+    representative_model: model,
+    per_model: [{ model, status: 'amber', detail: '', primary_method_id: method }],
+    parameters_used: {},
+  }) as any;
+
+  it('overrides the icing axis with the method the evidence came from', () => {
+    // User has SFIP selected, but this model fell back to Ogimet-NWP.
+    const prefs = { clouds: 'soft_dd', icing: 'sfip_nwp', convection: 'nwp' };
+    const out = advisoryMethodOverrides(adv('icing_escape', 'gfs', 'ogimet_nwp'), 'gfs', prefs);
+    expect(out.icing).toBe('ogimet_nwp');
+    // other axes untouched
+    expect(out.clouds).toBe('soft_dd');
+    expect(out.convection).toBe('nwp');
+  });
+
+  it('keeps the user cloud STYLE and swaps only the source', () => {
+    const prefs = { clouds: 'square_dd', icing: 'sfip_nwp' };
+    const out = advisoryMethodOverrides(adv('vmc_cruise', 'ecmwf', 'nwp'), 'ecmwf', prefs);
+    expect(out.clouds).toBe('square_nwp');   // NOT bare 'nwp' — style preserved
+  });
+
+  it('treats nwp_synthesized as the nwp cloud band', () => {
+    const prefs = { clouds: 'soft_dd' };
+    const out = advisoryMethodOverrides(adv('cloud_top', 'gfs', 'nwp_synthesized'), 'gfs', prefs);
+    expect(out.clouds).toBe('soft_nwp');
+  });
+
+  it('handles a style-less cloud pref', () => {
+    const out = advisoryMethodOverrides(adv('vmc_cruise', 'gfs', 'dd'), 'gfs', { clouds: 'nwp' });
+    expect(out.clouds).toBe('dd');
+  });
+
+  it('overrides the convection axis (thermo fallback)', () => {
+    const prefs = { convection: 'nwp' };
+    const out = advisoryMethodOverrides(adv('convective', 'gfs', 'thermo'), 'gfs', prefs);
+    expect(out.convection).toBe('thermo');
+  });
+
+  it('changes nothing for an advisory with no method axis', () => {
+    const prefs = { clouds: 'soft_dd', icing: 'sfip_nwp' };
+    expect(advisoryMethodOverrides(adv('turbulence', 'gfs', null), 'gfs', prefs)).toEqual(prefs);
+    expect(advisoryMethodOverrides(adv('mountain_wind', 'gfs', null), 'gfs', prefs)).toEqual(prefs);
+  });
+
+  it('changes nothing when the advisory carries no method (GREEN grade)', () => {
+    const prefs = { icing: 'sfip_nwp' };
+    expect(advisoryMethodOverrides(adv('icing_escape', 'gfs', null), 'gfs', prefs)).toEqual(prefs);
+  });
+
+  it('uses the method of the model actually being shown', () => {
+    const a = {
+      advisory_id: 'icing_escape',
+      representative_model: 'gfs',
+      per_model: [
+        { model: 'gfs', status: 'amber', detail: '', primary_method_id: 'ogimet_nwp' },
+        { model: 'ecmwf', status: 'amber', detail: '', primary_method_id: 'sfip_nwp' },
+      ],
+    } as any;
+    expect(advisoryMethodOverrides(a, 'ecmwf', { icing: 'ogimet_dd' }).icing).toBe('sfip_nwp');
   });
 });

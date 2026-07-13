@@ -36,6 +36,65 @@ export function representativeModel(adv: RouteAdvisoryResult): string | null {
   return adv.representative_model ?? adv.per_model[0]?.model ?? null;
 }
 
+/**
+ * Which layer group an advisory's `primary_method_id` speaks for. Only the
+ * evaluators that grade off a user-selectable method appear here — the rest
+ * (turbulence, mountain_wind, …) have no method axis to reconstitute.
+ * `ifr_feasibility` is a composite whose `primary_method_id` is its icing axis.
+ */
+const ADVISORY_METHOD_GROUP: Record<string, 'clouds' | 'icing' | 'convection'> = {
+  vmc_cruise: 'clouds',
+  cloud_top: 'clouds',
+  icing_escape: 'icing',
+  fiki_icing: 'icing',
+  ifr_feasibility: 'icing',
+  convective: 'convection',
+};
+
+/**
+ * The preferred-method map to resolve an advisory's preset with, so the
+ * cross-section shows the configuration the *advisory* was graded under rather
+ * than whatever the user currently has selected in Settings.
+ *
+ * These normally coincide — the advisory is evaluated with the user's own
+ * methods. They diverge exactly where it matters: when the requested method
+ * could not run and the backend fell back (`*_method_effective`, #408). Showing
+ * the requested layer there would paint evidence the grade never used.
+ *
+ * Only the one group the advisory speaks for is overridden; every other group
+ * keeps the user's preference. An advisory with no `primary_method_id` (GREEN —
+ * `driving_method_id` only fires on a flagged grade) changes nothing: there is
+ * no highlight to explain, so the user's own view is the right one.
+ *
+ * Clouds needs care. The backend knows only the *source* (`dd` / `nwp` /
+ * `nwp_synthesized`), while the layer registry keys on source **and** render
+ * style (`soft_nwp`, `square_dd`, …). Swapping in a bare source would silently
+ * change the user's cloud style too, so we keep their style and replace only the
+ * source.
+ */
+export function advisoryMethodOverrides(
+  adv: RouteAdvisoryResult,
+  model: string | null,
+  preferredMethods: Record<string, string>,
+): Record<string, string> {
+  const group = ADVISORY_METHOD_GROUP[adv.advisory_id];
+  if (!group) return preferredMethods;
+
+  const pm = adv.per_model.find((m) => m.model === model);
+  const effective = pm?.primary_method_id;
+  if (!effective) return preferredMethods;
+
+  let value = effective;
+  if (group === 'clouds') {
+    // "nwp_synthesized" renders on the same NWP band as "nwp".
+    const source = effective === 'dd' ? 'dd' : 'nwp';
+    const current = preferredMethods.clouds ?? '';
+    const style = current.replace(/_(dd|nwp)$/, '');
+    value = style && style !== current ? `${style}_${source}` : source;
+  }
+  return { ...preferredMethods, [group]: value };
+}
+
 /** Find one advisory by id in a manifest (or null). */
 export function findAdvisory(
   manifest: RouteAdvisoriesManifest | null,
