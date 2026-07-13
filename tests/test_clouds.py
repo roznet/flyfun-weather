@@ -450,34 +450,47 @@ def test_resolve_analyses_nwp_fallback():
     assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
 
 
-def test_cloud_source_from_method():
-    """Styled <style>_<source> forms and bare/None reduce to the right source."""
-    from weatherbrief.tasks.advise import _cloud_source_from_method
-    assert _cloud_source_from_method("nwp") == "nwp"
-    assert _cloud_source_from_method("soft_nwp") == "nwp"
-    assert _cloud_source_from_method("square_nwp") == "nwp"
-    assert _cloud_source_from_method("natural_nwp") == "nwp"
-    assert _cloud_source_from_method("dd") == "dd"
-    assert _cloud_source_from_method("natural_dd") == "dd"
-    assert _cloud_source_from_method("square_dd") == "dd"
-    assert _cloud_source_from_method(None) is None
-    assert _cloud_source_from_method("") is None
+def test_legacy_cloud_source_reduces_all_nine_forms():
+    """The #410 read-path fallback reduces every legacy ``cloud_method`` form (all
+    nine observed in prod) — bare, styled, None — to the right bare source."""
+    from weatherbrief.analysis.advisories.engine_methods import legacy_cloud_source
+    assert legacy_cloud_source("nwp") == "nwp"
+    assert legacy_cloud_source("soft_nwp") == "nwp"
+    assert legacy_cloud_source("square_nwp") == "nwp"
+    assert legacy_cloud_source("natural_nwp") == "nwp"
+    assert legacy_cloud_source("dd") == "dd"
+    assert legacy_cloud_source("natural_dd") == "dd"
+    assert legacy_cloud_source("square_dd") == "dd"
+    assert legacy_cloud_source("soft_dd") == "dd"
+    assert legacy_cloud_source(None) is None
+    assert legacy_cloud_source("") is None
 
 
-@pytest.mark.parametrize("method", ["soft_nwp", "square_nwp", "natural_nwp"])
-def test_resolve_analyses_styled_nwp_swaps(method):
-    """Styled *_nwp forms resolve to NWP layers (regression: used to fall to DD)."""
+def test_cloud_source_from_settings_prefers_new_key_over_legacy():
+    """``cloud_source`` wins when present; otherwise the legacy fused
+    ``cloud_method`` is reduced; absent both → None (follow the default)."""
+    from weatherbrief.analysis.advisories.engine_methods import cloud_source_from_settings
+    assert cloud_source_from_settings({"cloud_source": "dd"}) == "dd"
+    # New key wins even when a stale legacy value disagrees.
+    assert cloud_source_from_settings({"cloud_source": "dd", "cloud_method": "square_nwp"}) == "dd"
+    assert cloud_source_from_settings({"cloud_method": "square_nwp"}) == "nwp"
+    assert cloud_source_from_settings({"cloud_method": "square_dd"}) == "dd"
+    assert cloud_source_from_settings({}) is None
+
+
+@pytest.mark.parametrize("source", ["nwp"])
+def test_resolve_analyses_nwp_source_swaps(source):
+    """A bare ``nwp`` source resolves to NWP layers."""
     from weatherbrief.tasks.advise import _resolve_analyses
     rpa, _, _ = _make_rpa_with_clouds()
-    result = _resolve_analyses([rpa], None, method)
+    result = _resolve_analyses([rpa], None, source)
     assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 5000
     assert result[0].sounding["gfs"].cloud_layers[0].coverage == CloudCoverage.OVC
 
 
-@pytest.mark.parametrize("method", ["natural_dd", "square_dd", "soft_dd"])
-def test_resolve_analyses_styled_dd_keeps_dd(method):
-    """Styled *_dd forms keep the DD-derived base layers."""
+def test_resolve_analyses_dd_source_keeps_dd():
+    """A bare ``dd`` source keeps the DD-derived base layers."""
     from weatherbrief.tasks.advise import _resolve_analyses
     rpa, _, _ = _make_rpa_with_clouds()
-    result = _resolve_analyses([rpa], None, method)
+    result = _resolve_analyses([rpa], None, "dd")
     assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000

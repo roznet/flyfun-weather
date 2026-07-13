@@ -80,9 +80,6 @@ class PreferencesResponse(BaseModel):
     gramet_enabled: bool
     llm_digest_enabled: bool
     icing_severity_enhance: bool
-    icing_method: str
-    cloud_method: str
-    convective_method: str
     locale: str
     units_region: str
     display_currency: str  # ISO 4217 or "auto" (cost/donation display only)
@@ -121,9 +118,6 @@ class PreferencesUpdate(BaseModel):
     gramet_enabled: bool | None = None
     llm_digest_enabled: bool | None = None
     icing_severity_enhance: bool | None = None
-    icing_method: str | None = None
-    cloud_method: str | None = None
-    convective_method: str | None = None
     locale: str | None = None
     units_region: Literal["auto", "europe", "us"] | None = None
     display_currency: str | None = None  # "auto" or an ISO 4217 code (e.g. "EUR")
@@ -169,7 +163,13 @@ def _parse_defaults(raw: str) -> FlightDefaults:
 
 
 def _parse_service_toggles(raw: str) -> dict:
-    """Extract service toggles and locale from the app_prefs_json blob."""
+    """Extract service toggles and locale from the app_prefs_json blob.
+
+    #410 retired the account-level engine methods (``icing_method`` /
+    ``cloud_method`` / ``convective_method``): they were empty for every user,
+    never written by any client, and never read by the pipeline (which grades
+    exclusively off the flight *profile*). This parser no longer surfaces them.
+    """
     try:
         data = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
@@ -178,9 +178,6 @@ def _parse_service_toggles(raw: str) -> dict:
         "gramet_enabled": data.get("gramet_enabled", True),
         "llm_digest_enabled": data.get("llm_digest_enabled", True),
         "icing_severity_enhance": data.get("icing_severity_enhance", False),
-        "icing_method": data.get("icing_method", ENGINE_METHOD_DEFAULTS["icing_method"]),
-        "cloud_method": data.get("cloud_method", ENGINE_METHOD_DEFAULTS["cloud_method"]),
-        "convective_method": data.get("convective_method", ENGINE_METHOD_DEFAULTS["convective_method"]),
         "locale": data.get("locale", "en"),
         "units_region": data.get("units_region", "auto"),
         "display_currency": data.get("display_currency", "auto"),
@@ -329,12 +326,6 @@ def update_preferences(
         data["llm_digest_enabled"] = body.llm_digest_enabled
     if body.icing_severity_enhance is not None:
         data["icing_severity_enhance"] = body.icing_severity_enhance
-    if body.icing_method is not None:
-        data["icing_method"] = body.icing_method
-    if body.cloud_method is not None:
-        data["cloud_method"] = body.cloud_method
-    if body.convective_method is not None:
-        data["convective_method"] = body.convective_method
     if body.locale is not None:
         data["locale"] = body.locale
     if body.units_region is not None:
@@ -574,12 +565,13 @@ def load_service_toggles(db: Session, user_id: str) -> dict[str, Any]:
     """Load service toggle preferences for a user.
 
     Returns a mix of bool toggles (``gramet_enabled``, ``llm_digest_enabled``,
-    ``icing_severity_enhance``) and string choices (``icing_method``,
-    ``cloud_method``, ``convective_method``, ``units_region``).
+    ``icing_severity_enhance``) and string choices (``units_region``,
+    ``display_currency``). The engine methods were retired here in #410 — they
+    now live only on the flight profile.
     """
     row = db.get(UserPreferencesRow, user_id)
     if not row:
-        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "icing_method": ENGINE_METHOD_DEFAULTS["icing_method"], "cloud_method": ENGINE_METHOD_DEFAULTS["cloud_method"], "convective_method": ENGINE_METHOD_DEFAULTS["convective_method"], "units_region": "auto", "display_currency": "auto", "defer_email_for_model_update": False}
+        return {"gramet_enabled": True, "llm_digest_enabled": True, "icing_severity_enhance": False, "units_region": "auto", "display_currency": "auto", "defer_email_for_model_update": False}
     run_pending_migrations(db, row)
     return _parse_service_toggles(row.app_prefs_json)
 

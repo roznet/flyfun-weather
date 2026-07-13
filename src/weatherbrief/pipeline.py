@@ -81,7 +81,7 @@ class BriefingOptions:
     airports_db_path: str | None = None  # euro_aip database for runway data
     icing_severity_enhance: bool = False  # enable RH/PW icing severity upgrades
     icing_method: str | None = None  # "ogimet_dd", "ogimet_nwp", "sfip_nwp"
-    cloud_method: str | None = None  # "dd" or "nwp"
+    cloud_source: str | None = None  # "dd" or "nwp" (#410 — split from render style)
     convective_method: str | None = None  # "thermo" or "nwp"
     flight_rules: str | None = None  # "vfr_only" or "vfr_ifr"
     metar_taf_corridor_nm: float = 30  # corridor width for METAR/TAF search
@@ -393,7 +393,7 @@ def execute_briefing(
             progress_callback=progress_callback,
             cruise_speed_ias_kt=options.cruise_speed_ias_kt,
             icing_method=options.icing_method,
-            cloud_method=options.cloud_method,
+            cloud_source=options.cloud_source,
             convective_method=options.convective_method,
             locale=options.locale,
             # Precompute the altitude table now, while cross-sections are still

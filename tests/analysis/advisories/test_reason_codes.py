@@ -57,7 +57,7 @@ def _ctx(
     # for the Ogimet-NWP list — so an icing test that hand-sets ``icing_zones``
     # must ask for "ogimet_dd", the no-swap path.
     resolved = _resolve_analyses(
-        analyses, icing_method=icing_method, cloud_method=None,
+        analyses, icing_method=icing_method, cloud_source=None,
         convective_method=convective_method,
     )
     return RouteContext(

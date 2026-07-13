@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   advisoryMethodOverrides,
   peakPointPosition,
+  deriveGradedMethods,
   representativeModel,
   deriveHighlights,
   findAdvisory,
@@ -223,19 +224,21 @@ describe('advisoryMethodOverrides — show the config the advisory was graded un
     expect(out.convection).toBe('nwp');
   });
 
-  it('keeps the user cloud STYLE and swaps only the source', () => {
-    const prefs = { clouds: 'square_dd', icing: 'sfip_nwp' };
+  it('resolves the clouds axis to a bare source (render style is client-only now)', () => {
+    // #410: the profile/advisory carries only a source; the render style lives in
+    // vizSettings.cloudStyle and is fused at layer-composition time.
+    const prefs = { clouds: 'dd', icing: 'sfip_nwp' };
     const out = advisoryMethodOverrides(adv('vmc_cruise', 'ecmwf', 'nwp'), 'ecmwf', prefs);
-    expect(out.clouds).toBe('square_nwp');   // NOT bare 'nwp' — style preserved
+    expect(out.clouds).toBe('nwp');
   });
 
-  it('treats nwp_synthesized as the nwp cloud band', () => {
-    const prefs = { clouds: 'soft_dd' };
+  it('treats nwp_synthesized as the nwp cloud source', () => {
+    const prefs = { clouds: 'dd' };
     const out = advisoryMethodOverrides(adv('cloud_top', 'gfs', 'nwp_synthesized'), 'gfs', prefs);
-    expect(out.clouds).toBe('soft_nwp');
+    expect(out.clouds).toBe('nwp');
   });
 
-  it('handles a style-less cloud pref', () => {
+  it('keeps a dd source as dd', () => {
     const out = advisoryMethodOverrides(adv('vmc_cruise', 'gfs', 'dd'), 'gfs', { clouds: 'nwp' });
     expect(out.clouds).toBe('dd');
   });
@@ -326,5 +329,60 @@ describe('peakPointPosition — jump to the worst point (#223)', () => {
 
   it('returns null with no analyses', () => {
     expect(peakPointPosition(adv('gfs', 50), 'gfs', [])).toBeNull();
+  });
+});
+
+describe('deriveGradedMethods — graded methods come from the manifest, not account prefs (#410)', () => {
+  const DEFAULTS = { cloud_source: 'nwp', icing_method: 'ogimet_nwp', convective_method: 'nwp' };
+  const manifest = (advisories: any[]) => ({ advisories } as any);
+  const adv = (id: string, model: string, method: string | null) => ({
+    advisory_id: id,
+    representative_model: model,
+    per_model: [{ model, status: 'amber', detail: '', primary_method_id: method }],
+  });
+
+  it('null manifest falls back to the catalog engine-method defaults', () => {
+    expect(deriveGradedMethods(null, DEFAULTS)).toEqual({
+      clouds: 'nwp', icing: 'ogimet_nwp', convection: 'nwp',
+    });
+  });
+
+  it('a DD-graded profile yields DD cloud / DD icing / thermo convective', () => {
+    // The core acceptance criterion: compact mode must pick the DD layers.
+    const out = deriveGradedMethods(manifest([
+      adv('vmc_cruise', 'gfs', 'dd'),
+      adv('icing_escape', 'gfs', 'ogimet_dd'),
+      adv('convective', 'gfs', 'thermo'),
+    ]), DEFAULTS);
+    expect(out).toEqual({ clouds: 'dd', icing: 'ogimet_dd', convection: 'thermo' });
+  });
+
+  it('collapses nwp_synthesized to a bare nwp cloud source', () => {
+    const out = deriveGradedMethods(manifest([adv('cloud_top', 'gfs', 'nwp_synthesized')]), DEFAULTS);
+    expect(out.clouds).toBe('nwp');
+  });
+
+  it('uses the representative model per-model method', () => {
+    const out = deriveGradedMethods(manifest([{
+      advisory_id: 'icing_escape',
+      representative_model: 'ecmwf',
+      per_model: [
+        { model: 'gfs', status: 'amber', detail: '', primary_method_id: 'ogimet_dd' },
+        { model: 'ecmwf', status: 'amber', detail: '', primary_method_id: 'sfip_nwp' },
+      ],
+    }]), DEFAULTS);
+    expect(out.icing).toBe('sfip_nwp');
+  });
+
+  it('falls back to defaults for groups the pack has no signal for', () => {
+    // Only an icing advisory present, and it carries no method (GREEN) → all
+    // three groups keep the catalog defaults.
+    const out = deriveGradedMethods(manifest([adv('icing_escape', 'gfs', null)]), DEFAULTS);
+    expect(out).toEqual({ clouds: 'nwp', icing: 'ogimet_nwp', convection: 'nwp' });
+  });
+
+  it('honours a DD default cloud source when the pack is silent', () => {
+    const out = deriveGradedMethods(null, { ...DEFAULTS, cloud_source: 'dd' });
+    expect(out.clouds).toBe('dd');
   });
 });

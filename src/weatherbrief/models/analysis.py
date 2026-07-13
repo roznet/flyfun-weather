@@ -752,9 +752,13 @@ class SoundingAnalysis(BaseModel):
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
 
-    # Which cloud method was actually applied by _resolve_analyses.
+    # Which cloud *source* was actually applied by _resolve_analyses.
     # "dd" (default or fallback), "nwp" (GRIB diagnostics available),
-    # "nwp_synthesized" (synthesized from Open-Meteo + DD heuristics).
+    # "nwp_synthesized" (synthesized from Open-Meteo + DD heuristics). Since the
+    # #410 split this is a pure grading source — the render style is a client-only
+    # concern (``vizSettings.cloudStyle``) and no longer travels with the grade.
+    # The field name is kept stable (the #408 method-badge machinery and the iOS
+    # client read it) even though it now carries a source, not a fused method.
     cloud_method_effective: Optional[str] = None
 
     # Which icing / convective method _resolve_analyses actually graded on — the

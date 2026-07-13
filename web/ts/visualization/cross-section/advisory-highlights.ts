@@ -16,6 +16,7 @@
 
 import type {
   AdvisoryHighlights,
+  EngineMethodDefaults,
   RouteAdvisoriesManifest,
   RouteAdvisoryResult,
 } from '../../types/advisories';
@@ -67,11 +68,10 @@ const ADVISORY_METHOD_GROUP: Record<string, 'clouds' | 'icing' | 'convection'> =
  * `driving_method_id` only fires on a flagged grade) changes nothing: there is
  * no highlight to explain, so the user's own view is the right one.
  *
- * Clouds needs care. The backend knows only the *source* (`dd` / `nwp` /
- * `nwp_synthesized`), while the layer registry keys on source **and** render
- * style (`soft_nwp`, `square_dd`, …). Swapping in a bare source would silently
- * change the user's cloud style too, so we keep their style and replace only the
- * source.
+ * Clouds carry only a bare *source* (`dd` / `nwp` / `nwp_synthesized`) here —
+ * the render style lives entirely in `vizSettings.cloudStyle` and is fused with
+ * the source at layer-composition time (#410), so nothing about the user's style
+ * is touched. `nwp_synthesized` renders on the same NWP band as `nwp`.
  */
 export function advisoryMethodOverrides(
   adv: RouteAdvisoryResult,
@@ -85,14 +85,7 @@ export function advisoryMethodOverrides(
   const effective = pm?.primary_method_id;
   if (!effective) return preferredMethods;
 
-  let value = effective;
-  if (group === 'clouds') {
-    // "nwp_synthesized" renders on the same NWP band as "nwp".
-    const source = effective === 'dd' ? 'dd' : 'nwp';
-    const current = preferredMethods.clouds ?? '';
-    const style = current.replace(/_(dd|nwp)$/, '');
-    value = style && style !== current ? `${style}_${source}` : source;
-  }
+  const value = group === 'clouds' ? (effective === 'dd' ? 'dd' : 'nwp') : effective;
   return { ...preferredMethods, [group]: value };
 }
 
@@ -128,6 +121,43 @@ export function peakPointPosition(
     }
   }
   return best >= 0 ? best : null;
+}
+
+/**
+ * Derive the profile's graded methods for each cross-section group from the
+ * loaded advisory manifest — the honest source now that account-level engine
+ * methods are retired (#410). Each method-bearing advisory carries, on its
+ * representative model, the `primary_method_id` it actually graded on (already
+ * reflecting any backend fallback). We take the first such signal per group and
+ * fall back to the catalog's declared defaults when the pack is silent.
+ *
+ * Clouds resolve to a bare source (`dd` / `nwp`); the render style is applied
+ * later from `vizSettings.cloudStyle`. Icing/convection resolve to their full
+ * method ids (`ogimet_dd`, `sfip_nwp`, `thermo`, …).
+ */
+export function deriveGradedMethods(
+  manifest: RouteAdvisoriesManifest | null,
+  defaults: EngineMethodDefaults,
+): Record<string, string> {
+  const result: Record<string, string> = {
+    clouds: defaults.cloud_source === 'dd' ? 'dd' : 'nwp',
+    icing: defaults.icing_method,
+    convection: defaults.convective_method,
+  };
+  if (!manifest) return result;
+
+  const found = new Set<string>();
+  for (const adv of manifest.advisories) {
+    const group = ADVISORY_METHOD_GROUP[adv.advisory_id];
+    if (!group || found.has(group)) continue;
+    const rep = representativeModel(adv);
+    const pm = adv.per_model.find((m) => m.model === rep) ?? adv.per_model[0];
+    const method = pm?.primary_method_id;
+    if (!method) continue;
+    result[group] = group === 'clouds' ? (method === 'dd' ? 'dd' : 'nwp') : method;
+    found.add(group);
+  }
+  return result;
 }
 
 /** Find one advisory by id in a manifest (or null). */

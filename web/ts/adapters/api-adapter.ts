@@ -721,7 +721,7 @@ export async function previewAdvisories(
     // endpoint keys on JSON presence, so a null grades on the resolved default
     // rather than the profile's saved value.
     icing_method?: string | null;
-    cloud_method?: string | null;
+    cloud_source?: 'dd' | 'nwp' | null;
     convective_method?: string | null;
   },
   cruiseAltitudeFt?: number,

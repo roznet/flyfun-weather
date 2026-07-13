@@ -59,25 +59,10 @@ class AdvisoryResult:
 # ---------------------------------------------------------------------------
 
 
-def _cloud_source_from_method(cloud_method: str | None) -> str | None:
-    """Extract the cloud *source* (``"dd"`` / ``"nwp"``) from a ``cloud_method``.
-
-    Profiles persist a combined ``<style>_<source>`` string written by the
-    settings page (e.g. ``soft_nwp``, ``square_dd``, ``natural_nwp``), while
-    legacy profiles carry the bare source (``dd`` / ``nwp``). The render *style*
-    is a frontend-only concern; backend cloud resolution only needs the source.
-    Any value ending in ``nwp`` selects the NWP layers; everything else
-    (``None``, bare/styled ``*_dd``) falls back to the DD source.
-    """
-    if not cloud_method:
-        return None
-    return "nwp" if cloud_method.endswith("nwp") else "dd"
-
-
 def _resolve_analyses(
     rp_analyses: list[RoutePointAnalysis],
     icing_method: str | None,
-    cloud_method: str | None,
+    cloud_source: str | None,
     convective_method: str | None = None,
 ) -> list[RoutePointAnalysis]:
     """Return analyses with cloud/icing/convective layers resolved per user preference.
@@ -86,27 +71,28 @@ def _resolve_analyses(
     Otherwise builds new objects via ``model_copy()`` — the originals are
     never mutated.
 
-    Cloud resolution (``cloud_method``):
-        source ``nwp`` (``"nwp"`` or any ``*_nwp`` styled form) → use
-        ``nwp_cloud_layers`` (fall back to DD source if None); ``dd`` / ``None``
-        keep the DD-derived base layers. See ``_cloud_source_from_method``.
+    Cloud resolution (``cloud_source``, a bare ``"dd"`` / ``"nwp"`` grading
+    choice — the #410 split of the old fused ``cloud_method``; the legacy
+    ``<style>_<source>`` string is reduced to its source at the read boundary,
+    see ``engine_methods.cloud_source_from_settings``):
+        ``"nwp"`` → use ``nwp_cloud_layers`` (fall back to DD source if None);
+        ``"dd"`` / ``None`` keep the DD-derived base layers.
     Icing resolution (``icing_method``):
         ``"ogimet_nwp"`` → use ``icing_ogimet_nwp_zones``.
         ``"sfip_nwp"``   → convert ``sfip_zones`` to ``IcingZone`` list.
     Convective resolution (``convective_method``):
         ``"nwp"`` → use ``convective_nwp`` (fall back to ``convective_thermo``).
 
-    Absence (``None``) means "follow the declared default" (#403): each method is
+    Absence (``None``) means "follow the declared default" (#403): each axis is
     resolved through :data:`ENGINE_METHOD_DEFAULTS` (NWP icing / NWP cloud / NWP
     convective) before the checks below, so a profile that never saved an engine
     method grades on the same methods its settings page has always displayed —
     not the DD/DD/thermo the old falsy fall-through silently applied.
     """
     icing_method = icing_method or ENGINE_METHOD_DEFAULTS["icing_method"]
-    cloud_method = cloud_method or ENGINE_METHOD_DEFAULTS["cloud_method"]
+    cloud_source = cloud_source or ENGINE_METHOD_DEFAULTS["cloud_source"]
     convective_method = convective_method or ENGINE_METHOD_DEFAULTS["convective_method"]
 
-    cloud_source = _cloud_source_from_method(cloud_method)
     swap_icing = icing_method != "ogimet_dd"
     swap_cloud = cloud_source == "nwp"
     swap_convective = convective_method != "thermo"
@@ -354,7 +340,7 @@ def run_advisories(
     pack_dir: Path | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
     icing_method: str | None = None,
-    cloud_method: str | None = None,
+    cloud_source: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
@@ -374,7 +360,7 @@ def run_advisories(
         if progress_callback is not None:
             progress_callback(stage, detail)
 
-    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_method, convective_method)
+    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_source, convective_method)
 
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
@@ -488,7 +474,7 @@ def run_advisories_from_pack(
     airports_db_path: str | None = None,
     airport_conditions_recompute: Callable | None = None,
     icing_method: str | None = None,
-    cloud_method: str | None = None,
+    cloud_source: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
@@ -522,7 +508,7 @@ def run_advisories_from_pack(
     cross_sections = load_cross_sections(pack_dir)
     elevation = load_elevation_profile(pack_dir)
 
-    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method, convective_method)
+    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_source, convective_method)
 
     # Resolve flight_ceiling_ft from route or explicit param
     effective_ceiling = flight_ceiling_ft
@@ -633,7 +619,7 @@ def run_altitude_table_from_pack(
     aggregation: AdvisoryAggregation | None = None,
     airport_conditions_recompute: Callable | None = None,
     icing_method: str | None = None,
-    cloud_method: str | None = None,
+    cloud_source: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
@@ -655,7 +641,7 @@ def run_altitude_table_from_pack(
     cross_sections = load_cross_sections(pack_dir)
     elevation = load_elevation_profile(pack_dir)
 
-    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_method, convective_method)
+    analyses = _resolve_analyses(manifest.analyses, icing_method, cloud_source, convective_method)
 
     model_names = manifest.models
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
@@ -828,7 +814,7 @@ def run_alt_from_pack(
     airports_db_path: str | None = None,
     airport_conditions_recompute: Callable | None = None,
     icing_method: str | None = None,
-    cloud_method: str | None = None,
+    cloud_source: str | None = None,
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
@@ -882,7 +868,7 @@ def run_alt_from_pack(
     if not rp_analyses:
         return AdvisoryResult(manifest=None, error="Alt analysis produced no results")
 
-    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_method, convective_method)
+    rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_source, convective_method)
 
     total_distance = route_points[-1].distance_from_origin_nm
     model_names = list(rp_analyses[0].sounding.keys()) if rp_analyses else []

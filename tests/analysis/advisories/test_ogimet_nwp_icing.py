@@ -47,7 +47,7 @@ def _ctx(soundings: list[SoundingAnalysis], *, icing_method: str) -> RouteContex
         )
         for i, s in enumerate(soundings)
     ]
-    resolved = _resolve_analyses(analyses, icing_method=icing_method, cloud_method=None)
+    resolved = _resolve_analyses(analyses, icing_method=icing_method, cloud_source=None)
     return RouteContext(
         analyses=resolved, cross_sections=[], elevation=None, models=["gfs"],
         cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,

@@ -17,9 +17,6 @@
         "advisory_models": ["gfs", "ecmwf", "icon"],
         "gramet_enabled": true,
         "llm_digest_enabled": true,
-        "icing_method": "ogimet_dd",
-        "cloud_method": "dd",
-        "convective_method": "thermo",
         "digest_guidance": "conservative",
         "advisories": {
           "enabled": {
@@ -66,9 +63,6 @@
         "advisory_models": ["gfs", "ecmwf", "icon"],
         "gramet_enabled": true,
         "llm_digest_enabled": true,
-        "icing_method": "ogimet_dd",
-        "cloud_method": "dd",
-        "convective_method": "thermo",
         "digest_guidance": "balanced",
         "advisories": {
           "enabled": {
@@ -117,9 +111,6 @@
         "advisory_models": ["gfs", "ecmwf", "icon"],
         "gramet_enabled": true,
         "llm_digest_enabled": true,
-        "icing_method": "ogimet_nwp",
-        "cloud_method": "nwp",
-        "convective_method": "nwp",
         "digest_guidance": "tolerant",
         "advisories": {
           "enabled": {
