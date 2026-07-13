@@ -359,6 +359,78 @@ class TestIcingEvaluatorsBadgeEffective:
         rep = next(m for m in result.per_model if m.model == result.representative_model)
         assert rep.primary_method_id is None
 
+    def test_ifr_below_threshold_icing_does_not_borrow_method_for_conv_amber(self):
+        """The pooled-region trap (#409 round 2): icing under its own threshold.
+
+        1/20 points has in-buffer icing → an AMBER icing_band region IS emitted
+        (geometry is per-point), but icing_pct=5% is below icing_pct_amber (20),
+        so the icing axis grades GREEN and contributes nothing. A single MODERATE
+        convective point drives the composite to AMBER. The badge must NOT report
+        the icing method just because an AMBER icing region sorts first in the
+        pooled list — convective (method-less) drove it.
+        """
+        envelope = [EnhancedCloudLayer(base_ft=4000, top_ft=10000, coverage=CloudCoverage.OVC)]
+        plain = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[],
+        )
+        iced = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            nwp_cloud_layers=envelope,
+            icing_ogimet_nwp_zones=[
+                IcingZone(base_ft=6500, top_ft=9500, risk=IcingRisk.LIGHT, icing_type=IcingType.RIME),
+            ],
+        )
+        moderate_conv = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[],
+            convective=ConvectiveAssessment(risk_level=ConvectiveRisk.MODERATE, cape_jkg=1400),
+        )
+        soundings = [iced, moderate_conv] + [plain] * 18  # 1/20 iced, 1/20 conv
+        ctx = _ctx(soundings, icing_method="ogimet_nwp")
+        result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))
+        assert result.aggregate_status == AdvisoryStatus.AMBER  # convective-driven
+        # An AMBER icing region exists (per-point geometry), stamped ogimet_nwp…
+        assert any(
+            r.kind == "icing_band" and r.method_id == "ogimet_nwp"
+            for m in result.per_model if m.highlights for r in m.highlights.regions
+        )
+        # …but the badge must not borrow it — icing never crossed its threshold.
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id is None
+
+
+class TestBuildRegionsMethodSplit:
+    """build_regions must not merge a run across a method_id change (#409)."""
+
+    def test_splits_run_on_method_change(self):
+        from weatherbrief.analysis.advisories._helpers import FlaggedCell, build_regions
+
+        # Two adjacent flagged points, same kind+severity, different method — a
+        # model with NWP layers at one point and DD fallback at the next.
+        per_point = [
+            (0.0, FlaggedCell(kind="icing_band", severity=HighlightSeverity.AMBER,
+                              base_ft=4000, top_ft=9000, method_id="ogimet_nwp")),
+            (20.0, FlaggedCell(kind="icing_band", severity=HighlightSeverity.AMBER,
+                               base_ft=4000, top_ft=9000, method_id="ogimet_dd")),
+        ]
+        regions = build_regions(per_point, 40.0)
+        assert len(regions) == 2
+        assert [r.method_id for r in regions] == ["ogimet_nwp", "ogimet_dd"]
+
+    def test_still_merges_when_method_uniform(self):
+        from weatherbrief.analysis.advisories._helpers import FlaggedCell, build_regions
+
+        per_point = [
+            (0.0, FlaggedCell(kind="icing_band", severity=HighlightSeverity.AMBER,
+                              base_ft=4000, top_ft=9000, method_id="ogimet_nwp")),
+            (20.0, FlaggedCell(kind="icing_band", severity=HighlightSeverity.AMBER,
+                               base_ft=5000, top_ft=8000, method_id="ogimet_nwp")),
+        ]
+        regions = build_regions(per_point, 40.0)
+        assert len(regions) == 1
+        assert regions[0].method_id == "ogimet_nwp"
+
 
 class TestNonMethodAxisReportsNone:
     """Evaluators with no engine-method axis leave ``method_id`` None (reserved space)."""
