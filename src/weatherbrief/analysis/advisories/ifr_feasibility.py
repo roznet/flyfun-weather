@@ -499,6 +499,7 @@ class IFRFeasibilityEvaluator:
 
             # 6. Highlights (#375) only when the model has en-route data. The
             # airport IFR-viability axis colours the endpoint ribbon segments.
+            icing_regions = build_regions(icing_cells, ctx.total_distance_nm)
             highlights = None
             if total > 0:
                 apply_airport_endpoints(ribbon_points, dep_status, arr_status)
@@ -506,18 +507,33 @@ class IFRFeasibilityEvaluator:
                 highlights = AdvisoryHighlights(
                     ribbon=ribbon,
                     regions=(
-                        build_regions(icing_cells, ctx.total_distance_nm)
+                        icing_regions
                         + build_regions(conv_cells, ctx.total_distance_nm)
                     ),
                     peak_dist_nm=ribbon_peak(ribbon),
                 )
+
+            # primary_method_id (#409 review round 2): icing is the ONLY
+            # method-bearing axis of this composite, so its method may be badged
+            # only when the icing axis actually drove — or tied for — the grade.
+            # driving_method_id over the *pooled* region list can't tell: icing
+            # emits an AMBER region per in-buffer point even when icing_pct stays
+            # below its own threshold (icing_status GREEN), so a pooled match
+            # would borrow "ogimet_nwp" for a convective- or airport-driven grade.
+            # Resolve the icing method over the icing-only regions (single-axis,
+            # so driving_method_id is correct, incl. the extent-escalated RED),
+            # then gate it on the icing axis reaching the composite status.
+            icing_primary = driving_method_id(
+                AdvisoryHighlights(regions=icing_regions), icing_status,
+            )
+            primary_method_id = icing_primary if icing_status == status else None
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 highlights=highlights,
-                primary_method_id=driving_method_id(highlights, status),
+                primary_method_id=primary_method_id,
             ))
 
         return RouteAdvisoryResult.from_per_model("ifr_feasibility", per_model, params)

@@ -135,9 +135,10 @@ class FlaggedCell(NamedTuple):
 
     ``reason_code`` / ``metric_id`` / ``method_id`` are optional stable,
     non-localised provenance tokens (#393) carried onto the emitted
-    :class:`HighlightRegion` — see that model. They do not participate in
-    run-merging (only ``kind`` + ``severity`` do); the first cell of a run
-    supplies them for the merged region.
+    :class:`HighlightRegion` — see that model. ``method_id`` participates in
+    run-merging alongside ``kind`` + ``severity`` (it can vary point-to-point, so
+    merging across it would mislabel provenance — #409); ``reason_code`` /
+    ``metric_id`` do not, and the first cell of a run supplies them.
     """
 
     kind: str
@@ -239,6 +240,13 @@ def build_regions(
             and cells[j] is not None
             and cells[j].kind == cell.kind
             and cells[j].severity == cell.severity
+            # method_id can genuinely vary point-to-point within one model (NWP
+            # layers present at some route points, DD fallback at others), so it
+            # joins the run key — merging across a method change would silently
+            # mislabel the provenance of part of the region (#409 review). kind
+            # and severity are constant within a run by construction; reason_code
+            # and metric_id remain first-cell (dominant reason / target layer).
+            and cells[j].method_id == cell.method_id
         ):
             if cells[j].base_ft is not None:
                 bases.append(cells[j].base_ft)
@@ -363,6 +371,12 @@ def driving_method_id(
     ]
     if not below:
         return None
+    # Ties (several method-bearing regions at the same severity below the grade)
+    # break on list order, which is route order — arbitrary but deterministic.
+    # Reachable only within a single method-bearing axis (composites resolve
+    # their method per-axis before calling this), so a tie means the same axis
+    # graded different route points on different effective methods; any is a fair
+    # representative for the badge.
     return max(below, key=lambda r: _SEVERITY_RANK[r.severity]).method_id
 
 
