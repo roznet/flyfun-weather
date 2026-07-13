@@ -60,12 +60,16 @@ export interface AdvisoryCategory {
   diagnostics: boolean;
 }
 
-/** Declared engine grading-method defaults (#403), keyed by profile-settings
- *  field name (`icing_method`, `cloud_method`, `convective_method`). The settings
- *  page reads these instead of hardcoding fallbacks, so the UI default and the
- *  runtime default cannot drift, and a method equal to the default can be pruned
- *  on save. */
-export type EngineMethodDefaults = Record<string, string>;
+/** Declared engine grading-method defaults (#403). The settings page reads these
+ *  instead of hardcoding fallbacks, so the UI default and the runtime default
+ *  cannot drift, and a method equal to the default can be pruned on save. Typed
+ *  with the exact keys (not `Record<string, string>`) so a typo like
+ *  `engineDefaults.icing_methdo` fails the build. */
+export interface EngineMethodDefaults {
+  icing_method: string;
+  cloud_method: string;
+  convective_method: string;
+}
 
 /** Response of `/advisories/catalog` (#387): advisories in display order plus
  *  the ordered category list. `engine_method_defaults` added in #403 (optional
