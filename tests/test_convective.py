@@ -1151,7 +1151,9 @@ def test_resolve_analyses_convective_swaps_to_nwp():
         sounding={"gfs": sounding},
     )
 
-    resolved = _resolve_analyses([rpa], None, None, convective_method="nwp")
+    # Explicit DD icing/cloud so only the convective axis swaps (#403: None
+    # icing/cloud now resolve to their NWP defaults, which would swap those too).
+    resolved = _resolve_analyses([rpa], "ogimet_dd", "dd", convective_method="nwp")
     assert resolved[0].sounding["gfs"].convective.method == "nwp"
     assert resolved[0].sounding["gfs"].convective.risk_level == ConvectiveRisk.MODERATE
 
@@ -1177,7 +1179,8 @@ def test_resolve_analyses_convective_fallback_to_thermo():
         sounding={"gfs": sounding},
     )
 
-    resolved = _resolve_analyses([rpa], None, None, convective_method="nwp")
+    # Explicit DD icing/cloud so only the convective axis is exercised (#403).
+    resolved = _resolve_analyses([rpa], "ogimet_dd", "dd", convective_method="nwp")
     assert resolved[0].sounding["gfs"].convective.method == "thermo"
     assert resolved[0].sounding["gfs"].convective.risk_level == ConvectiveRisk.LOW
 
@@ -1202,9 +1205,13 @@ def test_resolve_analyses_no_swap_when_thermo():
         sounding={"gfs": sounding},
     )
 
-    resolved = _resolve_analyses([rpa], None, None, convective_method="thermo")
-    # Should return the same objects (no copy needed)
-    assert resolved is [rpa] or resolved[0].sounding["gfs"].convective is thermo
+    # All-DD/thermo methods trigger no swap → the original list is returned as-is
+    # (#403: this now requires stating the DD icing/cloud methods explicitly, since
+    # None would resolve to the NWP defaults and swap those axes).
+    original = [rpa]
+    resolved = _resolve_analyses(original, "ogimet_dd", "dd", convective_method="thermo")
+    assert resolved is original
+    assert resolved[0].sounding["gfs"].convective is thermo
 
 
 # ---------------------------------------------------------------------------
