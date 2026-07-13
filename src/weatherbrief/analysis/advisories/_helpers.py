@@ -302,30 +302,68 @@ def driving_method_id(
     """The stamped ``method_id`` of the region that drove this model's grade (#408).
 
     The provenance rollup for :attr:`ModelAdvisoryResult.primary_method_id`: the
-    flagged region whose severity matches the model's ``status`` is the one that
-    controlled the grade, so its ``method_id`` is the analysis method a chip
-    badges. Read from the very ``highlights`` the grade already produced — never
-    a second pass over the route — so the badged method cannot drift from the
-    geometry it came from (the #393 single-source principle).
+    analysis method a chip badges. Read from the very ``highlights`` the grade
+    already produced — never a second pass over the route — so the badged method
+    cannot drift from the geometry it came from (the #393 single-source
+    principle).
 
-    Returns None when nothing drove the grade to a flagged region (a
-    GREEN/UNAVAILABLE model has no regions), and when the evaluator stamped no
-    method on its cells at all (a non-method-controlled axis — the ``method_id``
-    the docstring reserves as "when one controlled it"). The first *stamped*
-    match wins, so a composite whose ribbon mixes a method-bearing axis
-    (icing_band) with a method-less one (tower) badges the method that actually
-    carries a label.
+    The driving region is normally the stamped one whose severity equals the
+    grade. But several evaluators cap their per-point region severity below the
+    grade the extent can reach — ``cloud_top`` decks are always AMBER yet ≥60%
+    coverage grades RED; ``ifr_feasibility`` icing bands are AMBER yet
+    ``icing_pct`` can grade RED; ``fiki_icing``'s clear-cruise fraction can grade
+    RED off AMBER points. Requiring an exact severity match dropped the badge on
+    exactly those RED grades — the worst case, where a pilot most needs to know
+    the method (#409 review). So the lookup degrades in two steps:
+
+    1. **Exact stamped match** — a stamped region at the grade severity drove it.
+    2. **Escalated by extent** — no region reached the grade severity at all, so
+       it escalated past every capped region by percentage; badge the
+       method-bearing axis that produced those regions (its highest-severity
+       stamped region). BUT if an *unstamped* region did reach the grade severity
+       (the method-less convective ``tower`` in the IFR composite), that axis
+       drove the grade — return None rather than misattribute it to a lesser
+       method-bearing axis.
+
+    Returns None for a GREEN/UNAVAILABLE grade (no regions), when only
+    method-less regions exist (a non-method-controlled axis — the ``method_id``
+    the contract reserves as "when one controlled it"), and in the unstamped-axis
+    case above.
     """
     if highlights is None:
         return None
     target = _STATUS_TO_SEVERITY.get(status)
     if target is None:
         return None
-    return next(
-        (r.method_id for r in highlights.regions
+    regions = highlights.regions
+
+    # 1. A stamped region exactly at the grade severity is the driving region.
+    exact = next(
+        (r.method_id for r in regions
          if r.severity == target and r.method_id is not None),
         None,
     )
+    if exact is not None:
+        return exact
+
+    # An unstamped region reached the grade severity → a method-less axis drove
+    # it (e.g. the convective tower). Don't badge a lesser method-bearing axis.
+    if any(r.severity == target for r in regions):
+        return None
+
+    # 2. No region reached the grade severity: it escalated past every capped
+    # region by extent. Badge the method-bearing axis behind the highest region
+    # *strictly below* the grade — the ones the percentage climbed over. A
+    # would-be-flagged grade with no lower region (e.g. GREEN — no regions at
+    # all) correctly yields no badge.
+    target_rank = _SEVERITY_RANK[target]
+    below = [
+        r for r in regions
+        if r.method_id is not None and _SEVERITY_RANK[r.severity] < target_rank
+    ]
+    if not below:
+        return None
+    return max(below, key=lambda r: _SEVERITY_RANK[r.severity]).method_id
 
 
 def ribbon_peak(segments: list[RibbonSegment]) -> float | None:

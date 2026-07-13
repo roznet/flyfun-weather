@@ -764,10 +764,12 @@ class SoundingAnalysis(BaseModel):
     # badge from these, so a chip can tell a pilot the truth under fallback
     # ("graded on thermo, though you asked for NWP") instead of the requested
     # label that lies at the point it matters.
-    #   ``icing_method_effective`` — "ogimet_nwp" / "ogimet_dd" / "sfip_nwp";
-    #     left None when the method could not run at all (pairs with
+    #   ``icing_method_effective`` — "ogimet_nwp" / "sfip_nwp"; left None when
+    #     the method could not run at all (pairs with
     #     ``active_icing_available=False``: an unavailable method has no honest
-    #     label to badge).
+    #     label to badge) AND when the requested method needs no NWP swap
+    #     (explicit "ogimet_dd" resolves in-place, the same no-swap gap as cloud's
+    #     DD source — no effective label is stamped).
     #   ``convective_method_effective`` — "nwp" / "thermo"; "thermo" whenever the
     #     model-native NWP convective was absent and it silently fell back.
     icing_method_effective: Optional[str] = None
