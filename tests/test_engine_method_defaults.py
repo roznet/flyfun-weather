@@ -75,12 +75,16 @@ def test_explicit_dd_thermo_methods_are_honoured_unchanged():
     rpa = _rpa_with_all_slots()
     original = [rpa]
     result = _resolve_analyses(original, "ogimet_dd", "dd", "thermo")
-    # No swap needed at all → the original list is returned unchanged (identity).
-    assert result is original
+    # No *data* swap — every DD/thermo track is kept verbatim. It is no longer
+    # object-identity (#409 follow-up): the no-swap path still stamps provenance,
+    # so all three axes badge the method that actually graded them.
     s = result[0].sounding["gfs"]
     assert s.cloud_layers[0].base_ft == 3000
     assert s.icing_zones[0].risk == IcingRisk.MODERATE
     assert s.convective.risk_level == ConvectiveRisk.LOW
+    assert s.cloud_method_effective == "dd"
+    assert s.icing_method_effective == "ogimet_dd"
+    assert s.convective_method_effective == "thermo"
 
 
 def test_engine_method_defaults_constant_values():

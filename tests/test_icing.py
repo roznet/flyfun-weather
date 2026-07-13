@@ -612,8 +612,13 @@ def test_resolve_analyses_ogimet_dd_returns_original():
     )
     original = [rpa]
     result = _resolve_analyses(original, "ogimet_dd", "dd", "thermo")
-    assert result is original
-    assert result[0].sounding["gfs"].icing_zones[0].risk == IcingRisk.MODERATE
+    # No swap: the DD zones are kept verbatim. Not object-identity though — the
+    # DD path still stamps its provenance (#409 follow-up), so it is a copy.
+    s = result[0].sounding["gfs"]
+    assert s.icing_zones[0].risk == IcingRisk.MODERATE
+    assert s.icing_method_effective == "ogimet_dd"
+    # Originals never mutated.
+    assert rpa.sounding["gfs"].icing_method_effective is None
 
 
 def test_resolve_analyses_ogimet_nwp_swaps_without_mutation():

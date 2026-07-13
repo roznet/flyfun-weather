@@ -284,6 +284,17 @@ exactly the "when one controlled it" space the docstring reserves. Convective's
 effective method is *produced* (the honesty fix) but not yet consumed by a
 `method_id` axis.
 
+**The no-swap path badges too.** An explicit DD/thermo selection replaces no data,
+so `_resolve_analyses` has nothing to swap — but it still stamps `ogimet_dd` /
+`dd` / `thermo`. Leaving those unset (as it first did) would make "graded on DD"
+indistinguishable from "this advisory has no method axis", which is the same
+absence-reads-as-something-else failure #391/#393 exist to kill. The `swap_*`
+flags therefore govern only whether the *data* is replaced, never whether
+provenance is recorded — which is why there is no early return for the all-DD
+case, at the cost of a shallow `model_copy` on that path. `None` on a
+method-bearing axis now means exactly one thing: **the method could not run**
+(`active_icing_available=False` → UNAVAILABLE).
+
 Design decisions (don't relitigate): **backend owns the geometry** (which zones
 fired depends on evaluator thresholds/altitude buffers/user params — re-deriving
 client-side would drift and iOS would need a third copy); **distance-space (`nm`)**

@@ -410,18 +410,23 @@ def _make_rpa_with_clouds():
     return rpa, dd_layers, nwp_layers
 
 
-def test_resolve_analyses_dd_returns_original():
-    """All-DD/thermo methods return the original list unchanged (identity).
+def test_resolve_analyses_dd_keeps_layers_and_badges_the_method():
+    """All-DD/thermo methods keep the DD layers — and still badge the method.
 
     Since #403 an *absent* (None) method resolves to its NWP default, so the
-    no-swap identity case requires the DD/thermo methods to be stated explicitly.
+    no-swap case requires the DD/thermo methods to be stated explicitly. Since the
+    #409 follow-up the DD path is no longer object-identity: it swaps no data but
+    stamps ``cloud_method_effective="dd"``, so "graded on DD" is distinguishable
+    from "this advisory has no method axis".
     """
     from weatherbrief.tasks.advise import _resolve_analyses
     rpa, dd_layers, _ = _make_rpa_with_clouds()
     original = [rpa]
     result = _resolve_analyses(original, "ogimet_dd", "dd", "thermo")
-    assert result is original
-    assert result[0].sounding["gfs"].cloud_layers[0].base_ft == 3000
+    s = result[0].sounding["gfs"]
+    assert s.cloud_layers[0].base_ft == 3000  # DD layers kept verbatim
+    assert s.cloud_method_effective == "dd"
+    assert rpa.sounding["gfs"].cloud_method_effective is None  # original untouched
 
 
 def test_resolve_analyses_nwp_swaps_without_mutation():

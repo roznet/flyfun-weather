@@ -110,8 +110,15 @@ def _resolve_analyses(
     swap_icing = icing_method != "ogimet_dd"
     swap_cloud = cloud_source == "nwp"
     swap_convective = convective_method != "thermo"
-    if not swap_icing and not swap_cloud and not swap_convective:
-        return rp_analyses
+
+    # NOTE: no early return for the all-DD/thermo case. The ``swap_*`` flags say
+    # whether the *data* needs replacing; provenance is stamped either way. A
+    # profile that explicitly grades on DD/thermo needs its method badged just as
+    # much as an NWP one — leaving ``*_method_effective`` unset there would make
+    # "graded on DD" indistinguishable from "this advisory has no method axis"
+    # (turbulence, mountain_wind), which is the same absence-reads-as-something-
+    # -else failure #391/#393 exist to kill. The cost is a shallow ``model_copy``
+    # on the DD path, which previously returned the list untouched.
 
     resolved: list[RoutePointAnalysis] = []
     for rpa in rp_analyses:
@@ -136,6 +143,11 @@ def _resolve_analyses(
                     # Fallback: restore DD source
                     updates["cloud_layers"] = list(sounding.dd_cloud_layers)
                     updates["cloud_method_effective"] = "dd"
+            else:
+                # DD source requested: ``cloud_layers`` already holds the
+                # DD-derived layers, so there is nothing to swap — but the grade
+                # was still produced *by* a method, and it must say so.
+                updates["cloud_method_effective"] = "dd"
 
             # --- icing resolution ---
             if swap_icing:
@@ -171,6 +183,10 @@ def _resolve_analyses(
                         )
                         for z in sounding.sfip_zones
                     ]
+            else:
+                # Explicit "ogimet_dd": ``icing_zones`` already holds the
+                # DD-derived zones — no swap, but the method still graded them.
+                updates["icing_method_effective"] = "ogimet_dd"
 
             # --- convective resolution ---
             if swap_convective:
@@ -182,6 +198,10 @@ def _resolve_analyses(
                 # convective grades on thermo wherever ``convective_nwp`` is None,
                 # and until now nothing recorded that it happened.
                 updates["convective_method_effective"] = "nwp" if nwp is not None else "thermo"
+            else:
+                # Explicit "thermo": ``convective`` already holds the thermo
+                # assessment — no swap, but badge the method that produced it.
+                updates["convective_method_effective"] = "thermo"
 
             if updates:
                 new_soundings[key] = sounding.model_copy(update=updates)

@@ -172,6 +172,35 @@ class TestSparseProfileResolvesToConcreteMethod:
         assert eff.convective_method_effective == "nwp"
 
 
+class TestExplicitDdThermoStillBadges:
+    """The no-swap path must badge too.
+
+    An explicit DD/thermo selection swaps no data, so ``_resolve_analyses`` used
+    to early-return the untouched list and leave every ``*_method_effective`` as
+    None. That made "graded on DD" indistinguishable from "this advisory has no
+    method axis" (turbulence, mountain_wind) — the same absence-reads-as-
+    something-else failure #391/#393 exist to kill. Every axis now stamps the
+    method that graded it, even when there is nothing to swap.
+    """
+
+    def test_explicit_dd_thermo_badges_every_axis(self):
+        s = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=5000),
+            convective_thermo=ConvectiveAssessment(risk_level=ConvectiveRisk.LOW, cape_jkg=400),
+        )
+        resolved = _resolve_analyses(_analyses([s]), "ogimet_dd", "dd", "thermo")
+        eff = resolved[0].sounding["gfs"]
+        assert eff.icing_method_effective == "ogimet_dd"
+        assert eff.cloud_method_effective == "dd"
+        assert eff.convective_method_effective == "thermo"
+
+    def test_styled_dd_cloud_method_badges_dd(self):
+        """The settings page persists a composed ``<style>_<source>`` form."""
+        s = SoundingAnalysis(indices=ThermodynamicIndices(freezing_level_ft=5000))
+        resolved = _resolve_analyses(_analyses([s]), "ogimet_dd", "square_dd", "thermo")
+        assert resolved[0].sounding["gfs"].cloud_method_effective == "dd"
+
+
 # ---------------------------------------------------------------------------
 # The driving-region rollup helper
 # ---------------------------------------------------------------------------
@@ -327,6 +356,26 @@ class TestIcingEvaluatorsBadgeEffective:
         assert all(m == "ogimet_nwp" for m in _region_method_ids(result))
         rep = next(m for m in result.per_model if m.model == result.representative_model)
         assert rep.primary_method_id is not None
+
+    def test_explicit_dd_icing_badges_ogimet_dd_not_none(self):
+        """A pilot who explicitly grades on DD gets a real badge, not a blank.
+
+        End-to-end proof the no-swap gap is closed: before, ``ogimet_dd`` swapped
+        nothing, so ``method_id`` came back None and a chip could not tell "graded
+        on DD" apart from "no method axis".
+        """
+        zone = IcingZone(base_ft=4000, top_ft=10000, risk=IcingRisk.MODERATE, icing_type=IcingType.MIXED)
+        dd_iced = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            icing_zones=[zone],  # DD-derived zones already in place — no swap
+        )
+        ctx = _ctx([dd_iced for _ in range(6)], icing_method="ogimet_dd")
+        result = IcingEscapeEvaluator.evaluate(ctx, _defaults(IcingEscapeEvaluator))
+        assert result.aggregate_status != AdvisoryStatus.GREEN
+        assert _region_method_ids(result)
+        assert all(m == "ogimet_dd" for m in _region_method_ids(result))
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "ogimet_dd"
 
     def test_icing_escape_amber_off_isolated_no_escape_keeps_badge(self):
         """1/20 no-escape (RED region) on an otherwise clear route → AMBER (#409 r3).

@@ -1205,13 +1205,17 @@ def test_resolve_analyses_no_swap_when_thermo():
         sounding={"gfs": sounding},
     )
 
-    # All-DD/thermo methods trigger no swap → the original list is returned as-is
-    # (#403: this now requires stating the DD icing/cloud methods explicitly, since
-    # None would resolve to the NWP defaults and swap those axes).
+    # All-DD/thermo methods trigger no data swap — the thermo assessment is kept
+    # verbatim (#403: this requires stating the DD icing/cloud methods explicitly,
+    # since None would resolve to the NWP defaults and swap those axes). Not
+    # object-identity: the no-swap path still badges its provenance (#409
+    # follow-up), so an explicit-thermo grade says so rather than going unlabelled.
     original = [rpa]
     resolved = _resolve_analyses(original, "ogimet_dd", "dd", convective_method="thermo")
-    assert resolved is original
-    assert resolved[0].sounding["gfs"].convective is thermo
+    s = resolved[0].sounding["gfs"]
+    assert s.convective is thermo
+    assert s.convective_method_effective == "thermo"
+    assert rpa.sounding["gfs"].convective_method_effective is None  # original untouched
 
 
 # ---------------------------------------------------------------------------
