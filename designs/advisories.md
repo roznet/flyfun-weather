@@ -264,9 +264,15 @@ the icing axis; `cloud_top`, `vmc_cruise` on the cloud axis) stamp
 `method_id = sounding.<axis>_method_effective` on the evidence cells they emit —
 `build_regions` already threads `cell.method_id → region.method_id`, so there is
 no plumbing — and roll `primary_method_id` up from the **driving region**
-(`driving_method_id` in `_helpers.py`: the flagged region whose severity matches
-the model's grade, read from the same `highlights` the grade produced so the
-badge can't drift from the geometry). The aggregate view reuses the existing
+(`driving_method_id` in `_helpers.py`: the highest-severity region stamped with a
+method, read from the same `highlights` the grade produced so the badge can't
+drift from the geometry). It makes **no comparison to the grade's own severity**:
+every caller passes a single method-bearing axis's regions, so the badge is simply
+the method of the flagged evidence. An earlier version did match severities and
+leaked an edge case in each direction — a grade escalating *past* capped-low
+regions by extent (`cloud_top` ≥60% AMBER decks → RED), and a grade landing
+*below* the only regions present (`vmc_cruise` sub-red OVC → AMBER off
+RED-severity regions). Dropping the match removes the whole class. The aggregate view reuses the existing
 `representative_model` to pick which per-model `primary_method_id` a chip shows —
 no second selection rule. **The rule that matters: `method_id` is the EFFECTIVE
 method, never the REQUESTED one** — a region graded on DD under fallback says
