@@ -49,6 +49,10 @@ interface CoverageRow {
 }
 
 let currentArea: Area = 'staging';
+/** Situation tags selected in the coverage grid; a pack must carry ALL of them. */
+const selected = new Set<string>();
+let currentCoverage: CoverageRow[] = [];
+let currentPacks: CorpusPackSummary[] = [];
 
 function badge(letter: string | null | undefined): string {
   if (!letter) return '<span class="badge unl">—</span>';
@@ -66,26 +70,75 @@ function esc(s: string): string {
   return d.innerHTML;
 }
 
-function renderCoverage(rows: CoverageRow[]): string {
+/** A pack matches when it carries every selected situation tag (AND, not OR). */
+function matchesFilter(p: CorpusPackSummary): boolean {
+  for (const sit of selected) {
+    if (!p.situations.includes(sit)) return false;
+  }
+  return true;
+}
+
+function renderCoverage(rows: CoverageRow[], packs: CorpusPackSummary[]): string {
+  const shown = packs.filter(matchesFilter);
   return rows
     .map((r) => {
-      const gap = r.labeled === 0 ? ' gap' : '';
-      return `<div class="eval-cell${gap}">
-        <div>${r.situation}</div>
-        <div class="c-count">${r.labeled}/${r.total} labelled</div>
+      const isSel = selected.has(r.situation);
+      // How many of the currently-shown packs would survive adding this tag —
+      // 0 means the cell is a dead end, so dim it rather than let the user
+      // click into an empty list.
+      const reach = isSel
+        ? shown.length
+        : shown.filter((p) => p.situations.includes(r.situation)).length;
+      const cls = [
+        'eval-cell',
+        r.labeled === 0 ? 'gap' : '',
+        isSel ? 'sel' : '',
+        !isSel && reach === 0 ? 'dead' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      // Narrowed count only differs from the corpus-wide total when a filter is
+      // active; showing both keeps the coverage checklist readable.
+      const narrowed =
+        selected.size > 0 && !isSel ? ` <span class="c-narrow">(${reach} shown)</span>` : '';
+      return `<div class="${cls}" data-sit="${esc(r.situation)}" role="button" tabindex="0"
+        title="${isSel ? 'Click to remove from filter' : 'Click to filter packs by this tag'}">
+        <div>${esc(r.situation)}</div>
+        <div class="c-count">${r.labeled}/${r.total} labelled${narrowed}</div>
       </div>`;
     })
     .join('');
 }
 
-function renderPacks(packs: CorpusPackSummary[], area: Area): string {
-  if (packs.length === 0) {
+function renderFilterBar(packs: CorpusPackSummary[]): string {
+  if (selected.size === 0) return '';
+  const chips = [...selected]
+    .map(
+      (s) =>
+        `<button class="chip" data-unsit="${esc(s)}" title="Remove this tag">${esc(s)} ✕</button>`,
+    )
+    .join('');
+  const shown = packs.filter(matchesFilter).length;
+  return `<div class="filter-bar">
+    <span class="sit">Filter (all of):</span>${chips}
+    <button class="btn-clear" data-clear="1">Clear all</button>
+    <span class="sit">${shown} of ${packs.length} packs</span>
+  </div>`;
+}
+
+function renderPacks(allPacks: CorpusPackSummary[], area: Area): string {
+  if (allPacks.length === 0) {
     const where = area === 'staging' ? 'staging' : 'corpus';
     return `<p>No packs in ${where}. ${
       area === 'staging'
         ? 'Pull some with <code>scripts/pull_eval_corpus.py --area staging</code>.'
         : 'Promote labelled packs from staging.'
     }</p>`;
+  }
+  const packs = allPacks.filter(matchesFilter);
+  if (packs.length === 0) {
+    return `<p>No packs carry all of: ${esc([...selected].join(', '))}. ` +
+      `<button class="btn-clear" data-clear="1">Clear all</button></p>`;
   }
   // Triage order: by priority (1 first, untriaged last), then unlabelled first.
   const prio = (p: CorpusPackSummary): number => p.label?.priority ?? 9;
@@ -125,7 +178,13 @@ function renderPacks(packs: CorpusPackSummary[], area: Area): string {
         <td>${deb}</td>
         <td>${badge(p.assessment)}</td>
         <td>${badge(g.conservative)} ${badge(g.balanced)} ${badge(g.tolerant)}</td>
-        <td class="sit">${esc(p.situations.join(', '))}</td>
+        <td class="sit">${p.situations
+          .map(
+            (s) =>
+              `<button class="sit-tag${selected.has(s) ? ' sel' : ''}" data-sit="${esc(s)}"
+                 title="Filter by this tag">${esc(s)}</button>`,
+          )
+          .join(' ')}</td>
         <td>${action}</td>
       </tr>`;
     })
@@ -161,6 +220,22 @@ async function promote(corpusId: string): Promise<void> {
   await loadArea(currentArea);
 }
 
+/** Re-render coverage + filter bar + table from the cached data (no refetch). */
+function renderAll(): void {
+  const covEl = document.getElementById('coverage');
+  const barEl = document.getElementById('filter-bar');
+  const packsEl = document.getElementById('packs');
+  if (covEl) covEl.innerHTML = renderCoverage(currentCoverage, currentPacks);
+  if (barEl) barEl.innerHTML = renderFilterBar(currentPacks);
+  if (packsEl) packsEl.innerHTML = renderPacks(currentPacks, currentArea);
+}
+
+function toggleSituation(sit: string): void {
+  if (selected.has(sit)) selected.delete(sit);
+  else selected.add(sit);
+  renderAll();
+}
+
 async function loadArea(area: Area): Promise<void> {
   currentArea = area;
   const covEl = document.getElementById('coverage');
@@ -174,11 +249,20 @@ async function loadArea(area: Area): Promise<void> {
       apiFetch<CoverageRow[]>(`/eval/coverage?area=${area}`),
       apiFetch<CorpusPackSummary[]>(`/eval/packs?area=${area}`),
     ]);
-    if (covEl) covEl.innerHTML = renderCoverage(coverage);
-    if (packsEl) packsEl.innerHTML = renderPacks(packs, area);
+    currentCoverage = coverage;
+    currentPacks = packs;
+    // Staging and corpus share the situation vocab, so a filter set on one area
+    // is still meaningful on the other — but drop tags no area-local pack has,
+    // otherwise the switch silently lands on an empty table.
+    for (const s of [...selected]) {
+      if (!packs.some((p) => p.situations.includes(s))) selected.delete(s);
+    }
+    renderAll();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (covEl) covEl.textContent = '';
+    const barEl = document.getElementById('filter-bar');
+    if (barEl) barEl.textContent = '';
     if (packsEl) {
       packsEl.textContent =
         `Workbench unavailable: ${msg}. Is WEATHERBRIEF_EVAL_WORKBENCH=1 set ` +
@@ -195,7 +279,7 @@ async function init(): Promise<void> {
   }
   initTheme();
 
-  // Event delegation: area toggle + per-row promote.
+  // Event delegation: area toggle + situation filter + per-row promote.
   document.addEventListener('click', (e) => {
     const t = e.target as HTMLElement;
     const area = t.getAttribute('data-area') as Area | null;
@@ -203,8 +287,33 @@ async function init(): Promise<void> {
       void loadArea(area);
       return;
     }
+    if (t.closest('[data-clear]')) {
+      selected.clear();
+      renderAll();
+      return;
+    }
+    // Coverage cells wrap their label in child divs, so match on the ancestor.
+    const sitEl = t.closest('[data-sit]') as HTMLElement | null;
+    if (sitEl) {
+      toggleSituation(sitEl.getAttribute('data-sit') || '');
+      return;
+    }
+    const unsit = t.closest('[data-unsit]') as HTMLElement | null;
+    if (unsit) {
+      toggleSituation(unsit.getAttribute('data-unsit') || '');
+      return;
+    }
     const promoteId = t.getAttribute('data-promote');
     if (promoteId) void promote(decodeURIComponent(promoteId));
+  });
+
+  // Coverage cells are divs with role=button — keep them keyboard-operable.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const sitEl = (e.target as HTMLElement).closest('.eval-cell[data-sit]') as HTMLElement | null;
+    if (!sitEl) return;
+    e.preventDefault();
+    toggleSituation(sitEl.getAttribute('data-sit') || '');
   });
 
   await loadArea(currentArea);

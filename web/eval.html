@@ -14,7 +14,27 @@
       padding: 0.35rem 0.6rem; font-size: 0.8rem; min-width: 9rem;
     }
     .eval-cell.gap { border-color: #c0392b; }
+    .eval-cell { cursor: pointer; user-select: none; }
+    .eval-cell:hover { border-color: #3367d6; }
+    .eval-cell.sel { background: #3367d6; color: #fff; border-color: #3367d6; }
+    .eval-cell.dead { opacity: 0.35; }
     .eval-cell .c-count { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .eval-cell .c-narrow { font-weight: 400; opacity: 0.75; }
+    .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: -1rem 0 1rem; }
+    .chip {
+      font: inherit; font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 999px;
+      border: 1px solid #3367d6; background: #3367d6; color: #fff; cursor: pointer;
+    }
+    .btn-clear {
+      font: inherit; font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 4px;
+      border: 1px solid var(--border); background: transparent; color: inherit; cursor: pointer;
+    }
+    .sit-tag {
+      font: inherit; font-size: 0.75rem; color: var(--text-muted); padding: 0.05rem 0.3rem;
+      border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer;
+    }
+    .sit-tag:hover { border-color: var(--border); }
+    .sit-tag.sel { background: #3367d6; color: #fff; border-color: #3367d6; }
     .eval-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     .eval-table th, .eval-table td {
       padding: 0.45rem 0.6rem; text-align: left; border-bottom: 1px solid var(--border);
@@ -52,7 +72,10 @@
        Open a pack to render the standard briefing view with the labelling panel.</p>
     <div id="area-toggle" class="area-toggle"></div>
     <h2>Coverage</h2>
+    <p class="sit">Tap a cell to filter the packs below by that situation; tap several to
+       narrow to packs carrying all of them.</p>
     <div id="coverage" class="eval-grid">Loading…</div>
+    <div id="filter-bar"></div>
     <h2>Corpus packs</h2>
     <div id="packs">Loading…</div>
   </div>
