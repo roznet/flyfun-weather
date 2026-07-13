@@ -20,6 +20,7 @@ import pytest
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import driving_method_id
 from weatherbrief.analysis.advisories.cloud_top import CloudTopEvaluator
+from weatherbrief.analysis.advisories.convective import ConvectiveEvaluator
 from weatherbrief.analysis.advisories.enroute_precip import EnroutePrecipEvaluator
 from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
@@ -538,3 +539,66 @@ class TestNonMethodAxisReportsNone:
         # Regions exist, but carry no method label, and no primary_method_id.
         assert all(m == None for m in _region_method_ids(result))  # noqa: E711
         assert all(m.primary_method_id is None for m in result.per_model)
+
+
+class TestConvectiveEvaluatorBadgesEffective:
+    """The convective evaluator's consumer half (the last method-bearing axis).
+
+    The chip must select the layer the evidence was *drawn from*. When the thermo
+    safety floor raises a quiet NWP grade, the floor changes the severity but not
+    the source — the geometry is still the NWP track's — so the method stays
+    ``nwp`` rather than becoming a compound token. A CAPE fallback (no
+    ``convective_nwp`` at all) genuinely changes the source, and is reported.
+    """
+
+    @staticmethod
+    def _sounding(nwp_risk, thermo_risk, *, nwp: bool = True) -> SoundingAnalysis:
+        return SoundingAnalysis(
+            convective_nwp=(
+                ConvectiveAssessment(
+                    risk_level=nwp_risk, cape_jkg=2500, base_ft=3000, top_ft=30000,
+                )
+                if nwp else None
+            ),
+            convective_thermo=ConvectiveAssessment(
+                risk_level=thermo_risk, cape_jkg=2500, base_ft=3000, top_ft=30000,
+            ),
+        )
+
+    def test_nwp_track_badges_nwp(self):
+        ctx = _ctx(
+            [self._sounding(ConvectiveRisk.HIGH, ConvectiveRisk.HIGH) for _ in range(6)],
+            convective_method="nwp",
+        )
+        result = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "nwp"
+        assert all(m == "nwp" for m in _region_method_ids(result))
+
+    def test_thermo_floor_does_not_compound_the_method(self):
+        """Quiet NWP floored up by thermo → still ``nwp``: the evidence is NWP's.
+
+        The user's decision: report the *intended* track. The floor moved the
+        grade, not the geometry the chip will draw.
+        """
+        ctx = _ctx(
+            [self._sounding(ConvectiveRisk.LOW, ConvectiveRisk.HIGH) for _ in range(6)],
+            convective_method="nwp",
+        )
+        result = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "nwp"
+        assert "_with_" not in (rep.primary_method_id or "")
+
+    def test_cape_fallback_badges_thermo(self):
+        """No native NWP track → the source really is thermo, and we say so."""
+        ctx = _ctx(
+            [
+                self._sounding(ConvectiveRisk.HIGH, ConvectiveRisk.HIGH, nwp=False)
+                for _ in range(6)
+            ],
+            convective_method="nwp",
+        )
+        result = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "thermo"

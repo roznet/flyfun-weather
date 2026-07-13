@@ -7,6 +7,7 @@ from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     build_regions,
     build_ribbon,
+    driving_method_id,
     format_extent,
     pct_above_threshold,
 )
@@ -279,12 +280,20 @@ class ConvectiveEvaluator:
                 # doesn't have and erase the tower/ghost distinction. So fall back
                 # to the full-column ghost whenever either bound is missing
                 # (mirrors nwp-convective-bg.ts's depth-unresolved column).
+                # The convective track that actually sourced this geometry —
+                # "nwp" / "thermo" under the CAPE fallback (#408). Deliberately
+                # NOT compounded when the thermo floor raised the grade: the
+                # floor changes the severity, not where the evidence came from,
+                # so the chip selects the layer the evidence is drawn from.
+                conv_method = sounding.convective_method_effective
                 if check_top_ft is not None and check_base_ft is not None:
                     region_cells.append((dist, FlaggedCell(
                         kind="tower",
                         severity=severity,
                         base_ft=int(check_base_ft),
                         top_ft=int(check_top_ft),
+                        metric_id="convective_risk",
+                        method_id=conv_method,
                     )))
                 else:
                     # Depth-unresolved (nwp_precip / cover-only, or a resolved top
@@ -294,6 +303,8 @@ class ConvectiveEvaluator:
                         severity=severity,
                         base_ft=None,
                         top_ft=None,
+                        metric_id="convective_risk",
+                        method_id=conv_method,
                     )))
 
                 # Peak = worst graded risk, ties broken by highest CAPE — matches
@@ -381,6 +392,7 @@ class ConvectiveEvaluator:
                 affected_mod=affected_mod,
                 cross_check=cross_check,
                 highlights=highlights,
+                primary_method_id=driving_method_id(highlights, status),
             ))
             peak_by_model[model] = worst_risk
 
