@@ -7,6 +7,7 @@ from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
     build_cost_model,
+    driving_method_id,
     format_extent,
     icing_zones_in_altitude_range,
     max_terrain_near_point,
@@ -336,6 +337,9 @@ class IcingEscapeEvaluator:
                         top_ft=int(max(z.top_ft for z in relevant_zones)),
                         reason_code=reason,
                         metric_id="icing",
+                        # The icing method that produced these zones — "ogimet_nwp"
+                        # / "sfip_nwp", or the requested "ogimet_dd" (#408).
+                        method_id=sounding.icing_method_effective,
                     ),
                 ))
 
@@ -395,6 +399,7 @@ class IcingEscapeEvaluator:
                 affected_nm=summary.affected_nm,
                 mitigations=mitigations,
                 highlights=highlights,
+                primary_method_id=driving_method_id(highlights, status),
             ))
 
         return RouteAdvisoryResult.from_per_model("icing_escape", per_model, params)

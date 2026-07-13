@@ -12,6 +12,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
+    driving_method_id,
     icing_zones_in_altitude_range,
     min_icing_clearance,
     summarize_evidence,
@@ -275,6 +276,8 @@ class FIKIIcingEvaluator:
                         base_ft=int(min(z.base_ft for z in relevant_zones)),
                         top_ft=int(max(z.top_ft for z in relevant_zones)),
                         metric_id="icing",
+                        # The icing method behind these zones (#408).
+                        method_id=sounding.icing_method_effective,
                     )
                 # Grade ``affected`` = cruise NOT clear-air; ribbon ``severity``
                 # includes corridor transit — deliberately decoupled (#393).
@@ -390,6 +393,7 @@ class FIKIIcingEvaluator:
                     total_distance_nm=total_dist,
                     affected_nm=summary.affected_nm,
                     highlights=summary.highlights,  # model has data here (total > 0)
+                    primary_method_id=driving_method_id(summary.highlights, status),
                 )
             )
 

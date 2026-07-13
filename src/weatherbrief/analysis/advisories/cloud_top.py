@@ -6,6 +6,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
+    driving_method_id,
     format_extent,
     pct_above_threshold,
     summarize_evidence,
@@ -130,6 +131,8 @@ class CloudTopEvaluator:
                             base_ft=int(min(cl.base_ft for cl in blocking)),
                             top_ft=int(max(cl.top_ft for cl in blocking)),
                             metric_id="cloud_cover",
+                            # The cloud method behind these layers (#408).
+                            method_id=sounding.cloud_method_effective,
                         ),
                     ))
                 else:
@@ -173,6 +176,7 @@ class CloudTopEvaluator:
                 total_distance_nm=ctx.total_distance_nm,
                 affected_nm=summary.affected_nm,
                 highlights=highlights,
+                primary_method_id=driving_method_id(highlights, status),
             ))
 
         return RouteAdvisoryResult.from_per_model("cloud_top", per_model, params)

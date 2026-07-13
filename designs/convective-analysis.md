@@ -470,20 +470,23 @@ def assess_convective_nwp(indices, nwp_diagnostics):
     )
 ```
 
-### 3. Add `convective_method_effective` tracking (Priority: Low)
+### 3. Add `convective_method_effective` tracking (DONE — #408)
 
-Same pattern as `cloud_method_effective` — record which method was actually used per model after fallback:
+Implemented. `_resolve_analyses` records which method actually graded per model
+after fallback, the sibling of `cloud_method_effective`:
 
 ```python
 if swap_convective:
     nwp = sounding.convective_nwp
-    if nwp is not None:
-        updates["convective"] = nwp
-        updates["convective_method_effective"] = "nwp"
-    else:
-        updates["convective"] = sounding.convective_thermo
-        updates["convective_method_effective"] = "thermo"  # fallback
+    updates["convective"] = nwp if nwp is not None else sounding.convective_thermo
+    updates["convective_method_effective"] = "nwp" if nwp is not None else "thermo"
 ```
+
+This closes the honesty gap where a pilot who asked for NWP convective silently
+graded on thermo wherever `convective_nwp` was None. The field is *produced* for
+provenance/digest use; the convective evaluator does not (yet) badge a
+`method_id` region from it (the icing/cloud axes do — see
+[advisories.md](./advisories.md) evidence contract).
 
 ### 4. Don't compare `nwp_cape_jkg` across models (Priority: Low)
 

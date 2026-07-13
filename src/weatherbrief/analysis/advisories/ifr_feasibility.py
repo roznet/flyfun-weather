@@ -13,6 +13,7 @@ from weatherbrief.analysis.advisories._helpers import (
     below_coverage,
     build_regions,
     build_ribbon,
+    driving_method_id,
     format_extent,
     min_icing_clearance,
     ribbon_peak,
@@ -214,6 +215,9 @@ def _check_enroute_hazards(
                 severity=HighlightSeverity.AMBER,
                 base_ft=int(min(z.base_ft for z in band)) if band else None,
                 top_ft=int(max(z.top_ft for z in band)) if band else None,
+                # icing is the method-controlled axis of this composite (#408);
+                # the tower/convective cells below carry no method label.
+                method_id=sounding.icing_method_effective,
             )))
         else:
             icing_cells.append((dist, None))
@@ -513,6 +517,7 @@ class IFRFeasibilityEvaluator:
                 affected=affected, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 highlights=highlights,
+                primary_method_id=driving_method_id(highlights, status),
             ))
 
         return RouteAdvisoryResult.from_per_model("ifr_feasibility", per_model, params)

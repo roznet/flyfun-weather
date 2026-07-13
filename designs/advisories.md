@@ -250,6 +250,34 @@ badge, not the user's selected method), and `HighlightRegion.reason_code` /
 `metric_id` / `method_id` (stable non-localised tokens; `metric_id` lets a chip
 jump to the right cross-section layer). Old packs deserialize with all absent.
 
+**Populating `method_id` from the EFFECTIVE method (#408).** #393 declared these
+fields but no evaluator filled them. #408 joins the two halves: the producer,
+`_resolve_analyses` (`tasks/advise.py`), stamps `icing_method_effective` and
+`convective_method_effective` alongside the pre-existing `cloud_method_effective`
+on each `SoundingAnalysis` — the method it *actually* graded on, at the exact
+branch each fallback decision is taken, so a silent fallback is recorded, not
+hidden (`convective` NWP→`thermo` when `convective_nwp` is None; `icing`
+`ogimet_nwp` left unset when it could not run without a native cloud envelope,
+pairing with `active_icing_available=False`). The consumer: the five
+method-controlled evaluators (`icing_escape`, `fiki_icing`, `ifr_feasibility` on
+the icing axis; `cloud_top`, `vmc_cruise` on the cloud axis) stamp
+`method_id = sounding.<axis>_method_effective` on the evidence cells they emit —
+`build_regions` already threads `cell.method_id → region.method_id`, so there is
+no plumbing — and roll `primary_method_id` up from the **driving region**
+(`driving_method_id` in `_helpers.py`: the flagged region whose severity matches
+the model's grade, read from the same `highlights` the grade produced so the
+badge can't drift from the geometry). The aggregate view reuses the existing
+`representative_model` to pick which per-model `primary_method_id` a chip shows —
+no second selection rule. **The rule that matters: `method_id` is the EFFECTIVE
+method, never the REQUESTED one** — a region graded on DD under fallback says
+`dd`, not the `square_nwp` the user asked for, and must never be sourced from the
+profile (where the post-#407 sparse majority store no key at all). Evaluators
+with no engine-method axis (`enroute_precip`, `turbulence`, `mountain_wind`,
+`freezing_precip`, `model_agreement`) stamp nothing → `method_id` stays `None`,
+exactly the "when one controlled it" space the docstring reserves. Convective's
+effective method is *produced* (the honesty fix) but not yet consumed by a
+`method_id` axis.
+
 Design decisions (don't relitigate): **backend owns the geometry** (which zones
 fired depends on evaluator thresholds/altitude buffers/user params — re-deriving
 client-side would drift and iOS would need a third copy); **distance-space (`nm`)**
