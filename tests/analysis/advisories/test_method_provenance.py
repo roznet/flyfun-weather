@@ -186,49 +186,50 @@ class TestDrivingMethodId:
             dist_from_nm=0, dist_to_nm=10, kind=kind, severity=sev, method_id=method_id,
         )
 
-    def test_matches_region_of_grade_severity(self):
+    def test_flagged_grade_badges_stamped_method(self):
         hl = self._hl(self._region(HighlightSeverity.RED, "ogimet_nwp"))
         assert driving_method_id(hl, AdvisoryStatus.RED) == "ogimet_nwp"
 
-    def test_green_grade_has_no_driving_region(self):
-        hl = self._hl(self._region(HighlightSeverity.AMBER, "dd"))
+    def test_green_grade_has_no_badge_even_with_flagged_region(self):
+        # A sub-threshold RED region under a GREEN grade is not a concern to badge.
+        hl = self._hl(self._region(HighlightSeverity.RED, "dd"))
         assert driving_method_id(hl, AdvisoryStatus.GREEN) is None
+        assert driving_method_id(hl, AdvisoryStatus.UNAVAILABLE) is None
 
     def test_none_highlights(self):
         assert driving_method_id(None, AdvisoryStatus.RED) is None
 
-    def test_skips_unstamped_regions_of_same_severity(self):
-        # Composite: a method-less tower and a method-bearing icing_band both RED.
-        hl = self._hl(
-            self._region(HighlightSeverity.RED, None, kind="tower"),
-            self._region(HighlightSeverity.RED, "ogimet_nwp"),
-        )
-        assert driving_method_id(hl, AdvisoryStatus.RED) == "ogimet_nwp"
-
-    def test_unstamped_only_returns_none(self):
+    def test_ignores_unstamped_regions(self):
+        # A method-less region (non-method axis) never supplies a badge.
         hl = self._hl(self._region(HighlightSeverity.AMBER, None, kind="cat_layer"))
         assert driving_method_id(hl, AdvisoryStatus.AMBER) is None
 
-    def test_extent_escalated_red_falls_back_to_capped_amber_region(self):
-        """RED grade escalated by percentage past AMBER-capped regions (#409).
+    def test_grade_above_capped_region_still_badges(self):
+        """RED grade escalated by percentage past an AMBER-capped region (#409 r1).
 
-        cloud_top / ifr icing_pct / fiki clear-cruise all grade RED off regions
-        capped at AMBER; the badge must survive the escalation.
+        cloud_top ≥60% AMBER decks → RED; the badge must survive the escalation.
         """
         hl = self._hl(self._region(HighlightSeverity.AMBER, "ogimet_nwp"))
         assert driving_method_id(hl, AdvisoryStatus.RED) == "ogimet_nwp"
 
-    def test_unstamped_region_at_grade_severity_defers(self):
-        """A method-less RED region (convective tower) drove it → no icing badge.
+    def test_grade_below_region_severity_still_badges(self):
+        """AMBER grade whose only region is RED-severity (#409 r3).
 
-        The composite guard: don't misattribute a convective-driven RED to the
-        concurrent AMBER icing axis just because icing carries a label.
+        vmc_cruise sub-red OVC → AMBER off RED cruise_imc regions; icing_escape
+        isolated no-escape → AMBER off a RED icing_band. The mirror of the r1
+        case — the badge must survive here too.
         """
+        hl = self._hl(self._region(HighlightSeverity.RED, "dd"))
+        assert driving_method_id(hl, AdvisoryStatus.AMBER) == "dd"
+
+    def test_highest_severity_region_is_representative(self):
+        # One model graded points on different effective methods; the region that
+        # most drove the grade (highest severity) supplies the badge.
         hl = self._hl(
-            self._region(HighlightSeverity.RED, None, kind="tower"),
-            self._region(HighlightSeverity.AMBER, "ogimet_nwp"),
+            self._region(HighlightSeverity.AMBER, "nwp_synthesized"),
+            self._region(HighlightSeverity.RED, "dd"),
         )
-        assert driving_method_id(hl, AdvisoryStatus.RED) is None
+        assert driving_method_id(hl, AdvisoryStatus.RED) == "dd"
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +264,22 @@ class TestCloudEvaluatorsBadgeEffective:
         assert result.aggregate_status == AdvisoryStatus.RED
         methods = _region_method_ids(result)
         assert methods and all(m == "dd" for m in methods)
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "dd"
+
+    def test_vmc_cruise_amber_off_red_regions_keeps_badge(self):
+        """AMBER grade (2/6 OVC, below ovc_pct_red) whose only regions are RED (#409 r3).
+
+        The mirror of the cloud_top escalation case: here the grade lands *below*
+        the region severity, and the badge must still survive.
+        """
+        clear = SoundingAnalysis(cloud_layers=[], nwp_cloud_layers=None)
+        ctx = _ctx(
+            [self._ovc_sounding(), self._ovc_sounding(), clear, clear, clear, clear],
+            cloud_method="square_nwp",
+        )
+        result = VMCCruiseEvaluator.evaluate(ctx, _defaults(VMCCruiseEvaluator))
+        assert result.aggregate_status == AdvisoryStatus.AMBER  # 33% OVC < 50 red
         rep = next(m for m in result.per_model if m.model == result.representative_model)
         assert rep.primary_method_id == "dd"
 
@@ -310,6 +327,31 @@ class TestIcingEvaluatorsBadgeEffective:
         assert all(m == "ogimet_nwp" for m in _region_method_ids(result))
         rep = next(m for m in result.per_model if m.model == result.representative_model)
         assert rep.primary_method_id is not None
+
+    def test_icing_escape_amber_off_isolated_no_escape_keeps_badge(self):
+        """1/20 no-escape (RED region) on an otherwise clear route → AMBER (#409 r3).
+
+        no_escape_count=1 of 20 = 5% < no_escape_pct_red (15) grades AMBER, but
+        the only region present is RED-severity — the badge must survive.
+        """
+        envelope = [EnhancedCloudLayer(base_ft=4000, top_ft=10000, coverage=CloudCoverage.OVC)]
+        no_escape = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            nwp_cloud_layers=envelope,
+            icing_ogimet_nwp_zones=[
+                IcingZone(base_ft=4000, top_ft=10000, risk=IcingRisk.MODERATE, icing_type=IcingType.MIXED),
+            ],
+        )
+        clear = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[],
+        )
+        # ctx has no elevation → terrain unknown → the iced point is no-escape (RED).
+        ctx = _ctx([no_escape] + [clear] * 19, icing_method="ogimet_nwp")
+        result = IcingEscapeEvaluator.evaluate(ctx, _defaults(IcingEscapeEvaluator))
+        assert result.aggregate_status == AdvisoryStatus.AMBER
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "ogimet_nwp"
 
     def test_fiki_icing_badges_effective(self):
         ctx = _ctx([self._iced_no_escape() for _ in range(6)], icing_method="ogimet_nwp")
