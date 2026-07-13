@@ -209,6 +209,27 @@ class TestDrivingMethodId:
         hl = self._hl(self._region(HighlightSeverity.AMBER, None, kind="cat_layer"))
         assert driving_method_id(hl, AdvisoryStatus.AMBER) is None
 
+    def test_extent_escalated_red_falls_back_to_capped_amber_region(self):
+        """RED grade escalated by percentage past AMBER-capped regions (#409).
+
+        cloud_top / ifr icing_pct / fiki clear-cruise all grade RED off regions
+        capped at AMBER; the badge must survive the escalation.
+        """
+        hl = self._hl(self._region(HighlightSeverity.AMBER, "ogimet_nwp"))
+        assert driving_method_id(hl, AdvisoryStatus.RED) == "ogimet_nwp"
+
+    def test_unstamped_region_at_grade_severity_defers(self):
+        """A method-less RED region (convective tower) drove it → no icing badge.
+
+        The composite guard: don't misattribute a convective-driven RED to the
+        concurrent AMBER icing axis just because icing carries a label.
+        """
+        hl = self._hl(
+            self._region(HighlightSeverity.RED, None, kind="tower"),
+            self._region(HighlightSeverity.AMBER, "ogimet_nwp"),
+        )
+        assert driving_method_id(hl, AdvisoryStatus.RED) is None
+
 
 # ---------------------------------------------------------------------------
 # Part 2 (consumer): evaluators badge the effective method
@@ -253,8 +274,12 @@ class TestCloudEvaluatorsBadgeEffective:
         )
         ctx = _ctx([s for _ in range(6)], cloud_method="square_nwp")
         result = CloudTopEvaluator.evaluate(ctx, _defaults(CloudTopEvaluator))
-        assert result.aggregate_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED)
+        # 6/6 blocking → 100% coverage → RED, though every region is AMBER-capped.
+        assert result.aggregate_status == AdvisoryStatus.RED
         assert _region_method_ids(result) and all(m == "dd" for m in _region_method_ids(result))
+        # The badge must survive the extent escalation to RED (#409 regression).
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "dd"
 
 
 class TestIcingEvaluatorsBadgeEffective:
@@ -291,6 +316,10 @@ class TestIcingEvaluatorsBadgeEffective:
         result = FIKIIcingEvaluator.evaluate(ctx, _defaults(FIKIIcingEvaluator))
         assert _region_method_ids(result)
         assert all(m == "ogimet_nwp" for m in _region_method_ids(result))
+        # clear-cruise fraction grades RED off AMBER-capped points — badge stands.
+        assert result.aggregate_status == AdvisoryStatus.RED
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "ogimet_nwp"
 
     def test_ifr_feasibility_icing_regions_badge_effective(self):
         ctx = _ctx([self._iced_no_escape() for _ in range(6)], icing_method="ogimet_nwp")
@@ -301,6 +330,34 @@ class TestIcingEvaluatorsBadgeEffective:
             for r in m.highlights.regions if r.kind == "icing_band"
         ]
         assert icing_methods and all(m == "ogimet_nwp" for m in icing_methods)
+        # 6/6 iced → icing_pct RED off AMBER icing bands: primary must survive.
+        assert result.aggregate_status == AdvisoryStatus.RED
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id == "ogimet_nwp"
+
+    def test_ifr_convective_driven_red_does_not_borrow_icing_method(self):
+        """Convective (method-less tower) drives RED while icing is only AMBER.
+
+        The badge must NOT fall back to the icing method — that would tell the
+        pilot icing drove the RED when convection did (#409 composite guard).
+        """
+        envelope = [EnhancedCloudLayer(base_ft=4000, top_ft=10000, coverage=CloudCoverage.OVC)]
+        zone = IcingZone(base_ft=6500, top_ft=9500, risk=IcingRisk.LIGHT, icing_type=IcingType.RIME)
+        high_conv = ConvectiveAssessment(risk_level=ConvectiveRisk.HIGH, cape_jkg=2600)
+        iced = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[zone], convective=high_conv,
+        )
+        clear = SoundingAnalysis(
+            indices=ThermodynamicIndices(freezing_level_ft=6000),
+            nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[], convective=high_conv,
+        )
+        # 2 iced of 6 → icing_pct ~33% (AMBER band, below RED 50); HIGH conv → RED.
+        ctx = _ctx([iced, iced, clear, clear, clear, clear], icing_method="ogimet_nwp")
+        result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))
+        assert result.aggregate_status == AdvisoryStatus.RED
+        rep = next(m for m in result.per_model if m.model == result.representative_model)
+        assert rep.primary_method_id is None
 
 
 class TestNonMethodAxisReportsNone:

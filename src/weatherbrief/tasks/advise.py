@@ -145,11 +145,14 @@ def _resolve_analyses(
                     # one it returns [] (assess_icing_zones_ogimet_nwp bails on
                     # `not clouds`), which is "method unavailable", NOT "ran,
                     # found nothing". Flag it so the icing evaluators grade
-                    # UNAVAILABLE rather than clear-by-absence (#391). Leave
-                    # ``icing_method_effective`` unset when it could not run —
-                    # there is no honest method to badge (#408).
+                    # UNAVAILABLE rather than clear-by-absence (#391). Clear
+                    # ``icing_method_effective`` explicitly when it could not run
+                    # — there is no honest method to badge (#408). Set on every
+                    # branch (like cloud/convective) so a stale value can never
+                    # survive ``model_copy(update=updates)``.
                     if not sounding.nwp_cloud_layers:
                         updates["active_icing_available"] = False
+                        updates["icing_method_effective"] = None
                     else:
                         updates["icing_method_effective"] = "ogimet_nwp"
                 elif icing_method == "sfip_nwp":

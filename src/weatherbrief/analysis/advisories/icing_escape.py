@@ -337,8 +337,10 @@ class IcingEscapeEvaluator:
                         top_ft=int(max(z.top_ft for z in relevant_zones)),
                         reason_code=reason,
                         metric_id="icing",
-                        # The icing method that produced these zones — "ogimet_nwp"
-                        # / "sfip_nwp", or the requested "ogimet_dd" (#408).
+                        # The icing method that produced these zones —
+                        # "ogimet_nwp" / "sfip_nwp" (#408). None when the active
+                        # method has no NWP swap to stamp (explicit "ogimet_dd",
+                        # the same no-swap gap as cloud's DD source).
                         method_id=sounding.icing_method_effective,
                     ),
                 ))
