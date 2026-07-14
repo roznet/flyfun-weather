@@ -19,6 +19,8 @@ Watch the target PR for the code-review bot's review, then triage and act on it.
 
 The reviewer is the GitHub user **`claude`**, driven by a **GitHub Action that fires automatically on every push** to the PR. It posts a single **top-level PR comment** (not inline threads) whose body starts with `## Code Review` and groups findings under **Critical**, **Important**, and **Minor** headings. A clean review posts a brief approval comment with no findings.
 
+Because it is a top-level comment, it is **not** a GitHub "Review": `gh pr view --json reviews` and the inline `pulls/<n>/comments` endpoint are both always empty for this bot — an empty result there means nothing. The login also differs by API: `.author.login` is `claude` via `gh pr view --json comments` (used below), but `user.login` is `claude[bot]` via REST `issues/<n>/comments`. Keep the two straight if you change the query.
+
 **Cost model — every push = one full review round.** Because the Action re-reviews on each push, an extra push is not free. Two rules follow:
 1. **Only push when there's a real blocker to fix.** If the findings are cosmetic-only, do *not* push — merge and fix on main, so you don't trigger (and wait on) another round.
 2. **If you're pushing anyway, batch in everything worth doing.** Once a blocker forces a push, the round is already paid for — so apply *every* fix you judge worth doing in that same push, cosmetic ones included. Don't defer a worthwhile fix to main when you're already pushing. (Deferral is only for the no-blocker case in rule 1.)

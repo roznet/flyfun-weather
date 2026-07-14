@@ -12,6 +12,14 @@ For `[library]` entries: import and reuse. For `[project]` entries: follow the p
 
 Skip this only for trivial edits (typo fix, single-line change in a file already in context).
 
+## Working from a GitHub issue
+
+Read the full comment thread, not just the issue body (`gh issue view <n> --comments`). Planning and design decisions frequently land in the comments and supersede the original description.
+
+## Finding the code-review bot's review on a PR
+
+The bot posts its findings as an ordinary **comment on the PR's conversation tab** — not as a GitHub "Review" (Approve / Request-changes) and not as inline diff comments. Look in `gh pr view <n> --comments` for a comment whose body starts with `## Code Review`.
+
 ## Code Design Principles
 
 - When adding logic around library calls, first consider whether it would be better to enhance the library itself rather than adding wrapper logic in the client code.
