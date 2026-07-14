@@ -1,6 +1,7 @@
 # Aircraft ⇄ Profile consolidation
 
 Status: **proposed** (2026-07-12), revised after a read-only audit of production.
+Slices consolidated 2026-07-14 (five → two; see §6).
 
 The app looks like it asks for the same facts twice. A prod audit showed that is
 only *half* true — one field is a genuine duplicate, one is a genuine
@@ -184,9 +185,9 @@ effective_rules = vfr_only if not aircraft.is_ifr else profile.flight_rules
 ⚠️ **The AND must never be silent.** `is_ifr` defaults to `False` and is written
 by nothing today, so a naive AND would quietly downgrade the IFR profile of every
 pilot who never ticked the box — `ifr_feasibility` would just stop appearing.
-Three guards, all required: onboarding asks explicitly (S3); the migration
+Three guards, all required: onboarding asks explicitly (S2, §6); the migration
 backfills `is_ifr` from `flight_rules != 'vfr_only'` (§5); a profile/aircraft
-mismatch is *shown*, not silently applied (S2).
+mismatch is *shown*, not silently applied (S2, §6).
 
 Note `profile.flight_rules` is **almost inert today** — its only consumer is one
 line of the digest prompt (`prompt_builder.py:89` → `PILOT CAPABILITY: …`). No
@@ -267,49 +268,80 @@ whose type genuinely isn't in the catalog could save ZZZZ deliberately and be
 trapped in an unclearable prompt.
 
 iOS and MCP users are unaffected until they visit the web app; their synthesised
-aircraft works regardless. The equivalent iOS prompt rides along with S5.
+aircraft works regardless. The equivalent iOS prompt rides along in the same
+client slice (S2, §6).
 
 ## 6. Slices
 
-**S1 — data model + resolution (backend), #397.** Migration; `ensure_default_aircraft`
-+ `load_aircraft_context`; aircraft-only speed resolver; `effective_rules`
-derivation; `is_fiki` on `RouteContext`; interview loses two questions; mission ≤
-service validation. Tests: resolution precedence, lazy-default path, MCP/agent
-creation attaching a default, explicit-opt-out-beats-equipage, and a regression
-test per equipage combination.
+Two, split along the only seam that matters: **what the server decides** vs **what
+a human is shown**. (This replaces an earlier five-slice split — S1..S5, issues
+#397–#401. It cut across that seam: the agent surfaces were server-side Python
+stranded in a client slice, and the settings rename, the onboarding wizard and
+iOS were three issues restating one rule on three screens. #399 and #401 are
+closed as merged; the tour was never consolidation work and is now independent.)
 
-**S2 — settings + flight-creation pane (web), #398.** Rename "Flight Defaults" →
-**Mission defaults** (cruise altitude, mission ceiling, flight rules); drop speed
-from it. Relabel the aircraft's ceiling as **service ceiling**. **Delete the
-ceiling-overwrite handler** (`flights-main.ts:989`). Show the mission>service and
-IFR-mismatch warnings. On the create pane: replace the aircraft (i)'s raw
-**`alert()`** (`flights-main.ts:259` — `initInfoPopup()` is already live there, it
-just isn't used) with `showPopupContent`, add a matching **profile (i)**, and give
-both an **"Edit in Settings →"** deep link. i18n the hard-coded English
-zero-aircraft hint.
+**S1 — backend, #397.** Migration (`needs_review` column; synthesise a default
+aircraft for the 487 users with none; strip `speed_kt` from `settings_json`);
+`ensure_default_aircraft` + `load_aircraft_context`; aircraft-only speed
+resolver; `effective_rules` derivation; `is_fiki` on `RouteContext`; interview
+loses `flying_type` + `icing_equipage`; mission ≤ service validation, exposed as
+a **warning signal for the client to render** — never a silent clamp.
 
-**S3 — onboarding wizard, #399.** Step 3 becomes a *real* aircraft: name + ICAO
-type (typeahead against the existing `GET /aircraft/types`), cruise speed, service
-ceiling, IFR + FIKI → `POST /aircraft` with `is_default: true`. The IFR/FIKI
-questions move here from the interview, where they never belonged. Step 2 gains
-**a few critical pilot minimums** — and #387 makes this nearly free, since the
-catalog now tags params `audience: "pilot"`: `airport_wind.crosswind_red_kt`,
-`flight_category.amber_ceiling_ft`, `flight_category.amber_vis_sm`, with "tune the
-rest in Settings".
+*Agent surfaces ride here*, because they are Python in the same files: optional
+`aircraft_id` on MCP/ChatGPT `create_flight` (correctness is already covered by
+the lazy default — this is about *choice*), and the aircraft surfaced on
+`get_briefing` / `list_flights` so an agent can tell which aeroplane a flight was
+analysed for.
 
-**S4 — flight-creation tour, #400.** `driver.js` is already a dependency and
-`briefing-tour.ts` is a clean `DriveStep[]`; this is a new step array plus
-generalising `tour-storage.ts` (today one hard-coded `wb_tour_offered` key →
-per-tour keys). Steps: aircraft+profile ("configuration that decides how the
-flight is analysed; keep several for different purposes") → route entry + FPL /
-Autorouter import → **Interpret** (see how the app understood your route, on a
-map, before committing) → date/time/altitude/duration → **Flexibility** (explore
-alternative departure times — *and* be honest that it is heavy server work).
+Tests: resolution precedence, lazy-default path, agent creation attaching a
+default *and* honouring an explicit one, all four (`is_ifr` × `flight_rules`)
+combinations, explicit-opt-out-beats-equipage, and a regression test per equipage
+combination.
 
-**S5 — clients, #401.** iOS: aircraft required in `AddFlightViewModel`; today
-`applyProfile` sets only cruise altitude and selecting an aircraft changes
-nothing. MCP/ChatGPT: optional aircraft on `create_flight`, defaulting to the
-user's default.
+**S2 — clients (web + iOS), #398.** One issue, because it is one idea — *aircraft
+= what the machine can do; profile = what you intend to do with it; never
+silently clamp or overwrite* — stated on several screens, in the same words. The
+wizard's aircraft form and the review modal are literally the same field list and
+**must share one component**; that shared component is the structural reason this
+isn't three issues.
+
+- *Settings:* rename "Flight Defaults" → **Mission defaults** (cruise altitude,
+  mission ceiling, flight rules), dropping speed. Relabel the aircraft's ceiling
+  as **service ceiling**. Render the mission>service and IFR-mismatch warnings
+  that S1 exposes.
+- *Flight-creation pane:* **delete the ceiling-overwrite handler**
+  (`flights-main.ts:989`) — the single line that conflates the two ceilings, and
+  the likely origin of the 39 disagreeing users. Replace the aircraft (i)'s raw
+  **`alert()`** (`flights-main.ts:259` — `initInfoPopup()` is already live there,
+  it just isn't used) with `showPopupContent`, add a matching **profile (i)**, and
+  give both an **"Edit in Settings →"** deep link. i18n the hard-coded English
+  zero-aircraft hint.
+- *Onboarding wizard:* step 3 becomes a *real* aircraft — name + ICAO type
+  (typeahead against the existing `GET /aircraft/types`), cruise speed, service
+  ceiling, IFR + FIKI → `POST /aircraft` with `is_default: true`. No cruise
+  altitude, no mission ceiling on that form. The IFR/FIKI questions move here from
+  the interview, where they never belonged. Step 2 gains **a few critical pilot
+  minimums** — #387 makes this nearly free, since the catalog now tags params
+  `audience: "pilot"`: `airport_wind.crosswind_red_kt`,
+  `flight_category.amber_ceiling_ft`, `flight_category.amber_vis_sm`, with "tune
+  the rest in Settings".
+- *Review modal* for the `needs_review` users — §5a. Completes, does not gate.
+- *iOS:* aircraft required in `AddFlightViewModel` (S1 guarantees one exists).
+  Today `applyProfile` sets only cruise altitude and selecting an aircraft changes
+  nothing at all; after this, the aircraft still prefills **nothing** — it *warns*
+  (mission>service, IFR mismatch) and supplies speed and equipage. Decode
+  `needs_review` and point those users at the web modal. Mirror the labels.
+
+**Independent, not part of this work — flight-creation tour, #400.** It adds no
+field, moves no data and renames nothing; it only *describes* the model this
+consolidation produces, so it should land after S2 but is not gated by it.
+`driver.js` is already a dependency and `briefing-tour.ts` is a clean
+`DriveStep[]`; this is a new step array plus generalising `tour-storage.ts`
+(today one hard-coded `wb_tour_offered` key → per-tour keys). Steps:
+aircraft+profile → route entry + FPL / Autorouter import → **Interpret** (see how
+the app understood your route, on a map, before committing) →
+date/time/altitude/duration → **Flexibility** (explore alternative departure
+times — *and* be honest that it is heavy server work).
 
 ## 7. Risks
 
