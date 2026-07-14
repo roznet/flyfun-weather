@@ -3,7 +3,6 @@
 All endpoints require authentication (current_user_id).
 
   GET /maps/forecast              — forecast overview for all watchlist airports
-  GET /maps/forecast/hours        — available sample hours for a given day
   GET /maps/airport-weather       — forecast + observations for specific airports
 
 The legacy ``GET /maps/verification`` (per-airport accuracy map) was
@@ -28,7 +27,6 @@ router = APIRouter(prefix="/maps", tags=["maps"])
 
 from weatherbrief.tasks.forecast_grid import (
     MAX_FORECAST_DAY,
-    all_sample_hours,
     forecast_days,
     sample_hours_for_day,
 )
@@ -85,42 +83,6 @@ def get_forecast_map(
 
     forecast_hour = _forecast_hour(day, hour)
     return get_forecast_map_data(db, forecast_hour, airports_db)
-
-
-@router.get("/forecast/hours")
-def get_available_hours(
-    day: int = Query(default=0, ge=0, le=MAX_FORECAST_DAY),
-    _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
-):
-    """Return which sample hours have forecast data for a given day.
-
-    Helps the frontend know which hour buttons to enable.
-    """
-    from sqlalchemy import func, select
-
-    from weatherbrief.db.models import AirportForecastSnapshotRow
-
-    now = datetime.now(timezone.utc)
-    target_date = (now + timedelta(days=day)).date()
-
-    # Single query: distinct forecast hours that exist for this date
-    hour_rows = db.execute(
-        select(func.extract("hour", AirportForecastSnapshotRow.forecast_hour))
-        .where(AirportForecastSnapshotRow.forecast_hour >= datetime(
-            target_date.year, target_date.month, target_date.day,
-            0, 0, 0, tzinfo=timezone.utc,
-        ))
-        .where(AirportForecastSnapshotRow.forecast_hour < datetime(
-            target_date.year, target_date.month, target_date.day,
-            23, 59, 59, tzinfo=timezone.utc,
-        ))
-        .distinct()
-    ).scalars().all()
-    offered = sample_hours_for_day(day)
-    available = sorted(int(h) for h in hour_rows if int(h) in offered)
-
-    return {"day": day, "date": target_date.isoformat(), "hours": available}
 
 
 def compute_day_availability(db: Session) -> list[dict[str, Any]]:

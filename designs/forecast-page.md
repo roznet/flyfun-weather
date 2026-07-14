@@ -18,10 +18,9 @@ api/maps.py                                maps.html (template)
 │   → cache or map_queries.get_forecast_   ├── state mgmt (day/hour/model/metric)
 │     map_data() — per-model + worst       ├── 4 tabs: forecast/synoptic/
 │     consensus baked in                   │           climatology/stats
-├── GET /maps/forecast/hours               └── data loading + client rerender
-│   → available hours for a day            adapters/maps-adapter.ts (API client)
-├── GET /maps/forecast/days                ├── fetchForecastMap(day,hour)
-│   → which D-0..D-3 have data             ├── fetchAvailableHours()
+├── GET /maps/forecast/days                └── data loading + client rerender
+│   → per day: which hours + which         adapters/maps-adapter.ts (API client)
+│     models have data (D+0..D+6)          ├── fetchForecastMap(day,hour)
 └── GET /maps/airport-weather              └── fetchAvailableDays()
     → forecast+obs for specific ICAOs      visualization/weather-map.ts (Leaflet map)
 api/airport_profile.py                     ├── setForecastData()
@@ -46,7 +45,7 @@ The page hosts four tabs (`forecast`, `synoptic`, `climatology`, `stats`). Only 
 ### Forecast Overview
 - ~620 airport markers (watchlist) on a Leaflet map, color-coded by selectable metric
 - **Metrics** (10): Flight Category, Alternate Required (FAA/EASA, #249), Wind Speed, Crosswind, Headwind, Ceiling, Visibility, CAPE, Convective Risk, Cloud Cover
-- **Controls**: Day (D-0 to D-3), hour (sample hours), model selector
+- **Controls**: Day (D-0 to D-6), hour (sample hours — five on the near days, three on D-6), model selector. Day and hour buttons are rendered from `/maps/forecast/days`, not hardcoded.
 - **Model modes**: Worst consensus, Majority consensus, or individual model (GFS/ICON/ECMWF)
 - **Agreement indicator**: Border color shows model divergence (good/moderate/poor) in consensus modes
 - **All mode/metric switches are client-side rerenders.** `/maps/forecast` returns per-model data for every airport plus a server pre-computed worst consensus; the frontend (`weather-map-consensus.ts::computeConsensus`) recomputes worst/majority itself, so changing model OR metric is a pure rerender. Only day/hour changes trigger an API call (different snapshot set)
@@ -126,7 +125,7 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 
 ## Gotchas
 
-- **Hour availability**: Not all sample hours have data for all days — `fetchAvailableHours()` checks and disables unavailable hour buttons; `fetchAvailableDays()` does the same for the D-0..D-3 day buttons
+- **The grid is not rectangular, and the UI is drawn from the data**: the horizon runs D+0..D+6 and is set by ECMWF (168h wall), not by the model that reaches furthest — a day only GFS can reach has nothing to cross-check it. ICON-EU's cloud-diag GRIB stops at 120h, which falls exactly on the D+4/D+5 boundary, so **D+5 and D+6 carry two models**; and ECMWF delivers only 6-hourly steps past 144h, where 09Z/15Z never land, so **D+6 carries three sample hours, not five**. `tasks/forecast_grid.py` is the single source of truth (`MAX_FORECAST_DAY`, `MAP_FORECAST_DAYS`, `sample_hours_for_day`) — the cycle, cache builder and API all read it. `fetchAvailableDays()` reports what each day actually holds, and the day/hour pickers are **rendered from that response**, not from markup; a model that can't reach the selected day is disabled with an explanation, so its absence never reads as agreement. Don't restate the horizon rules in the client. (#415)
 - **Consensus is client-side**: Switching worst/majority/individual-model is all a pure client rerender (`computeConsensus`); only day/hour hits the API. Don't reintroduce a per-mode server query or per-mode cache key
 - **Per-model-only metrics (client `computeConsensus`)**: `convective_risk` uses worst-across-models (ordinal max) in consensus mode; `cloud_cover_pct` worst = max; `crosswind_kt` worst = max; `headwind_kt` worst = min (weakest headwind is least favourable; matches the server's `airport_consensus.py` — see Consensus Algorithm)
 - **Runway wind data**: Crosswind/headwind require runway headings from the airports database; airports without runway data show no crosswind/headwind values. Best runway is selected by minimizing crosswind then maximizing headwind

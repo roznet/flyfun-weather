@@ -521,33 +521,6 @@ class TestForecastMapEndpoint:
 # its associated query function (get_verification_map_data) are gone.
 
 
-class TestAvailableHoursEndpoint:
-    """Tests for GET /api/maps/forecast/hours."""
-
-    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
-    def test_returns_available_hours(self, _mock_coords, app_db, tmp_path, monkeypatch):
-        client = _make_client(app_db, tmp_path, monkeypatch)
-
-        # Seed snapshot at today's 12Z
-        today_12z = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
-        session = app_db()
-        _insert_snapshot(session, icao="LFPG", model="gfs", forecast_hour=today_12z)
-        session.commit()
-        session.close()
-
-        resp = client.get("/api/maps/forecast/hours?day=0")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert 12 in data["hours"]
-
-    def test_empty_hours_for_future_day(self, app_db, tmp_path, monkeypatch):
-        client = _make_client(app_db, tmp_path, monkeypatch)
-
-        resp = client.get("/api/maps/forecast/hours?day=3")
-        assert resp.status_code == 200
-        assert resp.json()["hours"] == []
-
-
 class TestAvailableDaysEndpoint:
     """Tests for GET /api/maps/forecast/days — drives the day-picker
     disable/“not forecast yet” behaviour."""
