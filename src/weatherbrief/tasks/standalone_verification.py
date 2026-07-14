@@ -34,6 +34,7 @@ from weatherbrief.process_rss import current_rss_mb, log_memory
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
 from weatherbrief.tasks.edr_calibration import flush_accumulator
 from weatherbrief.tasks.forecast_grid import (
+    FINE_SAMPLE_HOURS,
     MAP_FORECAST_DAYS,
     all_sample_hours,
     sample_hours_for_day,
@@ -186,7 +187,10 @@ def _check_memory_anomaly(
 # ---------------------------------------------------------------------------
 
 STANDALONE_MODELS = ["gfs", "icon", "ecmwf"]
-SAMPLE_HOURS_UTC = [6, 9, 12, 15, 18]  # verification target hours (cycle_time, forecast-bucket UI)
+# Verification target hours. Derived from the map grid rather than restated:
+# a second literal here is a rule that can silently drift out of step with
+# forecast_grid, which is the thing that module exists to prevent.
+SAMPLE_HOURS_UTC = list(FINE_SAMPLE_HOURS)
 FULL_CYCLE_HOURS_UTC = {6, 18}  # legacy: combined fetch+score; kept for CLI/tests, no longer scheduled
 
 # Fetch loop fires ~30 min after each ECMWF delivery (00Z lands ~06:35,

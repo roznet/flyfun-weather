@@ -426,6 +426,11 @@ def get_wind_advisory_accuracy(
         .where(
             VerificationDailyStatsRow.date.between(since_d, until_d),
             VerificationDailyStatsRow.source == source,
+            # Scoped to the same lead times as get_category_accuracy. A single
+            # accuracy number blended over *every* lead time isn't a property of
+            # the model — it's a property of whatever mix of lead times happens
+            # to be in the table, so it moves whenever the horizon moves (#415).
+            VerificationDailyStatsRow.days_out.in_(_DAYS_OUT_COLS),
             _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
         )
         .group_by(VerificationDailyStatsRow.model)

@@ -267,7 +267,7 @@ def get_airport_weather(
     """Return forecast + observation data for specific airports.
 
     Resolves non-watchlist airports to the nearest monitored airport.
-    Returns model predictions with consensus for D-0 to D-3, and
+    Returns model predictions with consensus for D-0 to D-6, and
     METAR/TAF observations for D-0 (from the pre-built cache).
     """
     if not icao:
