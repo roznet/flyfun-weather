@@ -3,15 +3,19 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchForecastMap, fetchAvailableDays,
-  type ForecastMapResponse, type DayAvailability,
+  type ForecastMapResponse, type DayAvailability, type ForecastAirport,
 } from './adapters/maps-adapter';
+import { isConsensusMode, type ConsensusMode } from './visualization/weather-map-consensus';
 import {
   fetchHewsonManifest, fetchHewsonSlice, fetchHewsonAllMetrics, fetchHewsonFronts,
   type HewsonManifest, type HewsonManifestSnapshot,
   type HewsonAllMetricsSlice,
 } from './adapters/hewson-map-adapter';
 import { WeatherMap, type ForecastMetric } from './visualization/weather-map';
-import { AirportProfilePanel } from './visualization/airport-profile-panel';
+import {
+  AirportProfilePanel,
+  type AirportSummaryInput, type ViewMode as ApViewMode,
+} from './visualization/airport-profile-panel';
 import { SynopticMap } from './visualization/synoptic-map';
 import {
   fetchSynopticChartsManifest, synopticChartUrl, projectionKeyFor,
@@ -87,9 +91,11 @@ let fcMetric: ForecastMetric = 'flight_category';
 // show fewer/more time ticks than the streamed payload contains.
 const AIRPORT_PROFILE_WINDOW_H = 3;
 
-// Airport profile panel state (right-click on a forecast marker)
+// Airport profile panel state (left-click / tap on a forecast marker)
 let airportPanel: AirportProfilePanel | null = null;
 let airportPanelIcao: string | null = null;
+// Panel's current view (Card / Cross-section / Skew-T), tracked for deep-linking.
+let airportPanelView: ApViewMode = 'card';
 
 // --- URL state ---
 //
@@ -115,6 +121,9 @@ const mapsUrlState = createUrlState({
   // consensus mode), so they're separate keys.
   'fc.apt':    { default: '' },
   'fc.apModel':{ default: 'ecmwf', values: ['gfs', 'icon', 'ecmwf'] as readonly string[] },
+  // Panel view: card (default) | cross | skewt. Lets a shared link land
+  // straight on the cross-section; bare links open the summary card.
+  'fc.apView': { default: 'card', values: ['card', 'cross', 'skewt'] as readonly string[] },
 });
 
 function syncUrl(): void {
@@ -126,6 +135,7 @@ function syncUrl(): void {
     'fc.metric': fcMetric,
     'fc.apt':    airportPanelIcao ?? '',
     'fc.apModel': airportPanel?.getModel() ?? 'ecmwf',
+    'fc.apView': airportPanelView,
   });
 }
 
@@ -332,16 +342,50 @@ function panelDefaultModel(): string {
   return ['gfs', 'icon', 'ecmwf'].includes(fcModel) ? fcModel : 'ecmwf';
 }
 
-function openAirportPanel(icao: string, opts: { initialModel?: string } = {}): void {
+/** Consensus column for the summary card: mirror the map's mode when it's a
+ *  consensus mode, else fall back to the conservative 'worst'. */
+function panelConsensusMode(): ConsensusMode {
+  return isConsensusMode(fcModel) ? fcModel : 'worst';
+}
+
+/** Build the card's summary input from data the map already holds — no
+ *  network. Returns undefined if the airport isn't in the current map set. */
+function summaryFor(icao: string): AirportSummaryInput | undefined {
+  const apt: ForecastAirport | undefined = forecastData?.airports.find((a) => a.icao === icao);
+  if (!apt || !forecastData) return undefined;
+  return {
+    airport: apt,
+    consensusMode: panelConsensusMode(),
+    validTime: new Date(forecastData.forecast_time),
+    modelInitTimes: forecastData.model_init_times,
+  };
+}
+
+/** Set the map's colored metric programmatically (e.g. from a card row
+ *  click) and keep the picker + URL + markers in sync. */
+function setMetric(metric: ForecastMetric): void {
+  if (fcMetric === metric) return;
+  fcMetric = metric;
+  const metricSel = $('metric-picker') as HTMLSelectElement | null;
+  if (metricSel) metricSel.value = metric;
+  syncUrl();
+  rerender();
+}
+
+function openAirportPanel(icao: string, opts: { initialModel?: string; initialView?: ApViewMode } = {}): void {
   const host = $('ap-panel-host') as HTMLElement | null;
   if (!host) return;
   host.style.display = 'flex';
+  if (opts.initialView) airportPanelView = opts.initialView;
   if (!airportPanel) {
     airportPanel = new AirportProfilePanel({
       container: host,
       initialModel: opts.initialModel ?? panelDefaultModel(),
+      initialView: opts.initialView,
       onClose: () => closeAirportPanel(),
       onModelChange: () => syncUrl(),
+      onMetricSelect: (metric) => setMetric(metric),
+      onViewChange: (v) => { airportPanelView = v; syncUrl(); },
     });
   } else if (opts.initialModel) {
     airportPanel.setModel(opts.initialModel);
@@ -350,6 +394,7 @@ function openAirportPanel(icao: string, opts: { initialModel?: string } = {}): v
   forecastMap?.setHighlightedIcao(icao);
   airportPanel.load({
     icao, startHour: forecastStartHour(), windowH: AIRPORT_PROFILE_WINDOW_H,
+    summary: summaryFor(icao),
   });
   syncUrl();
   // The map width changed — let Leaflet re-layout.
@@ -362,16 +407,19 @@ function closeAirportPanel(): void {
   airportPanel?.destroy();
   airportPanel = null;
   airportPanelIcao = null;
+  airportPanelView = 'card';
   forecastMap?.setHighlightedIcao(null);
   syncUrl();
   setTimeout(() => forecastMap?.invalidateSize(), 50);
 }
 
-function refreshAirportPanelOnHourChange(): void {
-  // Map's day/hour changed: reload the open panel; metric changes are ignored.
+/** Reload the open panel after a day/hour change refetches the map data,
+ *  so the card reflects the new valid time (and the cross-section rewindows). */
+function refreshOpenPanel(): void {
   if (!airportPanel || !airportPanelIcao) return;
   airportPanel.load({
     icao: airportPanelIcao, startHour: forecastStartHour(), windowH: AIRPORT_PROFILE_WINDOW_H,
+    summary: summaryFor(airportPanelIcao),
   });
 }
 
@@ -386,6 +434,9 @@ async function loadForecast(): Promise<void> {
         .map(([m, t]) => `${m.toUpperCase()}: ${new Date(t).toISOString().slice(0, 13)}Z`)
         .join(', ');
       showInfo(`${forecastData.airports.length} airports | Model runs: ${initTimes}`, 'map-info');
+      // Refresh the open panel now that fresh data has landed, so the card
+      // shows the new valid time's numbers (not the pre-change snapshot).
+      refreshOpenPanel();
     }
   } catch (err) {
     showInfo(`Failed to load forecast: ${err instanceof Error ? err.message : err}`, 'map-info');
@@ -436,15 +487,13 @@ function wireForecastControls(): void {
     syncPickersForDay();
     updateForecastDatetime();
     syncUrl();
-    loadForecast();
-    refreshAirportPanelOnHourChange();
+    loadForecast();  // refreshes the open panel once fresh data lands
   });
 
   wireButtonGroup('hour-picker', 'hour', (v) => {
     fcHour = parseInt(v);
     syncUrl();
-    loadForecast();
-    refreshAirportPanelOnHourChange();
+    loadForecast();  // refreshes the open panel once fresh data lands
   });
 
   // Custom handler rather than wireButtonGroup: now that unavailable models are
@@ -1081,6 +1130,9 @@ async function main(): Promise<void> {
   if (!container) return;
   forecastMap = new WeatherMap(container);
   forecastMap.init();
+  // Left-click / tap is the primary (touch-friendly) way to open the panel;
+  // right-click stays wired as a desktop alias.
+  forecastMap.setAirportClickHandler((icao) => openAirportPanel(icao));
   forecastMap.setAirportContextHandler((icao) => openAirportPanel(icao));
 
   // Set up the briefing-style info modal (used by the synoptic tab's (i)).
@@ -1178,7 +1230,10 @@ async function main(): Promise<void> {
   // has a marker to highlight.
   const urlIcao = init['fc.apt'];
   if (urlIcao && currentTab === 'forecast') {
-    openAirportPanel(urlIcao, { initialModel: init['fc.apModel'] });
+    openAirportPanel(urlIcao, {
+      initialModel: init['fc.apModel'],
+      initialView: init['fc.apView'] as ApViewMode,
+    });
   }
 }
 
