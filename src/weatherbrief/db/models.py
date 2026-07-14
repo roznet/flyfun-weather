@@ -717,6 +717,10 @@ class AirportForecastSnapshotRow(Base):
         Index("ix_afs_icao_hour", "icao", "forecast_hour"),
         Index("ix_afs_fetched", "fetched_at"),
         Index("ix_afs_model_init", "model", "model_init_time"),
+        # Forecast-hour-leading, for the map's "which hours/models exist per
+        # day" scan. Without it that DISTINCT has no usable index and reads the
+        # whole table on every map page load (#415).
+        Index("ix_afs_hour_model", "forecast_hour", "model"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
