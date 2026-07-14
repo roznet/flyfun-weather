@@ -11,9 +11,9 @@ Extending the map to D+6 (#415) is exactly such a move: it adds days_out 5 and
 `get_notable_misses` and `get_category_bias_stats` already scope themselves;
 `get_wind_advisory_accuracy` did not, and would have silently drifted.
 
-(`get_missed_warnings` has the same omission, but its query is dead in
-production — it filters on a wind-advisory value that is never stored. That is
-tracked separately; scoping a query that returns nothing would prove nothing.)
+(`get_missed_warnings` had the same omission on top of a query that was dead in
+production — it filtered on a wind-advisory value that is never stored. Both are
+fixed in #418 and covered by `test_verification_missed_warnings.py`.)
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _rollup_seeded_days(db_session):
     """
     for day_off in range(3):
         rollup_day(db_session, BASE + timedelta(days=day_off))
-    db_session.commit()
+    db_session.flush()
 
 
 def _seed(db_session, icao: str, *, advisory_matches_at: tuple[int, ...]):
@@ -56,8 +56,12 @@ def _seed(db_session, icao: str, *, advisory_matches_at: tuple[int, ...]):
     every other lead gets it wrong. That way the accuracy the stats report
     tells us exactly which leads were counted.
 
-    Each test seeds its own ICAO: the seed commits, and the engine outlives the
-    session rollback, so rows would otherwise leak across tests.
+    Flushed, never committed. The stats read through this same session, so the
+    rows are visible without a commit — and the ``db_session`` fixture then rolls
+    them back, so nothing survives into another test. A commit here would leak,
+    and the engine is shared: ``run_monthly_rollup`` in
+    ``test_verification_rollup.py`` counts *every* month that has observations in
+    it, so leaked rows there become an order-dependent failure over here.
     """
     for day_off in range(3):
         day = BASE + timedelta(days=day_off)
@@ -91,7 +95,7 @@ def _seed(db_session, icao: str, *, advisory_matches_at: tuple[int, ...]):
                 obs_wind_advisory="red",
                 model_wind_advisory="red" if matched else "green",
             ))
-    db_session.commit()
+    db_session.flush()
 
 
 class TestWindAdvisoryAccuracyIsLeadScoped:
