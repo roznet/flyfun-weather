@@ -151,11 +151,12 @@ class WindAdvisoryStats(BaseModel):
 
 
 class MissedWarning(BaseModel):
-    """A wind WARNING that a model failed to predict."""
+    """An observed ``red`` wind advisory that a model called something milder."""
 
     icao: str
     observation_time: datetime
     model: str
+    days_out: int
     obs_wind_advisory: str
     model_wind_advisory: str
 

@@ -431,6 +431,7 @@ export interface MissedWarning {
   icao: string;
   observation_time: string;
   model: string;
+  days_out: number;
   obs_wind_advisory: string;
   model_wind_advisory: string;
 }

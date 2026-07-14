@@ -50,8 +50,15 @@ from weatherbrief.models.verification import (
 logger = logging.getLogger(__name__)
 
 _DAYS_OUT_COLS = (0, 1, 2, 3)
+# Lead times a *miss* is worth surfacing at. An observation is scored once per
+# lead time, so without this scope one storm returns as one row per days_out —
+# and a model missing a warning six days out is expected, not notable.
+_NEAR_TERM_LEADS = (0, 1)
 # Ordered from best to worst flying conditions
 _CAT_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
+# The strongest wind advisory. The vocabulary is green/amber/red — there is no
+# "WARNING" (#418).
+_WIND_WARNING = "red"
 
 
 def _icao_clause(col, icao_filter: list[str] | None):
@@ -303,7 +310,7 @@ def get_notable_misses(
             VerificationScoreRow.observation_time.between(since, until),
             VerificationScoreRow.category_match == False,  # noqa: E712
             VerificationScoreRow.source == source,
-            VerificationScoreRow.days_out.in_((0, 1)),
+            VerificationScoreRow.days_out.in_(_NEAR_TERM_LEADS),
             VerificationScoreRow.obs_flight_category.in_(tuple(_CAT_ORDER)),
             VerificationScoreRow.model_flight_category.in_(tuple(_CAT_ORDER)),
             _icao_clause(VerificationScoreRow.icao, icao_filter),
@@ -370,7 +377,7 @@ def get_category_bias_stats(
         )
         .where(
             VerificationDailyStatsRow.date.between(since_d, until_d),
-            VerificationDailyStatsRow.days_out.in_((0, 1)),
+            VerificationDailyStatsRow.days_out.in_(_NEAR_TERM_LEADS),
             VerificationDailyStatsRow.source == source,
             _icao_clause(VerificationDailyStatsRow.icao, icao_filter),
         )
@@ -482,19 +489,32 @@ def get_missed_warnings(
     icao_filter: list[str] | None = None,
     *, limit: int = 10,
 ) -> list[MissedWarning]:
-    """Wind WARNINGs that models failed to predict."""
+    """Observed ``red`` wind advisories that a model called something milder.
+
+    Scoped to D-0/D-1 like its sibling ``get_notable_misses``: a missed warning
+    six days out is expected rather than notable, and without the scope one
+    storm fills the list with a copy of itself per lead time.
+
+    Rows where the model has no advisory at all (NULL — e.g. no runway data)
+    are absence, not a miss, and are excluded explicitly. SQL's three-valued
+    logic already drops them from ``!= 'red'``, but ``MissedWarning`` requires a
+    ``str``, so we don't leave that to a subtlety of the dialect.
+    """
     stmt = (
         select(
             VerificationScoreRow.icao,
             VerificationScoreRow.observation_time,
             VerificationScoreRow.model,
+            VerificationScoreRow.days_out,
             VerificationScoreRow.obs_wind_advisory,
             VerificationScoreRow.model_wind_advisory,
         )
         .where(
             VerificationScoreRow.observation_time.between(since, until),
-            VerificationScoreRow.obs_wind_advisory == "WARNING",
-            VerificationScoreRow.model_wind_advisory != "WARNING",
+            VerificationScoreRow.obs_wind_advisory == _WIND_WARNING,
+            VerificationScoreRow.model_wind_advisory != _WIND_WARNING,
+            VerificationScoreRow.model_wind_advisory.isnot(None),
+            VerificationScoreRow.days_out.in_(_NEAR_TERM_LEADS),
             VerificationScoreRow.source == source,
             _icao_clause(VerificationScoreRow.icao, icao_filter),
         )
@@ -507,8 +527,9 @@ def get_missed_warnings(
             icao=row[0],
             observation_time=row[1],
             model=row[2],
-            obs_wind_advisory=row[3],
-            model_wind_advisory=row[4],
+            days_out=row[3],
+            obs_wind_advisory=row[4],
+            model_wind_advisory=row[5],
         )
         for row in db.execute(stmt).all()
     ]

@@ -288,7 +288,7 @@ def _render_wind_section(data: VerificationDigestData) -> str:
         )
         parts.append(f'<table style="{_STYLE_TABLE}">')
         parts.append("<tr>")
-        for h in ("ICAO", "Time", "Model", "Predicted"):
+        for h in ("ICAO", "Time", "Model", "D-out", "Predicted"):
             parts.append(f'<th style="{_STYLE_TH}">{h}</th>')
         parts.append("</tr>")
 
@@ -297,6 +297,7 @@ def _render_wind_section(data: VerificationDigestData) -> str:
             parts.append(f'<td style="{_STYLE_TD} font-weight:600;">{html.escape(w.icao)}</td>')
             parts.append(f'<td style="{_STYLE_TD}">{_fmt_time(w.observation_time)}</td>')
             parts.append(f'<td style="{_STYLE_TD}">{html.escape(w.model.upper())}</td>')
+            parts.append(f'<td style="{_STYLE_TD}">D-{w.days_out}</td>')
             parts.append(
                 f'<td style="{_STYLE_TD}">'
                 f"{html.escape(w.model_wind_advisory)}</td>"
@@ -388,7 +389,7 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
         for w in data.missed_warnings:
             lines.append(
                 f"  {w.icao} {_fmt_time(w.observation_time)} — "
-                f"{w.model.upper()}: predicted {w.model_wind_advisory}"
+                f"{w.model.upper()}(D-{w.days_out}): predicted {w.model_wind_advisory}"
             )
         lines.append("")
 

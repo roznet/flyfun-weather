@@ -476,12 +476,13 @@ function renderWind(data: VerificationDigest): void {
 
   if (data.missed_warnings.length > 0) {
     html += '<h3 style="font-size:0.9rem;margin:1rem 0 0.5rem;color:var(--red-text, #dc2626)">Missed Wind Warnings</h3>';
-    html += '<table class="admin-table"><thead><tr><th>ICAO</th><th>Time</th><th>Model</th><th>Predicted</th></tr></thead><tbody>';
+    html += '<table class="admin-table"><thead><tr><th>ICAO</th><th>Time</th><th>Model</th><th>D-out</th><th>Predicted</th></tr></thead><tbody>';
     for (const w of data.missed_warnings) {
       html += `<tr class="miss-row-danger">`;
       html += `<td style="font-weight:600">${escapeHtml(w.icao)}</td>`;
       html += `<td>${fmtTime(w.observation_time)}</td>`;
       html += `<td>${escapeHtml(w.model.toUpperCase())}</td>`;
+      html += `<td>D-${w.days_out}</td>`;
       html += `<td>${escapeHtml(w.model_wind_advisory)}</td>`;
       html += '</tr>';
     }
