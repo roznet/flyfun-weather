@@ -66,11 +66,6 @@ def forecast_days() -> tuple[int, ...]:
     return tuple(range(MAX_FORECAST_DAY + 1))
 
 
-def all_sample_hours() -> tuple[int, ...]:
-    """Every hour that can appear on any day — the superset, for validation."""
-    return FINE_SAMPLE_HOURS
-
-
 def day_hour_pairs() -> list[tuple[int, int]]:
     """Every (day, hour) slot the map can hold, in display order."""
     return [(d, h) for d in forecast_days() for h in sample_hours_for_day(d)]

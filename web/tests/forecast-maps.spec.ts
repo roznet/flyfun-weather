@@ -44,7 +44,22 @@ const MOCK_FORECAST: Record<string, unknown> = {
   ],
 };
 
-const MOCK_HOURS = { day: 0, date: '2026-04-06', hours: [6, 9, 12, 15, 18] };
+// The day/hour/model grid the page now renders its pickers from. Not
+// rectangular: the far day carries fewer models and fewer hours, mirroring the
+// real horizons (ICON's ceiling GRIB stops at 120h; ECMWF goes 6-hourly past
+// 144h). See tasks/forecast_grid.py.
+const MOCK_DAYS = {
+  max_day: 6,
+  days: [
+    { day: 0, date: '2026-04-06', available: true,  hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'] },
+    { day: 1, date: '2026-04-07', available: true,  hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'] },
+    { day: 2, date: '2026-04-08', available: true,  hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'] },
+    { day: 3, date: '2026-04-09', available: true,  hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'] },
+    { day: 4, date: '2026-04-10', available: true,  hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'] },
+    { day: 5, date: '2026-04-11', available: true,  hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs'] },
+    { day: 6, date: '2026-04-12', available: true,  hours: [6, 12, 18],        models: ['ecmwf', 'gfs'] },
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // Route mocking
@@ -52,10 +67,11 @@ const MOCK_HOURS = { day: 0, date: '2026-04-06', hours: [6, 9, 12, 15, 18] };
 
 async function mockApis(page: import('@playwright/test').Page) {
   await page.route('**/auth/me', route => route.fulfill({ json: MOCK_USER }));
-  await page.route('**/api/maps/forecast/hours*', route => route.fulfill({ json: MOCK_HOURS }));
+  await page.route('**/api/maps/forecast/days*', route => route.fulfill({ json: MOCK_DAYS }));
   await page.route('**/api/maps/forecast*', route => {
-    // Don't match /forecast/hours (already handled above)
-    if (route.request().url().includes('/hours')) return route.fallthrough();
+    // The generic handler must not swallow /forecast/days — that response has a
+    // different shape, and the page builds its day and hour pickers from it.
+    if (route.request().url().includes('/days')) return route.fallthrough();
     return route.fulfill({ json: MOCK_FORECAST });
   });
   // Preferences (for nav rendering)
@@ -143,6 +159,53 @@ test.describe('Forecast page', () => {
     expect(requestCount).toBeGreaterThan(initial);
     // D-1 button is active
     await expect(page.locator('#day-picker .btn-toggle[data-day="1"]')).toHaveClass(/active/);
+  });
+
+  test('day picker is rendered from the grid, out to the far day', async ({ page }) => {
+    await page.goto('/maps.html');
+    // Buttons come from /forecast/days, not from markup — D-0..D-6.
+    await expect(page.locator('#day-picker .btn-toggle')).toHaveCount(7);
+    await expect(page.locator('#day-picker .btn-toggle[data-day="6"]')).toBeVisible();
+  });
+
+  test('far day offers three hours, not five', async ({ page }) => {
+    await page.goto('/maps.html');
+    // Near day: the full five sample hours.
+    await expect(page.locator('#hour-picker .btn-toggle')).toHaveCount(5);
+
+    // D-6: ECMWF only delivers 6-hourly steps out there, so 09Z and 15Z are
+    // not offered — they'd be slots no second model could fill.
+    await page.click('#day-picker .btn-toggle[data-day="6"]');
+    await expect(page.locator('#hour-picker .btn-toggle')).toHaveCount(3);
+    await expect(page.locator('#hour-picker .btn-toggle[data-hour="9"]')).toHaveCount(0);
+    await expect(page.locator('#hour-picker .btn-toggle[data-hour="15"]')).toHaveCount(0);
+  });
+
+  test('a model that cannot reach the selected day is disabled', async ({ page }) => {
+    await page.goto('/maps.html');
+    // ICON reaches the near days.
+    await expect(page.locator('#model-picker .btn-toggle[data-model="icon"]')).toBeEnabled();
+
+    // ...but its ceiling GRIB stops at 120h, so it has nothing to say at D-6.
+    // It must read as absent, never as agreement.
+    await page.click('#day-picker .btn-toggle[data-day="6"]');
+    await expect(page.locator('#model-picker .btn-toggle[data-model="icon"]')).toBeDisabled();
+    await expect(page.locator('#model-picker .btn-toggle[data-model="ecmwf"]')).toBeEnabled();
+    await expect(page.locator('#model-picker .btn-toggle[data-model="gfs"]')).toBeEnabled();
+  });
+
+  test('survives a 200 from /forecast/days carrying the wrong shape', async ({ page }) => {
+    // Stale cache, a proxy, or version skew can return 200 with a body that has
+    // no `days`. That must degrade to the offline fallback, not throw partway
+    // through init and leave the page with no pickers and no map.
+    await page.route('**/api/maps/forecast/days*', route =>
+      route.fulfill({ json: { unexpected: 'shape' } }));
+
+    await page.goto('/maps.html');
+    await expect(page.locator('#day-picker .btn-toggle')).toHaveCount(4);  // fallback grid
+    await expect(page.locator('#hour-picker .btn-toggle')).toHaveCount(5);
+    // Crucially, init continued: the map still loaded.
+    await expect(page.locator('#map-info')).toContainText('2 airports');
   });
 
   test('model picker switches between consensus and single model', async ({ page }) => {

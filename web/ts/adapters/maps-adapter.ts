@@ -68,12 +68,6 @@ export async function fetchForecastMap(day: number, hour: number): Promise<Forec
   return resp.json();
 }
 
-export async function fetchAvailableHours(day: number): Promise<{ hours: number[] }> {
-  const resp = await fetch(`${apiBase}/maps/forecast/hours?day=${day}`, { credentials: 'include' });
-  if (!resp.ok) throw new Error(`Available hours: ${resp.status}`);
-  return resp.json();
-}
-
 /** What a given day actually holds. The grid is not rectangular: the far days
  *  carry fewer models (ICON's ceiling GRIB stops at 120h) and the last day
  *  fewer hours (ECMWF only delivers 6-hourly steps past 144h). */

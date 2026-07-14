@@ -266,28 +266,46 @@ function syncPickersForDay(): void {
   setActive('hour-picker', String(fcHour), 'hour');
 }
 
+/** Offline/error fallback: assume the near days exist so the page still works.
+ *  Deliberately conservative — four days, all models — rather than empty, which
+ *  would render a page with no day buttons at all. */
+function fallbackDayGrid(): DayAvailability[] {
+  return [0, 1, 2, 3].map((day) => ({
+    day, date: '', available: true,
+    hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'],
+  }));
+}
+
 /** Refresh the grid and snap the selection back into range if the selected day
- *  fell outside the horizon (e.g. after a UTC-midnight rollover before the
- *  next model run). */
+ *  or hour fell outside it — after a UTC-midnight rollover before the next
+ *  model run, or from a hand-edited URL naming an hour the day doesn't offer. */
 async function refreshDayAvailability(): Promise<void> {
   try {
     const { days } = await fetchAvailableDays();
-    dayGrid = days;
+    // A 200 carrying an unexpected shape (stale cache, proxy, version skew) is
+    // as useless as a failed request, and must be treated like one: reading
+    // `.filter` off a non-array here would throw past this try/catch and take
+    // the rest of page init — pickers, first map load — down with it.
+    dayGrid = Array.isArray(days) && days.length > 0 ? days : fallbackDayGrid();
   } catch {
-    // Offline/error: assume the near days exist so the page still works.
-    dayGrid = [0, 1, 2, 3].map((day) => ({
-      day, date: '', available: true,
-      hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'],
-    }));
+    dayGrid = fallbackDayGrid();
   }
+
+  const beforeDay = fcDay;
+  const beforeHour = fcHour;
+
   const avail = availableDaysSet();
   if (!avail.has(fcDay)) {
     fcDay = [...avail].sort((a, b) => b - a)[0] ?? 0;
-    syncUrl();
   }
   renderDayPicker();
-  syncPickersForDay();
+  syncPickersForDay();  // may snap fcHour into the day's grid, and fcModel
   updateForecastDatetime();
+
+  // Snapping on this hydration path must reach the address bar too, or a
+  // shared link like ?fc.day=6&fc.hour=9 (09Z isn't offered on the far day)
+  // would keep showing an hour the view isn't actually displaying.
+  if (fcDay !== beforeDay || fcHour !== beforeHour) syncUrl();
 }
 
 // --- Data loading ---
