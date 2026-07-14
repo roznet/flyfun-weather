@@ -11,7 +11,7 @@ import {
   type HewsonManifest, type HewsonManifestSnapshot,
   type HewsonAllMetricsSlice,
 } from './adapters/hewson-map-adapter';
-import { WeatherMap, type ForecastMetric } from './visualization/weather-map';
+import { WeatherMap, FORECAST_METRICS, type ForecastMetric } from './visualization/weather-map';
 import {
   AirportProfilePanel,
   type AirportSummaryInput, type ViewMode as ApViewMode,
@@ -113,7 +113,7 @@ const mapsUrlState = createUrlState({
   'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
   'fc.metric': {
     default: 'flight_category' as ForecastMetric,
-    values: ['flight_category', 'alternate_needed', 'wind_speed_kt', 'crosswind_kt', 'headwind_kt', 'ceiling_ft', 'visibility_m', 'cape_jkg', 'convective_risk', 'cloud_cover_pct'] as readonly ForecastMetric[],
+    values: FORECAST_METRICS as readonly ForecastMetric[],
   },
   // Open airport-profile panel (ICAO) and the panel's selected model.
   // Empty ICAO = no panel open. Panel model defaults differ from the
@@ -157,14 +157,20 @@ function showInfo(text: string, targetId: string = 'map-info'): void {
 const _DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const _MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** "Sat 13-Jun-26" for the calendar date `day` offsets from today (UTC).
- *  Mirrors the server's `now + day` mapping so the displayed date stays
- *  consistent with the forecast data resolved for that (day, hour). */
-function dayDateLabel(day: number): string {
+/** The UTC calendar date `day` offsets from today. Mirrors the server's
+ *  `now + day` mapping, so every label derived from it stays consistent with
+ *  the forecast data resolved for that (day, hour). One copy — both labels
+ *  below depend on this mapping being the server's. */
+function dayOffsetDate(day: number): Date {
   const now = new Date();
-  const target = new Date(Date.UTC(
+  return new Date(Date.UTC(
     now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, 0, 0, 0,
   ));
+}
+
+/** "Sat 13-Jun-26" — the full valid-date readout. */
+function dayDateLabel(day: number): string {
+  const target = dayOffsetDate(day);
   const dow = _DAYS[target.getUTCDay()];
   const dd = String(target.getUTCDate()).padStart(2, '0');
   const mon = _MONTHS[target.getUTCMonth()];
@@ -175,13 +181,10 @@ function dayDateLabel(day: number): string {
 /** Compact day-picker label: "Today" for D-0, else weekday + day-of-month
  *  ("Thu 16"). A pilot planning a weekend thinks "Saturday", not "D+4"; the
  *  URL state key `fc.day` stays a relative integer so share links still
- *  resolve (#419, W1). Uses the same UTC `now + day` mapping as the data. */
+ *  resolve (#419, W1). */
 function dayTabLabel(day: number): string {
   if (day === 0) return t('maps.today');
-  const now = new Date();
-  const target = new Date(Date.UTC(
-    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, 0, 0, 0,
-  ));
+  const target = dayOffsetDate(day);
   return `${_DAYS[target.getUTCDay()]} ${target.getUTCDate()}`;
 }
 

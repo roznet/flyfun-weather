@@ -5,10 +5,57 @@
 import { describe, it, expect } from 'vitest';
 import {
   getForecastColor, aggAltRequired, getAgreementForMetric, CAT_COLORS,
+  FORECAST_METRICS, validateMapMetricsCatalog,
 } from '../../ts/visualization/weather-map-format';
+import catalog from '../../ts/data/map-metrics-catalog.json';
 import type {
   ForecastAirport, ModelForecast, ConsensusForecast,
 } from '../../ts/adapters/maps-adapter';
+
+/** The catalog is imported JSON cast to its interface, so the compiler cannot
+ *  see inside it: dropping or misspelling a metric key, or pointing one at a
+ *  scale that doesn't exist, type-checks fine and would only blow up when a
+ *  marker renders — taking out the whole map. These tests are the build-time
+ *  gate that makes a bad one-line JSON edit fail here instead of in production. */
+describe('map-metrics-catalog', () => {
+  const cat = catalog as unknown as Parameters<typeof validateMapMetricsCatalog>[0];
+
+  it('the shipped catalog describes every metric the map can colour by', () => {
+    expect(validateMapMetricsCatalog(cat)).toEqual([]);
+  });
+
+  it('catches a metric dropped from the catalog', () => {
+    const broken = { ...cat, metrics: { ...cat.metrics } };
+    delete broken.metrics.crosswind_kt;
+    expect(validateMapMetricsCatalog(broken)).toContain(
+      "metric 'crosswind_kt' missing from catalog",
+    );
+  });
+
+  it('catches a metric pointing at a scale that does not exist', () => {
+    const broken = {
+      ...cat,
+      metrics: {
+        ...cat.metrics,
+        wind_speed_kt: {
+          ...cat.metrics.wind_speed_kt,
+          color: { ...cat.metrics.wind_speed_kt.color, scale: 'wind_speed_ktz' },
+        },
+      },
+    };
+    expect(validateMapMetricsCatalog(broken)).toContain(
+      "metric 'wind_speed_kt' → unknown band scale 'wind_speed_ktz'",
+    );
+  });
+
+  it('every metric renders a colour rather than throwing', () => {
+    // Guards the `spec.color` non-null path in getForecastColor for real data.
+    const airport = makeAirport({ gfs: makeModelForecast({ wind_speed_kt: 12 }) });
+    for (const metric of FORECAST_METRICS) {
+      expect(typeof getForecastColor(airport, metric, 'gfs')).toBe('string');
+    }
+  });
+});
 
 function makeModelForecast(overrides: Partial<ModelForecast> = {}): ModelForecast {
   return {

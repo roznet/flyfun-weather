@@ -58,6 +58,63 @@ const CATALOG = catalog as unknown as MapMetricsCatalog;
 const CATEGORICAL = CATALOG.scales.categorical;
 const BANDS = CATALOG.scales.bands;
 
+/** The metrics the map can colour by. Single source for both the `ForecastMetric`
+ *  type and the runtime list, so the two cannot drift; `mapsUrlState` validates
+ *  `fc.metric` against it too. */
+export const FORECAST_METRICS = [
+  'flight_category', 'alternate_needed', 'wind_speed_kt', 'crosswind_kt',
+  'headwind_kt', 'ceiling_ft', 'visibility_m', 'cape_jkg', 'convective_risk',
+  'cloud_cover_pct',
+] as const;
+
+/** Check the catalog describes every metric with a scale that actually exists.
+ *
+ * The JSON is imported and cast to its interface, so TypeScript cannot see
+ * inside it: dropping or misspelling a metric key — or pointing one at a scale
+ * that isn't there — compiles fine and would only fail when a marker renders
+ * (`spec.color` on `undefined`), taking out the whole map in production. Since
+ * the point of the catalog is that a threshold is "a one-line JSON edit both
+ * clients pick up", that edit has to fail loudly and early instead.
+ *
+ * Exported pure so a unit test can assert the shipped catalog is well-formed —
+ * that test is the build-time gate; the module-load throw below is the backstop.
+ */
+export function validateMapMetricsCatalog(cat: MapMetricsCatalog): string[] {
+  const problems: string[] = [];
+  for (const metric of FORECAST_METRICS) {
+    const spec = cat.metrics?.[metric];
+    if (!spec) { problems.push(`metric '${metric}' missing from catalog`); continue; }
+    if (!spec.label) problems.push(`metric '${metric}' has no label`);
+    if (!spec.legend?.items?.length) problems.push(`metric '${metric}' has no legend items`);
+
+    const color = spec.color;
+    if (!color) { problems.push(`metric '${metric}' has no color spec`); continue; }
+    switch (color.kind) {
+      case 'categorical':
+        if (!color.scale || !cat.scales?.categorical?.[color.scale]) {
+          problems.push(`metric '${metric}' → unknown categorical scale '${color.scale}'`);
+        }
+        break;
+      case 'band':
+        if (!color.scale || !cat.scales?.bands?.[color.scale]) {
+          problems.push(`metric '${metric}' → unknown band scale '${color.scale}'`);
+        }
+        if (!color.field) problems.push(`metric '${metric}' band scale has no data field`);
+        break;
+      case 'alternate_needed':
+        break;
+      default:
+        problems.push(`metric '${metric}' has unknown color kind '${(color as { kind: string }).kind}'`);
+    }
+  }
+  return problems;
+}
+
+const CATALOG_PROBLEMS = validateMapMetricsCatalog(CATALOG);
+if (CATALOG_PROBLEMS.length) {
+  throw new Error(`map-metrics-catalog.json is malformed:\n  ${CATALOG_PROBLEMS.join('\n  ')}`);
+}
+
 /** Muted grey for missing data (unchanged from the previous hardcoded value). */
 const MUTED = '#888';
 
@@ -109,7 +166,7 @@ function bandColor(scaleKey: string, raw: number | null | undefined, fallback: s
 
 // --- Forecast metric extraction ---
 
-export type ForecastMetric = 'flight_category' | 'wind_speed_kt' | 'crosswind_kt' | 'headwind_kt' | 'ceiling_ft' | 'cape_jkg' | 'convective_risk' | 'cloud_cover_pct' | 'visibility_m' | 'alternate_needed';
+export type ForecastMetric = typeof FORECAST_METRICS[number];
 
 // --- Alternate-required (FAA/EASA) helpers (#249) ---
 

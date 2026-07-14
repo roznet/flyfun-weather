@@ -15,6 +15,7 @@ import {
 
 // Re-exported so existing importers (maps-main.ts) keep resolving the type here.
 export type { ForecastMetric };
+export { FORECAST_METRICS } from './weather-map-format';
 
 const LIGHT_TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
