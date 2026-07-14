@@ -172,6 +172,19 @@ function dayDateLabel(day: number): string {
   return `${dow} ${dd}-${mon}-${yr}`;
 }
 
+/** Compact day-picker label: "Today" for D-0, else weekday + day-of-month
+ *  ("Thu 16"). A pilot planning a weekend thinks "Saturday", not "D+4"; the
+ *  URL state key `fc.day` stays a relative integer so share links still
+ *  resolve (#419, W1). Uses the same UTC `now + day` mapping as the data. */
+function dayTabLabel(day: number): string {
+  if (day === 0) return t('maps.today');
+  const now = new Date();
+  const target = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, 0, 0, 0,
+  ));
+  return `${_DAYS[target.getUTCDay()]} ${target.getUTCDate()}`;
+}
+
 function updateForecastDatetime(): void {
   const el = $('forecast-datetime');
   if (!el) return;
@@ -203,7 +216,7 @@ function renderDayPicker(): void {
     const btn = document.createElement('button');
     btn.className = 'btn-toggle';
     btn.dataset.day = String(d.day);
-    btn.textContent = `D-${d.day}`;
+    btn.textContent = dayTabLabel(d.day);
     if (d.day === fcDay) btn.classList.add('active');
     btn.classList.toggle('unavailable', !d.available);
     // Kept clickable (to explain itself when picked) so `disabled` isn't used;

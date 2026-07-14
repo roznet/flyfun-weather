@@ -68,14 +68,18 @@ def get_forecast_map(
         hour: UTC sample hour. Which hours exist depends on the day — see
             ``/forecast/days``. Out-of-grid values snap to the nearest offered.
     """
-    from weatherbrief.tasks.cache_builder import get_cached, is_stale
+    from weatherbrief.tasks.cache_builder import (
+        forecast_map_cache_key,
+        get_cached,
+        is_stale,
+    )
     from weatherbrief.tasks.map_queries import get_forecast_map_data
 
     offered = sample_hours_for_day(day)
     if hour not in offered:
         hour = min(offered, key=lambda h: abs(h - hour))
 
-    cache_key = f"forecast_map:{day}:{hour}"
+    cache_key = forecast_map_cache_key(day, hour)
     if not is_stale(db, cache_key, "snapshot"):
         cached = get_cached(db, cache_key)
         if cached is not None:
@@ -289,7 +293,11 @@ def get_airport_weather(
     # no longer maps to today's date (post-midnight, before the next model
     # run); in that case compute live for the correct absolute date so the
     # response date stays consistent with the requested day/hour.
-    from weatherbrief.tasks.cache_builder import get_cached, is_stale
+    from weatherbrief.tasks.cache_builder import (
+        forecast_map_cache_key,
+        get_cached,
+        is_stale,
+    )
     from weatherbrief.tasks.map_queries import (
         enrich_with_observations,
         get_forecast_map_data,
@@ -299,7 +307,7 @@ def get_airport_weather(
     if hour not in offered:
         hour = min(offered, key=lambda h: abs(h - hour))
 
-    cache_key = f"forecast_map:{day}:{hour}"
+    cache_key = forecast_map_cache_key(day, hour)
     data = None
     if not is_stale(db, cache_key, "snapshot"):
         data = get_cached(db, cache_key)

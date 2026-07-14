@@ -1,10 +1,12 @@
 """Shared-vector parity test for the Python consensus.
 
-Pins ``analysis.airport_consensus.consensus`` to the same expected output as the
-TypeScript ``weather-map-consensus.computeConsensus`` (see
-``web/tests/unit/consensus-parity.test.ts``), both driven off
-``tests/fixtures/consensus_vectors.json``. If the two implementations drift, one
-of the two parity tests fails.
+Pins ``analysis.airport_consensus.consensus`` to the reference behaviour the web
+forecast map used to compute client-side. That client consensus was retired in
+#419 — the web now reads the server-baked ``consensus`` / ``consensus_majority``
+blocks straight off the payload — so this file is the guardrail that the server
+still produces exactly what the client used to, field-by-field, including the
+newly-baked ``convective_risk`` and ``cloud_cover_pct``. Driven off
+``tests/fixtures/consensus_vectors.json``.
 """
 
 from __future__ import annotations
@@ -33,3 +35,5 @@ def test_consensus_matches_shared_vector(case, mode):
     assert result["wind_speed_kt"] == pytest.approx(expected["wind_speed_kt"])
     assert result["crosswind_kt"] == pytest.approx(expected["crosswind_kt"])
     assert result["headwind_kt"] == pytest.approx(expected["headwind_kt"])
+    assert result["convective_risk"] == expected["convective_risk"]
+    assert result["cloud_cover_pct"] == pytest.approx(expected["cloud_cover_pct"])

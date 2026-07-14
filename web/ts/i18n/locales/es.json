@@ -89,6 +89,7 @@
   "maps.shareLinkTitle": "Copiar un enlace a esta vista",
   "maps.shareLinkCopied": "Enlace copiado",
   "maps.shareLinkFallback": "Copia este enlace para compartir:",
+  "maps.today": "Hoy",
   "maps.dayNotForecast": "Aún sin pronóstico",
   "maps.dayNotForecastDetail": "{date} aún no tiene pronóstico — estará disponible tras la próxima pasada del modelo (07Z/19Z).",
   "maps.dayModels": "Modelos a este alcance: {models}",

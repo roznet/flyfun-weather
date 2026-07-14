@@ -12,7 +12,9 @@ Cache key catalogue:
 - ``stats:{source}:{period}`` — dashboard digest payload
 - ``bias_leaderboard:{model}:{days_out}:{period}`` — top airports model
   over-promises for (#154)
-- ``forecast_map:{day}:{hour}`` — pan-European weather overview map
+- ``forecast_map:{version}:{day}:{hour}`` — pan-European weather overview map
+  (version-segmented; see ``FORECAST_MAP_CACHE_VERSION`` /
+  ``forecast_map_cache_key``)
 
 The legacy ``verif_map:*`` keys (verification-bias map view) were removed
 in #154; the view that consumed them is also gone.
@@ -51,6 +53,21 @@ _LEADERBOARD_PERIODS = {"7d": 168, "30d": 720, "90d": 2160}
 # far day carries fewer hours because ECMWF only delivers 6-hourly steps out
 # there — so it comes from the horizon policy rather than a literal here.
 from weatherbrief.tasks.forecast_grid import forecast_days, sample_hours_for_day
+
+# Cache-key version for the forecast-map payload. Bump whenever the baked
+# payload shape changes: old entries (written by the prior code) then never
+# match, so the endpoint falls through to the live ``get_forecast_map_data()``
+# path and serves the new shape immediately — instead of handing back a stale
+# payload that ``is_stale()`` considers fresh (it only checks fetched_at + the
+# UTC-date rule, not the shape). Without this, a deploy that drops the client's
+# fallback would show a ~12-hour half-outage until the next standalone cycle
+# rebuilt the cache. v2 (#419): added the baked ``consensus_majority`` block.
+FORECAST_MAP_CACHE_VERSION = "v2"
+
+
+def forecast_map_cache_key(day: int, hour: int) -> str:
+    """Deterministic cache key for one ``(day, hour)`` forecast-map slot."""
+    return f"forecast_map:{FORECAST_MAP_CACHE_VERSION}:{day}:{hour}"
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +119,7 @@ def is_stale(db: Session, cache_key: str, source: str) -> bool:
     verification scores.
 
     Forecast-map keys (``source == "snapshot"``) are *relative-day* indexed
-    (``forecast_map:{day}:{hour}``) but the cached payload holds an *absolute*
+    (``forecast_map:{version}:{day}:{hour}``) but the cached payload holds an *absolute*
     forecast date. Snapshots only refresh on the twice-daily fetch cycles, so
     after a UTC-midnight rollover the snapshot max-time is unchanged yet the
     relative day now maps to a new calendar date. Without a date check the
@@ -255,7 +272,7 @@ def rebuild_forecast_map_cache(db: Session, airports_db_path: str) -> int:
             # D-0: enrich with latest METAR/TAF observations from verification
             if day == 0:
                 data = enrich_with_observations(db, forecast_hour, data)
-            cache_key = f"forecast_map:{day}:{hour}"
+            cache_key = forecast_map_cache_key(day, hour)
             _upsert(db, cache_key, data, snapshot_max)
             count += 1
 

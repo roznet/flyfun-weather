@@ -62,13 +62,26 @@ describe('getForecastColor', () => {
     expect(getForecastColor(apt, 'ceiling_ft', 'icon')).toBe('#888');
   });
 
-  it('worst consensus picks the most restrictive category', () => {
+  it('consensus modes read the server-baked block, not a client recompute (#419)', () => {
+    // Both blocks are baked server-side; the client just picks by mode. The
+    // per-model categories are deliberately inconsistent with the baked blocks
+    // to prove the colour comes from the baked value, not a recomputation.
     const apt = makeAirport({
       gfs: { flight_category: 'VFR' },
-      icon: { flight_category: 'MVFR' },
-      ecmwf: { flight_category: 'IFR' },
+      icon: { flight_category: 'VFR' },
+      ecmwf: { flight_category: 'VFR' },
     });
+    apt.consensus = { flight_category: 'IFR', agreement: {} };
+    apt.consensus_majority = { flight_category: 'MVFR', agreement: {} };
     expect(getForecastColor(apt, 'flight_category', 'worst')).toBe(CAT_COLORS.IFR);
+    expect(getForecastColor(apt, 'flight_category', 'majority')).toBe(CAT_COLORS.MVFR);
+  });
+
+  it('majority falls back to the worst block when no majority block is baked', () => {
+    const apt = makeAirport({ gfs: { flight_category: 'VFR' } });
+    apt.consensus = { flight_category: 'IFR', agreement: {} };
+    // No consensus_majority (older cached payload) → falls back to consensus.
+    expect(getForecastColor(apt, 'flight_category', 'majority')).toBe(CAT_COLORS.IFR);
   });
 });
 

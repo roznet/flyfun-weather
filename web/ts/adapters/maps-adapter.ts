@@ -18,7 +18,12 @@ export interface ForecastAirport {
   lon: number;
   approach_type?: string | null;
   models: Record<string, ModelForecast>;
+  /** Worst-mode consensus, baked server-side. */
   consensus: ConsensusForecast;
+  /** Majority-mode consensus, baked server-side (#419). Optional so an older
+   *  cached payload without it still decodes; `getConsensus` falls back to
+   *  `consensus` when absent. */
+  consensus_majority?: ConsensusForecast;
 }
 
 export interface ModelForecast {

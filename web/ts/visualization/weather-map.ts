@@ -9,7 +9,7 @@ import { isConsensusMode, type ConsensusMode } from './weather-map-consensus';
 import {
   getForecastColor, getConsensus, getAgreementForMetric, formatMetricValue,
   METRIC_LABEL, altLabel, aggAltRequired, AGREEMENT_COLORS,
-  CAT_COLORS, RISK_COLORS, cloudCoverColor,
+  MAP_LEGENDS,
   type ForecastMetric,
 } from './weather-map-format';
 
@@ -86,102 +86,10 @@ function getForecastTooltip(airport: ForecastAirport, model: string, metric: For
 }
 
 // --- Legend definitions ---
-
-const FORECAST_LEGENDS: Record<ForecastMetric, { title: string; items: Array<{ color: string; label: string }> }> = {
-  flight_category: {
-    title: 'Flight Category',
-    items: [
-      { color: CAT_COLORS.VFR, label: 'VFR' },
-      { color: CAT_COLORS.MVFR, label: 'MVFR' },
-      { color: CAT_COLORS.IFR, label: 'IFR' },
-      { color: CAT_COLORS.LIFR, label: 'LIFR' },
-    ],
-  },
-  wind_speed_kt: {
-    title: 'Wind Speed (kt)',
-    items: [
-      { color: '#22c55e', label: '< 10' },
-      { color: '#84cc16', label: '10-15' },
-      { color: '#eab308', label: '15-20' },
-      { color: '#f97316', label: '20-25' },
-      { color: '#ef4444', label: '25-35' },
-      { color: '#991b1b', label: '35+' },
-    ],
-  },
-  crosswind_kt: {
-    title: 'Best Rwy Crosswind (kt)',
-    items: [
-      { color: '#22c55e', label: '< 5' },
-      { color: '#84cc16', label: '5-10' },
-      { color: '#eab308', label: '10-15' },
-      { color: '#f97316', label: '15-20' },
-      { color: '#ef4444', label: '20-25' },
-      { color: '#991b1b', label: '25+' },
-    ],
-  },
-  headwind_kt: {
-    title: 'Best Rwy Headwind (kt)',
-    items: [
-      { color: '#22c55e', label: '< 10' },
-      { color: '#84cc16', label: '10-15' },
-      { color: '#eab308', label: '15-20' },
-      { color: '#f97316', label: '20-25' },
-      { color: '#ef4444', label: '25-30' },
-      { color: '#991b1b', label: '30+' },
-    ],
-  },
-  ceiling_ft: {
-    title: 'Ceiling (ft)',
-    items: [
-      { color: '#22c55e', label: '> 3000 (VFR)' },
-      { color: '#3b82f6', label: '1000-3000 (MVFR)' },
-      { color: '#ef4444', label: '500-1000 (IFR)' },
-      { color: '#a855f7', label: '< 500 (LIFR)' },
-    ],
-  },
-  cape_jkg: {
-    title: 'CAPE (J/kg)',
-    items: [
-      { color: '#22c55e', label: '< 100' },
-      { color: '#eab308', label: '100-500' },
-      { color: '#f97316', label: '500-1000' },
-      { color: '#ef4444', label: '1000-2000' },
-      { color: '#991b1b', label: '2000+' },
-    ],
-  },
-  convective_risk: {
-    title: 'Convective Risk',
-    items: Object.entries(RISK_COLORS).map(([k, c]) => ({ color: c, label: k })),
-  },
-  visibility_m: {
-    title: 'Visibility',
-    items: [
-      { color: '#22c55e', label: '>= 5 SM (VFR)' },
-      { color: '#3b82f6', label: '3-5 SM (MVFR)' },
-      { color: '#ef4444', label: '1-3 SM (IFR)' },
-      { color: '#a855f7', label: '< 1 SM (LIFR)' },
-    ],
-  },
-  cloud_cover_pct: {
-    title: 'Cloud Cover',
-    items: [
-      { color: cloudCoverColor(0), label: 'Clear' },
-      { color: cloudCoverColor(25), label: '25%' },
-      { color: cloudCoverColor(50), label: '50%' },
-      { color: cloudCoverColor(75), label: '75%' },
-      { color: cloudCoverColor(100), label: 'Overcast' },
-    ],
-  },
-  alternate_needed: {
-    title: 'Alternate required? (model estimate)',
-    items: [
-      { color: '#22c55e', label: 'Neither (FAA & EASA ok)' },
-      { color: '#eab308', label: 'One regime (FAA or EASA)' },
-      { color: '#ef4444', label: 'Both (FAA & EASA)' },
-      { color: '#888', label: 'No data' },
-    ],
-  },
-};
+//
+// Titles + colour rows come from the served map-metrics catalog (`MAP_LEGENDS`,
+// B2/#419) rather than being hardcoded here. Visibility keeps a region-aware
+// label override (SM vs km) applied at render time — see `visibilityLegendItems`.
 
 // --- Map class ---
 
@@ -338,8 +246,8 @@ export class WeatherMap {
 
     this.attachZoomHandler();
     const legend = metric === 'visibility_m'
-      ? { ...FORECAST_LEGENDS.visibility_m, items: visibilityLegendItems() }
-      : FORECAST_LEGENDS[metric];
+      ? { ...MAP_LEGENDS.visibility_m, items: visibilityLegendItems() }
+      : MAP_LEGENDS[metric];
     this.renderLegend(legend);
 
     // Re-apply highlight if the currently-highlighted airport is still on the map.

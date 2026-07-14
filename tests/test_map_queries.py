@@ -159,6 +159,12 @@ class TestGetForecastMapData:
         assert "icon" in apt["models"]
         assert "consensus" in apt
         assert apt["consensus"]["flight_category"] in ("VFR", "MVFR", "IFR", "LIFR")
+        # Both consensus modes are baked so the clients carry no consensus math (#419).
+        assert "consensus_majority" in apt
+        assert apt["consensus_majority"]["flight_category"] in ("VFR", "MVFR", "IFR", "LIFR")
+        # Newly-baked fields the web reads for the convective/cloud metrics.
+        assert "convective_risk" in apt["consensus"]
+        assert "cloud_cover_pct" in apt["consensus"]
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
     def test_empty_when_no_data(self, _mock_coords, _mock_rwy, db_session):

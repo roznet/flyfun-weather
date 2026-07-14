@@ -11,79 +11,100 @@ import type {
 } from '../adapters/maps-adapter';
 import { formatVisibility, formatHeading } from '../units';
 import {
-  isConsensusMode, computeConsensus, ordinalConsensus, type ConsensusMode,
+  isConsensusMode, ordinalConsensus, type ConsensusMode,
 } from './weather-map-consensus';
+import catalog from '../data/map-metrics-catalog.json';
 
-// --- Color scales ---
+// --- Served catalog: colours, thresholds, labels, legends (B2, #419) ---
+//
+// The colour ramps and thresholds are no longer hardcoded here — they live in
+// `web/ts/data/map-metrics-catalog.json`, imported below and ALSO served
+// ETag-cacheable to iOS via `/api/help` (`maps` section). A threshold change is
+// a one-line JSON edit both clients pick up, so the same weather can never show
+// in two different colours on two devices. This module is now the JSON's
+// interpreter: it evaluates the band/categorical scales the catalog describes.
 
-export const CAT_COLORS: Record<string, string> = {
-  VFR: '#22c55e', MVFR: '#3b82f6', IFR: '#ef4444', LIFR: '#a855f7',
-};
+interface BandStop { lt?: number; gte?: number; color: string; }
+interface ThresholdScale {
+  kind: 'threshold_asc' | 'threshold_desc';
+  stops: BandStop[];
+  default: string;
+  null_color?: string;
+  convert?: 'm_to_sm';
+}
+interface GrayRampScale { kind: 'gray_ramp'; base: number; span: number; blue_boost: number; }
+type BandScale = ThresholdScale | GrayRampScale;
 
-export const RISK_COLORS: Record<string, string> = {
-  none: '#22c55e', marginal: '#eab308', low: '#facc15', moderate: '#f97316', high: '#ef4444', extreme: '#991b1b',
-};
+interface MetricColorSpec {
+  kind: 'categorical' | 'band' | 'alternate_needed';
+  scale?: string;
+  field?: string;
+  default?: string;
+  fallback: string | number | null;
+}
+interface MapLegendItem { color: string; label: string; }
+export interface MapLegend { title: string; items: MapLegendItem[]; }
+interface MetricSpec { label: string; color: MetricColorSpec; legend: MapLegend; }
+interface MapMetricsCatalog {
+  version: number;
+  scales: {
+    categorical: Record<string, Record<string, string>>;
+    bands: Record<string, BandScale>;
+  };
+  metrics: Record<string, MetricSpec>;
+}
 
+const CATALOG = catalog as unknown as MapMetricsCatalog;
+const CATEGORICAL = CATALOG.scales.categorical;
+const BANDS = CATALOG.scales.bands;
+
+/** Muted grey for missing data (unchanged from the previous hardcoded value). */
+const MUTED = '#888';
+
+// Re-exported categorical scales, sourced from the catalog so callers that
+// colour category / risk / agreement directly (markers, card, legends) share
+// the one table with the marker layer.
+export const CAT_COLORS: Record<string, string> = CATEGORICAL.flight_category;
+export const RISK_COLORS: Record<string, string> = CATEGORICAL.convective_risk;
 /** Border color per agreement bucket (consensus modes). Keys match the
  *  values the server bakes into `consensus.agreement[field]`. */
-export const AGREEMENT_COLORS: Record<string, string> = {
-  consistent: '#22c55e', mixed: '#f97316', divergent: '#ef4444',
-};
+export const AGREEMENT_COLORS: Record<string, string> = CATEGORICAL.agreement;
 
-function windSpeedColor(kt: number): string {
-  if (kt < 10) return '#22c55e';
-  if (kt < 15) return '#84cc16';
-  if (kt < 20) return '#eab308';
-  if (kt < 25) return '#f97316';
-  if (kt < 35) return '#ef4444';
-  return '#991b1b';
-}
-
-function crosswindColor(kt: number): string {
-  if (kt < 5) return '#22c55e';
-  if (kt < 10) return '#84cc16';
-  if (kt < 15) return '#eab308';
-  if (kt < 20) return '#f97316';
-  if (kt < 25) return '#ef4444';
-  return '#991b1b';
-}
-
-function headwindColor(kt: number): string {
-  if (kt < 10) return '#22c55e';
-  if (kt < 15) return '#84cc16';
-  if (kt < 20) return '#eab308';
-  if (kt < 25) return '#f97316';
-  if (kt < 30) return '#ef4444';
-  return '#991b1b';
-}
-
-function ceilingColor(ft: number | null): string {
-  if (ft === null) return '#888';
-  if (ft < 500) return '#a855f7';  // LIFR
-  if (ft < 1000) return '#ef4444'; // IFR
-  if (ft < 3000) return '#3b82f6'; // MVFR
-  return '#22c55e';                 // VFR
-}
-
-function capeColor(jkg: number): string {
-  if (jkg < 100) return '#22c55e';
-  if (jkg < 500) return '#eab308';
-  if (jkg < 1000) return '#f97316';
-  if (jkg < 2000) return '#ef4444';
-  return '#991b1b';
-}
-
-function visibilityColor(m: number): string {
-  const sm = m / 1609.34;
-  if (sm >= 5) return '#22c55e';   // VFR
-  if (sm >= 3) return '#3b82f6';   // MVFR
-  if (sm >= 1) return '#ef4444';   // IFR
-  return '#a855f7';                 // LIFR
+function grayRamp(scale: GrayRampScale, pct: number): string {
+  const g = Math.round(scale.base - (pct / 100) * scale.span);
+  return `rgb(${g},${g},${g + scale.blue_boost})`;
 }
 
 export function cloudCoverColor(pct: number): string {
-  const g = Math.round(220 - (pct / 100) * 160);
-  return `rgb(${g},${g},${g + 10})`;
+  return grayRamp(BANDS.cloud_cover_pct as GrayRampScale, pct);
+}
+
+/** Evaluate a value→colour band scale from the catalog.
+ *
+ * A missing value resolves in the same order the old per-metric functions did:
+ * a `null_color` (ceiling) wins; otherwise a `null` fallback → muted grey
+ * (crosswind/headwind), and a numeric fallback (wind/CAPE 0, visibility 99999,
+ * cloud 0) is substituted before banding. `threshold_asc` picks the first stop
+ * the value is below; `threshold_desc` (visibility, after m→SM) the first stop
+ * the value is at-or-above. */
+function bandColor(scaleKey: string, raw: number | null | undefined, fallback: string | number | null): string {
+  const scale = BANDS[scaleKey];
+  let v: number | null = raw ?? null;
+  if (v == null) {
+    const nullColor = (scale as ThresholdScale).null_color;
+    if (nullColor) return nullColor;
+    if (typeof fallback !== 'number') return MUTED;
+    v = fallback;
+  }
+  if (scale.kind === 'gray_ramp') return grayRamp(scale, v);
+  let val = v;
+  if (scale.convert === 'm_to_sm') val = val / 1609.34;
+  if (scale.kind === 'threshold_desc') {
+    for (const s of scale.stops) if (val >= (s.gte as number)) return s.color;
+    return scale.default;
+  }
+  for (const s of scale.stops) if (val < (s.lt as number)) return s.color;
+  return scale.default;
 }
 
 // --- Forecast metric extraction ---
@@ -124,37 +145,37 @@ export function altNeededColor(airport: ForecastAirport, model: string): string 
   return n === 0 ? '#22c55e' : n === 1 ? '#eab308' : '#ef4444'; // green / amber / red
 }
 
+/** The consensus block for the active mode. Both Worst (`consensus`) and
+ *  Majority (`consensus_majority`) are baked server-side (#419) so the client
+ *  carries no consensus math — it just picks the block. Falls back to the
+ *  worst block if a majority block is missing (e.g. an older cached payload). */
 export function getConsensus(airport: ForecastAirport, mode: ConsensusMode): ConsensusForecast {
-  return computeConsensus(airport, mode);
+  const baked = mode === 'majority' ? airport.consensus_majority : airport.consensus;
+  return baked ?? airport.consensus;
 }
 
 export function getForecastColor(airport: ForecastAirport, metric: ForecastMetric, model: string): string {
+  const spec = CATALOG.metrics[metric];
   const data = isConsensusMode(model) ? getConsensus(airport, model) : airport.models[model];
-  if (!data) return '#888';
+  if (!data) return MUTED;
 
-  switch (metric) {
-    case 'flight_category':
-      return CAT_COLORS[data.flight_category] || '#888';
-    case 'wind_speed_kt':
-      return windSpeedColor(data.wind_speed_kt ?? 0);
-    case 'crosswind_kt':
-      return data.crosswind_kt != null ? crosswindColor(data.crosswind_kt) : '#888';
-    case 'headwind_kt':
-      return data.headwind_kt != null ? headwindColor(data.headwind_kt) : '#888';
-    case 'ceiling_ft':
-      return ceilingColor(data.ceiling_ft ?? null);
-    case 'cape_jkg':
-      return capeColor(data.cape_jkg ?? 0);
-    case 'convective_risk':
-      return RISK_COLORS[data.convective_risk || 'none'] || '#888';
-    case 'visibility_m':
-      return visibilityColor(data.visibility_m ?? 99999);
-    case 'cloud_cover_pct':
-      return cloudCoverColor(data.cloud_cover_pct ?? 0);
+  const color = spec.color;
+  switch (color.kind) {
     case 'alternate_needed':
       return altNeededColor(airport, model);
+    case 'categorical': {
+      // For categorical metrics the scale name is also the data field
+      // ('flight_category' / 'convective_risk'). `default` maps a blank value
+      // to a sentinel key (convective '' → 'none').
+      const scaleMap = CATEGORICAL[color.scale!];
+      let key = (data as unknown as Record<string, unknown>)[color.scale!] as string | undefined;
+      if (color.default != null && !key) key = color.default;
+      return (key != null ? scaleMap[key] : undefined) ?? (color.fallback as string);
+    }
+    case 'band':
+      return bandColor(color.scale!, (data as unknown as Record<string, number | null>)[color.field!], color.fallback);
     default:
-      return '#888';
+      return MUTED;
   }
 }
 
@@ -175,18 +196,16 @@ function fmtWind(speed: number | null | undefined, dir: number | null | undefine
   return `${dirStr}${Math.round(speed)}${gustStr} kt`;
 }
 
-export const METRIC_LABEL: Record<ForecastMetric, string> = {
-  flight_category: 'Category',
-  wind_speed_kt: 'Wind',
-  crosswind_kt: 'Xwind',
-  headwind_kt: 'Headwind',
-  ceiling_ft: 'Ceiling',
-  cape_jkg: 'CAPE',
-  convective_risk: 'Convective',
-  visibility_m: 'Visibility',
-  cloud_cover_pct: 'Cloud cover',
-  alternate_needed: 'Alternate required?',
-};
+export const METRIC_LABEL: Record<ForecastMetric, string> = Object.fromEntries(
+  Object.entries(CATALOG.metrics).map(([k, m]) => [k, m.label]),
+) as Record<ForecastMetric, string>;
+
+/** Per-metric legend (title + colour rows), from the served catalog. The
+ *  marker layer renders these; visibility keeps a region-aware override for
+ *  its labels (SM vs km) in `weather-map.ts`. */
+export const MAP_LEGENDS: Record<ForecastMetric, MapLegend> = Object.fromEntries(
+  Object.entries(CATALOG.metrics).map(([k, m]) => [k, m.legend]),
+) as Record<ForecastMetric, MapLegend>;
 
 /** Format the value of a metric (no label) for tooltip / card display. */
 export function formatMetricValue(data: { [key: string]: any }, metric: ForecastMetric): string {

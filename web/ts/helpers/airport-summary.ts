@@ -2,9 +2,9 @@
  *
  * Collapses the per-model `AirportModelCondition` list into one summary
  * condition under the user's aggregation mode. Extracted from `advisories-ui`
- * so the math is independently testable and mirrors the forecast-map consensus
- * (`weather-map-consensus.computeConsensus`) and the Python
- * `analysis.airport_consensus.consensus`.
+ * so the math is independently testable and mirrors the Python
+ * `analysis.airport_consensus.consensus` (the same rules the forecast map now
+ * reads server-baked; both are pinned to `tests/fixtures/consensus_vectors.json`).
  *
  * Numeric fields follow the category so they can never contradict the badge:
  *  - **worst**:    worst value across ALL models (min ceiling/vis, max wind).
