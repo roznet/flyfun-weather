@@ -25,6 +25,10 @@ import {
   type AirportProfileSnapshot, type AirportProfileStreamHandle,
   type AirportProfileEnriched,
 } from '../adapters/airport-profile-adapter';
+import { renderAirportSummaryCard } from './airport-summary-card';
+import type { ForecastAirport } from '../adapters/maps-adapter';
+import type { ConsensusMode } from './weather-map-consensus';
+import type { ForecastMetric } from './weather-map-format';
 
 /** Render a one-line summary of which GRIB sources contributed
  *  (or empty when none did, so the status row collapses). */
@@ -54,8 +58,11 @@ function statusLoading(label: string): string {
   return `${esc(label)}<span class="dots-spinner"></span>`;
 }
 
-type ViewMode = 'both' | 'cross' | 'skewt';
-const VIEW_MODE_KEY = 'wb_apProfileView';
+export type ViewMode = 'card' | 'cross' | 'skewt';
+// v2 key: the summary card is the new default. The old `wb_apProfileView`
+// defaulted to the heavy stacked 'both' view; migrating to a fresh key
+// lands every existing user on the card once, without a value-migration.
+const VIEW_MODE_KEY = 'wb_apProfileView2';
 /** Per-panel layer-enable map. Key is independent from the main
  *  briefing's `wb_visibleLayers` so toggles in this panel don't bleed
  *  into the main /briefing.html view. */
@@ -63,8 +70,8 @@ const LAYERS_KEY = 'wb_apProfileLayers';
 
 function loadViewMode(): ViewMode {
   const v = localStorage.getItem(VIEW_MODE_KEY);
-  if (v === 'cross' || v === 'skewt' || v === 'both') return v;
-  return 'both';
+  if (v === 'cross' || v === 'skewt' || v === 'card') return v;
+  return 'card';
 }
 function saveViewMode(m: ViewMode): void {
   localStorage.setItem(VIEW_MODE_KEY, m);
@@ -95,17 +102,38 @@ function saveEnabledLayers(m: Record<string, boolean>): void {
 export interface AirportProfilePanelOptions {
   container: HTMLElement;
   initialModel?: string;
+  /** Override the persisted default view (e.g. from a deep-link's
+   *  `fc.apView`). When omitted, the last-used view is restored. */
+  initialView?: ViewMode;
   onClose?: () => void;
   /** Fired when the user picks a different model from the panel's
    *  dropdown — lets the host round-trip the selection through URL
    *  state without polling. */
   onModelChange?: (model: string) => void;
+  /** Fired when the user clicks a metric row in the summary card — the
+   *  host switches the map's color dropdown to that metric. */
+  onMetricSelect?: (metric: ForecastMetric) => void;
+  /** Fired when the view mode changes (Card / Cross-section / Skew-T) so
+   *  the host can deep-link it. */
+  onViewChange?: (view: ViewMode) => void;
+}
+
+/** Snapshot summary the host already holds (from the forecast map response)
+ *  used to render the card synchronously, with no network round-trip. */
+export interface AirportSummaryInput {
+  airport: ForecastAirport;
+  consensusMode: ConsensusMode;
+  validTime: Date;
+  modelInitTimes?: Record<string, string>;
 }
 
 export interface AirportProfileRequest {
   icao: string;
   startHour: string;  // ISO 8601 UTC, e.g. "2026-05-07T12:00:00Z"
   windowH?: number;
+  /** Per-airport summary for the card. Optional so callers without it
+   *  (e.g. a deep-link before the map data lands) still open the panel. */
+  summary?: AirportSummaryInput;
 }
 
 const MODELS = ['gfs', 'icon', 'ecmwf'] as const;
@@ -116,7 +144,10 @@ export class AirportProfilePanel {
   private viewMode: ViewMode;
   private onClose?: () => void;
   private onModelChange?: (model: string) => void;
+  private onMetricSelect?: (metric: ForecastMetric) => void;
+  private onViewChange?: (view: ViewMode) => void;
 
+  private cardEl: HTMLDivElement;
   private crossEl: HTMLDivElement;
   private skewtEl: HTMLDivElement;
   private statusEl: HTMLDivElement;
@@ -126,6 +157,15 @@ export class AirportProfilePanel {
   private settingsBtn: HTMLButtonElement;
   private drawerEl: HTMLDivElement;
   private drawerOpen = false;
+
+  /** Per-airport summary for the card (from the forecast map response). */
+  private summary: AirportSummaryInput | null = null;
+  /** Dwell-prefetch timer + guard so the slow cross-section SSE fires on
+   *  intent (dwell / pointer-enter / switching to a heavy view), not on
+   *  every marker click. */
+  private prefetchTimer: number | null = null;
+  private streamStarted = false;
+  private static readonly PREFETCH_DWELL_MS = 400;
 
   private crossRenderer: CrossSectionRenderer | null = null;
   private skewtRenderer: SkewTRenderer | null = null;
@@ -155,9 +195,11 @@ export class AirportProfilePanel {
   constructor(opts: AirportProfilePanelOptions) {
     this.container = opts.container;
     this.model = opts.initialModel ?? 'ecmwf';
-    this.viewMode = loadViewMode();
+    this.viewMode = opts.initialView ?? loadViewMode();
     this.onClose = opts.onClose;
     this.onModelChange = opts.onModelChange;
+    this.onMetricSelect = opts.onMetricSelect;
+    this.onViewChange = opts.onViewChange;
 
     this.container.classList.add('ap-panel');
     this.container.innerHTML = `
@@ -174,7 +216,7 @@ export class AirportProfilePanel {
         </select>
         <label>View</label>
         <div class="ap-view-group btn-group" role="group">
-          <button class="btn-toggle" data-view="both">Both</button>
+          <button class="btn-toggle" data-view="card">Card</button>
           <button class="btn-toggle" data-view="cross">Cross-section</button>
           <button class="btn-toggle" data-view="skewt">Skew-T</button>
         </div>
@@ -182,6 +224,7 @@ export class AirportProfilePanel {
       </div>
       <div class="ap-panel-status" id="ap-status"></div>
       <div class="ap-panel-body">
+        <div class="ap-card-host" id="ap-card"></div>
         <div class="ap-cross" id="ap-cross"></div>
         <div class="ap-skewt" id="ap-skewt"></div>
       </div>
@@ -190,6 +233,7 @@ export class AirportProfilePanel {
 
     this.titleEl = this.container.querySelector('.ap-panel-title') as HTMLDivElement;
     this.statusEl = this.container.querySelector('.ap-panel-status') as HTMLDivElement;
+    this.cardEl = this.container.querySelector('.ap-card-host') as HTMLDivElement;
     this.crossEl = this.container.querySelector('.ap-cross') as HTMLDivElement;
     this.skewtEl = this.container.querySelector('.ap-skewt') as HTMLDivElement;
     this.modelSel = this.container.querySelector('.ap-model-sel') as HTMLSelectElement;
@@ -199,7 +243,7 @@ export class AirportProfilePanel {
 
     const viewGroup = this.container.querySelector('.ap-view-group') as HTMLElement;
     this.viewBtns = {
-      both: viewGroup.querySelector('[data-view="both"]') as HTMLButtonElement,
+      card: viewGroup.querySelector('[data-view="card"]') as HTMLButtonElement,
       cross: viewGroup.querySelector('[data-view="cross"]') as HTMLButtonElement,
       skewt: viewGroup.querySelector('[data-view="skewt"]') as HTMLButtonElement,
     };
@@ -219,12 +263,22 @@ export class AirportProfilePanel {
       if (!v) return;
       this.viewMode = v;
       saveViewMode(v);
+      this.onViewChange?.(v);
+      // Switching to a heavy view is explicit intent — start the SSE now
+      // if the dwell timer hasn't already fired.
+      if (v === 'cross' || v === 'skewt') this.ensureStream();
       this.applyViewMode();
       // Drawer contents depend on viewMode; re-render if open so a
       // section that just became visible shows its controls.
       if (this.drawerOpen) this.renderDrawer();
     });
     this.settingsBtn.addEventListener('click', () => this.toggleDrawer());
+
+    // Pointer entering the panel is an intent signal — warm the
+    // cross-section in the background so a switch to it feels instant.
+    this.container.addEventListener('pointerenter', () => {
+      if (this.currentRequest && !this.streamStarted) this.ensureStream();
+    });
   }
 
   /** Update the model from outside (e.g. for URL deep-linking). */
@@ -240,7 +294,10 @@ export class AirportProfilePanel {
     return this.model;
   }
 
-  /** Start (or restart) loading the profile for a new airport / hour. */
+  /** Open the panel for a new airport / hour. Renders the summary card
+   *  immediately from host-provided data; the slow cross-section SSE is
+   *  deferred (see `ensureStream` / dwell prefetch) unless a heavy view is
+   *  already selected. */
   load(req: AirportProfileRequest): void {
     // Drop the cache on icao or startHour change — the cached snapshots
     // are scoped to the previous request shape and no longer apply.
@@ -252,7 +309,39 @@ export class AirportProfilePanel {
       this.snapshotCache.clear();
     }
     this.currentRequest = req;
+    if (req.summary) this.summary = req.summary;
+
+    // Cancel any pending prefetch + in-flight stream from the prior request.
+    this.cancelPrefetch();
     if (this.stream) { this.stream.abort(); this.stream = null; }
+    this.streamStarted = false;
+
+    // Reset to an empty snapshot and render the card — instant, no network.
+    this.snapshot = {
+      meta: null, surface: [], levels: [], enriched: null, derived: [],
+    };
+    this.titleEl.textContent = req.icao;
+    this.statusEl.innerHTML = '';
+    this.clearRenderers();
+    this.renderCard();
+    this.applyViewMode();
+
+    // Heavy view already selected → fetch now; otherwise defer the slow
+    // cross-section SSE until the user shows intent.
+    if (this.viewMode === 'cross' || this.viewMode === 'skewt') {
+      this.ensureStream();
+    } else {
+      this.armPrefetch();
+    }
+  }
+
+  /** Kick off (or reuse) the cross-section SSE for the current request +
+   *  model. Idempotent per request+model via `streamStarted`; serves a
+   *  cached snapshot instantly when one exists. */
+  private ensureStream(): void {
+    if (this.streamStarted || !this.currentRequest) return;
+    this.cancelPrefetch();
+    const req = this.currentRequest;
 
     // Cache hit: skip the SSE round-trip entirely. Bump the entry to
     // the most-recently-used slot (Map preserves insertion order, so
@@ -263,6 +352,7 @@ export class AirportProfilePanel {
     if (cached) {
       this.snapshotCache.delete(cacheKey);
       this.snapshotCache.set(cacheKey, cached);
+      this.streamStarted = true;
       this.snapshot = cached;
       this.applyTitle(cached);
       this.statusEl.innerHTML = esc(formatEnrichmentBadge(cached.enriched));
@@ -273,6 +363,7 @@ export class AirportProfilePanel {
       return;
     }
 
+    this.streamStarted = true;
     this.snapshot = {
       meta: null, surface: [], levels: [], enriched: null, derived: [],
     };
@@ -288,6 +379,39 @@ export class AirportProfilePanel {
       { icao: req.icao, model: this.model, startHour: req.startHour, windowH: req.windowH },
       (phase, snapshot, raw) => this.onPhase(phase, snapshot, raw),
     );
+  }
+
+  /** Arm the dwell timer — if the user lingers on the card, warm the
+   *  cross-section so a later switch is instant. Cancelled on close,
+   *  reload, or an earlier intent signal (pointer-enter / view switch). */
+  private armPrefetch(): void {
+    this.cancelPrefetch();
+    this.prefetchTimer = window.setTimeout(() => {
+      this.prefetchTimer = null;
+      this.ensureStream();
+    }, AirportProfilePanel.PREFETCH_DWELL_MS);
+  }
+
+  private cancelPrefetch(): void {
+    if (this.prefetchTimer != null) {
+      clearTimeout(this.prefetchTimer);
+      this.prefetchTimer = null;
+    }
+  }
+
+  /** Render the summary card from the host-provided snapshot summary. */
+  private renderCard(): void {
+    if (!this.summary) {
+      this.cardEl.innerHTML = '<div class="ap-card-empty">Summary unavailable</div>';
+      return;
+    }
+    renderAirportSummaryCard(this.cardEl, {
+      airport: this.summary.airport,
+      consensusMode: this.summary.consensusMode,
+      validTime: this.summary.validTime,
+      modelInitTimes: this.summary.modelInitTimes,
+      onMetricSelect: this.onMetricSelect,
+    });
   }
 
   /** Toggle the dimmed/grayscale "loading" state on the canvas areas.
@@ -384,20 +508,25 @@ export class AirportProfilePanel {
   }
 
   private applyViewMode(): void {
-    for (const v of ['both', 'cross', 'skewt'] as const) {
+    for (const v of ['card', 'cross', 'skewt'] as const) {
       this.viewBtns[v].classList.toggle('active', v === this.viewMode);
     }
-    const showCross = this.viewMode === 'both' || this.viewMode === 'cross';
-    const showSkewT = this.viewMode === 'both' || this.viewMode === 'skewt';
+    const showCard = this.viewMode === 'card';
+    const showCross = this.viewMode === 'cross';
+    const showSkewT = this.viewMode === 'skewt';
+    this.cardEl.style.display = showCard ? 'block' : 'none';
     this.crossEl.style.display = showCross ? 'block' : 'none';
     this.skewtEl.style.display = showSkewT ? 'block' : 'none';
-    this.container.classList.toggle('view-both', this.viewMode === 'both');
-    this.container.classList.toggle('view-cross', this.viewMode === 'cross');
-    this.container.classList.toggle('view-skewt', this.viewMode === 'skewt');
+    // The gear (layers/overlays) only applies to the cross-section / Skew-T.
+    this.settingsBtn.style.display = showCard ? 'none' : '';
+    this.container.classList.toggle('view-card', showCard);
+    this.container.classList.toggle('view-cross', showCross);
+    this.container.classList.toggle('view-skewt', showSkewT);
 
-    // Force a re-render so canvases pick up the new container size.
+    // Build/refresh the active view's renderer from the current snapshot
+    // (also lets canvases pick up the new container size).
     setTimeout(() => {
-      this.crossRenderer?.render();
+      this.renderCross();
       this.renderSkewT();
     }, 0);
   }
@@ -418,7 +547,7 @@ export class AirportProfilePanel {
   }
 
   private renderCross(): void {
-    if (this.viewMode === 'skewt') return;
+    if (this.viewMode !== 'cross') return;
     const data = snapshotToVizData(this.snapshot);
     if (!data) return;
     const r = this.ensureCrossRenderer();
@@ -427,7 +556,7 @@ export class AirportProfilePanel {
   }
 
   private renderSkewT(): void {
-    if (this.viewMode === 'cross') return;
+    if (this.viewMode !== 'skewt') return;
     // TODO(#121-followup): Skew-T is locked to hour 0 of the window;
     // the cross-section above shows all 4 hours but there's no
     // affordance (click on a time tick, hour selector, etc.) to
@@ -549,11 +678,12 @@ export class AirportProfilePanel {
   /** Single teardown path: abort the SSE stream, dispose renderers,
    *  empty the container. Idempotent. */
   destroy(): void {
+    this.cancelPrefetch();
     if (this.stream) { this.stream.abort(); this.stream = null; }
     this.snapshotCache.clear();
     this.drawerOpen = false;
     this.clearRenderers();
     this.container.innerHTML = '';
-    this.container.classList.remove('ap-panel', 'view-both', 'view-cross', 'view-skewt', 'drawer-open');
+    this.container.classList.remove('ap-panel', 'view-card', 'view-cross', 'view-skewt', 'drawer-open');
   }
 }

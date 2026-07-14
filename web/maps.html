@@ -50,6 +50,8 @@
       border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
     }
     .map-info { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem; }
+    /* Airport markers open the summary panel on click/tap — signal it. */
+    .wx-marker-clickable { cursor: pointer; }
 
     .map-legend {
       position: absolute; bottom: 30px; left: 10px; z-index: 1000;
@@ -168,12 +170,77 @@
     .ap-panel-status:empty { display: none; }
 
     .ap-panel-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
-    .ap-panel.view-both .ap-cross,
-    .ap-panel.view-both .ap-skewt { flex: 1 1 50%; min-height: 0; position: relative; }
+    .ap-panel.view-card .ap-card-host { flex: 1 1 100%; min-height: 0; overflow-y: auto; }
     .ap-panel.view-cross .ap-cross { flex: 1 1 100%; min-height: 0; position: relative; }
     .ap-panel.view-skewt .ap-skewt { flex: 1 1 100%; min-height: 0; position: relative; }
     .ap-cross, .ap-skewt { background: var(--bg); position: relative; min-height: 0; }
     .ap-cross + .ap-skewt { border-top: 1px solid var(--border); }
+
+    /* --- Airport summary card (default panel view) ---
+     * Pure client-side render from the map's forecast data. Cells are
+     * colored inline by JS via the same scales as the markers; the CSS
+     * here owns layout + the diverging-row emphasis. */
+    .ap-card { padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.6rem; }
+    .ap-card-empty { padding: 1rem; color: var(--text-muted); font-size: 0.85rem; text-align: center; }
+
+    .ap-card-verdict { display: flex; align-items: center; gap: 0.6rem; }
+    .ap-card-cat {
+      font-size: 1.15rem; font-weight: 800; letter-spacing: 0.02em;
+      padding: 0.35rem 0.6rem; border-radius: 6px; min-width: 3.2rem; text-align: center;
+    }
+    .ap-card-verdict-meta { display: flex; flex-direction: column; line-height: 1.15; }
+    .ap-card-icao { font-weight: 700; font-size: 0.95rem; color: var(--text); }
+    .ap-card-validtime { font-size: 0.72rem; color: var(--text-muted); }
+    .ap-card-agr {
+      margin-left: auto; display: inline-flex; align-items: center; gap: 0.3rem;
+      font-size: 0.72rem; color: var(--text-muted); white-space: nowrap;
+    }
+    .ap-card-agr-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+
+    .ap-card-alt {
+      display: flex; align-items: center; gap: 0.45rem; font-size: 0.78rem;
+      padding: 0.3rem 0.45rem; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 5px;
+    }
+    .ap-card-alt-label { color: var(--text-muted); font-weight: 600; }
+    .ap-card-alt-val { font-weight: 700; }
+    .ap-card-alt-val.is-required { color: #ef4444; }
+    .ap-card-alt-val.is-none { color: #22c55e; }
+    .ap-card-alt-mode {
+      margin-left: auto; font-size: 0.66rem; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.03em;
+    }
+
+    .ap-card-matrix-wrap { overflow-x: auto; }
+    .ap-card-matrix { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+    .ap-card-unit { color: var(--text-muted); font-weight: 500; font-size: 0.9em; }
+    .ap-card-matrix th {
+      font-weight: 700; color: var(--text-muted); text-align: center;
+      padding: 0.2rem 0.15rem; font-size: 0.66rem;
+      text-transform: uppercase; letter-spacing: 0.02em;
+      border-bottom: 1px solid var(--border);
+    }
+    .ap-card-matrix th.ap-card-metric-col { text-align: left; }
+    .ap-card-matrix td {
+      padding: 0.28rem 0.25rem; text-align: center; font-weight: 600;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .ap-card-matrix td.ap-card-metric-col {
+      text-align: left; color: var(--text); background: transparent;
+    }
+    .ap-card-matrix th.ap-card-consensus-col,
+    .ap-card-matrix td.ap-card-consensus-col { border-left: 2px solid var(--border); }
+    .ap-card-row { cursor: pointer; }
+    .ap-card-row:hover td.ap-card-metric-col { color: var(--primary); }
+    .ap-card-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+    /* Diverging models → red rail on the metric label to draw the eye. */
+    .ap-card-row.is-diverging td.ap-card-metric-col {
+      box-shadow: inset 3px 0 0 #ef4444; padding-left: 0.45rem;
+    }
+    .ap-card-warn { color: #ef4444; margin-left: 0.2rem; }
+    .ap-card-row-plain { cursor: default; }
+    .ap-card-row-plain td { font-weight: 500; color: var(--text-muted); background: transparent; }
+    .ap-card-footnote { font-size: 0.66rem; color: var(--text-muted); }
 
     /* Loading state — kills the "blue sky = forecast is clear" trap by
      * desaturating the empty canvas and overlaying a "Loading…" badge
