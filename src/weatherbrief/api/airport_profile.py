@@ -46,16 +46,19 @@ router = APIRouter(prefix="/maps", tags=["maps"])
 
 _VALID_MODELS = ("gfs", "icon", "ecmwf")
 
-# Reuse the briefing pipeline's progress labels so the panel's status row
-# reads the same as /refresh/stream. Mapping is phase → stage_name in
-# packs._STAGE_LABELS. The `surface` phase has no analogue (the briefing
-# pipeline doesn't read a surface cache); we emit a generic label for it.
-# Keys are looked up lazily inside the SSE generator so a circular import
-# from packs (which itself imports from many places) can't break startup.
-_PHASE_TO_STAGE: dict[str, str] = {
-    "levels": "fetch_forecasts",
-    "enriched": "grib_enrichment",
-    "derived": "waypoint_analysis",
+# Stages the panel's status row narrates. Emitted as a `progress` event
+# *before* the work starts, mirroring /refresh/stream's contract — a data
+# phase (`levels`, `enriched`, `derived`) carries the result of a stage that
+# has already finished, so labelling those would always name the step the
+# user just waited through instead of the one they are waiting on now.
+#
+# `fetch_forecasts` / `grib_enrichment` reuse packs._STAGE_LABELS so the row
+# reads the same as the briefing refresh. `sounding_analysis` is local: the
+# briefing's analogous stage is called "Analyzing waypoints", which is wrong
+# wording for a single-airport profile. Labels are resolved lazily inside the
+# SSE generator so a circular import from packs can't break startup.
+_LOCAL_STAGE_LABELS: dict[str, str] = {
+    "sounding_analysis": "Analyzing sounding",
 }
 _DEFAULT_WINDOW_H = 3  # selected hour + 3 forward = 4 forecast hours
 
@@ -593,15 +596,14 @@ async def get_airport_profile(
         # is heavy and pulls in much of the API surface).
         from weatherbrief.api.packs import _STAGE_LABELS
 
-        def _label_for(phase: str) -> str | None:
-            stage = _PHASE_TO_STAGE.get(phase)
-            return _STAGE_LABELS.get(stage) if stage else None
-
         def _event(event_type: str, payload: dict) -> str:
-            label = _label_for(event_type)
-            if label and "label" not in payload:
-                payload = {**payload, "label": label}
             return f"event: {event_type}\ndata: {json_mod.dumps(payload, default=str)}\n\n"
+
+        def _progress(stage: str) -> str:
+            """Announce the stage we are about to run, so the status row
+            names the step the user is currently waiting on."""
+            label = _LOCAL_STAGE_LABELS.get(stage) or _STAGE_LABELS.get(stage, stage)
+            return _event("progress", {"type": "progress", "stage": stage, "label": label})
 
         def _error_event(phase: str, message: str) -> str:
             """Match /refresh/stream's pattern: emit a structured error
@@ -631,6 +633,7 @@ async def get_airport_profile(
             yield _event("surface", {"type": "surface", "hours": surface})
 
             # Phase 2 (levels) — runs in a thread since it does network I/O.
+            yield _progress("fetch_forecasts")
             loop = asyncio.get_running_loop()
             try:
                 wf = await loop.run_in_executor(
@@ -667,6 +670,7 @@ async def get_airport_profile(
             # underlying GRIB run is the same. See #123 for the deeper
             # cache-layer atomicity fix that supersedes this lock.
             if enrich and wf is not None:
+                yield _progress("grib_enrichment")
                 run_lock = _grib_dedup.lock_for(model, int(hours[0].timestamp()))
                 async with run_lock:
                     try:
@@ -684,6 +688,7 @@ async def get_airport_profile(
             # If this fails the client gets nothing useful past the levels phase;
             # emit a structured error and stop instead of letting the executor
             # exception bubble up and kill the stream silently.
+            yield _progress("sounding_analysis")
             try:
                 derived = await loop.run_in_executor(
                     None, _build_derived_payload, wf, hours,

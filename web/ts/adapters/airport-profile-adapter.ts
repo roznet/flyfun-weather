@@ -117,7 +117,11 @@ export interface AirportProfileSnapshot {
   derived: AirportProfileDerivedPoint[];
 }
 
-export type AirportProfilePhase = 'meta' | 'surface' | 'levels' | 'enriched' | 'derived' | 'complete' | 'error';
+/** `progress` carries no data — it announces the stage the server is about
+ *  to run (`{stage, label}`), so the status row names the step currently in
+ *  flight rather than the one that just produced the previous data phase. */
+export type AirportProfilePhase =
+  'meta' | 'surface' | 'progress' | 'levels' | 'enriched' | 'derived' | 'complete' | 'error';
 
 export interface AirportProfileStreamHandle {
   abort(): void;
@@ -156,6 +160,11 @@ export function streamAirportProfile(
       snapshot.surface = data.hours ?? [];
       dispatch('surface', data);
     } catch (err) { console.warn('airport-profile: bad surface event', err); }
+  });
+  es.addEventListener('progress', (e: MessageEvent) => {
+    try {
+      dispatch('progress', JSON.parse(e.data));
+    } catch (err) { console.warn('airport-profile: bad progress event', err); }
   });
   es.addEventListener('levels', (e: MessageEvent) => {
     try {

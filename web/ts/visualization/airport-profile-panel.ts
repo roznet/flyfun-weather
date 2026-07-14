@@ -177,6 +177,9 @@ export class AirportProfilePanel {
   };
   private stream: AirportProfileStreamHandle | null = null;
   private currentRequest: AirportProfileRequest | null = null;
+  /** Set when a phase fails. Sticky for the rest of the stream so later
+   *  progress labels / the GRIB badge can't overwrite the failure. */
+  private streamError: string | null = null;
 
   /** Per-(icao,startHour,model) cache of completed snapshots so model
    *  switching reuses prior fetches. Cleared whenever the request shape
@@ -220,12 +223,15 @@ export class AirportProfilePanel {
         </div>
         <button class="ap-settings-btn" type="button" title="Layers & overlays" aria-label="Settings" aria-expanded="false">⚙</button>
       </div>
-      <div class="ap-panel-status" id="ap-status"></div>
       <div class="ap-panel-body">
         <div class="ap-card-host" id="ap-card"></div>
         <div class="ap-cross" id="ap-cross"></div>
         <div class="ap-skewt" id="ap-skewt"></div>
       </div>
+      <!-- Status sits *below* the body: it appears mid-stream (progress
+           labels → GRIB badge), and above the body every appearance would
+           shove the card down under the user's cursor. -->
+      <div class="ap-panel-status" id="ap-status"></div>
       <div class="ap-settings-drawer" hidden></div>
     `;
 
@@ -289,6 +295,8 @@ export class AirportProfilePanel {
     if (!MODELS.includes(model as any)) return;
     this.model = model;
     this.modelSel.value = model;
+    // The card's Windy link carries the model — keep it in step.
+    if (this.summary) this.renderCard();
   }
 
   /** Restrict the model choices to those the selected day actually has data for.
@@ -314,6 +322,7 @@ export class AirportProfilePanel {
       this.model = fallback;
       this.modelSel.value = fallback;
       this.onModelChange?.(fallback);
+      if (this.summary) this.renderCard();
     }
   }
 
@@ -344,6 +353,7 @@ export class AirportProfilePanel {
     this.cancelPrefetch();
     if (this.stream) { this.stream.abort(); this.stream = null; }
     this.streamStarted = false;
+    this.streamError = null;
 
     // Reset to an empty snapshot and render the card — instant, no network.
     this.snapshot = {
@@ -382,6 +392,7 @@ export class AirportProfilePanel {
       this.snapshotCache.delete(cacheKey);
       this.snapshotCache.set(cacheKey, cached);
       this.streamStarted = true;
+      this.streamError = null;
       this.snapshot = cached;
       this.applyTitle(cached);
       this.statusEl.innerHTML = esc(formatEnrichmentBadge(cached.enriched));
@@ -393,10 +404,13 @@ export class AirportProfilePanel {
     }
 
     this.streamStarted = true;
+    this.streamError = null;
     this.snapshot = {
       meta: null, surface: [], levels: [], enriched: null, derived: [],
     };
     this.titleEl.textContent = `${req.icao} — loading…`;
+    // Only shown until the first `progress` event lands (a few ms) — from
+    // then on the server names the stage that is actually running.
     this.statusEl.innerHTML = statusLoading('Connecting');
     this.clearRenderers();
     // Mark canvases as loading so the empty cross-section doesn't read
@@ -447,6 +461,7 @@ export class AirportProfilePanel {
       consensusMode: this.summary.consensusMode,
       validTime: this.summary.validTime,
       modelInitTimes: this.summary.modelInitTimes,
+      model: this.model,
       onMetricSelect: this.onMetricSelect,
     });
   }
@@ -463,6 +478,14 @@ export class AirportProfilePanel {
     return `${req.icao}|${req.startHour}|${model}`;
   }
 
+  /** End-of-stream status: which GRIB runs contributed — unless a phase
+   *  failed, in which case the failure stays on screen. */
+  private applyFinalStatus(snapshot: AirportProfileSnapshot): void {
+    this.statusEl.innerHTML = this.streamError
+      ? esc(this.streamError)
+      : esc(formatEnrichmentBadge(snapshot.enriched));
+  }
+
   /** Render the panel header from the snapshot's meta. */
   private applyTitle(snapshot: AirportProfileSnapshot): void {
     if (!snapshot.meta) return;
@@ -473,39 +496,39 @@ export class AirportProfilePanel {
 
   private onPhase(phase: string, snapshot: AirportProfileSnapshot, raw: any): void {
     this.snapshot = snapshot;
-    // Backend emits a `label` field on phases that map to a stage in the
-    // briefing pipeline (see api/airport_profile.py:_PHASE_TO_STAGE). For
-    // phases without a label (`meta`, `surface`) we use a local string
-    // since the briefing pipeline has no analogue.
-    const labelFromBackend = (raw && typeof raw === 'object' && typeof raw.label === 'string')
-      ? raw.label as string
-      : null;
 
     if (phase === 'meta') {
       this.applyTitle(snapshot);
-      this.statusEl.innerHTML = statusLoading('Loading');
       this.renderCross();
     } else if (phase === 'surface') {
-      this.statusEl.innerHTML = statusLoading(labelFromBackend ?? 'Loading');
       this.renderCross();
+    } else if (phase === 'progress') {
+      // The server announces each stage *before* running it (see
+      // api/airport_profile.py `_progress`), so the row names the step the
+      // user is waiting on. Data phases (`levels`, `enriched`) deliberately
+      // don't touch the status: by the time they land, their stage is done.
+      if (!this.streamError) {
+        const label = (raw && typeof raw.label === 'string') ? raw.label as string : 'Loading';
+        this.statusEl.innerHTML = statusLoading(label);
+      }
     } else if (phase === 'levels') {
-      const text = (raw && raw.error)
-        ? `Levels failed (${raw.error})`
-        : (labelFromBackend ?? 'Fetching forecasts');
-      this.statusEl.innerHTML = (raw && raw.error) ? esc(text) : statusLoading(text);
+      if (raw && raw.error) {
+        // Sticky: the following stages still run (on an empty profile), and
+        // their progress labels must not paper over the failure.
+        this.streamError = `Levels failed (${raw.error})`;
+        this.statusEl.innerHTML = esc(this.streamError);
+      }
       this.renderSkewT();
       // Skew-T renderer just mounted — refresh drawer if open so
       // the previously-empty Skew-T section now has controls.
       if (this.drawerOpen) this.renderDrawer();
-    } else if (phase === 'enriched') {
-      this.statusEl.innerHTML = statusLoading(labelFromBackend ?? 'Adding cloud & icing detail');
     } else if (phase === 'derived') {
-      this.statusEl.innerHTML = esc(formatEnrichmentBadge(snapshot.enriched));
+      this.applyFinalStatus(snapshot);
       this.setLoading(false);
       this.renderCross();
       this.renderSkewT();
     } else if (phase === 'complete') {
-      this.statusEl.innerHTML = esc(formatEnrichmentBadge(snapshot.enriched));
+      this.applyFinalStatus(snapshot);
       // Successful completion: cache the snapshot for fast model-switch.
       if (this.currentRequest) {
         const key = this.cacheKey(this.currentRequest, this.model);
@@ -536,7 +559,8 @@ export class AirportProfilePanel {
       const detail = raw && typeof raw === 'object' && raw.phase
         ? `${raw.phase}: ${raw.message ?? 'unknown error'}`
         : 'connection lost';
-      this.statusEl.innerHTML = esc(`Error — ${detail}`);
+      this.streamError = `Error — ${detail}`;
+      this.statusEl.innerHTML = esc(this.streamError);
       // Lift the loading dim on error too — the canvases now show
       // whatever last-known state they have (typically empty axes),
       // which is the correct signal alongside the error message.

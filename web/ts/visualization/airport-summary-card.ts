@@ -20,6 +20,7 @@
  */
 
 import type { ForecastAirport, ModelForecast } from '../adapters/maps-adapter';
+import { buildWindyUrl } from '../utils';
 import { type ConsensusMode } from './weather-map-consensus';
 import {
   type ForecastMetric, METRIC_LABEL, CAT_COLORS, AGREEMENT_COLORS,
@@ -99,6 +100,9 @@ export interface SummaryCardOptions {
   validTime: Date;
   /** Per-model init times, if known, for the freshness footnote. */
   modelInitTimes?: Record<string, string>;
+  /** The panel's selected model — used only for the Windy link (Windy has a
+   *  dedicated view for GFS/ICON; anything else lands on its ECMWF default). */
+  model?: string;
   /** Fired when the user clicks a metric row — the host switches the map's
    *  color dropdown to that metric so the card and map reinforce each
    *  other. */
@@ -164,7 +168,7 @@ function agreementChip(bucket: string | null): { label: string; color: string } 
 }
 
 export function renderAirportSummaryCard(host: HTMLElement, opts: SummaryCardOptions): void {
-  const { airport, consensusMode, validTime, modelInitTimes, onMetricSelect } = opts;
+  const { airport, consensusMode, validTime, modelInitTimes, model, onMetricSelect } = opts;
   const present = MODELS.filter((m) => airport.models[m]);
   const consensus = getConsensus(airport, consensusMode);
   const modeLabel = consensusMode === 'worst' ? 'Worst' : 'Majority';
@@ -247,8 +251,16 @@ export function renderAirportSummaryCard(host: HTMLElement, opts: SummaryCardOpt
 
   html += '</tbody></table></div>';
 
+  // --- Footer: init times on the left, the external link on the right. One
+  // row rather than two — the panel's vertical space belongs to the matrix.
+  // The link points at the same airport, valid time and model on Windy
+  // (mirrors the cross-section's link — see briefing-ui.updateWindyLink).
   const initLine = formatInitTimes(modelInitTimes, present);
-  if (initLine) html += `<div class="ap-card-footnote">${esc(initLine)}</div>`;
+  const windyUrl = buildWindyUrl(airport.lat, airport.lon, validTime, model);
+  html += '<div class="ap-card-footer">';
+  html += `<span class="ap-card-footnote">${esc(initLine)}</span>`;
+  html += `<a class="ap-card-link" href="${esc(windyUrl)}" target="_blank" rel="noopener">Open in Windy ↗</a>`;
+  html += '</div>';
 
   html += '</div>';
   host.innerHTML = html;

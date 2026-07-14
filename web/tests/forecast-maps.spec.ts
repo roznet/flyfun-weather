@@ -220,6 +220,35 @@ test.describe('Forecast page', () => {
     await expect(page.locator('#map-info')).toContainText('2 airports');
   });
 
+  test('the airport card links out to Windy at the same place, time and model', async ({ page }) => {
+    await page.goto('/maps.html');
+    await page.click('#map-container .leaflet-interactive');
+
+    const link = page.locator('.ap-card-link');
+    await expect(link).toHaveText(/Open in Windy/);
+    // Panel defaults to ECMWF, which has no dedicated Windy view — the URL
+    // carries no model segment and Windy lands on its own default.
+    let href = await link.getAttribute('href');
+    expect(href).toContain('windy.com/49.010/2.550/meteogram');
+    expect(href).toContain('2026-04-06-12');  // the selected day + hour, UTC
+
+    // Switch the panel to a model Windy *does* have: the link follows.
+    await page.selectOption('.ap-model-sel', 'gfs');
+    href = await page.locator('.ap-card-link').getAttribute('href');
+    expect(href).toContain('windy.com/49.010/2.550/gfs/meteogram?gfs,2026-04-06-12');
+  });
+
+  test('the loading status sits below the card, so it cannot push it around', async ({ page }) => {
+    // The status row appears mid-stream (stage label → GRIB badge). Above the
+    // body, every appearance shoved the card down under the user's cursor.
+    await page.goto('/maps.html');
+    await page.click('#map-container .leaflet-interactive');
+
+    const order = await page.locator('.ap-panel').evaluate((panel) =>
+      Array.from(panel.children).map((c) => c.className));
+    expect(order.indexOf('ap-panel-status')).toBeGreaterThan(order.indexOf('ap-panel-body'));
+  });
+
   test('the airport panel does not offer a model the day has no data for', async ({ page }) => {
     // The panel's surface trace comes from the snapshot table, and ICON's
     // ceiling GRIB stops at 120h — so from D+5 there are no ICON snapshots.

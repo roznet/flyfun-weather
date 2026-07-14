@@ -66,6 +66,7 @@ RUN_TS=20260426T000000Z   # convert from run tag
 TAG=20260426_00z
 
 rsync -av --stats ${DRY_RUN:+-n} \
+  --exclude='*.idx' \
   --include="brg_*_fc_${RUN_TS}_*" \
   --include=".ready_${TAG}" \
   --include="delivery_config.json" \
@@ -78,12 +79,13 @@ Notes on the rsync flags:
 - macOS ships rsync 2.6.x — do **not** use `--info=progress2` (unsupported). Use `--stats` and let it print per-file lines.
 - `delivery_config.json` is included so `ecmwf_watcher` can re-validate locally.
 - The trailing `/` on both source and dest is required for include/exclude semantics.
+- **`--exclude='*.idx'` must stay first** (rsync takes the first matching rule, and the `brg_*` include would otherwise pull the indexes too). cfgrib's `.idx` is a pickle that stores the **absolute path** it was built against, and cfgrib only accepts an index whose path matches the GRIB it is opening. Prod's indexes name `/mnt/flyfun_data/...`, so locally every one is rejected ("Ignoring index file … incompatible with GRIB file") — and since cfgrib writes indexes with an *exclusive* create, the stale file is never replaced. Result: every decode full-scans the GRIB forever. Measured on the airport-profile panel: **~30–40 s per request with prod indexes present, ~3 s without.** If a sync predating this exclude left indexes behind, delete them: `rm "$DEST"/*.idx`.
 
 ### 5. Verify
 
 ```bash
 ls -1 "$DEST/.ready_${TAG}" 2>/dev/null && cat "$DEST/.ready_${TAG}"
-ls -1 "$DEST" | grep -c "_fc_${RUN_TS}_"   # should match files= count in sentinel × 2 (data + .idx)
+ls -1 "$DEST" | grep -c "_fc_${RUN_TS}_"   # should match files= count in sentinel (no .idx — see above)
 du -sh "$DEST"
 ```
 
