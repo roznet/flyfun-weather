@@ -450,7 +450,7 @@ def execute_briefing(
                 aggregation=adv_aggregation,
                 airports_db_path=options.airports_db_path,
                 icing_method=options.icing_method,
-                cloud_method=options.cloud_method,
+                cloud_source=options.cloud_source,
                 convective_method=options.convective_method,
                 locale=options.locale,
                 cruise_speed_ias_kt=options.cruise_speed_ias_kt,

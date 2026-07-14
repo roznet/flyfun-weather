@@ -198,3 +198,30 @@ class TestBriefingResult:
         assert result.digest is not None
         assert result.digest.assessment == "GREEN"
         assert result.digest.assessment_reason == "Good weather"
+
+
+def test_briefing_options_uses_cloud_source_not_cloud_method():
+    """#410 renamed ``BriefingOptions.cloud_method`` → ``cloud_source``. Guards the
+    rename-regression class (CLAUDE.md "update ALL callers"): the alt-departure
+    re-run at pipeline.py section 3.1 read the stale ``options.cloud_method`` after
+    the rename — an ``AttributeError`` swallowed by that block's broad try/except,
+    so it failed silently. Regression for the #413 review's Critical #2.
+    """
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(BriefingOptions)}
+    assert "cloud_source" in fields
+    assert "cloud_method" not in fields
+
+    opts = BriefingOptions(cloud_source="dd")
+    assert opts.cloud_source == "dd"
+    with pytest.raises(TypeError):
+        BriefingOptions(cloud_method="dd")  # the old kwarg is gone
+
+    # No stale ``options.cloud_method`` reader survives anywhere in the pipeline
+    # module (the missed 16-space-indented alt call was exactly this).
+    import inspect
+
+    import weatherbrief.pipeline as pipeline_mod
+
+    assert "options.cloud_method" not in inspect.getsource(pipeline_mod)

@@ -83,12 +83,32 @@ class DuplicateProfileRequest(BaseModel):
     name: str
 
 
+def _resolved_response_settings(settings: dict) -> dict:
+    """Settings for the response model, with ``cloud_source`` resolved for display.
+
+    #410 read-path fallback for the profile-CRUD surface (sibling of the grading
+    path's ``cloud_source_from_settings``): a pre-split profile still carrying a
+    legacy fused ``cloud_method`` — anything the migration doesn't clear, e.g. the
+    styled values — has no ``cloud_source`` key, so a plain ``ProfileSettings(**…)``
+    (``extra="ignore"``) would deserialize it to ``cloud_source=None`` and the
+    settings page would fall back to the NWP default *for a profile still graded
+    DD* — the same evidence-vs-grade lie this PR exists to kill, just relocated to
+    the settings surface. Resolve the source here so the UI reports what actually
+    grades. A no-op once ``cloud_source`` is present or no legacy key exists.
+    """
+    if "cloud_source" in settings or not settings.get("cloud_method"):
+        return settings
+    from weatherbrief.analysis.advisories.engine_methods import cloud_source_from_settings
+
+    return {**settings, "cloud_source": cloud_source_from_settings(settings)}
+
+
 def _profile_to_response(profile: FlightProfile) -> ProfileResponse:
     return ProfileResponse(
         id=profile.id,
         name=profile.name,
         is_default=profile.is_default,
-        settings=ProfileSettings(**profile.settings),
+        settings=ProfileSettings(**_resolved_response_settings(profile.settings)),
         system_template_key=profile.system_template_key,
         created_at=profile.created_at.isoformat(),
         updated_at=profile.updated_at.isoformat(),
