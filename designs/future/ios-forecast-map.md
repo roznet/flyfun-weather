@@ -279,10 +279,18 @@ state**. Cheap — the state schema already exists.
   `/maps/forecast/days`, and port the web's *"greyed but still tappable, explains
   itself"* affordance — a model that can't reach the selected day must never read
   as agreement.
-- **Payload is several hundred KB per (day, hour).** Confirm gzip is on before
-  designing around it. Keep an in-memory LRU keyed `(day, hour)` and prefetch the
-  adjacent hours of the current day (they're server-cached, so it's cheap) — that's
-  what makes `‹ ›` stepping feel instant.
+- **Payload: ~1.5 MB raw, ~190 KB gzipped, per (day, hour)** (measured 2026-07-14
+  on the real 619-airport payload: D+0 1,585 KB → 186 KB; D+6 1,058 KB → 127 KB).
+  Compression does the heavy lifting — 12 % of raw — so this is comfortable on
+  cellular, but only *because* of it.
+  **Dev gotcha:** production compresses at the edge (Caddy `encode zstd gzip`), but
+  the local HTTPS dev server is uvicorn serving TLS directly with **no Caddy and no
+  compression middleware** — so an iOS client pointed at `localhost.ro-z.me:8443`
+  pulls the full 1.5 MB and will feel far slower than production. Don't tune the
+  fetch/prefetch strategy against dev numbers.
+  Keep an in-memory LRU keyed `(day, hour)` and prefetch the adjacent hours of the
+  current day (they're server-cached, so it's cheap) — that's what makes `‹ ›`
+  stepping feel instant.
 - **`models` is sparse.** Two-model days are normal, not an error state.
 - **Colour scales must not be re-typed in Swift.** That's what B2 is for.
 
