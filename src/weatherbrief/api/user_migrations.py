@@ -45,22 +45,19 @@ def _register(key: str) -> Callable[[MigrationFn], MigrationFn]:
 
 @_register("001_method_defaults_v2")
 def _migrate_method_defaults_v2(prefs: dict) -> dict:
-    """Upgrade legacy analysis method values to GRAMET-aligned defaults.
+    """Inert since #410 — kept only so the applied-migration key stays stable.
 
-    dd       -> square_nwp (cloud method)
-    nwp      -> square_nwp (cloud method)
-    ogimet_dd -> ogimet_nwp (icing method)
-    thermo   -> nwp        (convective method)
+    This used to rewrite the account-level engine methods (``cloud_method`` /
+    ``icing_method`` / ``convective_method``) in ``app_prefs_json`` to their
+    GRAMET-aligned values. #410 retired those keys entirely: nothing writes them
+    and ``_parse_service_toggles`` no longer surfaces them, so grading reads the
+    flight *profile* alone. Rewriting them now would only churn a blob no reader
+    consults.
+
+    Deleting the registration instead would drop ``001_method_defaults_v2`` from
+    the applied-migrations bookkeeping, so the entry stays and the body is a
+    no-op. Any stale key left in the blob is inert and harmless.
     """
-    upgrades = {
-        "cloud_method": {"dd": "square_nwp", "nwp": "square_nwp"},
-        "icing_method": {"ogimet_dd": "ogimet_nwp"},
-        "convective_method": {"thermo": "nwp"},
-    }
-    for key, mapping in upgrades.items():
-        current = prefs.get(key)
-        if current in mapping:
-            prefs[key] = mapping[current]
     return prefs
 
 
