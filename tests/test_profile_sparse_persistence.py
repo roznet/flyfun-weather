@@ -161,3 +161,25 @@ def test_all_default_save_persists_no_engine_keys_or_params(client, app_db):
     assert "cloud_source" not in stored
     assert "convective_method" not in stored
     assert stored["advisories"]["params"] == {}
+
+
+def test_response_resolves_legacy_cloud_method_for_display():
+    """A pre-#410 profile still carrying a legacy fused ``cloud_method`` (which the
+    de-fossilize migration doesn't clear — e.g. the styled values) must report a
+    resolved ``cloud_source`` to the settings page, not ``None``. Otherwise the
+    settings page falls back to the NWP default and shows "NWP" for a profile still
+    graded DD — the evidence-vs-grade lie #410 exists to kill, relocated to the
+    profile surface. Regression for the #413 review's Critical #1.
+    """
+    from weatherbrief.api.profiles import ProfileSettings, _resolved_response_settings
+
+    # Legacy styled-DD → resolves to the "dd" source (would be None without the fix).
+    styled = _resolved_response_settings({"cloud_method": "square_dd", "cruise_altitude_ft": 5500})
+    assert styled["cloud_source"] == "dd"
+    assert ProfileSettings(**styled).cloud_source == "dd"
+    # Legacy bare NWP → "nwp".
+    assert _resolved_response_settings({"cloud_method": "nwp"})["cloud_source"] == "nwp"
+    # New key present → untouched (no legacy reinterpretation).
+    assert _resolved_response_settings({"cloud_source": "nwp", "cloud_method": "square_dd"})["cloud_source"] == "nwp"
+    # No engine key at all → nothing injected (client applies the declared default).
+    assert "cloud_source" not in _resolved_response_settings({"cruise_altitude_ft": 5000})
