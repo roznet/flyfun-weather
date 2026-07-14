@@ -70,6 +70,54 @@ def _fetch(days: int, sample_hours=None):
     return snaps
 
 
+class TestParseTimeMemoryBound:
+    """`hour_filter` is a memory bound, not a correctness filter (#236).
+
+    Open-Meteo returns every hour on the wire regardless. The filter decides
+    how much of that is materialised as Pydantic objects — without it, ~80% of
+    a 6-day hourly response (up to 28 pressure levels) is built only to be
+    thrown away, and stays alive across the chunk's sounding analysis in
+    several threads at once. Passing `None` here would be silently correct and
+    expensively wrong, so pin it.
+    """
+
+    def test_superset_of_sample_hours_is_pushed_down_to_open_meteo(self, monkeypatch):
+        seen = {}
+
+        def capture(self, points, model, *, start_date=None, end_date=None,
+                    chunk_size=None, hour_filter=None):
+            seen["hour_filter"] = hour_filter
+            self._record_call()
+            return [_forecast_every_hour(p.waypoint_icao, days=6) for p in points]
+
+        with patch(
+            "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+            new=capture,
+        ):
+            _fetch(days=6)
+
+        assert seen["hour_filter"] == {6, 9, 12, 15, 18}, (
+            "the per-day grid path must still bound what Open-Meteo parses"
+        )
+
+    def test_explicit_hours_are_pushed_down_unchanged(self, monkeypatch):
+        seen = {}
+
+        def capture(self, points, model, *, start_date=None, end_date=None,
+                    chunk_size=None, hour_filter=None):
+            seen["hour_filter"] = hour_filter
+            self._record_call()
+            return [_forecast_every_hour(p.waypoint_icao, days=2) for p in points]
+
+        with patch(
+            "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+            new=capture,
+        ):
+            _fetch(days=2, sample_hours=[12])
+
+        assert seen["hour_filter"] == {12}
+
+
 class TestPerDayGrid:
     def test_near_days_keep_five_sample_hours(self, om_returns_every_hour):
         steps = _steps(_fetch(days=6))

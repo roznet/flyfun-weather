@@ -33,7 +33,11 @@ from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
 from weatherbrief.process_rss import current_rss_mb, log_memory
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
 from weatherbrief.tasks.edr_calibration import flush_accumulator
-from weatherbrief.tasks.forecast_grid import MAP_FORECAST_DAYS, sample_hours_for_day
+from weatherbrief.tasks.forecast_grid import (
+    MAP_FORECAST_DAYS,
+    all_sample_hours,
+    sample_hours_for_day,
+)
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.grib import DecodePriority
@@ -308,7 +312,14 @@ def _fetch_forecasts_for_model(
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
 
     # A flat list applies to all days; None means the map's per-day grid.
-    hour_filter = set(sample_hours) if sample_hours is not None else None
+    explicit_hours = set(sample_hours) if sample_hours is not None else None
+
+    # What Open-Meteo is asked to materialise. This must stay a real set even
+    # on the per-day-grid path: it is a parse-time memory bound (#236), not a
+    # correctness filter. The per-day grid is a subset of the superset, so
+    # filtering to the superset here discards nothing the loop below wants —
+    # while leaving it None would parse every hour of a now-6-day horizon.
+    hour_filter = explicit_hours if explicit_hours is not None else set(all_sample_hours())
 
     model_source = ModelSource(model)
     forecast_days = days if days is not None else MODEL_FORECAST_DAYS.get(model, 7)
@@ -350,7 +361,7 @@ def _fetch_forecasts_for_model(
         for attempt in range(3):
             try:
                 # hour_filter drops non-sample hours at parse time — without
-                # it, ~80% of the response (a 4-day hourly horizon at up to
+                # it, ~80% of the response (a 6-day hourly horizon at up to
                 # 28 pressure levels) was materialised as Pydantic objects
                 # only to be discarded by the loop below, and those objects
                 # stayed alive across the chunk's sounding analysis in up to
@@ -399,8 +410,8 @@ def _fetch_forecasts_for_model(
                 # row past the horizon is a bug, not a bonus.
                 if day_offset < 0 or day_offset > forecast_days:
                     continue
-                if hour_filter is not None:
-                    if utc_hour not in hour_filter:
+                if explicit_hours is not None:
+                    if utc_hour not in explicit_hours:
                         continue
                 elif utc_hour not in sample_hours_for_day(day_offset):
                     continue

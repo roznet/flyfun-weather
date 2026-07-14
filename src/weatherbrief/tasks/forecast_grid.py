@@ -66,6 +66,16 @@ def forecast_days() -> tuple[int, ...]:
     return tuple(range(MAX_FORECAST_DAY + 1))
 
 
+def all_sample_hours() -> tuple[int, ...]:
+    """Every hour that can appear on any day — the superset.
+
+    The per-day grid is a subset of this, so it is the correct parse-time
+    filter to hand Open-Meteo: it bounds how much of the response is
+    materialised (#236) without pre-empting the per-day refinement.
+    """
+    return FINE_SAMPLE_HOURS
+
+
 def day_hour_pairs() -> list[tuple[int, int]]:
     """Every (day, hour) slot the map can hold, in display order."""
     return [(d, h) for d in forecast_days() for h in sample_hours_for_day(d)]

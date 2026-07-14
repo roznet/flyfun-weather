@@ -8,7 +8,7 @@ We already have NWP model forecasts stored in briefing packs (GFS, ECMWF, ICON, 
 
 This system has two verification tracks:
 1. **Flight-based**: Collects METAR/TAF observations during flight windows (1h before → flight end + 1h), scores against briefing pack forecasts
-2. **Standalone**: Monitors ~830 pan-European watchlist airports via three decoupled loops — METAR ingest (every 30 min), forecast fetch (07/19 UTC), and scoring (06/09/12/15/18 UTC) — covering GFS/ICON/ECMWF at up to 4 days out
+2. **Standalone**: Monitors ~830 pan-European watchlist airports via three decoupled loops — METAR ingest (every 30 min), forecast fetch (07/19 UTC), and scoring (06/09/12/15/18 UTC) — covering GFS/ICON/ECMWF out to the forecast map's horizon (gfs 6d, icon 4d, ecmwf 6d — see `tasks/forecast_grid.py`)
 3. **Scores** TAF accuracy against METARs (TAF is also a forecast — was it right?)
 4. **Archives** everything in a standalone, anonymized verification database
 5. **Reports** daily verification digest via email + admin web dashboard
@@ -178,7 +178,7 @@ Flight-based verification is limited to airports along active flight routes. Sta
 | **Airports** | Flight corridor (15nm) | Watchlist (~830 pan-European airports) |
 | **Forecast source** | Briefing pack forecasts.json | Independent Open-Meteo fetch + GRIB + sounding (ECMWF prefers direct GRIB) |
 | **Models** | All models in briefing pack | GFS, ICON, ECMWF (3 models) |
-| **Horizon** | D-0 through D-7 (per pack) | Up to 4 days per model |
+| **Horizon** | D-0 through D-7 (per pack) | Per-model, from `forecast_grid.MAP_FORECAST_DAYS`: gfs 6d, ecmwf 6d, icon 4d (ICON-EU's ceiling GRIB stops at 120h) |
 | **Score source tag** | `source='flight'` | `source='standalone'` |
 | **Database** | `verification_observations` + scores | Same + `airport_forecast_snapshots` |
 
@@ -242,7 +242,7 @@ During scoring (Phase D), `_build_sounding_proxy()` reconstructs a minimal `Soun
 
 Standalone fetches surface + pressure-level variables for ~830 airports per full cycle. Requests are chunked into batches of 100 airports per Open-Meteo call (`_OPEN_METEO_BATCH_SIZE`). Chunk-level retry: up to 3 attempts with exponential backoff.
 
-**Parse-time hour filtering (#236)**: the fetch passes `hour_filter=SAMPLE_HOURS_UTC` to `OpenMeteoClient.fetch_multi_point`, so only sample-hour slots are materialised as `HourlyForecast`/`PressureLevelData` objects. Without it, ~80% of the 4-day hourly response (28 pressure levels for GFS) was parsed into Pydantic objects only to be discarded — and stayed alive across the chunk's sounding analysis in up to 4 concurrent threads, dominating the fetch phase's transient memory. The wire payload still contains every hour; the filter bounds parse memory, not bandwidth.
+**Parse-time hour filtering (#236)**: the fetch passes `hour_filter` (the superset of sample hours, `forecast_grid.all_sample_hours()`) to `OpenMeteoClient.fetch_multi_point`, so only sample-hour slots are materialised as `HourlyForecast`/`PressureLevelData` objects. Without it, ~80% of the 6-day hourly response (28 pressure levels for GFS) was parsed into Pydantic objects only to be discarded — and stayed alive across the chunk's sounding analysis in up to 4 concurrent threads, dominating the fetch phase's transient memory. The wire payload still contains every hour; the filter bounds parse memory, not bandwidth.
 
 ### Scheduler Integration
 
