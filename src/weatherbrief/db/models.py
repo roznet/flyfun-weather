@@ -742,6 +742,12 @@ class AirportForecastSnapshotRow(Base):
     wind_gusts_10m_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     precipitation_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
     snowfall_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Window that precipitation_mm / snowfall_cm accumulate over. Open-Meteo
+    # (GFS, ICON) reports hourly, so 1. ECMWF is decoded from accumulated-since-
+    # init GRIB fields and thins its step cadence with lead time, so a far-out
+    # row covers 3 h or 6 h. NULL on rows written before this was tracked, and
+    # on the first delivered step (nothing to diff against).
+    precip_period_h: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_cover_low_pct: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -26,7 +26,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/maps", tags=["maps"])
 
-from weatherbrief.tasks.standalone_verification import SAMPLE_HOURS_UTC as _SAMPLE_HOURS
+from weatherbrief.tasks.forecast_grid import (
+    MAX_FORECAST_DAY,
+    all_sample_hours,
+    forecast_days,
+    sample_hours_for_day,
+)
 
 
 from weatherbrief.api.deps import airports_db as _airports_db
@@ -49,7 +54,7 @@ def _forecast_hour(day: int, hour: int) -> datetime:
 
 @router.get("/forecast")
 def get_forecast_map(
-    day: int = Query(default=0, ge=0, le=3),
+    day: int = Query(default=0, ge=0, le=MAX_FORECAST_DAY),
     hour: int = Query(default=12),
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
@@ -62,13 +67,15 @@ def get_forecast_map(
 
     Parameters:
         day: Days from today (0 = today, 1 = tomorrow, ...)
-        hour: UTC hour (6, 9, 12, 15, 18)
+        hour: UTC sample hour. Which hours exist depends on the day — see
+            ``/forecast/days``. Out-of-grid values snap to the nearest offered.
     """
     from weatherbrief.tasks.cache_builder import get_cached, is_stale
     from weatherbrief.tasks.map_queries import get_forecast_map_data
 
-    if hour not in _SAMPLE_HOURS:
-        hour = min(_SAMPLE_HOURS, key=lambda h: abs(h - hour))
+    offered = sample_hours_for_day(day)
+    if hour not in offered:
+        hour = min(offered, key=lambda h: abs(h - hour))
 
     cache_key = f"forecast_map:{day}:{hour}"
     if not is_stale(db, cache_key, "snapshot"):
@@ -82,7 +89,7 @@ def get_forecast_map(
 
 @router.get("/forecast/hours")
 def get_available_hours(
-    day: int = Query(default=0, ge=0, le=3),
+    day: int = Query(default=0, ge=0, le=MAX_FORECAST_DAY),
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -110,43 +117,70 @@ def get_available_hours(
         ))
         .distinct()
     ).scalars().all()
-    available = sorted(int(h) for h in hour_rows if int(h) in _SAMPLE_HOURS)
+    offered = sample_hours_for_day(day)
+    available = sorted(int(h) for h in hour_rows if int(h) in offered)
 
     return {"day": day, "date": target_date.isoformat(), "hours": available}
 
 
 def compute_day_availability(db: Session) -> list[dict[str, Any]]:
-    """Per-relative-day (D-0..D-3) flag for whether any forecast data exists.
+    """What actually exists, per relative day: which hours, and which models.
 
-    Pure logic (no ``Depends`` defaults) so it can be unit-tested directly and
-    reused. The far day (today+3) has no snapshots until the next twice-daily
-    model run extends the horizon.
+    The grid is deliberately not rectangular. ICON's cloud-diag GRIB stops at
+    120 h, so the far days carry GFS and ECMWF only; and ECMWF delivers just
+    6-hourly steps past 144 h, so the last day carries three sample hours
+    rather than five. Rather than encode those rules a second time in the
+    client, report what is in the table and let the UI draw that.
+
+    Pure logic (no ``Depends`` defaults) so it can be unit-tested directly.
+    A day beyond the current model horizon reports ``available: false`` — it
+    stays empty until the next twice-daily cycle extends the horizon.
     """
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from weatherbrief.db.models import AirportForecastSnapshotRow
 
-    # Capture `now` once so all four days resolve against the same instant —
+    # Capture `now` once so every day resolves against the same instant —
     # otherwise a UTC-midnight tick mid-loop could map two days to one date.
     now = datetime.now(timezone.utc)
-    days = []
-    for day in (0, 1, 2, 3):
-        forecast_date = (now + timedelta(days=day)).date()
-        start = datetime(
-            forecast_date.year, forecast_date.month, forecast_date.day,
-            0, 0, 0, tzinfo=timezone.utc,
+    today = now.date()
+    horizon_end = datetime(
+        today.year, today.month, today.day, 0, 0, 0, tzinfo=timezone.utc,
+    ) + timedelta(days=MAX_FORECAST_DAY + 1)
+
+    # One pass over the horizon: which (date, hour, model) triples exist.
+    rows = db.execute(
+        select(
+            func.date(AirportForecastSnapshotRow.forecast_hour),
+            func.extract("hour", AirportForecastSnapshotRow.forecast_hour),
+            AirportForecastSnapshotRow.model,
         )
-        end = start + timedelta(days=1)
-        has_data = db.execute(
-            select(AirportForecastSnapshotRow.id)
-            .where(AirportForecastSnapshotRow.forecast_hour >= start)
-            .where(AirportForecastSnapshotRow.forecast_hour < end)
-            .limit(1)
-        ).scalar()
+        .where(AirportForecastSnapshotRow.forecast_hour >= datetime(
+            today.year, today.month, today.day, 0, 0, 0, tzinfo=timezone.utc,
+        ))
+        .where(AirportForecastSnapshotRow.forecast_hour < horizon_end)
+        .distinct()
+    ).all()
+
+    # SQLite returns date() as a string, MySQL as a date — normalise to date.
+    present: dict[str, dict[int, set[str]]] = {}
+    for raw_date, raw_hour, model in rows:
+        key = raw_date if isinstance(raw_date, str) else raw_date.isoformat()
+        present.setdefault(key, {}).setdefault(int(raw_hour), set()).add(model)
+
+    days = []
+    for day in forecast_days():
+        forecast_date = (now + timedelta(days=day)).date()
+        by_hour = present.get(forecast_date.isoformat(), {})
+        offered = sample_hours_for_day(day)
+        hours = sorted(h for h in by_hour if h in offered)
+        models = sorted({m for h in hours for m in by_hour[h]})
         days.append({
             "day": day,
             "date": forecast_date.isoformat(),
-            "available": has_data is not None,
+            "available": bool(hours),
+            "hours": hours,
+            "models": models,
         })
     return days
 
@@ -156,12 +190,13 @@ def get_available_days(
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Return which relative days (D-0..D-3) have any forecast data.
+    """Return the forecast grid: per day, which hours and models have data.
 
-    The frontend disables days beyond the current model horizon rather than
-    showing an empty or mislabelled map.
+    The client builds its day and hour pickers from this rather than from a
+    hardcoded range, so a day with fewer sample hours or fewer models shows up
+    as exactly that instead of as a map with silent gaps in it.
     """
-    return {"days": compute_day_availability(db)}
+    return {"days": compute_day_availability(db), "max_day": MAX_FORECAST_DAY}
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +296,7 @@ def _resolve_airports(
 @router.get("/airport-weather")
 def get_airport_weather(
     icao: list[str] = Query(description="ICAO codes (1-20)"),
-    day: int = Query(default=0, ge=0, le=3),
+    day: int = Query(default=0, ge=0, le=MAX_FORECAST_DAY),
     hour: int = Query(default=12),
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
@@ -298,8 +333,9 @@ def get_airport_weather(
         get_forecast_map_data,
     )
 
-    if hour not in _SAMPLE_HOURS:
-        hour = min(_SAMPLE_HOURS, key=lambda h: abs(h - hour))
+    offered = sample_hours_for_day(day)
+    if hour not in offered:
+        hour = min(offered, key=lambda h: abs(h - hour))
 
     cache_key = f"forecast_map:{day}:{hour}"
     data = None

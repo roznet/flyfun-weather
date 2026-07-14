@@ -47,9 +47,10 @@ _LEADERBOARD_MODELS = ("gfs", "icon", "ecmwf")
 _LEADERBOARD_DAYS_OUT = (0, 1, 2)
 _LEADERBOARD_PERIODS = {"7d": 168, "30d": 720, "90d": 2160}
 
-# Forecast map: days ahead × sample hours
-_FORECAST_DAYS = (0, 1, 2, 3)
-_FORECAST_HOURS = (6, 9, 12, 15, 18)
+# Forecast map: days ahead × sample hours. The grid is not rectangular — the
+# far day carries fewer hours because ECMWF only delivers 6-hourly steps out
+# there — so it comes from the horizon policy rather than a literal here.
+from weatherbrief.tasks.forecast_grid import forecast_days, sample_hours_for_day
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +235,9 @@ def rebuild_forecast_map_cache(db: Session, airports_db_path: str) -> int:
         select(func.max(AirportForecastSnapshotRow.fetched_at))
     ).scalar()
 
-    for day in _FORECAST_DAYS:
+    for day in forecast_days():
         target_date = (now + timedelta(days=day)).date()
-        for hour in _FORECAST_HOURS:
+        for hour in sample_hours_for_day(day):
             forecast_hour = datetime(
                 target_date.year, target_date.month, target_date.day,
                 hour, 0, 0, tzinfo=timezone.utc,

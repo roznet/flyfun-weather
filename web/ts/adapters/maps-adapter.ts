@@ -74,9 +74,18 @@ export async function fetchAvailableHours(day: number): Promise<{ hours: number[
   return resp.json();
 }
 
-export interface DayAvailability { day: number; date: string; available: boolean; }
+/** What a given day actually holds. The grid is not rectangular: the far days
+ *  carry fewer models (ICON's ceiling GRIB stops at 120h) and the last day
+ *  fewer hours (ECMWF only delivers 6-hourly steps past 144h). */
+export interface DayAvailability {
+  day: number;
+  date: string;
+  available: boolean;
+  hours: number[];
+  models: string[];
+}
 
-export async function fetchAvailableDays(): Promise<{ days: DayAvailability[] }> {
+export async function fetchAvailableDays(): Promise<{ days: DayAvailability[]; max_day: number }> {
   const resp = await fetch(`${apiBase}/maps/forecast/days`, { credentials: 'include' });
   if (!resp.ok) throw new Error(`Available days: ${resp.status}`);
   return resp.json();

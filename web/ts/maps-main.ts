@@ -2,8 +2,8 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
-  fetchForecastMap, fetchAvailableHours, fetchAvailableDays,
-  type ForecastMapResponse,
+  fetchForecastMap, fetchAvailableDays,
+  type ForecastMapResponse, type DayAvailability,
 } from './adapters/maps-adapter';
 import {
   fetchHewsonManifest, fetchHewsonSlice, fetchHewsonAllMetrics, fetchHewsonFronts,
@@ -102,7 +102,7 @@ let airportPanelIcao: string | null = null;
 // buttons, so an untouched view yields a bare `/maps.html` URL.
 const mapsUrlState = createUrlState({
   tab:         { default: 'forecast' as Tab, values: ['forecast', 'synoptic', 'climatology', 'stats'] as readonly Tab[] },
-  'fc.day':    { default: 0,  values: [0, 1, 2, 3] as readonly number[] },
+  'fc.day':    { default: 0,  values: [0, 1, 2, 3, 4, 5, 6] as readonly number[] },
   'fc.hour':   { default: 12, values: [6, 9, 12, 15, 18] as readonly number[] },
   'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
   'fc.metric': {
@@ -168,62 +168,126 @@ function updateForecastDatetime(): void {
   el.textContent = `${dayDateLabel(fcDay)} ${String(fcHour).padStart(2, '0')}Z`;
 }
 
-// Which relative days (0..3) currently have forecast data. The far day
-// (today+3) is empty until the next twice-daily model run extends the
-// horizon; such days are disabled in the picker with an explanation.
-let availableDays = new Set<number>([0, 1, 2, 3]);
+// The forecast grid, as reported by the server. It is deliberately not
+// rectangular — the far days carry fewer models (ICON's ceiling GRIB stops at
+// 120h) and the last day fewer hours (ECMWF delivers only 6-hourly steps past
+// 144h) — so the pickers are drawn from this rather than from a fixed range.
+// A day still inside the horizon but not yet fetched reports available:false.
+let dayGrid: DayAvailability[] = [];
 
-function applyDayAvailability(): void {
+function dayInfo(day: number): DayAvailability | undefined {
+  return dayGrid.find((d) => d.day === day);
+}
+
+function availableDaysSet(): Set<number> {
+  return new Set(dayGrid.filter((d) => d.available).map((d) => d.day));
+}
+
+/** Render the day buttons from the grid. Days beyond the horizon aren't drawn
+ *  at all; days inside it but not yet fetched are drawn and marked. */
+function renderDayPicker(): void {
   const group = $('day-picker');
   if (!group) return;
-  for (const btn of group.querySelectorAll('button')) {
-    const d = parseInt((btn as HTMLElement).dataset.day || '0');
-    const avail = availableDays.has(d);
-    btn.classList.toggle('day-unavailable', !avail);
-    (btn as HTMLElement).title = avail ? '' : t('maps.dayNotForecast');
-    // Kept clickable (to show the explanation) so `disabled` isn't used —
-    // aria-disabled conveys the state to screen readers without that.
-    btn.setAttribute('aria-disabled', avail ? 'false' : 'true');
+  group.innerHTML = '';
+  for (const d of dayGrid) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-toggle';
+    btn.dataset.day = String(d.day);
+    btn.textContent = `D-${d.day}`;
+    if (d.day === fcDay) btn.classList.add('active');
+    btn.classList.toggle('day-unavailable', !d.available);
+    // Kept clickable (to explain itself when picked) so `disabled` isn't used;
+    // aria-disabled conveys the state without removing it from the tab order.
+    btn.setAttribute('aria-disabled', d.available ? 'false' : 'true');
+    btn.title = d.available
+      ? (d.models.length > 0 ? t('maps.dayModels', { models: modelLabels(d.models) }) : '')
+      : t('maps.dayNotForecast');
+    group.appendChild(btn);
   }
 }
 
-/** Sync the hour picker's enabled buttons to the selected day. */
-async function syncHoursForDay(): Promise<void> {
-  try {
-    const { hours } = await fetchAvailableHours(fcDay);
-    const hourBtns = $('hour-picker')?.querySelectorAll('button');
-    if (!hourBtns) return;
-    for (const btn of hourBtns) {
-      const h = parseInt((btn as HTMLElement).dataset.hour || '0');
-      btn.classList.toggle('disabled', !hours.includes(h));
-      (btn as HTMLButtonElement).disabled = !hours.includes(h);
-    }
-    if (!hours.includes(fcHour) && hours.length > 0) {
-      fcHour = hours[0];
-      setActive('hour-picker', String(fcHour), 'hour');
-    }
-  } catch { /* ignore */ }
+function modelLabels(models: string[]): string {
+  return models.map((m) => m.toUpperCase()).join(', ');
 }
 
-/** Refresh day availability and snap the selection back into range if the
- *  selected day fell outside the horizon (e.g. after a UTC-midnight rollover
- *  before the next model run). */
+/** Render the hour buttons for the selected day. The far day offers three
+ *  slots rather than five, so the button set changes with the day. */
+function renderHourPicker(): void {
+  const group = $('hour-picker');
+  if (!group) return;
+  const hours = dayInfo(fcDay)?.hours ?? [];
+  // Snap the selection into the day's grid before drawing, so exactly one
+  // button ends up active (e.g. 09Z isn't offered on the far day).
+  if (hours.length > 0 && !hours.includes(fcHour)) {
+    fcHour = hours.reduce((best, h) =>
+      Math.abs(h - fcHour) < Math.abs(best - fcHour) ? h : best, hours[0]);
+  }
+  group.innerHTML = '';
+  for (const h of hours) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-toggle';
+    btn.dataset.hour = String(h);
+    btn.textContent = `${String(h).padStart(2, '0')}Z`;
+    if (h === fcHour) btn.classList.add('active');
+    group.appendChild(btn);
+  }
+}
+
+/** Grey out per-model buttons the selected day has no data for, and fall back
+ *  to the consensus view if the model currently shown isn't one of them. The
+ *  map should never present a model's absence as if it were its agreement. */
+function applyModelAvailability(): void {
+  const group = $('model-picker');
+  if (!group) return;
+  const models = dayInfo(fcDay)?.models ?? [];
+  // No data at all for this day → leave every button as-is rather than
+  // greying the whole picker out; the empty-map message covers that case.
+  if (models.length === 0) return;
+  for (const btn of group.querySelectorAll('button')) {
+    const m = (btn as HTMLElement).dataset.model || '';
+    if (m === 'worst' || m === 'majority') continue;  // consensus modes always offered
+    const has = models.includes(m);
+    btn.classList.toggle('disabled', !has);
+    (btn as HTMLButtonElement).disabled = !has;
+    (btn as HTMLElement).title = has
+      ? ''
+      : t('maps.modelNotAtRange', { model: m.toUpperCase(), date: dayDateLabel(fcDay) });
+  }
+  if (fcModel !== 'worst' && fcModel !== 'majority' && !models.includes(fcModel)) {
+    fcModel = 'worst';
+    setActive('model-picker', fcModel, 'model');
+  }
+}
+
+/** Re-sync hour + model pickers to the selected day. */
+function syncPickersForDay(): void {
+  renderHourPicker();
+  applyModelAvailability();
+  setActive('hour-picker', String(fcHour), 'hour');
+}
+
+/** Refresh the grid and snap the selection back into range if the selected day
+ *  fell outside the horizon (e.g. after a UTC-midnight rollover before the
+ *  next model run). */
 async function refreshDayAvailability(): Promise<void> {
   try {
     const { days } = await fetchAvailableDays();
-    availableDays = new Set(days.filter((d) => d.available).map((d) => d.day));
+    dayGrid = days;
   } catch {
-    availableDays = new Set([0, 1, 2, 3]);
+    // Offline/error: assume the near days exist so the page still works.
+    dayGrid = [0, 1, 2, 3].map((day) => ({
+      day, date: '', available: true,
+      hours: [6, 9, 12, 15, 18], models: ['ecmwf', 'gfs', 'icon'],
+    }));
   }
-  applyDayAvailability();
-  if (!availableDays.has(fcDay)) {
-    const fallback = [...availableDays].sort((a, b) => b - a)[0] ?? 0;
-    fcDay = fallback;
-    setActive('day-picker', String(fcDay), 'day');
-    await syncHoursForDay();
-    updateForecastDatetime();
+  const avail = availableDaysSet();
+  if (!avail.has(fcDay)) {
+    fcDay = [...avail].sort((a, b) => b - a)[0] ?? 0;
     syncUrl();
   }
+  renderDayPicker();
+  syncPickersForDay();
+  updateForecastDatetime();
 }
 
 // --- Data loading ---
@@ -335,7 +399,7 @@ function wireForecastControls(): void {
     const btn = (e.target as HTMLElement).closest('button');
     if (!btn || btn.dataset.day == null) return;
     const d = parseInt(btn.dataset.day);
-    if (!availableDays.has(d)) {
+    if (!availableDaysSet().has(d)) {
       showInfo(t('maps.dayNotForecastDetail', { date: dayDateLabel(d) }));
       return;
     }
@@ -343,7 +407,10 @@ function wireForecastControls(): void {
     for (const b of dayGroup.querySelectorAll('button')) b.classList.remove('active');
     btn.classList.add('active');
     fcDay = d;
-    await syncHoursForDay();
+    // The hour and model buttons both depend on the day: the far day offers
+    // three slots not five, and two models not three.
+    syncPickersForDay();
+    updateForecastDatetime();
     syncUrl();
     loadForecast();
     refreshAirportPanelOnHourChange();
