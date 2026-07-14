@@ -555,8 +555,8 @@ class TestAvailableDaysEndpoint:
     def test_reports_per_day_availability(self, app_db, tmp_path, monkeypatch):
         client = _make_client(app_db, tmp_path, monkeypatch)
 
-        # Seed D-0 (today) only; D-3 stays unforecast, as it would be before
-        # the next twice-daily model run extends the horizon.
+        # Seed D-0 (today) only; the rest stay unforecast, as they would be
+        # before the next twice-daily model run extends the horizon.
         today_12z = datetime.now(timezone.utc).replace(
             hour=12, minute=0, second=0, microsecond=0)
         session = app_db()
@@ -566,16 +566,44 @@ class TestAvailableDaysEndpoint:
 
         resp = client.get("/api/maps/forecast/days")
         assert resp.status_code == 200
-        days = {d["day"]: d for d in resp.json()["days"]}
-        assert set(days) == {0, 1, 2, 3}
+        body = resp.json()
+        days = {d["day"]: d for d in body["days"]}
+        # The map runs to ECMWF's 168h wall (#415), not to a fixed 4 days.
+        assert set(days) == {0, 1, 2, 3, 4, 5, 6}
+        assert body["max_day"] == 6
         assert days[0]["available"] is True
-        # D-1/D-2 also had nothing seeded — pin them so a regression that
+        # Nothing seeded beyond today — pin them all so a regression that
         # erroneously marks them available is caught.
-        assert days[1]["available"] is False
-        assert days[2]["available"] is False
-        assert days[3]["available"] is False
+        for day in range(1, 7):
+            assert days[day]["available"] is False, f"D-{day} should be empty"
         # Date label tracks today + day so the UI label stays consistent.
         assert days[0]["date"] == datetime.now(timezone.utc).date().isoformat()
+
+    def test_reports_hours_and_models_present_per_day(
+        self, app_db, tmp_path, monkeypatch,
+    ):
+        """The client draws its pickers from this, so it must say which hours
+        and which models a day actually holds — the grid is not rectangular."""
+        client = _make_client(app_db, tmp_path, monkeypatch)
+
+        today = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0)
+        session = app_db()
+        # Two models at 12Z, one of them also at 06Z.
+        _insert_snapshot(session, icao="LFPG", model="gfs",
+                         forecast_hour=today.replace(hour=12))
+        _insert_snapshot(session, icao="LFPG", model="ecmwf",
+                         forecast_hour=today.replace(hour=12))
+        _insert_snapshot(session, icao="LFPG", model="gfs",
+                         forecast_hour=today.replace(hour=6))
+        session.commit()
+        session.close()
+
+        days = {d["day"]: d for d in client.get("/api/maps/forecast/days").json()["days"]}
+        assert days[0]["hours"] == [6, 12]
+        assert days[0]["models"] == ["ecmwf", "gfs"]  # no ICON seeded → not claimed
+        assert days[1]["hours"] == []
+        assert days[1]["models"] == []
 
 
 def test_alt_required_flags():

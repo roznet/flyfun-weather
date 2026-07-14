@@ -402,21 +402,13 @@
     <!-- Tab: Forecast Overview -->
     <div id="panel-forecast" class="tab-panel active">
       <div class="maps-controls" id="controls-forecast">
+        <!-- Day and hour buttons are rendered from /maps/forecast/days: which
+             days, hours and models exist varies with the model horizons, so
+             the picker is drawn from the data rather than hardcoded here. -->
         <label>Day</label>
-        <div class="btn-group" id="day-picker">
-          <button class="btn-toggle active" data-day="0">D-0</button>
-          <button class="btn-toggle" data-day="1">D-1</button>
-          <button class="btn-toggle" data-day="2">D-2</button>
-          <button class="btn-toggle" data-day="3">D-3</button>
-        </div>
+        <div class="btn-group" id="day-picker"></div>
         <label>Hour</label>
-        <div class="btn-group" id="hour-picker">
-          <button class="btn-toggle" data-hour="6">06Z</button>
-          <button class="btn-toggle" data-hour="9">09Z</button>
-          <button class="btn-toggle active" data-hour="12">12Z</button>
-          <button class="btn-toggle" data-hour="15">15Z</button>
-          <button class="btn-toggle" data-hour="18">18Z</button>
-        </div>
+        <div class="btn-group" id="hour-picker"></div>
         <span class="forecast-datetime" id="forecast-datetime"></span>
         <label>Model</label>
         <div class="btn-group" id="model-picker">

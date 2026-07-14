@@ -33,6 +33,7 @@ from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
 from weatherbrief.process_rss import current_rss_mb, log_memory
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
 from weatherbrief.tasks.edr_calibration import flush_accumulator
+from weatherbrief.tasks.forecast_grid import MAP_FORECAST_DAYS, sample_hours_for_day
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.grib import DecodePriority
@@ -194,7 +195,9 @@ FORECAST_FETCH_HOURS_UTC = [7, 19]
 # snapshots are already in DB (most recent fetch wins).
 VERIFICATION_HOURS_UTC = [6, 9, 12, 15, 18]
 
-# Model forecast horizon — 4 days is enough for actionable verification stats
+# Per-flight alternates horizon — how far ahead a flight ETA can be fetched.
+# The forecast *map* has its own, longer horizon in ``forecast_grid``: it is
+# bounded by ECMWF's delivery, not by how far ahead someone files a flight.
 MODEL_FORECAST_DAYS = {
     "gfs": 4,
     "icon": 4,
@@ -285,28 +288,30 @@ def _fetch_forecasts_for_model(
     session: requests.Session,
     sample_hours: list[int] | None = None,
     edr_acc: "EdrAccumulator | None" = None,
+    days: int | None = None,
 ) -> tuple[list[dict], int]:
     """Fetch Open-Meteo surface forecasts for all airports for one model.
 
     Returns (snapshots, api_call_count) — list of dicts with airport ICAO
-    and per-sample-hour values filtered to ``sample_hours``, plus the number
-    of actual HTTP requests made.
+    and per-sample-hour values, plus the number of actual HTTP requests made.
 
-    ``sample_hours`` defaults to the module-level ``SAMPLE_HOURS_UTC`` so the
-    standalone verification cycle keeps its current behaviour; the route
-    alternates stage passes the flight's ETA hour to fetch off-grid hours
-    (issue #210, "Seam 1"). ``fetch_ecmwf_grib_snapshots`` already takes a
-    ``sample_hours`` argument, so this brings the GFS/ICON path in line.
+    ``sample_hours`` given as a flat list applies to every day — the route
+    alternates stage passes the flight's ETA hour that way to fetch off-grid
+    hours (issue #210, "Seam 1"). Left as ``None`` it means "the map's grid",
+    which varies by day: the far day is sampled at three hours rather than
+    five because ECMWF only delivers 6-hourly steps out there (#415).
+
+    ``days`` likewise defaults to the alternates horizon; the map cycle passes
+    its own, longer per-model horizon.
     """
     from weatherbrief.models.analysis import ModelSource, RoutePoint
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
 
-    if sample_hours is None:
-        sample_hours = SAMPLE_HOURS_UTC
-    hour_filter = set(sample_hours)
+    # A flat list applies to all days; None means the map's per-day grid.
+    hour_filter = set(sample_hours) if sample_hours is not None else None
 
     model_source = ModelSource(model)
-    forecast_days = MODEL_FORECAST_DAYS.get(model, 7)
+    forecast_days = days if days is not None else MODEL_FORECAST_DAYS.get(model, 7)
 
     start_date = init_time.strftime("%Y-%m-%d")
     end_dt = init_time + timedelta(days=forecast_days)
@@ -380,11 +385,24 @@ def _fetch_forecasts_for_model(
             time.monotonic() - chunk_started,
         )
         chunk_results: list[dict] = []
+        init_date = init_time.date()
         for airport, wpf in zip(chunk_list, forecasts):
             # Filter to sample hours only
             for hourly in wpf.hourly:
                 utc_hour = hourly.time.hour if hasattr(hourly.time, 'hour') else None
-                if utc_hour not in sample_hours:
+                if utc_hour is None:
+                    continue
+                day_offset = (hourly.time.date() - init_date).days
+                # Enforce the horizon here rather than trusting Open-Meteo to
+                # honour end_date. The horizons are load-bearing now — ICON is
+                # cut at 4 days because its ceiling GRIB stops at 120h — so a
+                # row past the horizon is a bug, not a bonus.
+                if day_offset < 0 or day_offset > forecast_days:
+                    continue
+                if hour_filter is not None:
+                    if utc_hour not in hour_filter:
+                        continue
+                elif utc_hour not in sample_hours_for_day(day_offset):
                     continue
 
                 # Compute LCL from T-Td
@@ -407,6 +425,7 @@ def _fetch_forecasts_for_model(
                     "wind_gusts_10m_kt": hourly.wind_gusts_10m_kt,
                     "precipitation_mm": hourly.precipitation_mm,
                     "snowfall_cm": hourly.snowfall_cm,
+                    "precip_period_h": 1,  # Open-Meteo reports hourly totals
                     "cape_jkg": hourly.cape_jkg,
                     "cloud_cover_pct": hourly.cloud_cover_pct,
                     "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
@@ -574,6 +593,24 @@ def _enrich_with_grib(
         return
 
     forecast_hours = sorted(fhour_set)
+
+    if model == "icon":
+        # ICON-EU's cloud-diag GRIB stops at 120 h (main cycles). Asking for a
+        # step past that is nine guaranteed 404s per hour, so don't ask.
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_model_level_max_hour
+
+        max_hour = icon_eu_model_level_max_hour(init_hour)
+        beyond = [h for h in forecast_hours if h > max_hour]
+        if beyond:
+            logger.info(
+                "ICON-EU cloud diag: %d forecast hour(s) beyond the %dh horizon "
+                "(%s) — no ceiling available, skipping",
+                len(beyond), max_hour, ", ".join(f"{h}h" for h in beyond),
+            )
+            forecast_hours = [h for h in forecast_hours if h <= max_hour]
+        if not forecast_hours:
+            return
+
     lats = [a.lat for a in airports]
     lons = [a.lon for a in airports]
 
@@ -648,7 +685,7 @@ def _select_ecmwf_grib_run(om_init_time: datetime, days: int):
 def fetch_ecmwf_grib_snapshots(
     run_files: list,
     airports: list[WatchlistAirport],
-    sample_hours: list[int],
+    sample_hours: list[int] | None,
     days: int,
     edr_acc: "EdrAccumulator | None" = None,
     priority: "int | DecodePriority | None" = None,
@@ -661,13 +698,15 @@ def fetch_ecmwf_grib_snapshots(
     ``analyze_sounding_lite`` on the GRIB-native pressure-level profile.
 
     ``tp`` and ``sf`` arrive accumulated from init in the a1 GRIB, so this
-    fetcher decodes the previous-hour step too and stores per-hour deltas
-    to match Open-Meteo's hourly precipitation semantics.
+    fetcher also decodes the preceding *delivered* step and stores the delta,
+    together with the window that delta covers (``precip_period_h``): 1 h in
+    the hourly region, 3 h or 6 h further out where ECMWF thins its cadence.
 
     Args:
         run_files: ECMWFFileInfo list scoped to one run (single base_time).
         airports: Watchlist airports to decode for.
-        sample_hours: UTC hours to sample (e.g. [6, 9, 12, 15, 18]).
+        sample_hours: UTC hours to sample, applied to every day. ``None`` means
+            the map's per-day grid (five hours near, three at the far day).
         days: Forecast horizon in days from init.
         priority: Decode priority for the dispatched a1/a2 jobs. ``None``
             (default) falls through to the decode-priority ContextVar via
@@ -734,10 +773,24 @@ def fetch_ecmwf_grib_snapshots(
 
     snapshots: list[dict] = []
     max_step = max(files_by_step.keys())
+    delivered_steps = sorted(files_by_step)
+
+    def _previous_delivered_step(step_h: int) -> int | None:
+        """Nearest delivered step before ``step_h``, for the accumulation diff.
+
+        ``tp``/``sf`` accumulate from init, so a per-period value needs the
+        preceding step. That is *not* ``step_h - 1`` outside the hourly region:
+        ECMWF delivers 3-hourly past 90 h and 6-hourly past 144 h. Reaching for
+        an undelivered step used to yield the empty sentinel, which silently
+        skipped the diff and left the value accumulated-since-init (#415).
+        """
+        prev = [s for s in delivered_steps if s < step_h]
+        return prev[-1] if prev else None
 
     for day_offset in range(days + 1):
         target_date = (init_time + timedelta(days=day_offset)).date()
-        for hour in sample_hours:
+        hours = sample_hours if sample_hours is not None else sample_hours_for_day(day_offset)
+        for hour in hours:
             target_dt = datetime.combine(
                 target_date, dt_time(hour, 0, 0), tzinfo=timezone.utc,
             )
@@ -748,7 +801,12 @@ def fetch_ecmwf_grib_snapshots(
                 continue
 
             cur_a1 = _decode_a1(step_h)
-            prev_a1 = _decode_a1(step_h - 1) if (step_h - 1) > 0 else None
+            prev_step = _previous_delivered_step(step_h)
+            prev_a1 = _decode_a1(prev_step) if prev_step is not None else None
+            # Window the accumulation actually covers: 1 h inside the hourly
+            # region, 3 h or 6 h further out. Recorded per row so a 6 h total is
+            # never mistaken for an hourly one.
+            precip_period_h = (step_h - prev_step) if prev_step is not None else None
 
             a2_path = files_by_step[step_h].get("a2")
             pl_data: list[dict[int, dict[str, float]]] | None = None
@@ -802,6 +860,7 @@ def fetch_ecmwf_grib_snapshots(
                     "wind_gusts_10m_kt": snap_fields.get("wind_gusts_10m_kt"),
                     "precipitation_mm": snap_fields.get("precipitation_mm"),
                     "snowfall_cm": snap_fields.get("snowfall_cm"),
+                    "precip_period_h": precip_period_h,
                     "cape_jkg": snap_fields.get("cape_jkg"),
                     "cloud_cover_pct": snap_fields.get("cloud_cover_pct"),
                     "cloud_cover_low_pct": snap_fields.get("cloud_cover_low_pct"),
@@ -919,6 +978,7 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
             wind_gusts_10m_kt=snap.get("wind_gusts_10m_kt"),
             precipitation_mm=snap.get("precipitation_mm"),
             snowfall_cm=snap.get("snowfall_cm"),
+            precip_period_h=snap.get("precip_period_h"),
             cape_jkg=snap.get("cape_jkg"),
             cloud_cover_pct=snap.get("cloud_cover_pct"),
             cloud_cover_low_pct=snap.get("cloud_cover_low_pct"),
@@ -983,6 +1043,10 @@ def _snapshot_to_hourly(snap: AirportForecastSnapshotRow):
         wind_gusts_10m_kt=snap.wind_gusts_10m_kt,
         precipitation_mm=snap.precipitation_mm,
         snowfall_cm=snap.snowfall_cm,
+        # precip_period_h is deliberately not carried into HourlyForecast: that
+        # model is shared with the briefing pipeline, where precipitation is
+        # always hourly. Scoring still reads a 3h/6h ECMWF total as if it were
+        # hourly — see #415; the window is on the row for that fix to use.
         cape_jkg=snap.cape_jkg,
         cloud_cover_pct=snap.cloud_cover_pct,
         cloud_cover_low_pct=snap.cloud_cover_low_pct,
@@ -1264,11 +1328,11 @@ def run_standalone_cycle(
                 # fresh as Open-Meteo's. Open-Meteo republishes ECMWF IFS-HRES
                 # with a 7–9h lag, so the 07/19Z fetch consistently saw the
                 # prior 18Z bc-run; direct GRIB lands ~6h after init.
+                map_days = MAP_FORECAST_DAYS.get(model, 4)
+
                 grib_run_files = None
                 if model == "ecmwf":
-                    grib_run_files = _select_ecmwf_grib_run(
-                        om_init_time, MODEL_FORECAST_DAYS.get(model, 4),
-                    )
+                    grib_run_files = _select_ecmwf_grib_run(om_init_time, map_days)
 
                 if grib_run_files is not None:
                     init_time = grib_run_files[0].base_time
@@ -1295,8 +1359,8 @@ def run_standalone_cycle(
                     )
                     snapshots = fetch_ecmwf_grib_snapshots(
                         grib_run_files, airports,
-                        SAMPLE_HOURS_UTC,
-                        MODEL_FORECAST_DAYS.get(model, 4),
+                        None,  # per-day grid: five hours near, three at the far day
+                        map_days,
                         edr_acc=edr_acc,
                         # Standalone cycle decode stays deprioritised behind any
                         # interactive briefing. (The cycle ContextVar also
@@ -1313,6 +1377,7 @@ def run_standalone_cycle(
                                 model, init_time, len(airports))
                     snapshots, api_calls = _fetch_forecasts_for_model(
                         model, init_time, airports, session, edr_acc=edr_acc,
+                        days=map_days,
                     )
                     total_api_calls += api_calls
                     logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
