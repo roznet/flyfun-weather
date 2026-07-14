@@ -28,8 +28,11 @@
     .maps-controls .btn-group .btn-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
     /* Day beyond model horizon: greyed but still clickable so a click can
        explain why (see maps.dayNotForecastDetail). */
-    .maps-controls .btn-group .btn-toggle.day-unavailable { opacity: 0.4; cursor: not-allowed; }
-    .maps-controls .btn-group .btn-toggle.day-unavailable:hover:not(.active) { background: transparent; }
+    /* Unavailable toggles stay clickable so they can explain themselves — the
+       native `disabled` attribute suppresses hover/click in Blink and WebKit,
+       which would leave a greyed-out button with no way to learn why. */
+    .maps-controls .btn-group .btn-toggle.unavailable { opacity: 0.4; cursor: not-allowed; }
+    .maps-controls .btn-group .btn-toggle.unavailable:hover:not(.active) { background: transparent; }
 
     .maps-controls select {
       padding: 0.3rem 0.5rem; border: 1px solid var(--border);

@@ -181,17 +181,29 @@ test.describe('Forecast page', () => {
     await expect(page.locator('#hour-picker .btn-toggle[data-hour="15"]')).toHaveCount(0);
   });
 
-  test('a model that cannot reach the selected day is disabled', async ({ page }) => {
+  test('a model that cannot reach the selected day explains itself', async ({ page }) => {
     await page.goto('/maps.html');
-    // ICON reaches the near days.
-    await expect(page.locator('#model-picker .btn-toggle[data-model="icon"]')).toBeEnabled();
+    const icon = page.locator('#model-picker .btn-toggle[data-model="icon"]');
+    await expect(icon).toHaveAttribute('aria-disabled', 'false');
 
-    // ...but its ceiling GRIB stops at 120h, so it has nothing to say at D-6.
-    // It must read as absent, never as agreement.
+    // ICON's ceiling GRIB stops at 120h, so it has nothing to say at D-6. It
+    // must read as absent, never as agreement.
     await page.click('#day-picker .btn-toggle[data-day="6"]');
-    await expect(page.locator('#model-picker .btn-toggle[data-model="icon"]')).toBeDisabled();
-    await expect(page.locator('#model-picker .btn-toggle[data-model="ecmwf"]')).toBeEnabled();
-    await expect(page.locator('#model-picker .btn-toggle[data-model="gfs"]')).toBeEnabled();
+    await expect(icon).toHaveAttribute('aria-disabled', 'true');
+    await expect(page.locator('#model-picker .btn-toggle[data-model="ecmwf"]'))
+      .toHaveAttribute('aria-disabled', 'false');
+
+    // Crucially NOT the native `disabled` attribute. Blink and WebKit suppress
+    // hover and click on disabled elements, so the button could never say why
+    // it is greyed out. (Playwright's own toBeEnabled() counts aria-disabled as
+    // disabled, so assert the DOM property directly — that is what browsers
+    // actually gate hover and click on.)
+    expect(await icon.evaluate((el: HTMLButtonElement) => el.disabled)).toBe(false);
+
+    // So it stays clickable, and clicking explains rather than selects.
+    await icon.click({ force: true });
+    await expect(page.locator('#map-info')).toContainText('ICON');
+    await expect(icon).not.toHaveClass(/active/);
   });
 
   test('survives a 200 from /forecast/days carrying the wrong shape', async ({ page }) => {

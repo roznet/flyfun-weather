@@ -35,14 +35,40 @@ slots would leave two of them permanently ECMWF-less.
 
 from __future__ import annotations
 
-# Last day offered on the map. ECMWF's 168 h wall: from a 00Z run, D+7's first
-# sample hour is 174 h, past the end of the delivery. D+7 would be GFS-only.
-MAX_FORECAST_DAY = 6
+# ECMWF operational delivery (00Z/12Z runs). These two numbers are the facts;
+# everything below is derived from them, so that a change to the contract moves
+# the grid rather than silently leaving it sampling steps nobody delivers.
+ECMWF_MAX_STEP_H = 168        # hard wall — nothing beyond this exists
+ECMWF_3H_MAX_STEP_H = 144     # hourly/3-hourly up to here, 6-hourly past it
 
 # Sample hours for a normal day, and for days past ECMWF's 3-hourly region.
+# The coarse set is exactly the hours that land on 6-hourly steps: from a 00Z or
+# 12Z init, 06/12/18Z are multiples of 6 and 09/15Z never are.
 FINE_SAMPLE_HOURS = (6, 9, 12, 15, 18)
 COARSE_SAMPLE_HOURS = (6, 12, 18)
-COARSE_FROM_DAY = 6
+
+
+def _first_coarse_day() -> int:
+    """First day whose fine-grid hours would reach past the 3-hourly region."""
+    day = 0
+    while 24 * day + max(FINE_SAMPLE_HOURS) <= ECMWF_3H_MAX_STEP_H:
+        day += 1
+    return day
+
+
+def _last_offered_day() -> int:
+    """Last day with at least one delivered sample step (its earliest hour)."""
+    day = 0
+    while 24 * (day + 1) + min(FINE_SAMPLE_HOURS) <= ECMWF_MAX_STEP_H:
+        day += 1
+    return day
+
+
+# Both happen to be 6 today, but for different reasons — one is the 168 h wall,
+# the other is where the cadence thins to 6-hourly. Deriving them separately
+# keeps that a fact rather than a coincidence waiting to be mis-copied.
+COARSE_FROM_DAY = _first_coarse_day()
+MAX_FORECAST_DAY = _last_offered_day()
 
 # How far each model is fetched for the map. ICON stops at 4 because its
 # cloud-diag GRIB horizon is 120 h; fetching it further would store rows with

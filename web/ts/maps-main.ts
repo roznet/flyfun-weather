@@ -195,7 +195,7 @@ function renderDayPicker(): void {
     btn.dataset.day = String(d.day);
     btn.textContent = `D-${d.day}`;
     if (d.day === fcDay) btn.classList.add('active');
-    btn.classList.toggle('day-unavailable', !d.available);
+    btn.classList.toggle('unavailable', !d.available);
     // Kept clickable (to explain itself when picked) so `disabled` isn't used;
     // aria-disabled conveys the state without removing it from the tab order.
     btn.setAttribute('aria-disabled', d.available ? 'false' : 'true');
@@ -247,8 +247,14 @@ function applyModelAvailability(): void {
     const m = (btn as HTMLElement).dataset.model || '';
     if (m === 'worst' || m === 'majority') continue;  // consensus modes always offered
     const has = models.includes(m);
-    btn.classList.toggle('disabled', !has);
-    (btn as HTMLButtonElement).disabled = !has;
+    // Same reasoning as the day picker: NOT the native `disabled` attribute.
+    // Blink and WebKit suppress hover and click on disabled elements, so the
+    // tooltip below would never fire and the button could not explain itself —
+    // leaving the user with a greyed-out ICON and no way to learn that its
+    // forecast simply doesn't reach this far. aria-disabled conveys the state
+    // to assistive tech without taking the button out of the tab order.
+    btn.classList.toggle('unavailable', !has);
+    btn.setAttribute('aria-disabled', has ? 'false' : 'true');
     (btn as HTMLElement).title = has
       ? ''
       : t('maps.modelNotAtRange', { model: m.toUpperCase(), date: dayDateLabel(fcDay) });
@@ -441,7 +447,22 @@ function wireForecastControls(): void {
     refreshAirportPanelOnHourChange();
   });
 
-  wireButtonGroup('model-picker', 'model', (v) => {
+  // Custom handler rather than wireButtonGroup: now that unavailable models are
+  // no longer natively disabled, a click on one must say why instead of
+  // selecting a model the day has no data for.
+  const modelGroup = $('model-picker');
+  modelGroup?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('button');
+    if (!btn || btn.dataset.model == null) return;
+    const v = btn.dataset.model;
+    if (btn.getAttribute('aria-disabled') === 'true') {
+      showInfo(t('maps.modelNotAtRange', {
+        model: v.toUpperCase(), date: dayDateLabel(fcDay),
+      }));
+      return;
+    }
+    for (const b of modelGroup.querySelectorAll('button')) b.classList.remove('active');
+    btn.classList.add('active');
     fcModel = v;
     // All mode switches are client-side — per-model data is already in the response
     syncUrl();

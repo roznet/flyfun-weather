@@ -7,7 +7,10 @@ the map quietly sample steps that were never delivered.
 """
 
 from weatherbrief.tasks.forecast_grid import (
+    COARSE_FROM_DAY,
     COARSE_SAMPLE_HOURS,
+    ECMWF_3H_MAX_STEP_H,
+    ECMWF_MAX_STEP_H,
     FINE_SAMPLE_HOURS,
     MAP_FORECAST_DAYS,
     MAX_FORECAST_DAY,
@@ -89,6 +92,38 @@ class TestModelHorizons:
         for day in forecast_days():
             reaching = [m for m, d in MAP_FORECAST_DAYS.items() if d >= day]
             assert len(reaching) >= 2, f"D+{day} would show {reaching} alone"
+
+
+class TestConstantsAreDerivedNotCoincidental:
+    """MAX_FORECAST_DAY and COARSE_FROM_DAY are both 6 — for different reasons.
+
+    One is ECMWF's 168h wall; the other is where its cadence thins to 6-hourly
+    past 144h. They must be derived from those two facts independently, so that
+    a change to the delivery contract moves each on its own.
+    """
+
+    def test_they_currently_coincide(self):
+        assert MAX_FORECAST_DAY == 6
+        assert COARSE_FROM_DAY == 6
+
+    def test_the_wall_alone_sets_the_last_day(self):
+        """D+6's first slot is inside 168h; D+7's is not."""
+        assert 24 * MAX_FORECAST_DAY + min(FINE_SAMPLE_HOURS) <= ECMWF_MAX_STEP_H
+        assert 24 * (MAX_FORECAST_DAY + 1) + min(FINE_SAMPLE_HOURS) > ECMWF_MAX_STEP_H
+
+    def test_the_cadence_alone_sets_the_coarse_day(self):
+        """The day before goes coarse still fits inside the 3-hourly region."""
+        assert 24 * (COARSE_FROM_DAY - 1) + max(FINE_SAMPLE_HOURS) <= ECMWF_3H_MAX_STEP_H
+        assert 24 * COARSE_FROM_DAY + max(FINE_SAMPLE_HOURS) > ECMWF_3H_MAX_STEP_H
+
+    def test_the_delivery_facts_match_the_real_step_list(self):
+        """Guard the two constants against the actual delivered steps."""
+        assert max(ECMWF_DELIVERED_STEPS) == ECMWF_MAX_STEP_H
+        three_hourly = [s for s in ECMWF_DELIVERED_STEPS if s <= ECMWF_3H_MAX_STEP_H]
+        # Everything past the 3-hourly region is on a 6-hourly step.
+        beyond = [s for s in ECMWF_DELIVERED_STEPS if s > ECMWF_3H_MAX_STEP_H]
+        assert max(three_hourly) == ECMWF_3H_MAX_STEP_H
+        assert all(s % 6 == 0 for s in beyond)
 
 
 class TestGridShape:
