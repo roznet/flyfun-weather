@@ -392,6 +392,9 @@ function openAirportPanel(icao: string, opts: { initialModel?: string; initialVi
   }
   airportPanelIcao = icao;
   forecastMap?.setHighlightedIcao(icao);
+  // A deep link can name a model the selected day has no data for
+  // (?fc.day=6&fc.apModel=icon) — constrain before loading, not after.
+  airportPanel.setAvailableModels(dayInfo(fcDay)?.models ?? []);
   airportPanel.load({
     icao, startHour: forecastStartHour(), windowH: AIRPORT_PROFILE_WINDOW_H,
     summary: summaryFor(icao),
@@ -417,6 +420,8 @@ function closeAirportPanel(): void {
  *  so the card reflects the new valid time (and the cross-section rewindows). */
 function refreshOpenPanel(): void {
   if (!airportPanel || !airportPanelIcao) return;
+  // The day may have moved past a model's horizon (or back inside it).
+  airportPanel.setAvailableModels(dayInfo(fcDay)?.models ?? []);
   airportPanel.load({
     icao: airportPanelIcao, startHour: forecastStartHour(), windowH: AIRPORT_PROFILE_WINDOW_H,
     summary: summaryFor(airportPanelIcao),

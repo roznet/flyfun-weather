@@ -220,6 +220,23 @@ test.describe('Forecast page', () => {
     await expect(page.locator('#map-info')).toContainText('2 airports');
   });
 
+  test('the airport panel does not offer a model the day has no data for', async ({ page }) => {
+    // The panel's surface trace comes from the snapshot table, and ICON's
+    // ceiling GRIB stops at 120h — so from D+5 there are no ICON snapshots.
+    // Offering ICON would draw a cross-section with an empty surface: absence
+    // rendered as if it were a forecast.
+    await page.goto('/maps.html');
+    await page.click('#day-picker .btn-toggle[data-day="6"]');
+    await page.click('#map-container .leaflet-interactive');
+
+    const iconOpt = page.locator('.ap-model-sel option[value="icon"]');
+    await expect(iconOpt).toBeDisabled();
+    await expect(iconOpt).toContainText('not at this range');
+    await expect(page.locator('.ap-model-sel option[value="ecmwf"]')).toBeEnabled();
+    // ...and the selection landed on a model that does reach D-6.
+    await expect(page.locator('.ap-model-sel')).not.toHaveValue('icon');
+  });
+
   test('model picker switches between consensus and single model', async ({ page }) => {
     await page.goto('/maps.html');
     // Default is "worst"

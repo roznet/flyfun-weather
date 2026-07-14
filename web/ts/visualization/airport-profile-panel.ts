@@ -291,6 +291,32 @@ export class AirportProfilePanel {
     this.modelSel.value = model;
   }
 
+  /** Restrict the model choices to those the selected day actually has data for.
+   *
+   *  The panel's surface trace is read from the forecast-snapshot table, and not
+   *  every model reaches every day: ICON's ceiling GRIB stops at 120h, so from
+   *  D+5 there are no ICON snapshots at all. Offering ICON there would draw a
+   *  cross-section with an empty surface — absence rendered as if it were a
+   *  forecast, which is the one thing this map must not do. Pass the models the
+   *  server reports for the day (`/maps/forecast/days`).
+   */
+  setAvailableModels(models: string[]): void {
+    if (!models.length) return;  // grid not known yet — leave the choices alone
+    for (const opt of Array.from(this.modelSel.options)) {
+      const has = models.includes(opt.value);
+      opt.disabled = !has;
+      opt.textContent = has
+        ? opt.value.toUpperCase()
+        : `${opt.value.toUpperCase()} — not at this range`;
+    }
+    if (!models.includes(this.model)) {
+      const fallback = models.includes('ecmwf') ? 'ecmwf' : models[0];
+      this.model = fallback;
+      this.modelSel.value = fallback;
+      this.onModelChange?.(fallback);
+    }
+  }
+
   /** Read the panel's current model — used by the host to round-trip
    *  the panel's selection through the URL state. */
   getModel(): string {
