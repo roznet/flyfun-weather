@@ -1,18 +1,16 @@
-/** Airport profile panel — right-click an airport on /maps.html to inspect
- *  its vertical conditions (cross-section + Skew-T) for a 4-hour window.
+/** Airport profile panel — click (or tap) an airport on /maps.html to
+ *  inspect it. Defaults to the summary Card (rendered synchronously from the
+ *  map's forecast data); the cross-section + Skew-T are behind the toggle and
+ *  fetched on intent (dwell / pointer-enter) via an SSE stream.
  *
  *  Renders into a host element that the maps page sizes via CSS. The panel
- *  owns its own SSE stream lifecycle; the only inputs from the host are
- *  airport coords + selected (day, hour, model).
+ *  owns its own SSE stream lifecycle; the inputs from the host are the
+ *  airport summary (for the card) + selected (day, hour, model).
  *
  *  View modes (segmented toggle, persisted to localStorage):
- *    'both'  — cross-section on top, Skew-T below (default)
+ *    'card'  — summary card, no network (default)
  *    'cross' — cross-section only
  *    'skewt' — Skew-T only
- *
- *  The issue calls out "stacked-views crowding (likely)" as something to
- *  revisit visually; the toggle is in place from day one so the follow-up
- *  is "change the default", not a refactor.
  */
 
 import { CrossSectionRenderer } from './cross-section/renderer';
@@ -268,9 +266,14 @@ export class AirportProfilePanel {
       // if the dwell timer hasn't already fired.
       if (v === 'cross' || v === 'skewt') this.ensureStream();
       this.applyViewMode();
-      // Drawer contents depend on viewMode; re-render if open so a
-      // section that just became visible shows its controls.
-      if (this.drawerOpen) this.renderDrawer();
+      // Card view has no layer/overlay controls (the gear is hidden), so
+      // close the drawer instead of leaving orphaned Cross/Skew-T sections.
+      // For cross/skewt, re-render so the just-shown section's controls appear.
+      if (v === 'card') {
+        if (this.drawerOpen) this.toggleDrawer();
+      } else if (this.drawerOpen) {
+        this.renderDrawer();
+      }
     });
     this.settingsBtn.addEventListener('click', () => this.toggleDrawer());
 
@@ -397,6 +400,14 @@ export class AirportProfilePanel {
       clearTimeout(this.prefetchTimer);
       this.prefetchTimer = null;
     }
+  }
+
+  /** Replace the card's summary and re-render just the card — used when the
+   *  map's model/consensus mode changes (the card's consensus column follows
+   *  it), without disturbing the cross-section stream. */
+  updateSummary(summary: AirportSummaryInput): void {
+    this.summary = summary;
+    this.renderCard();
   }
 
   /** Render the summary card from the host-provided snapshot summary. */
@@ -599,8 +610,10 @@ export class AirportProfilePanel {
   }
 
   private renderDrawer(): void {
-    const showCross = this.viewMode !== 'skewt';
-    const showSkewT = this.viewMode !== 'cross';
+    // Exact match — 'card' shows neither section (the drawer isn't reachable
+    // in card view; this is a guard against orphaned controls if it were).
+    const showCross = this.viewMode === 'cross';
+    const showSkewT = this.viewMode === 'skewt';
 
     // Build section shells; populate each with the appropriate
     // sub-control via the dedicated render helpers.

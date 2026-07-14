@@ -516,6 +516,13 @@ function wireForecastControls(): void {
     // All mode switches are client-side — per-model data is already in the response
     syncUrl();
     rerender();
+    // The open card's consensus column follows the map's mode
+    // (panelConsensusMode derives from fcModel) — keep it in lockstep with
+    // the markers instead of showing the previous mode's values.
+    if (airportPanel && airportPanelIcao) {
+      const s = summaryFor(airportPanelIcao);
+      if (s) airportPanel.updateSummary(s);
+    }
   });
 
   const metricSel = $('metric-picker') as HTMLSelectElement | null;
