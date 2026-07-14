@@ -211,8 +211,9 @@ def get_forecast_map_data(
     """Return forecast data for all watchlist airports at a given hour.
 
     Finds the latest model_init_time per model that has data for forecast_hour,
-    then returns per-airport, per-model forecasts with worst-consensus.
-    Majority consensus is computed client-side from per-model data.
+    then returns per-airport, per-model forecasts with both the worst
+    (``consensus``) and majority (``consensus_majority``) consensus baked in, so
+    the clients render without recomputing either.
     """
     coords = _get_coords(airports_db_path)
 
@@ -284,7 +285,11 @@ def get_forecast_map_data(
             "lon": lon,
             "approach_type": atype,
             "models": models_data,
-            "consensus": _consensus(models_data),
+            # Both consensus modes are baked so the clients (web + iOS) carry
+            # zero consensus logic — they read whichever block matches the
+            # selected Worst/Majority mode. See designs/forecast-page.md and #419.
+            "consensus": _consensus(models_data, "worst"),
+            "consensus_majority": _consensus(models_data, "majority"),
         })
 
     return {

@@ -1,39 +1,51 @@
 {
-  "_comment": "Shared consensus test vectors: one source of truth pinning the Python airport_consensus.consensus and the TypeScript weather-map-consensus.computeConsensus to identical output. Consumed by tests/test_consensus_parity.py and web/tests/unit/consensus-parity.test.ts. Each case's `models` maps model name -> {flight_category, ceiling_ft, visibility_m, wind_speed_kt, crosswind_kt, headwind_kt}; `expected` gives the reduced values per mode. crosswind: worst=max (higher is worse). headwind: worst=min (a positive headwind is favourable, so the weakest headwind / strongest tailwind is the conservative pick). majority=median within the winning-category pool for every numeric. Keep the two consumers in lockstep with this file.",
+  "_comment": "Shared consensus test vectors: one source of truth pinning the Python airport_consensus.consensus to the reference behaviour the web forecast map used to compute client-side (weather-map-consensus.computeConsensus, retired in #419 — the client now reads the server-baked consensus/consensus_majority blocks straight off the payload). Consumed by tests/test_consensus_parity.py (server) and web/tests/unit/consensus-parity.test.ts (the briefing arrival card's computeSummaryCondition, which still recomputes). Each case's `models` maps model name -> {flight_category, ceiling_ft, visibility_m, wind_speed_kt, crosswind_kt, headwind_kt, convective_risk, cloud_cover_pct}; `expected` gives the reduced values per mode. Numerics: worst = least-favourable across ALL models (crosswind/cloud_cover max, headwind/ceiling/visibility min); majority = median within the winning-category pool. convective_risk is ordinal over ALL models (worst = highest severity none<marginal<low<moderate<high<extreme; majority = modal with worst-severity tiebreak). Keep this file, the server, and the retired-client's documented rules in lockstep.",
   "cases": [
     {
       "name": "all agree VFR",
       "models": {
-        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5, "headwind_kt": 12},
-        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8},
-        "ecmwf": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12, "crosswind_kt": 7, "headwind_kt": 10}
+        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5, "headwind_kt": 12, "convective_risk": "low",  "cloud_cover_pct": 30},
+        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8,  "convective_risk": "none", "cloud_cover_pct": 50},
+        "ecmwf": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12, "crosswind_kt": 7, "headwind_kt": 10, "convective_risk": "low",  "cloud_cover_pct": 40}
       },
       "expected": {
-        "worst":    {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8},
-        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12, "crosswind_kt": 7, "headwind_kt": 10}
+        "worst":    {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8,  "convective_risk": "low", "cloud_cover_pct": 50},
+        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9500, "wind_speed_kt": 12, "crosswind_kt": 7, "headwind_kt": 10, "convective_risk": "low", "cloud_cover_pct": 40}
       }
     },
     {
       "name": "2 VFR + 1 IFR -> majority VFR from the pool",
       "models": {
-        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5, "headwind_kt": 12},
-        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9, "headwind_kt": 8},
-        "ecmwf": {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000, "wind_speed_kt": 30, "crosswind_kt": 20, "headwind_kt": -5}
+        "gfs":   {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5,  "headwind_kt": 12, "convective_risk": "none", "cloud_cover_pct": 20},
+        "icon":  {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 9,  "headwind_kt": 8,  "convective_risk": "low",  "cloud_cover_pct": 60},
+        "ecmwf": {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000, "wind_speed_kt": 30, "crosswind_kt": 20, "headwind_kt": -5, "convective_risk": "high", "cloud_cover_pct": 90}
       },
       "expected": {
-        "worst":    {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000,   "wind_speed_kt": 30, "crosswind_kt": 20, "headwind_kt": -5},
-        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9499.5, "wind_speed_kt": 12, "crosswind_kt": 7,  "headwind_kt": 10}
+        "worst":    {"flight_category": "IFR", "ceiling_ft": 800,  "visibility_m": 3000,   "wind_speed_kt": 30, "crosswind_kt": 20, "headwind_kt": -5, "convective_risk": "high", "cloud_cover_pct": 90},
+        "majority": {"flight_category": "VFR", "ceiling_ft": 4500, "visibility_m": 9499.5, "wind_speed_kt": 12, "crosswind_kt": 7,  "headwind_kt": 10, "convective_risk": "high", "cloud_cover_pct": 40}
       }
     },
     {
       "name": "1 VFR + 1 IFR tie -> majority breaks to worse (IFR)",
       "models": {
-        "gfs":  {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5,  "headwind_kt": 12},
-        "icon": {"flight_category": "IFR", "ceiling_ft": 900,  "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3}
+        "gfs":  {"flight_category": "VFR", "ceiling_ft": 5000, "visibility_m": 9999, "wind_speed_kt": 10, "crosswind_kt": 5,  "headwind_kt": 12, "convective_risk": "low",      "cloud_cover_pct": 25},
+        "icon": {"flight_category": "IFR", "ceiling_ft": 900,  "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3, "convective_risk": "moderate", "cloud_cover_pct": 85}
       },
       "expected": {
-        "worst":    {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3},
-        "majority": {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3}
+        "worst":    {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3, "convective_risk": "moderate", "cloud_cover_pct": 85},
+        "majority": {"flight_category": "IFR", "ceiling_ft": 900, "visibility_m": 3000, "wind_speed_kt": 20, "crosswind_kt": 15, "headwind_kt": -3, "convective_risk": "moderate", "cloud_cover_pct": 85}
+      }
+    },
+    {
+      "name": "convective modal (majority) differs from worst; cloud median over pool",
+      "models": {
+        "gfs":   {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 10, "crosswind_kt": 4, "headwind_kt": 10, "convective_risk": "moderate", "cloud_cover_pct": 10},
+        "icon":  {"flight_category": "VFR", "ceiling_ft": 4200, "visibility_m": 9200, "wind_speed_kt": 12, "crosswind_kt": 6, "headwind_kt": 12, "convective_risk": "moderate", "cloud_cover_pct": 20},
+        "ecmwf": {"flight_category": "VFR", "ceiling_ft": 4400, "visibility_m": 9400, "wind_speed_kt": 14, "crosswind_kt": 8, "headwind_kt": 14, "convective_risk": "extreme",  "cloud_cover_pct": 30}
+      },
+      "expected": {
+        "worst":    {"flight_category": "VFR", "ceiling_ft": 4000, "visibility_m": 9000, "wind_speed_kt": 14, "crosswind_kt": 8, "headwind_kt": 10, "convective_risk": "extreme",  "cloud_cover_pct": 30},
+        "majority": {"flight_category": "VFR", "ceiling_ft": 4200, "visibility_m": 9200, "wind_speed_kt": 12, "crosswind_kt": 6, "headwind_kt": 12, "convective_risk": "moderate", "cloud_cover_pct": 20}
       }
     }
   ]

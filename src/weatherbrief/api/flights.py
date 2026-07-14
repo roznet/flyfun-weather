@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal
 
@@ -18,7 +19,7 @@ from flyfun_common.auth import is_dev_mode
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
-from weatherbrief.db.models import BriefingPackRow
+from weatherbrief.db.models import BriefingPackRow, FlightRow
 from weatherbrief.fetch.variables import (
     MAX_BOOKING_LEAD_DAYS,
     coverage_start_date,
@@ -1540,6 +1541,92 @@ def move_flight(
     save_flight(db, new_flight, user_id)
 
     return _flight_to_response(new_flight, db, viewer_id=user_id)
+
+
+# ---------------------------------------------------------------------------
+# Frequent airports — the user's most-used departures/destinations (#419, B3)
+# ---------------------------------------------------------------------------
+
+# Airport waypoints are 4-letter ICAO location indicators; a route may also
+# carry navaids/fixes (which are not airports), so frequency counting keeps
+# only ICAO-shaped tokens at the route ends.
+_ICAO_RE = re.compile(r"^[A-Z]{4}$")
+
+
+class FrequentAirport(BaseModel):
+    """One airport in a frequency ranking."""
+
+    icao: str
+    count: int
+
+
+class FrequentAirportsResponse(BaseModel):
+    """The user's most-used departure and destination airports."""
+
+    departures: list[FrequentAirport]
+    destinations: list[FrequentAirport]
+
+
+def compute_frequent_airports(
+    db: Session, user_id: str, *, top_n: int = 5
+) -> FrequentAirportsResponse:
+    """Rank the user's most-used departure and destination airports.
+
+    Derived from flight history — there is no ``home_base`` concept in the
+    schema, and the departure/destination are not stored as columns: the route
+    lives in ``FlightRow.waypoints_json`` (a JSON array), so departure is the
+    first waypoint and destination the last. Only the user's OWN flights are
+    counted (not flights they merely subscribe to), and only ICAO-shaped route
+    ends (navaids/fixes are skipped). Ties keep ``Counter.most_common`` order.
+
+    Pure logic (no ``Depends`` defaults) so it is unit-testable and reusable —
+    iOS centres the forecast map on cold open from this; the web can prefill
+    Add-Flight from it.
+    """
+    rows = db.execute(
+        select(FlightRow.waypoints_json).where(FlightRow.user_id == user_id)
+    ).scalars().all()
+
+    departures: Counter[str] = Counter()
+    destinations: Counter[str] = Counter()
+    for raw in rows:
+        try:
+            waypoints = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            continue
+        codes = [w.upper() for w in waypoints if isinstance(w, str)]
+        if not codes:
+            continue
+        if _ICAO_RE.match(codes[0]):
+            departures[codes[0]] += 1
+        # Destination only when the route has a distinct end.
+        if len(codes) >= 2 and _ICAO_RE.match(codes[-1]):
+            destinations[codes[-1]] += 1
+
+    def _rank(counter: Counter[str]) -> list[FrequentAirport]:
+        return [
+            FrequentAirport(icao=icao, count=n)
+            for icao, n in counter.most_common(top_n)
+        ]
+
+    return FrequentAirportsResponse(
+        departures=_rank(departures), destinations=_rank(destinations)
+    )
+
+
+@router.get("/frequent-airports", response_model=FrequentAirportsResponse)
+def get_frequent_airports(
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Return the current user's top-5 departure and destination airports.
+
+    Discovery ("where can I fly this weekend") needs an origin; this derives one
+    from flight history instead of adding a preference + onboarding step. Used
+    by the iOS forecast map to centre on cold open, and reusable by the web
+    Add-Flight prefill. See ``compute_frequent_airports``.
+    """
+    return compute_frequent_airports(db, user_id)
 
 
 @router.get("/{flight_id}", response_model=FlightResponse)

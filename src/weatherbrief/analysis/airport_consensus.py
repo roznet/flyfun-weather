@@ -131,8 +131,32 @@ def agreement_label(level: str) -> str:
 #   * higher is worse → ``max`` in worst mode (wind speed, crosswind, CAPE).
 _WORST_IS_MIN = frozenset({"ceiling_ft", "visibility_m", "headwind_kt"})
 _NUMERIC_FIELDS = (
-    "wind_speed_kt", "ceiling_ft", "cape_jkg", "visibility_m", "crosswind_kt", "headwind_kt",
+    "wind_speed_kt", "ceiling_ft", "cape_jkg", "visibility_m", "crosswind_kt",
+    "headwind_kt", "cloud_cover_pct",
 )
+
+# Convective-risk severity, low→high. Mirrors the client's ``RISK_ORDER`` in
+# ``web/ts/visualization/weather-map-consensus.ts`` so worst/majority pick the
+# same category on both sides.
+_RISK_ORDER = ("none", "marginal", "low", "moderate", "high", "extreme")
+
+
+def _ordinal_consensus(values: list[str], order: tuple[str, ...], mode: str) -> str:
+    """Reduce categorical values by ordinal severity.
+
+    ``worst`` → highest-ranked value; ``majority`` → modal value with the worst
+    tied candidate breaking ties. Unknown values rank 0 (matches the client's
+    ``?? 0`` fallback in ``ordinalConsensus``).
+    """
+    def rank(v: str) -> int:
+        return order.index(v) if v in order else 0
+
+    if mode == "worst":
+        return max(values, key=rank)
+    counts = Counter(values)
+    max_count = max(counts.values())
+    tied = [v for v, n in counts.items() if n == max_count]
+    return max(tied, key=rank)
 
 
 def _reduce_numeric(field: str, vals: list[float], mode: str) -> float:
@@ -160,8 +184,10 @@ def consensus(per_model: dict[str, dict], mode: str = "majority") -> dict[str, A
         majority's intent. Wind direction is a circular mean of the pool.
 
     The same rule applies uniformly to every numeric field (ceiling, visibility,
-    wind speed, crosswind, headwind, CAPE); only wind direction is special-cased.
-    Returns per-variable agreement labels alongside consensus values.
+    wind speed, crosswind, headwind, CAPE, cloud cover). Convective risk is an
+    ordinal reduced over all models (worst rank / modal-with-worst-tiebreak),
+    and wind direction is a circular mean — both special-cased. Returns
+    per-variable agreement labels alongside consensus values.
     """
     models_with_data = list(per_model.keys())
     if not models_with_data:
@@ -207,6 +233,13 @@ def consensus(per_model: dict[str, dict], mode: str = "majority") -> dict[str, A
         "flight_category": consensus_cat,
         "agreement": agreement,
     }
+
+    # Convective risk is ordinal like flight category, but reduced over ALL
+    # models (not the winning-category pool) — matching the client, which maps
+    # every model's risk before the ordinal reduction.
+    risks = [(per_model[m].get("convective_risk") or "none") for m in models_with_data]
+    result["convective_risk"] = _ordinal_consensus(risks, _RISK_ORDER, mode)
+
     for field in _NUMERIC_FIELDS:
         vals = [per_model[m].get(field) for m in pool]
         vals = [v for v in vals if v is not None]

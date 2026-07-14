@@ -30,7 +30,8 @@ const MOCK_FORECAST: Record<string, unknown> = {
         icon: { ceiling_ft: 4500, visibility_m: 9999, wind_speed_kt: 14, wind_dir_deg: 220, wind_gust_kt: 20, cloud_cover_pct: 40, cape_jkg: 60, convective_risk: 'none', temperature_c: 13, flight_category: 'VFR' },
         ecmwf: { ceiling_ft: 800, visibility_m: 5000, wind_speed_kt: 10, wind_dir_deg: 240, wind_gust_kt: 15, cloud_cover_pct: 80, cape_jkg: 30, convective_risk: 'none', temperature_c: 12, flight_category: 'IFR' },
       },
-      consensus: { flight_category: 'IFR', agreement: { flight_category: 'mixed', wind_speed_kt: 'consistent', ceiling_ft: 'divergent', cape_jkg: 'consistent' }, wind_speed_kt: 12, wind_dir_deg: 230, ceiling_ft: 3433, cape_jkg: 47 },
+      consensus: { flight_category: 'IFR', agreement: { flight_category: 'mixed', wind_speed_kt: 'consistent', ceiling_ft: 'divergent', cape_jkg: 'consistent' }, wind_speed_kt: 14, wind_dir_deg: 230, ceiling_ft: 800, cape_jkg: 60, crosswind_kt: 9, headwind_kt: 8, visibility_m: 5000, convective_risk: 'none', cloud_cover_pct: 80 },
+      consensus_majority: { flight_category: 'VFR', agreement: { flight_category: 'mixed', wind_speed_kt: 'consistent', ceiling_ft: 'divergent', cape_jkg: 'consistent' }, wind_speed_kt: 13, wind_dir_deg: 225, ceiling_ft: 4750, cape_jkg: 55, crosswind_kt: 7, headwind_kt: 10, visibility_m: 9999, convective_risk: 'none', cloud_cover_pct: 35 },
     },
     {
       icao: 'EDDF', lat: 50.03, lon: 8.57,
@@ -39,7 +40,8 @@ const MOCK_FORECAST: Record<string, unknown> = {
         icon: { ceiling_ft: 5500, visibility_m: 9999, wind_speed_kt: 9, wind_dir_deg: 190, wind_gust_kt: null, cloud_cover_pct: 15, cape_jkg: 0, convective_risk: 'none', temperature_c: 15, flight_category: 'VFR' },
         ecmwf: { ceiling_ft: 5800, visibility_m: 9999, wind_speed_kt: 7, wind_dir_deg: 185, wind_gust_kt: null, cloud_cover_pct: 12, cape_jkg: 10, convective_risk: 'none', temperature_c: 15, flight_category: 'VFR' },
       },
-      consensus: { flight_category: 'VFR', agreement: { flight_category: 'consistent', wind_speed_kt: 'consistent', ceiling_ft: 'consistent', cape_jkg: 'consistent' }, wind_speed_kt: 8, wind_dir_deg: 185, ceiling_ft: 5767, cape_jkg: 3 },
+      consensus: { flight_category: 'VFR', agreement: { flight_category: 'consistent', wind_speed_kt: 'consistent', ceiling_ft: 'consistent', cape_jkg: 'consistent' }, wind_speed_kt: 9, wind_dir_deg: 185, ceiling_ft: 5500, cape_jkg: 10, visibility_m: 9999, convective_risk: 'none', cloud_cover_pct: 15 },
+      consensus_majority: { flight_category: 'VFR', agreement: { flight_category: 'consistent', wind_speed_kt: 'consistent', ceiling_ft: 'consistent', cape_jkg: 'consistent' }, wind_speed_kt: 8, wind_dir_deg: 185, ceiling_ft: 5800, cape_jkg: 0, visibility_m: 9999, convective_risk: 'none', cloud_cover_pct: 12 },
     },
   ],
 };
@@ -163,9 +165,13 @@ test.describe('Forecast page', () => {
 
   test('day picker is rendered from the grid, out to the far day', async ({ page }) => {
     await page.goto('/maps.html');
-    // Buttons come from /forecast/days, not from markup — D-0..D-6.
+    // Buttons come from /forecast/days, not from markup — seven days out.
     await expect(page.locator('#day-picker .btn-toggle')).toHaveCount(7);
     await expect(page.locator('#day-picker .btn-toggle[data-day="6"]')).toBeVisible();
+    // Labels are weekday + date, not D-N (#419, W1): D-0 reads "Today", and a
+    // later day reads a weekday + day-of-month, never "D-4".
+    await expect(page.locator('#day-picker .btn-toggle[data-day="0"]')).toHaveText('Today');
+    await expect(page.locator('#day-picker .btn-toggle[data-day="4"]')).not.toHaveText(/^D-/);
   });
 
   test('far day offers three hours, not five', async ({ page }) => {

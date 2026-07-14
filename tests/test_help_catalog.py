@@ -21,9 +21,11 @@ def _clear_caches():
     """Reset the module-level memoization between tests."""
     help_module._payload_cache.clear()
     help_module._metrics_cache = None
+    help_module._map_metrics_cache = None
     yield
     help_module._payload_cache.clear()
     help_module._metrics_cache = None
+    help_module._map_metrics_cache = None
 
 
 @pytest.fixture
@@ -59,6 +61,15 @@ class TestPayloadBuilding:
         # Advisory entry shape mirrors AdvisoryCatalogEntry.
         entry = payload["advisories"][0]
         assert {"id", "name", "short_description", "description", "category"} <= set(entry)
+
+    def test_payload_carries_the_forecast_map_catalog(self):
+        # The forecast-map colour/threshold catalog is served here (B2, #419) so
+        # iOS reads the same scales the web bundle imports.
+        payload = json.loads(help_module._build_payload("en")[0])
+        maps = payload["maps"]
+        assert maps["scales"]["categorical"]["flight_category"]["VFR"] == "#22c55e"
+        assert "wind_speed_kt" in maps["scales"]["bands"]
+        assert maps["metrics"]["flight_category"]["label"] == "Category"
 
     def test_version_is_stable(self):
         _, v1 = help_module._build_payload("en")

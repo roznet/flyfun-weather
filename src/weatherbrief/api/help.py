@@ -6,6 +6,12 @@ text. Two sections in one versioned, ETag-cacheable payload:
 
 - ``metrics``  — parsed verbatim from ``web/ts/data/metrics-catalog.json`` (the
   web bundle's only copy). English-only; see the ``lang`` note below.
+- ``maps``     — parsed verbatim from ``web/ts/data/map-metrics-catalog.json``
+  (the forecast-map colour scales, thresholds, labels and legends). Same
+  single-source pattern: the web bundle imports the JSON directly, iOS fetches
+  it here and caches it, so a threshold change is one JSON edit both clients
+  pick up (issue #419, B2). Language-independent (colours/numbers), but still
+  folded into the version hash so any edit re-validates the ETag.
 - ``advisories`` — the existing advisory catalog (``get_catalog()``), the same
   data already served at ``/user/preferences/advisories/catalog``.
 
@@ -47,10 +53,14 @@ SUPPORTED_LANGS = ("en", "fr", "de", "es")
 _METRICS_CATALOG_PATH = (
     Path(__file__).resolve().parents[3] / "web" / "ts" / "data" / "metrics-catalog.json"
 )
+_MAP_METRICS_CATALOG_PATH = (
+    Path(__file__).resolve().parents[3] / "web" / "ts" / "data" / "map-metrics-catalog.json"
+)
 
 # Per-language memoized (body bytes, version) — the catalog is static per process.
 _payload_cache: dict[str, tuple[bytes, str]] = {}
 _metrics_cache: dict[str, Any] | None = None
+_map_metrics_cache: dict[str, Any] | None = None
 
 
 def _load_metrics_catalog() -> dict[str, Any]:
@@ -65,6 +75,20 @@ def _load_metrics_catalog() -> dict[str, Any]:
         with _METRICS_CATALOG_PATH.open("r", encoding="utf-8") as fh:
             _metrics_cache = json.load(fh)
     return _metrics_cache
+
+
+def _load_map_metrics_catalog() -> dict[str, Any]:
+    """Load and memoize the forecast-map metrics catalog JSON (served as-is)."""
+    global _map_metrics_cache
+    if _map_metrics_cache is None:
+        if not _MAP_METRICS_CATALOG_PATH.exists():
+            raise RuntimeError(
+                f"map metrics catalog not found at {_MAP_METRICS_CATALOG_PATH} — "
+                "expected web/ts/data/map-metrics-catalog.json to be present"
+            )
+        with _MAP_METRICS_CATALOG_PATH.open("r", encoding="utf-8") as fh:
+            _map_metrics_cache = json.load(fh)
+    return _map_metrics_cache
 
 
 def _localize_advisories(
@@ -93,6 +117,7 @@ def _build_payload(lang: str) -> tuple[bytes, str]:
     core = {
         "lang": lang,
         "metrics": _load_metrics_catalog(),
+        "maps": _load_map_metrics_catalog(),
         "advisories": _localize_advisories(get_catalog(), lang),
     }
     canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -101,6 +126,7 @@ def _build_payload(lang: str) -> tuple[bytes, str]:
     payload = {
         "version": version,
         "metrics": core["metrics"],
+        "maps": core["maps"],
         "advisories": core["advisories"],
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
