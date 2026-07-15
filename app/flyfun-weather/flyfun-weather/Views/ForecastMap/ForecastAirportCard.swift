@@ -271,8 +271,8 @@ struct ForecastAirportCard: View {
             return m >= 5000 ? "\(Int((m / 1000).rounded())) km" : "\(Int(m.rounded())) m"
         case "wind_speed_kt":
             guard let s = data.numericField("wind_speed_kt") else { return "—" }
-            let dir = data.numericField("wind_dir_deg").map { "\(Int($0.rounded()))/" } ?? ""
-            // Gust as `Ggust` (web `dir/speedGgust`); consensus has no gust → omitted.
+            let dir = data.numericField("wind_dir_deg").map { "\(Int($0.rounded()))@" } ?? ""
+            // Gust as `Ggust` (web `dir@speedGgust`); consensus has no gust → omitted.
             // Web uses a truthy check on this field, so a literal 0 gust is omitted.
             let gust = data.numericField("wind_gust_kt").flatMap { $0 != 0 ? "G\(Int($0.rounded()))" : nil } ?? ""
             return "\(dir)\(Int(s.rounded()))\(gust)"

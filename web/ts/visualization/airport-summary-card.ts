@@ -67,7 +67,7 @@ function compactCell(data: { [k: string]: any }, metric: ForecastMetric): string
     case 'wind_speed_kt': {
       const s = data.wind_speed_kt;
       if (s == null) return '—';
-      const dir = data.wind_dir_deg != null ? `${Math.round(data.wind_dir_deg)}/` : '';
+      const dir = data.wind_dir_deg != null ? `${Math.round(data.wind_dir_deg)}@` : '';
       const g = data.wind_gust_kt ? `G${Math.round(data.wind_gust_kt)}` : '';
       return `${dir}${Math.round(s)}${g}`;
     }

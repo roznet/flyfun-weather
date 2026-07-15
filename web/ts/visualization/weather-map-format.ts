@@ -248,7 +248,7 @@ function fmtVisibility(m: number | null | undefined): string {
 
 function fmtWind(speed: number | null | undefined, dir: number | null | undefined, gust: number | null | undefined): string {
   if (speed == null) return '';
-  const dirStr = dir != null ? `${formatHeading(dir)}/` : '';
+  const dirStr = dir != null ? `${formatHeading(dir)}@` : '';
   const gustStr = gust ? `G${Math.round(gust)}` : '';
   return `${dirStr}${Math.round(speed)}${gustStr} kt`;
 }
