@@ -163,6 +163,28 @@ struct ForecastMapTests {
         #expect(apt.consensus.agreement(forMetric: "crosswind_kt") == "divergent")
     }
 
+    // MARK: - Card cell formatting (gust parity with web)
+
+    @Test func compactCellRendersGusts() throws {
+        let json = """
+        { "icao": "EGKB", "lat": 51.3, "lon": 0.03,
+          "models": { "gfs": { "convective_risk": "none", "flight_category": "VFR",
+            "wind_speed_kt": 15, "wind_dir_deg": 270, "wind_gust_kt": 22,
+            "crosswind_kt": 12, "gust_crosswind_kt": 18,
+            "headwind_kt": 8, "gust_headwind_kt": 14 } },
+          "consensus": { "flight_category": "VFR", "agreement": {}, "wind_speed_kt": 15, "wind_dir_deg": 270 },
+          "consensus_majority": { "flight_category": "VFR", "agreement": {} } }
+        """
+        let apt = try JSONDecoder().decode(ForecastAirport.self, from: Data(json.utf8))
+        let m = apt.models["gfs"].map { $0 as any ForecastCellData }
+        // Web: dir/speedGgust, value (gust) — the gust must not be silently dropped.
+        #expect(ForecastAirportCard.compactCell(m, metric: "wind_speed_kt") == "270/15G22")
+        #expect(ForecastAirportCard.compactCell(m, metric: "crosswind_kt") == "12 (18)")
+        #expect(ForecastAirportCard.compactCell(m, metric: "headwind_kt") == "8 (14)")
+        // The consensus block carries no gust field → steady value only, no "G".
+        #expect(ForecastAirportCard.compactCell(apt.consensus, metric: "wind_speed_kt") == "270/15")
+    }
+
     // MARK: - Model mode token round-trip
 
     @Test func modelModeTokens() {

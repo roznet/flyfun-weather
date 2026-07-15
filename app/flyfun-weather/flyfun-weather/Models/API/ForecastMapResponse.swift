@@ -153,6 +153,10 @@ struct ForecastModelEntry: Decodable, Sendable, ForecastCellData {
         case "cloud_cover_pct": return cloudCoverPct
         case "wind_dir_deg": return windDirDeg
         case "temperature_c": return temperatureC
+        // Gusts — the card renders these alongside the steady value (as web does).
+        case "wind_gust_kt": return windGustKt
+        case "gust_crosswind_kt": return gustCrosswindKt
+        case "gust_headwind_kt": return gustHeadwindKt
         default: return nil
         }
     }
