@@ -10,7 +10,7 @@
 | **UI** | **SwiftUI** | Native, declarative. No UIKit wrappers unless absolutely necessary. |
 | **Persistence** | **File-based JSON + UserDefaults** | No SwiftData. `BriefingCacheStore` (actor, on-disk pack cache under Application Support), `PirepOfflineStore` (JSON queue in Documents), `UserPreferencesStore` (UserDefaults). Simpler than a DB for our cache-the-pack model. |
 | **Networking** | **URLSession + async/await** | Built-in, no third-party dep. SSE refresh via `URLSession.bytes`. |
-| **Maps** | **MapKit (SwiftUI Map)** | iOS 17+ API, offline tiles, sufficient. |
+| **Maps** | **MapKit (`MKMapView` via `UIViewRepresentable`)** | Both the briefing route map and the forecast map are `MKMapView`-backed (converged in #428) so the airport-forecast marker layer is shared, not duplicated per map — the SwiftUI `Map` API janks at the forecast map's ~620-annotation scale. |
 | **Architecture** | **MVVM + Repository** | Natural fit for SwiftUI. Repos abstract API vs cache — offline-ready from day one. |
 | **Cross-section** | **SwiftUI Canvas** | Immediate-mode 2D, equivalent to HTML Canvas. No WKWebView. |
 | **Route graph** | **Swift Charts** | 2D charts, dual axes, extensible. |
