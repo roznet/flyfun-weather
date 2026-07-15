@@ -1,6 +1,6 @@
 ---
 name: sync-ios-web
-description: Audit web↔iOS consistency for hand-copied surfaces (preset tables, metrics-catalog, API DTOs) and surface divergences as an actionable task list. Run after a feature that touched one platform, before merge, or any time the two clients may have drifted.
+description: Audit web↔iOS consistency for hand-copied surfaces (preset tables, metrics-catalog, debrief taxonomy, API DTOs) and surface divergences as an actionable task list. Run after a feature that touched one platform, before merge, or any time the two clients may have drifted.
 ---
 
 # Sync iOS ↔ Web
@@ -78,7 +78,30 @@ Report field name / optionality / nesting mismatches. Prioritise fields present
 in the backend (or web) but **missing or non-optional in Swift** — those are the
 runtime-decode hazards. A field the server may omit must be `Optional` on iOS.
 
-### 4. Known parity gaps (informational)
+### 4. Debrief taxonomy — three-way copy
+
+The debrief vocabulary (condition tags + labels/descriptions, decisions, outcome
+values, advisory→tag map, note limit) is a **three-way** copy. Python is the
+source of truth; it is *served* to iOS in the `/api/help/catalog` `debrief`
+section, but iOS also ships a hand-kept offline baseline and web keeps a
+build-time mirror:
+
+| Role | File | Symbols |
+|---|---|---|
+| Source of truth | `src/weatherbrief/debriefs/taxonomy.py` | `ConditionTag`, `TAG_LABELS`, `TAG_DESCRIPTIONS`, `DECISION_LABELS`, `OUTCOME_LABELS`, `ADVISORY_TAG_MAP`, `NOTE_MAX_LENGTH`, `build_taxonomy_catalog()` |
+| Web mirror (build-time) | `web/ts/components/debrief-taxonomy.ts` | `ALL_TAGS`, `TAG_LABELS`, `TAG_DESCRIPTIONS`, `OUTCOME_LABELS`, `KEYWORD_MAP`, `ADVISORY_TAG_MAP` |
+| iOS offline baseline | `app/flyfun-weather/flyfun-weather/Models/API/DebriefTaxonomy.swift` | `DebriefTaxonomy.bundledBaseline` |
+
+The live iOS path reads the *served* catalog, so the baseline only backstops a
+cold first launch — but it must still match. Cross-check the tag set, labels,
+descriptions, decision order, advisory→tag map, and the note limit across all
+three. Report any tag/label/mapping that exists in Python but is missing or
+different in the web mirror **or** the iOS baseline. Web is not served, so a
+Python edit needs a manual TS + Swift-baseline update (source of truth = Python).
+The `KEYWORD_MAP` matcher is web-only by design (iOS dropped `matchTagsInText` for
+v1) — don't flag its absence on iOS.
+
+### 5. Known parity gaps (informational)
 
 List these so they are **not** re-flagged as new divergences, and note any *new*
 gap the branch introduced:
@@ -87,7 +110,7 @@ gap the branch introduced:
   `sld-bands`, `surface-obscuration-bands`.
 - Cross-section color themes (web-only; tracked in #320).
 
-### 5. SYNC-comment integrity
+### 6. SYNC-comment integrity
 
 Verify reciprocity for each `SYNC`-commented file pair:
 
