@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import UIKit
 
 /// Native MapKit map (§4.9). Earns its tab by being geographic — *where* along
 /// the route a hazard sits, on real terrain. Tier 1: per-segment metric overlay
@@ -92,66 +93,39 @@ struct RouteMapView: View {
     // MARK: Map
 
     private var mapContent: some View {
+        // Reading the tracking count keeps SwiftUI re-rendering (hence pushing a
+        // fresh `aircraft` into the representable) as the position updates.
         let _ = trackingService.locationUpdateCount
-        let isTracking = trackingService.isTracking
-        let aircraftLocation = trackingService.currentLocation
-        let aircraftOpacity = trackingService.projectedPosition?.opacity ?? 0.3
-        let aircraftHeading = trackingService.projectedPosition?.headingDeg ?? 0
-        let segs = segments()
-        let activeCoord = activePointCoordinate
-
-        return Map(initialPosition: .region(mapVM.mapRegion)) {
-            // Base route line under the metric segments.
-            MapPolyline(coordinates: mapVM.routeCoordinates)
-                .stroke(.gray.opacity(0.4), lineWidth: 2)
-
-            // Metric-coloured segments (colour + width = the metric).
-            ForEach(segs) { seg in
-                MapPolyline(coordinates: seg.coords)
-                    .stroke(seg.color, style: StrokeStyle(lineWidth: seg.width, lineCap: .round))
+        return RouteMapKitView(
+            routeCoordinates: mapVM.routeCoordinates,
+            segments: segments(),
+            routeSignature: routeSignature,
+            waypoints: mapVM.waypoints,
+            initialRegion: mapVM.mapRegion,
+            activePoint: activePointCoordinate,
+            aircraft: aircraftState,
+            onSelectWaypoint: { icao in
+                if let wp = mapVM.waypoints.first(where: { $0.id == icao }) { selectWaypoint(wp) }
             }
+        )
+        .ignoresSafeArea(edges: .bottom)
+    }
 
-            ForEach(mapVM.waypoints) { wp in
-                Annotation(wp.id, coordinate: wp.coordinate) {
-                    Button { selectWaypoint(wp) } label: {
-                        VStack(spacing: 2) {
-                            Text(wp.id)
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 4).padding(.vertical, 2)
-                                .background(.ultraThinMaterial, in: Capsule())
-                            Circle().fill(Theme.primary).frame(width: 8, height: 8)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+    /// Live aircraft state for the representable, or nil when not tracking.
+    private var aircraftState: RouteMapKitView.AircraftState? {
+        guard trackingService.isTracking, let location = trackingService.currentLocation else { return nil }
+        return RouteMapKitView.AircraftState(
+            coordinate: location.coordinate,
+            headingDeg: trackingService.projectedPosition?.headingDeg ?? 0,
+            opacity: trackingService.projectedPosition?.opacity ?? 0.3
+        )
+    }
 
-            // Shared active point (§4.7) — reflects the scrub point set on the
-            // cross-section / Skew-T or by tapping a waypoint here.
-            if let activeCoord {
-                Annotation("", coordinate: activeCoord, anchor: .center) {
-                    ZStack {
-                        Circle().fill(.orange.opacity(0.20))
-                        Circle().stroke(.orange, lineWidth: 3)
-                    }
-                    .frame(width: 22, height: 22)
-                }
-                .annotationTitles(.hidden)
-            }
-
-            if isTracking, let location = aircraftLocation {
-                Annotation("", coordinate: location.coordinate, anchor: .center) {
-                    Image(systemName: "airplane")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(.orange)
-                        .rotationEffect(.degrees(aircraftHeading - 90))
-                        .opacity(aircraftOpacity)
-                        .shadow(color: .black.opacity(0.5), radius: 3)
-                }
-                .annotationTitles(.hidden)
-            }
-        }
-        .mapStyle(.standard)  // follows the app's light/dark appearance natively
+    /// Cheap identity of the route overlays — the representable rebuilds segment
+    /// overlays only when this changes (not on every unrelated re-render, e.g. a
+    /// tracking tick that moves only the aircraft).
+    private var routeSignature: String {
+        "\(colorMetricId)|\(usesDualMetrics ? widthMetricId : colorMetricId)|\(Int(effectiveAltitudeFt))|\(viewModel.selectedModel)|\(vizData?.points.count ?? 0)"
     }
 
     // MARK: Controls (metric picker(s) · legend · altitude slider)
@@ -243,34 +217,26 @@ struct RouteMapView: View {
 
     // MARK: Segment building
 
-    private struct MapSegment: Identifiable {
-        let id: Int
-        let coords: [CLLocationCoordinate2D]
-        let color: Color
-        let width: Double
-    }
-
-    private func segments() -> [MapSegment] {
+    private func segments() -> [RouteMapKitView.Segment] {
         guard let colorMetric, let points = vizData?.points, points.count >= 2 else { return [] }
         let widthMetric = self.widthMetric
         let colorAlt: Double? = colorMetric.altitudeDependent ? effectiveAltitudeFt : nil
         let widthAlt: Double? = (widthMetric?.altitudeDependent ?? false) ? effectiveAltitudeFt : nil
 
-        var out: [MapSegment] = []
+        var out: [RouteMapKitView.Segment] = []
         for i in 0..<(points.count - 1) {
             let a = points[i], b = points[i + 1]
             // Risk/ordinal metrics take the worst endpoint (never average the
             // peak away); continuous metrics average — see MapMetric.aggregation.
             guard let colorValue = colorMetric.segmentValue(a, b, altitudeFt: colorAlt) else { continue }
             let widthValue = widthMetric?.segmentValue(a, b, altitudeFt: widthAlt)
-            out.append(MapSegment(
-                id: i,
+            out.append(RouteMapKitView.Segment(
                 coords: [
                     CLLocationCoordinate2D(latitude: a.lat, longitude: a.lon),
                     CLLocationCoordinate2D(latitude: b.lat, longitude: b.lon),
                 ],
-                color: colorMetric.color(colorValue),
-                width: widthMetric.flatMap { m in widthValue.map { m.width($0) } } ?? 8
+                color: UIColor(colorMetric.color(colorValue)),
+                width: widthMetric.flatMap { m in widthValue.map { CGFloat(m.width($0)) } } ?? 8
             ))
         }
         return out
