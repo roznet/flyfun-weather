@@ -104,16 +104,30 @@ final class FlightListViewModel {
             await refreshCachedFlightIds(seededCaching)
         }
         do {
+            let generation = loadGeneration
             let flights = try await repository.flights()
-            // Check offline/cache status (via `CacheStatusReporting` so the DEBUG
-            // fixture repo can present offline without a real cache, #318).
-            if let reporter = repository as? CacheStatusReporting {
-                isOffline = reporter.isServingCachedFlights
-                await refreshCachedFlightIds(reporter)
+            // Mirror `reconcileLatestPacks()`'s guard in the other direction: if a
+            // reconcile (or any authoritative commit) landed a strictly newer list
+            // while our fetch was suspended, its data is at least as fresh as ours —
+            // drop our write rather than reverting the row to older data (#427
+            // review). Request ordering doesn't guarantee a load is fresher than a
+            // concurrent reconcile, so both sides need the drop. No `await` sits
+            // between this guard and the `loadGeneration` bump below, so the
+            // compare-and-commit is race-free.
+            guard generation == loadGeneration else {
+                Self.logger.info("Dropping stale flight-list load; a newer commit won during fetch")
+                return
             }
+            // Check offline/cache status (via `CacheStatusReporting` so the DEBUG
+            // fixture repo can present offline without a real cache, #318). The
+            // sync `isServingCachedFlights` read stays inside the race-free window;
+            // the async badge-set refresh runs *after* the commit, as in reconcile.
+            let reporter = repository as? CacheStatusReporting
+            if let reporter { isOffline = reporter.isServingCachedFlights }
             state = .loaded(flights)
             lastPackTimestamps = Self.packTimestampMap(flights)
             loadGeneration &+= 1   // authoritative commit — see reconcileLatestPacks
+            if let reporter { await refreshCachedFlightIds(reporter) }
             // Keep Spotlight / Siri's flight index in sync with the server truth.
             // Fire-and-forget — never block the list on indexing (Decision 8).
             // Only when online: an offline cache snapshot can be stale/partial
@@ -198,8 +212,14 @@ final class FlightListViewModel {
                     let finished = refreshingFlightIds.subtracting(newIds)
                     refreshingFlightIds = newIds
                     if !finished.isEmpty {
+                        let genBefore = loadGeneration
                         await loadFlights()          // edge-triggered completion
-                        ticksSinceReconcile = 0      // loadFlights already reconciled
+                        // Only reset the level-triggered counter if that load
+                        // actually committed (generation advanced). A no-op load
+                        // (a concurrent manual refresh already held `isLoading`, or
+                        // the load dropped as stale) reconciled nothing, so don't
+                        // push the catch-up reconcile out a full 30s cycle for it.
+                        if loadGeneration != genBefore { ticksSinceReconcile = 0 }
                     } else {
                         ticksSinceReconcile += 1
                         if ticksSinceReconcile >= Self.reconcileEveryTicks {

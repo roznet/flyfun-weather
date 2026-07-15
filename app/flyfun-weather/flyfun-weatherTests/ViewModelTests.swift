@@ -348,6 +348,54 @@ import MapKit
         }
         #expect(flights.first?.latestBriefing?.assessment == "RED")   // fresh load preserved
     }
+
+    /// The mirror case (#427 review, round 2): a slow `loadFlights()` must not
+    /// clobber a fresher `reconcileLatestPacks()` that committed while the load
+    /// was suspended in its own fetch. Request ordering doesn't guarantee the
+    /// load is fresher, so `loadFlights()` captures a generation and drops its
+    /// write when a reconcile bumps it.
+    @Test func loadFlightsDropsStaleWriteWhenReconcileWins() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "GREEN", fetchTimestamp: "2026-07-15T10:00:00Z")),
+        ])
+        let vm = FlightListViewModel(repository: repo)
+        await vm.loadFlights()                         // baseline (generation → 1)
+
+        // Park a `loadFlights()` inside its `repository.flights()` fetch.
+        let gate = TestGate()
+        repo.beforeFlightsReturn = { await gate.wait() }
+        let loadTask = Task { await vm.loadFlights() }
+
+        // Wait until that load has entered flights() (2nd call) and is parked on
+        // the gate — by then it has already captured the load generation.
+        for _ in 0..<1000 where repo.flightsCallCount < 2 { await Task.yield() }
+        #expect(repo.flightsCallCount == 2)
+
+        // A reconcile lands a newer briefing while the load is suspended.
+        repo.beforeFlightsReturn = nil
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "RED", fetchTimestamp: "2026-07-15T10:05:00Z")),
+        ])
+        let repainted = await vm.reconcileLatestPacks()   // wins (generation → 2), state = RED
+        #expect(repainted == true)
+
+        // Restore the stale result the parked load will read when the gate opens
+        // (the mock resolves `flightsResult` *after* the gate), so a missing guard
+        // would revert the row to GREEN — that's what this test must catch.
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "GREEN", fetchTimestamp: "2026-07-15T10:00:00Z")),
+        ])
+        // Release the stale load; it must detect it lost and drop its write.
+        await gate.open()
+        await loadTask.value
+
+        guard case .loaded(let flights) = vm.state else {
+            Issue.record("expected .loaded, got \(vm.state)")
+            return
+        }
+        #expect(flights.first?.latestBriefing?.assessment == "RED")   // fresh reconcile preserved
+    }
 }
 
 // MARK: - FlightCardView content equality (#426)
