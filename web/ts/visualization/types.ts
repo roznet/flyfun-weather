@@ -35,6 +35,15 @@ export interface VizSettings {
   /** Show the experimental Hewson front overlay on the route map (#196).
    *  Default off; only has effect when front data is present. */
   mapFrontsVisible?: boolean;
+  /** Show the airport forecast overlay on the briefing route map (#424): the
+   *  same per-airport forecast markers the full forecast map draws, for the
+   *  snapshot time nearest the flight. Default on; only has effect when the
+   *  flight is within the forecast horizon (D-0..D-6). */
+  mapForecastOverlayVisible?: boolean;
+  /** Which forecast metric the airport overlay colours by (a `FORECAST_METRICS`
+   *  id — category, wind, ceiling, …). Independent of the route-segment
+   *  `mapColorMetric`. Default `flight_category`. */
+  mapForecastMetric?: string;
   /** Skew-T overlay band state most recently applied by a preset / deep-link
    *  (#308). Full clean-slate map (every overlay id → on/off). The SkewT
    *  renderer keeps its own localStorage for ad-hoc user toggles; this field is

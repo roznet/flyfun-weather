@@ -10,7 +10,7 @@ import {
   getForecastColor, getConsensus, getAgreementForMetric, formatMetricValue,
   METRIC_LABEL, altLabel, aggAltRequired, AGREEMENT_COLORS,
   MAP_LEGENDS,
-  type ForecastMetric,
+  type ForecastMetric, type MapLegend,
 } from './weather-map-format';
 
 // Re-exported so existing importers (maps-main.ts) keep resolving the type here.
@@ -40,6 +40,16 @@ function altNeededTooltip(airport: ForecastAirport, model: string): string {
   return lines.join('<br>');
 }
 
+/** The legend (title + colour rows) for a forecast metric, with the
+ *  region-aware visibility override applied. Shared by the forecast overview
+ *  map's own legend and the briefing route-map airport overlay (#424) so both
+ *  read the identical served catalog rows. */
+export function forecastLegend(metric: ForecastMetric): MapLegend {
+  return metric === 'visibility_m'
+    ? { ...MAP_LEGENDS.visibility_m, items: visibilityLegendItems() }
+    : MAP_LEGENDS[metric];
+}
+
 /** Region-aware legend rows for the visibility metric (flight-category bands). */
 function visibilityLegendItems(): Array<{ color: string; label: string }> {
   if (getUnitsRegion() === 'us') {
@@ -60,7 +70,7 @@ function visibilityLegendItems(): Array<{ color: string; label: string }> {
   ];
 }
 
-function getForecastTooltip(airport: ForecastAirport, model: string, metric: ForecastMetric): string {
+export function getForecastTooltip(airport: ForecastAirport, model: string, metric: ForecastMetric): string {
   if (metric === 'alternate_needed') return altNeededTooltip(airport, model);
 
   const lines: string[] = [`<b>${airport.icao}</b>`];
@@ -246,10 +256,7 @@ export class WeatherMap {
     }
 
     this.attachZoomHandler();
-    const legend = metric === 'visibility_m'
-      ? { ...MAP_LEGENDS.visibility_m, items: visibilityLegendItems() }
-      : MAP_LEGENDS[metric];
-    this.renderLegend(legend);
+    this.renderLegend(forecastLegend(metric));
 
     // Re-apply highlight if the currently-highlighted airport is still on the map.
     if (this.highlightedIcao) {

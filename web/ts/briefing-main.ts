@@ -38,7 +38,7 @@ import {
   peakPointPosition,
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
-import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls } from './visualization/controls/panel';
+import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -50,6 +50,8 @@ import { RouteMapRenderer, type MapFrontLine } from './visualization/route-map/r
 import { fetchHewsonFronts } from './adapters/hewson-map-adapter';
 import type { RouteFrontsManifest } from './types/fronts';
 import { getMapMetricById, MAP_METRIC_NONE } from './visualization/route-map/metrics';
+import { fetchForecastMap, type ForecastMapResponse } from './adapters/maps-adapter';
+import type { ForecastMetric } from './visualization/weather-map-format';
 import { attachMapInteraction, type MapInteractionHandle } from './visualization/route-map/interaction';
 import { renderMapLegend } from './visualization/route-map/legend';
 import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
@@ -189,6 +191,126 @@ function updateMapFrontLines(
     renderer.setFrontLines(all.length ? all : null);
     renderer.refreshFronts();
   });
+}
+
+// --- Airport forecast overlay (#424) ---
+//
+// Snapshots exist D-0..D-6 (mirrors tasks/forecast_grid.MAX_FORECAST_DAY and the
+// maps.html `fc.day` schema). Beyond that the overlay is simply not offered. The
+// snapshot payload holds every model per airport, so switching the briefing's
+// model or the overlay metric is a pure client recolour — only a new day/hour
+// slice hits the API. Cached by slice so unrelated re-renders don't refetch.
+const FORECAST_MAX_DAY = 6;
+const FORECAST_SAMPLE_HOURS = [6, 9, 12, 15, 18];
+
+interface ForecastOverlaySlot { day: number; hour: number; }
+interface ForecastOverlayCache { key: string; data: ForecastMapResponse | null; }
+let forecastOverlayCache: ForecastOverlayCache | null = null;
+
+/** Relative (day, hour) for a flight's departure in UTC — matching the forecast
+ *  endpoint's `now + day` date labelling. `null` when unparseable. */
+function forecastSlotForFlight(departureTimeIso: string | null | undefined): ForecastOverlaySlot | null {
+  if (!departureTimeIso) return null;
+  const dep = new Date(departureTimeIso);
+  if (Number.isNaN(dep.getTime())) return null;
+  const now = new Date();
+  const depDate = Date.UTC(dep.getUTCFullYear(), dep.getUTCMonth(), dep.getUTCDate());
+  const nowDate = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const day = Math.round((depDate - nowDate) / 86_400_000);
+  return { day, hour: dep.getUTCHours() };
+}
+
+function forecastSlotInHorizon(slot: ForecastOverlaySlot | null): slot is ForecastOverlaySlot {
+  return !!slot && slot.day >= 0 && slot.day <= FORECAST_MAX_DAY;
+}
+
+function nearestSampleHour(h: number): number {
+  return FORECAST_SAMPLE_HOURS.reduce((a, b) => (Math.abs(b - h) < Math.abs(a - h) ? b : a));
+}
+
+/** Short UTC label for a forecast valid-time ISO string, e.g. "Wed 12Z". */
+function formatForecastTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+  return `${wd} ${String(d.getUTCHours()).padStart(2, '0')}Z`;
+}
+
+/** Deep-link to the full forecast map seeded with the same day/hour/model/metric. */
+function forecastMapUrl(slot: ForecastOverlaySlot, model: string, metric: string): string {
+  const p = new URLSearchParams();
+  p.set('fc.day', String(slot.day));
+  p.set('fc.hour', String(nearestSampleHour(slot.hour)));
+  if (model === 'gfs' || model === 'icon' || model === 'ecmwf') p.set('fc.model', model);
+  p.set('fc.metric', metric);
+  return `maps.html?${p.toString()}`;
+}
+
+/** Overlay control state for the current flight, or `undefined` when the flight
+ *  is outside the forecast horizon (the control cluster is then hidden). */
+function forecastOverlayControls(state: BriefingState): MapForecastOverlayControls | undefined {
+  const slot = forecastSlotForFlight(state.flight?.departure_time);
+  if (!forecastSlotInHorizon(slot)) return undefined;
+  const metric = state.vizSettings.mapForecastMetric ?? 'flight_category';
+  const key = `${slot.day}:${slot.hour}`;
+  const data = forecastOverlayCache?.key === key ? forecastOverlayCache.data : null;
+  return {
+    available: true,
+    visible: state.vizSettings.mapForecastOverlayVisible ?? true,
+    metric,
+    timeLabel: data ? formatForecastTime(data.forecast_time) : undefined,
+    fullMapUrl: forecastMapUrl(slot, state.selectedModel, metric),
+  };
+}
+
+/** Patch the forecast-time label on the live controls row once the snapshot
+ *  loads, without re-rendering the whole row. */
+function patchForecastTimeLabel(label: string): void {
+  const el = document.getElementById('map-forecast-time');
+  if (el) el.textContent = label;
+}
+
+/** Fetch (once, cached) + draw the airport forecast overlay for the flight's
+ *  nearest snapshot time. Sets the model/metric every call (cheap recolour);
+ *  only a new day/hour slice triggers a request. */
+function updateForecastOverlay(state: BriefingState, renderer: RouteMapRenderer): void {
+  const slot = forecastSlotForFlight(state.flight?.departure_time);
+  const metric = (state.vizSettings.mapForecastMetric ?? 'flight_category') as ForecastMetric;
+  const wantVisible = (state.vizSettings.mapForecastOverlayVisible ?? true) && forecastSlotInHorizon(slot);
+
+  renderer.setForecastModel(state.selectedModel);
+  renderer.setForecastMetric(metric);
+
+  if (!wantVisible || !slot) {
+    renderer.setShowForecastOverlay(false);
+    renderer.refreshForecastOverlay();
+    return;
+  }
+
+  renderer.setShowForecastOverlay(true);
+  const key = `${slot.day}:${slot.hour}`;
+
+  if (forecastOverlayCache?.key === key) {
+    renderer.setForecastData(forecastOverlayCache.data);
+    renderer.refreshForecastOverlay();
+    return;
+  }
+
+  // New slice — clear any stale markers while the fetch is in flight, then draw.
+  forecastOverlayCache = { key, data: null };
+  renderer.setForecastData(null);
+  renderer.refreshForecastOverlay();
+  fetchForecastMap(slot.day, slot.hour)
+    .then((resp) => {
+      if (forecastOverlayCache?.key !== key) return;  // superseded by a newer flight/slice
+      forecastOverlayCache = { key, data: resp };
+      renderer.setForecastData(resp);
+      renderer.refreshForecastOverlay();
+      patchForecastTimeLabel(formatForecastTime(resp.forecast_time));
+    })
+    .catch(() => {
+      if (forecastOverlayCache?.key === key) forecastOverlayCache = { key, data: null };
+    });
 }
 
 
@@ -1592,6 +1714,8 @@ async function init(): Promise<void> {
         state.vizSettings.mapFrontsVisible ?? false,
         mapRenderer,
       );
+      // Airport forecast overlay for the flight time (async; cached by slice).
+      updateForecastOverlay(state, mapRenderer);
 
       // Attach or update map interaction
       if (mapInteraction) {
@@ -1627,7 +1751,9 @@ async function init(): Promise<void> {
           onColorMetricChange: (id) => store.getState().setMapColorMetric(id),
           onWidthMetricChange: (id) => store.getState().setMapWidthMetric(id),
           onFrontsToggle: (visible) => store.getState().setMapFrontsVisible(visible),
-        }, data.fronts != null);
+          onForecastOverlayToggle: (visible) => store.getState().setMapForecastOverlayVisible(visible),
+          onForecastMetricChange: (metricId) => store.getState().setMapForecastMetric(metricId),
+        }, data.fronts != null, forecastOverlayControls(state));
       }
 
       // Legend
