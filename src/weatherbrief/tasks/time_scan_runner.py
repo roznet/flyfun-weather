@@ -277,7 +277,7 @@ def _run_confirm_job(
                 db, flight, flight.user_id, None, pack_dir, db_path=db_path,
             )
 
-            confirmation = confirm_candidate(
+            result = confirm_candidate(
                 pack_dir, route, candidate_time,
                 data_dir=Path(os.environ.get("DATA_DIR", "data")),
                 advisory_models=adv_models,
@@ -309,9 +309,14 @@ def _run_confirm_job(
                 )
                 return
             cand.confirm_pending = False
-            if confirmation is not None:
+            if result is not None:
+                confirmation, advisory_status = result
                 cand.confirmed = confirmation
                 cand.confidence = "confirmed"
+                # The provisional ECMWF-only per-model map fills out to the full
+                # graded model set on confirm — same schema, more coverage (#434).
+                if advisory_status:
+                    cand.advisory_status = advisory_status
             save_time_options(pack_dir, scan)
 
             # Usage accounting: one row per confirm attempt (the GFS+ICON
@@ -326,7 +331,7 @@ def _run_confirm_job(
             db.commit()
             logger.info(
                 "time-scan: confirm %s for %s @ %s",
-                "ok" if confirmation else "failed", flight_id, candidate_time,
+                "ok" if result else "failed", flight_id, candidate_time,
             )
         finally:
             db.close()

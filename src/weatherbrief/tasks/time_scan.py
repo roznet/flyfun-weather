@@ -70,12 +70,31 @@ _MAX_GRID = 24
 # Severity ranking for the improve/worsen diff.
 _SEV = {"green": 0, "amber": 1, "red": 2}
 
-# A candidate surfaces only if the net severity drop over the scan-class set
-# reaches this margin with no offsetting scan-class regression (decision D).
+# A candidate is "improving" only if the net severity drop over the scan-class
+# set reaches this margin with no offsetting regression (decision D). This is
+# now the disposition threshold, not a persistence filter — every graded
+# candidate is kept and tagged (#434).
 _MIN_MARGIN = 1
 
-# Improving windows kept in the artifact (the UI caps display at ~3).
-_MAX_IMPROVING_KEPT = 5
+# Rank order for persisting candidates: improving first, then neutral, then
+# worse — so the client can slice "same-or-better" off the front and reveal
+# ``worse`` rows behind a "show all" toggle (#434).
+_DISPOSITION_RANK = {"improving": 0, "neutral": 1, "worse": 2}
+
+
+def _disposition(margin: float, worsens: list[str]) -> str:
+    """Classify a candidate vs the like-coverage baseline (#434 taxonomy).
+
+    ``worsens`` spans the **full** advisory set (never call a window that
+    quietly introduced a crosswind "improving"), so any regression — or a
+    negative scan-class margin — makes it ``worse``. Otherwise it's
+    ``improving`` when it clears the ranking margin, else ``neutral``.
+    """
+    if worsens or margin < 0:
+        return "worse"
+    if margin >= _MIN_MARGIN:
+        return "improving"
+    return "neutral"
 
 #: GRIB-enriched models — coverage is windowed; everything else is uniform OM.
 _GRIB_MODELS = {ModelSource.ECMWF, ModelSource.GFS, ModelSource.ICON}
@@ -516,13 +535,19 @@ def confirm_candidate(
 
     Ephemeral throughout (decision G): enrichment mutates a freshly loaded
     copy; the caller persists only the updated ``time_options.json``.
-    Returns ``None`` when grading fails outright.
+
+    Returns ``(confirmation, advisory_status)`` — the second element is the
+    now-multi-model per-(advisory, model) status map, so the caller can fill
+    out the candidate's provisional ECMWF-only ``advisory_status`` to the full
+    graded set (#434, "the same map fills out on confirm"). ``None`` when
+    grading fails outright.
     """
     from weatherbrief.fetch.grib import DecodePriority, enrich_forecasts
     from weatherbrief.models import TimeConfirmation
     from weatherbrief.tasks.advise import (
         derive_assessment_from_advisories,
         per_model_reasons_from_manifest,
+        per_model_status_from_manifest,
         run_alt_from_pack,
     )
     from weatherbrief.tasks.artifacts import load_cross_sections, load_route_points
@@ -595,7 +620,7 @@ def confirm_candidate(
         baseline_manifest, candidate_manifest, get_scan_class_ids(),
     )
     assess, reason = derive_assessment_from_advisories(candidate_manifest)
-    return TimeConfirmation(
+    confirmation = TimeConfirmation(
         models_checked=candidate_manifest.models,
         assessment=assess,
         assessment_reason=reason,
@@ -605,6 +630,7 @@ def confirm_candidate(
         worsens=worsens,
         confirmed_at=datetime.now(timezone.utc),
     )
+    return confirmation, per_model_status_from_manifest(candidate_manifest)
 
 
 def _aware_pack_departure(pack_dir: Path) -> datetime | None:
@@ -773,6 +799,7 @@ def run_time_scan(
     from weatherbrief.tasks.advise import (
         _compute_advisory_model_names,
         derive_assessment_from_advisories,
+        per_model_status_from_manifest,
         run_alt_from_pack,
     )
     from weatherbrief.tasks.artifacts import load_cross_sections, load_route_points
@@ -905,11 +932,14 @@ def run_time_scan(
         assessment=base_assess,
         assessment_reason=base_reason,
         models_used=graded_models,
+        advisory_status=per_model_status_from_manifest(baseline_manifest),
         confidence="confirmed_in_window",
         is_baseline=True,
     )
 
-    improving: list[TimeCandidate] = []
+    # Every graded swept candidate (all dispositions) — the improving-only cut
+    # moved to the display layer (#434). Bounded by _MAX_GRID up front.
+    graded: list[TimeCandidate] = []
     alternate_row: TimeCandidate | None = None
     # (time, is_alternate) pairs the free tier couldn't grade — the daylight
     # ECMWF extension (below) gives them a second, provisional chance.
@@ -946,13 +976,17 @@ def run_time_scan(
             improves=improves,
             worsens=worsens,
             margin=float(margin),
+            disposition=_disposition(margin, worsens),
+            advisory_status=per_model_status_from_manifest(manifest),
             confidence="confirmed_in_window",
             is_alternate=is_alt,
         )
         if is_alt:
             alternate_row = row
-        elif margin >= _MIN_MARGIN and not worsens:
-            improving.append(row)
+        else:
+            # Persist every disposition (#434) — the display layer, not the
+            # scan, applies the improving-only cut.
+            graded.append(row)
 
     # --- Slice 2: ECMWF-only provisional tier for the deferred hours.
     # Decode the daylight ECMWF fhours (local disk, BACKGROUND priority,
@@ -1013,6 +1047,8 @@ def run_time_scan(
                         improves=improves,
                         worsens=worsens,
                         margin=float(margin),
+                        disposition=_disposition(margin, worsens),
+                        advisory_status=per_model_status_from_manifest(manifest),
                         confidence="ecmwf_only",
                         is_alternate=is_alt,
                     )
@@ -1021,8 +1057,10 @@ def run_time_scan(
                         # persisted from the ECMWF-only manifest (its `models`
                         # field carries the honest coverage).
                         alternate_row = row
-                    elif margin >= _MIN_MARGIN and not worsens:
-                        improving.append(row)
+                    else:
+                        # Persist every disposition — including provisional
+                        # ``worse`` ±day rows, the honesty gap this closes (#434).
+                        graded.append(row)
             else:
                 refused.extend(t for t, _, _ in deferred)
         else:
@@ -1031,23 +1069,27 @@ def run_time_scan(
     else:
         refused.extend(t for t, _, _ in deferred)
 
-    # Rank: best margin first, then confirmed over provisional, ties broken by
-    # proximity to the alternate time (the pilot's stated preference) or else
-    # the planned time.
+    # Rank: same-or-better first (improving, then neutral, then worse), best
+    # margin first within a disposition, confirmed over provisional, ties broken
+    # by proximity to the alternate time (the pilot's stated preference) or else
+    # the planned time. No persistence cap — every graded candidate is kept
+    # (#434); the display layer slices the front and gates ``worse`` behind
+    # "show all". _MAX_GRID already bounds the count.
     anchor = _aware(alt_departure_time) if alt_departure_time else dep
-    improving.sort(
+    graded.sort(
         key=lambda r: (
+            _DISPOSITION_RANK.get(r.disposition, 1),
             -r.margin,
             0 if r.confidence == "confirmed_in_window" else 1,
             abs((r.departure_time - anchor).total_seconds()),
         ),
     )
-    improving = improving[:_MAX_IMPROVING_KEPT]
+    n_improving = sum(1 for r in graded if r.disposition == "improving")
 
     out_candidates = [baseline_row]
     if alternate_row is not None:
         out_candidates.append(alternate_row)
-    out_candidates.extend(improving)
+    out_candidates.extend(graded)
 
     if window_model is not None:
         window_model.horizon_clipped = horizon_clipped
@@ -1072,7 +1114,7 @@ def run_time_scan(
     )
     logger.info(
         "time-scan[%s]: %d graded (%d improving), %d refused in %.1fs",
-        flexibility, len(out_candidates), len(improving), len(refused),
+        flexibility, len(out_candidates), n_improving, len(refused),
         perf_counter() - t0,
     )
     return scan

@@ -190,6 +190,62 @@ class TestPerModelReasons:
 
         assert per_model_reasons_from_manifest(RouteAdvisoriesManifest()) == {}
 
+    def test_per_model_status_includes_green(self):
+        """#434: the full per-(advisory, model) status map records EVERY graded
+        status (GREEN too), so the UI can reconstruct dot rows without
+        re-grading — unlike the RED/AMBER-only reason string."""
+        from weatherbrief.models import ModelAdvisoryResult
+        from weatherbrief.tasks.advise import per_model_status_from_manifest
+
+        manifest = RouteAdvisoriesManifest(advisories=[
+            RouteAdvisoryResult(
+                advisory_id="convective",
+                aggregate_status=AdvisoryStatus.RED,
+                per_model=[
+                    ModelAdvisoryResult(model="ecmwf", status=AdvisoryStatus.RED),
+                    ModelAdvisoryResult(model="gfs", status=AdvisoryStatus.GREEN),
+                ],
+            ),
+        ])
+        assert per_model_status_from_manifest(manifest) == {
+            "convective": {"ecmwf": "RED", "gfs": "GREEN"},
+        }
+
+    def test_per_model_status_empty_without_per_model(self):
+        # An aggregate-only advisory (no per-model breakdown) contributes nothing.
+        from weatherbrief.tasks.advise import per_model_status_from_manifest
+
+        manifest = RouteAdvisoriesManifest(advisories=[
+            RouteAdvisoryResult(advisory_id="convective", aggregate_status=AdvisoryStatus.RED),
+        ])
+        assert per_model_status_from_manifest(manifest) == {}
+
+
+class TestDisposition:
+    """#434 taxonomy: improving / neutral / worse vs the like-coverage baseline."""
+
+    def test_improving_when_margin_clears_and_nothing_worsens(self):
+        from weatherbrief.tasks.time_scan import _disposition
+
+        assert _disposition(2, []) == "improving"
+
+    def test_neutral_when_no_gain_no_regression(self):
+        from weatherbrief.tasks.time_scan import _disposition
+
+        assert _disposition(0, []) == "neutral"
+
+    def test_worse_when_something_worsens_even_with_positive_margin(self):
+        # A full-set regression trumps a scan-class gain — never call a window
+        # that introduced a crosswind "improving".
+        from weatherbrief.tasks.time_scan import _disposition
+
+        assert _disposition(2, ["airport_wind"]) == "worse"
+
+    def test_worse_on_negative_margin(self):
+        from weatherbrief.tasks.time_scan import _disposition
+
+        assert _disposition(-1, []) == "worse"
+
     def test_confirmation_round_trips_field(self):
         from weatherbrief.models import TimeConfirmation
 
@@ -517,6 +573,147 @@ class TestProvisionalTier:
             if not c.is_baseline:
                 assert c.confidence == "ecmwf_only"
                 assert c.departure_time.date() > DEP.date()
+
+
+# ---------------------------------------------------------------------------
+# Persist all dispositions (#434): worse/neutral rows kept + tagged, not dropped
+# ---------------------------------------------------------------------------
+
+
+class TestPersistAllDispositions:
+    """The scan now persists every graded candidate with a disposition — the
+    improving-only cut moved to the display layer. Closes the honesty gap: a
+    worse alternate day is surfaced (behind the client's "show all"), never
+    silently discarded."""
+
+    def _write_pack(self, tmp_path: Path) -> None:
+        import json
+
+        cs_ecmwf = _cs(ModelSource.ECMWF, [_wf(ModelSource.ECMWF, enriched_hours=set(range(6, 12)))])
+        cs_gfs = _cs(ModelSource.GFS, [_wf(ModelSource.GFS, gfs_marked_hours=set(range(7, 11)))])
+        (tmp_path / "cross_section.json").write_text(json.dumps({
+            "cross_sections": [cs.model_dump(mode="json") for cs in (cs_ecmwf, cs_gfs)],
+        }, default=str))
+        (tmp_path / "route_points.json").write_text(json.dumps(
+            [rp.model_dump(mode="json") for rp in cs_ecmwf.route_points], default=str,
+        ))
+
+    def _route(self):
+        from weatherbrief.models import RouteConfig, Waypoint
+
+        return RouteConfig(
+            name="t",
+            waypoints=[
+                Waypoint(icao="AAAA", name="A", lat=51.0, lon=0.0),
+                Waypoint(icao="BBBB", name="B", lat=51.0, lon=1.0),
+            ],
+            flight_duration_hours=1.0,
+        )
+
+    def _full_day_extension(self):
+        def fake_extend(cross_sections, route_points, w_lo, w_hi, dur, *, as_of_time=None):
+            for cs in cross_sections:
+                if cs.model == ModelSource.ECMWF:
+                    for wf in cs.point_forecasts:
+                        for h in wf.hourly:
+                            h.pressure_levels = _levels(28)
+            return 1234567890, [(DAY, DAY + timedelta(hours=23))]
+
+        return fake_extend
+
+    def test_neutral_candidates_persisted_and_tagged(self, tmp_path, monkeypatch):
+        """Synthetic data grades identically at every hour → margin 0 → neutral.
+        Before #434 these were dropped entirely; now they're kept and tagged so
+        the UI can show "same conditions" times, not just better ones."""
+        import weatherbrief.tasks.time_scan as ts
+
+        self._write_pack(tmp_path)
+        monkeypatch.setattr(ts, "extend_ecmwf_daylight", self._full_day_extension())
+
+        scan = ts.run_time_scan(tmp_path, self._route(), DEP, flexibility="same_day")
+        assert scan is not None
+        swept = [c for c in scan.candidates if not c.is_baseline]
+        assert swept, "graded candidates must be persisted, not discarded"
+        assert all(c.disposition in {"improving", "neutral", "worse"} for c in swept)
+        assert any(c.disposition == "neutral" for c in swept)
+        # The baseline carries its own full per-model status map.
+        base = next(c for c in scan.candidates if c.is_baseline)
+        assert base.advisory_status, "baseline advisory_status map recorded"
+
+    def test_worse_candidates_persisted_and_tagged(self, tmp_path, monkeypatch):
+        """Force every diff to a regression: the swept rows must all be tagged
+        ``worse`` and still be persisted (the exact rows the old code threw
+        away). advisory_status is coverage-scoped to what was graded."""
+        import weatherbrief.tasks.time_scan as ts
+
+        self._write_pack(tmp_path)
+        monkeypatch.setattr(ts, "extend_ecmwf_daylight", self._full_day_extension())
+        # A regression on a non-scan advisory + negative scan margin → worse.
+        monkeypatch.setattr(
+            ts, "_diff_manifests",
+            lambda *a, **k: (["convective"], ["airport_wind"], -1),
+        )
+
+        scan = ts.run_time_scan(tmp_path, self._route(), DEP, flexibility="same_day")
+        assert scan is not None
+        swept = [c for c in scan.candidates if not c.is_baseline]
+        assert swept, "worse candidates must be persisted, not silently discarded"
+        assert all(c.disposition == "worse" for c in swept)
+        # Each ecmwf-only worse row carries a coverage-scoped per-model map:
+        # only ECMWF (and model-agnostic "all" advisories) were graded — the
+        # other weather models were never fetched for the sweep.
+        for c in swept:
+            assert isinstance(c.advisory_status, dict)
+            for model_map in c.advisory_status.values():
+                assert "gfs" not in model_map and "icon" not in model_map
+
+    def test_persistence_stays_bounded(self, tmp_path, monkeypatch):
+        """Size guardrail: keeping all dispositions must stay bounded by the
+        grid cap, and each candidate's per-model status map stays compact
+        (~KB, never the ~41 KB full detail which stays gated)."""
+        import json
+
+        import weatherbrief.tasks.time_scan as ts
+        from weatherbrief.tasks.time_scan import _MAX_GRID
+
+        self._write_pack(tmp_path)
+        monkeypatch.setattr(ts, "extend_ecmwf_daylight", self._full_day_extension())
+
+        scan = ts.run_time_scan(tmp_path, self._route(), DEP, flexibility="same_day")
+        assert scan is not None
+        swept = [c for c in scan.candidates if not c.is_baseline]
+        assert len(swept) <= _MAX_GRID
+        for c in scan.candidates:
+            size = len(json.dumps(c.advisory_status))
+            assert size < 5000, f"per-candidate advisory_status too large: {size} B"
+
+    def test_ranking_orders_improving_then_neutral_then_worse(self, tmp_path, monkeypatch):
+        """The persisted order lets the client slice same-or-better off the
+        front: improving first, neutral next, worse last."""
+        import weatherbrief.tasks.time_scan as ts
+
+        self._write_pack(tmp_path)
+        monkeypatch.setattr(ts, "extend_ecmwf_daylight", self._full_day_extension())
+
+        # Deterministically stamp a disposition per candidate hour so the
+        # ordering assertion doesn't depend on the synthetic grades: alternate
+        # improving / worse / neutral by hour.
+        real_diff = ts._diff_manifests
+        seq = iter([(["a"], [], 2), ([], ["b"], -1), ([], [], 0)] * 20)
+
+        def fake_diff(base, cand, scan_ids):
+            try:
+                return next(seq)
+            except StopIteration:
+                return real_diff(base, cand, scan_ids)
+
+        monkeypatch.setattr(ts, "_diff_manifests", fake_diff)
+        scan = ts.run_time_scan(tmp_path, self._route(), DEP, flexibility="same_day")
+        assert scan is not None
+        swept = [c for c in scan.candidates if not c.is_baseline]
+        ranks = {"improving": 0, "neutral": 1, "worse": 2}
+        order = [ranks[c.disposition] for c in swept]
+        assert order == sorted(order), "candidates must be ordered improving→neutral→worse"
 
 
 # ---------------------------------------------------------------------------

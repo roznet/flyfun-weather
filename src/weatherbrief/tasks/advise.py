@@ -759,6 +759,27 @@ def per_model_reasons_from_manifest(
     return {model: ", ".join(parts) for model, parts in per_model.items()}
 
 
+def per_model_status_from_manifest(
+    manifest: RouteAdvisoriesManifest,
+) -> dict[str, dict[str, str]]:
+    """Full per-(advisory, model) status map — ``{advisory_id: {model: STATUS}}``.
+
+    Unlike :func:`per_model_reasons_from_manifest` (a compact RED/AMBER-only
+    reason string), this records **every** graded status including GREEN and
+    UNAVAILABLE, so the timing-scan artifact can reconstruct any advisory's
+    per-model dot row at any candidate time without re-grading (#434). The map
+    is coverage-scoped by construction — it carries exactly the models the
+    manifest was graded on (ECMWF-only for the ±day sweep, the full set after a
+    confirm). ``STATUS`` is upper-cased to match the ``assessment`` fields.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for adv in manifest.advisories:
+        model_map = {m.model: m.status.value.upper() for m in adv.per_model}
+        if model_map:
+            out[adv.advisory_id] = model_map
+    return out
+
+
 # Cap on the number of named category chips surfaced on the flights-list card.
 # Mirrors the briefing-page glance summary's intent: a few "what to look at"
 # cues, not an exhaustive list.

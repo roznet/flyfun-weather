@@ -30,6 +30,17 @@ FlexibilityMode = Literal["none", "alternate", "same_day", "prev_day", "next_day
 #: Candidate model-coverage labels — see module docstring.
 TimeConfidence = Literal["confirmed_in_window", "ecmwf_only", "confirmed"]
 
+#: Disposition of a candidate vs the like-coverage baseline (#434) — orthogonal
+#: to ``is_baseline`` / ``is_alternate``. The scan now persists *every* graded
+#: candidate tagged with one of these; the improving-only cut moved to the
+#: display layer so the UI can honestly surface worse alternate times behind a
+#: "show all" toggle instead of the scan silently discarding them:
+#:
+#: * ``improving`` — clears the ranking margin with nothing worsened.
+#: * ``neutral``   — no qualifying improvement and no regression (same-ish).
+#: * ``worse``     — something worsened, or a scan-class regression.
+Disposition = Literal["improving", "neutral", "worse"]
+
 
 class TimeConfirmation(BaseModel):
     """Result of a multi-model check of one candidate (slice 3 on-tap confirm,
@@ -73,6 +84,19 @@ class TimeCandidate(BaseModel):
     # Net severity drop summed over the scan-class advisory set (the ranking
     # objective; decision D). Positive == better on the timing-sensitive axes.
     margin: float = 0.0
+    # How this candidate compares to the (like-coverage) baseline (#434). The
+    # scan persists all three; the client shows improving+neutral by default and
+    # reveals ``worse`` rows behind a "show all" toggle.
+    disposition: Disposition = "neutral"
+    # Per-advisory, per-model status the grade actually produced:
+    # ``{advisory_id: {model: "GREEN"|"AMBER"|"RED"|"UNAVAILABLE"}}``.
+    # Coverage-scoped (decision, #434): just ``{ecmwf: …}`` for the ±day sweep,
+    # the full graded set after an on-tap confirm — no schema change between
+    # provisional and confirmed. Lets the UI reconstruct any advisory's dot row
+    # at any candidate time without re-grading; ``improves``/``worsens`` are a
+    # diff and can't reconstruct the absolute per-model statuses. ~550 B (sweep)
+    # to ~2.7 KB (confirmed) per candidate; the ~41 KB full detail stays gated.
+    advisory_status: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     confidence: TimeConfidence
     is_baseline: bool = False   # the planned departure, graded identically
