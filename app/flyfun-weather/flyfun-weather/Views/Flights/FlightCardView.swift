@@ -32,6 +32,8 @@ struct FlightCardView: View, Equatable {
             && lhs.flight.role == rhs.flight.role
             && lhs.flight.coverage == rhs.flight.coverage
             && lhs.flight.latestBriefing == rhs.flight.latestBriefing
+            && lhs.flight.section == rhs.flight.section
+            && lhs.flight.debrief == rhs.flight.debrief
     }
 
     var body: some View {
@@ -69,6 +71,13 @@ struct FlightCardView: View, Equatable {
                     .accessibilityLabel("Briefing refreshing")
                 }
 
+                if flight.hasDebrief {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                        .accessibilityLabel("Debriefed")
+                }
+
                 statusBadge
             }
 
@@ -96,6 +105,20 @@ struct FlightCardView: View, Equatable {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                }
+
+                // Nudge to debrief a recent flight (server "recent" bucket = a
+                // recent past flight not yet debriefed). Tapping the row opens the
+                // briefing, where the debrief card lives.
+                if flight.flightSection == .recent && !flight.hasDebrief {
+                    Spacer(minLength: 0)
+                    Label("Debrief", systemImage: "square.and.pencil")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.14), in: Capsule())
+                        .accessibilityLabel("Needs debrief")
                 }
             }
             .lineLimit(1)

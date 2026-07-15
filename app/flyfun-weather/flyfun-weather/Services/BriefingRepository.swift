@@ -70,6 +70,18 @@ protocol BriefingRepository: Sendable {
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse
     func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse]
     func fetchPireps(flightId: String) async throws -> PirepListResponse
+
+    // Debrief (post-flight judgement on a past flight, owner-only)
+    /// Load a flight's debrief. Throws `APIError.notFound` (404) when none exists.
+    func fetchDebrief(flightId: String) async throws -> DebriefResponse
+    /// Insert or update a flight's debrief.
+    func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse
+    /// Remove a flight's debrief. Idempotent.
+    func deleteDebrief(flightId: String) async throws
+
+    // Digest feedback (👍/👎 on the AI digest)
+    /// Submit a thumb rating (+ optional comment) for a briefing pack's digest.
+    func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws
 }
 
 extension BriefingRepository {
@@ -276,6 +288,25 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func fetchPireps(flightId: String) async throws -> PirepListResponse {
         return try await client.requestURL("/api/pireps?flight_id=\(Self.queryValueEncoded(flightId))")
+    }
+
+    func fetchDebrief(flightId: String) async throws -> DebriefResponse {
+        try await client.request("/api/flights/\(flightId)/debrief")
+    }
+
+    func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse {
+        // Plain-encoded body so the `outcomes` tag-id keys aren't snake-cased.
+        let body = try request.encoded()
+        return try await client.request("/api/flights/\(flightId)/debrief", method: "PUT", body: body)
+    }
+
+    func deleteDebrief(flightId: String) async throws {
+        try await client.requestVoid("/api/flights/\(flightId)/debrief")
+    }
+
+    func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        _ = try await client.requestData("/api/feedback", method: "POST", body: body)
     }
 
     /// Percent-encode a query *value*. `.urlQueryAllowed` permits the `& = + ? #`

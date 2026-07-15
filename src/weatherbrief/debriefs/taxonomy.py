@@ -43,6 +43,121 @@ class OutcomeValue(str, Enum):
 OUTCOME_CATEGORIES: list[ConditionTag] = [t for t in ConditionTag if t != ConditionTag.OPS]
 
 
+# --- Display metadata (single source of truth; served to iOS, mirrored in TS) ---
+#
+# The labels/descriptions below and ``ADVISORY_TAG_MAP`` historically lived only
+# in ``web/ts/components/debrief-taxonomy.ts``. They now live here so Python is
+# the *complete* source of truth and ``build_taxonomy_catalog()`` can serve them
+# in the ``/api/help/catalog`` payload (the iOS client renders the debrief form
+# straight from that catalog rather than hand-copying a Swift third copy). The TS
+# mirror stays for the web build; keep all three in step.
+
+# Decision display order (Flown first — the common case), with labels.
+DECISION_ORDER: list[Decision] = [Decision.FLOWN, Decision.CANCELLED, Decision.MONITORING]
+
+DECISION_LABELS: dict[Decision, str] = {
+    Decision.FLOWN: "Flown",
+    Decision.CANCELLED: "Cancelled",
+    Decision.MONITORING: "Monitor only",
+}
+
+TAG_LABELS: dict[ConditionTag, str] = {
+    ConditionTag.IMC: "IMC",
+    ConditionTag.ICE: "Icing",
+    ConditionTag.WIND: "Wind",
+    ConditionTag.TS: "Thunderstorm",
+    ConditionTag.TURB: "Turbulence",
+    ConditionTag.FRZ: "Freezing precip",
+    ConditionTag.VIS: "Visibility",
+    ConditionTag.OPS: "Operational",
+}
+
+TAG_DESCRIPTIONS: dict[ConditionTag, str] = {
+    ConditionTag.IMC: "Low ceilings / IFR conditions",
+    ConditionTag.ICE: "Airframe icing",
+    ConditionTag.WIND: "Strong / gusty / crosswind",
+    ConditionTag.TS: "Thunderstorms or convective build-up",
+    ConditionTag.TURB: "Turbulence (any intensity)",
+    ConditionTag.FRZ: "Freezing rain / sleet",
+    ConditionTag.VIS: "Reduced visibility, fog, mist",
+    ConditionTag.OPS: "Non-weather (aircraft, pilot, NOTAM, fuel, …)",
+}
+
+OUTCOME_LABELS: dict[OutcomeValue, str] = {
+    OutcomeValue.CONSISTENT: "As forecast",
+    OutcomeValue.BETTER: "Better than forecast",
+    OutcomeValue.WORSE: "Worse than forecast",
+}
+
+# Free-text note ceiling, shared by both the cancel and flown forms.
+NOTE_MAX_LENGTH = 300
+
+# Advisory id → debrief tag. Per-id (not per-category) because some categories
+# cover more than one phenomenon. ``model`` advisories aren't weather → no entry.
+# Mirrors ADVISORY_TAG_MAP in ``web/ts/components/debrief-taxonomy.ts``.
+ADVISORY_TAG_MAP: dict[str, ConditionTag] = {
+    "icing_escape": ConditionTag.ICE,
+    "fiki_icing": ConditionTag.ICE,
+    "vmc_cruise": ConditionTag.IMC,
+    "cloud_top": ConditionTag.IMC,
+    "vfr_feasibility": ConditionTag.IMC,
+    "ifr_feasibility": ConditionTag.IMC,
+    "flight_category": ConditionTag.IMC,
+    "turbulence": ConditionTag.TURB,
+    "mountain_wind": ConditionTag.TURB,
+    "convective": ConditionTag.TS,
+    "airport_wind": ConditionTag.WIND,
+}
+
+
+def build_taxonomy_catalog() -> dict:
+    """JSON-able debrief taxonomy for the served ``/api/help/catalog`` payload.
+
+    iOS renders the debrief form (decision buttons, cancel-reason chips, per-
+    category outcome rows) purely from this, so a taxonomy edit is one Python
+    change both the web (build-time TS mirror) and iOS (this catalog) pick up.
+    Keys are snake_case to match the rest of the catalog's wire convention.
+    """
+    return {
+        "decisions": [
+            {"id": d.value, "label": DECISION_LABELS[d]} for d in DECISION_ORDER
+        ],
+        "tags": [
+            {
+                "id": t.value,
+                "label": TAG_LABELS[t],
+                "description": TAG_DESCRIPTIONS[t],
+                "outcome_category": t in OUTCOME_CATEGORIES,
+            }
+            for t in ConditionTag
+        ],
+        "outcome_values": [
+            {"id": v.value, "label": OUTCOME_LABELS[v]} for v in OutcomeValue
+        ],
+        "advisory_tag_map": {aid: tag.value for aid, tag in ADVISORY_TAG_MAP.items()},
+        "note_max_length": NOTE_MAX_LENGTH,
+    }
+
+
+def flagged_tags_from_advisories(
+    advisories: list[tuple[str, str]],
+) -> list[ConditionTag]:
+    """Tags whose advisory came back AMBER/RED, in ``ConditionTag`` order.
+
+    ``advisories`` is a list of ``(advisory_id, aggregate_status)`` pairs.
+    GREEN/UNAVAILABLE don't count — there's nothing for the pilot to grade.
+    Mirrors ``flaggedTagsFromAdvisories`` in the TS taxonomy.
+    """
+    flagged: set[ConditionTag] = set()
+    for advisory_id, status in advisories:
+        if status.lower() not in ("amber", "red"):
+            continue
+        tag = ADVISORY_TAG_MAP.get(advisory_id)
+        if tag is not None:
+            flagged.add(tag)
+    return [t for t in ConditionTag if t in flagged]
+
+
 # Phrases scanned in the free-text note to auto-toggle matching chips.
 # Lowercase, whole-word-ish matches (see _build_pattern). Conservative on purpose;
 # the chip is the source of truth — pilots can untoggle if a match is unwanted.

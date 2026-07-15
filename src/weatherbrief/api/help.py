@@ -14,6 +14,12 @@ text. Two sections in one versioned, ETag-cacheable payload:
   folded into the version hash so any edit re-validates the ETag.
 - ``advisories`` — the existing advisory catalog (``get_catalog()``), the same
   data already served at ``/user/preferences/advisories/catalog``.
+- ``debrief`` — the debrief taxonomy (decision buttons, cancel-reason chips,
+  per-category outcome rows, advisory→tag map). Python is the single source of
+  truth (``debriefs.taxonomy.build_taxonomy_catalog``); the iOS app renders its
+  debrief form straight from here instead of hand-copying a Swift third copy of
+  the vocabulary. Language-independent for now (English labels), but folded into
+  the version hash so any edit re-validates the ETag.
 
 ``lang`` contract: the param is accepted and threaded through now so no client
 or endpoint change is needed once content is translated. Today both the metrics
@@ -36,6 +42,7 @@ from typing import Any
 from fastapi import APIRouter, Header, Response
 
 from weatherbrief.analysis.advisories import get_catalog
+from weatherbrief.debriefs.taxonomy import build_taxonomy_catalog
 from weatherbrief.models import AdvisoryCatalogEntry
 
 logger = logging.getLogger(__name__)
@@ -119,6 +126,7 @@ def _build_payload(lang: str) -> tuple[bytes, str]:
         "metrics": _load_metrics_catalog(),
         "maps": _load_map_metrics_catalog(),
         "advisories": _localize_advisories(get_catalog(), lang),
+        "debrief": build_taxonomy_catalog(),
     }
     canonical = json.dumps(core, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     version = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
@@ -128,6 +136,7 @@ def _build_payload(lang: str) -> tuple[bytes, str]:
         "metrics": core["metrics"],
         "maps": core["maps"],
         "advisories": core["advisories"],
+        "debrief": core["debrief"],
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 

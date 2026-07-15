@@ -383,10 +383,33 @@ struct FlightListView: View {
 
     struct FlightGroup { let title: String; let flights: [FlightResponse] }
 
-    /// Group flights into Future (upcoming), Recent (flown in the last 7 days),
-    /// and Past. All sorted most-recent-first (latest departure at top). Empty
+    /// Group flights into Future · Recent · Past, sorted most-recent-first. Empty
     /// groups are dropped.
+    ///
+    /// Prefers the server's `section` (the authoritative debrief-nudge window:
+    /// `recent` = recent past flights not yet debriefed, bounded server-side). A
+    /// legacy server that omits `section` falls back to client-side date
+    /// bucketing (Recent = departed within 7 days) so the list still groups.
     static func groupedFlights(_ flights: [FlightResponse], now: Date = Date()) -> [FlightGroup] {
+        func date(_ f: FlightResponse) -> Date { f.departureDate ?? now }
+        func bucketed(_ future: [FlightResponse], _ recent: [FlightResponse], _ past: [FlightResponse]) -> [FlightGroup] {
+            [
+                FlightGroup(title: "Future", flights: future.sorted { date($0) > date($1) }),
+                FlightGroup(title: "Recent", flights: recent.sorted { date($0) > date($1) }),
+                FlightGroup(title: "Past", flights: past.sorted { date($0) > date($1) }),
+            ].filter { !$0.flights.isEmpty }
+        }
+
+        // Server-driven grouping when any flight carries a section.
+        if flights.contains(where: { $0.section != nil }) {
+            return bucketed(
+                flights.filter { $0.flightSection == .future },
+                flights.filter { $0.flightSection == .recent },
+                flights.filter { $0.flightSection == .past }
+            )
+        }
+
+        // Legacy fallback: client-side date bucketing.
         let recentCutoff = now.addingTimeInterval(-7 * 24 * 3600)
         var future: [FlightResponse] = []
         var recent: [FlightResponse] = []
@@ -397,15 +420,7 @@ struct FlightListView: View {
             else if dep >= recentCutoff { recent.append(f) }
             else { past.append(f) }
         }
-        func date(_ f: FlightResponse) -> Date { f.departureDate ?? now }
-        future.sort { date($0) > date($1) }
-        recent.sort { date($0) > date($1) }
-        past.sort { date($0) > date($1) }
-        return [
-            FlightGroup(title: "Future", flights: future),
-            FlightGroup(title: "Recent", flights: recent),
-            FlightGroup(title: "Past", flights: past),
-        ].filter { !$0.flights.isEmpty }
+        return bucketed(future, recent, past)
     }
 
     private var emptyStateView: some View {
