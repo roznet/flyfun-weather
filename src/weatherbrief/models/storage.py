@@ -8,6 +8,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from weatherbrief.debriefs.taxonomy import (
+    NOTE_MAX_LENGTH,
     OUTCOME_CATEGORIES,
     ConditionTag,
     Decision,
@@ -183,7 +184,11 @@ class BriefingPackMeta(BaseModel):
         return self.days_out < 0
 
 
-NOTE_MAX_LEN = 300
+# Single source of truth is `debriefs.taxonomy.NOTE_MAX_LENGTH` (also served to
+# iOS/mirrored in TS as the pilot-facing counter/gate). Kept as an alias so the
+# server-enforced limit can't drift from what clients display, and so the
+# existing `models.NOTE_MAX_LEN` export keeps resolving.
+NOTE_MAX_LEN = NOTE_MAX_LENGTH
 
 
 class FlightDebrief(BaseModel):
@@ -225,8 +230,8 @@ class FlightDebrief(BaseModel):
         v = v.strip()
         if not v:
             return None
-        if len(v) > NOTE_MAX_LEN:
-            raise ValueError(f"note must be at most {NOTE_MAX_LEN} characters")
+        if len(v) > NOTE_MAX_LENGTH:
+            raise ValueError(f"note must be at most {NOTE_MAX_LENGTH} characters")
         return v
 
     @model_validator(mode="after")

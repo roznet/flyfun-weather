@@ -95,6 +95,11 @@ private struct DigestFeedbackCommentSheet: View {
 
     private enum SubmitState: Equatable { case idle, sending, failed(String) }
 
+    /// Server caps the feedback comment at 2000 chars (`FeedbackRequest.comment`);
+    /// mirror it client-side so a long paste is caught before submit.
+    private static let commentMaxLength = 2000
+    private var commentTooLong: Bool { comment.count > Self.commentMaxLength }
+
     private var isPositive: Bool { sentiment == "up" }
 
     var body: some View {
@@ -113,7 +118,14 @@ private struct DigestFeedbackCommentSheet: View {
                 } header: {
                     Text("Comment")
                 } footer: {
-                    Text("Optional — a thumb on its own is still useful.")
+                    HStack {
+                        Text("Optional — a thumb on its own is still useful.")
+                        Spacer()
+                        if comment.count > Self.commentMaxLength - 200 {
+                            Text("\(Self.commentMaxLength - comment.count)")
+                                .foregroundStyle(commentTooLong ? .red : .secondary)
+                        }
+                    }
                 }
                 Section {
                     Toggle("You can contact me about this", isOn: $contactOk)
@@ -135,7 +147,7 @@ private struct DigestFeedbackCommentSheet: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(state == .sending)
+                    .disabled(state == .sending || commentTooLong)
                 }
             }
             .navigationTitle("Feedback")

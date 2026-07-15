@@ -109,8 +109,11 @@ struct FlightCardView: View, Equatable {
 
                 // Nudge to debrief a recent flight (server "recent" bucket = a
                 // recent past flight not yet debriefed). Tapping the row opens the
-                // briefing, where the debrief card lives.
-                if flight.flightSection == .recent && !flight.hasDebrief {
+                // briefing, where the debrief card lives. Also require `isEditable`:
+                // debrief is owner-only, and on the legacy-server date fallback a
+                // subscriber's recent shared flight would otherwise show a nudge
+                // that dead-ends (the briefing's debrief card is owner-gated).
+                if flight.flightSection == .recent && !flight.hasDebrief && flight.isEditable {
                     Spacer(minLength: 0)
                     Label("Debrief", systemImage: "square.and.pencil")
                         .font(.caption2.weight(.semibold))
