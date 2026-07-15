@@ -307,6 +307,47 @@ import MapKit
         let repainted = await vm.reconcileLatestPacks()   // same timestamp
         #expect(repainted == false)
     }
+
+    /// A slow reconcile must not clobber a fresher `loadFlights()` that completed
+    /// while the reconcile was suspended in its own fetch (#427 review). Both run
+    /// on `@MainActor` but interleave across `await`, so the reconcile captures a
+    /// load generation and drops its write when an authoritative load bumps it.
+    @Test func reconcileDropsStaleWriteWhenLoadFlightsWins() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "GREEN", fetchTimestamp: "2026-07-15T10:00:00Z")),
+        ])
+        let vm = FlightListViewModel(repository: repo)
+        await vm.loadFlights()                         // baseline (generation → 1)
+
+        // Park the reconcile inside its `repository.flights()` fetch.
+        let gate = TestGate()
+        repo.beforeFlightsReturn = { await gate.wait() }
+        let reconcileTask = Task { await vm.reconcileLatestPacks() }
+
+        // Wait until the reconcile has entered flights() (2nd call) and is parked
+        // on the gate — by then it has already captured the load generation.
+        for _ in 0..<1000 where repo.flightsCallCount < 2 { await Task.yield() }
+        #expect(repo.flightsCallCount == 2)
+
+        // A pull-to-refresh lands a newer briefing while the reconcile is suspended.
+        repo.beforeFlightsReturn = nil
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "RED", fetchTimestamp: "2026-07-15T10:05:00Z")),
+        ])
+        await vm.loadFlights()                         // wins (generation → 2), state = RED
+
+        // Release the stale reconcile; it must detect it lost and drop its write.
+        await gate.open()
+        let repainted = await reconcileTask.value
+        #expect(repainted == false)
+
+        guard case .loaded(let flights) = vm.state else {
+            Issue.record("expected .loaded, got \(vm.state)")
+            return
+        }
+        #expect(flights.first?.latestBriefing?.assessment == "RED")   // fresh load preserved
+    }
 }
 
 // MARK: - FlightCardView content equality (#426)
