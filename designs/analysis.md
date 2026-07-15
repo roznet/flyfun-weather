@@ -90,7 +90,7 @@ Every MetPy call is wrapped in try/except — returns None for fields that fail.
 
 ### Clouds (`sounding/clouds.py`)
 
-Two cloud detection methods, selectable via `cloud_method` user setting:
+Two cloud detection methods, selectable via `cloud_source` user setting:
 
 **DD (Dewpoint Depression) — default.** Sounding-derived cloud layers from dewpoint depression profiles.
 
@@ -122,7 +122,7 @@ nwp_layers = build_nwp_cloud_layers(
 
 **Cloud top uncertainty enrichment:** For convective (CAPE > 500): `theoretical_max_top_ft = EL`. For stratiform: `theoretical_max_top_ft = -20°C level`. Only set when exceeding sounding-derived cloud top.
 
-Both methods always computed; `cloud_method` controls which is used by advisory evaluators (method swapping in `tasks/advise.py`).
+Both methods always computed; `cloud_source` controls which is used by advisory evaluators (method swapping in `tasks/advise.py`).
 
 ### Inversions (`sounding/inversions.py`)
 
@@ -436,8 +436,8 @@ Route-point analysis (`analyze_all_route_points()`) adds interpolated time based
 - `icing_method="ogimet_dd"`: no swap needed (default in `icing_zones`)
 - `icing_method="ogimet_nwp"`: resolves `icing_ogimet_nwp_zones` → `icing_zones`. Sets `icing_method_effective="ogimet_nwp"` when it ran; leaves it None (+ `active_icing_available=False`) when there is no native cloud envelope to run against (#408)
 - `icing_method="sfip_nwp"`: converts `SfipZone` → `IcingZone` into `icing_zones`. Sets `icing_method_effective="sfip_nwp"`
-- `cloud_method="dd"`: no swap needed (default in `cloud_layers`)
-- `cloud_method="nwp"`: resolves `nwp_cloud_layers` → `cloud_layers` (falls back to `dd_cloud_layers` if NWP unavailable). Sets `cloud_method_effective` to "nwp" (grib sources), "nwp_synthesized" (synthesized sources), or "dd" (fallback)
+- `cloud_source="dd"`: no swap needed (default in `cloud_layers`)
+- `cloud_source="nwp"`: resolves `nwp_cloud_layers` → `cloud_layers` (falls back to `dd_cloud_layers` if NWP unavailable). Sets `cloud_method_effective` to "nwp" (grib sources), "nwp_synthesized" (synthesized sources), or "dd" (fallback)
 - `convective_method="thermo"`: no swap needed (default `convective` = `convective_thermo`)
 - `convective_method="nwp"`: resolves `convective_nwp` → `convective` (falls back to `convective_thermo` if the model has no NWP convective scheme). Sets `convective_method_effective` to "nwp" or "thermo" (fallback) — recording the silent fallback that used to go unlogged (#408)
 

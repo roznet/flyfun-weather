@@ -258,7 +258,7 @@ Computed in `analysis/sounding/thermodynamics.py` (`compute_indices_core()` + `c
 
 **Module:** `analysis/sounding/clouds.py`
 
-Two named methods — both always computed, user selects which drives advisories via `cloud_method` setting:
+Two named methods — both always computed, user selects which drives advisories via `cloud_source` setting:
 
 #### DD (Dewpoint Depression) — default
 
@@ -298,7 +298,7 @@ Three ICAO bands: low (SFC–6500ft), mid (6500–20000ft), high (20000–45000f
 - **DD (sounding-derived):** from dewpoint depression at pressure levels (8–28 levels, coarse vertical resolution)
 - **NWP (grid-scale):** `cloud_cover_low/mid/high` from model parameterization (sub-grid cloud physics, finer)
 
-These can disagree. The NWP cloud cover includes sub-grid processes the sounding approach misses. The `cloud_method` setting lets users choose which source drives advisory evaluators — see §5 Known Issues.
+These can disagree. The NWP cloud cover includes sub-grid processes the sounding approach misses. The `cloud_source` setting lets users choose which source drives advisory evaluators — see §5 Known Issues.
 
 ### 3.2 Icing Assessment
 

@@ -198,7 +198,7 @@ FlightProfile(
         "llm_digest_enabled": False,
         "icing_severity_enhance": False,
         "icing_method": "ogimet_dd",       # "ogimet_dd" | "ogimet_nwp" | "sfip_nwp"
-        "cloud_method": "dd",              # "dd" | "nwp"
+        "cloud_source": "dd",              # "dd" | "nwp"
         "advisories": {
             "enabled": {"icing_escape": True},
             "params": {"icing_escape": {"terrain_margin_ft": 1000}},

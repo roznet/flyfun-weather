@@ -102,9 +102,9 @@ def _make_profile(session, *, name: str, settings: dict, user_id: str = DEV_USER
     return row.id
 
 
-def _crosswind_profile_settings(red_kt: float, cloud_method: str = "square_nwp") -> dict:
+def _crosswind_profile_settings(red_kt: float, cloud_source: str = "nwp") -> dict:
     return {
-        "cloud_method": cloud_method,
+        "cloud_source": cloud_source,
         "advisories": {
             "enabled": {"airport_wind": True},
             "params": {"airport_wind": {"crosswind_red_kt": red_kt}},
@@ -202,7 +202,7 @@ def _seed_two_profiles(app_db) -> tuple[str, str, int, int]:
     bound_id = _make_profile(session, name="Bound", settings=_crosswind_profile_settings(22))
     edited_id = _make_profile(
         session, name="Edited",
-        settings=_crosswind_profile_settings(44, cloud_method="square_dd"),
+        settings=_crosswind_profile_settings(44, cloud_source="dd"),
     )
     session.commit()
     session.close()
@@ -341,7 +341,7 @@ def test_preview_threads_draft_engine_settings(client, app_db, monkeypatch):
     assert resp.status_code == 200, resp.text
     assert captured["icing_method"] == "ogimet_nwp"       # draft override
     assert captured["advisory_models"] is None            # explicit null, not the saved value
-    # absent from body → edited profile's saved value, read through the #410
-    # legacy fallback: the seeded ``cloud_method="square_dd"`` reduces to source "dd".
+    # absent from body → edited profile's saved value: the seeded
+    # ``cloud_source="dd"`` is read directly.
     assert captured["cloud_source"] == "dd"
     assert captured["persist"] is False

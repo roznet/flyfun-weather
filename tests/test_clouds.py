@@ -466,18 +466,6 @@ def test_legacy_cloud_source_reduces_all_nine_forms():
     assert legacy_cloud_source("") is None
 
 
-def test_cloud_source_from_settings_prefers_new_key_over_legacy():
-    """``cloud_source`` wins when present; otherwise the legacy fused
-    ``cloud_method`` is reduced; absent both → None (follow the default)."""
-    from weatherbrief.analysis.advisories.engine_methods import cloud_source_from_settings
-    assert cloud_source_from_settings({"cloud_source": "dd"}) == "dd"
-    # New key wins even when a stale legacy value disagrees.
-    assert cloud_source_from_settings({"cloud_source": "dd", "cloud_method": "square_nwp"}) == "dd"
-    assert cloud_source_from_settings({"cloud_method": "square_nwp"}) == "nwp"
-    assert cloud_source_from_settings({"cloud_method": "square_dd"}) == "dd"
-    assert cloud_source_from_settings({}) is None
-
-
 @pytest.mark.parametrize("source", ["nwp"])
 def test_resolve_analyses_nwp_source_swaps(source):
     """A bare ``nwp`` source resolves to NWP layers."""
