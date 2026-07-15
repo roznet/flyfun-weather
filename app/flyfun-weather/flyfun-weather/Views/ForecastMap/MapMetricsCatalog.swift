@@ -17,13 +17,6 @@ struct ForecastMapCatalog: Decodable, Sendable {
     let scales: Scales
     let metrics: [String: MetricSpec]
 
-    /// Canonical metric order for the map's colour picker (web `FORECAST_METRICS`).
-    static let metricOrder = [
-        "flight_category", "alternate_needed", "wind_speed_kt", "crosswind_kt",
-        "headwind_kt", "ceiling_ft", "visibility_m", "cape_jkg",
-        "convective_risk", "cloud_cover_pct",
-    ]
-
     /// Fallback grey for missing data / unknown scale (web `MUTED`).
     static var muted: UIColor { UIColor(rgbHex: 0x888888) }
 

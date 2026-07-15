@@ -328,9 +328,15 @@ struct FlightListView: View {
             mapOpenToken &+= 1
         }
         mapDeepLink = deepLink
+        // Present in exactly one container. If the size class flipped since a prior
+        // open (iPad Split View / Stage Manager resize), the other container could
+        // still describe "the map is open"; clear only the map's own state (never a
+        // flight `selection`) so the two presentations can't both be live.
         if isCompact {
+            if selection == .forecastMap { selection = nil }
             showMapCover = true
         } else {
+            showMapCover = false
             selection = .forecastMap
         }
     }

@@ -58,7 +58,19 @@ struct ForecastMapKitView: UIViewRepresentable {
         weak var map: MKMapView?
         private var renderedRevision: Int?
         private var appliedFocus: ForecastMapViewModel.FocusRequest?
+        /// Last (metric, mode, selection) the markers were coloured for. SwiftUI
+        /// calls `updateUIView` on *any* parent re-render (e.g. the `isLoading`
+        /// spinner toggling), so without this every such tick would recolour all
+        /// ~619 markers even when nothing colour-affecting changed.
+        private var appliedColorKey: ColorKey?
         var currentDiameter: CGFloat = 14
+
+        /// The inputs `configure` reads — a recolour is only needed when one changes.
+        private struct ColorKey: Equatable {
+            let metric: String
+            let mode: ForecastModelMode
+            let selectedIcao: String?
+        }
 
         init(_ parent: ForecastMapKitView) {
             self.parent = parent
@@ -68,11 +80,19 @@ struct ForecastMapKitView: UIViewRepresentable {
             self.parent = parent
             guard let map else { return }
 
-            if renderedRevision != parent.payloadRevision {
+            let rebuilt = renderedRevision != parent.payloadRevision
+            if rebuilt {
                 renderedRevision = parent.payloadRevision
                 rebuildAnnotations(on: map)
             }
-            recolorVisible(on: map)
+            // Recolour on a rebuild (fresh markers need it) or when the colour
+            // inputs changed; skip the ~619-marker pass on incidental re-renders.
+            let colorKey = ColorKey(metric: parent.metric, mode: parent.mode,
+                                    selectedIcao: parent.selectedIcao)
+            if rebuilt || colorKey != appliedColorKey {
+                appliedColorKey = colorKey
+                recolorVisible(on: map)
+            }
 
             if let focus = parent.focusRequest, focus != appliedFocus {
                 appliedFocus = focus

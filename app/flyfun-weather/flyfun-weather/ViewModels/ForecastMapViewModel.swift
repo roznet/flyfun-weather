@@ -185,16 +185,21 @@ final class ForecastMapViewModel {
     /// stays false — a day/hour change recolours in place, it never re-centres.
     private func loadSlot(day: Int, hour: Int, moveCamera: Bool) async {
         let key = SlotKey(day: day, hour: hour)
+        // The spinner is a single shared flag, so it must track only the *selected*
+        // slot: rapid `‹ ›` stepping spawns overlapping fetches, and a superseded one
+        // finishing must not clear the spinner while a newer slot is still loading.
+        func isCurrent() -> Bool { selectedDay == day && selectedHour == hour }
         if let cached = slots[key] {
             touchLRU(key)
             setPayload(cached)
+            if isCurrent() { isLoading = false }
             prefetchAdjacentHours()
             return
         }
         guard !inFlight.contains(key) else { return }  // a prefetch already owns it
         inFlight.insert(key)
         defer { inFlight.remove(key) }
-        isLoading = true
+        if isCurrent() { isLoading = true }
         loadError = nil
         do {
             let resp = try await repository.forecastMap(day: day, hour: hour)
@@ -207,11 +212,11 @@ final class ForecastMapViewModel {
             // benign
         } catch {
             Self.logger.warning("forecast map \(day)/\(hour) failed: \(error.localizedDescription)")
-            if selectedDay == day, selectedHour == hour, payload == nil {
+            if isCurrent(), payload == nil {
                 loadError = error.localizedDescription
             }
         }
-        isLoading = false
+        if isCurrent() { isLoading = false }
         prefetchAdjacentHours()
     }
 

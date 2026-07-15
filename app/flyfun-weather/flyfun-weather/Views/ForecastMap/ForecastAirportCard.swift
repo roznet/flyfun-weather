@@ -263,9 +263,12 @@ struct ForecastAirportCard: View {
             guard let v = data.numericField("ceiling_ft") else { return "—" }
             return v >= 10000 ? "CAVOK" : "\(Int(v.rounded()))"
         case "visibility_m":
+            // Matches web `formatVisibility` (metric/EU): >10 km / N km / N m. A
+            // US statute-mile variant awaits the shared units-region pref (no
+            // UnitsRegion is plumbed into iOS yet — see project_unit_system).
             guard let m = data.numericField("visibility_m") else { return "—" }
-            if m >= 9999 { return "10+km" }
-            return m >= 5000 ? "\(Int((m / 1000).rounded()))km" : "\(Int(m.rounded()))m"
+            if m >= 10000 { return ">10 km" }
+            return m >= 5000 ? "\(Int((m / 1000).rounded())) km" : "\(Int(m.rounded())) m"
         case "wind_speed_kt":
             guard let s = data.numericField("wind_speed_kt") else { return "—" }
             let dir = data.numericField("wind_dir_deg").map { "\(Int($0.rounded()))/" } ?? ""
