@@ -266,6 +266,103 @@ import MapKit
         #expect(vm.isOffline == true)
         #expect(vm.isRefreshing == false)
     }
+
+    // MARK: Level-triggered reconcile (#426)
+
+    /// A briefing that advanced on the server (new pack `fetchTimestamp`) repaints
+    /// the list via the quiet reconcile — the completion path the active-refresh
+    /// edge can miss when a refresh starts *and* finishes between two polls.
+    @Test func reconcileRepaintsWhenPackTimestampAdvances() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "GREEN", fetchTimestamp: "2026-07-15T10:00:00Z")),
+        ])
+        let vm = FlightListViewModel(repository: repo)
+        await vm.loadFlights()                 // baseline snapshot @ T1
+
+        // Server now has a newer pack for the same flight.
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "RED", fetchTimestamp: "2026-07-15T10:05:00Z")),
+        ])
+        let repainted = await vm.reconcileLatestPacks()
+
+        #expect(repainted)
+        guard case .loaded(let flights) = vm.state else {
+            Issue.record("expected .loaded, got \(vm.state)")
+            return
+        }
+        #expect(flights.first?.latestBriefing?.assessment == "RED")
+    }
+
+    /// No pack change → the reconcile is a no-op (one cheap fetch, no repaint), so
+    /// it can run on a steady cadence without churning the list.
+    @Test func reconcileIsNoopWhenPackUnchanged() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([
+            makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "GREEN", fetchTimestamp: "2026-07-15T10:00:00Z")),
+        ])
+        let vm = FlightListViewModel(repository: repo)
+        await vm.loadFlights()
+
+        let repainted = await vm.reconcileLatestPacks()   // same timestamp
+        #expect(repainted == false)
+    }
+}
+
+// MARK: - FlightCardView content equality (#426)
+
+/// The row must diff on the briefing content it draws, not `FlightResponse`'s
+/// id-only identity — otherwise a same-id/new-briefing update would look
+/// unchanged and the card would keep its stale badge until app relaunch.
+@MainActor
+@Suite struct FlightCardEquatableTests {
+
+    @Test func sameIdDifferentBriefingIsNotEqual() {
+        let green = makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "GREEN", fetchTimestamp: "T1"))
+        let red = makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "RED", fetchTimestamp: "T2"))
+
+        // The underlying model is *equal* by its id-only identity conformance…
+        #expect(green == red)
+        // …but the cards must compare *unequal* so SwiftUI repaints the row.
+        #expect(FlightCardView(flight: green) != FlightCardView(flight: red))
+    }
+
+    @Test func identicalContentIsEqual() {
+        let a = makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "AMBER", fetchTimestamp: "T1"))
+        let b = makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "AMBER", fetchTimestamp: "T1"))
+        #expect(FlightCardView(flight: a) == FlightCardView(flight: b))
+    }
+
+    @Test func refreshingFlagBreaksEquality() {
+        let a = makeFlight(id: "a", latestBriefing: makeBriefingStatus(assessment: "GREEN"))
+        #expect(FlightCardView(flight: a, isRefreshing: false) != FlightCardView(flight: a, isRefreshing: true))
+    }
+}
+
+// MARK: - BriefingStatusInfo wire decoding (#426)
+
+@Suite struct BriefingStatusDecodeTests {
+
+    /// The server's `latest_briefing.fetch_timestamp` decodes onto
+    /// `fetchTimestamp` via the shared snake-case decoder.
+    @Test func decodesFetchTimestamp() throws {
+        let json = Data("""
+        {"assessment": "GREEN", "fetch_timestamp": "2026-07-15T10:00:00Z"}
+        """.utf8)
+        let status = try JSONDecoder.weatherBrief.decode(BriefingStatusInfo.self, from: json)
+        #expect(status.assessment == "GREEN")
+        #expect(status.fetchTimestamp == "2026-07-15T10:00:00Z")
+    }
+
+    /// A legacy payload without the field decodes with `fetchTimestamp == nil`
+    /// (optional `let`, no default → `decodeIfPresent`).
+    @Test func toleratesMissingFetchTimestamp() throws {
+        let json = Data("""
+        {"assessment": "AMBER"}
+        """.utf8)
+        let status = try JSONDecoder.weatherBrief.decode(BriefingStatusInfo.self, from: json)
+        #expect(status.fetchTimestamp == nil)
+    }
 }
 
 // MARK: - RouteMapViewModel (waypoint extraction + fit-region math)

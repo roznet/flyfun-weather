@@ -273,9 +273,8 @@ struct DialogTests {
 
     @Test("check summary: assessment + top concerns")
     func check() {
-        let briefing = BriefingStatusInfo(
-            assessment: "AMBER", assessmentReason: nil, outlook: nil, outlookReason: nil,
-            hasAdvisories: true,
+        let briefing = makeBriefingStatus(
+            assessment: "AMBER", hasAdvisories: true,
             advisorySummary: AdvisorySummary(red: 0, amber: 2, top: [
                 AdvisoryChip(status: "AMBER", name: "convective"),
                 AdvisoryChip(status: "AMBER", name: "icing"),
@@ -293,9 +292,7 @@ struct DialogTests {
 
     @Test("overview: one upcoming flight")
     func overview() {
-        let briefing = BriefingStatusInfo(
-            assessment: "GREEN", assessmentReason: nil, outlook: nil, outlookReason: nil,
-            hasAdvisories: false, advisorySummary: nil)
+        let briefing = makeBriefingStatus(assessment: "GREEN", hasAdvisories: false)
         let flight = makeFlight(waypoints: ["EGKB", "EGTF"], departureTime: "2026-08-01T12:00:00Z", latestBriefing: briefing)
         #expect(IntentDialogs.overviewSummary([flight], now: now)
             == "You have 1 upcoming flight: EGKB → EGTF, green.")

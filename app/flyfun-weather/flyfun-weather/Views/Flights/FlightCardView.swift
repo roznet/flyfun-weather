@@ -1,13 +1,38 @@
 import SwiftUI
 
 /// Card displaying a flight summary in the list.
-struct FlightCardView: View {
+///
+/// `Equatable` (applied via `.equatable()` at the call site) is load-bearing:
+/// `FlightResponse` is `Hashable` by `id` only — deliberately, so `List`
+/// selection stays stable when a flight's briefing changes — but SwiftUI reuses
+/// that same id-only `==` when diffing this row, so a same-id/new-briefing
+/// update would look unchanged and the card would keep its stale badge until the
+/// view tree is rebuilt (app relaunch). Diffing on the exact fields the card
+/// draws instead makes a changed briefing repaint immediately (#426).
+struct FlightCardView: View, Equatable {
     let flight: FlightResponse
     var hasCachedData: Bool = false
     var isOffline: Bool = false
     /// The flight's briefing is queued/refreshing server-side — show a live
     /// "Updating…" tag alongside the (still-current) assessment badge.
     var isRefreshing: Bool = false
+
+    static func == (lhs: FlightCardView, rhs: FlightCardView) -> Bool {
+        lhs.hasCachedData == rhs.hasCachedData
+            && lhs.isOffline == rhs.isOffline
+            && lhs.isRefreshing == rhs.isRefreshing
+            // Everything below is a field the body actually renders. `flight`'s
+            // own `==` is id-only and must not be used here.
+            && lhs.flight.id == rhs.flight.id
+            && lhs.flight.shortTitle == rhs.flight.shortTitle
+            && lhs.flight.waypoints == rhs.flight.waypoints
+            && lhs.flight.departureTime == rhs.flight.departureTime
+            && lhs.flight.cruiseAltitudeFt == rhs.flight.cruiseAltitudeFt
+            && lhs.flight.aircraft == rhs.flight.aircraft
+            && lhs.flight.role == rhs.flight.role
+            && lhs.flight.coverage == rhs.flight.coverage
+            && lhs.flight.latestBriefing == rhs.flight.latestBriefing
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
