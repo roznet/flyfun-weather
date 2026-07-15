@@ -245,13 +245,18 @@ struct DebriefCard: View {
                     .font(.subheadline)
                     .foregroundStyle(Theme.text)
             } else if debrief.decision == "flown" {
-                let diffs = debrief.outcomes.filter { $0.value != "consistent" }
+                // Non-consistent outcomes in taxonomy order (matches the chips /
+                // outcome rows), not alphabetical by tag id.
+                let diffs = taxonomy.tags.compactMap { tag -> (id: String, value: String)? in
+                    guard let value = debrief.outcomes[tag.id], value != "consistent" else { return nil }
+                    return (tag.id, value)
+                }
                 if diffs.isEmpty {
                     Text("Conditions were as forecast.")
                         .font(.subheadline)
                         .foregroundStyle(Theme.textMuted)
                 } else {
-                    ForEach(diffs.sorted(by: { $0.key < $1.key }), id: \.key) { tagId, value in
+                    ForEach(diffs, id: \.id) { tagId, value in
                         Text("\(tagLabel(tagId)): \(outcomeLabel(value))")
                             .font(.subheadline)
                             .foregroundStyle(value == "worse" ? Theme.red : Theme.text)
