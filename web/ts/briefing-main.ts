@@ -214,7 +214,11 @@ let forecastOverlayCache: ForecastOverlayCache | null = null;
 // overlay for the rest of the session, but a persistent error doesn't hammer
 // the endpoint on every re-render (e.g. an altitude-slider drag).
 const FORECAST_RETRY_BACKOFF_MS = 30_000;
-let overlayRetryAt = 0;
+// Two independent retry policies: the one-shot day-grid load and the per-slice
+// forecast fetch back off separately so one's failure never inherits the other's
+// window (e.g. if day-grid revalidation is ever added).
+let dayGridRetryAt = 0;
+let sliceRetryAt = 0;
 
 /** The overlay metric, validated against the served catalog. A persisted
  *  localStorage value that no longer matches a catalog metric (e.g. after a
@@ -271,11 +275,11 @@ function updateForecastOverlay(
   // failure, back off rather than caching an empty "gave up" grid, so the
   // overlay recovers on a later render instead of being dead until reload.
   if (!availableDaysCache) {
-    if (!availableDaysPending && Date.now() >= overlayRetryAt) {
+    if (!availableDaysPending && Date.now() >= dayGridRetryAt) {
       availableDaysPending = true;
       fetchAvailableDays()
         .then((resp) => { availableDaysCache = resp.days; })
-        .catch(() => { overlayRetryAt = Date.now() + FORECAST_RETRY_BACKOFF_MS; })
+        .catch(() => { dayGridRetryAt = Date.now() + FORECAST_RETRY_BACKOFF_MS; })
         .finally(() => { availableDaysPending = false; requestRerender(); });
     }
     renderer.setShowForecastOverlay(false);
@@ -308,7 +312,7 @@ function updateForecastOverlay(
 
   // Cache miss. Honour the failure backoff so a persistent error doesn't refetch
   // on every re-render; the slice retries automatically once the window passes.
-  if (Date.now() < overlayRetryAt) {
+  if (Date.now() < sliceRetryAt) {
     renderer.setForecastData(null);
     renderer.refreshForecastOverlay();
     return;
@@ -330,7 +334,7 @@ function updateForecastOverlay(
       // Drop the in-flight marker (don't leave a permanent empty entry) and back
       // off, so the slice is retried on a later render instead of stuck empty.
       if (forecastOverlayCache?.key === key) forecastOverlayCache = null;
-      overlayRetryAt = Date.now() + FORECAST_RETRY_BACKOFF_MS;
+      sliceRetryAt = Date.now() + FORECAST_RETRY_BACKOFF_MS;
     });
 }
 
