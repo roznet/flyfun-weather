@@ -168,9 +168,19 @@ extension ForecastMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
     }
 
     func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
-        // Flag a user-initiated pan/zoom (an active gesture on the map's internal
-        // container) so a late-resolving cold-open recentre doesn't fight it. Our
-        // own `setRegion` moves carry no active gesture, so they don't trip this.
+        // Flag a user-initiated pan/zoom so a late-resolving cold-open recentre
+        // doesn't fight it. We infer "user" from an active gesture recognizer on
+        // the map's first internal subview — our own `setRegion` moves carry no
+        // active gesture, so they don't trip this.
+        //
+        // FRAGILITY: `subviews.first?.gestureRecognizers` reads MapKit's private
+        // view hierarchy — a known but *unsupported* trick. If a future iOS
+        // reshapes `MKMapView`'s subviews this silently stops matching (cold-open
+        // can yank the camera again) or, worse, could false-positive on a
+        // programmatic move (cold-open never applies). There's no compiler/test
+        // signal, so revisit here if cold-open recentring misbehaves; a hardened
+        // version would subclass `MKMapView` and track pan/pinch recognizer state
+        // directly, or compare the new region against the last `setRegion` target.
         guard let recognizers = mapView.subviews.first?.gestureRecognizers else { return }
         if recognizers.contains(where: { [.began, .changed, .ended].contains($0.state) }) {
             parent.onUserInteraction()

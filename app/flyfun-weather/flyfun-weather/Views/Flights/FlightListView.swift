@@ -317,10 +317,17 @@ struct FlightListView: View {
     /// `fullScreenCover` (compact) — retrofitting the sidebar later is expensive,
     /// so iPad is done from the start (#420).
     private func openForecastMap(deepLink: MapDeepLink?) {
+        // Only force a fresh view (new `.id`) when a *new* deep link arrives while
+        // the map is ALREADY open — that's the only case where the view is reused
+        // and wouldn't otherwise apply the new state. A plain re-open (toolbar
+        // button, or opening from closed) must NOT bump the token: doing so would
+        // tear down the VM and its (day,hour) LRU cache — the thing that makes
+        // `‹ ›` stepping instant — and re-fetch on a no-op tap.
+        let alreadyOpen = selection == .forecastMap || showMapCover
+        if deepLink != nil, alreadyOpen {
+            mapOpenToken &+= 1
+        }
         mapDeepLink = deepLink
-        // Bump the id so a re-entrant deep link (map already open) re-creates the
-        // view/VM and actually applies the new day/hour/model/metric/airport.
-        mapOpenToken &+= 1
         if isCompact {
             showMapCover = true
         } else {
