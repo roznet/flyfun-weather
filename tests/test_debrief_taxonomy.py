@@ -11,7 +11,6 @@ from weatherbrief.debriefs.taxonomy import (
     Decision,
     OutcomeValue,
     build_taxonomy_catalog,
-    flagged_tags_from_advisories,
     match_tags_in_text,
 )
 
@@ -53,28 +52,8 @@ class TestServedCatalog:
         valid = {t.value for t in ConditionTag}
         assert all(v in valid for v in cat["advisory_tag_map"].values())
 
-
-class TestFlaggedTags:
-    def test_amber_red_flag_their_tag(self):
-        flagged = flagged_tags_from_advisories(
-            [("icing_escape", "red"), ("turbulence", "amber"), ("vmc_cruise", "green")]
-        )
-        assert ConditionTag.ICE in flagged
-        assert ConditionTag.TURB in flagged
-        assert ConditionTag.IMC not in flagged  # green → not flagged
-
-    def test_unknown_advisory_ignored(self):
-        assert flagged_tags_from_advisories([("model_quality", "red")]) == []
-
-    def test_result_in_condition_tag_order(self):
-        flagged = flagged_tags_from_advisories(
-            [("convective", "red"), ("icing_escape", "red")]
-        )
-        # ICE precedes TS in ConditionTag declaration order.
-        assert flagged == [ConditionTag.ICE, ConditionTag.TS]
-
     def test_every_mapped_id_resolves(self):
-        # Guards the map against a typo'd tag.
+        # Guards ADVISORY_TAG_MAP (served in the catalog) against a typo'd tag.
         for tag in ADVISORY_TAG_MAP.values():
             assert isinstance(tag, ConditionTag)
 

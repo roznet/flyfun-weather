@@ -139,25 +139,6 @@ def build_taxonomy_catalog() -> dict:
     }
 
 
-def flagged_tags_from_advisories(
-    advisories: list[tuple[str, str]],
-) -> list[ConditionTag]:
-    """Tags whose advisory came back AMBER/RED, in ``ConditionTag`` order.
-
-    ``advisories`` is a list of ``(advisory_id, aggregate_status)`` pairs.
-    GREEN/UNAVAILABLE don't count — there's nothing for the pilot to grade.
-    Mirrors ``flaggedTagsFromAdvisories`` in the TS taxonomy.
-    """
-    flagged: set[ConditionTag] = set()
-    for advisory_id, status in advisories:
-        if status.lower() not in ("amber", "red"):
-            continue
-        tag = ADVISORY_TAG_MAP.get(advisory_id)
-        if tag is not None:
-            flagged.add(tag)
-    return [t for t in ConditionTag if t in flagged]
-
-
 # Phrases scanned in the free-text note to auto-toggle matching chips.
 # Lowercase, whole-word-ish matches (see _build_pattern). Conservative on purpose;
 # the chip is the source of truth — pilots can untoggle if a match is unwanted.
