@@ -96,6 +96,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         throw MockError.notStubbed("latestPack")
     }
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse { throw MockError.notStubbed("airportWeather") }
+    func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse { throw MockError.notStubbed("forecastMap") }
+    func forecastDays() async throws -> ForecastDaysResponse { throw MockError.notStubbed("forecastDays") }
+    func frequentAirports() async throws -> FrequentAirportsResponse { throw MockError.notStubbed("frequentAirports") }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         if let h = advisoriesHandler { return try h() }
         throw MockError.notStubbed("advisories")

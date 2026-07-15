@@ -31,6 +31,15 @@ protocol BriefingRepository: Sendable {
     /// `get_airport_weather` tool). Online-only — not part of the offline bundle.
     /// `day`: 0=today…3, `hour`: forecast hour UTC (snapped server-side).
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse
+    // Forecast map (#420) — all online-only, one payload per (day, hour).
+    /// Every watchlist airport with per-model + baked consensus for one slot. The
+    /// only call that hits the network on a day/hour change (metric/model switches
+    /// are a pure client recolour).
+    func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse
+    /// The ragged day/hour/model grid the pickers are drawn from. Never hardcode it.
+    func forecastDays() async throws -> ForecastDaysResponse
+    /// Top-5 departure/destination airports from history — cold-open map centring (#419).
+    func frequentAirports() async throws -> FrequentAirportsResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
@@ -149,6 +158,26 @@ final class OnlineBriefingRepository: BriefingRepository {
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {
         let code = Self.queryValueEncoded(icao)
         return try await client.requestURL("/api/maps/airport-weather?icao=\(code)&day=\(day)&hour=\(hour)")
+    }
+
+    func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse {
+        // Decode with a plain decoder (NOT weatherBrief): `.convertFromSnakeCase`
+        // would rewrite the `agreement`/`models` dictionary keys. See
+        // `ForecastMapResponse.decode(from:)`.
+        let data = try await client.requestDataURL("/api/maps/forecast?day=\(day)&hour=\(hour)")
+        do {
+            return try ForecastMapResponse.decode(from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
+    }
+
+    func forecastDays() async throws -> ForecastDaysResponse {
+        try await client.request("/api/maps/forecast/days")
+    }
+
+    func frequentAirports() async throws -> FrequentAirportsResponse {
+        try await client.request("/api/flights/frequent-airports")
     }
 
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {

@@ -32,6 +32,10 @@ final class HelpCatalogStore {
         catalog = Self.loadFromDisk(fileURL) ?? Self.loadBaseline()
     }
 
+    /// The forecast-map metric catalog: the served `maps` section if synced,
+    /// else the bundled baseline so the map renders on a cold first launch.
+    var mapsCatalog: ForecastMapCatalog? { catalog?.maps ?? ForecastMapCatalog.bundledBaseline }
+
     // MARK: - Lookups (used by the (i) popups)
 
     func metric(_ id: String) -> MetricHelp? { catalog?.metrics[id] }

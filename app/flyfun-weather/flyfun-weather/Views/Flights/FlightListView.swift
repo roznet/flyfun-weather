@@ -1,17 +1,32 @@
 import SwiftUI
 
+/// What the sidebar has selected: the pan-European forecast map, or a flight's
+/// briefing (#420). The map is an iPad detail pane / iPhone `fullScreenCover`;
+/// the flight case drives the briefing detail as before.
+enum SidebarSelection: Hashable {
+    case forecastMap
+    case flight(FlightResponse)
+}
+
 /// Main screen showing the user's saved flights with sidebar/detail split on iPad.
 struct FlightListView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var viewModel: FlightListViewModel?
-    @State private var selectedFlight: FlightResponse?
+    @State private var selection: SidebarSelection?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showAddFlight = false
     @State private var showSettings = false
     @State private var showSignOutWarning = false
     @State private var editingFlight: FlightResponse?
+    /// Compact-width forecast-map cover (the app's first `fullScreenCover`) and
+    /// the deep-link state it opens with.
+    @State private var showMapCover = false
+    @State private var mapDeepLink: ForecastMapViewModel.DeepLink?
+
+    private var isCompact: Bool { horizontalSizeClass == .compact }
     // Guards the one authoritative-reload retry in `applyPendingNavigation` so a
     // deep-link to a just-created flight (push tap / Universal Link) isn't dropped
     // against a stale cache-first list. Holds the flight id we've already retried.
@@ -38,7 +53,7 @@ struct FlightListView: View {
                             }
                             // Utility logbook (§4.4): Future · Recent · Past.
                             // Past is collapsible (collapsed by default).
-                            List(selection: $selectedFlight) {
+                            List(selection: $selection) {
                                 ForEach(Self.groupedFlights(flights), id: \.title) { group in
                                     if group.title == "Past" {
                                         Section {
@@ -119,6 +134,12 @@ struct FlightListView: View {
                             Label("Add Flight", systemImage: "plus")
                         }
                         .accessibilityIdentifier("addFlightButton")
+                        Button {
+                            openForecastMap(deepLink: nil)
+                        } label: {
+                            Label("Forecast Map", systemImage: "map")
+                        }
+                        .accessibilityIdentifier("forecastMapButton")
                         Menu {
                             Button {
                                 showSettings = true
@@ -157,7 +178,7 @@ struct FlightListView: View {
                     AddFlightView(repository: repo) { flight in
                         Task {
                             await viewModel?.loadFlights()
-                            selectedFlight = flight
+                            selection = .flight(flight)
                         }
                     }
                 }
@@ -171,7 +192,7 @@ struct FlightListView: View {
                         Task {
                             await viewModel?.loadFlights()
                             // Re-open the (regenerated) briefing.
-                            selectedFlight = updated
+                            selection = .flight(updated)
                         }
                     }
                 }
@@ -183,12 +204,26 @@ struct FlightListView: View {
                 Text("You have downloaded packs. They won't be accessible until you sign in again.")
             }
         } detail: {
-            if let selectedFlight {
-                BriefingContainerView(flight: selectedFlight)
-                    .id(selectedFlight.id)
-            } else {
+            switch selection {
+            case .flight(let flight):
+                BriefingContainerView(flight: flight)
+                    .id(flight.id)
+            case .forecastMap:
+                // iPad detail pane (regular width). On compact the map opens as a
+                // fullScreenCover instead — see `openForecastMap`.
+                if let repo = appState.repository {
+                    ForecastMapView(repository: repo, deepLink: mapDeepLink)
+                }
+            case nil:
                 ContentUnavailableView("Select a Flight", systemImage: "airplane",
-                                       description: Text("Choose a flight from the list to view its briefing."))
+                                       description: Text("Choose a flight from the list, or open the forecast map."))
+            }
+        }
+        .fullScreenCover(isPresented: $showMapCover) {
+            if let repo = appState.repository {
+                ForecastMapView(repository: repo, deepLink: mapDeepLink) {
+                    showMapCover = false
+                }
             }
         }
         .task {
@@ -237,12 +272,15 @@ struct FlightListView: View {
         guard let nav = appState.pendingNavigation else { return }
         switch nav {
         case .flightList:
-            selectedFlight = nil
+            selection = nil
+            appState.clearPendingNavigation()
+        case .forecastMap(let deepLink):
+            openForecastMap(deepLink: deepLink.isEmpty ? nil : deepLink.asViewModelDeepLink)
             appState.clearPendingNavigation()
         case .briefing(let flightId):
             guard let vm = viewModel, case .loaded(let flights) = vm.state else { return }
             if let match = flights.first(where: { $0.id == flightId }) {
-                selectedFlight = match
+                selection = .flight(match)
                 appState.clearPendingNavigation()
                 reloadRetryFlightId = nil
             } else if vm.isOffline || vm.isRefreshing {
@@ -269,12 +307,24 @@ struct FlightListView: View {
         }
     }
 
+    /// Open the forecast map: an iPad detail pane (regular width) or an iPhone
+    /// `fullScreenCover` (compact) — retrofitting the sidebar later is expensive,
+    /// so iPad is done from the start (#420).
+    private func openForecastMap(deepLink: ForecastMapViewModel.DeepLink?) {
+        mapDeepLink = deepLink
+        if isCompact {
+            showMapCover = true
+        } else {
+            selection = .forecastMap
+        }
+    }
+
     /// One flight row (navigation + edit swipe/context menu). Shared by every
     /// section so the collapsible Past section renders identical rows.
     @ViewBuilder
     private func flightRow(_ flight: FlightResponse, viewModel: FlightListViewModel) -> some View {
         let hasCached = viewModel.cachedFlightIds.contains(flight.id)
-        NavigationLink(value: flight) {
+        NavigationLink(value: SidebarSelection.flight(flight)) {
             FlightCardView(flight: flight, hasCachedData: hasCached,
                            isOffline: viewModel.isOffline,
                            isRefreshing: viewModel.refreshingFlightIds.contains(flight.id))

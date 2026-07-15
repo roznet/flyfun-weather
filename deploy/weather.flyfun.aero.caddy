@@ -14,7 +14,7 @@ weather.flyfun.aero {
     # Apple Universal Links — associate app with this domain
     handle /.well-known/apple-app-site-association {
         header Content-Type application/json
-        respond `{"applinks":{"apps":[],"details":[{"appID":"M7QSSF3624.net.ro-z.flyfun-weather","paths":["/auth/callback","/briefing.html"]}]}}`
+        respond `{"applinks":{"apps":[],"details":[{"appID":"M7QSSF3624.net.ro-z.flyfun-weather","paths":["/auth/callback","/briefing.html","/maps.html"]}]}}`
     }
 
     # OAuth 2.1 Authorization Server metadata (RFC 8414) — lets native/third-party

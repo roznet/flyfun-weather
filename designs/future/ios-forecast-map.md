@@ -3,7 +3,9 @@
 > Porting the pan-European forecast overview map (`maps.html`, forecast tab) to
 > the iOS/iPad app — as a **pilot-framed** weather map, not a generic one.
 
-**Status:** design, not built. Agreed in a design session 2026-07-14.
+**Status:** backend (#419) shipped in PR #422; iOS client (#420) implemented —
+map + airport card + universal links, under `app/flyfun-weather/flyfun-weather/Views/ForecastMap/`.
+Agreed in a design session 2026-07-14.
 Related: [forecast-page.md](../forecast-page.md) (the web feature this ports),
 [ios-app-ui.md](../ios-app-ui.md), [ios-app-architecture.md](../ios-app-architecture.md),
 [ios-web-known-gaps.md](./ios-web-known-gaps.md).
@@ -373,7 +375,25 @@ they are what makes the iOS client logic-free.
 - W1 — weekday+date day labels; `fc.day` stays a relative integer so share links
   still resolve.
 
-### Issue 2 (#420) — iOS: the forecast map *(two PRs)*
+### Issue 2 (#420) — iOS: the forecast map *(two PRs)* — implemented
+
+As built (`app/flyfun-weather/flyfun-weather/`):
+- **DTOs** `Models/API/ForecastMapResponse.swift` (plain-decoder, verbatim keys so
+  the `agreement` map survives), `ForecastDaysResponse.swift`,
+  `FrequentAirportsResponse.swift`; `HelpCatalogResponse` widened with the `maps`
+  section; catalog interpreter `Views/ForecastMap/MapMetricsCatalog.swift`
+  (`bandColor`, categorical, gray-ramp, `m_to_sm`, `alternate_needed`,
+  `agreementKey`) with a bundled `Resources/map-metrics-catalog.json` baseline.
+- **Repository** `forecastMap/forecastDays/frequentAirports` (online-only).
+- **VM** `ViewModels/ForecastMapViewModel.swift` — day/hour/metric/mode/selection,
+  `(day,hour)` LRU + adjacent-hour prefetch, cold-open centring, deep-link.
+- **Views** `Views/ForecastMap/ForecastMapKitView.swift` (MKMapView representable,
+  no clustering, pure recolour, zoom-scaled radius, agreement ring),
+  `ForecastMapView.swift` (+`+Support`), `ForecastAirportCard.swift`.
+- **Nav** `FlightListView` `SidebarSelection` enum + Map toolbar button (iPad
+  detail pane / iPhone `fullScreenCover`); `/maps.html` universal link →
+  `PendingNavigation.forecastMap(MapDeepLink)`; AASA path added in
+  `deploy/weather.flyfun.aero.caddy`. Tests: `flyfun-weatherTests/ForecastMapTests.swift`.
 
 **PR 1 — the map.** Sidebar-selection enum + toolbar Map button (iPad detail pane /
 iPhone `fullScreenCover`); `MKMapView` representable with 619 markers coloured from

@@ -375,20 +375,42 @@ final class AppState {
 
     /// Parse an inbound Universal Link into a navigation target, if it names one.
     ///
-    /// Recognizes only `https://weather.flyfun.aero/briefing.html?flight=<id>` —
-    /// the same URL the web Smart App Banner carries as its `app-argument`. The
-    /// auth callback (`/auth/callback`), unknown hosts/paths, and a missing or
-    /// empty `flight` param all return nil so the caller routes them elsewhere.
-    /// Pure + `nonisolated` so the path/param logic is unit-testable off the
-    /// MainActor and can't silently regress.
+    /// Recognizes `https://weather.flyfun.aero/briefing.html?flight=<id>` (the
+    /// Smart App Banner's `app-argument`) and `https://weather.flyfun.aero/maps.html`
+    /// with the web's `fc.*` share state (#420) — a desktop-shared map link opens
+    /// the phone on the same day/hour/metric/airport. The auth callback
+    /// (`/auth/callback`) and unknown hosts/paths return nil so the caller routes
+    /// them elsewhere. Pure + `nonisolated` so the path/param logic is
+    /// unit-testable off the MainActor and can't silently regress.
     nonisolated static func navigationTarget(for url: URL) -> PendingNavigation? {
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              comps.host == "weather.flyfun.aero",
-              comps.path == "/briefing.html",
-              let flight = comps.queryItems?.first(where: { $0.name == "flight" })?.value,
-              !flight.isEmpty
-        else { return nil }
-        return .briefing(flightId: flight)
+              comps.host == "weather.flyfun.aero" else { return nil }
+        switch comps.path {
+        case "/briefing.html":
+            guard let flight = comps.queryItems?.first(where: { $0.name == "flight" })?.value,
+                  !flight.isEmpty else { return nil }
+            return .briefing(flightId: flight)
+        case "/maps.html":
+            return .forecastMap(mapDeepLink(from: comps.queryItems ?? []))
+        default:
+            return nil
+        }
+    }
+
+    /// Read the forecast map's `fc.*` share-state keys from a `/maps.html` query.
+    /// `fc.day`/`fc.hour` stay relative integers so existing share links resolve.
+    nonisolated static func mapDeepLink(from items: [URLQueryItem]) -> MapDeepLink {
+        func value(_ name: String) -> String? {
+            let v = items.first { $0.name == name }?.value
+            return (v?.isEmpty == false) ? v : nil
+        }
+        return MapDeepLink(
+            day: value("fc.day").flatMap(Int.init),
+            hour: value("fc.hour").flatMap(Int.init),
+            model: value("fc.model"),
+            metric: value("fc.metric"),
+            airport: value("fc.apt")
+        )
     }
 
     // MARK: - Push notifications & badge

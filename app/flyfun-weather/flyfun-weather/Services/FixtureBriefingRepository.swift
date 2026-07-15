@@ -126,6 +126,15 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {
         throw FixtureError.notProvided("airportWeather")
     }
+    func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse {
+        throw FixtureError.notProvided("forecastMap")
+    }
+    func forecastDays() async throws -> ForecastDaysResponse {
+        throw FixtureError.notProvided("forecastDays")
+    }
+    func frequentAirports() async throws -> FrequentAirportsResponse {
+        throw FixtureError.notProvided("frequentAirports")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.advisories

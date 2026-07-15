@@ -23,22 +23,27 @@ struct HelpCatalogResponse: Sendable {
     let version: String
     /// Metric help keyed by metric id.
     let metrics: [String: MetricHelp]
+    /// Forecast-map metric catalog (colours/thresholds/labels/legends), served in
+    /// the `maps` section (#419, B2). nil on the bundled baseline before first
+    /// sync — the forecast map falls back to `ForecastMapCatalog.bundledBaseline`.
+    let maps: ForecastMapCatalog?
     /// Advisory help (same shape as `AdvisoriesResponse.catalog`).
     let advisories: [AdvisoryCatalogEntry]
     /// O(1) advisory lookup by id, built once at construction — mirrors the
     /// metrics dict so both popup call sites have the same access cost.
     let advisoriesById: [String: AdvisoryCatalogEntry]
 
-    init(version: String, metrics: [String: MetricHelp], advisories: [AdvisoryCatalogEntry]) {
+    init(version: String, metrics: [String: MetricHelp], maps: ForecastMapCatalog?, advisories: [AdvisoryCatalogEntry]) {
         self.version = version
         self.metrics = metrics
+        self.maps = maps
         self.advisories = advisories
         self.advisoriesById = Dictionary(advisories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// Decode a full server payload (`{version, metrics, advisories}`).
+    /// Decode a full server payload (`{version, metrics, maps, advisories}`).
     static func decode(from data: Data) throws -> HelpCatalogResponse {
-        let plain = JSONDecoder()  // no key strategy → metric ids stay verbatim
+        let plain = JSONDecoder()  // no key strategy → metric/scale/field ids stay verbatim
         let envelope = try plain.decode(MetricsEnvelope.self, from: data)
         // Advisory property names need snake→camel; the weatherBrief decoder only
         // touches the `advisories` key here (this struct ignores metrics/version).
@@ -46,6 +51,7 @@ struct HelpCatalogResponse: Sendable {
         return HelpCatalogResponse(
             version: envelope.version,
             metrics: envelope.metrics,
+            maps: envelope.maps,
             advisories: adv.advisories
         )
     }
@@ -55,12 +61,14 @@ struct HelpCatalogResponse: Sendable {
     static func decodeBaseline(from data: Data) throws -> HelpCatalogResponse {
         let plain = JSONDecoder()
         let metrics = try plain.decode([String: MetricHelp].self, from: data)
-        return HelpCatalogResponse(version: "baseline", metrics: metrics, advisories: [])
+        return HelpCatalogResponse(version: "baseline", metrics: metrics, maps: nil, advisories: [])
     }
 
     private struct MetricsEnvelope: Decodable {
         let version: String
         let metrics: [String: MetricHelp]
+        /// The `maps` section (#419); optional so an old server without it decodes.
+        let maps: ForecastMapCatalog?
     }
 
     private struct AdvisoriesEnvelope: Decodable {
