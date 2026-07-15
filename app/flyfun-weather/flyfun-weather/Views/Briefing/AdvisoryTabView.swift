@@ -8,7 +8,11 @@ import SwiftUI
 struct AdvisoryTabView: View {
     let viewModel: BriefingViewModel
     @Environment(AppState.self) private var appState
-    @State private var showingDebriefSheet = false
+    /// Held in `@State` and created once (in the card's action) so a parent
+    /// `body` re-render — frequent during the SSE refresh stream — can't
+    /// re-allocate it and wipe in-progress form input. `.sheet(item:)` presents
+    /// while it's non-nil.
+    @State private var debriefVM: DebriefViewModel?
 
     var body: some View {
         ScrollSpyScroll(sections: spySections) {
@@ -36,19 +40,27 @@ struct AdvisoryTabView: View {
             .padding(.vertical, Theme.cardPadding)
         }
         .background(Theme.bg)
-        .sheet(isPresented: $showingDebriefSheet) {
-            if let repo = appState.repository {
-                DebriefFormView(
-                    viewModel: DebriefViewModel(
-                        flight: flightForDebrief,
-                        taxonomy: appState.helpCatalog.debriefTaxonomy,
-                        flaggedTagIds: flaggedTagIds,
-                        repository: repo
-                    ),
-                    onFinished: { viewModel.setDebrief($0) }
-                )
-            }
+        .sheet(item: $debriefVM) { vm in
+            DebriefFormView(viewModel: vm, onFinished: { saved in
+                viewModel.setDebrief(saved)
+                // Re-sync the flights list so the "Debriefed ✓" glyph and the
+                // Recent-debrief nudge update — the list VM persists across
+                // navigation, so it won't otherwise re-fetch until foreground.
+                appState.signalExternalSync(flightId: viewModel.flight.id)
+            })
         }
+    }
+
+    /// Build the debrief view model once, at tap time, from the current flagged
+    /// categories — then present it via `$debriefVM`.
+    private func presentDebrief() {
+        guard let repo = appState.repository else { return }
+        debriefVM = DebriefViewModel(
+            flight: flightForDebrief,
+            taxonomy: appState.helpCatalog.debriefTaxonomy,
+            flaggedTagIds: flaggedTagIds,
+            repository: repo
+        )
     }
 
     /// The flight with the freshest known debrief folded in, so re-opening the
@@ -83,7 +95,7 @@ struct AdvisoryTabView: View {
     private var debriefSection: some View {
         if viewModel.flight.isPast && viewModel.flight.isEditable {
             DebriefCard(debrief: viewModel.debrief) {
-                showingDebriefSheet = true
+                presentDebrief()
             }
             .padding(.horizontal, Theme.cardPadding)
         }

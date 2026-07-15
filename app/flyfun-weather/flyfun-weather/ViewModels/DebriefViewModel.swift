@@ -10,7 +10,11 @@ import OSLog
 /// emits neither (the server's `_decision_shape` validator enforces that).
 @Observable
 @MainActor
-final class DebriefViewModel {
+final class DebriefViewModel: Identifiable {
+    /// Stable identity so the sheet can hold this in `@State` and drive
+    /// `.sheet(item:)` — the instance is created once per presentation, never
+    /// re-allocated on a parent `body` re-render.
+    nonisolated let id = UUID()
     let flight: FlightResponse
     let taxonomy: DebriefTaxonomy
     private let repository: any BriefingRepository
