@@ -52,9 +52,12 @@ struct AdvisoryTabView: View {
     }
 
     /// Build the debrief view model once, at tap time, from the current flagged
-    /// categories — then present it via `$debriefVM`.
+    /// categories — then present it via `$debriefVM`. A fresh add is only reached
+    /// once advisories are terminal (the button is disabled otherwise), so
+    /// `flaggedTagIds` is trustworthy here; the guard is belt-and-suspenders.
     private func presentDebrief() {
         guard let repo = appState.repository else { return }
+        guard viewModel.debrief != nil || advisoriesReady else { return }
         debriefVM = DebriefViewModel(
             flight: flightForDebrief,
             taxonomy: appState.helpCatalog.debriefTaxonomy,
@@ -94,10 +97,19 @@ struct AdvisoryTabView: View {
     @ViewBuilder
     private var debriefSection: some View {
         if viewModel.flight.isPast && viewModel.flight.isEditable {
-            DebriefCard(debrief: viewModel.debrief) {
+            DebriefCard(debrief: viewModel.debrief, advisoriesReady: advisoriesReady) {
                 presentDebrief()
             }
             .padding(.horizontal, Theme.cardPadding)
+        }
+    }
+
+    /// Advisories have reached a terminal state (loaded or failed) — the point at
+    /// which `flaggedTagIds` is trustworthy for a fresh debrief.
+    private var advisoriesReady: Bool {
+        switch viewModel.advisoriesState {
+        case .loaded, .error: return true
+        case .idle, .loading: return false
         }
     }
 
