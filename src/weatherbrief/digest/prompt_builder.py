@@ -9,6 +9,7 @@ from weatherbrief.analysis.advisories.altitude_table import (
     diff_altitude_rows,
     row_for_altitude,
 )
+from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.units import format_visibility
@@ -149,12 +150,13 @@ def build_digest_context(
                 sfc_parts.append(f"T={hourly.temperature_2m_c:.1f}C")
             if hourly.dewpoint_2m_c is not None:
                 sfc_parts.append(f"Td={hourly.dewpoint_2m_c:.1f}C")
-            if hourly.wind_speed_10m_kt is not None:
-                sfc_parts.append(
-                    f"Wind {hourly.wind_direction_10m_deg:.0f}/{hourly.wind_speed_10m_kt:.0f}kt"
-                )
-            if hourly.wind_gusts_10m_kt is not None:
-                sfc_parts.append(f"G{hourly.wind_gusts_10m_kt:.0f}kt")
+            sfc_wind = format_wind_string(
+                hourly.wind_direction_10m_deg,
+                hourly.wind_speed_10m_kt,
+                hourly.wind_gusts_10m_kt,
+            )
+            if sfc_wind:
+                sfc_parts.append(f"Wind {sfc_wind}kt")
             if sfc_parts:
                 quant_lines.append(f"  Surface: {', '.join(sfc_parts)}")
 
@@ -192,10 +194,12 @@ def build_digest_context(
                         ):
                             level = pl
             if level and level.wind_speed_kt is not None:
-                cruise_parts = [
-                    f"{level.pressure_hpa}hPa",
-                    f"Wind {level.wind_direction_deg:.0f}/{level.wind_speed_kt:.0f}kt",
-                ]
+                cruise_parts = [f"{level.pressure_hpa}hPa"]
+                cruise_wind = format_wind_string(
+                    level.wind_direction_deg, level.wind_speed_kt, None
+                )
+                if cruise_wind:
+                    cruise_parts.append(f"Wind {cruise_wind}kt")
                 if level.temperature_c is not None:
                     cruise_parts.append(f"T={level.temperature_c:.1f}C")
                 if level.relative_humidity_pct is not None:

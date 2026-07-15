@@ -190,7 +190,7 @@ def test_build_context_quantitative_detail(sample_snapshot):
 
     # Surface data
     assert "T=5.0C" in context
-    assert "Wind 270/12kt" in context
+    assert "Wind 270@12kt" in context
 
     # Weather data
     assert "Cloud=60%" in context

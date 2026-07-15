@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.digest.format_utils import format_flight_level
 from weatherbrief.models import (
     AgreementLevel,
@@ -108,11 +109,13 @@ def _format_waypoint_forecast(
         parts.append(f"T {hourly.temperature_2m_c:.0f}C")
     if hourly.dewpoint_2m_c is not None:
         parts.append(f"Td {hourly.dewpoint_2m_c:.0f}C")
-    if hourly.wind_speed_10m_kt is not None:
-        wind_str = f"Wind {hourly.wind_direction_10m_deg:.0f}/{hourly.wind_speed_10m_kt:.0f}kt"
-        if hourly.wind_gusts_10m_kt and hourly.wind_gusts_10m_kt > hourly.wind_speed_10m_kt + 5:
-            wind_str += f" G{hourly.wind_gusts_10m_kt:.0f}"
-        parts.append(wind_str)
+    sfc_wind = format_wind_string(
+        hourly.wind_direction_10m_deg,
+        hourly.wind_speed_10m_kt,
+        hourly.wind_gusts_10m_kt,
+    )
+    if sfc_wind:
+        parts.append(f"Wind {sfc_wind}kt")
     if parts:
         lines.append(f"    Sfc: {', '.join(parts)}")
 
@@ -154,9 +157,10 @@ def _format_waypoint_forecast(
         if level.geopotential_height_m is not None:
             alt_str = f" ({level.geopotential_height_m * 3.28084:.0f}ft)"
         temp_str = f"T {level.temperature_c:.0f}C" if level.temperature_c is not None else ""
+        cruise_wind = format_wind_string(level.wind_direction_deg, level.wind_speed_kt, None)
         lines.append(
             f"    {level.pressure_hpa}hPa{alt_str}: "
-            f"Wind {level.wind_direction_deg:.0f}/{level.wind_speed_kt:.0f}kt"
+            f"Wind {cruise_wind}kt"
             f"{', ' + temp_str if temp_str else ''}"
         )
 
