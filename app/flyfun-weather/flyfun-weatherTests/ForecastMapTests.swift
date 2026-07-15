@@ -177,12 +177,12 @@ struct ForecastMapTests {
         """
         let apt = try JSONDecoder().decode(ForecastAirport.self, from: Data(json.utf8))
         let m = apt.models["gfs"].map { $0 as any ForecastCellData }
-        // Web: dir/speedGgust, value (gust) — the gust must not be silently dropped.
-        #expect(ForecastAirportCard.compactCell(m, metric: "wind_speed_kt") == "270/15G22")
-        #expect(ForecastAirportCard.compactCell(m, metric: "crosswind_kt") == "12 (18)")
-        #expect(ForecastAirportCard.compactCell(m, metric: "headwind_kt") == "8 (14)")
+        // Web: dir@speedGgust, valueGgust — the gust must not be silently dropped.
+        #expect(ForecastAirportCard.compactCell(m, metric: "wind_speed_kt") == "270@15G22")
+        #expect(ForecastAirportCard.compactCell(m, metric: "crosswind_kt") == "12G18")
+        #expect(ForecastAirportCard.compactCell(m, metric: "headwind_kt") == "8G14")
         // The consensus block carries no gust field → steady value only, no "G".
-        #expect(ForecastAirportCard.compactCell(apt.consensus, metric: "wind_speed_kt") == "270/15")
+        #expect(ForecastAirportCard.compactCell(apt.consensus, metric: "wind_speed_kt") == "270@15")
     }
 
     // MARK: - Model mode token round-trip
