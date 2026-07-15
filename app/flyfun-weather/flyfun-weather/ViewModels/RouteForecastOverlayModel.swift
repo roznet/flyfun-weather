@@ -79,6 +79,13 @@ final class RouteForecastOverlayModel {
         defer { if loadingSlotKey == slot.key { loadingSlotKey = nil } }
         do {
             let resp = try await repository.forecastMap(day: slot.day, hour: slot.hour)
+            // Publish only if this is still the slot the view wants. A newer
+            // slot's fetch may have superseded ours during the await (the
+            // `.task(id:)` cancellation race); clobbering the visible slice with
+            // a stale one would leave the overlay stuck on a slot no longer
+            // selected, since `.task(id:)` won't refire for an unchanged id.
+            // Mirrors `ForecastMapViewModel.store`'s `if key == current` guard.
+            guard loadingSlotKey == slot.key else { return }
             payload = resp
             loadedSlotKey = slot.key
             payloadRevision &+= 1

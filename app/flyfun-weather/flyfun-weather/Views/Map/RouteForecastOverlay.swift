@@ -20,7 +20,7 @@ enum RouteForecastOverlay {
     /// forecast endpoint's `now + day` date labelling. `nil` when unparseable.
     /// `now` is injected so the boundary math is deterministic in tests.
     static func relativeDayHour(departureIso: String?, now: Date) -> (day: Int, hour: Int)? {
-        guard let departureIso, let dep = parseISO(departureIso) else { return nil }
+        guard let departureIso, let dep = Date.parseISO8601(departureIso) else { return nil }
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         let depDay = cal.startOfDay(for: dep)
@@ -54,7 +54,7 @@ enum RouteForecastOverlay {
     /// Short UTC label for a forecast valid-time ISO string, e.g. "Wed 12Z".
     /// Empty for an unparseable / missing value.
     static func formatForecastTime(_ iso: String?) -> String {
-        guard let iso, let d = parseISO(iso) else { return "" }
+        guard let iso, let d = Date.parseISO8601(iso) else { return "" }
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -75,15 +75,6 @@ enum RouteForecastOverlay {
             metric: metric,
             airport: nil
         )
-    }
-
-    /// Parse an ISO8601 instant, tolerating both the `…Z` and fractional-second
-    /// forms the API emits.
-    private static func parseISO(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.date(from: s)
     }
 }
 

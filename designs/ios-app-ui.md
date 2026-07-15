@@ -82,7 +82,7 @@ Planning/viewer mode — default when not in an active flight session. What the 
 | **Advisory** | `AdvisoryTabView` — accented hero (traffic-light + reason) → watch chips → responsive advisory grid (`LazyVGrid` adaptive ≥280pt; AMBER/RED as `AdvisoryCardView`s, all GREEN collapsed into `GreenAdvisoryStrip` pills) → `AirportConditionsView` → `AlternatesView` (D-2 inward only). Per-hazard digest narrative is attached to the matching advisory card, not Discussion. |
 | **Discussion** | `DiscussionTabView` — synoptic overview text (`DigestResponse.synopsis`). v1 is synopsis-only; surface-pressure & front charts are a deferred fast-follow. |
 | **Cross-Section** | `CrossSectionView` with the Skew-T (`SkewTTabView`, bounded height) folded **below it in one scroll**. The "Sounding ›" deep-link and `FocusIntent.target == .skewT` scroll to the embedded Skew-T instead of switching tabs. |
-| **Map** | `RouteMapView` — unchanged. |
+| **Map** | `RouteMapView` — `MKMapView`-backed (migrated off SwiftUI `Map` in #428) route map with the metric-colored route line, plus an **airport-forecast overlay** (#428): per-airport markers coloured by the same served forecast catalog as the full forecast map, with a control cluster — on/off toggle, independent metric picker, valid-time label, and an "open full forecast map" deep-link. Only a new day/hour slice fetches (`RouteForecastOverlayModel`); model/metric switches recolour client-side. |
 
 **Chrome / space reclaim (#310 item 1).** The old standalone `BriefingHeaderView`
 band is gone: route identity moved to `navigationTitle` + `.navigationSubtitle`
