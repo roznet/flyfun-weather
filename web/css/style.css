@@ -5358,8 +5358,10 @@ label {
   flex: 0 0 auto;
 }
 
-/* Multi-line tooltip for the airport forecast markers on the briefing map. */
-.map-tooltip { font-size: 0.72rem; line-height: 1.35; }
+/* Multi-line tooltip for the airport forecast markers on the briefing map.
+   Scoped to a briefing-only class so it doesn't restyle the full forecast
+   map's own `.map-tooltip` markers (#424). */
+.wx-forecast-tooltip { font-size: 0.72rem; line-height: 1.35; }
 
 /* Layout toggle buttons */
 .viz-layout-toggle {
@@ -5424,6 +5426,14 @@ label {
 .map-forecast-time {
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Shown in place of the time/metric when the selected model has no airport
+   data, so an empty overlay never reads as "all clear" (#424). */
+.map-forecast-note {
+  color: var(--text-muted);
+  font-style: italic;
   white-space: nowrap;
 }
 

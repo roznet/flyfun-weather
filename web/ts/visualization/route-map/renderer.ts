@@ -64,6 +64,12 @@ export class RouteMapRenderer {
   private forecastData: ForecastMapResponse | null = null;
   private forecastMetric: ForecastMetric = 'flight_category';
   private forecastModel = 'ecmwf';
+  // Bumped only when the data reference actually changes, so the render
+  // signature below stays stable across the many re-renders that don't touch
+  // the overlay (e.g. altitude-slider drags) and the ~620-marker rebuild is
+  // skipped. `null` sig forces the first draw.
+  private forecastDataVersion = 0;
+  private lastForecastSig: string | null = null;
   private selectedPointIndex = -1;
   private initialized = false;
   private currentTileTheme: 'light' | 'dark' = 'light';
@@ -116,7 +122,12 @@ export class RouteMapRenderer {
    *  fetched async by briefing-main. `null` clears it. Call
    *  `refreshForecastOverlay()` after to redraw. */
   setForecastData(data: ForecastMapResponse | null): void {
-    this.forecastData = data;
+    // Bump the version only on a real change so repeated cache-hit calls with
+    // the same object reference don't force a redraw (see renderForecastOverlay).
+    if (this.forecastData !== data) {
+      this.forecastData = data;
+      this.forecastDataVersion++;
+    }
   }
 
   /** Which forecast metric colours the overlay markers. Recolour is a redraw. */
@@ -209,6 +220,7 @@ export class RouteMapRenderer {
     this.waypointGroup = null;
     this.highlightMarker = null;
     this.forecastZoomHandler = null;
+    this.lastForecastSig = null;
     this.initialized = false;
   }
 
@@ -384,6 +396,20 @@ export class RouteMapRenderer {
    *  drawn — zoom does the spatial filtering. */
   private renderForecastOverlay(): void {
     if (!this.airportForecastGroup || !this.map) return;
+
+    // Skip the ~620-marker teardown/rebuild when nothing about the overlay
+    // changed since the last draw. renderVisualization re-runs on every
+    // map-affecting state change (notably each altitude-slider input tick, which
+    // has nothing to do with the airport overlay), and both render() and
+    // updateForecastOverlay call this per pass — without this guard that heavy
+    // DOM churn would run twice per tick and stutter the drag. Zoom-driven
+    // radius changes are handled separately by the zoom handler (no rebuild).
+    const sig = this.showForecastOverlay && this.forecastData
+      ? `on|${this.forecastMetric}|${this.forecastModel}|${this.forecastDataVersion}`
+      : 'off';
+    if (sig === this.lastForecastSig) return;
+    this.lastForecastSig = sig;
+
     this.airportForecastGroup.clearLayers();
 
     if (!this.showForecastOverlay || !this.forecastData) {
@@ -405,7 +431,7 @@ export class RouteMapRenderer {
         weight: 1,
         opacity: 1,
       });
-      marker.bindTooltip(getForecastTooltip(apt, model, metric), { className: 'map-tooltip' });
+      marker.bindTooltip(getForecastTooltip(apt, model, metric), { className: 'wx-forecast-tooltip' });
       this.airportForecastGroup.addLayer(marker);
     }
 

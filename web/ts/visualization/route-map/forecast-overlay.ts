@@ -9,7 +9,7 @@
  *  source of truth and the client must not hardcode it.
  */
 
-import type { DayAvailability } from '../../adapters/maps-adapter';
+import { FORECAST_INDIVIDUAL_MODELS, type DayAvailability } from '../../adapters/maps-adapter';
 
 export interface ForecastOverlaySlot {
   /** Relative day (0 = today) the flight falls on. */
@@ -71,17 +71,14 @@ export function formatForecastTime(iso: string): string {
   return `${wd} ${String(d.getUTCHours()).padStart(2, '0')}Z`;
 }
 
-/** Individual models the full forecast map's `fc.model` URL key accepts
- *  (mirrors maps-main.ts `mapsUrlState`). Consensus/other models fall back to
- *  the full map's default when deep-linked. */
-const DEEP_LINK_MODELS = ['gfs', 'icon', 'ecmwf'];
-
-/** Deep-link to the full forecast map seeded with the same slot/model/metric. */
+/** Deep-link to the full forecast map seeded with the same slot/model/metric.
+ *  `fc.model` is set only for a supported individual model (shared list);
+ *  consensus/other models fall back to the full map's default. */
 export function forecastMapUrl(slot: ForecastOverlaySlot, model: string, metric: string): string {
   const p = new URLSearchParams();
   p.set('fc.day', String(slot.day));
   p.set('fc.hour', String(slot.hour));
-  if (DEEP_LINK_MODELS.includes(model)) p.set('fc.model', model);
+  if (FORECAST_INDIVIDUAL_MODELS.includes(model)) p.set('fc.model', model);
   p.set('fc.metric', metric);
   return `maps.html?${p.toString()}`;
 }

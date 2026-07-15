@@ -405,6 +405,7 @@
   "viz.airports.show": "Show:",
   "viz.airports.openMap": "Open full forecast map",
   "viz.airports.timeHint": "Forecast valid-time nearest the flight (may differ slightly from departure)",
+  "viz.airports.noModelData": "No {model} airport data",
   "fronts.kind.cold": "Cold front",
   "fronts.kind.warm": "Warm front",
   "fronts.kind.quasi": "Quasi-stationary front",

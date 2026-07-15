@@ -4,6 +4,12 @@ import { API_BASE } from '../utils';
 
 const apiBase = API_BASE;
 
+/** The individual forecast models the airport-forecast snapshot backend
+ *  populates and the full map's `fc.model` URL key accepts (gfs/icon/ecmwf).
+ *  Single source shared by maps-main.ts and the briefing forecast overlay so
+ *  the list can't drift across copies. */
+export const FORECAST_INDIVIDUAL_MODELS: readonly string[] = ['gfs', 'icon', 'ecmwf'];
+
 // --- Forecast types ---
 
 /** FAA/EASA "is a destination alternate required?" flags (#249, NWP path). */
