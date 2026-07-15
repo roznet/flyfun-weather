@@ -37,19 +37,28 @@ from weatherbrief.analysis.advisories.profile_sparsify import (
 from weatherbrief.analysis.advisories.registry import get_catalog
 
 
+def _default_db_url() -> str:
+    """Same resolution as ``alembic/env.py``: ``DATABASE_URL`` (prod) else the
+    dev sqlite fallback ``sqlite:///{DATA_DIR}/flyfun.db``. Keeps zero-arg usage
+    working on a dev box that relies on the fallback (no ``DATABASE_URL`` set)."""
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        return url
+    data_dir = os.environ.get("DATA_DIR", "data")
+    return f"sqlite:///{data_dir}/flyfun.db"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--db",
-        default=os.environ.get("DATABASE_URL"),
-        help="SQLAlchemy DB URL (default: $DATABASE_URL)",
+        default=_default_db_url(),
+        help="SQLAlchemy DB URL (default: $DATABASE_URL, else sqlite:///{DATA_DIR}/flyfun.db)",
     )
     ap.add_argument(
         "-v", "--verbose", action="store_true", help="one line per touched profile"
     )
     args = ap.parse_args()
-    if not args.db:
-        ap.error("no database URL: pass --db or set DATABASE_URL")
 
     param_defaults = build_param_defaults(get_catalog())
     engine = sa.create_engine(args.db)

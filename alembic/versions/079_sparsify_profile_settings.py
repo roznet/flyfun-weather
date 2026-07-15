@@ -31,10 +31,17 @@ an absent engine method as DD via a falsy fall-through, so sparsifying against i
 would silently revert profiles to DD.
 
 **Dry-run.** Set ``SPARSIFY_DRY_RUN=1`` to compute and print the per-profile +
-total blast radius and then **abort before commit** (raises, so alembic rolls the
-transaction back and does not stamp the revision). Use it to reproduce the
-expected counts against a prod snapshot before the real write. The richer offline
-report lives in ``scripts/sparsify_profiles_dryrun.py``.
+total blast radius and then **abort before commit** (raises to roll back). Use it
+to reproduce the expected counts against a prod snapshot before the real write.
+
+*Precondition — 079 must be the sole pending revision.* ``env.py`` opens one
+transaction per ``alembic upgrade`` invocation (no ``transaction_per_migration``),
+so the raise rolls back the **entire** invocation, not just this revision. If any
+*other* migration is also pending in the same ``upgrade head`` (079 lands a
+release behind, or an 080 already merged), the abort silently rolls that one back
+too. Run the dry-run only when the DB is at 078 — or, preferably, use the
+transaction-free offline report ``scripts/sparsify_profiles_dryrun.py``, which
+reads the DB read-only and has no rollback footprint at all.
 
 Pure Python data update over the JSON ``settings_json`` Text column (cf.
 migrations 069 / 078) — raw SQL with named binds, dialect-agnostic (SQLite dev /
@@ -124,8 +131,13 @@ def upgrade() -> None:
 
     if dry_run:
         # Abort so the transaction rolls back and the revision is NOT stamped.
+        # NB: this rolls back the whole `alembic upgrade` invocation — run only
+        # with 079 as the sole pending revision, or prefer the offline script.
         raise RuntimeError(
-            "[079] SPARSIFY_DRY_RUN=1 — aborting before commit; no rows written."
+            "[079] SPARSIFY_DRY_RUN=1 — aborting before commit; no rows written. "
+            "This rolls back the entire `alembic upgrade` invocation; run only "
+            "when 079 is the sole pending revision (else use "
+            "scripts/sparsify_profiles_dryrun.py)."
         )
 
 

@@ -37,11 +37,15 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from weatherbrief.analysis.advisories.engine_methods import (
     ENGINE_METHOD_DEFAULTS,
     legacy_cloud_source,
 )
+
+if TYPE_CHECKING:
+    from weatherbrief.models.advisories import AdvisoryCatalogEntry
 
 
 @dataclass
@@ -63,7 +67,9 @@ class SparsifyStats:
         )
 
 
-def build_param_defaults(catalog) -> dict[tuple[str, str], float]:
+def build_param_defaults(
+    catalog: list[AdvisoryCatalogEntry],
+) -> dict[tuple[str, str], float]:
     """Lookup of catalog default keyed ``(advisory_id, param_key)``.
 
     ``catalog`` is the live ``get_catalog()`` list — imported at migration time
