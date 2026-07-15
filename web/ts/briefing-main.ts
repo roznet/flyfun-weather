@@ -983,8 +983,12 @@ async function init(): Promise<void> {
     // default view and hide graded-worse alternate hours behind "show all", so
     // the section can honestly say "the previous day is worse" without leading
     // with it. Old artifacts have no disposition — treat them as not-worse.
+    // A *confirmed* row is never hidden: the user paid a tap + a full model
+    // check for it, so a confirm-downgrade (disposition flips to worse, #435)
+    // stays visible with its "not clearly better after all" verdict rather than
+    // vanishing into "show all".
     const isWorse = (c: api.TimeCandidateDTO) =>
-      !c.is_baseline && !c.is_alternate && c.disposition === 'worse';
+      !c.is_baseline && !c.is_alternate && c.disposition === 'worse' && !c.confirmed;
     const defaultCandidates = scan.candidates.filter((c) => !isWorse(c));
     const worseCandidates = scan.candidates.filter(isWorse);
 

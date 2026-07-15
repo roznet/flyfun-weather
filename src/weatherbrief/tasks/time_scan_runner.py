@@ -308,15 +308,7 @@ def _run_confirm_job(
                     flight_id, candidate_time,
                 )
                 return
-            cand.confirm_pending = False
-            if result is not None:
-                confirmation, advisory_status = result
-                cand.confirmed = confirmation
-                cand.confidence = "confirmed"
-                # The provisional ECMWF-only per-model map fills out to the full
-                # graded model set on confirm — same schema, more coverage (#434).
-                if advisory_status:
-                    cand.advisory_status = advisory_status
+            _apply_confirmation(cand, result)
             save_time_options(pack_dir, scan)
 
             # Usage accounting: one row per confirm attempt (the GFS+ICON
@@ -350,6 +342,32 @@ def _run_confirm_job(
     finally:
         with _inflight_lock:
             _inflight.discard(key)
+
+
+def _apply_confirmation(cand, result) -> None:
+    """Fold an on-tap confirm result onto its candidate.
+
+    Clears ``confirm_pending`` regardless; on a real result folds in the
+    multi-model verdict, the widened per-model ``advisory_status`` map, and —
+    crucially — the **re-derived disposition** (#435). The web layer's show/hide
+    split and "N look smoother" headline key off ``disposition``, so a confirm
+    that downgrades a provisional ``improving`` to "not clearly better" (or
+    upgrades a ``worse`` row) must move it between buckets, not just change its
+    verdict text. ``result`` is ``confirm_candidate``'s
+    ``(confirmation, advisory_status, disposition)`` tuple, or ``None`` on a
+    grading failure.
+    """
+    cand.confirm_pending = False
+    if result is None:
+        return
+    confirmation, advisory_status, disposition = result
+    cand.confirmed = confirmation
+    cand.confidence = "confirmed"
+    cand.disposition = disposition
+    # The provisional ECMWF-only per-model map fills out to the full graded
+    # model set on confirm — same schema, more coverage (#434).
+    if advisory_status:
+        cand.advisory_status = advisory_status
 
 
 def reconcile_stale_scan(pack_dir: Path) -> bool:
@@ -394,6 +412,13 @@ def merge_confirmed(old: "TimeWindowScan | None", new: "TimeWindowScan") -> None
         if prev is not None and prev.confirmed is not None and cand.confirmed is None:
             cand.confirmed = prev.confirmed
             cand.confidence = "confirmed"
+            # The paid confirm widened advisory_status to the full model set and
+            # re-derived disposition from the multi-model diff (#434/#435). A
+            # same-run rescan grades fresh ECMWF-only, so carry both — else the
+            # richer map narrows back to ~550 B and the confirm-derived bucket is
+            # lost while the verdict text still says "checked with all models".
+            cand.advisory_status = prev.advisory_status
+            cand.disposition = prev.disposition
 
 
 def reconcile_stale_confirms(pack_dir: Path) -> bool:

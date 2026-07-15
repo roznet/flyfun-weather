@@ -86,9 +86,16 @@ def _disposition(margin: float, worsens: list[str]) -> str:
     """Classify a candidate vs the like-coverage baseline (#434 taxonomy).
 
     ``worsens`` spans the **full** advisory set (never call a window that
-    quietly introduced a crosswind "improving"), so any regression — or a
-    negative scan-class margin — makes it ``worse``. Otherwise it's
-    ``improving`` when it clears the ranking margin, else ``neutral``.
+    quietly introduced a crosswind "improving"), so any regression makes it
+    ``worse``. Otherwise it's ``improving`` when it clears the ranking margin,
+    else ``neutral``.
+
+    The ``margin < 0`` clause is a defensive backstop: ``_diff_manifests``
+    already appends every negative-delta advisory to ``worsens`` before the
+    scan-class margin sum, so a negative ``margin`` cannot occur with an empty
+    ``worsens`` today. It's kept because "negative margin ⇒ worse" is the
+    taxonomy the issue states, so the classifier stays correct even if the
+    diff's ordering is ever refactored.
     """
     if worsens or margin < 0:
         return "worse"
@@ -536,11 +543,16 @@ def confirm_candidate(
     Ephemeral throughout (decision G): enrichment mutates a freshly loaded
     copy; the caller persists only the updated ``time_options.json``.
 
-    Returns ``(confirmation, advisory_status)`` — the second element is the
-    now-multi-model per-(advisory, model) status map, so the caller can fill
-    out the candidate's provisional ECMWF-only ``advisory_status`` to the full
-    graded set (#434, "the same map fills out on confirm"). ``None`` when
-    grading fails outright.
+    Returns ``(confirmation, advisory_status, disposition)``:
+
+    * ``advisory_status`` — the now-multi-model per-(advisory, model) status
+      map, so the caller can fill out the candidate's provisional ECMWF-only
+      map to the full graded set (#434, "the same map fills out on confirm").
+    * ``disposition`` — re-derived from the multi-model diff, so a confirm
+      up/downgrade updates what the client shows (the display partition and
+      headline are keyed off ``disposition``, not the confirmation — #435).
+
+    ``None`` when grading fails outright.
     """
     from weatherbrief.fetch.grib import DecodePriority, enrich_forecasts
     from weatherbrief.models import TimeConfirmation
@@ -630,7 +642,14 @@ def confirm_candidate(
         worsens=worsens,
         confirmed_at=datetime.now(timezone.utc),
     )
-    return confirmation, per_model_status_from_manifest(candidate_manifest)
+    # Re-derive disposition from the multi-model diff (same _disposition the
+    # sweep used) so a confirm up/downgrade updates what the client shows — the
+    # display partition + headline key off `disposition`, not the confirmation.
+    return (
+        confirmation,
+        per_model_status_from_manifest(candidate_manifest),
+        _disposition(margin, worsens),
+    )
 
 
 def _aware_pack_departure(pack_dir: Path) -> datetime | None:

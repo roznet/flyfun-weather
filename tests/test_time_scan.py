@@ -918,10 +918,18 @@ class TestMergeConfirmed:
             departure_shift_hours=hours,
             assessment="AMBER",
             confidence="ecmwf_only",
+            # A confirmed prev carries the widened multi-model map + a
+            # confirm-derived disposition (here: downgraded to worse).
+            disposition="worse" if confirmed else "improving",
+            advisory_status=(
+                {"convective": {"ecmwf": "RED", "gfs": "AMBER", "icon": "RED"}}
+                if confirmed else {"convective": {"ecmwf": "AMBER"}}
+            ),
             confirmed=TimeConfirmation(
                 models_checked=["ecmwf", "gfs", "icon"],
                 assessment="RED",
                 better_than_baseline=False,
+                worsens=["convective"],
                 confirmed_at=DEP,
             ) if confirmed else None,
         )
@@ -933,13 +941,18 @@ class TestMergeConfirmed:
         new = TimeWindowScan(
             flexibility="same_day",
             baseline=TimeScanBaseline(departure_time=DEP, assessment="RED"),
-            candidates=[self._cand(3)],
+            candidates=[self._cand(3)],  # fresh ECMWF-only regrade
             ecmwf_run_ts=111,
             generated_at=DEP,
         )
         merge_confirmed(old, new)
-        assert new.candidates[0].confirmed is not None
-        assert new.candidates[0].confidence == "confirmed"
+        merged = new.candidates[0]
+        assert merged.confirmed is not None
+        assert merged.confidence == "confirmed"
+        # #435 finding 2: the paid confirm's widened map + confirm-derived
+        # disposition survive the rescan, not just the verdict object.
+        assert merged.advisory_status == {"convective": {"ecmwf": "RED", "gfs": "AMBER", "icon": "RED"}}
+        assert merged.disposition == "worse"
 
     def test_new_run_drops_stale_confirms(self, tmp_path):
         from weatherbrief.tasks.time_scan_runner import merge_confirmed
@@ -954,6 +967,63 @@ class TestMergeConfirmed:
         )
         merge_confirmed(old, new)
         assert new.candidates[0].confirmed is None
+
+
+class TestApplyConfirmation:
+    """#435 finding 1: a confirm must move a candidate between display buckets
+    by re-deriving disposition, not merely swap its verdict text — the web
+    show/hide split and "N look smoother" headline key off disposition."""
+
+    def _pending(self, disposition: str) -> TimeCandidate:
+        return TimeCandidate(
+            departure_time=DEP + timedelta(hours=3),
+            departure_shift_hours=3.0,
+            assessment="AMBER",
+            confidence="ecmwf_only",
+            disposition=disposition,
+            advisory_status={"convective": {"ecmwf": "GREEN"}},
+            confirm_pending=True,
+        )
+
+    def _result(self, disposition: str, *, better: bool, worsens):
+        from weatherbrief.models import TimeConfirmation
+
+        conf = TimeConfirmation(
+            models_checked=["ecmwf", "gfs", "icon"],
+            assessment="AMBER",
+            better_than_baseline=better,
+            worsens=worsens,
+            confirmed_at=DEP,
+        )
+        status = {"convective": {"ecmwf": "AMBER", "gfs": "GREEN", "icon": "AMBER"}}
+        return conf, status, disposition
+
+    def test_confirm_downgrades_improving_to_worse(self):
+        from weatherbrief.tasks.time_scan_runner import _apply_confirmation
+
+        cand = self._pending("improving")
+        _apply_confirmation(cand, self._result("worse", better=False, worsens=["airport_wind"]))
+        assert cand.disposition == "worse"  # moved out of the default view
+        assert cand.confidence == "confirmed"
+        assert cand.confirm_pending is False
+        # The map widened to the full graded set on confirm.
+        assert cand.advisory_status["convective"] == {"ecmwf": "AMBER", "gfs": "GREEN", "icon": "AMBER"}
+
+    def test_confirm_upgrades_worse_to_improving(self):
+        from weatherbrief.tasks.time_scan_runner import _apply_confirmation
+
+        cand = self._pending("worse")
+        _apply_confirmation(cand, self._result("improving", better=True, worsens=[]))
+        assert cand.disposition == "improving"  # revealed into the default view
+
+    def test_failed_confirm_only_clears_pending(self):
+        from weatherbrief.tasks.time_scan_runner import _apply_confirmation
+
+        cand = self._pending("improving")
+        _apply_confirmation(cand, None)
+        assert cand.confirm_pending is False
+        assert cand.disposition == "improving"  # unchanged
+        assert cand.confirmed is None
 
 
 # ---------------------------------------------------------------------------
