@@ -668,7 +668,7 @@ export function renderMapControls(
     html += `<span class="viz-toggle-label">${t('viz.airports')}</span>`;
     html += '</label>';
     const timeLabel = forecastOverlay.timeLabel ?? '…';
-    html += `<span class="map-forecast-time" title="${escapeHtml(t('viz.airports.timeHint'))}">${escapeHtml(timeLabel)}</span>`;
+    html += `<span class="map-forecast-time" id="map-forecast-time" title="${escapeHtml(t('viz.airports.timeHint'))}">${escapeHtml(timeLabel)}</span>`;
     html += '<label class="map-control-label">';
     html += `<span class="viz-toggle-label">${t('viz.airports.show')}</span>`;
     html += '<select id="map-forecast-metric" class="map-control-select">';
