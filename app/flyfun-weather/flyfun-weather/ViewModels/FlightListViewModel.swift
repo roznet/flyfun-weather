@@ -45,6 +45,13 @@ final class FlightListViewModel {
     /// load. The level-triggered reconcile compares against this to tell whether
     /// a briefing actually advanced (#426).
     private var lastPackTimestamps: [String: String] = [:]
+    /// Monotonic counter bumped on every authoritative list commit (a completed
+    /// `loadFlights()` or a `reconcileLatestPacks()` write). The reconcile — which
+    /// runs on `@MainActor` but suspends across its `repository.flights()` fetch —
+    /// captures this before awaiting and drops its result if it changed, so a
+    /// slow background reconcile can never clobber a fresher `loadFlights()` that
+    /// completed during that suspension (#427 review).
+    private var loadGeneration = 0
     /// The active-refresh poll loop (one at a time). Detached from any `.task`, so
     /// the view must start/stop it explicitly around visibility.
     @ObservationIgnored private var refreshPollTask: Task<Void, Never>?
@@ -106,6 +113,7 @@ final class FlightListViewModel {
             }
             state = .loaded(flights)
             lastPackTimestamps = Self.packTimestampMap(flights)
+            loadGeneration &+= 1   // authoritative commit — see reconcileLatestPacks
             // Keep Spotlight / Siri's flight index in sync with the server truth.
             // Fire-and-forget — never block the list on indexing (Decision 8).
             // Only when online: an offline cache snapshot can be stale/partial
@@ -221,9 +229,18 @@ final class FlightListViewModel {
     /// repainted, for tests. Failures are swallowed — the next tick retries.
     @discardableResult
     func reconcileLatestPacks() async -> Bool {
+        let generation = loadGeneration
         guard let flights = try? await repository.flights() else { return false }
+        // An authoritative load (pull-to-refresh, foreground, external sync, the
+        // completion edge, or a prior reconcile) committed while our fetch was in
+        // flight — its result is at least as fresh as ours, so drop instead of
+        // clobbering it back to stale data (#427 review). `loadGeneration` and
+        // `state` only change on the main actor between our suspension points, so
+        // this comparison is race-free.
+        guard generation == loadGeneration else { return false }
         let fresh = Self.packTimestampMap(flights)
         guard fresh != lastPackTimestamps else { return false }
+        loadGeneration &+= 1
         state = .loaded(flights)
         lastPackTimestamps = fresh
         // Keep the offline/cached-badge state consistent with the fresh list, the
