@@ -26,12 +26,17 @@ final class RouteForecastOverlayModel {
 
     private let repository: any BriefingRepository
     private var daysLoading = false
-    private var sliceLoading = false
+    /// Slot key currently being fetched (nil = idle). Keyed by slot — not a bare
+    /// bool — so a same-slot re-entry dedupes while a *different* slot is never
+    /// blocked by an in-flight fetch for another slot. Mirrors the sibling
+    /// `ForecastMapViewModel`'s per-slot `inFlight` set (#429 review).
+    private var loadingSlotKey: String?
     /// Slot key the current `payload` belongs to (guards against showing a stale
     /// slice for a different slot).
     private var loadedSlotKey: String?
-    /// After a failure, back off rather than refetching on every re-render.
-    private var retryAt = Date.distantPast
+    /// Per-slot failure backoff (key → earliest retry). Per-slot so a failure on
+    /// one slot never stalls a legitimately different slot for the backoff window.
+    private var retryBySlot: [String: Date] = [:]
     private static let retryBackoff: TimeInterval = 30
 
     init(repository: any BriefingRepository) { self.repository = repository }
@@ -66,21 +71,25 @@ final class RouteForecastOverlayModel {
     /// when it's already current. Honours a short failure backoff.
     func ensureSlice(_ slot: RouteForecastSlot) async {
         if loadedSlotKey == slot.key, payload != nil { return }
-        guard !sliceLoading, Date() >= retryAt else { return }
-        sliceLoading = true
-        defer { sliceLoading = false }
+        if loadingSlotKey == slot.key { return }                       // this slot already loading
+        if let until = retryBySlot[slot.key], Date() < until { return } // this slot backing off
+        loadingSlotKey = slot.key
+        // Only clear if we still own the flag — a newer slot's fetch may have
+        // taken it over while this one was unwinding (task cancellation race).
+        defer { if loadingSlotKey == slot.key { loadingSlotKey = nil } }
         do {
             let resp = try await repository.forecastMap(day: slot.day, hour: slot.hour)
             payload = resp
             loadedSlotKey = slot.key
             payloadRevision &+= 1
+            retryBySlot[slot.key] = nil
         } catch let error as APIError where error.isCancellation {
             // Superseded by a newer slot (task cancellation) — benign, no backoff.
         } catch is CancellationError {
             // SwiftUI cancelled the `.task(id:)` on a slot change — benign.
         } catch {
             Self.logger.warning("forecast map \(slot.day)/\(slot.hour) failed: \(error.localizedDescription)")
-            retryAt = Date().addingTimeInterval(Self.retryBackoff)
+            retryBySlot[slot.key] = Date().addingTimeInterval(Self.retryBackoff)
         }
     }
 

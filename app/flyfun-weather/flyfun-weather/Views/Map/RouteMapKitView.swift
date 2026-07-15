@@ -295,19 +295,9 @@ struct RouteMapKitView: UIViewRepresentable {
 
         /// Marker diameter from zoom — one step smaller than the full forecast
         /// map's so the airport dots stay secondary to the route (web parity).
+        /// Shares the zoom formula with the forecast map via `AirportMarkerSizing`.
         func forecastDiameter(for map: MKMapView) -> CGFloat {
-            let span = map.region.span.longitudeDelta
-            guard span > 0 else { return 12 }
-            let zoom = log2(360 / span)
-            let radius: CGFloat
-            switch zoom {
-            case ..<4.5: radius = 4
-            case ..<5.5: radius = 5
-            case ..<6.5: radius = 6
-            case ..<7.5: radius = 8
-            default: radius = 10
-            }
-            return radius * 2
+            AirportMarkerSizing.diameter(for: map, radii: [4, 5, 6, 8, 10], fallback: 12)
         }
     }
 }

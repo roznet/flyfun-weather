@@ -156,20 +156,10 @@ struct ForecastMapKitView: UIViewRepresentable {
         }
 
         /// Marker diameter from the map's zoom (web `markerRadius`: 5px at z≤4 →
-        /// 11px at z≥8), doubled to a diameter.
+        /// 11px at z≥8), doubled to a diameter. Shares the zoom formula with the
+        /// briefing route-map overlay via `AirportMarkerSizing` (#429 review).
         static func diameter(for map: MKMapView) -> CGFloat {
-            let span = map.region.span.longitudeDelta
-            guard span > 0 else { return 14 }
-            let zoom = log2(360 / span)
-            let radius: CGFloat
-            switch zoom {
-            case ..<4.5: radius = 5
-            case ..<5.5: radius = 6
-            case ..<6.5: radius = 7
-            case ..<7.5: radius = 9
-            default: radius = 11
-            }
-            return radius * 2
+            AirportMarkerSizing.diameter(for: map, radii: [5, 6, 7, 9, 11], fallback: 14)
         }
     }
 }
