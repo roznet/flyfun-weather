@@ -16,10 +16,13 @@ struct ForecastMapView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var viewModel: ForecastMapViewModel
     @State private var locator = OneShotLocator()
+    /// Set when the user taps a model that can't reach the selected day, to show
+    /// the "why" instead of switching to an unreachable model.
+    @State private var unavailableModel: String?
     /// nil on the iPad detail pane; set on the iPhone cover so it can dismiss.
     private let onClose: (() -> Void)?
 
-    init(repository: any BriefingRepository, deepLink: ForecastMapViewModel.DeepLink? = nil, onClose: (() -> Void)? = nil) {
+    init(repository: any BriefingRepository, deepLink: MapDeepLink? = nil, onClose: (() -> Void)? = nil) {
         _viewModel = State(initialValue: ForecastMapViewModel(repository: repository, deepLink: deepLink))
         self.onClose = onClose
     }
@@ -44,6 +47,14 @@ struct ForecastMapView: View {
                 span: MKCoordinateSpan(latitudeDelta: 4, longitudeDelta: 5), biasForSheet: false)
         }
         .modifier(AirportCardPresenter(viewModel: viewModel, catalog: catalog, isCompact: isCompact))
+        .alert("No \(unavailableModel ?? "") data", isPresented: Binding(
+            get: { unavailableModel != nil },
+            set: { if !$0 { unavailableModel = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This model doesn't reach \(shortDayLabel). Two- and three-model days differ by design — the consensus still shows what the models that do reach it agree on.")
+        }
     }
 
     // MARK: - Map
@@ -55,11 +66,12 @@ struct ForecastMapView: View {
             metric: viewModel.metric,
             mode: viewModel.mode,
             selectedIcao: viewModel.selectedIcao,
-            slotID: "\(viewModel.selectedDay)-\(viewModel.selectedHour)",
+            payloadRevision: viewModel.payloadRevision,
             initialRegion: viewModel.initialRegion,
             focusRequest: viewModel.focusRequest,
             onSelect: { viewModel.select(icao: $0, biasForSheet: isCompact) },
-            onFocusApplied: { viewModel.focusRequest = nil }
+            onFocusApplied: { viewModel.focusRequest = nil },
+            onUserInteraction: { viewModel.markUserInteracted() }
         )
         .ignoresSafeArea(edges: isCompact ? .all : [])
     }
@@ -90,6 +102,11 @@ struct ForecastMapView: View {
             HStack(spacing: Theme.spacingS) {
                 dayCapsule
                 hourStepper
+                // A slot switch that misses the LRU shows a subtle in-flight spinner
+                // (the full-screen overlay only covers the very first load).
+                if viewModel.isLoading, viewModel.didLoadOnce {
+                    ProgressView().controlSize(.small)
+                }
                 Spacer()
             }
         }
@@ -192,13 +209,19 @@ struct ForecastMapView: View {
             Section("Individual model") {
                 ForEach(["gfs", "icon", "ecmwf"], id: \.self) { m in
                     let available = viewModel.modelAvailable(m, day: viewModel.selectedDay)
+                    // Greyed-but-still-tappable: an unreachable model must explain
+                    // itself on tap, not sit inert (design Gotchas). Only fully
+                    // disable a day that has no data at all (dayCapsule does that).
                     Button {
-                        viewModel.mode = .model(m)
+                        if available {
+                            viewModel.mode = .model(m)
+                        } else {
+                            unavailableModel = m.uppercased()
+                        }
                     } label: {
-                        menuRow(m.uppercased() + (available ? "" : " (n/a this day)"),
+                        menuRow(m.uppercased() + (available ? "" : " (no data this day)"),
                                 selected: viewModel.mode == .model(m))
                     }
-                    .disabled(!available)
                 }
             }
         } label: {
