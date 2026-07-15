@@ -98,8 +98,12 @@ test.describe('Briefing page', () => {
   test('loads and displays the briefing', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
 
-    // Assessment badge should show GREEN
-    await expect(page.getByText('GREEN', { exact: true })).toBeVisible();
+    // Assessment badge should show GREEN. Scope to the banner: the sidebar rail
+    // now also renders the overall level (`.rail-overall-level`), so a bare
+    // getByText('GREEN') matches two elements and trips strict mode.
+    await expect(
+      page.locator('#assessment-banner').getByText('GREEN', { exact: true }),
+    ).toBeVisible();
 
     // Route summary should appear
     await expect(page.getByText('EGTF → EGLF')).toBeVisible();
