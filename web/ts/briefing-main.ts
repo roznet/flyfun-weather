@@ -746,9 +746,16 @@ async function init(): Promise<void> {
     }
   }
 
+  // "Show all" reveals worse rows + not-checkable (refused) times (#434).
+  // A view-only toggle kept in the init closure so it survives re-renders
+  // (the section replaces its innerHTML on every store update).
+  let timeScenariosShowAll = false;
+
   /** Timing-scenario section (Flexibility) — attention-director framing:
    *  candidates are "what changes if you leave at X", never a go/no-go.
-   *  Data arrives from the background scan via the polled store state. */
+   *  Data arrives from the background scan via the polled store state.
+   *  Default view is same-or-better (improving+neutral); worse alternate
+   *  hours and not-checkable times hide behind a "show all" toggle (#434). */
   function renderTimeScenarios(state: BriefingState): void {
     const wrapper = document.getElementById('time-scenarios-wrapper');
     const section = document.getElementById('time-scenarios-section');
@@ -816,7 +823,7 @@ async function init(): Promise<void> {
       return ` · ${diff > 0 ? '+' : ''}${diff} days`;
     };
 
-    const rows = scan.candidates.map((c) => {
+    const renderRow = (c: api.TimeCandidateDTO): string => {
       const time = formatDepartureTime(c.departure_time) + dayLabelFor(c.departure_time);
       const shift = c.is_baseline
         ? 'as planned'
@@ -969,15 +976,55 @@ async function init(): Promise<void> {
             </details>
           </span>
         </div>`;
+    };
+
+    // Partition (#434). scan.candidates already arrives ranked
+    // improving→neutral→worse; keep baseline + alternate + same-or-better in the
+    // default view and hide graded-worse alternate hours behind "show all", so
+    // the section can honestly say "the previous day is worse" without leading
+    // with it. Old artifacts have no disposition — treat them as not-worse.
+    const isWorse = (c: api.TimeCandidateDTO) =>
+      !c.is_baseline && !c.is_alternate && c.disposition === 'worse';
+    const defaultCandidates = scan.candidates.filter((c) => !isWorse(c));
+    const worseCandidates = scan.candidates.filter(isWorse);
+
+    const improvingCount = scan.candidates.filter(
+      (c) => !c.is_baseline && !c.is_alternate && c.disposition === 'improving',
+    ).length;
+    const headline = improvingCount > 0
+      ? `${improvingCount} departure window${improvingCount > 1 ? 's' : ''} look${improvingCount === 1 ? 's' : ''} smoother than the planned time — worth a look, not a verdict.`
+      : 'No clearly better window found in the hours checkable from this briefing.';
+
+    // Not-checkable (refused) hours — revealed greyed under "show all". The
+    // honesty guardrail made visible ("couldn't grade this time"), kept
+    // distinct from a graded-worse row (which carries a real RED/AMBER chip).
+    const refusedRows = scan.refused_times.map((t) => {
+      const rt = formatDepartureTime(t) + dayLabelFor(t);
+      return `<div class="info-row time-scenario-row" style="opacity:0.55;">
+          <span class="info-label">${escapeHtml(rt)}</span>
+          <span class="info-value">
+            ${chip('UNAVAILABLE')}
+            <span class="muted" style="font-size:0.8em;">not checkable — outside this briefing’s fetched forecast window</span>
+          </span>
+        </div>`;
     }).join('');
 
-    const better = scan.candidates.filter((c) => !c.is_baseline && !c.is_alternate).length;
-    const headline = better > 0
-      ? `${better} departure window${better > 1 ? 's' : ''} look${better === 1 ? 's' : ''} smoother than the planned time — worth a look, not a verdict.`
-      : 'No clearly better window found in the hours checkable from this briefing.';
-    const refusedNote = scan.refused_times.length
-      ? `<p class="muted" style="font-size:0.85em;">${scan.refused_times.length} daylight hour${scan.refused_times.length > 1 ? 's' : ''} couldn’t be checked from this briefing’s data (outside the fetched forecast window).</p>`
+    const hiddenWorse = worseCandidates.length;
+    const hiddenRefused = scan.refused_times.length;
+    const hasHidden = hiddenWorse > 0 || hiddenRefused > 0;
+    const hiddenSummary = [
+      hiddenWorse ? `${hiddenWorse} worse` : '',
+      hiddenRefused ? `${hiddenRefused} not checkable` : '',
+    ].filter(Boolean).join(' · ');
+    const showAllBtn = hasHidden
+      ? `<button type="button" class="btn btn-link btn-sm time-showall-btn">${
+          timeScenariosShowAll ? 'Show fewer' : `Show all (${escapeHtml(hiddenSummary)})`
+        }</button>`
       : '';
+    const hiddenRows = (hasHidden && timeScenariosShowAll)
+      ? worseCandidates.map(renderRow).join('') + refusedRows
+      : '';
+
     // ±day edges (slice 4): explain why the window stops where it does, so a
     // clipped prev/next-day scan doesn't read as a data gap.
     const win = scan.window;
@@ -988,7 +1035,12 @@ async function init(): Promise<void> {
       ? `<p class="muted" style="font-size:0.85em;">The window stops where ECMWF forecast fidelity ends — later hours aren’t checkable yet.</p>`
       : '';
 
-    section.innerHTML = `<p>${escapeHtml(headline)}</p>${rows}${refusedNote}${pastNote}${horizonNote}`;
+    section.innerHTML =
+      `<p>${escapeHtml(headline)}</p>`
+      + defaultCandidates.map(renderRow).join('')
+      + (showAllBtn ? `<div style="margin-top:0.4rem;">${showAllBtn}</div>` : '')
+      + hiddenRows
+      + pastNote + horizonNote;
 
     // Product-analytics signal (#352): flexibility used, counted once per
     // briefing and only when actual scan results render (the pending / failed /
@@ -1007,6 +1059,12 @@ async function init(): Promise<void> {
         const dep = btn.dataset.departure;
         if (dep) void store.getState().setScenarioAsAlternate(dep);
       });
+    });
+    // "Show all" reveals graded-worse + not-checkable rows (#434). View-only —
+    // flip the closure flag and re-render (which re-wires fresh handlers).
+    section.querySelector<HTMLButtonElement>('.time-showall-btn')?.addEventListener('click', () => {
+      timeScenariosShowAll = !timeScenariosShowAll;
+      renderTimeScenarios(store.getState());
     });
   }
 
