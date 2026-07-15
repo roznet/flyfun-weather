@@ -347,9 +347,13 @@ struct FlightListView: View {
     private func flightRow(_ flight: FlightResponse, viewModel: FlightListViewModel) -> some View {
         let hasCached = viewModel.cachedFlightIds.contains(flight.id)
         NavigationLink(value: SidebarSelection.flight(flight)) {
+            // `.equatable()` so the row diffs on the briefing content it draws,
+            // not `FlightResponse`'s id-only `==` — otherwise a same-id briefing
+            // update wouldn't repaint the card until app relaunch (#426).
             FlightCardView(flight: flight, hasCachedData: hasCached,
                            isOffline: viewModel.isOffline,
                            isRefreshing: viewModel.refreshingFlightIds.contains(flight.id))
+                .equatable()
         }
         .disabled(viewModel.isOffline && !hasCached)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {

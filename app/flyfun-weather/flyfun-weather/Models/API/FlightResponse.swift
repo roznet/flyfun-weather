@@ -157,7 +157,8 @@ enum FlexibilityMode: String, Codable, Sendable, CaseIterable {
 /// Weather-coverage status for a flight saved beyond the forecast horizon.
 /// Present on `FlightResponse.coverage` only while no model reaches the flight
 /// date yet; the UI shows a neutral pending state instead of an assessment.
-struct CoveragePending: Codable, Sendable {
+/// `Equatable` so `FlightCardView` can diff on it (see its `==`).
+struct CoveragePending: Codable, Sendable, Equatable {
     /// ISO date (yyyy-MM-dd) — first (early-outlook) briefing appears.
     let availableDate: String
     /// ISO date — full GRIB briefing, if resolved. nil when unresolved.
@@ -201,7 +202,10 @@ struct AircraftInfo: Codable, Hashable, Sendable {
 /// each card can render a status tag from the single `/api/flights` response
 /// (mirrors the web `BriefingStatusInfo`). Scalar fields are optional so a
 /// partial/legacy payload decodes rather than failing the whole flight.
-struct BriefingStatusInfo: Codable, Sendable {
+/// `Equatable` so `FlightCardView` diffs on the briefing content (the card's
+/// only source of truth) rather than `FlightResponse`'s id-only identity, which
+/// would otherwise make a same-id/new-briefing update look unchanged (#426).
+struct BriefingStatusInfo: Codable, Sendable, Equatable {
     /// GREEN / AMBER / RED traffic-light verdict (short-range, within the GRIB
     /// horizon). nil when only a long-range `outlook` is available.
     let assessment: String?
@@ -213,10 +217,17 @@ struct BriefingStatusInfo: Codable, Sendable {
     let outlookReason: String?
     let hasAdvisories: Bool?
     let advisorySummary: AdvisorySummary?
+    /// The latest pack's fetch timestamp (ISO 8601), as the server sends it in
+    /// `latest_briefing.fetch_timestamp`. Used by the flight list's
+    /// level-triggered reconcile to detect that a briefing advanced even when
+    /// the active-refresh poll never observed the refresh (#426). Optional (no
+    /// default — a `let` with a default would be dropped from the synthesized
+    /// `Codable`, never decoding the field); absent on older servers → nil.
+    let fetchTimestamp: String?
 }
 
 /// Compact RED/AMBER advisory breakdown for the flights-list card chips.
-struct AdvisorySummary: Codable, Sendable {
+struct AdvisorySummary: Codable, Sendable, Equatable {
     let red: Int
     let amber: Int
     /// Severity-ordered named concerns, capped at 3 server-side.
@@ -224,7 +235,7 @@ struct AdvisorySummary: Codable, Sendable {
 }
 
 /// One named advisory concern for the summary chips.
-struct AdvisoryChip: Codable, Sendable {
+struct AdvisoryChip: Codable, Sendable, Equatable {
     let status: String  // "RED" | "AMBER"
     let name: String
 }

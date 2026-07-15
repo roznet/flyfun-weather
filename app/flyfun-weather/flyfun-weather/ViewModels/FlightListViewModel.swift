@@ -41,6 +41,10 @@ final class FlightListViewModel {
     /// always attempts, relying on error backoff).
     private let networkMonitor: NetworkMonitor?
     private var isLoading = false
+    /// Per-flight latest-pack `fetchTimestamp`, snapshotted on every successful
+    /// load. The level-triggered reconcile compares against this to tell whether
+    /// a briefing actually advanced (#426).
+    private var lastPackTimestamps: [String: String] = [:]
     /// The active-refresh poll loop (one at a time). Detached from any `.task`, so
     /// the view must start/stop it explicitly around visibility.
     @ObservationIgnored private var refreshPollTask: Task<Void, Never>?
@@ -101,6 +105,7 @@ final class FlightListViewModel {
                 await refreshCachedFlightIds(reporter)
             }
             state = .loaded(flights)
+            lastPackTimestamps = Self.packTimestampMap(flights)
             // Keep Spotlight / Siri's flight index in sync with the server truth.
             // Fire-and-forget — never block the list on indexing (Decision 8).
             // Only when online: an offline cache snapshot can be stale/partial
@@ -157,9 +162,17 @@ final class FlightListViewModel {
 
     /// Healthy poll cadence (matches the web's flat 5s).
     private static let refreshPollBaseDelay: Double = 5
+    /// Full-reconcile cadence, in healthy poll ticks (6 × 5s ≈ 30s). A level-
+    /// triggered safety net for the active-set edge below: a refresh that begins
+    /// *and* finishes between two polls — a fast refresh, or one started on the
+    /// web / another device / by auto-refresh — never enters `refreshingFlightIds`,
+    /// so the `finished` edge never fires and the row would stay stale until the
+    /// next foreground / pull-to-refresh. Reconciling on this cadence catches it.
+    private static let reconcileEveryTicks = 6
 
     private func pollActiveRefreshesLoop() async {
         var delay = Self.refreshPollBaseDelay
+        var ticksSinceReconcile = 0
         while !Task.isCancelled {
             if networkMonitor?.isConnected == false {
                 // Offline: don't even attempt the round-trip — no point waking the
@@ -177,7 +190,14 @@ final class FlightListViewModel {
                     let finished = refreshingFlightIds.subtracting(newIds)
                     refreshingFlightIds = newIds
                     if !finished.isEmpty {
-                        await loadFlights()
+                        await loadFlights()          // edge-triggered completion
+                        ticksSinceReconcile = 0      // loadFlights already reconciled
+                    } else {
+                        ticksSinceReconcile += 1
+                        if ticksSinceReconcile >= Self.reconcileEveryTicks {
+                            ticksSinceReconcile = 0
+                            await reconcileLatestPacks()   // level-triggered catch-up
+                        }
                     }
                     delay = Self.refreshPollBaseDelay   // healthy — reset cadence
                 } catch {
@@ -189,6 +209,44 @@ final class FlightListViewModel {
             }
             try? await Task.sleep(for: .seconds(delay))
         }
+    }
+
+    /// Level-triggered reconcile: re-fetch the flights list and repaint only when
+    /// a flight's latest-pack `fetchTimestamp` has advanced since the last load.
+    /// This is the completion signal the active-refresh edge can miss (#426) — a
+    /// refresh whose whole active lifetime fell between two polls still lands here
+    /// once its new pack timestamp shows up. Quiet by design: it never flips the
+    /// full-screen spinner or the `isRefreshing` indicator, and does nothing
+    /// (beyond one cheap list fetch) when no briefing changed. Returns whether it
+    /// repainted, for tests. Failures are swallowed — the next tick retries.
+    @discardableResult
+    func reconcileLatestPacks() async -> Bool {
+        guard let flights = try? await repository.flights() else { return false }
+        let fresh = Self.packTimestampMap(flights)
+        guard fresh != lastPackTimestamps else { return false }
+        state = .loaded(flights)
+        lastPackTimestamps = fresh
+        // Keep the offline/cached-badge state consistent with the fresh list, the
+        // same way loadFlights does (disk-only, no extra network).
+        if let reporter = repository as? CacheStatusReporting {
+            isOffline = reporter.isServingCachedFlights
+            await refreshCachedFlightIds(reporter)
+        }
+        Self.logger.info("Reconcile repainted flight list (pack timestamps advanced)")
+        return true
+    }
+
+    /// Per-flight latest-pack `fetchTimestamp`, keyed by flight id. Flights whose
+    /// latest briefing carries no timestamp (never briefed, or a legacy server
+    /// that omits the field) are absent from the map.
+    static func packTimestampMap(_ flights: [FlightResponse]) -> [String: String] {
+        var map: [String: String] = [:]
+        for flight in flights {
+            if let ts = flight.latestBriefing?.fetchTimestamp {
+                map[flight.id] = ts
+            }
+        }
+        return map
     }
 
     /// Refresh the "available offline" badge set from the offline-ready flights.

@@ -168,6 +168,29 @@ func makeFlight(
     )
 }
 
+/// Build a `BriefingStatusInfo` fixture — the latest-pack summary inlined into a
+/// flight-list row. Centralizes construction so adding wire fields (e.g.
+/// `fetchTimestamp`) touches one call site, not every test.
+func makeBriefingStatus(
+    assessment: String? = nil,
+    assessmentReason: String? = nil,
+    outlook: String? = nil,
+    outlookReason: String? = nil,
+    hasAdvisories: Bool? = nil,
+    advisorySummary: AdvisorySummary? = nil,
+    fetchTimestamp: String? = nil
+) -> BriefingStatusInfo {
+    BriefingStatusInfo(
+        assessment: assessment,
+        assessmentReason: assessmentReason,
+        outlook: outlook,
+        outlookReason: outlookReason,
+        hasAdvisories: hasAdvisories,
+        advisorySummary: advisorySummary,
+        fetchTimestamp: fetchTimestamp
+    )
+}
+
 /// Build an `UpdateFlightResponse` fixture (Decodable-only, so assembled via
 /// JSON) for stubbing `MockBriefingRepository.updateFlightResult`.
 func makeUpdateResponse(
