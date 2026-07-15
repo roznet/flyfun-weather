@@ -13,6 +13,8 @@ from weatherbrief.analysis.airport_conditions import (
     classify_flight_category,
     compute_airport_conditions,
     compute_runway_winds,
+    format_wind_string,
+    GUST_DISPLAY_MIN_EXCESS_KT,
 )
 from weatherbrief.models import (
     CloudCoverage,
@@ -27,6 +29,31 @@ from weatherbrief.models.airport_conditions import (
     FlightCategory,
     RunwayEnd,
 )
+
+
+# --- format_wind_string ---
+
+class TestFormatWindString:
+    """Standard `dir@speedGgust` notation — mirrors web `formatWind`
+    (units.ts) and iOS `WindFormat`; the three must stay in sync."""
+
+    def test_dir_speed_gust_padded(self):
+        assert format_wind_string(273, 15, 22) == "273@15G22"
+        assert format_wind_string(5, 8, None) == "005@8"
+
+    def test_empty_when_dir_or_speed_missing(self):
+        assert format_wind_string(None, 15, 20) == ""
+        assert format_wind_string(270, None, 20) == ""
+
+    def test_gust_shown_only_above_threshold(self):
+        thr = GUST_DISPLAY_MIN_EXCESS_KT
+        assert format_wind_string(9, 5, 6) == "009@5"            # +1 kt — suppressed
+        assert format_wind_string(9, 5, 5 + thr) == "009@5G9"    # exactly threshold
+        assert format_wind_string(9, 5, 10) == "009@5G10"        # well above
+        assert format_wind_string(9, 5, 5 + thr - 1) == "009@5"  # just below
+
+    def test_gust_below_speed_is_suppressed(self):
+        assert format_wind_string(80, 14, 6) == "080@14"
 
 
 # --- classify_flight_category ---

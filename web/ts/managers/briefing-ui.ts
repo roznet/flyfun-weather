@@ -45,7 +45,7 @@ import {
   variableToMetricId,
 } from '../helpers/metrics-helper';
 import { compareAdvisories } from '../helpers/alt-departure-compare';
-import { formatHeading } from '../units';
+import { formatHeading, formatWind } from '../units';
 import { showPopupContent } from '../components/info-popup';
 import * as api from '../adapters/api-adapter';
 import { $, escapeHtml, formatAlt, formatDate, formatDepartureTime, modelLabel, buildWindyUrl, flightTitle, flightRouteCompact } from '../utils';
@@ -1060,8 +1060,7 @@ function windTooltip(rwyId: string | null, crosswind: number | null): string {
 
 function formatWindStr(dir: number | null, speed: number | null, gust: number | null): string {
   if (dir == null || speed == null) return '';
-  const g = gust != null ? `G${Math.round(gust)}` : '';
-  return `${formatHeading(dir, 10)}@${Math.round(speed)}${g}`;
+  return formatWind(speed, dir, gust);
 }
 
 function renderObsPopup(apt: AirportObservation, comp: ObservationComparison | undefined): string {

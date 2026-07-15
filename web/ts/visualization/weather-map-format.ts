@@ -9,7 +9,7 @@
 import type {
   ForecastAirport, ConsensusForecast, AltRequired,
 } from '../adapters/maps-adapter';
-import { formatVisibility, formatHeading } from '../units';
+import { formatVisibility, formatWind, formatWindComponent } from '../units';
 import {
   isConsensusMode, ordinalConsensus, type ConsensusMode,
 } from './weather-map-consensus';
@@ -247,10 +247,8 @@ function fmtVisibility(m: number | null | undefined): string {
 }
 
 function fmtWind(speed: number | null | undefined, dir: number | null | undefined, gust: number | null | undefined): string {
-  if (speed == null) return '';
-  const dirStr = dir != null ? `${formatHeading(dir)}@` : '';
-  const gustStr = gust ? `G${Math.round(gust)}` : '';
-  return `${dirStr}${Math.round(speed)}${gustStr} kt`;
+  const s = formatWind(speed, dir, gust);
+  return s ? `${s} kt` : '';
 }
 
 export const METRIC_LABEL: Record<ForecastMetric, string> = Object.fromEntries(
@@ -276,9 +274,8 @@ export function formatMetricValue(data: { [key: string]: any }, metric: Forecast
       const v = data[metric];
       if (v == null) return '—';
       const gust = metric === 'crosswind_kt' ? data.gust_crosswind_kt : data.gust_headwind_kt;
-      const gustStr = gust != null ? `G${Math.round(gust)}` : '';
       const rwyStr = data.best_runway_id ? ` RWY ${data.best_runway_id}` : '';
-      return `${Math.round(v)}${gustStr} kt${rwyStr}`;
+      return `${formatWindComponent(v, gust)} kt${rwyStr}`;
     }
     case 'ceiling_ft':
       return data.ceiling_ft != null ? fmtCeiling(data.ceiling_ft) : '—';

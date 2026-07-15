@@ -29,20 +29,34 @@ _CEIL_LIFR, _CEIL_IFR, _CEIL_MVFR = 500, 1000, 3000
 _VIS_LIFR, _VIS_IFR, _VIS_MVFR = 1, 3, 5
 
 
+# A gust is only shown when it exceeds the sustained wind by at least this many
+# knots (comparing the rounded, displayed numbers). A gust within a few kt of the
+# mean isn't operationally meaningful and just adds noise ("5G6" -> "5"). Keep in
+# sync with web GUST_DISPLAY_MIN_EXCESS_KT (units.ts) and iOS
+# WindFormat.gustDisplayMinExcessKt.
+GUST_DISPLAY_MIN_EXCESS_KT = 4
+
+
 def format_wind_string(
     direction_deg: float | None,
     speed_kt: float | None,
     gust_kt: float | None,
 ) -> str:
-    """Format wind as '230@11G25' (without units).
+    """Format wind as '273@11G25' (without units).
 
-    Returns empty string if direction or speed are unavailable.
+    Direction is zero-padded to 3 digits (rounded to the nearest degree). The
+    gust is dropped when absent or within ``GUST_DISPLAY_MIN_EXCESS_KT`` kt of
+    the sustained speed. Returns empty string if direction or speed are
+    unavailable.
     """
     if direction_deg is None or speed_kt is None:
         return ""
-    dir_rounded = round(direction_deg / 10) * 10
-    gust_str = f"G{gust_kt:.0f}" if gust_kt else ""
-    return f"{dir_rounded:03.0f}@{speed_kt:.0f}{gust_str}"
+    dir_rounded = round(direction_deg)
+    speed_rounded = round(speed_kt)
+    gust_str = ""
+    if gust_kt is not None and round(gust_kt) - speed_rounded >= GUST_DISPLAY_MIN_EXCESS_KT:
+        gust_str = f"G{round(gust_kt)}"
+    return f"{dir_rounded:03d}@{speed_rounded}{gust_str}"
 
 
 def classify_flight_category(

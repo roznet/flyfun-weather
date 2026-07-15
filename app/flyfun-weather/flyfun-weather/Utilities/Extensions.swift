@@ -77,6 +77,41 @@ extension Int {
     }
 }
 
+/// Wind formatting shared across iOS surfaces — mirrors web `formatWind` /
+/// `formatWindComponent` in `web/ts/units.ts`. Standard `dir@speedGgust`
+/// notation with a zero-padded 3-digit direction; the gust is dropped when
+/// absent or within `gustDisplayMinExcessKt` kt of the sustained value.
+enum WindFormat {
+    /// A gust is shown only when it exceeds the sustained value by at least this
+    /// many knots (comparing rounded, displayed numbers). A gust within a few kt
+    /// of the mean isn't operationally meaningful and just adds noise ("5G6" →
+    /// "5"). Keep in sync with web `GUST_DISPLAY_MIN_EXCESS_KT`.
+    static let gustDisplayMinExcessKt = 4
+
+    /// `Ggust` suffix for a wind of sustained value `base`, or "" when the gust
+    /// is absent or too close to `base`.
+    private static func gustSuffix(base: Double, gust: Double?) -> String {
+        guard let gust else { return "" }
+        let g = Int(gust.rounded())
+        return g - Int(base.rounded()) >= gustDisplayMinExcessKt ? "G\(g)" : ""
+    }
+
+    /// `dir@speedGgust`, e.g. "273@15G22". Missing direction drops the `dir@`
+    /// prefix; missing speed returns nil. Units (kt) are appended by the caller.
+    static func wind(speed: Double?, dir: Double?, gust: Double?) -> String? {
+        guard let speed else { return nil }
+        let dirStr = dir.map { "\(Int($0.rounded()).paddedHeading)@" } ?? ""
+        return "\(dirStr)\(Int(speed.rounded()))\(gustSuffix(base: speed, gust: gust))"
+    }
+
+    /// A single wind component (crosswind/headwind) as `valueGgust`, e.g.
+    /// "12G18", using the same gust-suppression rule. Missing value returns nil.
+    static func component(_ value: Double?, gust: Double?) -> String? {
+        guard let value else { return nil }
+        return "\(Int(value.rounded()))\(gustSuffix(base: value, gust: gust))"
+    }
+}
+
 extension URL {
     /// Extract a query parameter value by name.
     func queryParam(_ name: String) -> String? {

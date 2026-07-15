@@ -270,20 +270,17 @@ struct ForecastAirportCard: View {
             if m >= 10000 { return ">10 km" }
             return m >= 5000 ? "\(Int((m / 1000).rounded())) km" : "\(Int(m.rounded())) m"
         case "wind_speed_kt":
-            guard let s = data.numericField("wind_speed_kt") else { return "—" }
-            let dir = data.numericField("wind_dir_deg").map { "\(Int($0.rounded()))@" } ?? ""
-            // Gust as `Ggust` (web `dir@speedGgust`); consensus has no gust → omitted.
-            // Web uses a truthy check on this field, so a literal 0 gust is omitted.
-            let gust = data.numericField("wind_gust_kt").flatMap { $0 != 0 ? "G\(Int($0.rounded()))" : nil } ?? ""
-            return "\(dir)\(Int(s.rounded()))\(gust)"
+            // Shared `dir@speedGgust` notation (web `formatWind`); gust suppressed
+            // when within a few kt of the sustained speed. Consensus has no gust.
+            return WindFormat.wind(speed: data.numericField("wind_speed_kt"),
+                                   dir: data.numericField("wind_dir_deg"),
+                                   gust: data.numericField("wind_gust_kt")) ?? "—"
         case "crosswind_kt":
-            guard let v = data.numericField("crosswind_kt") else { return "—" }
-            let gust = data.numericField("gust_crosswind_kt").map { "G\(Int($0.rounded()))" } ?? ""
-            return "\(Int(v.rounded()))\(gust)"
+            return WindFormat.component(data.numericField("crosswind_kt"),
+                                        gust: data.numericField("gust_crosswind_kt")) ?? "—"
         case "headwind_kt":
-            guard let v = data.numericField("headwind_kt") else { return "—" }
-            let gust = data.numericField("gust_headwind_kt").map { "G\(Int($0.rounded()))" } ?? ""
-            return "\(Int(v.rounded()))\(gust)"
+            return WindFormat.component(data.numericField("headwind_kt"),
+                                        gust: data.numericField("gust_headwind_kt")) ?? "—"
         case "cape_jkg":
             guard let v = data.numericField("cape_jkg") else { return "—" }
             return "\(Int(v.rounded()))"

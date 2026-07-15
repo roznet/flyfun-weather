@@ -9,7 +9,7 @@ import { advisoryBand, isCompactBand, compareAdvisories } from '../helpers/advis
 import { formatAltitudeDeltaNote } from '../helpers/altitude-diff';
 import { $, escapeHtml, formatAlt, modelLabel } from '../utils';
 import { t } from '../i18n/i18n';
-import { formatVisibility, formatHeading } from '../units';
+import { formatVisibility, formatHeading, formatWind as formatWind_ } from '../units';
 import { ADVISORY_TO_PRESET } from '../visualization/cross-section/advisory-presets';
 import { computeSummaryCondition } from '../helpers/airport-summary';
 
@@ -97,11 +97,7 @@ function formatRunwayPopup(allRunways: RunwayWind[]): string {
 
 function formatWind(cond: AirportModelCondition): string {
   if (cond.wind_speed_kt == null || cond.wind_direction_deg == null) return '\u2014';
-
-  const dir = formatHeading(cond.wind_direction_deg, 10);
-  const spd = cond.wind_speed_kt.toFixed(0);
-  const gust = cond.wind_gust_kt != null ? `G${cond.wind_gust_kt.toFixed(0)}` : '';
-  return `${dir}@${spd}${gust}`;
+  return formatWind_(cond.wind_speed_kt, cond.wind_direction_deg, cond.wind_gust_kt);
 }
 
 function formatRunwayComponents(rwy: RunwayWind, windDir: number): string {

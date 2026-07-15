@@ -7,7 +7,45 @@ import {
   setUnitsPreference,
   setFlightRegion,
   regionFromIcaos,
+  formatWind,
+  formatWindComponent,
+  GUST_DISPLAY_MIN_EXCESS_KT,
 } from '../../ts/units';
+
+describe('formatWind', () => {
+  it('formats dir@speedGgust with a zero-padded 3-digit direction', () => {
+    expect(formatWind(15, 273, 22)).toBe('273@15G22');
+    expect(formatWind(8, 5, null)).toBe('005@8');
+  });
+
+  it('drops the direction prefix when direction is missing, keeps speed', () => {
+    expect(formatWind(15, null, null)).toBe('15');
+  });
+
+  it('returns empty when speed is missing', () => {
+    expect(formatWind(null, 270, 30)).toBe('');
+  });
+
+  it('shows the gust only when it exceeds the sustained speed by the threshold', () => {
+    // +1 kt gust — suppressed
+    expect(formatWind(5, 9, 6)).toBe('009@5');
+    // exactly the threshold — shown
+    expect(formatWind(5, 9, 5 + GUST_DISPLAY_MIN_EXCESS_KT)).toBe('009@5G9');
+    // well above — shown
+    expect(formatWind(5, 9, 10)).toBe('009@5G10');
+    // just below the threshold — suppressed
+    expect(formatWind(5, 9, 5 + GUST_DISPLAY_MIN_EXCESS_KT - 1)).toBe('009@5');
+  });
+});
+
+describe('formatWindComponent', () => {
+  it('formats a crosswind/headwind component with the same gust rule', () => {
+    expect(formatWindComponent(12, 18)).toBe('12G18');
+    expect(formatWindComponent(6, 6)).toBe('6');       // no meaningful gust
+    expect(formatWindComponent(6, null)).toBe('6');
+    expect(formatWindComponent(null, 10)).toBe('');
+  });
+});
 
 describe('formatVisibility', () => {
   it('returns empty string for null/undefined', () => {

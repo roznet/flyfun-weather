@@ -21,6 +21,7 @@
 
 import type { ForecastAirport, ModelForecast } from '../adapters/maps-adapter';
 import { buildWindyUrl } from '../utils';
+import { formatWind, formatWindComponent } from '../units';
 import { type ConsensusMode } from './weather-map-consensus';
 import {
   type ForecastMetric, METRIC_LABEL, CAT_COLORS, AGREEMENT_COLORS,
@@ -65,19 +66,15 @@ function compactCell(data: { [k: string]: any }, metric: ForecastMetric): string
     case 'visibility_m':
       return formatMetricValue(data, 'visibility_m');
     case 'wind_speed_kt': {
-      const s = data.wind_speed_kt;
-      if (s == null) return '—';
-      const dir = data.wind_dir_deg != null ? `${Math.round(data.wind_dir_deg)}@` : '';
-      const g = data.wind_gust_kt ? `G${Math.round(data.wind_gust_kt)}` : '';
-      return `${dir}${Math.round(s)}${g}`;
+      if (data.wind_speed_kt == null) return '—';
+      return formatWind(data.wind_speed_kt, data.wind_dir_deg, data.wind_gust_kt);
     }
     case 'crosswind_kt':
     case 'headwind_kt': {
       const v = data[metric];
       if (v == null) return '—';
       const gust = metric === 'crosswind_kt' ? data.gust_crosswind_kt : data.gust_headwind_kt;
-      const g = gust != null ? `G${Math.round(gust)}` : '';
-      return `${Math.round(v)}${g}`;
+      return formatWindComponent(v, gust);
     }
     case 'cape_jkg':
       return data.cape_jkg != null ? String(Math.round(data.cape_jkg)) : '—';

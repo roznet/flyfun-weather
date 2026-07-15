@@ -127,6 +127,49 @@ export function formatHeading(deg: number, step = 1): string {
   return String(rounded).padStart(3, '0');
 }
 
+/** A gust is only shown when it exceeds the sustained value by at least this
+ *  many knots (comparing the rounded, displayed numbers). A gust within a few
+ *  kt of the mean isn't operationally meaningful and just adds noise — e.g.
+ *  "5G6" collapses to "5", while "5G10" keeps its gust. Central knob for every
+ *  wind formatter on this surface. */
+export const GUST_DISPLAY_MIN_EXCESS_KT = 4;
+
+/** `Ggust` suffix for a wind of sustained value `base`, or '' when the gust is
+ *  absent or too close to `base` (see {@link GUST_DISPLAY_MIN_EXCESS_KT}). */
+function gustSuffix(base: number, gust: number | null | undefined): string {
+  if (gust == null) return '';
+  const g = Math.round(gust);
+  return g - Math.round(base) >= GUST_DISPLAY_MIN_EXCESS_KT ? `G${g}` : '';
+}
+
+/** Format a wind as `dir@speedGgust` (e.g. "273@15G22") — the standard notation
+ *  used across every surface. Direction is zero-padded to 3 digits (rounded to
+ *  `dirStep`°, default 1). The gust is dropped when absent or within
+ *  {@link GUST_DISPLAY_MIN_EXCESS_KT} kt of the sustained speed. Returns ''
+ *  when speed is missing; direction alone missing just drops the `dir@` prefix.
+ *  Units (kt) are appended by the call site, not here. */
+export function formatWind(
+  speed: number | null | undefined,
+  dir: number | null | undefined,
+  gust: number | null | undefined,
+  dirStep = 1,
+): string {
+  if (speed == null) return '';
+  const dirStr = dir != null ? `${formatHeading(dir, dirStep)}@` : '';
+  return `${dirStr}${Math.round(speed)}${gustSuffix(speed, gust)}`;
+}
+
+/** Format a single wind component (crosswind/headwind) as `valueGgust`
+ *  (e.g. "12G18"), the same G-notation and gust-suppression rule as
+ *  {@link formatWind}. Returns '' when the value is missing. */
+export function formatWindComponent(
+  value: number | null | undefined,
+  gust: number | null | undefined,
+): string {
+  if (value == null) return '';
+  return `${Math.round(value)}${gustSuffix(value, gust)}`;
+}
+
 /** Format a temperature in Celsius. (Not yet wired into surfaces.) */
 export function formatTemperature(
   celsius: number | null | undefined,
