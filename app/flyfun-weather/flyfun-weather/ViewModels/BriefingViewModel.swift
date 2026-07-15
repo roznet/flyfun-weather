@@ -98,6 +98,12 @@ final class BriefingViewModel {
     private(set) var pack: PackMetaResponse?
     private(set) var packHistory: [PackMetaResponse] = []
 
+    /// The pilot's post-flight debrief (past owned flights). Seeded from the
+    /// inlined `flight.debrief` and updated in place when the debrief sheet saves
+    /// or deletes, so the Advisory-tab card reflects the change without a list
+    /// reload and survives tab switches (this view model outlives the tab views).
+    private(set) var debrief: DebriefResponse?
+
     // Section states
     private(set) var advisoriesState: LoadingState<AdvisoriesResponse> = .idle
     private(set) var digestState: LoadingState<DigestResponse> = .idle
@@ -161,6 +167,12 @@ final class BriefingViewModel {
         self.repository = repository
         self.settings = settings
         self.networkMonitor = networkMonitor
+        self.debrief = flight.debrief
+    }
+
+    /// Adopt the saved (or deleted → nil) debrief so the Advisory card updates.
+    func setDebrief(_ debrief: DebriefResponse?) {
+        self.debrief = debrief
     }
 
     // MARK: - Deep-link focus (§4.6/§4.7/§4.9)

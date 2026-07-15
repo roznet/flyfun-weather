@@ -104,6 +104,12 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { PirepListResponse(items: [], count: 0) }
+    func fetchDebrief(flightId: String) async throws -> DebriefResponse { throw APIError.notFound }
+    func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse {
+        throw FixtureError.notProvided("upsertDebrief")
+    }
+    func deleteDebrief(flightId: String) async throws {}
+    func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {}
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         AsyncThrowingStream { $0.finish() }
     }

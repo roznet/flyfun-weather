@@ -32,16 +32,24 @@ struct HelpCatalogResponse: Sendable {
     /// O(1) advisory lookup by id, built once at construction — mirrors the
     /// metrics dict so both popup call sites have the same access cost.
     let advisoriesById: [String: AdvisoryCatalogEntry]
+    /// Debrief taxonomy (decision buttons, condition tags, outcome values,
+    /// advisory→tag map). Served so the iOS debrief form renders from the same
+    /// vocabulary the web bundle imports. nil on the bundled baseline (metrics
+    /// only) before the first online sync — callers fall back to
+    /// `DebriefTaxonomy.bundledBaseline`.
+    let debrief: DebriefTaxonomy?
 
-    init(version: String, metrics: [String: MetricHelp], maps: ForecastMapCatalog?, advisories: [AdvisoryCatalogEntry]) {
+    init(version: String, metrics: [String: MetricHelp], maps: ForecastMapCatalog?,
+         advisories: [AdvisoryCatalogEntry], debrief: DebriefTaxonomy?) {
         self.version = version
         self.metrics = metrics
         self.maps = maps
         self.advisories = advisories
         self.advisoriesById = Dictionary(advisories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self.debrief = debrief
     }
 
-    /// Decode a full server payload (`{version, metrics, maps, advisories}`).
+    /// Decode a full server payload (`{version, metrics, maps, advisories, debrief}`).
     static func decode(from data: Data) throws -> HelpCatalogResponse {
         let plain = JSONDecoder()  // no key strategy → metric/scale/field ids stay verbatim
         let envelope = try plain.decode(MetricsEnvelope.self, from: data)
@@ -52,7 +60,11 @@ struct HelpCatalogResponse: Sendable {
             version: envelope.version,
             metrics: envelope.metrics,
             maps: envelope.maps,
-            advisories: adv.advisories
+            advisories: adv.advisories,
+            // The debrief section carries snake_case keys (`outcome_category`,
+            // `advisory_tag_map`, …); it's decoded with the plain decoder and
+            // `DebriefTaxonomy`'s explicit CodingKeys, NOT the snake-converting one.
+            debrief: envelope.debrief
         )
     }
 
@@ -61,7 +73,7 @@ struct HelpCatalogResponse: Sendable {
     static func decodeBaseline(from data: Data) throws -> HelpCatalogResponse {
         let plain = JSONDecoder()
         let metrics = try plain.decode([String: MetricHelp].self, from: data)
-        return HelpCatalogResponse(version: "baseline", metrics: metrics, maps: nil, advisories: [])
+        return HelpCatalogResponse(version: "baseline", metrics: metrics, maps: nil, advisories: [], debrief: nil)
     }
 
     private struct MetricsEnvelope: Decodable {
@@ -69,6 +81,8 @@ struct HelpCatalogResponse: Sendable {
         let metrics: [String: MetricHelp]
         /// The `maps` section (#419); optional so an old server without it decodes.
         let maps: ForecastMapCatalog?
+        /// The `debrief` section; optional so an old server without it decodes.
+        let debrief: DebriefTaxonomy?
     }
 
     private struct AdvisoriesEnvelope: Decodable {

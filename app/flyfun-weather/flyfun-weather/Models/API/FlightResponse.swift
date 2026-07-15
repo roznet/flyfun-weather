@@ -43,10 +43,32 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// Absent on older servers → treated as "default".
     var notifyOverride: String? = nil
 
+    /// Server-assigned logbook bucket ("future" | "recent" | "past"). "recent" is
+    /// the debrief-nudge window (recent past flights not yet debriefed). Absent on
+    /// older servers → nil; the flight list then falls back to client-side date
+    /// bucketing. `var … = nil` (not `let`) so it decodes AND the synthesized
+    /// memberwise init keeps existing call sites unchanged.
+    var section: String? = nil
+    /// The pilot's stored debrief for this flight, inlined by `/api/flights` for
+    /// owned past flights only (nil otherwise / older servers). Lets the list show
+    /// a "debriefed ✓" glyph and the briefing seed its debrief card without a
+    /// per-flight round-trip.
+    var debrief: DebriefResponse? = nil
+
     /// Per-flight override folded to an enum, tolerant of unknown/absent values.
     var notifyOverrideMode: FlightNotifyOverride {
         FlightNotifyOverride(rawValue: notifyOverride ?? "default") ?? .default
     }
+
+    /// Logbook section folded to an enum. Absent/unknown → derived from
+    /// `departureDate` so a legacy server still groups sensibly.
+    var flightSection: FlightSection {
+        if let section, let parsed = FlightSection(rawValue: section) { return parsed }
+        return isPast ? .past : .future
+    }
+
+    /// Whether this flight already has a stored debrief.
+    var hasDebrief: Bool { debrief != nil }
 
     /// Parsed departure date for display.
     var departureDate: Date? {
@@ -86,6 +108,15 @@ struct FlightResponse: Codable, Identifiable, Sendable {
 enum FlightRole: String, Codable, Sendable {
     case owner
     case subscriber
+}
+
+/// Server-assigned logbook bucket for the flight list (mirrors the web
+/// `section`). `recent` is the debrief-nudge window: recent past flights not yet
+/// debriefed (bounded server-side), so a `recent` flight is the one to debrief.
+enum FlightSection: String, Codable, Sendable {
+    case future
+    case recent
+    case past
 }
 
 /// Per-flight briefing-notification override (mirrors the server

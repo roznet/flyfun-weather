@@ -72,6 +72,23 @@ final class AppState {
     /// the bundled baseline at init; refreshed opportunistically when online.
     let helpCatalog = HelpCatalogStore()
 
+    /// Digests the user has rated (👍/👎) this session, keyed
+    /// "flightId|packTimestamp" (per pack version). Session-only, matching the
+    /// web widget's in-memory dedup — there's no server read-back yet, so a
+    /// relaunch can re-prompt. Cross-session "already rated" state is a deferred
+    /// follow-up (needs a new server endpoint, on web too).
+    private(set) var ratedDigests: Set<String> = []
+
+    /// Whether this pack's digest has been rated this session.
+    func isDigestRated(flightId: String, packTimestamp: String) -> Bool {
+        ratedDigests.contains("\(flightId)|\(packTimestamp)")
+    }
+
+    /// Record that this pack's digest was rated (hides the thumb prompt).
+    func markDigestRated(flightId: String, packTimestamp: String) {
+        ratedDigests.insert("\(flightId)|\(packTimestamp)")
+    }
+
     /// External "server data changed" nudge (e.g. a refresh push). The flight list
     /// and any open briefing observe this and re-sync to the newest online pack —
     /// push is just one more sync trigger, not a special path. `token` makes every

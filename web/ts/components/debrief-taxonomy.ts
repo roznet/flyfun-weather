@@ -1,8 +1,12 @@
 /** TS mirror of src/weatherbrief/debriefs/taxonomy.py.
  *
- * Keep in sync — both define the canonical condition tags and keyword
- * map. Drift is caught at code review (small file, no obvious harm
- * mechanism) since runtime cross-validation would mean an extra fetch.
+ * Keep in sync — both define the canonical condition tags, labels and
+ * keyword map. Python is the single source of truth: it also serves this
+ * vocabulary in the `debrief` section of `/api/help/catalog`, which the iOS
+ * app renders from (so iOS never hand-copies a third Swift copy). The web
+ * bundle keeps this build-time mirror rather than fetching, so the labels
+ * here must match `TAG_LABELS`/`TAG_DESCRIPTIONS`/`ADVISORY_TAG_MAP` in the
+ * Python module. Drift is caught at code review + the sync-ios-web audit.
  */
 
 import type { ConditionTagId, OutcomeValue } from '../store/types';

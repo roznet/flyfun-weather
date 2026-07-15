@@ -243,6 +243,24 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.fetchPireps(flightId: flightId)
     }
 
+    // Debrief + digest feedback are always online (post-flight, on-the-ground
+    // actions — not part of the offline briefing bundle).
+    func fetchDebrief(flightId: String) async throws -> DebriefResponse {
+        try await online.fetchDebrief(flightId: flightId)
+    }
+
+    func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse {
+        try await online.upsertDebrief(flightId: flightId, request: request)
+    }
+
+    func deleteDebrief(flightId: String) async throws {
+        try await online.deleteDebrief(flightId: flightId)
+    }
+
+    func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {
+        try await online.submitDigestFeedback(request)
+    }
+
     // MARK: - Cache-aware data endpoints
 
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {

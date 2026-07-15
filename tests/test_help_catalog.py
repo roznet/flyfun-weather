@@ -71,6 +71,37 @@ class TestPayloadBuilding:
         assert "wind_speed_kt" in maps["scales"]["bands"]
         assert maps["metrics"]["flight_category"]["label"] == "Category"
 
+    def test_payload_carries_the_debrief_taxonomy(self):
+        # The debrief taxonomy is served here so iOS renders the debrief form
+        # from the same vocabulary the web bundle imports at build time.
+        payload = json.loads(help_module._build_payload("en")[0])
+        debrief = payload["debrief"]
+        # Decisions in display order, Flown first.
+        assert [d["id"] for d in debrief["decisions"]] == ["flown", "cancelled", "monitoring"]
+        # Every ConditionTag present; OPS is not an outcome category, IMC is.
+        tags = {t["id"]: t for t in debrief["tags"]}
+        assert set(tags) == {"IMC", "ICE", "WIND", "TS", "TURB", "FRZ", "VIS", "OPS"}
+        assert tags["OPS"]["outcome_category"] is False
+        assert tags["ICE"]["outcome_category"] is True
+        assert tags["ICE"]["label"] == "Icing"
+        assert [v["id"] for v in debrief["outcome_values"]] == ["consistent", "better", "worse"]
+        assert debrief["advisory_tag_map"]["convective"] == "TS"
+        assert debrief["note_max_length"] == 300
+
+    def test_debrief_taxonomy_folded_into_version(self):
+        # A taxonomy edit must re-validate the ETag (it's part of the hash).
+        import weatherbrief.debriefs.taxonomy as tax
+
+        _, v1 = help_module._build_payload("en")
+        original = tax.TAG_LABELS[tax.ConditionTag.ICE]
+        tax.TAG_LABELS[tax.ConditionTag.ICE] = "Rime & clear ice"
+        try:
+            help_module._payload_cache.clear()
+            _, v2 = help_module._build_payload("en")
+        finally:
+            tax.TAG_LABELS[tax.ConditionTag.ICE] = original
+        assert v1 != v2
+
     def test_version_is_stable(self):
         _, v1 = help_module._build_payload("en")
         help_module._payload_cache.clear()
@@ -125,6 +156,8 @@ class TestEndpoint:
         assert data["version"]
         assert data["metrics"]["cape_surface_jkg"]["name"] == "CAPE"
         assert any(a["id"] == "convective" for a in data["advisories"])
+        # Debrief taxonomy rides in the same payload.
+        assert [d["id"] for d in data["debrief"]["decisions"]] == ["flown", "cancelled", "monitoring"]
         # ETag wraps the version exactly.
         assert resp.headers["ETag"] == f'"{data["version"]}"'
 

@@ -7,12 +7,16 @@ import SwiftUI
 /// packs — weather alternates. A sticky scroll-spy bar jumps between sections.
 struct AdvisoryTabView: View {
     let viewModel: BriefingViewModel
+    @Environment(AppState.self) private var appState
+    @State private var showingDebriefSheet = false
 
     var body: some View {
         ScrollSpyScroll(sections: spySections) {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 heroSection
                     .spyAnchor("hero")
+                digestFeedbackSection
+                debriefSection
                 advisoriesSection
                     .spyAnchor("advisories")
                 AirportConditionsView(viewModel: viewModel)
@@ -32,6 +36,65 @@ struct AdvisoryTabView: View {
             .padding(.vertical, Theme.cardPadding)
         }
         .background(Theme.bg)
+        .sheet(isPresented: $showingDebriefSheet) {
+            if let repo = appState.repository {
+                DebriefFormView(
+                    viewModel: DebriefViewModel(
+                        flight: flightForDebrief,
+                        taxonomy: appState.helpCatalog.debriefTaxonomy,
+                        flaggedTagIds: flaggedTagIds,
+                        repository: repo
+                    ),
+                    onFinished: { viewModel.setDebrief($0) }
+                )
+            }
+        }
+    }
+
+    /// The flight with the freshest known debrief folded in, so re-opening the
+    /// sheet after a save seeds from the just-saved debrief (the immutable
+    /// `viewModel.flight` still carries the list-load value).
+    private var flightForDebrief: FlightResponse {
+        var f = viewModel.flight
+        f.debrief = viewModel.debrief
+        return f
+    }
+
+    // MARK: Digest feedback (👍/👎) — below the hero, shown once a digest loads
+
+    @ViewBuilder
+    private var digestFeedbackSection: some View {
+        if hasDigest, let timestamp = viewModel.pack?.fetchTimestamp {
+            DigestFeedbackView(flightId: viewModel.flight.id, packTimestamp: timestamp)
+        }
+    }
+
+    private var hasDigest: Bool {
+        if case .loaded = viewModel.digestState { return true }
+        return false
+    }
+
+    // MARK: Debrief — post-flight judgement (past owned flights only)
+
+    /// The pilot's debrief card: an "Add debrief" prompt or a read-only summary
+    /// with "Edit". Only for owned flights that have already ended — matches the
+    /// web flight-detail placement (a section under the assessment).
+    @ViewBuilder
+    private var debriefSection: some View {
+        if viewModel.flight.isPast && viewModel.flight.isEditable {
+            DebriefCard(debrief: viewModel.debrief) {
+                showingDebriefSheet = true
+            }
+            .padding(.horizontal, Theme.cardPadding)
+        }
+    }
+
+    /// Advisory categories flagged AMBER/RED on the loaded briefing, mapped to
+    /// debrief tags — the flown-form outcome rows. Empty until advisories load.
+    private var flaggedTagIds: [String] {
+        guard case .loaded(let response) = viewModel.advisoriesState else { return [] }
+        let pairs = response.advisories.map { (id: $0.advisoryId, status: $0.aggregateStatus) }
+        return appState.helpCatalog.debriefTaxonomy.flaggedTagIds(fromAdvisories: pairs)
     }
 
     // MARK: Scroll-spy sections (only those present)
