@@ -47,6 +47,11 @@ final class ForecastMapViewModel {
 
     /// Current slot's payload (nil until first load).
     private(set) var payload: ForecastMapResponse?
+    /// Bumped on every payload assignment. The map rebuilds its annotations when
+    /// this changes (NOT on the day/hour string), so the nil→populated transition
+    /// on cold open and every slot swap both repopulate markers; a metric/model
+    /// switch leaves it unchanged and is a pure recolour.
+    private(set) var payloadRevision = 0
     private(set) var isLoading = false
     private(set) var loadError: String?
     /// True once the grid + first payload have loaded (drives the placeholder).
@@ -71,9 +76,19 @@ final class ForecastMapViewModel {
     private var pendingOpenIcao: String?
     /// Suppresses cold-open centring when a deep link already set the view.
     private var hasExplicitLocation = false
+    /// Set once the user pans/zooms the map, so a late-resolving cold-open target
+    /// never yanks the camera out from under them.
+    private var userDidInteract = false
+    /// Slots with a fetch in flight, so a `selectHour` and a prefetch racing on the
+    /// same (day, hour) don't both hit the network.
+    private var inFlight: Set<SlotKey> = []
     private var loadTask: Task<Void, Never>?
 
-    init(repository: any BriefingRepository, deepLink: DeepLink? = nil) {
+    /// `deepLink` is the parsed `/maps.html?fc.*` share state (`MapDeepLink`), or
+    /// nil for a plain "open the map" (toolbar button). It's applied once at init;
+    /// a *new* inbound deep link re-creates the view (`.id` on the container) so a
+    /// re-entrant link isn't dropped.
+    init(repository: any BriefingRepository, deepLink: MapDeepLink? = nil) {
         self.repository = repository
         if let deepLink {
             hasExplicitLocation = true
@@ -83,15 +98,6 @@ final class ForecastMapViewModel {
             if let mt = deepLink.metric { metric = mt }
             pendingOpenIcao = deepLink.airport
         }
-    }
-
-    /// Deep-link state parsed from a `/maps.html?...` universal link (`fc.*`).
-    struct DeepLink: Equatable, Sendable {
-        var day: Int?
-        var hour: Int?
-        var model: String?
-        var metric: String?
-        var airport: String?
     }
 
     // MARK: - Loading
@@ -126,9 +132,10 @@ final class ForecastMapViewModel {
         didLoadOnce = true
         isLoading = false
         loadTask = nil
-        // 5. Open a deep-linked airport once its data is present.
+        // 5. Open (and centre on) a deep-linked airport once its data is present,
+        //    so a shared link lands on that airport, not just its day/hour/metric.
         if let apt = pendingOpenIcao, payload?.airports.contains(where: { $0.icao == apt }) == true {
-            selectedIcao = apt
+            select(icao: apt, biasForSheet: false)
             pendingOpenIcao = nil
         }
         prefetchAdjacentHours()
@@ -180,20 +187,22 @@ final class ForecastMapViewModel {
         let key = SlotKey(day: day, hour: hour)
         if let cached = slots[key] {
             touchLRU(key)
-            payload = cached
+            setPayload(cached)
             prefetchAdjacentHours()
             return
         }
+        guard !inFlight.contains(key) else { return }  // a prefetch already owns it
+        inFlight.insert(key)
+        defer { inFlight.remove(key) }
         isLoading = true
         loadError = nil
         do {
             let resp = try await repository.forecastMap(day: day, hour: hour)
-            // A late-arriving fetch for a slot the user already scrubbed past must
-            // not clobber the current view.
+            // `store` publishes the payload iff this slot is still the selected one,
+            // so a late fetch for a scrubbed-past slot doesn't clobber the view, and
+            // an in-flight *prefetch* the user then selects still shows (loadSlot
+            // may have bailed on the in-flight guard above — store is the one seam).
             store(resp, for: key)
-            if selectedDay == day, selectedHour == hour {
-                payload = resp
-            }
         } catch let error as APIError where error.isCancellation {
             // benign
         } catch {
@@ -213,9 +222,11 @@ final class ForecastMapViewModel {
         guard let idx = hrs.firstIndex(of: selectedHour) else { return }
         for neighbour in [idx - 1, idx + 1] where hrs.indices.contains(neighbour) {
             let key = SlotKey(day: selectedDay, hour: hrs[neighbour])
-            guard slots[key] == nil else { continue }
+            guard slots[key] == nil, !inFlight.contains(key) else { continue }
+            inFlight.insert(key)
             Task { [weak self] in
                 guard let self else { return }
+                defer { self.inFlight.remove(key) }
                 if let resp = try? await self.repository.forecastMap(day: key.day, hour: key.hour) {
                     self.store(resp, for: key)
                 }
@@ -303,8 +314,11 @@ final class ForecastMapViewModel {
         applyColdOpenIfPossible()
     }
 
+    /// The user panned/zoomed — freeze cold-open so it can't recentre later.
+    func markUserInteracted() { userDidInteract = true }
+
     private func applyColdOpenIfPossible() {
-        guard !hasExplicitLocation, let icao = coldOpenIcao,
+        guard !hasExplicitLocation, !userDidInteract, let icao = coldOpenIcao,
               let apt = payload?.airports.first(where: { $0.icao == icao }) else { return }
         initialRegion = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: apt.lat, longitude: apt.lon),
@@ -315,16 +329,33 @@ final class ForecastMapViewModel {
         coldOpenIcao = nil
     }
 
+    /// Publish a payload and bump the revision so the map rebuilds its markers.
+    private func setPayload(_ resp: ForecastMapResponse) {
+        payload = resp
+        payloadRevision &+= 1
+    }
+
     // MARK: - LRU
 
     private func store(_ resp: ForecastMapResponse, for key: SlotKey) {
         slots[key] = resp
         touchLRU(key)
+        let current = SlotKey(day: selectedDay, hour: selectedHour)
+        // Publish only when this is the on-screen slot (covers both the user-driven
+        // loadSlot and a prefetch the user has since navigated onto).
+        if key == current { setPayload(resp) }
         // A payload may arrive before the cold-open target resolved.
         applyColdOpenIfPossible()
         while lruOrder.count > Self.lruCapacity {
             let evict = lruOrder.removeFirst()
-            if evict != SlotKey(day: selectedDay, hour: selectedHour) { slots[evict] = nil }
+            if evict == current {
+                // Never drop the on-screen slot — re-queue it as most-recent so it
+                // stays tracked (dropping it from lruOrder while keeping it in
+                // `slots` leaked the entry and pinned stale data).
+                lruOrder.append(evict)
+            } else {
+                slots[evict] = nil
+            }
         }
     }
 
@@ -347,12 +378,5 @@ final class ForecastMapViewModel {
             ForecastDay(day: d, date: "", available: true,
                         hours: [6, 9, 12, 15, 18], models: ["ecmwf", "gfs", "icon"])
         }
-    }
-}
-
-extension MapDeepLink {
-    /// Bridge the universal-link deep-link into the map view model's own type.
-    var asViewModelDeepLink: ForecastMapViewModel.DeepLink {
-        ForecastMapViewModel.DeepLink(day: day, hour: hour, model: model, metric: metric, airport: airport)
     }
 }

@@ -1,5 +1,6 @@
 import MapKit
 import SwiftUI
+import UIKit
 
 /// The forecast-map canvas: `MKMapView` via `UIViewRepresentable`, **no
 /// clustering**. 619 `MKAnnotationView`s (reused, `displayPriority = .required`
@@ -9,20 +10,25 @@ import SwiftUI
 /// dangerous), so every airport always shows (#420).
 ///
 /// A metric or model switch is a **pure recolour** of the existing views — no
-/// annotation rebuild, no refetch. Only a day/hour change (new `slotID`) rebuilds
-/// annotations.
+/// annotation rebuild, no refetch. Only a new payload (`payloadRevision` bump:
+/// cold-open first load or a day/hour swap) rebuilds annotations.
 struct ForecastMapKitView: UIViewRepresentable {
     let payload: ForecastMapResponse?
     let catalog: ForecastMapCatalog?
     let metric: String
     let mode: ForecastModelMode
     let selectedIcao: String?
-    /// Identity of the current (day, hour) slot — rebuild annotations when it changes.
-    let slotID: String
+    /// Revision of the current payload — annotations rebuild when this changes, so
+    /// the nil→populated transition on cold open and every slot swap both
+    /// repopulate. (Gating on a day/hour string missed the cold-open payload,
+    /// which arrives *after* the first `updateUIView` for the same slot.)
+    let payloadRevision: Int
     let initialRegion: MKCoordinateRegion
     let focusRequest: ForecastMapViewModel.FocusRequest?
     let onSelect: (String) -> Void
     let onFocusApplied: () -> Void
+    /// The user panned/zoomed the map (freezes cold-open recentring).
+    let onUserInteraction: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -50,7 +56,7 @@ struct ForecastMapKitView: UIViewRepresentable {
     final class Coordinator: NSObject {
         private var parent: ForecastMapKitView
         weak var map: MKMapView?
-        private var renderedSlotID: String?
+        private var renderedRevision: Int?
         private var appliedFocus: ForecastMapViewModel.FocusRequest?
         var currentDiameter: CGFloat = 14
 
@@ -62,8 +68,8 @@ struct ForecastMapKitView: UIViewRepresentable {
             self.parent = parent
             guard let map else { return }
 
-            if renderedSlotID != parent.slotID {
-                renderedSlotID = parent.slotID
+            if renderedRevision != parent.payloadRevision {
+                renderedRevision = parent.payloadRevision
                 rebuildAnnotations(on: map)
             }
             recolorVisible(on: map)
@@ -154,11 +160,21 @@ struct ForecastMapKitView: UIViewRepresentable {
 extension ForecastMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
     func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
         guard let a = annotation as? ForecastAnnotation else { return nil }  // user location → default
-        let view = mapView.dequeueReusableAnnotationView(
-            withIdentifier: AirportMarkerView.reuseID, for: a) as! AirportMarkerView
+        guard let view = mapView.dequeueReusableAnnotationView(
+            withIdentifier: AirportMarkerView.reuseID, for: a) as? AirportMarkerView else { return nil }
         view.annotation = a
         configure(view, airport: a.airport)
         return view
+    }
+
+    func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+        // Flag a user-initiated pan/zoom (an active gesture on the map's internal
+        // container) so a late-resolving cold-open recentre doesn't fight it. Our
+        // own `setRegion` moves carry no active gesture, so they don't trip this.
+        guard let recognizers = mapView.subviews.first?.gestureRecognizers else { return }
+        if recognizers.contains(where: { [.began, .changed, .ended].contains($0.state) }) {
+            parent.onUserInteraction()
+        }
     }
 
     func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {

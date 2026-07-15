@@ -222,6 +222,19 @@ struct ForecastMapTests {
         #expect(PendingNavigationStore.take() == .forecastMap(dl))
     }
 
+    /// The VM applies a `MapDeepLink` at init — the consumption end of the shared
+    /// `fc.*` state (the map's `.id` re-creates the VM for a re-entrant link).
+    @MainActor
+    @Test func viewModelAppliesDeepLinkAtInit() {
+        let vm = ForecastMapViewModel(
+            repository: MockBriefingRepository(),
+            deepLink: MapDeepLink(day: 3, hour: 15, model: "majority", metric: "crosswind_kt", airport: "LFMD"))
+        #expect(vm.selectedDay == 3)
+        #expect(vm.selectedHour == 15)
+        #expect(vm.mode == .majority)
+        #expect(vm.metric == "crosswind_kt")
+    }
+
     // MARK: - Fixtures
 
     private static func airport(consensusCategory: String) throws -> ForecastAirport {

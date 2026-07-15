@@ -73,6 +73,21 @@ struct ForecastAirport: Decodable, Sendable, Identifiable {
         case consensusMajority = "consensus_majority"
     }
 
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        icao = try c.decode(String.self, forKey: .icao)
+        lat = try c.decode(Double.self, forKey: .lat)
+        lon = try c.decode(Double.self, forKey: .lon)
+        approachType = try c.decodeIfPresent(String.self, forKey: .approachType)
+        models = try c.decodeIfPresent([String: ForecastModelEntry].self, forKey: .models) ?? [:]
+        consensus = try c.decode(ForecastConsensus.self, forKey: .consensus)
+        // Degrade gracefully if an (older/partial) payload omits the majority
+        // block — fall back to worst rather than failing the whole map, mirroring
+        // the web `getConsensus`. Today the versioned cache key guarantees it.
+        consensusMajority = try c.decodeIfPresent(ForecastConsensus.self, forKey: .consensusMajority) ?? consensus
+        observation = try c.decodeIfPresent(ForecastObservation.self, forKey: .observation)
+    }
+
     /// The consensus block for a mode; falls back to worst when majority absent
     /// (mirrors the web `getConsensus`).
     func consensus(mode: ForecastModelMode) -> ForecastConsensus {

@@ -24,7 +24,11 @@ struct FlightListView: View {
     /// Compact-width forecast-map cover (the app's first `fullScreenCover`) and
     /// the deep-link state it opens with.
     @State private var showMapCover = false
-    @State private var mapDeepLink: ForecastMapViewModel.DeepLink?
+    @State private var mapDeepLink: MapDeepLink?
+    /// Bumped on every `openForecastMap`, used as the map view's `.id` so a *new*
+    /// inbound deep link while the map is already open re-creates the view (the
+    /// deep link is applied only at `ForecastMapViewModel.init`).
+    @State private var mapOpenToken = 0
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
     // Guards the one authoritative-reload retry in `applyPendingNavigation` so a
@@ -213,6 +217,7 @@ struct FlightListView: View {
                 // fullScreenCover instead — see `openForecastMap`.
                 if let repo = appState.repository {
                     ForecastMapView(repository: repo, deepLink: mapDeepLink)
+                        .id(mapOpenToken)
                 }
             case nil:
                 ContentUnavailableView("Select a Flight", systemImage: "airplane",
@@ -224,6 +229,7 @@ struct FlightListView: View {
                 ForecastMapView(repository: repo, deepLink: mapDeepLink) {
                     showMapCover = false
                 }
+                .id(mapOpenToken)
             }
         }
         .task {
@@ -275,7 +281,7 @@ struct FlightListView: View {
             selection = nil
             appState.clearPendingNavigation()
         case .forecastMap(let deepLink):
-            openForecastMap(deepLink: deepLink.isEmpty ? nil : deepLink.asViewModelDeepLink)
+            openForecastMap(deepLink: deepLink.isEmpty ? nil : deepLink)
             appState.clearPendingNavigation()
         case .briefing(let flightId):
             guard let vm = viewModel, case .loaded(let flights) = vm.state else { return }
@@ -310,8 +316,11 @@ struct FlightListView: View {
     /// Open the forecast map: an iPad detail pane (regular width) or an iPhone
     /// `fullScreenCover` (compact) — retrofitting the sidebar later is expensive,
     /// so iPad is done from the start (#420).
-    private func openForecastMap(deepLink: ForecastMapViewModel.DeepLink?) {
+    private func openForecastMap(deepLink: MapDeepLink?) {
         mapDeepLink = deepLink
+        // Bump the id so a re-entrant deep link (map already open) re-creates the
+        // view/VM and actually applies the new day/hour/model/metric/airport.
+        mapOpenToken &+= 1
         if isCompact {
             showMapCover = true
         } else {
