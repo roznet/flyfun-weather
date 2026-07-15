@@ -5437,14 +5437,32 @@ label {
   white-space: nowrap;
 }
 
+/* Stroked map glyph (mirrors the iOS SF Symbol "map" in a soft circle) that
+   deep-links into the full forecast map — replaced the ambiguous 🗺️ emoji. */
 .map-forecast-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  color: var(--text-muted);
   text-decoration: none;
-  font-size: 1rem;
-  line-height: 1;
-  filter: grayscale(0.2);
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
-.map-forecast-open:hover { filter: none; }
+.map-forecast-open svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  display: block;
+}
+
+.map-forecast-open:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
 
 .map-control-select {
   padding: 0.15rem 0.4rem;
