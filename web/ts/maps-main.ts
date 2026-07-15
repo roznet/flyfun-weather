@@ -2,7 +2,7 @@
 
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
-  fetchForecastMap, fetchAvailableDays,
+  fetchForecastMap, fetchAvailableDays, FORECAST_INDIVIDUAL_MODELS,
   type ForecastMapResponse, type DayAvailability, type ForecastAirport,
 } from './adapters/maps-adapter';
 import { isConsensusMode, type ConsensusMode } from './visualization/weather-map-consensus';
@@ -120,7 +120,7 @@ const mapsUrlState = createUrlState({
   // map's per-airport model (panel always needs a real model, not a
   // consensus mode), so they're separate keys.
   'fc.apt':    { default: '' },
-  'fc.apModel':{ default: 'ecmwf', values: ['gfs', 'icon', 'ecmwf'] as readonly string[] },
+  'fc.apModel':{ default: 'ecmwf', values: FORECAST_INDIVIDUAL_MODELS },
   // Panel view: card (default) | cross | skewt. Lets a shared link land
   // straight on the cross-section; bare links open the summary card.
   'fc.apView': { default: 'card', values: ['card', 'cross', 'skewt'] as readonly string[] },
@@ -355,7 +355,7 @@ function forecastStartHour(): string {
 function panelDefaultModel(): string {
   // Map: forecast tab might be in consensus mode, panel needs a real
   // model. Pick the same model when one is selected, otherwise ECMWF.
-  return ['gfs', 'icon', 'ecmwf'].includes(fcModel) ? fcModel : 'ecmwf';
+  return FORECAST_INDIVIDUAL_MODELS.includes(fcModel) ? fcModel : 'ecmwf';
 }
 
 /** Consensus column for the summary card: mirror the map's mode when it's a

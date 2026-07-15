@@ -209,6 +209,13 @@ let availableDaysPending = false;
 interface ForecastOverlayCache { key: string; data: ForecastMapResponse | null; }
 let forecastOverlayCache: ForecastOverlayCache | null = null;
 
+// After a fetch failure, back off instead of caching a permanent "gave up"
+// sentinel — so a transient network blip during load doesn't disable the
+// overlay for the rest of the session, but a persistent error doesn't hammer
+// the endpoint on every re-render (e.g. an altitude-slider drag).
+const FORECAST_RETRY_BACKOFF_MS = 30_000;
+let overlayRetryAt = 0;
+
 /** The overlay metric, validated against the served catalog. A persisted
  *  localStorage value that no longer matches a catalog metric (e.g. after a
  *  rename) resets to the default instead of indexing into `undefined` and
@@ -236,6 +243,8 @@ function forecastOverlayControls(state: BriefingState): MapForecastOverlayContro
     metric,
     timeLabel: data ? formatForecastTime(data.forecast_time) : undefined,
     fullMapUrl: forecastMapUrl(slot, state.selectedModel, metric),
+    modelSupported: slot.models.includes(state.selectedModel),
+    model: state.selectedModel,
   };
 }
 
@@ -258,13 +267,15 @@ function updateForecastOverlay(
   renderer.setForecastModel(state.selectedModel);
   renderer.setForecastMetric(overlayMetric(state.vizSettings.mapForecastMetric));
 
-  // Lazy-load the server's day/hour grid once; re-render when it lands.
+  // Lazy-load the server's day/hour grid once; re-render when it lands. On
+  // failure, back off rather than caching an empty "gave up" grid, so the
+  // overlay recovers on a later render instead of being dead until reload.
   if (!availableDaysCache) {
-    if (!availableDaysPending) {
+    if (!availableDaysPending && Date.now() >= overlayRetryAt) {
       availableDaysPending = true;
       fetchAvailableDays()
         .then((resp) => { availableDaysCache = resp.days; })
-        .catch(() => { availableDaysCache = []; })  // quietly unavailable; no refetch storm
+        .catch(() => { overlayRetryAt = Date.now() + FORECAST_RETRY_BACKOFF_MS; })
         .finally(() => { availableDaysPending = false; requestRerender(); });
     }
     renderer.setShowForecastOverlay(false);
@@ -295,6 +306,14 @@ function updateForecastOverlay(
     return;
   }
 
+  // Cache miss. Honour the failure backoff so a persistent error doesn't refetch
+  // on every re-render; the slice retries automatically once the window passes.
+  if (Date.now() < overlayRetryAt) {
+    renderer.setForecastData(null);
+    renderer.refreshForecastOverlay();
+    return;
+  }
+
   // New slice — clear any stale markers while the fetch is in flight, then draw.
   forecastOverlayCache = { key, data: null };
   renderer.setForecastData(null);
@@ -308,7 +327,10 @@ function updateForecastOverlay(
       patchForecastTimeLabel(formatForecastTime(resp.forecast_time));
     })
     .catch(() => {
-      if (forecastOverlayCache?.key === key) forecastOverlayCache = { key, data: null };
+      // Drop the in-flight marker (don't leave a permanent empty entry) and back
+      // off, so the slice is retried on a later render instead of stuck empty.
+      if (forecastOverlayCache?.key === key) forecastOverlayCache = null;
+      overlayRetryAt = Date.now() + FORECAST_RETRY_BACKOFF_MS;
     });
 }
 

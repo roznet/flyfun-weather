@@ -354,6 +354,13 @@ export interface MapForecastOverlayControls {
   timeLabel?: string;
   /** Deep-link to the full forecast map seeded with day/hour/model/metric. */
   fullMapUrl?: string;
+  /** The briefing's selected model has airport data for this day. When false the
+   *  map is empty because of the model, not the weather — the cluster shows an
+   *  explanatory note instead of the metric/time so a blank map never reads as
+   *  "all clear" (designs/forecast-page.md). */
+  modelSupported: boolean;
+  /** Selected model id, for the "no data" note. */
+  model: string;
 }
 
 export function renderVizControls(
@@ -661,26 +668,33 @@ export function renderMapControls(
   // Airport forecast overlay (#424), right-aligned. Rendered only when the
   // flight is within the forecast horizon (otherwise nothing to show).
   if (forecastOverlay?.available) {
-    const checked = forecastOverlay.visible ? ' checked' : '';
+    const fo = forecastOverlay;
+    const checked = fo.visible ? ' checked' : '';
     html += '<div class="map-forecast-controls">';
     html += '<label class="map-control-label viz-toggle">';
     html += `<input type="checkbox" id="map-forecast-toggle"${checked}>`;
     html += `<span class="viz-toggle-label">${t('viz.airports')}</span>`;
     html += '</label>';
-    const timeLabel = forecastOverlay.timeLabel ?? '…';
-    html += `<span class="map-forecast-time" id="map-forecast-time" title="${escapeHtml(t('viz.airports.timeHint'))}">${escapeHtml(timeLabel)}</span>`;
-    html += '<label class="map-control-label">';
-    html += `<span class="viz-toggle-label">${t('viz.airports.show')}</span>`;
-    html += '<select id="map-forecast-metric" class="map-control-select">';
-    for (const m of FORECAST_METRICS) {
-      const selected = m === forecastOverlay.metric ? ' selected' : '';
-      html += `<option value="${m}"${selected}>${escapeHtml(METRIC_LABEL[m])}</option>`;
+    if (fo.modelSupported) {
+      const timeLabel = fo.timeLabel ?? '…';
+      html += `<span class="map-forecast-time" id="map-forecast-time" title="${escapeHtml(t('viz.airports.timeHint'))}">${escapeHtml(timeLabel)}</span>`;
+      html += '<label class="map-control-label">';
+      html += `<span class="viz-toggle-label">${t('viz.airports.show')}</span>`;
+      html += '<select id="map-forecast-metric" class="map-control-select">';
+      for (const m of FORECAST_METRICS) {
+        const selected = m === fo.metric ? ' selected' : '';
+        html += `<option value="${m}"${selected}>${escapeHtml(METRIC_LABEL[m])}</option>`;
+      }
+      html += '</select>';
+      html += '</label>';
+    } else {
+      // Empty because the selected model has no airport data for this day, not
+      // because the weather is clear — say so (forecast-page.md).
+      html += `<span class="map-forecast-note">${escapeHtml(t('viz.airports.noModelData', { model: modelLabel(fo.model) }))}</span>`;
     }
-    html += '</select>';
-    html += '</label>';
-    if (forecastOverlay.fullMapUrl) {
+    if (fo.fullMapUrl) {
       const openLabel = escapeHtml(t('viz.airports.openMap'));
-      html += `<a class="map-forecast-open" id="map-forecast-open" href="${escapeHtml(forecastOverlay.fullMapUrl)}" target="_blank" rel="noopener" title="${openLabel}" aria-label="${openLabel}">🗺️</a>`;
+      html += `<a class="map-forecast-open" id="map-forecast-open" href="${escapeHtml(fo.fullMapUrl)}" target="_blank" rel="noopener" title="${openLabel}" aria-label="${openLabel}">🗺️</a>`;
     }
     html += '</div>';
   }
