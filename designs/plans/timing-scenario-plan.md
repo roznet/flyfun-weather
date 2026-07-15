@@ -300,6 +300,8 @@ TimeWindowScan {
      departure_shift, valid_times[],                   # a shift propagates per-point ETAs
      ecmwf_assessment,                                 # GREEN/AMBER/RED
      improves: [advisory_ids], worsens: [...],         # FULL-picture diff vs baseline
+     disposition: "improving" | "neutral" | "worse",   # #434 — every candidate kept + tagged
+     advisory_status: {adv_id: {model: status}},       # #434 — coverage-scoped per-model map
      confidence: "confirmed_in_window" | "ecmwf_only" | "confirmed",
      confirmed: TimeConfirmation | null                # filled on tap (or free in-window)
   } ]
@@ -445,8 +447,47 @@ user to the app rather than exposing half a workflow.
   `cost(check)` vs `cost(full scan) × skip_rate` — and keep whichever (if
   either) pays for itself.
 
+## Follow-up: persist all graded candidates + disposition (#434)
+
+The original scan graded every candidate on the full advisory set but only
+**persisted** improving windows (+ baseline + pinned alternate). Green-but-not-
+better and — the honesty gap — **worse (AMBER/RED) alternate hours** were computed
+and silently discarded, so the feature could *offer* a smoother day but never
+*show* that another day is worse (observed live on `egtf_big_lfat_lfqa-2026-07-18`:
+a prev-day scan that graded 07-17 midday convective-worse just went empty).
+
+**Decision — persist everything, cut at the display layer:**
+
+- `TimeCandidate` gains `disposition: "improving" | "neutral" | "worse"`
+  (orthogonal to `is_baseline` / `is_alternate`) — `worse` = any regression or
+  negative scan-class margin; `improving` = clears the margin with nothing
+  worsened; else `neutral`. `refused_times` (ungradable, no coverage) stays
+  distinct from `worse` (graded, but worse weather).
+- `TimeCandidate` gains `advisory_status: {advisory_id: {model: status}}` — a
+  **coverage-scoped per-model status map**. It carries exactly the models
+  actually graded: `{ecmwf: …}` for the ±day sweep, filling out to the full set
+  on an on-tap confirm — no schema change between provisional and confirmed.
+  Records GREEN too (unlike the RED/AMBER-only `assessment_reason`), so a client
+  reconstructs any advisory's per-model dot row at any candidate time without
+  re-grading. Full `per_model` detail (prose/ribbon/geometry, ~41 KB) stays
+  gated to the baseline manifest + confirm. Storage: ~550 B (sweep) to ~2.7 KB
+  (confirmed) per candidate; the 24-row grid stays well under ~70 KB/pack.
+- `run_time_scan` stops filtering: it appends **all** graded rows (free tier +
+  ECMWF-only tier) tagged with a computed disposition, ranked
+  improving→neutral→worse. `_MAX_IMPROVING_KEPT` is retired — persistence is
+  bounded by `_MAX_GRID`; the improving-only cut is now the client's job.
+- **Web** shows same-or-better (improving+neutral) + baseline/alternate by
+  default; a **"Show all"** toggle reveals `worse` rows (real chips) and refused
+  times (greyed, UNAVAILABLE chip). `advisory_status` mirrored on the DTO.
+- **iOS** mirrors the DTO fields in a separate PR (contract change), defaulting
+  the panel filter to improving+neutral so it doesn't suddenly show worse rows.
+
+Out of scope (unchanged): per-model per-advisory *detail* per candidate (too
+large; stays gated), and the confirm/rescan flow.
+
 ## References
 
+- Persist-all follow-up: #434 (`models/time_scan.py` `disposition`/`advisory_status`, `tasks/time_scan.py` unfiltered persistence, `tasks/advise.py::per_model_status_from_manifest`, web `renderTimeScenarios` show-all)
 - Mitigation framework + `MitigationKind.TIMING` (reserved): [advisories.md](../advisories.md) *Mitigations* section, #328/#330
 - Reuse machinery: `run_alt_from_pack` (`tasks/advise.py:704`), `AdvisoryCatalogEntry` (`models/advisories.py:144`, `altitude_dependent` `:153`), registry helper pattern (`analysis/advisories/registry.py:31`)
 - Enrichment windows: ECMWF ±3h (`fetch/grib/__init__.py:2071-2077`); GFS forward window (`grib_fetch.py:176`); ICON forward window (`icon_eu_fetch.py:361`); silent clamp (`models/analysis.py:329-342`); accumulated-field step-differencing (`grib/__init__.py:2067,2205`)
