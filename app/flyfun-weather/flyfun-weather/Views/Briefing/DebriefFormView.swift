@@ -206,10 +206,20 @@ struct DebriefFormView: View {
 /// does. Tapping opens `DebriefFormView`.
 struct DebriefCard: View {
     let debrief: DebriefResponse?
+    /// Whether the briefing's advisories have reached a terminal state. A *fresh*
+    /// debrief derives its flown-outcome rows from the flagged advisories, so
+    /// "Add" is gated until they load — otherwise a tap during the load window
+    /// would grade zero categories and submit an empty `outcomes` dict even
+    /// though the briefing had flagged some. Edits are unaffected (the stored
+    /// outcomes carry through regardless).
+    var advisoriesReady: Bool = true
     let onEdit: () -> Void
     @Environment(AppState.self) private var appState
 
     private var taxonomy: DebriefTaxonomy { appState.helpCatalog.debriefTaxonomy }
+
+    /// Only a fresh add needs advisories; an edit is always allowed.
+    private var addDisabled: Bool { debrief == nil && !advisoriesReady }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacingS) {
@@ -220,9 +230,14 @@ struct DebriefCard: View {
                 Spacer()
                 Button(debrief == nil ? "Add" : "Edit", action: onEdit)
                     .font(.subheadline.weight(.medium))
+                    .disabled(addDisabled)
             }
             if let debrief {
                 summary(debrief)
+            } else if addDisabled {
+                Label("Checking advisories…", systemImage: "clock")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textMuted)
             } else {
                 Text("How did this flight go? A quick debrief helps calibrate future forecasts.")
                     .font(.subheadline)
