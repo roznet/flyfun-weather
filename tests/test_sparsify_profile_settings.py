@@ -16,7 +16,7 @@ import copy
 
 from weatherbrief.analysis.advisories.engine_methods import (
     ENGINE_METHOD_DEFAULTS,
-    cloud_source_from_settings,
+    legacy_cloud_source,
 )
 from weatherbrief.analysis.advisories.profile_sparsify import (
     build_param_defaults,
@@ -44,13 +44,15 @@ def _resolve_effective(settings: dict, param_defaults) -> dict:
     for adv_id, defaults in catalog_by_adv.items():
         merged[adv_id] = {**defaults, **user_params.get(adv_id, {})}
 
-    # Engine axes: absence → default; legacy cloud_method honoured via the
-    # read-path fallback (still present this slice).
+    # Engine axes: absence → default. Fixtures still carry the pre-#410 fused
+    # ``cloud_method`` to exercise the sweep, so the "before" state is resolved
+    # the same way the sweep does — new key wins, else reduce the legacy form.
     return {
         "params": merged,
         "icing_method": settings.get("icing_method")
         or ENGINE_METHOD_DEFAULTS["icing_method"],
-        "cloud_source": cloud_source_from_settings(settings)
+        "cloud_source": settings.get("cloud_source")
+        or legacy_cloud_source(settings.get("cloud_method"))
         or ENGINE_METHOD_DEFAULTS["cloud_source"],
         "convective_method": settings.get("convective_method")
         or ENGINE_METHOD_DEFAULTS["convective_method"],

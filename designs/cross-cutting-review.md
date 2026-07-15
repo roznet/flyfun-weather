@@ -75,7 +75,7 @@ The icing formula underweights convective icing when SB-CAPE is low but elevated
 - DD cloud layers (default `cloud_layers`)
 - Ogimet-DD icing zones (default `icing_zones`)
 
-When a user selects `cloud_method="nwp"` + `icing_method="sfip_nwp"`, the altitude advisories still reflect DD clouds and Ogimet-DD icing — potentially showing different cloud boundaries and icing zones than what the user sees in other views.
+When a user selects `cloud_source="nwp"` + `icing_method="sfip_nwp"`, the altitude advisories still reflect DD clouds and Ogimet-DD icing — potentially showing different cloud boundaries and icing zones than what the user sees in other views.
 
 **Impact:** The descend-below-icing and climb-above-icing recommendations may reference different cloud/icing boundaries than the user's selected method shows. The vertical regime labels ("In cloud, icing MOD") could disagree with the cross-section visualization.
 
@@ -174,7 +174,7 @@ The `_is_near_cloud` wrappers in `icing.py` and `sfip.py` have been removed; all
 ## What's Working Well
 
 1. **Eager computation + lazy resolution** — All methods computed once, resolution is just a swap. Clean separation of concerns.
-2. **Cloud source independence** — Each icing method uses its natural cloud signal (DD attenuation for Ogimet-DD, NWP fraction for Ogimet-NWP, CLW for SFIP). The user's `cloud_method` choice correctly doesn't affect icing computation.
+2. **Cloud source independence** — Each icing method uses its natural cloud signal (DD attenuation for Ogimet-DD, NWP fraction for Ogimet-NWP, CLW for SFIP). The user's `cloud_source` choice correctly doesn't affect icing computation.
 3. **`_resolve_analyses` is non-mutating** — Uses `model_copy()`, original data preserved.
 4. **DD fallback in Ogimet-NWP** — When NWP diagnostics are absent, the DD proximity gate prevents false positives from bulk ICAO band percentages. Good defensive design.
 5. **Shared icing utilities** — `icing_common.py` centralizes cloud proximity, icing type classification, and zone grouping. All three methods use consistent type thresholds.

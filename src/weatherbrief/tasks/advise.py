@@ -72,9 +72,8 @@ def _resolve_analyses(
     never mutated.
 
     Cloud resolution (``cloud_source``, a bare ``"dd"`` / ``"nwp"`` grading
-    choice — the #410 split of the old fused ``cloud_method``; the legacy
-    ``<style>_<source>`` string is reduced to its source at the read boundary,
-    see ``engine_methods.cloud_source_from_settings``):
+    choice — the #410 split of the old fused ``cloud_method``, whose legacy
+    ``<style>_<source>`` form was swept off every profile by ``alembic 079``):
         ``"nwp"`` → use ``nwp_cloud_layers`` (fall back to DD source if None);
         ``"dd"`` / ``None`` keep the DD-derived base layers.
     Icing resolution (``icing_method``):

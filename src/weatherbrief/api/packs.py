@@ -1080,9 +1080,6 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     profile_name_for_digest = None
     profile_settings: dict = {}
     if db is not None:
-        from weatherbrief.analysis.advisories.engine_methods import (
-            cloud_source_from_settings,
-        )
         from weatherbrief.api.preferences import (
             load_autorouter_token,
             load_units_region,
@@ -1111,9 +1108,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
         auto_front_detection = profile_settings.get("auto_front_detection", False)
         compute_alternates = profile_settings.get("compute_alternates", True)
         icing_method = profile_settings.get("icing_method")
-        # #410: read the split ``cloud_source``, honouring a legacy fused
-        # ``cloud_method`` until the profile migration has run in prod.
-        cloud_source = cloud_source_from_settings(profile_settings)
+        cloud_source = profile_settings.get("cloud_source")
         convective_method = profile_settings.get("convective_method")
         flight_rules = profile_settings.get("flight_rules")  # "vfr_only" or "vfr_ifr"
         digest_guidance = profile_settings.get("digest_guidance")
@@ -3080,7 +3075,6 @@ def _load_advisory_profile(
     ``load_profile_settings`` silently degrades an unowned id to empty settings.
     """
     from weatherbrief.analysis.advisories import resolve_enabled_ids
-    from weatherbrief.analysis.advisories.engine_methods import cloud_source_from_settings
     from weatherbrief.api.preferences import load_user_locale
     from weatherbrief.api.profiles import load_profile_settings
     from weatherbrief.models import AdvisoryAggregation
@@ -3098,7 +3092,7 @@ def _load_advisory_profile(
 
     adv_models = profile_settings.get("advisory_models")
     icing_method = profile_settings.get("icing_method")
-    cloud_source = cloud_source_from_settings(profile_settings)
+    cloud_source = profile_settings.get("cloud_source")
     convective_method = profile_settings.get("convective_method")
     auto_front_detection = bool(profile_settings.get("auto_front_detection", False))
     if request is not None:
