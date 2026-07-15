@@ -609,6 +609,15 @@ export interface TimeCandidateDTO {
   improves: string[];
   worsens: string[];
   margin: number;
+  /** Disposition vs the like-coverage baseline (#434). The client shows
+   *  improving+neutral by default and reveals `worse` rows behind "show all".
+   *  Optional for old artifacts (pre-#434 packs default to neutral). */
+  disposition?: 'improving' | 'neutral' | 'worse';
+  /** Per-(advisory, model) status this grade produced —
+   *  {advisory_id: {model: STATUS}}. Coverage-scoped: ECMWF-only for the ±day
+   *  sweep, the full graded set after a confirm. Lets a client reconstruct any
+   *  advisory's per-model dot row without re-grading. */
+  advisory_status?: Record<string, Record<string, string>>;
   confidence: 'confirmed_in_window' | 'ecmwf_only' | 'confirmed';
   is_baseline: boolean;
   is_alternate: boolean;
