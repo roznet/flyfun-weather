@@ -203,6 +203,20 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.airportWeather(icao: icao, day: day, hour: hour)
     }
 
+    // Forecast map (#420) — all online-only; the map VM keeps its own in-memory
+    // (day, hour) LRU, so there's nothing for the disk cache to add here.
+    func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse {
+        try await online.forecastMap(day: day, hour: hour)
+    }
+
+    func forecastDays() async throws -> ForecastDaysResponse {
+        try await online.forecastDays()
+    }
+
+    func frequentAirports() async throws -> FrequentAirportsResponse {
+        try await online.frequentAirports()
+    }
+
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         await online.refreshStream(flightId: flightId, source: source)
     }

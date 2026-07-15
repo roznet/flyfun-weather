@@ -9,11 +9,28 @@ enum PendingNavigation: Equatable, Sendable {
     case flightList
     /// Open a specific flight's briefing by id.
     case briefing(flightId: String)
+    /// Open the forecast map, optionally in a shared `fc.*` state (#420). A map
+    /// link shared from desktop opens the phone on the same day/hour/metric/airport.
+    case forecastMap(MapDeepLink)
 
     /// The target flight id, when this navigation names one.
     var flightId: String? {
         if case .briefing(let id) = self { return id }
         return nil
+    }
+}
+
+/// Forecast-map deep-link state parsed from `/maps.html?fc.*`. All fields are
+/// optional — an unqualified `/maps.html` opens the map at its cold-open default.
+struct MapDeepLink: Equatable, Sendable {
+    var day: Int?
+    var hour: Int?
+    var model: String?
+    var metric: String?
+    var airport: String?
+
+    var isEmpty: Bool {
+        day == nil && hour == nil && model == nil && metric == nil && airport == nil
     }
 }
 
@@ -47,11 +64,12 @@ enum PendingNavigationStore {
         return decode(raw)
     }
 
-    // Compact string encoding (no Codable ceremony for two cases).
+    // Compact string encoding (no Codable ceremony for a few cases).
     private static func encode(_ nav: PendingNavigation) -> String {
         switch nav {
         case .flightList: "flightList"
         case .briefing(let id): "briefing:\(id)"
+        case .forecastMap(let dl): "forecastMap:" + encodeMap(dl)
         }
     }
 
@@ -61,6 +79,37 @@ enum PendingNavigationStore {
             let id = String(raw.dropFirst("briefing:".count))
             return id.isEmpty ? nil : .briefing(flightId: id)
         }
+        if raw.hasPrefix("forecastMap:") {
+            return .forecastMap(decodeMap(String(raw.dropFirst("forecastMap:".count))))
+        }
         return nil
+    }
+
+    private static func encodeMap(_ dl: MapDeepLink) -> String {
+        var parts: [String] = []
+        if let d = dl.day { parts.append("day=\(d)") }
+        if let h = dl.hour { parts.append("hour=\(h)") }
+        if let m = dl.model { parts.append("model=\(m)") }
+        if let mt = dl.metric { parts.append("metric=\(mt)") }
+        if let a = dl.airport { parts.append("apt=\(a)") }
+        return parts.joined(separator: "&")
+    }
+
+    private static func decodeMap(_ query: String) -> MapDeepLink {
+        var dl = MapDeepLink()
+        for pair in query.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2 else { continue }
+            let value = String(kv[1])
+            switch String(kv[0]) {
+            case "day": dl.day = Int(value)
+            case "hour": dl.hour = Int(value)
+            case "model": dl.model = value
+            case "metric": dl.metric = value
+            case "apt": dl.airport = value
+            default: break
+            }
+        }
+        return dl
     }
 }
