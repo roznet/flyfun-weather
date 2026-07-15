@@ -23,6 +23,15 @@ struct RouteMapView: View {
     /// drags don't re-run the full route-analysis mapping on every render.
     @State private var vizData: VizRouteData?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(AppState.self) private var appState
+
+    // Airport-forecast overlay (#428): the same per-airport markers the full
+    // forecast map draws, for the snapshot nearest the flight time.
+    /// Day grid + per-slot snapshot; created on appear from the repository.
+    @State private var overlayModel: RouteForecastOverlayModel?
+    /// Persisted overlay prefs (mirror the web localStorage keys). Default on.
+    @AppStorage("mapForecastOverlayVisible") private var forecastOverlayVisible = true
+    @AppStorage("mapForecastMetric") private var forecastMetricRaw = "flight_category"
 
     /// iPad (regular width) drives colour and width from independent metrics.
     private var usesDualMetrics: Bool { horizontalSizeClass == .regular }
@@ -88,6 +97,18 @@ struct RouteMapView: View {
             applyFocusIntent()
         }
         .sheet(item: $selectedWaypoint) { waypointSheet($0) }
+        .task {
+            // Create the overlay model + lazy-load the server day grid once; when it
+            // lands, `overlaySlot` resolves and the slice task below fires.
+            if overlayModel == nil, let repo = appState.repository {
+                overlayModel = RouteForecastOverlayModel(repository: repo)
+            }
+            await overlayModel?.loadDaysIfNeeded()
+        }
+        .task(id: overlaySliceKey) {
+            guard forecastOverlayVisible, let slot = overlaySlot else { return }
+            await overlayModel?.ensureSlice(slot)
+        }
     }
 
     // MARK: Map
@@ -106,7 +127,13 @@ struct RouteMapView: View {
             aircraft: aircraftState,
             onSelectWaypoint: { icao in
                 if let wp = mapVM.waypoints.first(where: { $0.id == icao }) { selectWaypoint(wp) }
-            }
+            },
+            forecastAirports: overlayAirports,
+            forecastCatalog: overlayCatalog,
+            forecastMetric: overlayMetric,
+            forecastModel: viewModel.selectedModel,
+            showForecastOverlay: forecastOverlayVisible && overlayModelSupported,
+            forecastRevision: overlayModel?.payloadRevision ?? 0
         )
         .ignoresSafeArea(edges: .bottom)
     }
@@ -128,6 +155,48 @@ struct RouteMapView: View {
         "\(colorMetricId)|\(usesDualMetrics ? widthMetricId : colorMetricId)|\(Int(effectiveAltitudeFt))|\(viewModel.selectedModel)|\(vizData?.points.count ?? 0)"
     }
 
+    // MARK: Airport-forecast overlay (#428)
+
+    /// Served colour/legend catalog (bundled fallback until the first sync).
+    private var overlayCatalog: ForecastMapCatalog? { appState.helpCatalog.mapsCatalog }
+
+    /// The overlay slot for this flight, or nil when the grid hasn't loaded or the
+    /// flight is outside the server-advertised D-0..D-6 horizon (overlay not offered).
+    private var overlaySlot: RouteForecastSlot? {
+        overlayModel?.slot(departureTime: viewModel.flight.departureTime)
+    }
+
+    /// The overlay metric, validated against the served catalog — a stale persisted
+    /// id falls back to flight_category rather than colouring nothing.
+    private var overlayMetric: String {
+        guard let catalog = overlayCatalog, catalog.metrics[forecastMetricRaw] != nil else { return "flight_category" }
+        return forecastMetricRaw
+    }
+
+    /// The briefing's selected model has airport data for this day. When false the
+    /// overlay is empty because of the model, not the weather — the controls show a
+    /// note instead of the metric/time so a blank map never reads as "all clear".
+    private var overlayModelSupported: Bool {
+        guard let slot = overlaySlot else { return false }
+        return slot.models.contains(viewModel.selectedModel)
+    }
+
+    /// Airports to draw — only within the horizon, toggled on, and with model data;
+    /// otherwise empty (hidden), never muted-grey.
+    private var overlayAirports: [ForecastAirport] {
+        guard forecastOverlayVisible, overlayModelSupported, let slot = overlaySlot,
+              let airports = overlayModel?.airports(for: slot) else { return [] }
+        return airports
+    }
+
+    /// `.task(id:)` key for lazily fetching the slice: changes when the slot first
+    /// resolves (grid lands) or the toggle flips on. Metric/model changes don't
+    /// refetch (the payload holds every model — a pure recolour).
+    private var overlaySliceKey: String {
+        guard forecastOverlayVisible, let slot = overlaySlot else { return "off" }
+        return slot.key
+    }
+
     // MARK: Controls (metric picker(s) · legend · altitude slider)
 
     private var controls: some View {
@@ -140,6 +209,9 @@ struct RouteMapView: View {
                 Spacer()
             }
 
+            // Airport-forecast overlay controls — only within the forecast horizon.
+            if overlaySlot != nil { forecastOverlayControls }
+
             if let colorMetric {
                 legend(colorMetric)
                 if needsAltitude { altitudeSlider }
@@ -147,6 +219,91 @@ struct RouteMapView: View {
             Spacer()
         }
         .padding(Theme.spacingM)
+    }
+
+    /// Airport-forecast overlay controls (#428): toggle · metric picker + valid-time
+    /// label (or a "no model data" note) · open-full-forecast-map deep link.
+    private var forecastOverlayControls: some View {
+        HStack(spacing: Theme.spacingS) {
+            Button {
+                forecastOverlayVisible.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: forecastOverlayVisible ? "checkmark.circle.fill" : "circle")
+                    Text("Airports")
+                }
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            if forecastOverlayVisible {
+                if overlayModelSupported {
+                    overlayMetricMenu
+                    let timeLabel = overlayModel?.forecastTimeLabel ?? ""
+                    Text(timeLabel.isEmpty ? "…" : timeLabel)
+                        .font(.tabularData(.caption2)).foregroundStyle(Theme.textMuted)
+                } else {
+                    // Empty because the selected model has no airport data for this
+                    // day, not because the weather is clear — say so.
+                    Text("No \(viewModel.selectedModel.uppercased()) data")
+                        .font(.caption2).italic().foregroundStyle(Theme.textMuted)
+                }
+            }
+
+            Spacer()
+
+            Button { openFullForecastMap() } label: {
+                Image(systemName: "map")
+                    .font(.caption.weight(.medium))
+                    .padding(8)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("Open full forecast map")
+        }
+    }
+
+    /// Overlay metric picker — reuses the forecast map's "question" sections,
+    /// filtered to metrics the served catalog defines. Independent of the
+    /// route-segment colour metric.
+    private var overlayMetricMenu: some View {
+        Menu {
+            ForEach(ForecastMapView.metricSections, id: \.title) { section in
+                Section(section.title) {
+                    ForEach(section.items, id: \.metric) { item in
+                        if overlayCatalog?.metrics[item.metric] != nil {
+                            Button {
+                                forecastMetricRaw = item.metric
+                            } label: {
+                                if item.metric == overlayMetric {
+                                    Label(item.label, systemImage: "checkmark")
+                                } else {
+                                    Text(item.label)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "cloud.sun")
+                Text(overlayCatalog?.label(metric: overlayMetric) ?? "Metric")
+                Image(systemName: "chevron.down").font(.caption2)
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+
+    /// Deep-link into the full forecast map seeded with this slot/model/metric,
+    /// via the existing `PendingNavigation.forecastMap` seam.
+    private func openFullForecastMap() {
+        guard let slot = overlaySlot else { return }
+        let link = RouteForecastOverlay.deepLink(slot: slot, model: viewModel.selectedModel, metric: overlayMetric)
+        appState.pendingNavigation = .forecastMap(link)
     }
 
     private func metricMenu(title: String, systemImage: String, selection: Binding<String>) -> some View {
