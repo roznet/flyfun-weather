@@ -8,6 +8,9 @@ import { isDarkTheme } from '../interaction-utils';
 import { frontColor, frontKindLabel, frontTooltip, frontOfftrackTooltip, FRONT_INTENSITY_WEIGHT } from '../front-style';
 import type { HewsonFront } from '../../adapters/hewson-map-adapter';
 import type { FrontKind } from '../../types/fronts';
+import type { ForecastMapResponse } from '../../adapters/maps-adapter';
+import { getForecastColor, type ForecastMetric } from '../weather-map-format';
+import { getForecastTooltip, forecastLegend } from '../weather-map';
 
 /** A front-axis polyline tagged with the pressure level it was extracted at, so
  *  the map can draw a model's boundaries across all stored levels (a low warm
@@ -43,7 +46,10 @@ export class RouteMapRenderer {
   private segmentGroup: L.LayerGroup | null = null;
   private waypointGroup: L.LayerGroup | null = null;
   private frontsGroup: L.LayerGroup | null = null;
+  private airportForecastGroup: L.LayerGroup | null = null;
   private highlightMarker: L.CircleMarker | null = null;
+  private forecastLegendEl: HTMLElement | null = null;
+  private forecastZoomHandler: (() => void) | null = null;
 
   private data: VizRouteData | null = null;
   private colorMetric: MapMetric | null = null;
@@ -51,6 +57,13 @@ export class RouteMapRenderer {
   private altitudeFt = 0;
   private showFronts = false;
   private frontLines: MapFrontLine[] | null = null;
+  // Airport forecast overlay (#424): per-airport markers for the snapshot time
+  // nearest the flight, coloured by the same served catalog as the full
+  // forecast map. Data holds every model; switching model/metric is a recolour.
+  private showForecastOverlay = false;
+  private forecastData: ForecastMapResponse | null = null;
+  private forecastMetric: ForecastMetric = 'flight_category';
+  private forecastModel = 'ecmwf';
   private selectedPointIndex = -1;
   private initialized = false;
   private currentTileTheme: 'light' | 'dark' = 'light';
@@ -94,6 +107,35 @@ export class RouteMapRenderer {
     this.renderFronts();
   }
 
+  /** Toggle the airport forecast overlay (#424). */
+  setShowForecastOverlay(show: boolean): void {
+    this.showForecastOverlay = show;
+  }
+
+  /** The forecast-map snapshot for the flight time (all models per airport),
+   *  fetched async by briefing-main. `null` clears it. Call
+   *  `refreshForecastOverlay()` after to redraw. */
+  setForecastData(data: ForecastMapResponse | null): void {
+    this.forecastData = data;
+  }
+
+  /** Which forecast metric colours the overlay markers. Recolour is a redraw. */
+  setForecastMetric(metric: ForecastMetric): void {
+    this.forecastMetric = metric;
+  }
+
+  /** Individual model (gfs/icon/ecmwf) the overlay reads — mirrors the
+   *  briefing's model selector. Consensus modes are not offered here (they
+   *  live on the full forecast map). */
+  setForecastModel(model: string): void {
+    this.forecastModel = model;
+  }
+
+  /** Redraw just the airport overlay layer + its legend, without a full render. */
+  refreshForecastOverlay(): void {
+    this.renderForecastOverlay();
+  }
+
   setSelectedPointIndex(index: number): void {
     this.selectedPointIndex = index;
     this.updateHighlight();
@@ -104,6 +146,7 @@ export class RouteMapRenderer {
     if (this.container.clientWidth === 0 || this.container.clientHeight === 0) return;
 
     this.ensureMap();
+    this.renderForecastOverlay();
     this.renderSegments();
     this.renderFronts();
     this.renderWaypoints();
@@ -155,14 +198,17 @@ export class RouteMapRenderer {
   }
 
   destroy(): void {
+    if (this.forecastLegendEl) { this.forecastLegendEl.remove(); this.forecastLegendEl = null; }
     if (this.map) {
       this.map.remove();
       this.map = null;
     }
     this.segmentGroup = null;
     this.frontsGroup = null;
+    this.airportForecastGroup = null;
     this.waypointGroup = null;
     this.highlightMarker = null;
+    this.forecastZoomHandler = null;
     this.initialized = false;
   }
 
@@ -188,6 +234,9 @@ export class RouteMapRenderer {
       this.updateTiles(e.detail === 'dark');
     }) as EventListener);
 
+    // Airport forecast overlay sits at the bottom of the stack so the route
+    // segments, fronts and waypoints always draw on top of the airport dots.
+    this.airportForecastGroup = L.layerGroup().addTo(this.map);
     this.segmentGroup = L.layerGroup().addTo(this.map);
     this.frontsGroup = L.layerGroup().addTo(this.map);
     this.waypointGroup = L.layerGroup().addTo(this.map);
@@ -326,6 +375,98 @@ export class RouteMapRenderer {
       );
       this.frontsGroup.addLayer(marker);
     }
+  }
+
+  /** Airport forecast overlay (#424): one circle marker per watchlist airport
+   *  in the snapshot, coloured by the selected metric for the briefing's
+   *  selected model. Reuses the forecast map's served colour catalog, tooltip
+   *  and legend so the two views can never disagree. All ~620 airports are
+   *  drawn — zoom does the spatial filtering. */
+  private renderForecastOverlay(): void {
+    if (!this.airportForecastGroup || !this.map) return;
+    this.airportForecastGroup.clearLayers();
+
+    if (!this.showForecastOverlay || !this.forecastData) {
+      this.removeForecastLegend();
+      this.attachForecastZoomHandler();
+      return;
+    }
+
+    const r = this.forecastMarkerRadius();
+    const metric = this.forecastMetric;
+    const model = this.forecastModel;
+    for (const apt of this.forecastData.airports) {
+      const color = getForecastColor(apt, metric, model);
+      const marker = L.circleMarker([apt.lat, apt.lon], {
+        radius: r,
+        fillColor: color,
+        fillOpacity: 0.85,
+        color,
+        weight: 1,
+        opacity: 1,
+      });
+      marker.bindTooltip(getForecastTooltip(apt, model, metric), { className: 'map-tooltip' });
+      this.airportForecastGroup.addLayer(marker);
+    }
+
+    this.attachForecastZoomHandler();
+    this.renderForecastLegend();
+  }
+
+  /** Marker radius scaled to zoom for legibility — one step smaller than the
+   *  full forecast map's so the airport dots stay secondary to the route. */
+  private forecastMarkerRadius(): number {
+    if (!this.map) return 5;
+    const z = this.map.getZoom();
+    if (z <= 4) return 4;
+    if (z <= 5) return 5;
+    if (z <= 6) return 6;
+    if (z <= 7) return 8;
+    return 10;
+  }
+
+  private attachForecastZoomHandler(): void {
+    if (!this.map) return;
+    if (this.forecastZoomHandler) {
+      this.map.off('zoomend', this.forecastZoomHandler);
+      this.forecastZoomHandler = null;
+    }
+    if (!this.showForecastOverlay) return;
+    this.forecastZoomHandler = () => {
+      const nr = this.forecastMarkerRadius();
+      this.airportForecastGroup?.eachLayer((layer) => {
+        if (layer instanceof L.CircleMarker) layer.setRadius(nr);
+      });
+    };
+    this.map.on('zoomend', this.forecastZoomHandler);
+  }
+
+  private removeForecastLegend(): void {
+    if (this.forecastLegendEl) { this.forecastLegendEl.remove(); this.forecastLegendEl = null; }
+  }
+
+  /** Small floating legend inside the map (top-right) — distinct from the
+   *  route-segment gradient legend that sits below the map, so the two don't
+   *  collide. Reuses the served catalog rows via `forecastLegend`. */
+  private renderForecastLegend(): void {
+    this.removeForecastLegend();
+    const legend = forecastLegend(this.forecastMetric);
+    const el = document.createElement('div');
+    el.className = 'wx-forecast-legend';
+    el.innerHTML = `
+      <div class="wx-forecast-legend-title">${legend.title}</div>
+      ${legend.items.map((i) => `
+        <div class="wx-forecast-legend-item">
+          <span class="wx-forecast-legend-dot" style="background:${i.color}"></span>
+          <span>${i.label}</span>
+        </div>
+      `).join('')}
+    `;
+    // Appended into the Leaflet container so it floats over the tiles; stop the
+    // map from panning when the user interacts with the box.
+    this.container.appendChild(el);
+    L.DomEvent.disableClickPropagation(el);
+    this.forecastLegendEl = el;
   }
 
   /** True if any vertex of the axis is within FRONT_CORRIDOR_KM of any route

@@ -16,6 +16,7 @@ import { renderFrontsInfo } from '../../helpers/fronts-info';
 import { modelLabel, escapeHtml } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
+import { FORECAST_METRICS, METRIC_LABEL } from '../weather-map-format';
 import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
 import { showThemePreview } from '../cross-section/theme-preview';
 import { t } from '../../i18n/i18n';
@@ -333,6 +334,26 @@ export interface MapControlCallbacks {
   onWidthMetricChange: (metricId: string) => void;
   /** Toggle the experimental Hewson front overlay (#196). */
   onFrontsToggle?: (visible: boolean) => void;
+  /** Toggle the airport forecast overlay (#424). */
+  onForecastOverlayToggle?: (visible: boolean) => void;
+  /** Change the metric the airport forecast overlay colours by (#424). */
+  onForecastMetricChange?: (metricId: string) => void;
+}
+
+/** Airport forecast overlay control state (#424). Present (and the cluster
+ *  rendered) only when the flight is within the forecast horizon; absent when
+ *  it is more than a week out. */
+export interface MapForecastOverlayControls {
+  /** Flight is within D-0..D-6 and has a snapshot to show. */
+  available: boolean;
+  /** User's show/hide preference. */
+  visible: boolean;
+  /** Active `FORECAST_METRICS` id. */
+  metric: string;
+  /** Short label for the snapshot valid-time (e.g. "Wed 12Z"); undefined while loading. */
+  timeLabel?: string;
+  /** Deep-link to the full forecast map seeded with day/hour/model/metric. */
+  fullMapUrl?: string;
 }
 
 export function renderVizControls(
@@ -600,6 +621,7 @@ export function renderMapControls(
   settings: VizSettings,
   callbacks: MapControlCallbacks,
   frontsAvailable = false,
+  forecastOverlay?: MapForecastOverlayControls,
 ): void {
   const colorOptions = getMapMetricOptions(false);
   const widthOptions = getMapMetricOptions(true);
@@ -636,9 +658,49 @@ export function renderMapControls(
     html += '</label>';
   }
 
+  // Airport forecast overlay (#424), right-aligned. Rendered only when the
+  // flight is within the forecast horizon (otherwise nothing to show).
+  if (forecastOverlay?.available) {
+    const checked = forecastOverlay.visible ? ' checked' : '';
+    html += '<div class="map-forecast-controls">';
+    html += '<label class="map-control-label viz-toggle">';
+    html += `<input type="checkbox" id="map-forecast-toggle"${checked}>`;
+    html += `<span class="viz-toggle-label">${t('viz.airports')}</span>`;
+    html += '</label>';
+    const timeLabel = forecastOverlay.timeLabel ?? '…';
+    html += `<span class="map-forecast-time" title="${escapeHtml(t('viz.airports.timeHint'))}">${escapeHtml(timeLabel)}</span>`;
+    html += '<label class="map-control-label">';
+    html += `<span class="viz-toggle-label">${t('viz.airports.show')}</span>`;
+    html += '<select id="map-forecast-metric" class="map-control-select">';
+    for (const m of FORECAST_METRICS) {
+      const selected = m === forecastOverlay.metric ? ' selected' : '';
+      html += `<option value="${m}"${selected}>${escapeHtml(METRIC_LABEL[m])}</option>`;
+    }
+    html += '</select>';
+    html += '</label>';
+    if (forecastOverlay.fullMapUrl) {
+      const openLabel = escapeHtml(t('viz.airports.openMap'));
+      html += `<a class="map-forecast-open" id="map-forecast-open" href="${escapeHtml(forecastOverlay.fullMapUrl)}" target="_blank" rel="noopener" title="${openLabel}" aria-label="${openLabel}">🗺️</a>`;
+    }
+    html += '</div>';
+  }
+
   html += '</div>';
 
   container.innerHTML = html;
+
+  const forecastToggle = container.querySelector('#map-forecast-toggle') as HTMLInputElement | null;
+  if (forecastToggle) {
+    forecastToggle.addEventListener('change', () => {
+      callbacks.onForecastOverlayToggle?.(forecastToggle.checked);
+    });
+  }
+  const forecastMetricSelect = container.querySelector('#map-forecast-metric') as HTMLSelectElement | null;
+  if (forecastMetricSelect) {
+    forecastMetricSelect.addEventListener('change', () => {
+      callbacks.onForecastMetricChange?.(forecastMetricSelect.value);
+    });
+  }
 
   const frontsToggle = container.querySelector('#map-fronts-toggle') as HTMLInputElement | null;
   if (frontsToggle) {

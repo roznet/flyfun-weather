@@ -5318,7 +5318,48 @@ label {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   z-index: 0;
+  /* Positioning context for the floating airport-forecast legend (#424). */
+  position: relative;
 }
+
+/* Airport forecast overlay legend (#424): a small box floating over the map,
+   top-right (clear of the zoom control top-left and attribution bottom-right).
+   Distinct from `.map-legend`, which is the route-segment gradient below the map. */
+.wx-forecast-legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1000;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.7rem;
+  color: var(--text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  max-width: 44%;
+  pointer-events: auto;
+}
+
+.wx-forecast-legend-title { font-weight: 600; margin-bottom: 0.25rem; }
+
+.wx-forecast-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  line-height: 1.35;
+}
+
+.wx-forecast-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+/* Multi-line tooltip for the airport forecast markers on the briefing map. */
+.map-tooltip { font-size: 0.72rem; line-height: 1.35; }
 
 /* Layout toggle buttons */
 .viz-layout-toggle {
@@ -5370,6 +5411,30 @@ label {
   align-items: center;
   gap: 0.3rem;
 }
+
+/* Airport forecast overlay controls (#424), pushed to the right of the row. */
+.map-forecast-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.map-forecast-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.map-forecast-open {
+  text-decoration: none;
+  font-size: 1rem;
+  line-height: 1;
+  filter: grayscale(0.2);
+}
+
+.map-forecast-open:hover { filter: none; }
 
 .map-control-select {
   padding: 0.15rem 0.4rem;

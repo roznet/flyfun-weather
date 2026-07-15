@@ -58,6 +58,8 @@ function loadVizSettings(): VizSettings {
     compareBandMode: 'consensus-outline',
     cloudStyle: 'square',
     mapFrontsVisible: false,
+    mapForecastOverlayVisible: true,
+    mapForecastMetric: 'flight_category',
     activePreset: null,
     activeHighlightAdvisoryId: null,
   };
@@ -189,6 +191,8 @@ export interface BriefingState {
   setMapWidthMetric: (metricId: string) => void;
   setMapAltitude: (altitudeFt: number | null) => void;
   setMapFrontsVisible: (visible: boolean) => void;
+  setMapForecastOverlayVisible: (visible: boolean) => void;
+  setMapForecastMetric: (metricId: string) => void;
   setRouteGraphVisible: (visible: boolean) => void;
   setRouteGraphMetric: (axis: 'left' | 'right', metricId: string) => void;
   setCompareLayer: (layerId: string) => void;
@@ -1061,6 +1065,18 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
 
   setMapFrontsVisible: (visible: boolean) => {
     const updated = { ...get().vizSettings, mapFrontsVisible: visible };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setMapForecastOverlayVisible: (visible: boolean) => {
+    const updated = { ...get().vizSettings, mapForecastOverlayVisible: visible };
+    set({ vizSettings: updated });
+    saveVizSettings(updated);
+  },
+
+  setMapForecastMetric: (metricId: string) => {
+    const updated = { ...get().vizSettings, mapForecastMetric: metricId };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
