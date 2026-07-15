@@ -76,7 +76,7 @@ function compactCell(data: { [k: string]: any }, metric: ForecastMetric): string
       const v = data[metric];
       if (v == null) return '—';
       const gust = metric === 'crosswind_kt' ? data.gust_crosswind_kt : data.gust_headwind_kt;
-      const g = gust != null ? ` (${Math.round(gust)})` : '';
+      const g = gust != null ? `G${Math.round(gust)}` : '';
       return `${Math.round(v)}${g}`;
     }
     case 'cape_jkg':

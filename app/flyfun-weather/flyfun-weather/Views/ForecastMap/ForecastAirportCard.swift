@@ -278,11 +278,11 @@ struct ForecastAirportCard: View {
             return "\(dir)\(Int(s.rounded()))\(gust)"
         case "crosswind_kt":
             guard let v = data.numericField("crosswind_kt") else { return "—" }
-            let gust = data.numericField("gust_crosswind_kt").map { " (\(Int($0.rounded())))" } ?? ""
+            let gust = data.numericField("gust_crosswind_kt").map { "G\(Int($0.rounded()))" } ?? ""
             return "\(Int(v.rounded()))\(gust)"
         case "headwind_kt":
             guard let v = data.numericField("headwind_kt") else { return "—" }
-            let gust = data.numericField("gust_headwind_kt").map { " (\(Int($0.rounded())))" } ?? ""
+            let gust = data.numericField("gust_headwind_kt").map { "G\(Int($0.rounded()))" } ?? ""
             return "\(Int(v.rounded()))\(gust)"
         case "cape_jkg":
             guard let v = data.numericField("cape_jkg") else { return "—" }

@@ -276,7 +276,7 @@ export function formatMetricValue(data: { [key: string]: any }, metric: Forecast
       const v = data[metric];
       if (v == null) return '—';
       const gust = metric === 'crosswind_kt' ? data.gust_crosswind_kt : data.gust_headwind_kt;
-      const gustStr = gust != null ? ` (G${Math.round(gust)})` : '';
+      const gustStr = gust != null ? `G${Math.round(gust)}` : '';
       const rwyStr = data.best_runway_id ? ` RWY ${data.best_runway_id}` : '';
       return `${Math.round(v)}${gustStr} kt${rwyStr}`;
     }
