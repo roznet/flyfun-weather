@@ -61,6 +61,29 @@ struct RouteMapKitView: UIViewRepresentable {
     /// A waypoint marker was tapped (reports its ICAO).
     let onSelectWaypoint: (String) -> Void
 
+    // MARK: Airport-forecast overlay (#428)
+    //
+    // The per-airport forecast markers for the flight's nearest snapshot time,
+    // reusing the forecast map's `ForecastAnnotation` / `AirportMarkerView` and
+    // colour catalog so the two views can't disagree. Empty / hidden in commit 1.
+
+    /// Watchlist airports to draw (empty ⇒ nothing). Already filtered to the
+    /// current slot by `RouteMapView`; drawn only when `showForecastOverlay`.
+    let forecastAirports: [ForecastAirport]
+    /// Served colour/legend catalog; nil ⇒ overlay can't colour, so it's skipped.
+    let forecastCatalog: ForecastMapCatalog?
+    /// Active overlay metric (a `FORECAST_METRICS` id), independent of the
+    /// route-segment colour metric.
+    let forecastMetric: String
+    /// The briefing's selected individual model (gfs/icon/ecmwf) — the overlay
+    /// follows it, as on the web.
+    let forecastModel: String
+    /// User show/hide preference AND within-horizon+model-supported gating.
+    let showForecastOverlay: Bool
+    /// Bumped when the snapshot payload changes; markers rebuild on change. A
+    /// metric/model switch leaves it and is a pure recolour.
+    let forecastRevision: Int
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> MKMapView {
@@ -74,6 +97,9 @@ struct RouteMapKitView: UIViewRepresentable {
                      forAnnotationViewWithReuseIdentifier: RouteActiveMarkerView.reuseID)
         map.register(RouteAircraftMarkerView.self,
                      forAnnotationViewWithReuseIdentifier: RouteAircraftMarkerView.reuseID)
+        // Airport-forecast markers reuse the forecast map's view class (#428).
+        map.register(AirportMarkerView.self,
+                     forAnnotationViewWithReuseIdentifier: AirportMarkerView.reuseID)
         map.setRegion(initialRegion, animated: false)
         context.coordinator.map = map
         return map
@@ -95,12 +121,29 @@ struct RouteMapKitView: UIViewRepresentable {
         private var activeAnnotation: RouteActiveAnnotation?
         private var aircraftAnnotation: RouteAircraftAnnotation?
 
+        // Airport-forecast overlay state (#428).
+        private var renderedForecastRevision: Int?
+        private var appliedForecastColorKey: ForecastColorKey?
+        private var currentForecastDiameter: CGFloat = 12
+        /// Whether airport markers are currently on the map — so a re-show after
+        /// the model regained data rebuilds even when the payload is unchanged.
+        private var markersShown = false
+
+        /// The inputs the airport markers colour from — a recolour is only needed
+        /// when one of these changes (not on every unrelated re-render).
+        private struct ForecastColorKey: Equatable {
+            let metric: String
+            let model: String
+            let visible: Bool
+        }
+
         init(_ parent: RouteMapKitView) { self.parent = parent }
 
         func update(parent: RouteMapKitView) {
             self.parent = parent
             guard let map else { return }
             updateRoute(on: map)
+            updateForecastOverlay(on: map)
             updateWaypoints(on: map)
             updateActivePoint(on: map)
             updateAircraft(on: map)
@@ -178,6 +221,94 @@ struct RouteMapKitView: UIViewRepresentable {
                 map.addAnnotation(a)
             }
         }
+
+        // MARK: Airport-forecast overlay (#428)
+
+        private func updateForecastOverlay(on map: MKMapView) {
+            let wantMarkers = parent.showForecastOverlay && !parent.forecastAirports.isEmpty
+            let payloadChanged = renderedForecastRevision != parent.forecastRevision
+            renderedForecastRevision = parent.forecastRevision
+
+            // Tear down when not wanted (toggled off, or the selected model lost
+            // data for this day). Rebuild when wanted and either the payload
+            // changed (new slot) or the markers aren't currently on the map (first
+            // show, or re-show after the model regained data). Otherwise leave the
+            // ~620 annotations in place — a metric/model change is a pure recolour.
+            if !wantMarkers {
+                if markersShown {
+                    let existing = map.annotations.compactMap { $0 as? ForecastAnnotation }
+                    map.removeAnnotations(existing)
+                    markersShown = false
+                }
+                return
+            }
+            if payloadChanged || !markersShown {
+                let existing = map.annotations.compactMap { $0 as? ForecastAnnotation }
+                map.removeAnnotations(existing)
+                map.addAnnotations(parent.forecastAirports.map(ForecastAnnotation.init))
+                markersShown = true
+                appliedForecastColorKey = nil  // fresh markers must be coloured
+            }
+
+            currentForecastDiameter = forecastDiameter(for: map)
+            let colorKey = ForecastColorKey(metric: parent.forecastMetric,
+                                            model: parent.forecastModel, visible: true)
+            if colorKey != appliedForecastColorKey {
+                appliedForecastColorKey = colorKey
+                recolorForecast(on: map)
+            }
+        }
+
+        /// Resize the airport dots to a new zoom without recolouring (web parity).
+        func resizeForecastMarkers(on map: MKMapView) {
+            let d = forecastDiameter(for: map)
+            guard d != currentForecastDiameter else { return }
+            currentForecastDiameter = d
+            for annotation in map.annotations {
+                guard let a = annotation as? ForecastAnnotation,
+                      let v = map.view(for: a) as? AirportMarkerView else { continue }
+                v.resize(diameter: d)
+            }
+        }
+
+        private func recolorForecast(on map: MKMapView) {
+            let mode = ForecastModelMode.model(parent.forecastModel)
+            for annotation in map.annotations {
+                guard let a = annotation as? ForecastAnnotation,
+                      let view = map.view(for: a) as? AirportMarkerView else { continue }
+                configureForecast(view, airport: a.airport, mode: mode)
+            }
+        }
+
+        /// One airport marker: the metric fill for the briefing's selected model,
+        /// with a matching hairline border (no agreement ring — that's a consensus
+        /// concept and the briefing overlay is always an individual model).
+        func configureForecast(_ view: AirportMarkerView, airport: ForecastAirport, mode: ForecastModelMode) {
+            let fill = parent.forecastCatalog?.color(metric: parent.forecastMetric, airport: airport, mode: mode)
+                ?? ForecastMapCatalog.muted
+            // Non-interactive on the briefing map so an airport dot never swallows
+            // a tap meant for a waypoint (the full forecast map owns tap-to-card).
+            view.isEnabled = false
+            view.apply(fill: fill, border: fill, borderWidth: 1,
+                       diameter: currentForecastDiameter, bringToFront: false)
+        }
+
+        /// Marker diameter from zoom — one step smaller than the full forecast
+        /// map's so the airport dots stay secondary to the route (web parity).
+        func forecastDiameter(for map: MKMapView) -> CGFloat {
+            let span = map.region.span.longitudeDelta
+            guard span > 0 else { return 12 }
+            let zoom = log2(360 / span)
+            let radius: CGFloat
+            switch zoom {
+            case ..<4.5: radius = 4
+            case ..<5.5: radius = 5
+            case ..<6.5: radius = 6
+            case ..<7.5: radius = 8
+            default: radius = 10
+            }
+            return radius * 2
+        }
     }
 }
 
@@ -212,6 +343,13 @@ extension RouteMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
                 withIdentifier: RouteAircraftMarkerView.reuseID, for: aircraft)
             (view as? RouteAircraftMarkerView)?.apply(headingDeg: aircraft.headingDeg, opacity: aircraft.opacity)
             return view
+        case let apt as ForecastAnnotation:
+            let view = mapView.dequeueReusableAnnotationView(
+                withIdentifier: AirportMarkerView.reuseID, for: apt)
+            if let marker = view as? AirportMarkerView {
+                configureForecast(marker, airport: apt.airport, mode: .model(parent.forecastModel))
+            }
+            return view
         default:
             return nil
         }
@@ -220,9 +358,15 @@ extension RouteMapKitView.Coordinator: @preconcurrency MKMapViewDelegate {
     func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
         guard let wp = view.annotation as? RouteWaypointAnnotation else { return }
         // Drive selection from our callback, not MapKit's own selection state, so
-        // re-tapping the same waypoint always re-fires.
+        // re-tapping the same waypoint always re-fires. Airport-forecast dots are
+        // non-interactive here (the full forecast map owns tap-to-card).
         mapView.deselectAnnotation(wp, animated: false)
         parent.onSelectWaypoint(wp.icao)
+    }
+
+    func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+        // Keep the airport dots legibly sized as the user zooms (web parity).
+        resizeForecastMarkers(on: mapView)
     }
 }
 
