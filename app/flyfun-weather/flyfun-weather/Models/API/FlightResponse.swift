@@ -60,11 +60,17 @@ struct FlightResponse: Codable, Identifiable, Sendable {
         FlightNotifyOverride(rawValue: notifyOverride ?? "default") ?? .default
     }
 
-    /// Logbook section folded to an enum. Absent/unknown → derived from
-    /// `departureDate` so a legacy server still groups sensibly.
+    /// Logbook section folded to an enum. On a legacy server that omits
+    /// `section`, mirror `FlightListView.groupedFlights`' date bucketing exactly
+    /// (Recent = departed within 7 days) so a card's Recent-debrief nudge matches
+    /// the list's Recent group instead of never appearing.
     var flightSection: FlightSection {
         if let section, let parsed = FlightSection(rawValue: section) { return parsed }
-        return isPast ? .past : .future
+        guard let dep = departureDate else { return .future }
+        let now = Date()
+        if dep >= now { return .future }
+        if dep >= now.addingTimeInterval(-7 * 24 * 3600) { return .recent }
+        return .past
     }
 
     /// Whether this flight already has a stored debrief.

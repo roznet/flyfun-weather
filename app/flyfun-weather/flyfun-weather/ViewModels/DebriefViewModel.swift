@@ -25,8 +25,16 @@ final class DebriefViewModel {
     var note: String = ""
 
     /// The advisory categories flagged AMBER/RED on the open briefing, in
-    /// taxonomy order — the only outcome rows the flown form shows (matches web).
+    /// taxonomy order. Drives which outcome rows a *fresh* flown debrief shows.
     let flaggedTagIds: [String]
+
+    /// The outcome rows the flown form actually grades: the union of
+    /// `flaggedTagIds` and any category the stored debrief already recorded, in
+    /// taxonomy order. Using the union (not just `flaggedTagIds`) means editing an
+    /// existing flown debrief never drops a previously-graded category — even one
+    /// the briefing no longer flags, or when advisories haven't loaded yet and
+    /// `flaggedTagIds` is empty. Mirrors the web form's `initialState` union.
+    private(set) var outcomeTagIds: [String] = []
 
     var submitState: LoadingState<DebriefResponse> = .idle
     var errorMessage: String?
@@ -43,23 +51,26 @@ final class DebriefViewModel {
         self.repository = repository
 
         // Seed from an existing debrief (inlined on the flight) if present.
+        let existingOutcomes = flight.debrief?.outcomes ?? [:]
+        // Union the flagged categories with any the stored debrief already graded,
+        // in taxonomy order, so an edit can't silently drop a recorded outcome.
+        let union = Set(flaggedTagIds).union(existingOutcomes.keys)
+        self.outcomeTagIds = taxonomy.tags.map(\.id).filter { union.contains($0) }
+
         if let existing = flight.debrief {
             self.isEditing = true
             self.decision = existing.decision
             self.selectedReasons = Set(existing.reasons)
             self.note = existing.note ?? ""
-            // Start every flagged category at its stored value, else "consistent".
-            var seeded: [String: String] = [:]
-            for tagId in flaggedTagIds { seeded[tagId] = existing.outcomes[tagId] ?? "consistent" }
-            self.outcomes = seeded
         } else {
             self.isEditing = false
             // Flown is the common case — default to it (matches the web form).
             self.decision = "flown"
-            var seeded: [String: String] = [:]
-            for tagId in flaggedTagIds { seeded[tagId] = "consistent" }
-            self.outcomes = seeded
         }
+        // Each graded row starts at its stored value, else "consistent".
+        var seeded: [String: String] = [:]
+        for tagId in self.outcomeTagIds { seeded[tagId] = existingOutcomes[tagId] ?? "consistent" }
+        self.outcomes = seeded
     }
 
     // MARK: - Derived
@@ -67,9 +78,9 @@ final class DebriefViewModel {
     /// Cancel-reason chips (all tags) — shown when decision == cancelled.
     var reasonTags: [DebriefTaxonomy.TagOption] { taxonomy.tags }
 
-    /// Outcome rows (flagged categories only) — shown when decision == flown.
+    /// Outcome rows shown when decision == flown: the flagged-∪-stored set.
     var outcomeTags: [DebriefTaxonomy.TagOption] {
-        taxonomy.tags.filter { flaggedTagIds.contains($0.id) }
+        taxonomy.tags.filter { outcomeTagIds.contains($0.id) }
     }
 
     var noteRemaining: Int { taxonomy.noteMaxLength - note.count }
@@ -113,9 +124,10 @@ final class DebriefViewModel {
             request = DebriefRequest(decision: "monitoring", reasons: [], outcomes: [:],
                                      note: trimmedNote.isEmpty ? nil : trimmedNote)
         default: // "flown"
-            // Only emit outcomes for the flagged categories.
+            // Emit outcomes for the graded set (flagged ∪ previously-stored), so
+            // an edit preserves categories the current briefing no longer flags.
             var flownOutcomes: [String: String] = [:]
-            for tagId in flaggedTagIds { flownOutcomes[tagId] = outcomes[tagId] ?? "consistent" }
+            for tagId in outcomeTagIds { flownOutcomes[tagId] = outcomes[tagId] ?? "consistent" }
             request = DebriefRequest(
                 decision: "flown",
                 reasons: [],

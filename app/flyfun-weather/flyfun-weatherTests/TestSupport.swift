@@ -126,6 +126,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         return try submitPirepsBatchResult.get()
     }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { throw MockError.notStubbed("fetchPireps") }
+    func fetchDebrief(flightId: String) async throws -> DebriefResponse { throw MockError.notStubbed("fetchDebrief") }
+    func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse { throw MockError.notStubbed("upsertDebrief") }
+    func deleteDebrief(flightId: String) async throws { throw MockError.notStubbed("deleteDebrief") }
+    func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws { throw MockError.notStubbed("submitDigestFeedback") }
 }
 
 // MARK: - Fixture factories
