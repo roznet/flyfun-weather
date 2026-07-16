@@ -1601,12 +1601,20 @@ async function init(): Promise<void> {
     // advisory × the rendered model (never stored), so model switches / recalcs /
     // altitude changes update it with no stale-copy bugs. Null → the highlight
     // layer + its panel toggle stay hidden.
+    const effectiveAdvisories = getEffectiveAdvisories(state);
+    const activeHighlightId = state.vizSettings.activeHighlightAdvisoryId ?? null;
     const derivedHighlights = deriveHighlights(
-      getEffectiveAdvisories(state),
-      state.vizSettings.activeHighlightAdvisoryId ?? null,
+      effectiveAdvisories,
+      activeHighlightId,
       state.selectedModel,
     );
     data.advisoryHighlights = derivedHighlights;
+    // The advisory's display name for the ribbon-hover tooltip (#412) — from the
+    // pack's catalog (same source the timing grid uses), falling back to the id.
+    data.advisoryHighlightName = derivedHighlights && activeHighlightId
+      ? (effectiveAdvisories?.catalog.find((c) => c.id === activeHighlightId)?.name
+         ?? activeHighlightId)
+      : null;
     const unavailable = getUnavailableLayers(data);
     const allLayers = getAllLayers();
     // Render-time map only — never mutates the stored enabledLayers pref.

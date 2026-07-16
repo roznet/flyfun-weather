@@ -177,6 +177,14 @@ export interface VizRouteData {
    * layer no-ops.
    */
   advisoryHighlights: AdvisoryHighlights | null;
+  /**
+   * Display name of the currently-tracked advisory (#412), attached alongside
+   * `advisoryHighlights` so the ribbon-hover tooltip can name the advisory it is
+   * reporting a verdict for. `null`/absent whenever `advisoryHighlights` is null
+   * (no advisory tracked / old pack). Optional so the non-briefing VizRouteData
+   * builders (airport profile, snapshot adapters) need not set it.
+   */
+  advisoryHighlightName?: string | null;
 }
 
 /** A twilight or night stretch along the route (distance-based for shading). */

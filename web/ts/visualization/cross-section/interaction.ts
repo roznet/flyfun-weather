@@ -13,6 +13,13 @@ import { flightCategoryColor } from '../scales';
 import { columnSpanNm, sigmetSpanNm, COLUMN_HEIGHT_FT } from './layers/current-conditions';
 import { formatVisibility } from '../../units';
 import { escapeHtml } from '../../utils';
+import { t } from '../../i18n/i18n';
+import {
+  ribbonSeverityAt, reasonCodeAt, reasonLabelKey, HIGHLIGHT_LAYER_ID,
+} from './advisory-highlights';
+import {
+  severityColor, RIBBON_GAP, RIBBON_HEIGHT,
+} from './layers/highlight-layer';
 
 export interface InteractionCallbacks {
   onSelectPoint: (index: number) => void;
@@ -64,11 +71,53 @@ export function attachInteraction(
     callbacks.onHover?.(x);
 
     const distanceNm = transform.xToDistance(x);
+
+    // Ribbon-hover verdict tooltip (#412): when the cursor is over the verdict
+    // ribbon in the bottom margin (below the plot), show *why* the advisory is
+    // flagged here rather than the per-point weather tooltip. Only when the
+    // ribbon is actually drawn (advisory tracked + layer enabled).
+    if (
+      isOverRibbon(y, plotArea)
+      && currentData.advisoryHighlights
+      && renderer.isLayerEnabled(HIGHLIGHT_LAYER_ID)
+    ) {
+      callbacks.onHoverAltitude?.(undefined);
+      showRibbonTooltip(e, distanceNm);
+      return;
+    }
+
     const hoverAltFt = transform.yToAltitude(y);
     callbacks.onHoverAltitude?.(hoverAltFt);
     const idx = findNearestPointIndex(currentData.points, distanceNm);
     const point = currentData.points[idx];
     showTooltip(e, point, idx, distanceNm, hoverAltFt);
+  }
+
+  /** Ribbon-hover verdict tooltip (#412): advisory + verdict, plus the human
+   *  phrasing of `reason_code` when the flagged region under the cursor carries
+   *  one. Unknown/absent code → just the verdict, never invented text. */
+  function showRibbonTooltip(e: PointerEvent, distanceNm: number): void {
+    const hl = currentData.advisoryHighlights;
+    if (!hl) { hideTooltipEl(tooltip); return; }
+    const severity = ribbonSeverityAt(hl.ribbon, distanceNm);
+    if (!severity) { hideTooltipEl(tooltip); return; }
+
+    tooltip = ensureTooltipEl(canvas.parentElement!, tooltip);
+    const theme = getActiveTheme();
+
+    const name = currentData.advisoryHighlightName ?? t('advisories.ribbonTooltip.title');
+    const verdict = t(`advisories.verdict.${severity}`);
+    const swatch = squareSwatch(severityColor(severity), theme.sky.background);
+
+    const sections: string[] = [
+      `<span class="tt-header">${swatch}<strong>${escapeHtml(name)}</strong> · ${escapeHtml(verdict)}</span>`,
+    ];
+    const reasonKey = reasonLabelKey(reasonCodeAt(hl.regions, distanceNm));
+    if (reasonKey) sections.push(escapeHtml(t(reasonKey)));
+
+    tooltip.innerHTML = sections.map((s) => `<div class="tt-section">${s}</div>`).join('');
+    tooltip.style.display = 'block';
+    positionTooltip(tooltip, e, canvas, canvas.parentElement!.clientWidth);
   }
 
   function clearOverlay(): void {
@@ -250,6 +299,18 @@ export function attachInteraction(
 
 function fmt(n: number): string {
   return Math.round(n).toLocaleString();
+}
+
+/** Whether a canvas y lies over the verdict ribbon's hit band (#412). The strip
+ *  itself is only RIBBON_HEIGHT px tall; we pad the top (from the plot bottom)
+ *  and bottom a little so it is comfortably hoverable without overlapping the
+ *  distance-axis labels below (pushed to DISTANCE_LABEL_DY in axes.ts). */
+const RIBBON_HIT_PAD = 3;
+function isOverRibbon(y: number, plotArea: { top: number; height: number }): boolean {
+  const plotBottom = plotArea.top + plotArea.height;
+  const top = plotBottom;                                        // include the small gap above the strip
+  const bottom = plotBottom + RIBBON_GAP + RIBBON_HEIGHT + RIBBON_HIT_PAD;
+  return y >= top && y <= bottom;
 }
 
 /** Inline HTML swatch mimicking a reference line's colour + dash pattern, so a
