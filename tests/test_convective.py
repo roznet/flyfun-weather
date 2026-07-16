@@ -1044,9 +1044,11 @@ def test_nwp_firing_gate_holds_zero_precip_tower_down():
 
 
 def test_nwp_firing_gate_missing_data_keeps_tier():
-    """No cover and no precip (e.g. ICON deep tower, no rain_con) → keep tier.
+    """No cover and no precip field at all → keep tier.
 
-    Missing data must never hold down — safety asymmetry. (#283)
+    Missing data must never hold down — safety asymmetry. (#283) Post-#421 this
+    is the ICON first-window-hour case (no predecessor step to de-accumulate
+    rain_con against, so convective_precip_mm_h is None, not 0.0).
     """
     indices = ThermodynamicIndices(cape_surface_jkg=40.0)
     diag = NWPCloudDiagnostics(convective_base_ft=4000.0, convective_top_ft=30000.0)

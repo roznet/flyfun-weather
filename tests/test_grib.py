@@ -922,6 +922,8 @@ class TestIconEuDecode:
         assert _ICON_CLOUD_DIAG_FIELD_MAP["ceiling"] == "ceiling_m"
         assert _ICON_CLOUD_DIAG_FIELD_MAP["hbas_con"] == "convective_cloud_base_m"
         assert _ICON_CLOUD_DIAG_FIELD_MAP["htop_con"] == "convective_cloud_top_m"
+        # rain_con (convective rain, accumulated) decoded for the firing gate (#421)
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["rain_con"] == "conv_rain_kg_m2"
 
 
 # --- ICON-EU single-level URL format tests ---
@@ -964,6 +966,77 @@ class TestIconEuSingleLevel:
 
         for var in ("clcl", "clcm", "clch", "clct"):
             assert var in ICON_EU_CLOUD_DIAG_VARIABLES, f"{var} missing"
+
+    def test_cloud_diag_variables_include_rain_con(self):
+        """rain_con is fetched so the firing gate can evaluate ICON (#421)."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_CLOUD_DIAG_VARIABLES
+
+        assert "rain_con" in ICON_EU_CLOUD_DIAG_VARIABLES
+
+    def test_cloud_diag_cache_key_bumped_to_v2(self):
+        """Adding rain_con changed the blob content → key bumped so warm caches
+        re-fetch instead of silently keeping the gate-less blob (#421)."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_CLOUD_DIAG_CACHE_KEY
+
+        assert ICON_EU_CLOUD_DIAG_CACHE_KEY == "ICON_EU_CLOUD_DIAG_V2"
+
+    def test_previous_step_hourly_grid(self):
+        """Below 78h the predecessor is one hour back (1-hourly grid)."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_previous_step
+
+        assert icon_eu_previous_step(1) == 0
+        assert icon_eu_previous_step(6) == 5
+        assert icon_eu_previous_step(78) == 77
+
+    def test_previous_step_three_hourly_grid(self):
+        """Above 78h the predecessor is three hours back (3-hourly grid)."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_previous_step
+
+        assert icon_eu_previous_step(81) == 78
+        assert icon_eu_previous_step(120) == 117
+
+    def test_previous_step_zero_has_no_predecessor(self):
+        """At init there is no earlier step — accumulation is 0 by definition."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_previous_step
+
+        assert icon_eu_previous_step(0) is None
+
+    def test_conv_rain_rate_no_x1000(self):
+        """rain_con is already mm (kg/m² ≡ mm) — the rate is NOT ×1000.
+
+        The single highest-value regression: the ECMWF `cp` port multiplies by
+        1000 (m water equiv → mm); porting that here would over-read by 1000×.
+        """
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_conv_rain_rate_mm_h
+
+        # 2.0 mm accumulated over 1h → 2.0 mm/h, not 2000.
+        assert icon_eu_conv_rain_rate_mm_h(3.0, 1.0, 1.0) == 2.0
+
+    def test_conv_rain_rate_three_hour_window(self):
+        """A 3-hourly step divides the accumulation delta by 3."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_conv_rain_rate_mm_h
+
+        # 6.0 mm accumulated over the step, 3h window → 2.0 mm/h.
+        assert icon_eu_conv_rain_rate_mm_h(10.0, 4.0, 3.0) == 2.0
+
+    def test_conv_rain_rate_clamps_negative_to_zero(self):
+        """A decreasing accumulation (new run / GRIB glitch) clamps to 0."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_conv_rain_rate_mm_h
+
+        assert icon_eu_conv_rain_rate_mm_h(1.0, 5.0, 1.0) == 0.0
+
+    def test_conv_rain_rate_missing_is_none_not_zero(self):
+        """Missing inputs → None (unknown, gate-safe), never 0.0 (holds down).
+
+        None and 0.0 are NOT interchangeable: 0.0 actively holds a tower down
+        one level, None is treated as missing-data-safe by the firing gate.
+        """
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_conv_rain_rate_mm_h
+
+        assert icon_eu_conv_rain_rate_mm_h(None, 1.0, 1.0) is None   # no current
+        assert icon_eu_conv_rain_rate_mm_h(2.0, None, 1.0) is None   # no predecessor
+        assert icon_eu_conv_rain_rate_mm_h(2.0, 1.0, None) is None   # no window
+        assert icon_eu_conv_rain_rate_mm_h(2.0, 1.0, 0.0) is None    # zero window
 
     def test_single_level_url_no_level_number(self):
         """Single-level URLs have no level number (unlike model-level)."""
@@ -1060,6 +1133,27 @@ class TestBuildIconCloudDiagnostics:
         assert diag.ml_cape_jkg == 850.0
         assert diag.ml_cin_jkg == -120.0
 
+    def test_rain_con_not_surfaced_as_rate(self):
+        """build_icon_cloud_diagnostics stays unaware of rain_con (#421).
+
+        The accumulated conv_rain_kg_m2 rides through the decode but the mm/h
+        *rate* is computed in the enrichment loop (the only place that knows the
+        previous step), so the builder must leave convective_precip_mm_h None and
+        not treat the raw accumulation as a rate.
+        """
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        # conv_rain_kg_m2 present alongside a real field — builds, rate stays None.
+        raw = {"convective_cloud_top_m": 10000.0, "conv_rain_kg_m2": 3.5}
+        diag = build_icon_cloud_diagnostics(raw)
+        assert diag is not None
+        assert diag.convective_top_ft is not None
+        assert diag.convective_precip_mm_h is None
+
+        # conv_rain_kg_m2 alone does not by itself make a diagnostics object —
+        # it is not one of the "has_any" fields the builder keys on.
+        assert build_icon_cloud_diagnostics({"conv_rain_kg_m2": 3.5}) is None
+
     def test_ecmwf_native_stability_surfaced(self):
         """ECMWF a1 native stability indices surfaced on the diag (#283).
 
@@ -1151,6 +1245,99 @@ class TestBuildIconCloudDiagnostics:
         assert _ICON_CLOUD_DIAG_FIELD_MAP["clcm"] == "mid_cover_pct"
         assert _ICON_CLOUD_DIAG_FIELD_MAP["clch"] == "high_cover_pct"
         assert _ICON_CLOUD_DIAG_FIELD_MAP["clct"] == "total_cover_pct"
+
+
+# --- ICON-EU convective-precip de-accumulation through the merge path ---
+
+
+class TestIconConvectivePrecipEnrichment:
+    """End-to-end de-accumulation in _enrich_icon_eu_cloud_diagnostics (#421).
+
+    Confirms the field actually *arrives populated* on ICON diagnostics: the
+    leading step seeds the accumulation state, the first window hour gets a real
+    mm/h rate (no ×1000), and each in-window step differences against its
+    predecessor.
+    """
+
+    @staticmethod
+    def _run(monkeypatch, accum_by_fhour, forecast_hours):
+        """Enrich a single-point ICON section; return {hour_utc: diag}."""
+        import re
+        from datetime import datetime, timezone
+
+        import weatherbrief.fetch.grib as grib_mod
+        from weatherbrief.models import (
+            HourlyForecast,
+            ModelSource,
+            PressureLevelData,
+            RoutePoint,
+            RouteCrossSection,
+            Waypoint,
+            WaypointForecast,
+        )
+
+        init_date, init_hour = "20260716", 0
+        now = datetime.now(tz=timezone.utc)
+
+        def _utc(h):
+            return datetime(2026, 7, 16, h, 0, tzinfo=timezone.utc)
+
+        hourly = [
+            HourlyForecast(time=_utc(h), pressure_levels=[PressureLevelData(pressure_hpa=500)])
+            for h in forecast_hours
+        ]
+        wpt = Waypoint(icao="XXXX", name="Test", lat=50.0, lon=0.0)
+        wf = WaypointForecast(
+            waypoint=wpt, model=ModelSource.ICON, fetched_at=now, hourly=hourly,
+        )
+        cs = RouteCrossSection(
+            model=ModelSource.ICON, route_points=[], fetched_at=now,
+            point_forecasts=[wf],
+        )
+
+        # Cache always "present" so no network; decode returns the accumulated
+        # rain_con for the fhour parsed from the cache path, plus a real field so
+        # build_icon_cloud_diagnostics yields a diagnostics object.
+        monkeypatch.setattr(grib_mod, "is_cached", lambda run_dir, ck: True)
+
+        def fake_dispatch(worker, path, lats, lons, **kw):
+            fh = int(re.search(r"f(\d{3})_", str(path)).group(1))
+            return [{
+                "convective_cloud_top_m": 8000.0,
+                "conv_rain_kg_m2": accum_by_fhour[fh],
+            }]
+
+        monkeypatch.setattr(grib_mod, "_dispatch_decode", fake_dispatch)
+
+        grib_mod._enrich_icon_eu_cloud_diagnostics(
+            [cs], [], [RoutePoint(lat=50.0, lon=0.0, distance_from_origin_nm=0.0)],
+            init_date, init_hour, list(forecast_hours),
+            Path("/unused"), [50.0], [0.0], session=None,
+        )
+        return {h.time.hour: h.nwp_cloud_diagnostics for h in wf.hourly}
+
+    def test_first_window_hour_gets_rate_from_leading_step(self, monkeypatch):
+        """The leading step (f005) seeds state so f006 gets a real mm/h rate."""
+        # f005=1.0 (lead), f006=3.0, f007=4.5 accumulated mm.
+        diags = self._run(
+            monkeypatch,
+            accum_by_fhour={5: 1.0, 6: 3.0, 7: 4.5},
+            forecast_hours=[6, 7],
+        )
+        # f006: (3.0 − 1.0) / 1h = 2.0 mm/h — NOT 2000 (no ×1000).
+        assert diags[6] is not None
+        assert diags[6].convective_precip_mm_h == 2.0
+        # f007: (4.5 − 3.0) / 1h = 1.5 mm/h.
+        assert diags[7].convective_precip_mm_h == 1.5
+
+    def test_rate_clamped_on_run_reset(self, monkeypatch):
+        """A decreasing accumulation across the window clamps to 0, not negative."""
+        diags = self._run(
+            monkeypatch,
+            accum_by_fhour={5: 5.0, 6: 2.0},  # accumulation dropped (new run)
+            forecast_hours=[6],
+        )
+        assert diags[6].convective_precip_mm_h == 0.0
 
 
 # --- Cache model parameter tests ---

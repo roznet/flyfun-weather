@@ -125,6 +125,11 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "clct": "total_cover_pct",
     "cape_ml": "ml_cape_jkg",   # J/kg, mixed-layer CAPE (#283)
     "cin_ml": "ml_cin_jkg",     # J/kg, mixed-layer CIN (#283)
+    # Convective rain, kg/m² ≡ mm, ACCUMULATED since init (#421). The near-
+    # equivalent of ECMWF `cp`, but already mm (no ×1000). The rate is
+    # de-accumulated in the ICON enrichment loop (the only place that knows the
+    # previous step), so build_icon_cloud_diagnostics stays unaware of it.
+    "rain_con": "conv_rain_kg_m2",
 }
 
 # ECMWF single-level (a1) field mapping.

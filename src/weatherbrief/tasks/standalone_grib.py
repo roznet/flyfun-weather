@@ -144,7 +144,10 @@ def fetch_icon_cloud_diag(
     """
     from weatherbrief.fetch.grib import _dispatch_decode
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
-    from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_CLOUD_DIAG_CACHE_KEY,
+        fetch_icon_eu_single_level,
+    )
 
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
@@ -155,7 +158,7 @@ def fetch_icon_cloud_diag(
     result: dict[int, list[AirportCeilingData]] = {}
 
     for fhour in forecast_hours:
-        ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
+        ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
 
         if not is_cached(run_dir, ck):
             try:

@@ -45,8 +45,9 @@ Tracked in `NWP_CAPE_TYPE` dict (`variables.py:84`), stored as `nwp_cape_type` o
 | **Convective cloud cover %** | ✓ (TCDC on convectiveCloudLayer) | ✗ | ✗ | ✗ |
 | **Convective cloud base** | ✓ (PRES → ft via std atm) | ✓ (hbas_con, m → ft) | ✗ | ✗ |
 | **Convective cloud top** | ✓ (PRES → ft via std atm) | ✓ (htop_con, m → ft) | ✓ (hcct, m → ft) | ✗ |
+| **Convective precip rate** | ✗ | ✓ (rain_con, mm, de-accum) | ✓ (cp, m we ×1000, de-accum) | ✗ |
 
-Stored in `NWPCloudDiagnostics.convective_{cover_pct,base_ft,top_ft}`.
+Stored in `NWPCloudDiagnostics.convective_{cover_pct,base_ft,top_ft}` and `convective_precip_mm_h`. ICON `rain_con` is already mm (kg/m² ≡ mm) so it is **not** ×1000, unlike ECMWF `cp` (m water equivalent); both are accumulated since init and de-accumulated in the enrichment loop.
 
 ### MetPy-Derived Thermodynamic Indices (all models with pressure levels)
 
@@ -67,7 +68,7 @@ These are derived from 13–28 pressure levels (model-dependent resolution). Ava
 | **GFS** | Open-Meteo | SB | ✓ | ✓ | Full (cover + base/top) | All | Complete |
 | **Best Match** | Open-Meteo | SB | ✓ | ✓ | Full (via GFS) | All | Complete |
 | **ECMWF** | Open-Meteo | MU | ✗ | ✗ | None | All | Good (MU-CAPE + MetPy) |
-| **ICON-EU** | Open-Meteo | ML | ✗ | ✗ | Partial (base/top only) | All | Good (base/top + MetPy) |
+| **ICON-EU** | Open-Meteo | ML | ✗ | ✗ | Partial (base/top + conv precip, no cover) | All | Good (base/top + conv precip + MetPy) |
 | **UKMO** | Open-Meteo | ? | ✓ | ✗ | None | All | Fair (MetPy-only risk) |
 | **MétéoFr** | ✗ | — | ✗ | ✗ | None | All | MetPy-only |
 | **GEM** | ✗ | — | ✗ | ✗ | None | All | MetPy-only |
@@ -88,6 +89,7 @@ GFS GRIB2 ──→ decode_cloud_diag_per_point()
 
 ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
               ──→ NWPCloudDiagnostics.convective_{base_ft,top_ft}  (no cover_pct)
+              ──→ rain_con (accumulated) → convective_precip_mm_h (de-accum, #421)
 ```
 
 ### Stage 2: Temporal Forward-Fill
@@ -142,7 +144,7 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
   - **Primary scale — convective tower top** (`convective_top_ft`, the one native field common to GFS/ECMWF/ICON): `_CONV_TOP_FL_THRESHOLDS` (FL380 EXTREME / FL280 HIGH / FL200 MODERATE / FL120 LOW / present-but-shallow MARGINAL).
   - **Cover modifier** (GFS, where `convective_cover_pct` is present): numerous cover (≥35%) bumps the top-derived tier up one level, capped at HIGH. Cover-only (no top) sets a depth-unknown tier capped at MODERATE. The MODERATE cap is on the *base* tier only — Phase-2 corroboration (below) can still raise a strongly-realized cover-only MODERATE to HIGH when native precip/indices are strong. This can't fire today (GFS exposes no native `k_index`/`total_totals` and ECMWF takes the tower-top path), but the cap is intentionally not a hard ceiling against corroboration.
   - **Precip-rate fallback (Phase 3, method `"nwp_precip"`):** when the model emits *no* tower top and *no* cover fraction but `convective_precip_mm_h > 0.1` — the ECMWF marine / elevated-convection case, where `cp` lands but `hcct` is sentinel/absent — the tier comes from a convective-precip-rate ladder (`_CONV_PRECIP_MM_H_THRESHOLDS`: ≥2.0 → MODERATE, ≥0.5 → LOW, ≥0.1 → MARGINAL) instead of the old false NONE. Tower top stays primary whenever present; this is the geometry-absent fallback only. Depth is unknown from rate alone, so the ladder is capped at MODERATE. Realized by construction, so it skips the firing gate hold-down and the precip corroboration (which would double-count `cp`), and the strong-CIN suppression below (penalising a demonstrably-firing scheme on surface/ML CIN is circular). Rate is resolution-dependent → synoptic-scale v1.
-  - **Firing gate (Phase 2):** a MODERATE+ tower is only kept there when the scheme *realized* convection (`convective_precip_mm_h > 0.1` OR `convective_cover_pct > 15`); a deep-but-dry tower is held down one level. Missing-data-safe — held down only on positive dry evidence. **Known gap (ICON-EU):** ICON exposes neither `convective_cover_pct` nor (yet) `convective_precip_mm_h`, so realization can't be evaluated and every ICON tower is kept at full native tier — no dry-tower suppression until `rain_con` is decoded. Tracked as a calibration gap.
+  - **Firing gate (Phase 2):** a MODERATE+ tower is only kept there when the scheme *realized* convection (`convective_precip_mm_h > 0.1` OR `convective_cover_pct > 15`); a deep-but-dry tower is held down one level. Missing-data-safe — held down only on positive dry evidence. All three GRIB models can now be evaluated here: ICON gained a `convective_precip_mm_h` signal in #421 (DWD `RAIN_CON`, de-accumulated), so a deep-but-dry ICON tower is held down like GFS/ECMWF rather than kept at full native tier. Its only residual blind spot is a cold-air-mass **convective snow** shower (`RAIN_CON ≈ 0` but real `SNOW_CON`), which is safe by construction — the gate holds down only on positive dry evidence, so such a tower simply keeps its current tier (`SNOW_CON` deferred, see the code note in `icon_eu_fetch.py`).
   - **Native corroboration (Phase 2):** a realized MODERATE+ cell with strong native `k_index`/`total_totals`/conv-precip bumps up one level (capped HIGH). Thresholds (`_CORROB_K_INDEX=35`, `_CORROB_TOTAL_TOTALS=50`) are North-American severe-convection defaults; European environments (lower lapse rates, more modest moisture) often need TT ≥55, so this may fire readily over Europe — flagged for eval-digest calibration.
   - **Strong-CIN suppression** kept (prefers the model's own `ml_cin_jkg`, else DD `cin_surface_jkg`) — but *not* applied on the `"nwp_precip"` path (see Phase 3 above).
 
@@ -159,7 +161,7 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 | Model | NWP Convective Result | Notes |
 |-------|----------------------|-------|
 | **GFS** | `method="nwp"` — risk from tower top + cover modifier; cover/base/top from GRIB | Only model with convective cover % |
-| **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` native | — |
+| **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` + `rain_con`→conv-precip native | Firing gate + native corroboration now evaluate ICON (#421) |
 | **ECMWF** | `method="nwp_lcl_top"` when `hcct` present; `method="nwp_precip"` (Phase 3) when `hcct` sentinel but `cp` fires — risk from the precip-rate ladder; `cp`/`kx`/`totalx`/`mlcape`/`mlcin` native | `hcct` is sparsely delivered (sentinel over marine/elevated convection), so `cp` is often the only firing signal |
 | **Others** | None | No diagnostics at all |
 
@@ -362,11 +364,13 @@ Advisory:
 
 ```
 Open-Meteo → cape_jkg (ML)
-GRIB2      → NWPCloudDiagnostics.convective_{base_ft,top_ft}  (no cover_pct)
+GRIB2      → NWPCloudDiagnostics.convective_{base_ft,top_ft}  (no cover_pct),
+             rain_con→convective_precip_mm_h (de-accumulated, #421)
 MetPy      → SB/MU/ML CAPE, CIN, LCL/LFC/EL, shear, K, TT
 Analysis:
   Thermo assessment  → risk from max(SB,MU,ML,NWP) CAPE, CIN suppression
-  NWP assessment     → Hybrid: tower-top risk + GRIB base/top + cape_ml/cin_ml (method="nwp_hybrid", #283)
+  NWP assessment     → Hybrid: tower-top risk + GRIB base/top + cape_ml/cin_ml +
+                       firing gate / corroboration from rain_con (method="nwp_hybrid", #283/#421)
 Visualization:
   Thermo towers      → LFC→EL (estimated if shallow), always available
   NWP towers         → GRIB convective base/top, available via hybrid path
