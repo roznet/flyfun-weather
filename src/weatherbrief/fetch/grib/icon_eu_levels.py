@@ -22,11 +22,37 @@ logger = logging.getLogger(__name__)
 # ICON-EU's 40 model levels provide enough resolution to support this.
 TARGET_PRESSURE_LEVELS_HPA = EXTENDED_PRESSURE_LEVELS
 
+# Physical bounds per interpolated field, applied after interpolation.
+# A field absent from this map is SIGNED and must not be clamped.
+#
+# Temperature and the wind components U/V/W are signed: clamping a negative
+# U or V corrupts wind speed AND direction, and clamping negative (downward)
+# W destroys subsidence — which then zeroes the omega derived from it. Only
+# genuinely non-negative quantities (condensate mixing ratios, specific
+# humidity) and the bounded cloud-fraction percentage are clamped here.
+# See issue #441 finding #1.
+_FIELD_BOUNDS: dict[str, tuple[float | None, float | None]] = {
+    "cloud_liquid_water_kg_kg": (0.0, None),
+    "ice_mixing_ratio_kg_kg": (0.0, None),
+    "raw_specific_humidity_kg_kg": (0.0, None),
+    "cloud_area_fraction_pct": (0.0, 100.0),
+}
+
+
+def bounds_for_field(field_key: str) -> tuple[float | None, float | None] | None:
+    """Return (min, max) physical bounds for an interpolated ICON field.
+
+    Returns None for signed fields (temperature, wind components) that must
+    not be clamped.
+    """
+    return _FIELD_BOUNDS.get(field_key)
+
 
 def interpolate_model_to_pressure_levels(
     model_pressures_pa: list[float],
     model_values: list[float],
     target_pressures_hpa: list[int] | None = None,
+    bounds: tuple[float | None, float | None] | None = None,
 ) -> dict[int, float]:
     """Interpolate a variable from model levels to standard pressure levels.
 
@@ -39,6 +65,10 @@ def interpolate_model_to_pressure_levels(
         model_values: Variable values at each model level.
         target_pressures_hpa: Target pressure levels in hPa.
             Defaults to ICON_PRESSURE_LEVELS.
+        bounds: Optional ``(min, max)`` clamp applied to each interpolated
+            value; either side may be None to leave it unbounded. Defaults to
+            None (no clamping) so signed fields (T, U, V, W) pass through
+            unchanged. Use :func:`bounds_for_field` to pick per-field bounds.
 
     Returns:
         Dict mapping pressure_hpa to interpolated value. Levels outside
@@ -80,6 +110,8 @@ def interpolate_model_to_pressure_levels(
     p_min_pa = p_pa[0]
     p_max_pa = p_pa[-1]
 
+    lo, hi = (None, None) if bounds is None else bounds
+
     result: dict[int, float] = {}
     for target_hpa in target_pressures_hpa:
         target_pa = target_hpa * 100.0
@@ -88,7 +120,10 @@ def interpolate_model_to_pressure_levels(
             continue
         ln_target = np.log(target_pa)
         interp_val = float(np.interp(ln_target, ln_p, vals))
-        # Cloud water values should not be negative
-        result[target_hpa] = max(0.0, interp_val)
+        if lo is not None and interp_val < lo:
+            interp_val = lo
+        if hi is not None and interp_val > hi:
+            interp_val = hi
+        result[target_hpa] = interp_val
 
     return result

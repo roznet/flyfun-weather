@@ -881,6 +881,7 @@ def decode_icon_eu_per_point_chunked(
 
     from weatherbrief.fetch.grib.icon_eu_levels import (
         TARGET_PRESSURE_LEVELS_HPA,
+        bounds_for_field,
         interpolate_model_to_pressure_levels,
     )
 
@@ -950,6 +951,7 @@ def decode_icon_eu_per_point_chunked(
 
             interp_result = interpolate_model_to_pressure_levels(
                 model_pressures, model_values, target_pressures_hpa,
+                bounds=bounds_for_field(field_key),
             )
             for p_hpa, val in interp_result.items():
                 results[pt_idx].setdefault(p_hpa, {})[field_key] = val
@@ -990,6 +992,7 @@ def decode_icon_eu_per_point(
 
     from weatherbrief.fetch.grib.icon_eu_levels import (
         TARGET_PRESSURE_LEVELS_HPA,
+        bounds_for_field,
         interpolate_model_to_pressure_levels,
     )
 
@@ -1112,6 +1115,7 @@ def decode_icon_eu_per_point(
 
                 interp_result = interpolate_model_to_pressure_levels(
                     model_pressures, model_values, target_pressures_hpa,
+                    bounds=bounds_for_field(field_key),
                 )
                 for p_hpa, val in interp_result.items():
                     results[pt_idx].setdefault(p_hpa, {})[field_key] = val
