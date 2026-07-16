@@ -3230,11 +3230,17 @@ def _enrich_icon_eu_cloud_diagnostics(
                 diagnostics_per_point[i] = diag_i.model_copy(
                     update={"convective_precip_mm_h": rate}
                 )
-        # Carry this step's cumulative rain_con + valid time forward.
+        # Carry this step's cumulative rain_con + valid time forward. Assign
+        # unconditionally: a point that lacks rain_con at this step (e.g. the DWD
+        # rain_con file failed for this hour while the other cloud-diag vars
+        # succeeded, or the point is uncovered) resets its predecessor to None,
+        # so the NEXT step differences against nothing → None (missing-data-safe)
+        # rather than dividing a multi-step accumulation delta by a single-step
+        # window and silently inflating the rate. prev_valid_utc advances every
+        # processed step, so a stale predecessor value would otherwise desync
+        # from the window (review on 6c5555a).
         for i, raw in enumerate(decoded_points):
-            rc = raw.get("conv_rain_kg_m2")
-            if rc is not None:
-                prev_rain_con_per_point[i] = rc
+            prev_rain_con_per_point[i] = raw.get("conv_rain_kg_m2")
         prev_valid_utc = valid_utc
 
         # Fill missing layer base/top from CLC-derived boundaries

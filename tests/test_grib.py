@@ -1302,10 +1302,11 @@ class TestIconConvectivePrecipEnrichment:
 
         def fake_dispatch(worker, path, lats, lons, **kw):
             fh = int(re.search(r"f(\d{3})_", str(path)).group(1))
-            return [{
-                "convective_cloud_top_m": 8000.0,
-                "conv_rain_kg_m2": accum_by_fhour[fh],
-            }]
+            raw = {"convective_cloud_top_m": 8000.0}
+            acc = accum_by_fhour[fh]
+            if acc is not None:  # None models a failed/absent rain_con file
+                raw["conv_rain_kg_m2"] = acc
+            return [raw]
 
         monkeypatch.setattr(grib_mod, "_dispatch_decode", fake_dispatch)
 
@@ -1338,6 +1339,27 @@ class TestIconConvectivePrecipEnrichment:
             forecast_hours=[6],
         )
         assert diags[6].convective_precip_mm_h == 0.0
+
+    def test_missing_rain_con_step_invalidates_predecessor(self, monkeypatch):
+        """A step whose rain_con file failed must not inflate the next step's rate.
+
+        If f006's rain_con is absent (file failed) but its geometry succeeded,
+        the step still advances prev_valid_utc. Differencing f007 against f005's
+        value over a single-step window would divide a 2h accumulation delta by
+        1h and inflate the rate. The predecessor must instead be invalidated to
+        None so f007 yields None (missing-data-safe), never a fabricated rate.
+        """
+        diags = self._run(
+            monkeypatch,
+            accum_by_fhour={5: 1.0, 6: None, 7: 4.5},  # f006 rain_con file failed
+            forecast_hours=[6, 7],
+        )
+        # f006 has no rain_con this step → rate unknown, not fabricated.
+        assert diags[6] is not None
+        assert diags[6].convective_precip_mm_h is None
+        # f007's predecessor was invalidated by the f006 miss → None,
+        # NOT the inflated (4.5 − 1.0) / 1h = 3.5.
+        assert diags[7].convective_precip_mm_h is None
 
 
 # --- Cache model parameter tests ---
