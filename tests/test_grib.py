@@ -398,13 +398,22 @@ def test_parse_cloud_diag_idx_returns_correct_entries():
     assert ("TMP", "2 m above ground") not in vars_found
 
 
-def test_parse_cloud_diag_idx_prefers_instant_over_avg():
-    """When both instant and averaged entries exist, only instant is kept."""
+def test_parse_cloud_diag_idx_low_mid_high_prefer_averaged():
+    """#441: low/mid/high cover keep the AVERAGED form (to match averaged
+    geometry); TCDC total/convective keep the instantaneous form."""
     entries = parse_cloud_diag_idx(CLOUD_DIAG_IDX)
-    # LCDC has both "6 hour fcst" and "0-6 hour ave fcst"
-    lcdc_entries = [e for e in entries if e.variable == "LCDC"]
-    assert len(lcdc_entries) == 1
-    assert "ave" not in lcdc_entries[0].forecast_step
+
+    # LCDC / MCDC both have instant + averaged → averaged is kept.
+    for var in ("LCDC", "MCDC"):
+        got = [e for e in entries if e.variable == var]
+        assert len(got) == 1, var
+        assert "ave" in got[0].forecast_step, var
+
+    # TCDC entire atmosphere (total) has only instant here → instant kept.
+    total = [e for e in entries
+             if e.variable == "TCDC" and e.level_str == "entire atmosphere"]
+    assert len(total) == 1
+    assert "ave" not in total[0].forecast_step
 
 
 def test_parse_cloud_diag_idx_keeps_avg_when_no_instant():
@@ -423,11 +432,12 @@ def test_plan_cloud_diag_byte_ranges():
     assert len(ranges) > 0
     assert all(isinstance(r, CloudDiagByteRange) for r in ranges)
 
-    # Check specific range: LCDC instant at offset 437912319
+    # #441: LCDC now selects the AVERAGED message at offset 438715784
+    # (matching its averaged geometry), not the instant one at 437912319.
     lcdc = [r for r in ranges if r.variable == "LCDC"][0]
-    assert lcdc.start == 437912319
-    # Next entry is LCDC ave at 438715784
-    assert lcdc.end == 438715784 - 1
+    assert lcdc.start == 438715784
+    # Next sequential idx offset is MCDC instant at 439598564.
+    assert lcdc.end == 439598564 - 1
 
     # HGT cloud ceiling
     hgt = [r for r in ranges if r.variable == "HGT" and r.level_str == "cloud ceiling"][0]
