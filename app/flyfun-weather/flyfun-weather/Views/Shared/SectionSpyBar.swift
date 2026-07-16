@@ -112,32 +112,41 @@ struct ScrollSpyScroll<Content: View>: View {
     @State private var scrollTarget: String?
 
     var body: some View {
-        // The pill bar sits OUTSIDE the ScrollViewReader; the reader wraps only
-        // the ScrollView and consumes a `scrollTarget` trigger via `.onChange`.
-        // (Driving `proxy.scrollTo` directly from a tap handler on a sibling of
-        // the ScrollView inside the same reader silently did nothing — this is
-        // the same reader+trigger shape CrossSectionView uses successfully.) (#3)
-        VStack(spacing: 0) {
-            if sections.count > 1 {
-                SectionSpyBar(sections: sections, active: active.isEmpty ? (sections.first?.id ?? "") : active) { id in
-                    scrollTarget = id
+        // The bar is a PINNED SECTION HEADER inside the vertical ScrollView, not a
+        // sibling pinned above it. On iPhone the briefing lives in a
+        // NavigationSplitView detail column that collapses to a stack and reuses
+        // its hosting container across pushes; a bar pinned OUTSIDE the scroll
+        // content composited zero pixels on every briefing opened after the first
+        // (correct frame, no draw). The scroll content itself always re-composites
+        // correctly, so the bar rides inside it as a pinned header — same sticky
+        // behaviour, immune to the reuse bug. Tap-to-scroll drives `scrollTarget`,
+        // consumed by the reader's `.onChange` (the reader+trigger shape
+        // CrossSectionView uses; driving `proxy.scrollTo` straight from the tap
+        // handler silently did nothing). (#3)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        content()
+                    } header: {
+                        if sections.count > 1 {
+                            SectionSpyBar(sections: sections, active: active.isEmpty ? (sections.first?.id ?? "") : active) { id in
+                                scrollTarget = id
+                            }
+                        }
+                    }
                 }
             }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    content()
+            .coordinateSpace(name: Self.coordSpace)
+            .onPreferenceChange(SpyOffsetKey.self) { offsets in
+                active = Self.activeSection(sections: sections, offsets: offsets)
+            }
+            .onChange(of: scrollTarget) { _, target in
+                guard let target else { return }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo(target, anchor: .top)
                 }
-                .coordinateSpace(name: Self.coordSpace)
-                .onPreferenceChange(SpyOffsetKey.self) { offsets in
-                    active = Self.activeSection(sections: sections, offsets: offsets)
-                }
-                .onChange(of: scrollTarget) { _, target in
-                    guard let target else { return }
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        proxy.scrollTo(target, anchor: .top)
-                    }
-                    scrollTarget = nil
-                }
+                scrollTarget = nil
             }
         }
     }
