@@ -815,3 +815,18 @@ class TestGustWindowMax:
         assert gap.wind_gusts_10m_kt == 35.0
         # A genuinely instantaneous scalar IS linearly interpolated.
         assert gap.temperature_2m_c == pytest.approx(16.0)
+
+
+class TestBoundaryCoverAlignment:
+    """#441 finding #5: boundary-layer cover is averaged-only, so it aligns at
+    the window midpoint (mid_frac), while total cover is instantaneous
+    (step_frac)."""
+
+    def test_boundary_uses_mid_frac_total_uses_step_frac(self):
+        from weatherbrief.fetch.grib.fill import _interp_diag_at
+
+        prev = NWPCloudDiagnostics(boundary_cover_pct=0.0, total_cover_pct=0.0)
+        nxt = NWPCloudDiagnostics(boundary_cover_pct=100.0, total_cover_pct=100.0)
+        out = _interp_diag_at(prev, nxt, mid_frac=0.25, step_frac=0.75)
+        assert out.boundary_cover_pct == pytest.approx(25.0)  # averaged → mid_frac
+        assert out.total_cover_pct == pytest.approx(75.0)     # instant → step_frac

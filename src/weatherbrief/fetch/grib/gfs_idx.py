@@ -156,13 +156,29 @@ def parse_idx(text: str) -> list[IdxEntry]:
     return entries
 
 
+# Cover fields whose paired geometry (PRES cloud bottom/top, TMP cloud-top
+# temperature) NCEP publishes ONLY as a time-average. The cover MUST use the
+# averaged form too, so cover and geometry share the same statistical
+# processing and temporal (window-midpoint) alignment. Everything else
+# (TCDC entire-atmosphere total, TCDC convective) prefers the instantaneous
+# snapshot. Boundary-layer TCDC is averaged-only, so its preference is moot
+# here — but it is aligned as averaged downstream. (#441 finding #5)
+_PREFER_AVERAGED_PAIRS: set[tuple[str, str]] = {
+    ("LCDC", "low cloud layer"),
+    ("MCDC", "middle cloud layer"),
+    ("HCDC", "high cloud layer"),
+}
+
+
 def parse_cloud_diag_idx(text: str) -> list[CloudDiagIdxEntry]:
     """Parse a GFS .idx file for cloud diagnostic entries.
 
     Returns entries matching CLOUD_DIAG_VARIABLES at their accepted levels.
-    Prefers instantaneous ("N hour fcst") over averaged ("0-N hour ave fcst")
-    when both exist, by returning only instantaneous entries for variables
-    where an instantaneous version is available.
+    For each (variable, level) that has both an instantaneous ("N hour fcst")
+    and an averaged ("0-N hour ave fcst") form, selection is per-field:
+    low/mid/high cover (``_PREFER_AVERAGED_PAIRS``) keep the AVERAGED entry to
+    match their averaged-only geometry; all other fields keep the
+    instantaneous entry. (#441 finding #5)
     """
     all_entries: list[CloudDiagIdxEntry] = []
     for line in text.strip().splitlines():
@@ -189,18 +205,28 @@ def parse_cloud_diag_idx(text: str) -> list[CloudDiagIdxEntry]:
             logger.debug("Skipping malformed cloud diag .idx line: %s", line)
             continue
 
-    # Prefer instantaneous over averaged: for each (var, level_str) if we
-    # have an instant entry, drop the averaged one.
+    # Per-field selection between instantaneous and averaged forms.
+    avg_keys: set[tuple[str, str]] = set()
     instant_keys: set[tuple[str, str]] = set()
     for e in all_entries:
-        if "ave" not in e.forecast_step:
-            instant_keys.add((e.variable, e.level_str))
+        key = (e.variable, e.level_str)
+        if "ave" in e.forecast_step:
+            avg_keys.add(key)
+        else:
+            instant_keys.add(key)
 
     result: list[CloudDiagIdxEntry] = []
     for e in all_entries:
         key = (e.variable, e.level_str)
-        if "ave" in e.forecast_step and key in instant_keys:
-            continue  # Skip averaged when instant is available
+        is_avg = "ave" in e.forecast_step
+        if key in _PREFER_AVERAGED_PAIRS:
+            # Keep averaged; drop the instant form when an averaged one exists.
+            if not is_avg and key in avg_keys:
+                continue
+        else:
+            # Keep instantaneous; drop averaged when an instant one exists.
+            if is_avg and key in instant_keys:
+                continue
         result.append(e)
 
     return result

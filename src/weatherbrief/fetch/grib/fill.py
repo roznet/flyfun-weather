@@ -285,10 +285,10 @@ def _interp_diag_at(
 ) -> NWPCloudDiagnostics:
     """Build an interpolated NWPCloudDiagnostics for one gap hour.
 
-    ``mid_frac`` is the interpolation fraction in window-midpoint space —
-    used for low/mid/high cover_pct (the averaged-window fields).
-    ``step_frac`` is the fraction in step-time space — used for
-    instantaneous fields (convective, boundary, total, ceiling, etc.).
+    ``mid_frac`` is the interpolation fraction in window-midpoint space — used
+    for the AVERAGED-window fields (low/mid/high cover and boundary-layer
+    cover). ``step_frac`` is the fraction in step-time space — used for the
+    instantaneous fields (convective, total, ceiling, etc.). (#441 finding #5)
     """
     from weatherbrief.models import NWPCloudDiagnostics
 
@@ -312,8 +312,9 @@ def _interp_diag_at(
         total_cover_pct=_lerp(
             prev_diag.total_cover_pct, next_diag.total_cover_pct, step_frac,
         ),
+        # Boundary-layer cover is published averaged-only → midpoint align.
         boundary_cover_pct=_lerp(
-            prev_diag.boundary_cover_pct, next_diag.boundary_cover_pct, step_frac,
+            prev_diag.boundary_cover_pct, next_diag.boundary_cover_pct, mid_frac,
         ),
         ceiling_ft=_lerp(prev_diag.ceiling_ft, next_diag.ceiling_ft, step_frac),
         freezing_level_ft=_lerp(
