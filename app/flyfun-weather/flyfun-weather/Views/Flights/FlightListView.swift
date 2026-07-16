@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 /// What the sidebar has selected: the pan-European forecast map, or a flight's
 /// briefing (#420). The map is an iPad detail pane / iPhone `fullScreenCover`;
@@ -38,6 +39,12 @@ struct FlightListView: View {
     /// "Past" flights start collapsed (like the web app) so the list opens on
     /// what's upcoming/recent.
     @State private var pastExpanded = false
+
+    // Contextual tips (#312): the add-flight / forecast-map pair reads side by
+    // side, so the forecast-map tip is sequenced after the add-flight tip
+    // donates its event.
+    private let addFlightTip = AddFlightTip()
+    private let forecastMapTip = ForecastMapTip()
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -134,16 +141,20 @@ struct FlightListView: View {
                     HStack(spacing: 12) {
                         Button {
                             showAddFlight = true
+                            addFlightTip.invalidate(reason: .actionPerformed)
                         } label: {
                             Label("Add Flight", systemImage: "plus")
                         }
                         .accessibilityIdentifier("addFlightButton")
+                        .popoverTip(addFlightTip)
                         Button {
                             openForecastMap(deepLink: nil)
+                            forecastMapTip.invalidate(reason: .actionPerformed)
                         } label: {
                             Label("Forecast Map", systemImage: "map")
                         }
                         .accessibilityIdentifier("forecastMapButton")
+                        .popoverTip(forecastMapTip)
                         Menu {
                             Button {
                                 showSettings = true
@@ -266,6 +277,30 @@ struct FlightListView: View {
             // the per-flight summaries reflect the newest online packs. Warm
             // refresh — the current list stays on screen (see loadFlights).
             Task { await viewModel?.loadFlights() }
+        }
+        // Sequence the forecast-map tip after the add-flight tip: when the
+        // add-flight tip is dismissed — closed via its × OR acted on — donate the
+        // event that makes the forecast-map tip eligible, so the pair reads in
+        // order (#312).
+        .task {
+            for await status in addFlightTip.statusUpdates {
+                if case .invalidated = status {
+                    await FlightListTipEvents.addFlightTipSeen.donate()
+                    break
+                }
+            }
+        }
+        .onAppear {
+            // Recovery for the narrow window where the app is killed between the
+            // add-flight tip invalidating and the donate() above completing:
+            // `statusUpdates` is a change stream, so it won't replay
+            // `.invalidated` next launch. If the add-flight tip is already
+            // dismissed but the event never landed, donate proactively so the
+            // forecast-map tip can't get stuck permanently ineligible.
+            if case .invalidated = addFlightTip.status,
+               FlightListTipEvents.addFlightTipSeen.donations.isEmpty {
+                Task { await FlightListTipEvents.addFlightTipSeen.donate() }
+            }
         }
     }
 

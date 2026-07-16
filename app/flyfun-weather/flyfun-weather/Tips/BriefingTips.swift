@@ -15,36 +15,41 @@ import TipKit
 
 // MARK: - Events
 
-/// Donated when the user acts on the download tip, so the refresh tip can
+/// Donated when the user acts on the refresh tip, so the download tip can
 /// sequence *after* it. The two controls sit side by side and the whole point
-/// is the contrast — offline-save vs. fetch-new — so they should read as a pair.
+/// is the contrast — fetch-new vs. offline-save — so they should read as a pair.
 enum BriefingTipEvents {
-    static let downloadTipSeen = Tips.Event(id: "briefing.downloadTipSeen")
+    static let refreshTipSeen = Tips.Event(id: "briefing.refreshTipSeen")
 }
 
 // MARK: - Toolbar tips
 
-/// 1. Download button (`arrow.down.circle`, `.notDownloaded`).
-struct DownloadBriefingTip: Tip {
-    var title: Text { Text("Save for offline") }
-    var message: Text? {
-        Text("Downloads this briefing so you can view it without a connection. Stays put until you refresh or remove it.")
-    }
-    var image: Image? { Image(systemName: "arrow.down.circle") }
-}
-
-/// 2. Refresh button (`arrow.clockwise`). Sequenced after the download tip via
-/// the `downloadTipSeen` event so the offline-save / fetch-new pair reads in
-/// order. If the user ignores the download tip, this one simply waits — it is
-/// still non-forced.
+/// 1. Refresh button (`arrow.clockwise`). Shown first: the refresh button is
+/// always in the toolbar, so it's a reliable anchor to open the pair on.
 struct RefreshBriefingTip: Tip {
     var title: Text { Text("Get the latest forecast") }
     var message: Text? {
-        Text("Re-fetches the newest model run from the server. Download saves what you have now; refresh pulls new data.")
+        Text("Re-fetches the newest model run from the server. The offline copy keeps what you have now; refresh pulls new data.")
     }
     var image: Image? { Image(systemName: "arrow.clockwise") }
+}
+
+/// 2. Download indicator (`arrow.down.circle` / `.fill`). Sequenced after the
+/// refresh tip via the `refreshTipSeen` event so the fetch-new / offline-save
+/// pair reads in order. If the user ignores the refresh tip, this one simply
+/// waits — it is still non-forced.
+///
+/// Downloads now happen automatically, so this reads as a *status signal*, not
+/// a "tap to download" action: the icon fills in green once the briefing is
+/// saved and available to view offline.
+struct DownloadBriefingTip: Tip {
+    var title: Text { Text("Offline availability") }
+    var message: Text? {
+        Text("This icon shows whether the briefing is saved for offline viewing. Briefings download automatically — it fills in once this one is ready to view without a connection.")
+    }
+    var image: Image? { Image(systemName: "arrow.down.circle") }
     var rules: [Rule] {
-        #Rule(BriefingTipEvents.downloadTipSeen) { $0.donations.count > 0 }
+        #Rule(BriefingTipEvents.refreshTipSeen) { $0.donations.count > 0 }
     }
 }
 

@@ -233,8 +233,8 @@ private struct BriefingToolbarView: View {
     var isInFlightWindow: Bool
     var startTracking: () -> Void
 
-    // Contextual tips (#312): the download/refresh pair reads side by side, so
-    // the refresh tip is sequenced after the download tip donates its event.
+    // Contextual tips (#312): the refresh/download pair reads side by side, so
+    // the download tip is sequenced after the refresh tip donates its event.
     private let downloadTip = DownloadBriefingTip()
     private let refreshTip = RefreshBriefingTip()
 
@@ -264,10 +264,7 @@ private struct BriefingToolbarView: View {
                 Button {
                     Task {
                         await viewModel.downloadCurrentPack()
-                        // Retire the tip on a successful download. The refresh
-                        // tip's sequencing is driven by the dismissal watcher
-                        // below, so it fires whether the user downloads or just
-                        // closes the tip.
+                        // Retire the download tip once its pack is saved.
                         if case .downloaded = viewModel.downloadState {
                             downloadTip.invalidate(reason: .actionPerformed)
                         }
@@ -292,6 +289,13 @@ private struct BriefingToolbarView: View {
                     Image(systemName: "arrow.down.circle.fill")
                         .foregroundStyle(.green)
                 }
+                // Auto-download means the briefing is almost always already
+                // `.downloaded` by the time the toolbar renders, so the tip must
+                // anchor here too — otherwise its only anchor (`.notDownloaded`)
+                // is never in the hierarchy and the coachmark can never show
+                // (nor can "Show All Tips" render it). Reworded as an offline-
+                // availability *indicator* (#312), it explains this green icon.
+                .popoverTip(downloadTip)
             case .error:
                 Button {
                     Task { await viewModel.downloadCurrentPack() }
@@ -323,28 +327,28 @@ private struct BriefingToolbarView: View {
             .disabled(viewModel.refreshState.isRefreshing)
             .popoverTip(refreshTip)
         }
-        // Sequence the refresh tip after the download tip: when the download tip
-        // is dismissed — closed via its × OR acted on by downloading — donate the
-        // event that makes the refresh tip eligible, so the offline-save /
-        // fetch-new pair reads in order (#312).
+        // Sequence the download tip after the refresh tip: when the refresh tip
+        // is dismissed — closed via its × OR acted on by refreshing — donate the
+        // event that makes the download tip eligible, so the fetch-new /
+        // offline-save pair reads in order (#312).
         .task {
-            for await status in downloadTip.statusUpdates {
+            for await status in refreshTip.statusUpdates {
                 if case .invalidated = status {
-                    await BriefingTipEvents.downloadTipSeen.donate()
+                    await BriefingTipEvents.refreshTipSeen.donate()
                     break
                 }
             }
         }
         .onAppear {
             // Recovery for the narrow window where the app is killed between the
-            // download tip invalidating and the donate() above completing:
+            // refresh tip invalidating and the donate() above completing:
             // `statusUpdates` is a change stream, so it won't replay
-            // `.invalidated` next launch. If the download tip is already
+            // `.invalidated` next launch. If the refresh tip is already
             // dismissed but the event never landed, donate proactively so the
-            // refresh tip can't get stuck permanently ineligible.
-            if case .invalidated = downloadTip.status,
-               BriefingTipEvents.downloadTipSeen.donations.isEmpty {
-                Task { await BriefingTipEvents.downloadTipSeen.donate() }
+            // download tip can't get stuck permanently ineligible.
+            if case .invalidated = refreshTip.status,
+               BriefingTipEvents.refreshTipSeen.donations.isEmpty {
+                Task { await BriefingTipEvents.refreshTipSeen.donate() }
             }
         }
     }
