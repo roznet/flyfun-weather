@@ -482,6 +482,14 @@ a prev-day scan that graded 07-17 midday convective-worse just went empty).
 - **iOS** mirrors the DTO fields in a separate PR (contract change), defaulting
   the panel filter to improving+neutral so it doesn't suddenly show worse rows.
 
+**Rollout note (transient):** `disposition` defaults to `neutral`, so a
+`time_options.json` persisted **before** this change reloads with every swept
+candidate marked `neutral` rather than the `improving` it was (pre-#434, only
+improving rows were persisted at all). Until that pack's next rescan (a new
+ECMWF run, or an explicit "Set as alternate" / rescan), the "N departure windows
+look smoother" headline **undercounts** for it. Self-healing on the next scan,
+and it never over-claims (undercount only) — no data fix needed.
+
 Out of scope (unchanged): per-model per-advisory *detail* per candidate (too
 large; stays gated), and the confirm/rescan flow.
 

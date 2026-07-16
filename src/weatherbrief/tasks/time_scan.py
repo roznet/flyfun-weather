@@ -45,6 +45,7 @@ from typing import Callable
 from weatherbrief.fetch.grib import ECMWF_FLIGHT_WINDOW_MARGIN
 from weatherbrief.models import (
     AdvisoryAggregation,
+    Disposition,
     ModelCoverage,
     ModelSource,
     RouteAdvisoriesManifest,
@@ -82,7 +83,7 @@ _MIN_MARGIN = 1
 _DISPOSITION_RANK = {"improving": 0, "neutral": 1, "worse": 2}
 
 
-def _disposition(margin: float, worsens: list[str]) -> str:
+def _disposition(margin: float, worsens: list[str]) -> Disposition:
     """Classify a candidate vs the like-coverage baseline (#434 taxonomy).
 
     ``worsens`` spans the **full** advisory set (never call a window that
