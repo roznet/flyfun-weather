@@ -3016,11 +3016,12 @@ def _decode_and_merge_icon_eu(
 
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
 
-    # Collect CLC-derived cloud layers across forecast hours.
-    # Use the last non-empty result per point (layers are time-invariant for
-    # a given ICON run, so any forecast hour's CLC works).
+    # CLC-derived cloud layers are a time-VARYING forecast field, so keep each
+    # forecast hour's own geometry (keyed by fhour) instead of collapsing to a
+    # single per-point set. Each valid time is enriched with its own layers
+    # below — reusing one hour's clouds for every hour was stale. (#441 #4)
     n_points = len(ctx.point_lats)
-    clc_layers_per_point: list[dict[str, float]] = [{} for _ in range(n_points)]
+    clc_layers_by_fhour: dict[int, list[dict[str, float]]] = {}
 
     # Build per-fhour decode jobs up-front. A given fhour either has the
     # legacy combined cache (one ``decode_icon_legacy`` job) or per-variable
@@ -3086,10 +3087,9 @@ def _decode_and_merge_icon_eu(
         if not decoded_points:
             continue
 
-        # Keep CLC-derived layers (first non-empty wins per point)
-        for i, layers in enumerate(clc_layers):
-            if layers and not clc_layers_per_point[i]:
-                clc_layers_per_point[i] = layers
+        # Keep THIS forecast hour's own CLC-derived layers (per valid time).
+        if any(clc_layers):
+            clc_layers_by_fhour[fhour] = clc_layers
 
         valid_utc = _forecast_hour_to_utc(ctx.init_date, ctx.init_hour, fhour)
         replaced = _replace_pressure_levels_from_grib(
@@ -3098,11 +3098,9 @@ def _decode_and_merge_icon_eu(
         )
         total_enriched += replaced
         del decoded_points
-        # Replace the tuple to release both the decoded_points reference
-        # (already del'd locally) and the clc_layers reference (already
-        # accumulated into clc_layers_per_point above). The local
-        # ``clc_layers`` stays alive for the rest of this iteration; no
-        # further reader needs the dict entry.
+        # Release the decoded_points reference (already del'd locally). The
+        # clc_layers list is now owned by ``clc_layers_by_fhour`` (small: a few
+        # float bases/tops per point), so it stays alive until enrichment.
         decoded_by_fhour[fhour] = None
     _grib_gc()
     _grib_rss_mark("icon_fhour_post_gc")
@@ -3122,7 +3120,7 @@ def _decode_and_merge_icon_eu(
         icon_sections, all_forecasts, route_points,
         ctx.init_date, ctx.init_hour, ctx.forecast_hours,
         ctx.run_dir, ctx.point_lats, ctx.point_lons, ctx.session,
-        clc_layers_per_point=clc_layers_per_point,
+        clc_layers_by_fhour=clc_layers_by_fhour,
     )
 
     return _run_info_to_timestamp(ctx.init_date, ctx.init_hour), None
@@ -3140,13 +3138,14 @@ def _enrich_icon_eu_cloud_diagnostics(
     point_lons: list[float],
     session: requests.Session,
     *,
-    clc_layers_per_point: list[dict[str, float]] | None = None,
+    clc_layers_by_fhour: dict[int, list[dict[str, float]]] | None = None,
 ) -> None:
     """Enrich ICON forecasts with single-level cloud diagnostics (ceiling, etc.).
 
-    If *clc_layers_per_point* is provided (CLC-derived cloud layer boundaries
-    from model-level data), missing ``base_ft``/``top_ft`` on low/mid/high
-    NWPCloudLayerDiag are filled from it.
+    If *clc_layers_by_fhour* is provided (CLC-derived cloud layer boundaries
+    from model-level data, keyed by forecast hour), missing ``base_ft``/
+    ``top_ft`` on low/mid/high NWPCloudLayerDiag are filled from THAT forecast
+    hour's geometry — clouds evolve over time, so each valid time uses its own.
     """
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
@@ -3243,12 +3242,13 @@ def _enrich_icon_eu_cloud_diagnostics(
             prev_rain_con_per_point[i] = raw.get("conv_rain_kg_m2")
         prev_valid_utc = valid_utc
 
-        # Fill missing layer base/top from CLC-derived boundaries
-        if clc_layers_per_point:
+        # Fill missing layer base/top from THIS forecast hour's CLC geometry.
+        clc_for_hour = clc_layers_by_fhour.get(fhour) if clc_layers_by_fhour else None
+        if clc_for_hour:
             for pt_idx, diag in enumerate(diagnostics_per_point):
-                if diag is None or pt_idx >= len(clc_layers_per_point):
+                if diag is None or pt_idx >= len(clc_for_hour):
                     continue
-                clc = clc_layers_per_point[pt_idx]
+                clc = clc_for_hour[pt_idx]
                 if not clc:
                     continue
                 for band in ("low", "mid", "high"):
