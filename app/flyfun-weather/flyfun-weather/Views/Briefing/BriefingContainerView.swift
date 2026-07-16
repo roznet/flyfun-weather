@@ -486,10 +486,11 @@ private struct DownloadBannerView: View {
 }
 
 /// Inner content once the view model is ready (#310). Tabs: Advisory ·
-/// Discussion · Cross-Section · Map (+ gated PIREPs). On regular width (iPad)
-/// they render as a custom top pill band with switched content; on compact
-/// width (iPhone) they collapse to a native bottom tab bar. Both drive
-/// `viewModel.selectedTab`, so deep-links behave identically.
+/// Discussion · Cross-Section · Map (+ gated PIREPs), rendered by a native
+/// `TabView` on both idioms — a bottom tab bar on iPhone (compact), a top tab
+/// bar on iPad (regular). Both drive `viewModel.selectedTab`, so deep-links
+/// behave identically. (The custom iPad pill band this replaced hit the same
+/// NavigationSplitView-reuse compositing bug as the section spy bar — #437.)
 private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService

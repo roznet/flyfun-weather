@@ -89,19 +89,25 @@ band is gone: route identity moved to `navigationTitle` + `.navigationSubtitle`
 (iOS 26), and the freshness chip + pack-history (D-N) picker merged into one
 `BriefingPackToolbar` menu in the nav-bar toolbar.
 
-**Tab presentation is size-class adaptive** (`BriefingContentView`): on **regular
-width (iPad)** the tabs render as a custom top pill band (`BriefingTabBand`) with
-switched content below; on **compact width (iPhone)** they collapse to a native
-bottom `TabView`. Both drive `viewModel.selectedTab`, so all deep-links
-(watch chips, advisory detail → cross-section) behave identically. iPad keeps the
-`NavigationSplitView` sidebar.
+**Tab presentation is a native `TabView`** (`BriefingContentView`) on both idioms:
+a bottom tab bar on **compact width (iPhone)**, a top tab bar on **regular width
+(iPad)**. Both drive `viewModel.selectedTab`, so all deep-links (watch chips,
+advisory detail → cross-section) behave identically. iPad keeps the
+`NavigationSplitView` sidebar. (A custom iPad pill band, `BriefingTabBand`, was
+removed in #437: pinned as a sibling above the tab content it composited zero
+pixels when the reused split-view detail column re-presented — the same bug as
+the scroll-spy bar below. The system-hosted `TabView` is immune.)
 
 **Intra-tab scroll-spy (#310 item 5).** Multi-section tabs (Advisory; reusable on
-Discussion/Cross-Section) wrap their scroll in `ScrollSpyScroll`, which pins a
-sticky horizontally-scrollable `SectionSpyBar` of section pills, highlights the
-section nearest the top, and jumps on tap. Sections register via the `.spyAnchor(id)`
-modifier (a `GeometryReader` + `PreferenceKey` reporting each section's top
-offset); the bar suppresses itself when there is only one section.
+Discussion/Cross-Section) wrap their scroll in `ScrollSpyScroll`, which shows a
+`SectionSpyBar` of section pills as a **pinned `Section` header inside the
+`ScrollView`** (#436 — a bar pinned *outside* the scroll drew zero pixels on
+re-presentation in the reused split-view detail column), highlights the section
+nearest the top, and jumps on tap. Sections register with `.spyAnchor(id)` (a
+plain `.id`); the active section comes from `onScrollTargetVisibilityChange` and
+taps drive `ScrollPosition.scrollTo(id:)` — native iOS 18 scroll APIs that
+replaced a `GeometryReader`/`PreferenceKey`/coordinate-space offset reporter
+(#437). The bar suppresses itself when there is only one section.
 
 ## In-Flight Mode (Phase 3 vision — NOT built as drawn)
 

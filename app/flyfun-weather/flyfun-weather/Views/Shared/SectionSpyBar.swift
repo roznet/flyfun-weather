@@ -118,8 +118,11 @@ struct ScrollSpyScroll<Content: View>: View {
         }
         .scrollPosition($position)
         .onScrollTargetVisibilityChange(idType: String.self) { visible in
-            // Topmost visible anchored section is the active one. Ordered top→bottom.
-            if let first = visible.first { active = first }
+            // Derive the topmost visible section from our own top→bottom `sections`
+            // order rather than trusting the callback array to be position-ordered.
+            if let top = sections.first(where: { visible.contains($0.id) })?.id {
+                active = top
+            }
         }
     }
 }
