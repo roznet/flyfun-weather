@@ -161,7 +161,10 @@ class NWPCloudDiagnostics(BaseModel):
     k_index: Optional[float] = None                 # model-native K-index (°C)
     total_totals: Optional[float] = None            # model-native Total Totals (°C)
     ml_cape_jkg: Optional[float] = None             # mixed-layer CAPE (J/kg)
-    ml_cin_jkg: Optional[float] = None              # mixed-layer CIN (J/kg)
+    # Mixed-layer CIN (J/kg), NEGATIVE convention: more negative = stronger
+    # cap (matches MetPy sounding CIN and the `eff_cin < -200` gate). Provider
+    # magnitudes are normalized at decode by `_normalize_model_cin`. (#441)
+    ml_cin_jkg: Optional[float] = None
 
     total_cover_pct: Optional[float] = None
     boundary_cover_pct: Optional[float] = None

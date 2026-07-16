@@ -1187,14 +1187,34 @@ class TestBuildIconCloudDiagnostics:
         assert diag.low.cover_pct is None
 
     def test_ml_cape_cin_surfaced(self):
-        """ICON mixed-layer CAPE/CIN (cape_ml/cin_ml) surfaced on the diag (#283)."""
+        """ICON mixed-layer CAPE/CIN (cape_ml/cin_ml) surfaced on the diag (#283).
+
+        #441: ICON CIN_ML is a POSITIVE magnitude (larger = stronger cap) and
+        is normalized to the app's internal negative convention.
+        """
         from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
 
-        raw = {"ml_cape_jkg": 850.0, "ml_cin_jkg": -120.0}
+        raw = {"ml_cape_jkg": 850.0, "ml_cin_jkg": 120.0}
         diag = build_icon_cloud_diagnostics(raw)
         assert diag is not None
         assert diag.ml_cape_jkg == 850.0
-        assert diag.ml_cin_jkg == -120.0
+        assert diag.ml_cin_jkg == -120.0  # positive magnitude → internal negative
+
+    def test_icon_cin_sentinel_and_sign(self):
+        """#441: ICON -999.9 sentinel → None; packed-zero → 0; magnitude → negative."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        # A strong cap (+1585 J/kg) must become a strong internal negative cap.
+        diag = build_icon_cloud_diagnostics({"ml_cape_jkg": 10.0, "ml_cin_jkg": 1585.0})
+        assert diag.ml_cin_jkg == -1585.0
+
+        # The -999.9 "undefined" sentinel is dropped, NOT read as a huge cap.
+        diag = build_icon_cloud_diagnostics({"ml_cape_jkg": 10.0, "ml_cin_jkg": -999.9})
+        assert diag.ml_cin_jkg is None
+
+        # Packed near-zero negative → no cap (0).
+        diag = build_icon_cloud_diagnostics({"ml_cape_jkg": 10.0, "ml_cin_jkg": -0.025})
+        assert diag.ml_cin_jkg == 0.0
 
     def test_rain_con_not_surfaced_as_rate(self):
         """build_icon_cloud_diagnostics stays unaware of rain_con (#421).
@@ -1229,14 +1249,21 @@ class TestBuildIconCloudDiagnostics:
             "k_index_c": 38.0,
             "total_totals_c": 52.0,
             "ml_cape_jkg": 1200.0,
-            "ml_cin_jkg": -45.0,
+            "ml_cin_jkg": 45.0,  # #441: mlcin100 is a positive magnitude
         }
         diag = build_ecmwf_cloud_diagnostics(raw)
         assert diag is not None
         assert diag.k_index == 38.0
         assert diag.total_totals == 52.0
         assert diag.ml_cape_jkg == 1200.0
-        assert diag.ml_cin_jkg == -45.0
+        assert diag.ml_cin_jkg == -45.0  # normalized to internal negative
+
+    def test_ecmwf_cin_9999_sentinel_dropped(self):
+        """#441: ECMWF 9999 CIN sentinel (if not NaN-masked) is dropped, not read as a cap."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        diag = build_ecmwf_cloud_diagnostics({"ml_cape_jkg": 10.0, "ml_cin_jkg": 9999.0})
+        assert diag.ml_cin_jkg is None
 
     def test_ecmwf_k_index_kelvin_normalized(self):
         """ECMWF kx arrives in Kelvin → normalized to °C (#283 review).

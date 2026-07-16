@@ -1276,6 +1276,43 @@ def _opt_float(raw: dict[str, float], key: str) -> float | None:
     return float(val) if val is not None else None
 
 
+def _normalize_model_cin(
+    raw: dict[str, float],
+    key: str,
+    *,
+    drop_at_or_below: float | None = None,
+    drop_at_or_above: float | None = None,
+) -> float | None:
+    """Normalize a model CIN magnitude to the app's internal signed convention.
+
+    Both ECMWF ``mlcin100`` and DWD ICON ``CIN_ML`` report convective
+    inhibition as a NON-NEGATIVE magnitude in J/kg (larger = stronger cap;
+    verified against cached GRIB — ECMWF values ≥ 0, ICON up to +1585 J/kg).
+    The rest of the app — MetPy sounding CIN and the convective suppression
+    gate (``eff_cin < -200``) — uses the opposite sign: CIN is NEGATIVE, more
+    negative = stronger cap. Passing the raw positive magnitude straight
+    through meant genuine strong model caps never suppressed. (#441 finding #2)
+
+    Normalization:
+    - Provider "undefined" sentinels are dropped to None: ECMWF ``9999``
+      (``drop_at_or_above=9998``; usually already masked to NaN by cfgrib, this
+      is a defensive net) and ICON ``-999.9`` (``drop_at_or_below=-900``).
+    - Any residual negative (ICON packed-zero ≈ -0.025, or an interpolation
+      artifact where a sentinel bled into a neighbour) is floored to 0 — no
+      cap — rather than read as an implausibly strong one.
+    - The remaining non-negative magnitude is negated to the internal
+      convention: ``+1585 → -1585``.
+    """
+    val = raw.get(key)
+    if val is None:
+        return None
+    if drop_at_or_below is not None and val <= drop_at_or_below:
+        return None
+    if drop_at_or_above is not None and val >= drop_at_or_above:
+        return None
+    return -max(0.0, float(val))
+
+
 def _k_index_to_c(raw: dict[str, float], key: str) -> float | None:
     """K-index normalized to °C.
 
@@ -1337,7 +1374,9 @@ def build_icon_cloud_diagnostics(
     high_cover = _pct("high_cover_pct")
     total_cover = _pct("total_cover_pct")
     ml_cape = _opt_float(raw, "ml_cape_jkg")  # instantaneous (#283)
-    ml_cin = _opt_float(raw, "ml_cin_jkg")    # instantaneous (#283)
+    # ICON CIN_ML is a positive magnitude with -999.9 as the undefined
+    # sentinel → convert to internal negative convention. (#441 finding #2)
+    ml_cin = _normalize_model_cin(raw, "ml_cin_jkg", drop_at_or_below=-900.0)
 
     # Only create diagnostics if at least one field is populated
     has_any = (
@@ -1720,7 +1759,9 @@ def build_ecmwf_cloud_diagnostics(
     k_index = _k_index_to_c(raw, "k_index_c")
     total_totals = _opt_float(raw, "total_totals_c")
     ml_cape = _opt_float(raw, "ml_cape_jkg")
-    ml_cin = _opt_float(raw, "ml_cin_jkg")
+    # ECMWF mlcin100 is a positive magnitude with 9999 as the missing
+    # sentinel (usually already NaN-masked by cfgrib) → internal negative. (#441)
+    ml_cin = _normalize_model_cin(raw, "ml_cin_jkg", drop_at_or_above=9998.0)
 
     has_any = (
         ceiling_ft is not None
