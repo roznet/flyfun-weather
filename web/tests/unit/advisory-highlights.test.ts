@@ -455,6 +455,30 @@ describe('reasonCodeAt', () => {
     expect(reasonCodeAt(overlap, 50)).toBe('sld');
     expect(reasonCodeAt(overlap, 20)).toBe('transit_exposure');
   });
+
+  it('matches the reason to the displayed verdict at a touching RED/AMBER boundary', () => {
+    // Adjacent same-kind runs of differing severity share an exact boundary by
+    // construction (build_regions/build_ribbon cut from the same midpoints). At
+    // the boundary the ribbon assigns the point to the later (amber) segment, so
+    // the reason must be the amber one — not the red region's, which an
+    // unfiltered inclusive-both-ends test would pick via the severity tie-break.
+    const touching: HighlightRegion[] = [
+      { dist_from_nm: 0, dist_to_nm: 50, kind: 'icing_band', severity: 'red', reason_code: 'no_escape' },
+      { dist_from_nm: 50, dist_to_nm: 100, kind: 'icing_band', severity: 'amber', reason_code: 'tight_margin' },
+    ];
+    // Ribbon gives amber at the shared boundary (50) → reason must be amber's.
+    expect(ribbonSeverityAt([
+      { dist_from_nm: 0, dist_to_nm: 50, severity: 'red' },
+      { dist_from_nm: 50, dist_to_nm: 100, severity: 'amber' },
+    ], 50)).toBe('amber');
+    expect(reasonCodeAt(touching, 50, 'amber')).toBe('tight_margin');
+    // Interiors resolve to their own region's reason under the matching verdict.
+    expect(reasonCodeAt(touching, 25, 'red')).toBe('no_escape');
+    expect(reasonCodeAt(touching, 75, 'amber')).toBe('tight_margin');
+    // A verdict with no matching-severity region under the cursor → no reason
+    // (just the verdict), never a mismatched one.
+    expect(reasonCodeAt(touching, 25, 'amber')).toBeNull();
+  });
 });
 
 describe('reasonLabelKey', () => {

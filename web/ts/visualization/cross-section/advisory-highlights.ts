@@ -212,15 +212,28 @@ export function ribbonSeverityAt(
  * `models/advisories.py`). Those single-kind evaluators produce regions that
  * don't overlap in x, but a multi-kind composite could; when regions overlap we
  * take the most severe one carrying a code so the tooltip names what dominates.
+ *
+ * Pass `severity` to keep the reason consistent with the verdict the ribbon is
+ * showing at this distance. Adjacent same-kind regions of *differing* severity
+ * (e.g. a RED `no_escape` run touching an AMBER `tight_margin` run) share an
+ * exact boundary by construction — `build_regions`/`build_ribbon` cut both from
+ * the same per-point midpoints — and at that boundary an unfiltered
+ * inclusive-both-ends test would match *both* regions and the severity tie-break
+ * would pick the RED reason even though `ribbonSeverityAt` assigns the boundary
+ * to the AMBER segment, rendering a contradictory "Amber · <RED reason>". Only
+ * considering regions whose severity equals the resolved verdict removes that
+ * class entirely: the reason always describes the verdict actually displayed.
  */
 export function reasonCodeAt(
   regions: HighlightRegion[],
   distanceNm: number,
+  severity?: HighlightSeverity | null,
 ): string | null {
   let best: HighlightRegion | null = null;
   for (const r of regions) {
     if (distanceNm < r.dist_from_nm || distanceNm > r.dist_to_nm) continue;
     if (!r.reason_code) continue;
+    if (severity != null && r.severity !== severity) continue;
     if (best === null || severityRank(r.severity) > severityRank(best.severity)) {
       best = r;
     }
