@@ -161,7 +161,7 @@ ICON-EU GRIB2 ──→ decode_icon_eu_cloud_diag_per_point()
 | Model | NWP Convective Result | Notes |
 |-------|----------------------|-------|
 | **GFS** | `method="nwp"` — risk from tower top + cover modifier; cover/base/top from GRIB | Only model with convective cover % |
-| **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` + `rain_con`→conv-precip native | Firing gate + native corroboration now evaluate ICON (#421) |
+| **ICON-EU** | `method="nwp_hybrid"` — risk from tower top; GRIB base/top; `cape_ml`/`cin_ml` + `rain_con`→conv-precip native | Firing gate + native corroboration now evaluate ICON (#421). ICON stays `nwp_hybrid` in practice: it emits `htop_con` whenever its scheme fires, so a firing point always has tower geometry and never falls through to the geometry-absent `nwp_precip` ladder (that branch is generic on field presence, not reachable for ICON when `rain_con` > 0). |
 | **ECMWF** | `method="nwp_lcl_top"` when `hcct` present; `method="nwp_precip"` (Phase 3) when `hcct` sentinel but `cp` fires — risk from the precip-rate ladder; `cp`/`kx`/`totalx`/`mlcape`/`mlcin` native | `hcct` is sparsely delivered (sentinel over marine/elevated convection), so `cp` is often the only firing signal |
 | **Others** | None | No diagnostics at all |
 
