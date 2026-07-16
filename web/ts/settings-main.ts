@@ -58,6 +58,7 @@ import { setUnitsPreference } from './units';
 import { initInfoPopup, showPopupContent, hideMetricInfo } from './components/info-popup';
 import { renderAdvisoryPopup } from './helpers/advisory-popup';
 import { buildParamDefaults, pruneAdvisoryParams, pruneEngineMethod } from './helpers/profile-sparsify';
+import { clearOffered } from './tour/tour-storage';
 
 /** Advisory id of the experimental front advisory (mirrors FRONTS_ADVISORY_ID in the backend). */
 const FRONTS_ADVISORY_ID = 'fronts';
@@ -699,7 +700,7 @@ async function init(): Promise<void> {
   });
 
   // Aircraft tab
-  initAircraftTab();
+  const aircraftLoaded = initAircraftTab();
 
   // Export my data (GDPR data portability)
   const exportDataBtn = document.getElementById('btn-export-data');
@@ -754,7 +755,7 @@ async function init(): Promise<void> {
     });
     document.getElementById('btn-reset-tour-offer')?.addEventListener('click', () => {
       try {
-        localStorage.removeItem('wb_tour_offered');
+        clearOffered();
         showStatus('Tour offer reset — open a briefing to see the banner again.');
       } catch (err) {
         showStatus(`Failed to clear tour flag: ${String(err)}`, true);
@@ -763,13 +764,47 @@ async function init(): Promise<void> {
     document.getElementById('btn-reset-first-time')?.addEventListener('click', async () => {
       try {
         await resetMyOnboarding();
-        localStorage.removeItem('wb_tour_offered');
+        clearOffered();
         showStatus('First-time experience reset — wizard on Flights, banner on next briefing.');
       } catch (err) {
         showStatus(`Failed to reset first-time flags: ${String(err)}`, true);
       }
     });
   }
+
+  // Deep-links from the flights page info popups (#400): open a specific
+  // aircraft or profile straight to its editor.
+  void applyDeepLink(aircraftLoaded);
+}
+
+/** Honour ?tab=/?profile=<id>/?aircraft=<id> query params: switch to the right
+ *  tab and open the target profile or aircraft for editing. */
+async function applyDeepLink(aircraftLoaded: Promise<void>): Promise<void> {
+  const params = new URLSearchParams(window.location.search);
+  const aircraftParam = params.get('aircraft');
+  const profileParam = params.get('profile');
+  const tabParam = params.get('tab');
+
+  if (aircraftParam) {
+    switchTab('aircraft');
+    await aircraftLoaded;
+    const ac = aircraftList.find(a => String(a.id) === aircraftParam);
+    if (ac) {
+      editAircraft(ac);
+      document.getElementById('aircraft-form-section')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    return;
+  }
+
+  if (profileParam) {
+    switchTab('flight');
+    const id = parseInt(profileParam, 10);
+    if (!isNaN(id) && profiles.some(p => p.id === id)) switchProfile(id);
+    return;
+  }
+
+  if (tabParam) switchTab(tabParam);
 }
 
 function switchTab(tabId: string): void {
@@ -1796,9 +1831,10 @@ function renderUsageBar(label: string, used: number, limit: number | null): stri
 
 // --- Aircraft tab ---
 
-function initAircraftTab(): void {
-  // Load aircraft list
-  fetchAircraft()
+function initAircraftTab(): Promise<void> {
+  // Load aircraft list. Returned so deep-links (?aircraft=<id>) can await it
+  // before trying to open the target aircraft's edit form.
+  const loaded = fetchAircraft()
     .then(list => {
       aircraftList = list;
       renderAircraftList();
@@ -1831,6 +1867,8 @@ function initAircraftTab(): void {
     // Delay hiding to allow click on suggestion
     setTimeout(hideTypeSuggestions, 200);
   });
+
+  return loaded;
 }
 
 function renderAircraftList(): void {

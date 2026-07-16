@@ -208,7 +208,7 @@ function preloadSkewT(): void {
 }
 
 export function startBriefingTour(): void {
-  markOffered();
+  markOffered('briefing');
   if (activeDriver) {
     activeDriver.destroy();
     activeDriver = null;

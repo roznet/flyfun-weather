@@ -24,7 +24,7 @@ import {
 import { showWelcomeWizard } from './components/welcome-wizard';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
-import { initInfoPopup } from './components/info-popup';
+import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { maybeShowFlexibilityExplainer } from './components/flexibility-explainer';
 import { iasToTasISA, resolveCruiseSpeedIAS } from './utils/atmo';
 import {
@@ -35,6 +35,7 @@ import {
   buildTimezoneOptions, localToUtc, utcToLocal, nearestMinuteOption,
 } from './utils/timezone';
 import { track, EVENTS } from './analytics/track';
+import { startFlightsTour, maybeAutoStartFlightsTour } from './tour/flights-tour';
 
 let loadedProfiles: ProfileResponse[] = [];
 let loadedAircraft: AircraftResponse[] = [];
@@ -248,21 +249,12 @@ function translateStaticElements(): void {
   set('h1', 'page.flights.title');
   set('.create-panel h3', 'page.flights.newFlight');
   set('label[for="input-waypoints"]', 'page.flights.waypoints');
-  // Aircraft label — preserve the (i) button child
-  const acLabel = document.querySelector('label[for="input-aircraft"]');
-  const acInfoBtn = acLabel?.querySelector('.aircraft-info-btn');
-  if (acLabel) {
-    acLabel.textContent = t('page.flights.aircraft') + ' ';
-    if (acInfoBtn) {
-      acLabel.appendChild(acInfoBtn);
-      acInfoBtn.setAttribute('title', t('flights.form.aircraftHint'));
-      acInfoBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        alert(t('flights.form.aircraftHint'));
-      });
-    }
-  }
-  set('label[for="input-profile"]', 'page.flights.profile');
+  // Aircraft + profile labels each carry an (i) info button child; re-setting
+  // textContent would wipe it, so relabel the text node and re-append the button.
+  translateLabelWithInfoBtn('input-aircraft', 'page.flights.aircraft', '.aircraft-info-btn',
+    t('flights.form.aircraftInfoTitle'), showAircraftInfo);
+  translateLabelWithInfoBtn('input-profile', 'page.flights.profile', '.profile-info-btn',
+    t('flights.form.profileInfoTitle'), showProfileInfo);
   set('label[for="input-date"]', 'page.flights.date');
   set('label[for="input-hour"]', 'page.flights.time');
   set('label[for="input-altitude"]', 'page.flights.altitude');
@@ -273,6 +265,70 @@ function translateStaticElements(): void {
   if (submitBtn) submitBtn.textContent = t('page.flights.createFlight');
   const pasteFplBtn = document.querySelector('#btn-paste-fpl');
   if (pasteFplBtn) pasteFplBtn.textContent = t('flights.fpl.pasteFpl');
+  const tourBtn = document.getElementById('tour-btn');
+  if (tourBtn) {
+    tourBtn.setAttribute('title', t('tour.flights.helpTitle'));
+    tourBtn.setAttribute('aria-label', t('tour.flights.helpTitle'));
+  }
+}
+
+/** Relabel a form label that carries an (i) info button child. Setting
+ *  textContent on the label would delete the button, so we rewrite only the
+ *  label text and re-append the (freshly wired) button. Idempotent: clones the
+ *  button to drop any previously-attached click listener before re-binding. */
+function translateLabelWithInfoBtn(
+  inputId: string, labelKey: string, btnSelector: string,
+  btnTitle: string, onClick: () => void,
+): void {
+  const label = document.querySelector(`label[for="${inputId}"]`);
+  if (!label) return;
+  const existing = label.querySelector(btnSelector);
+  label.textContent = t(labelKey) + ' ';
+  if (!existing) return;
+  // Clone to strip stale listeners (translateStaticElements can run more than
+  // once if the locale changes), then re-wire.
+  const btn = existing.cloneNode(true) as HTMLButtonElement;
+  btn.setAttribute('title', btnTitle);
+  btn.setAttribute('aria-label', btnTitle);
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    onClick();
+  });
+  label.appendChild(btn);
+}
+
+/** Info popup: what the Aircraft selector is for, plus a deep-link to edit the
+ *  selected aircraft (or the aircraft list) in Settings. */
+function showAircraftInfo(): void {
+  const ac = getSelectedAircraft();
+  const editHref = ac
+    ? `/settings.html?tab=aircraft&aircraft=${encodeURIComponent(ac.id)}`
+    : '/settings.html?tab=aircraft';
+  const linkLabel = ac
+    ? t('flights.form.aircraftInfoEditThis')
+    : t('flights.form.aircraftInfoEditAny');
+  showPopupContent(`
+    <h3 style="margin-top:0">${escapeHtml(t('flights.form.aircraftInfoTitle'))}</h3>
+    <p>${escapeHtml(t('flights.form.aircraftInfoBody'))}</p>
+    <p style="margin-top:1rem"><a class="btn btn-primary btn-sm" href="${editHref}">${escapeHtml(linkLabel)}</a></p>
+  `);
+}
+
+/** Info popup: what a Profile is, that you can keep several for different
+ *  missions, and a deep-link to edit the selected profile in Settings. */
+function showProfileInfo(): void {
+  const profile = getSelectedProfile();
+  const editHref = profile
+    ? `/settings.html?tab=flight&profile=${encodeURIComponent(profile.id)}`
+    : '/settings.html?tab=flight';
+  const linkLabel = profile
+    ? t('flights.form.profileInfoEditThis')
+    : t('flights.form.profileInfoEditAny');
+  showPopupContent(`
+    <h3 style="margin-top:0">${escapeHtml(t('flights.form.profileInfoTitle'))}</h3>
+    <p>${escapeHtml(t('flights.form.profileInfoBody'))}</p>
+    <p style="margin-top:1rem"><a class="btn btn-primary btn-sm" href="${editHref}">${escapeHtml(linkLabel)}</a></p>
+  `);
 }
 
 /** Apply parsed FPL data to the flight creation form. */
@@ -899,6 +955,10 @@ async function init(): Promise<void> {
   // stayed at its `false` default), matching what the user would see on a
   // first visit before linking Autorouter.
   updateAutorouterButtonState();
+
+  // --- Guided tour (#400): help icon + ?tour=1 auto-start ---
+  document.getElementById('tour-btn')?.addEventListener('click', () => startFlightsTour());
+  maybeAutoStartFlightsTour();
 
   // --- Initial load ---
   store.getState().loadFlights().then(() => {
