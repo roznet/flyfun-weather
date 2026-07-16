@@ -151,11 +151,19 @@ struct ScrollSpyScroll<Content: View>: View {
         }
     }
 
-    /// Active = the last section whose top has scrolled at/above the bar
-    /// (small threshold below the top edge). Falls back to the first known
-    /// section before any offsets arrive.
+    /// Active = the last section whose top has scrolled up to (or behind) the
+    /// pinned bar's bottom edge. Falls back to the first known section before any
+    /// offsets arrive.
+    ///
+    /// The bar is now a pinned header INSIDE the scroll view, overlapping the top
+    /// ~44pt of the viewport, so a section's offset (measured from the raw
+    /// viewport top) reaches 0 while it is still hidden behind the bar. The
+    /// threshold therefore matches the bar's height, so a section flips to active
+    /// as its top clears the bar — not one bar-height early. (Approximate height;
+    /// the pending native-scroll rewrite replaces this reducer with
+    /// `onScrollTargetVisibilityChange`, which needs no threshold at all.)
     private static func activeSection(sections: [SpySection], offsets: [String: CGFloat]) -> String {
-        let threshold: CGFloat = 12
+        let threshold: CGFloat = 44
         var current = sections.first(where: { offsets[$0.id] != nil })?.id ?? sections.first?.id ?? ""
         for section in sections {
             if let y = offsets[section.id], y <= threshold { current = section.id }
