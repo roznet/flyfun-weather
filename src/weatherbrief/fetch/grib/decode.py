@@ -218,7 +218,10 @@ def decode_grib_to_points(
         tmp_path = Path(tmp.name)
 
     try:
-        datasets = cfgrib.open_datasets(str(tmp_path))
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
 
         result: dict[int, dict[str, float]] = {}
 
@@ -567,7 +570,10 @@ def decode_grib_per_point(
         tmp_path = Path(tmp.name)
 
     try:
-        datasets = cfgrib.open_datasets(str(tmp_path))
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
 
         # Normalize longitudes to 0–360 (GFS convention)
         target_lons = [(lon % 360) for lon in longitudes]
@@ -652,7 +658,10 @@ def decode_cloud_diag_per_point(
         tmp_path = Path(tmp.name)
 
     try:
-        datasets = cfgrib.open_datasets(str(tmp_path))
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
         target_lons = [(lon % 360) for lon in longitudes]
         results: list[dict[str, float]] = [{} for _ in range(n_points)]
 
@@ -708,7 +717,10 @@ def _decode_icon_eu_single_var(
         tmp_path = Path(tmp.name)
 
     try:
-        datasets = cfgrib.open_datasets(str(tmp_path))
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
         # ICON-EU uses -180 to +180 longitude convention
         target_lons = list(longitudes)
         level_values: dict[int, list[float | None]] = {}
@@ -894,8 +906,11 @@ def decode_icon_eu_per_point_chunked(
 
     n_points = len(latitudes)
 
-    # Step 1: Decode P (pressure) variable — needed for vertical interpolation
-    p_bytes = var_bytes.get("p", b"")
+    # Step 1: Decode P (pressure) variable — needed for vertical interpolation.
+    # pop() (not get()) so the dict releases the compressed bytes as each
+    # variable is consumed — otherwise the whole ~260 MB/hour input set stays
+    # resident and the later `del` frees nothing. (#441 efficiency)
+    p_bytes = var_bytes.pop("p", b"")
     pressure_data = _decode_icon_eu_single_var(p_bytes, latitudes, longitudes)
     del p_bytes
     gc.collect()
@@ -923,7 +938,7 @@ def decode_icon_eu_per_point_chunked(
         ("v", "raw_v_wind_m_s"),
         ("w", "raw_w_m_s"),
     ):
-        raw = var_bytes.get(var_name, b"")
+        raw = var_bytes.pop(var_name, b"")  # release bytes as consumed (#441)
         if not raw:
             continue
         field_data = _decode_icon_eu_single_var(raw, latitudes, longitudes)
@@ -1012,7 +1027,10 @@ def decode_icon_eu_per_point(
         tmp_path = Path(tmp.name)
 
     try:
-        datasets = cfgrib.open_datasets(str(tmp_path))
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
 
         # ICON-EU uses -180 to +180 longitude convention (no normalization needed)
         target_lons = list(longitudes)
@@ -1237,7 +1255,10 @@ def decode_icon_eu_cloud_diag_per_point(
         tmp_path = Path(tmp.name)
 
     try:
-        datasets = cfgrib.open_datasets(str(tmp_path))
+        # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
+        # one-shot temp files: only the .grib2 gets unlinked, so a written
+        # .idx would be orphaned (604 found in the wild). (#441 efficiency)
+        datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
         # ICON-EU uses -180 to +180 (same as route points)
         target_lons = list(longitudes)
         results: list[dict[str, float]] = [{} for _ in range(n_points)]
