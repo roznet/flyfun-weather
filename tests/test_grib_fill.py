@@ -788,3 +788,30 @@ class TestLerpWind:
         spd, wd = _lerp_wind(10.0, None, 20.0, 90.0, 0.5)
         assert spd == pytest.approx(15.0)
         assert wd == 90.0
+
+
+class TestGustWindowMax:
+    """#441 finding #6: ECMWF gust (10fg) is a window maximum, held over the
+    covering interval on gap hours — not linearly interpolated."""
+
+    def test_gust_held_not_interpolated(self):
+        from weatherbrief.fetch.grib.fill import _interp_surface_hourly
+
+        t0 = datetime(2026, 7, 16, 12, tzinfo=timezone.utc)
+        # Anchors at index 0 and 2 (diag set), gap hour at index 1.
+        anchor0 = HourlyForecast(
+            time=t0, nwp_cloud_diagnostics=NWPCloudDiagnostics(total_cover_pct=50.0),
+            wind_gusts_10m_kt=20.0, temperature_2m_c=15.0,
+        )
+        gap = HourlyForecast(time=t0 + timedelta(hours=1))
+        anchor2 = HourlyForecast(
+            time=t0 + timedelta(hours=2),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(total_cover_pct=50.0),
+            wind_gusts_10m_kt=35.0, temperature_2m_c=17.0,
+        )
+        filled = _interp_surface_hourly([anchor0, gap, anchor2])
+        assert filled == 1
+        # Gust holds the covering interval's max (next anchor), NOT ~27.5 lerp.
+        assert gap.wind_gusts_10m_kt == 35.0
+        # A genuinely instantaneous scalar IS linearly interpolated.
+        assert gap.temperature_2m_c == pytest.approx(16.0)

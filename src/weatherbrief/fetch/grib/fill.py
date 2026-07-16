@@ -766,12 +766,13 @@ def _lerp_wind(
 # Instantaneous fields written by ``_apply_ecmwf_surface_to_hourly``.
 # Precip/snow are *window-rate* — distributed at apply time across every hour
 # in the differencing window, so they don't need temporal interpolation.
-# Wind speed/direction are interpolated together as U/V components by
-# ``_lerp_wind`` (not scalar-interpolated), so they are NOT listed here. (#441)
+# Genuinely instantaneous surface scalars — linearly interpolable across gaps.
+# NOT listed here (handled specially in _interp_surface_hourly):
+#  - wind speed/direction → U/V-component interp (_lerp_wind)  (#441 #7)
+#  - wind gust → window MAXIMUM, held over the covering interval (#441 #6)
 _ECMWF_SURFACE_INSTANT_FIELDS: tuple[str, ...] = (
     "temperature_2m_c",
     "dewpoint_2m_c",
-    "wind_gusts_10m_kt",
     "visibility_m",
     "cape_jkg",
     "surface_pressure_hpa",
@@ -808,9 +809,9 @@ def _linear_interp_ecmwf_surface(
     the two writes coupled, or replace this detector with an explicit
     anchor list passed from the caller.
 
-    Wind direction uses circular linear interpolation (shortest arc); when the
-    interpolated speed is below ``_CALM_WIND_KT``, direction is copied from
-    the nearest anchor since the interpolated direction would be meaningless.
+    Wind speed/direction are interpolated as U/V components (``_lerp_wind``),
+    not as scalars. Gust is a window maximum and is held over the covering
+    interval rather than linearly interpolated. See findings #6/#7.
     """
     total = 0
     for cs in sections:
@@ -874,6 +875,12 @@ def _interp_surface_hourly(hourly_list: list[HourlyForecast]) -> int:
                 h.wind_speed_10m_kt = ws
             if wd is not None:
                 h.wind_direction_10m_deg = wd
+            # Gust (10fg) is a window MAXIMUM ("max gust since previous
+            # post-processing"), not an instantaneous value — a max is not
+            # linearly interpolable. Hold the reported max of the covering
+            # interval: the next anchor's window contains this gap hour. (#441 #6)
+            if next_h.wind_gusts_10m_kt is not None:
+                h.wind_gusts_10m_kt = next_h.wind_gusts_10m_kt
             filled += 1
     return filled
 
