@@ -126,6 +126,15 @@ def precache_icon_eu_run(init: datetime) -> dict[str, int]:
                     "Pre-cache ICON-EU f%03d %s failed", fhour, var, exc_info=True,
                 )
 
+        # Unlike the flight-briefing prefetch/enrichment paths, this warm-up
+        # does NOT prepend the rain_con de-accumulation predecessor step (#421).
+        # The airport-profile hour set is gappy across day boundaries, so a
+        # single leading step wouldn't give parity anyway, and warming every
+        # block's predecessor is not worth the complexity here: a briefing whose
+        # window starts on a boundary hour just fetches that one predecessor
+        # live in `_enrich_icon_eu_cloud_diagnostics`. The firing gate stays
+        # missing-data-safe throughout — this is a warm-path gap, not a
+        # correctness one.
         diag_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
         if not is_cached(run_dir, diag_ck):
             try:

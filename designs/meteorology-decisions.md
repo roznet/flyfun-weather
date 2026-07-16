@@ -1363,6 +1363,13 @@ spatial-interp `_lerp_diagnostics`.
   the first window hour a predecessor to difference against. The firing gate and
   native corroboration now evaluate ICON towers. `SNOW_CON` (convective snow)
   stays deferred — omitting it is safe by construction (positive-dry-evidence gate).
+  Validation caveat: the DWD product/URL was verified live against the opendata
+  directory listing (per the issue), and the de-accumulation logic is covered by
+  unit + mocked-decode integration tests. The cfgrib **decoded shortName** (the
+  `rain_con` key the field map relies on) has not yet been confirmed against a
+  real DWD GRIB pull — worth a one-time live-decode check when convenient, though
+  it follows the same lowercased-shortName convention as the sibling single-level
+  fields (`ceiling`, `clcl`, …) that already decode correctly in production.
 - **GFS `CPRAT`/`ACPCP`** (convective precip): GFS always emits convective
   *cover*, which already drives the firing gate, so GFS precip is redundant for
   the gate. Deferred (the `.idx` byte-range + shortName needs validation).
