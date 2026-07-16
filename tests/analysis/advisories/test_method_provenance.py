@@ -546,11 +546,12 @@ class TestNonMethodAxisReportsNone:
 class TestConvectiveEvaluatorBadgesEffective:
     """The convective evaluator's consumer half (the last method-bearing axis).
 
-    The chip must select the layer the evidence was *drawn from*. When the thermo
-    safety floor raises a quiet NWP grade, the floor changes the severity but not
-    the source — the geometry is still the NWP track's — so the method stays
-    ``nwp`` rather than becoming a compound token. A CAPE fallback (no
-    ``convective_nwp`` at all) genuinely changes the source, and is reported.
+    The chip must select the layer the evidence was *drawn from*. The convective
+    grade is now NWP-native (#442): DD no longer floors the colour, and a
+    ``dd_trigger`` amber (or a plain NWP grade) still draws the NWP track's
+    geometry — so the method stays ``nwp`` rather than becoming a compound token.
+    A CAPE fallback (no ``convective_nwp`` at all) genuinely changes the source,
+    and is reported.
     """
 
     @staticmethod
@@ -577,11 +578,11 @@ class TestConvectiveEvaluatorBadgesEffective:
         assert rep.primary_method_id == "nwp"
         assert all(m == "nwp" for m in _region_method_ids(result))
 
-    def test_thermo_floor_does_not_compound_the_method(self):
-        """Quiet NWP floored up by thermo → still ``nwp``: the evidence is NWP's.
-
-        The user's decision: report the *intended* track. The floor moved the
-        grade, not the geometry the chip will draw.
+    def test_dd_divergence_does_not_compound_the_method(self):
+        """NWP LOW under a HIGH DD tower → graded on NWP (amber), method still
+        ``nwp``: the geometry the chip draws is the NWP track's (#442). Report the
+        *intended* track; the DD divergence rides ``reason_code`` / the cross-check,
+        not ``method_id``.
         """
         ctx = _ctx(
             [self._sounding(ConvectiveRisk.LOW, ConvectiveRisk.HIGH) for _ in range(6)],

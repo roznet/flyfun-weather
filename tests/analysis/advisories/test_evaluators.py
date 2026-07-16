@@ -470,11 +470,12 @@ class TestConvective:
         assert res_with.aggregate_status == res_without.aggregate_status
         assert res_with.per_model[0].status == res_without.per_model[0].status
 
-    def test_dd_floor_uses_thermo_el_for_altitude_filter(self):
-        """Regression (#283 review I1): when the DD floor raises a quiet-NWP
-        point and the active track has no geometry (top_ft=None), the below-cruise
-        filter falls back to the thermo EL so convection topping out below cruise
-        is still skipped — not counted via the None-top bypass."""
+    def test_dd_trigger_uses_thermo_el_for_altitude_filter(self):
+        """Regression (#283 review I1, updated for #442): when a green NWP is raised
+        to a ``dd_trigger`` amber and the active track has no geometry
+        (top_ft=None), the below-cruise filter falls back to the thermo EL so
+        convection topping out below cruise is still skipped — not counted via the
+        None-top bypass. Here the DD EL (FL180) is below the FL300 cruise → GREEN."""
         from datetime import datetime
 
         from weatherbrief.models import (
@@ -524,15 +525,21 @@ class TestConvective:
             "min_risk": 2, "affected_pct_amber": 20,
             "affected_pct_red": 50, "top_clearance_ft": 2000,
         }
-        # Active = quiet NWP (DD floor raises grade to HIGH). Thermo EL FL180 +
+        # Active = quiet NWP → dd_trigger raises grade to amber. Thermo EL FL180 +
         # 2000 ft clearance = FL200 <= FL300 cruise → every point skipped → GREEN.
         res = ConvectiveEvaluator.evaluate(_ctx(nwp_quiet), params)
         assert res.aggregate_status == AdvisoryStatus.GREEN
 
-    def test_dd_floor_altitude_filter_uses_deeper_top(self):
-        """Regression (#283 review): when the DD floor applies and the NWP top is
-        non-None but shallow, the below-cruise filter uses the deeper DD EL — a
-        shallow NWP top must not filter out a point graded HIGH by a deep DD EL."""
+    def test_shallow_nwp_moderate_below_cruise_greens_despite_deep_dd(self):
+        """#442: DD no longer floors the colour, and ``dd_trigger`` only rescues a
+        *green* NWP. Here the NWP fires its own MODERATE cell (so it is not green)
+        but tops out at FL150, below the FL300 cruise → filtered to GREEN. The deep
+        DD HIGH (EL FL350) does NOT floor it back up.
+
+        Known limitation (§18): a shallow NWP MODERATE + deep DD HIGH falls in the
+        cross-check's "neither active nor quiet" gap, so the DD's deeper reach is
+        not surfaced even as amber. Rare configuration; flagged as a calibration
+        item rather than handled here."""
         from datetime import datetime
 
         from weatherbrief.models import (
@@ -543,8 +550,7 @@ class TestConvective:
             ThermodynamicIndices,
         )
 
-        # NWP MODERATE, shallow top FL150; DD HIGH, EL FL350. Cruise FL300 sits
-        # above the NWP top but below the DD EL → the HIGH grade reaches cruise.
+        # NWP MODERATE, shallow top FL150; DD HIGH, EL FL350. Cruise FL300.
         nwp_shallow = ConvectiveAssessment(
             risk_level=ConvectiveRisk.MODERATE, top_ft=15000.0, method="nwp",
         )
@@ -580,8 +586,8 @@ class TestConvective:
             "affected_pct_red": 50, "top_clearance_ft": 2000,
         }
         res = ConvectiveEvaluator.evaluate(ctx, params)
-        # DD EL FL350 reaches FL300 cruise → not filtered → HIGH → RED.
-        assert res.aggregate_status == AdvisoryStatus.RED
+        # NWP's own MODERATE tops below cruise → GREEN; DD no longer floors (#442).
+        assert res.aggregate_status == AdvisoryStatus.GREEN
 
 
 class TestConvectiveHeadline:

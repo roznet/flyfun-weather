@@ -120,7 +120,8 @@ class TestFIKIReasonCodes:
 
 
 class TestConvectiveReasonCodes:
-    """Was the model's own scheme alarmed, or was it quiet and floored up?"""
+    """Was the model's own scheme alarmed [active_track], or quiet with loaded
+    thermodynamics raising it to amber [dd_trigger, #442]?"""
 
     @staticmethod
     def _sounding(nwp_risk, thermo_risk) -> SoundingAnalysis:
@@ -133,23 +134,47 @@ class TestConvectiveReasonCodes:
             ),
         )
 
+    @staticmethod
+    def _quiet_nwp_sounding(thermo_risk) -> SoundingAnalysis:
+        # NWP genuinely quiet (green, no tower / precip / cover) so the cross-check
+        # reads ``dd_not_corroborated``; DD loaded above it.
+        return SoundingAnalysis(
+            convective_nwp=ConvectiveAssessment(
+                risk_level=ConvectiveRisk.NONE, cape_jkg=None,
+                base_ft=None, top_ft=None,
+            ),
+            convective_thermo=ConvectiveAssessment(
+                risk_level=thermo_risk, cape_jkg=2500, base_ft=3000, top_ft=30000,
+            ),
+        )
+
     def test_active_track_saw_it(self):
         ctx = _ctx([self._sounding(ConvectiveRisk.HIGH, ConvectiveRisk.LOW)] * 6, convective_method="nwp")
         res = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
         reasons = _reasons(res, HighlightSeverity.RED) | _reasons(res, HighlightSeverity.AMBER)
         assert reasons == {"active_track"}
 
-    def test_quiet_model_floored_up_by_thermodynamics(self):
-        """The case that is invisible today: NWP says LOW, thermo says HIGH.
-
-        Identical tower, identical colour, identical method_id ("nwp" — the layer
-        a chip draws is still the NWP track's). Only reason_code records that the
-        model itself was quiet.
-        """
+    def test_low_nwp_not_floored_up_by_dd(self):
+        """#442: DD no longer floors the colour. A LOW NWP under a HIGH DD tower
+        grades on the NWP itself — amber, reason ``active_track``, NOT red and NOT
+        ``thermo_floor``. The DD divergence rides the cross-check note instead."""
         ctx = _ctx([self._sounding(ConvectiveRisk.LOW, ConvectiveRisk.HIGH)] * 6, convective_method="nwp")
         res = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
+        assert res.aggregate_status == AdvisoryStatus.AMBER
         reasons = _reasons(res, HighlightSeverity.RED) | _reasons(res, HighlightSeverity.AMBER)
-        assert reasons == {"thermo_floor"}
+        assert reasons == {"active_track"}
+
+    def test_dd_trigger_amber_when_nwp_green(self):
+        """#442: NWP green + uncorroborated DD MODERATE+ → AMBER (never red),
+        reason ``dd_trigger``, with the cross-check note surfaced. DD alone can
+        raise green→amber; it can never produce a red."""
+        ctx = _ctx([self._quiet_nwp_sounding(ConvectiveRisk.HIGH)] * 6, convective_method="nwp")
+        res = ConvectiveEvaluator.evaluate(ctx, _defaults(ConvectiveEvaluator))
+        assert res.aggregate_status == AdvisoryStatus.AMBER
+        assert _reasons(res, HighlightSeverity.RED) == set()   # DD never reds
+        assert _reasons(res, HighlightSeverity.AMBER) == {"dd_trigger"}
+        # The divergence carries a note, not just a colour.
+        assert any(pm.cross_check for pm in res.per_model)
         # And the method is NOT compounded — that decision stands.
         rep = next(m for m in res.per_model if m.model == res.representative_model)
         assert rep.primary_method_id == "nwp"

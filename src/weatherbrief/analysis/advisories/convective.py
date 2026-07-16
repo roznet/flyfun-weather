@@ -138,6 +138,7 @@ class ConvectiveEvaluator:
             total = 0
             affected = 0  # >= min_risk (LOW floor) — drives the colour
             affected_mod = 0  # >= MODERATE — anchors the headline extent (#300)
+            dd_trigger_count = 0  # DD-only amber points (#442) — never escalate RED
             has_high = False
             worst_risk = ConvectiveRisk.NONE
             below_cruise_count = 0  # risky points skipped because tops below cruise
@@ -203,30 +204,45 @@ class ConvectiveEvaluator:
                 # the divergence is surfaced via the cross-check below and the
                 # dd_nwp_agreement advisory, not blended into the DD tier. When
                 # the active track is DD this is a no-op.
+                # NWP-native grade (#442, meteorology-decisions §18). The colour
+                # comes from the model's OWN convective scheme (the active track;
+                # convective_method defaults to "nwp"), NOT max(NWP, DD). A quiet
+                # NWP is no longer floored up to a loaded DD tower — that floor
+                # produced the loaded-gun false-alarm REDs. The DD tier still
+                # speaks, but only as an AMBER cap + the cross-check note below,
+                # never a red. ``reason_code`` answers "why is this flagged?" —
+                # ``active_track`` (the model's scheme saw it) or ``dd_trigger``
+                # (the model was quiet and the thermodynamics raised it to amber);
+                # ``method_id`` stays the active track's, the layer a chip draws.
                 graded_risk = conv.risk_level
-                # Did the thermo floor decide this point, or the active track?
-                # Both produce an identical RED tower, and the difference is the
-                # whole story: "the model's own convective scheme sees storms"
-                # versus "the model is quiet, but the thermodynamics are loaded".
-                # This is the compound provenance we deliberately keep OUT of
-                # ``method_id`` — that field answers "which layer do I draw?" and
-                # the answer is still the active track's. ``reason_code`` answers
-                # "why is this flagged?", which is a different question.
-                floored_by_thermo = False
-                if thermo_conv is not None and _RISK_ORDER.index(
-                    thermo_conv.risk_level
-                ) > _RISK_ORDER.index(graded_risk):
-                    graded_risk = thermo_conv.risk_level
-                    floored_by_thermo = True
-                reason = "thermo_floor" if floored_by_thermo else "active_track"
+                reason = "active_track"
 
                 risk_idx = _RISK_ORDER.index(graded_risk)
                 if risk_idx < _RISK_ORDER.index(min_risk):
-                    # Below the min risk floor → GREEN on the ribbon (checked,
-                    # nothing worth flagging here).
-                    ribbon_points.append((dist, HighlightSeverity.GREEN))
-                    region_cells.append((dist, None))
-                    continue
+                    # NWP is GREEN here. DD-trigger AMBER cap: when the DD-vs-model
+                    # cross-check flags an uncorroborated DD MODERATE+ tower (the
+                    # thermodynamics are loaded but the model's own scheme is
+                    # quiet), raise this point to AMBER — never RED — so the
+                    # divergence carries a colour, not just a note. Bound to the
+                    # SAME condition as ``xc`` (``dd_not_corroborated``) so colour,
+                    # note, and reason can never diverge. Capped at MODERATE so a
+                    # DD HIGH never renders a red-tier "peak HIGH" under amber.
+                    if (
+                        xc is not None
+                        and xc.direction == "dd_not_corroborated"
+                        and thermo_conv is not None
+                        and _MOD_IDX >= _RISK_ORDER.index(min_risk)
+                    ):
+                        graded_risk = ConvectiveRisk.MODERATE
+                        risk_idx = _MOD_IDX
+                        reason = "dd_trigger"
+                        dd_trigger_count += 1
+                    else:
+                        # Below the min risk floor → GREEN on the ribbon (checked,
+                        # nothing worth flagging here).
+                        ribbon_points.append((dist, HighlightSeverity.GREEN))
+                        region_cells.append((dist, None))
+                        continue
 
                 # Skip if convective tops are well below cruise altitude. When the
                 # DD floor raised the grade and the active (quiet NWP) track has no
@@ -352,6 +368,29 @@ class ConvectiveEvaluator:
                 else:
                     status = pct_above_threshold(affected, total, affected_pct_amber, affected_pct_red)
                     if worst_risk == ConvectiveRisk.LOW and status == AdvisoryStatus.RED:
+                        status = AdvisoryStatus.AMBER
+                    # #442: DD-trigger points raise a green NWP to AMBER only —
+                    # they must never escalate the advisory to RED via coverage.
+                    # RED comes only from the model's own NWP track (its HIGH, or
+                    # its own MODERATE+ extent crossing the red threshold). If the
+                    # red is crossed only because of DD-trigger extent, cap AMBER.
+                    if status == AdvisoryStatus.RED and dd_trigger_count > 0:
+                        real_mod = affected - dd_trigger_count
+                        if pct_above_threshold(
+                            real_mod, total, affected_pct_amber, affected_pct_red
+                        ) != AdvisoryStatus.RED:
+                            status = AdvisoryStatus.AMBER
+                    # #442: any MODERATE+ convection that reaches cruise is at least
+                    # a WATCH. The coverage thresholds were calibrated with the old
+                    # DD floor inflating the LOW-floor extent; without it an
+                    # isolated-but-real MODERATE tower (or a dd_trigger amber) can
+                    # fall below affected_pct_amber and read GREEN despite the
+                    # "MODERATE+ peak" headline — colour contradicting text, and the
+                    # DD divergence note going unsurfaced. Floor a MODERATE+ point at
+                    # AMBER. HIGH still routes through the RED branch above; the pct
+                    # thresholds still govern LOW-only extent and the MODERATE→RED
+                    # coverage escalation.
+                    if affected_mod > 0 and status == AdvisoryStatus.GREEN:
                         status = AdvisoryStatus.AMBER
                 # Headline anchors on the MODERATE+ extent + named peak, so the
                 # severity word (peak) and the coverage (MODERATE+ extent) are

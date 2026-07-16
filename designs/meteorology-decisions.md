@@ -1773,9 +1773,8 @@ consistency test).
 ## 18. Convective advisory colour: NWP-native grade with a DD-trigger AMBER cap (removing the full DD floor)
 
 **Date:** 2026-07-16
-**Status:** Approved, not yet implemented — tracked in **#442**. (This section
-documents the decision; the code still ships the §4/§14 DD-floor behaviour until
-#442 lands. Do not treat the invariant below as live until then.)
+**Status:** Implemented (#442). Supersedes the §4/§14 advisory-level DD-floor
+behaviour.
 **Context:** Follow-up to the ICON `rain_con` firing-gate fix (decoded under
 cfgrib shortName `crr`, not `rain_con`, commit `60f7036b`). That fix is what
 finally makes ICON's model-native convective tier trustworthy enough to grade on
@@ -1802,23 +1801,50 @@ divergence must not vanish silently.
 
 ### The decision
 
-Grade the colour from the **NWP-native tier only** (no full floor), with exactly
-one asymmetric exception:
+Grade the colour from the **NWP-native tier only** (no full floor), with two
+rules layered on top:
 
-> If the NWP tier is **green** (below `min_risk`) **and** the DD-vs-NWP
-> cross-check returns `dd_not_corroborated` (DD MODERATE+ while the model's own
-> scheme is quiet — no convective precip above the firing gate, low/no cover, no
-> deep tower), **upgrade to AMBER only** — never RED — with
-> `reason_code = "dd_trigger"`. Cap the displayed peak at MODERATE for these
-> DD-only ambers (so a DD HIGH never renders "peak HIGH" under an amber colour).
+> **(1) DD-trigger amber.** If the NWP tier is **green** (below `min_risk`) **and**
+> the DD-vs-NWP cross-check returns `dd_not_corroborated` (DD MODERATE+ while the
+> model's own scheme is quiet — no convective precip above the firing gate,
+> low/no cover, no deep tower), **upgrade that point to AMBER only** — never RED —
+> with `reason_code = "dd_trigger"`, tier capped at MODERATE (so a DD HIGH never
+> renders "peak HIGH" under an amber colour).
+>
+> **(2) MODERATE+ amber floor.** Any MODERATE+ point that reaches cruise (real NWP
+> MODERATE or a dd_trigger) forces the advisory to **at least AMBER**. The
+> per-model colour otherwise runs through the existing coverage thresholds
+> (`affected_pct_amber` 20 %, `affected_pct_red` 50 %) on the LOW-floor extent —
+> but those were calibrated **with** the old DD floor inflating that extent.
+> Without the floor, an isolated-but-real MODERATE tower (8 % of route) or a
+> dd_trigger amber would fall below 20 % and read GREEN despite a "MODERATE+ peak
+> MODERATE" headline — colour contradicting text, and the divergence note
+> unsurfaced. The floor keeps MODERATE convection a *watch*.
 
-New invariant: **RED ⟺ the model's own NWP scheme fires HIGH.** DD can only ever
-raise green→amber; it can never, by itself, produce red.
+Colour provenance after this change:
 
-The amber trigger is bound to the *exact* condition that already emits the
+- **RED** — only from the model's own NWP track: a **HIGH** tower anywhere, or its
+  own **MODERATE+ coverage crossing the red threshold** (≥ 50 %). A `dd_trigger`
+  point is explicitly excluded from the red-coverage count, so **DD alone can
+  never produce a red** — it can only raise green→amber.
+- **AMBER** — any MODERATE+ reaching cruise (real or dd_trigger), or LOW-floor
+  coverage over the amber threshold.
+- **GREEN** — everything else (including convection topping out below cruise).
+
+The dd_trigger amber is bound to the *exact* condition that emits the
 `convective_cross_check` note (`convective.py::convective_cross_check`,
 `dd_not_corroborated`). Colour, note, and reason are therefore one condition and
 cannot diverge — "why amber?" is answered verbatim by the surfaced note.
+
+### Known limitation (calibration item)
+
+A **shallow NWP MODERATE + deep DD HIGH** point falls in a gap: the NWP is not
+green (so `dd_trigger` does not fire) yet its own tower tops below cruise (so the
+below-cruise filter greens it), and the cross-check's "neither active nor quiet"
+band (tower FL120–200, cover 10–25 %) stays silent — so the DD's deeper reach is
+not surfaced even as amber. Rare configuration; flagged for the calibration pass
+rather than special-cased now (test:
+`test_shallow_nwp_moderate_below_cruise_greens_despite_deep_dd`).
 
 ### Truth table (motivating flight: EGTF→LFAT→LFQA 2026-07-17)
 
@@ -1828,9 +1854,13 @@ cannot diverge — "why amber?" is answered verbatim by the surfaced note.
 | ICON  | MODERATE (`crr` realized) | MODERATE | AMBER | **AMBER** — NWP tier |
 | GFS   | quiet (cover ~3%, no tower) | MODERATE (CAPE 348) | AMBER (DD floor) | **AMBER** — reason = "DD MODERATE not corroborated" |
 
-The colours happen to match here, but the *provenance* changes: GFS is now amber
-because of a named, surfaced DD-vs-NWP disagreement rather than an anonymous
-floor, and the loaded-gun path can no longer escalate to red on DD alone.
+The colours match the old floor here (verified reproducing this pack), but the
+*provenance* changes: GFS is now amber via a named `dd_trigger` + the surfaced
+DD-vs-NWP note rather than an anonymous floor, and the loaded-gun path can no
+longer escalate to red on DD alone. Note the **MODERATE+ amber floor** is what
+keeps ICON and GFS at AMBER — without it, dropping the DD floor shrank the
+LOW-floor coverage below the 20 % amber threshold and both fell to GREEN despite
+their "MODERATE+ peak" headline (the wrinkle that rule fixes).
 
 ### Reasoning
 
@@ -1873,17 +1903,28 @@ floor, and the loaded-gun path can no longer escalate to red on DD alone.
   built only for *affected* points; the DD-trigger amber makes the point affected,
   so the note surfaces. Guard this in tests.
 
-### Implementation (see #442)
+### Implementation (#442)
 
-- `analysis/advisories/convective.py` — replace the `floored_by_thermo` block
-  (`graded_risk = max(...)`) with `graded_risk = conv.risk_level`; add a single
-  branch (NWP below `min_risk` **and** cross-check `dd_not_corroborated`) → amber-
-  capped tier + `reason_code = "dd_trigger"`, peak capped at MODERATE.
+- `analysis/advisories/convective.py`:
+  - Replaced the `floored_by_thermo` block (`graded_risk = max(NWP, DD)`) with
+    `graded_risk = conv.risk_level` (NWP-native).
+  - Added the DD-trigger branch inside the below-`min_risk` (green NWP) path:
+    `xc.direction == "dd_not_corroborated"` → `graded_risk = MODERATE`,
+    `reason_code = "dd_trigger"`, and a `dd_trigger_count` tally.
+  - In the status computation: exclude `dd_trigger_count` from the RED-coverage
+    test (DD never reds), then floor a MODERATE+ point (`affected_mod > 0`) at
+    AMBER (the coverage-recalibration wrinkle above).
+- `reason_code` token `thermo_floor` → `dd_trigger` (`models/advisories.py`;
+  no TS switch depends on the value).
 - `convective_character` — unchanged (already NWP-cells-only, orthogonal to
   severity, §15).
-- Optional `dd_amber_min_risk` param (default MODERATE) for eval-corpus tuning.
 - Downstream surfaces (cross-section RED/AMBER cutouts §373, digest assessment,
   iOS, MCP) inherit from the single grade — no per-surface change.
+- Tests: `test_reason_codes.py` (dd_trigger amber, LOW-NWP-not-floored),
+  `test_evaluators.py` (below-cruise via thermo EL; shallow-NWP limitation),
+  `test_method_provenance.py` (method stays `nwp`). Full suite green.
+- Deferred: optional `dd_amber_min_risk` param (default MODERATE) for eval-corpus
+  tuning; the shallow-NWP+deep-DD gap above.
 
 ### Real-world validation needed
 
