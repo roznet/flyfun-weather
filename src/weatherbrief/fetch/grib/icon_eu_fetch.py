@@ -113,6 +113,13 @@ ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
 # accumulated since init) added in #421 so the convective firing gate and
 # native corroboration can evaluate ICON towers — the rate is de-accumulated
 # in the enrichment loop, not here.
+# SNOW_CON (convective snow, also accumulated) is intentionally NOT fetched
+# (#421 scope decision): it would double the single-level file count for the
+# rare convective-snow-shower case, and omitting it is safe by construction —
+# the firing gate holds down only on positive dry evidence, so a winter ICON
+# tower with rain_con ~0 but real convective snow simply keeps its tier (no
+# regression, just an unclosed corner). If added, sum the two de-accumulated
+# rates before assigning convective_precip_mm_h.
 ICON_EU_CLOUD_DIAG_VARIABLES = (
     "ceiling", "hbas_con", "htop_con",
     "clcl", "clcm", "clch", "clct",
