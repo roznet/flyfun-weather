@@ -1070,6 +1070,44 @@ def test_nwp_firing_gate_realized_by_precip_keeps_tier():
     assert result.risk_level == ConvectiveRisk.HIGH
 
 
+def test_nwp_icon_dry_tower_held_down_by_rain_con():
+    """#421: a deep-but-dry ICON tower is now held down one level.
+
+    ICON's shape is base+top with no cover fraction → method `nwp_hybrid`. With
+    `convective_precip_mm_h` newly decoded from `rain_con`, a realized-dry tower
+    (rate 0.0, positive dry evidence) hits the firing gate and drops HIGH→MODERATE
+    — the behaviour ICON never got before this PR. The method must stay
+    `nwp_hybrid`: ICON has geometry, so it never falls through to `nwp_precip`.
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=4000.0, convective_top_ft=30000.0,  # FL300 → HIGH
+        convective_precip_mm_h=0.0,                            # realized dry
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_hybrid"          # geometry present, NOT nwp_precip
+    assert result.risk_level == ConvectiveRisk.MODERATE  # HIGH held down one level
+    assert any("dry" in s for s in result.suppressors)
+
+
+def test_nwp_icon_wet_tower_stays_nwp_hybrid():
+    """#421: a firing ICON tower keeps its tier and stays `nwp_hybrid`.
+
+    Pins that a populated `convective_precip_mm_h` on an ICON-shaped diagnostic
+    does not reroute it onto the geometry-absent `nwp_precip` ladder.
+    """
+    indices = ThermodynamicIndices(cape_surface_jkg=40.0)
+    diag = NWPCloudDiagnostics(
+        convective_base_ft=4000.0, convective_top_ft=30000.0,
+        convective_precip_mm_h=1.5,
+    )
+    result = assess_convective_nwp(indices, diag)
+    assert result is not None
+    assert result.method == "nwp_hybrid"
+    assert result.risk_level == ConvectiveRisk.HIGH
+
+
 def test_nwp_corroboration_bumps_realized_cell():
     """A realized MODERATE cell with strong native K-index bumps to HIGH."""
     indices = ThermodynamicIndices(cape_surface_jkg=40.0)
