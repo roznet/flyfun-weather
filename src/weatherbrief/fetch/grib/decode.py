@@ -129,7 +129,15 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     # equivalent of ECMWF `cp`, but already mm (no ×1000). The rate is
     # de-accumulated in the ICON enrichment loop (the only place that knows the
     # previous step), so build_icon_cloud_diagnostics stays unaware of it.
-    "rain_con": "conv_rain_kg_m2",
+    #
+    # DWD's RAIN_CON product decodes under cfgrib shortName `crr` (paramId
+    # 228218, "Convective rain rate") — NOT `rain_con`. Despite the "rate" name
+    # eccodes attaches, the stored values are the accumulated field (verified
+    # against real 20260716_12z GRIB: monotonically increasing across forecast
+    # hours), so the de-accumulation is correct. This map is keyed on the
+    # lowercased cfgrib var name (see decode_icon_eu_cloud_diag_per_point), so
+    # the key MUST be `crr` for the field to be picked up at all.
+    "crr": "conv_rain_kg_m2",
 }
 
 # ECMWF single-level (a1) field mapping.

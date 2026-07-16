@@ -922,8 +922,41 @@ class TestIconEuDecode:
         assert _ICON_CLOUD_DIAG_FIELD_MAP["ceiling"] == "ceiling_m"
         assert _ICON_CLOUD_DIAG_FIELD_MAP["hbas_con"] == "convective_cloud_base_m"
         assert _ICON_CLOUD_DIAG_FIELD_MAP["htop_con"] == "convective_cloud_top_m"
-        # rain_con (convective rain, accumulated) decoded for the firing gate (#421)
-        assert _ICON_CLOUD_DIAG_FIELD_MAP["rain_con"] == "conv_rain_kg_m2"
+        # DWD RAIN_CON (convective rain, accumulated) decoded for the firing
+        # gate (#421). cfgrib names it `crr` (paramId 228218), NOT `rain_con` —
+        # confirmed against real GRIB. Keying on `rain_con` silently dropped the
+        # field so ICON's convective_precip_mm_h was always None and the gate
+        # could never fire. The map MUST key on the actual cfgrib shortName.
+        assert _ICON_CLOUD_DIAG_FIELD_MAP["crr"] == "conv_rain_kg_m2"
+        assert "rain_con" not in _ICON_CLOUD_DIAG_FIELD_MAP
+
+    def test_icon_cloud_diag_decodes_crr_to_conv_rain(self):
+        """DWD RAIN_CON (cfgrib shortName `crr`) populates conv_rain_kg_m2.
+
+        Regression for #421 follow-up: the field arrives from cfgrib under the
+        var name `crr`, and the per-point decode lowercases the var name before
+        the field-map lookup. This pins that a `CRR`/`crr` variable is picked up
+        end-to-end (the exact link that broke when the map keyed `rain_con`).
+        """
+        from unittest.mock import MagicMock, patch
+
+        from weatherbrief.fetch.grib import decode as decode_mod
+
+        mock_var = MagicMock()
+        mock_ds = MagicMock()
+        # Uppercase to also pin the .lower() normalization at the lookup site.
+        mock_ds.data_vars = {"CRR": mock_var}
+
+        # decode_icon_eu_cloud_diag_per_point does a local `import cfgrib`, so
+        # patch the attribute on the real cfgrib module the local import binds.
+        with patch("cfgrib.open_datasets", return_value=[mock_ds]), patch.object(
+            decode_mod, "_interpolate_per_point", return_value=[3.5]
+        ):
+            out = decode_mod.decode_icon_eu_cloud_diag_per_point(
+                b"grib-bytes", [48.0], [2.0],
+            )
+
+        assert out == [{"conv_rain_kg_m2": 3.5}]
 
 
 # --- ICON-EU single-level URL format tests ---
