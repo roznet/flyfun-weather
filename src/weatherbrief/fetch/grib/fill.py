@@ -41,6 +41,7 @@ Interpolation rules (see also spatial_interpolation.py for the spatial axis):
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -715,6 +716,49 @@ def _lerp_circ(a: float | None, b: float | None, frac: float) -> float | None:
     return (a + diff * frac) % 360
 
 
+def _wind_uv(speed_kt: float, direction_deg: float) -> tuple[float, float]:
+    """Meteorological (speed, from-direction) → (u, v) components.
+
+    Direction is where the wind comes FROM, so the vector points the opposite
+    way: u = -speed·sin(dir), v = -speed·cos(dir).
+    """
+    rad = math.radians(direction_deg)
+    return -speed_kt * math.sin(rad), -speed_kt * math.cos(rad)
+
+
+def _lerp_wind(
+    speed_a: float | None,
+    dir_a: float | None,
+    speed_b: float | None,
+    dir_b: float | None,
+    frac: float,
+) -> tuple[float | None, float | None]:
+    """Vector-correct temporal interpolation of a wind → (speed_kt, dir_deg).
+
+    Interpolating scalar speed and circular direction independently is wrong:
+    10 kt @ 090° → 10 kt @ 270° would hold 10 kt through an intermediate
+    bearing instead of passing through near-calm. Reconstruct U/V, interpolate
+    the components, then derive speed and direction. (#441 finding #7)
+
+    When an endpoint lacks a direction (calm), fall back to scalar speed interp
+    and keep whichever direction is defined. When the interpolated vector is
+    near-calm, direction is ill-defined so copy the nearer anchor's direction.
+    """
+    if speed_a is None or speed_b is None:
+        return None, None
+    if dir_a is None or dir_b is None:
+        spd = speed_a + (speed_b - speed_a) * frac
+        return spd, (dir_a if dir_a is not None else dir_b)
+    ua, va = _wind_uv(speed_a, dir_a)
+    ub, vb = _wind_uv(speed_b, dir_b)
+    u = ua + (ub - ua) * frac
+    v = va + (vb - va) * frac
+    spd = math.hypot(u, v)
+    if spd < _CALM_WIND_KT:
+        return spd, (dir_a if frac < 0.5 else dir_b)
+    return spd, math.degrees(math.atan2(-u, -v)) % 360.0
+
+
 # ---------------------------------------------------------------------------
 # ECMWF surface scalars (HourlyForecast surface fields) — linear interp
 # ---------------------------------------------------------------------------
@@ -722,10 +766,11 @@ def _lerp_circ(a: float | None, b: float | None, frac: float) -> float | None:
 # Instantaneous fields written by ``_apply_ecmwf_surface_to_hourly``.
 # Precip/snow are *window-rate* — distributed at apply time across every hour
 # in the differencing window, so they don't need temporal interpolation.
+# Wind speed/direction are interpolated together as U/V components by
+# ``_lerp_wind`` (not scalar-interpolated), so they are NOT listed here. (#441)
 _ECMWF_SURFACE_INSTANT_FIELDS: tuple[str, ...] = (
     "temperature_2m_c",
     "dewpoint_2m_c",
-    "wind_speed_10m_kt",
     "wind_gusts_10m_kt",
     "visibility_m",
     "cape_jkg",
@@ -819,17 +864,16 @@ def _interp_surface_hourly(hourly_list: list[HourlyForecast]) -> int:
                 v = _lerp(getattr(prev_h, f), getattr(next_h, f), frac)
                 if v is not None:
                     setattr(h, f, v)
-            # Wind direction: circular interp, gated by interpolated speed
-            wd = _lerp_circ(prev_h.wind_direction_10m_deg, next_h.wind_direction_10m_deg, frac)
-            ws = h.wind_speed_10m_kt
+            # Wind: interpolate as U/V components, then derive speed + direction.
+            ws, wd = _lerp_wind(
+                prev_h.wind_speed_10m_kt, prev_h.wind_direction_10m_deg,
+                next_h.wind_speed_10m_kt, next_h.wind_direction_10m_deg,
+                frac,
+            )
+            if ws is not None:
+                h.wind_speed_10m_kt = ws
             if wd is not None:
-                if ws is not None and ws < _CALM_WIND_KT:
-                    # Calm: pick the closer anchor's direction (avoids a
-                    # spurious mid-arc direction when both endpoints are calm).
-                    nearer = prev_h if frac < 0.5 else next_h
-                    h.wind_direction_10m_deg = nearer.wind_direction_10m_deg
-                else:
-                    h.wind_direction_10m_deg = wd
+                h.wind_direction_10m_deg = wd
             filled += 1
     return filled
 
@@ -949,8 +993,12 @@ def _interp_levels_at(
         else:
             td_c = _lerp(prev.dewpoint_c, nxt.dewpoint_c, frac)
 
-        ws = _lerp(prev.wind_speed_kt, nxt.wind_speed_kt, frac)
-        wd = _lerp_circ(prev.wind_direction_deg, nxt.wind_direction_deg, frac)
+        # Wind: U/V-component interpolation (see _lerp_wind), not scalar. (#441)
+        ws, wd = _lerp_wind(
+            prev.wind_speed_kt, prev.wind_direction_deg,
+            nxt.wind_speed_kt, nxt.wind_direction_deg,
+            frac,
+        )
 
         out.append(PressureLevelData(
             pressure_hpa=prev.pressure_hpa,

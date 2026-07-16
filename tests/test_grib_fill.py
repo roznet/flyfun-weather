@@ -10,6 +10,7 @@ from weatherbrief.analysis.spatial_interpolation import (
 )
 from weatherbrief.fetch.grib.fill import (
     _gfs_window_length_hours,
+    _lerp_wind,
     apply_gfs_rh_condensate_gate,
     propagate_all,
 )
@@ -757,3 +758,33 @@ class TestGfsRhCondensateGate:
         assert h.nwp_cloud_diagnostics.mid.cover_pct is None
         assert h.nwp_cloud_diagnostics.convective_cover_pct == 55.0
         assert h.nwp_cloud_diagnostics.convective_base_ft == 2665.0
+
+
+class TestLerpWind:
+    """#441 finding #7: temporal wind interp uses U/V components, not scalar
+    speed + circular direction."""
+
+    def test_opposing_winds_pass_through_calm(self):
+        # 10 kt @ 090° → 10 kt @ 270°: the U/V midpoint is near-calm, NOT 10 kt
+        # at some intermediate bearing (which naive scalar interp would give).
+        spd, _ = _lerp_wind(10.0, 90.0, 10.0, 270.0, 0.5)
+        assert spd < 1.0
+
+    def test_same_direction_preserves(self):
+        spd, wd = _lerp_wind(10.0, 270.0, 20.0, 270.0, 0.5)
+        assert spd == pytest.approx(15.0)
+        assert wd == pytest.approx(270.0)
+
+    def test_veering_midpoint(self):
+        # 10 kt from 270° (westerly) → 10 kt from 360° (northerly): the vector
+        # midpoint is a NW wind of reduced speed, bearing between 270 and 360.
+        spd, wd = _lerp_wind(10.0, 270.0, 10.0, 360.0, 0.5)
+        assert spd == pytest.approx(10.0 * (2 ** 0.5) / 2, abs=0.1)  # ~7.07 kt
+        assert 270.0 < wd < 360.0
+
+    def test_none_endpoints(self):
+        assert _lerp_wind(None, 90.0, 10.0, 90.0, 0.5) == (None, None)
+        # Missing direction on one side → scalar speed, keep defined direction.
+        spd, wd = _lerp_wind(10.0, None, 20.0, 90.0, 0.5)
+        assert spd == pytest.approx(15.0)
+        assert wd == 90.0
