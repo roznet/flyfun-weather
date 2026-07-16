@@ -24,6 +24,7 @@ from weatherbrief.fetch.grib.cache import (
     put_cached,
 )
 from weatherbrief.fetch.grib.icon_eu_fetch import (
+    ICON_EU_CLOUD_DIAG_CACHE_KEY,
     ICON_EU_VARIABLES as ICON_EU_PRECACHE_VARS,
 )
 
@@ -125,7 +126,7 @@ def precache_icon_eu_run(init: datetime) -> dict[str, int]:
                     "Pre-cache ICON-EU f%03d %s failed", fhour, var, exc_info=True,
                 )
 
-        diag_ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
+        diag_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
         if not is_cached(run_dir, diag_ck):
             try:
                 fetched = fetch_icon_eu_single_level(

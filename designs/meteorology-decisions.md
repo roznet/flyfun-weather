@@ -1312,9 +1312,11 @@ when the model's own scheme *realized* convection — `convective_precip_mm_h >
 case) is held down one level. This is the native-side mirror of §6's parcel-EL
 over-read fix. Crucially it is **missing-data-safe**: a not-realized tower is
 held down only on *positive* dry evidence (precip ~0 or cover ≤ threshold), never
-on absent data — so a model that simply doesn't emit precip (ICON without
-`rain_con`, ECMWF before `cp` lands) keeps its tower-top tier rather than being
-wrongly suppressed (safety asymmetry).
+on absent data — so a model that simply doesn't emit precip (ECMWF before `cp`
+lands, or the first ICON window hour with no predecessor step to de-accumulate
+against) keeps its tower-top tier rather than being wrongly suppressed (safety
+asymmetry). (ICON gained a `convective_precip_mm_h` signal from `rain_con` in
+#421 — see "Remaining decode gaps" below.)
 
 **Native corroboration.** A *realized* MODERATE+ cell whose own model-native
 indices are strong (`k_index > 35`, `total_totals > 50`, or conv precip >
@@ -1353,11 +1355,14 @@ spatial-interp `_lerp_diagnostics`.
 
 ### Remaining decode gaps (small, low-risk)
 
-- **ICON `rain_con`** (convective rain) is accumulated since init and would need
-  new step-difference machinery in the ICON merge path (ICON has no accumulated
-  single-level field today). Deferred — needs real-GRIB validation of the
-  product/shortName and cadence. ICON's firing gate is missing-data-safe, so
-  ICON keeps its tower-top tier meanwhile.
+- **ICON `rain_con`** (convective rain) — ✅ RESOLVED (#421). Accumulated since
+  init (kg/m² ≡ mm, already mm so **no** ×1000, unlike ECMWF `cp`); the mm/h rate
+  is de-accumulated in the ICON cloud-diag merge loop, mirroring the ECMWF `cp`
+  path. ICON has no ±margin (fetched on-demand exactly on window hours), so the
+  merge prepends one leading single-level step (`icon_eu_previous_step`) to give
+  the first window hour a predecessor to difference against. The firing gate and
+  native corroboration now evaluate ICON towers. `SNOW_CON` (convective snow)
+  stays deferred — omitting it is safe by construction (positive-dry-evidence gate).
 - **GFS `CPRAT`/`ACPCP`** (convective precip): GFS always emits convective
   *cover*, which already drives the firing gate, so GFS precip is redundant for
   the gate. Deferred (the `.idx` byte-range + shortName needs validation).

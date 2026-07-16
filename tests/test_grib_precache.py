@@ -104,6 +104,7 @@ class TestPrecacheIconEuRun:
             put_cached,
         )
         from weatherbrief.fetch.grib.icon_eu_fetch import (
+            ICON_EU_CLOUD_DIAG_CACHE_KEY,
             ICON_EU_VARIABLES,
         )
 
@@ -120,7 +121,7 @@ class TestPrecacheIconEuRun:
                     cache_key(fhour, f"ICON_EU_{var.upper()}"),
                     b"x",  # marker bytes; not parsed
                 )
-            put_cached(run_dir, cache_key(fhour, "ICON_EU_CLOUD_DIAG"), b"x")
+            put_cached(run_dir, cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY), b"x")
 
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_per_variable"

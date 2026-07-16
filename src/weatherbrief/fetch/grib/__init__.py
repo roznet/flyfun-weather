@@ -2921,9 +2921,11 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     completion.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_CLOUD_DIAG_CACHE_KEY,
         ICON_EU_VARIABLES,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
+        icon_eu_previous_step,
     )
 
     outer = _icon_prefetch_workers()
@@ -2973,9 +2975,19 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
                     jobs.append((_fetch_var, fhour, var, ck))
 
         # Single-level cloud diagnostics
-        diag_ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
+        diag_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
         if not is_cached(ctx.run_dir, diag_ck):
             jobs.append((_fetch_diag, fhour, diag_ck))
+
+    # One leading single-level step so the first window hour has a predecessor
+    # to de-accumulate rain_con against (#421). Cloud-diag fetch only — the
+    # model-level sounding list above is untouched.
+    if ctx.forecast_hours:
+        lead = icon_eu_previous_step(min(ctx.forecast_hours))
+        if lead is not None and lead not in ctx.forecast_hours:
+            lead_ck = cache_key(lead, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+            if not is_cached(ctx.run_dir, lead_ck):
+                jobs.append((_fetch_diag, lead, lead_ck))
 
     if not jobs:
         return
@@ -3137,11 +3149,34 @@ def _enrich_icon_eu_cloud_diagnostics(
     NWPCloudLayerDiag are filled from it.
     """
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
-    from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_CLOUD_DIAG_CACHE_KEY,
+        fetch_icon_eu_single_level,
+        icon_eu_conv_rain_rate_mm_h,
+        icon_eu_previous_step,
+    )
+
+    # Prepend one leading step so the first window hour has a predecessor to
+    # de-accumulate rain_con against, then walk steps in sorted order carrying
+    # the previous accumulated value + valid time — a direct port of the ECMWF
+    # a1 loop (#421). The leading step is a harmless no-op for enrichment:
+    # _matches_valid_time never matches an out-of-window hourly, so it only
+    # seeds the de-accumulation state.
+    steps = sorted(set(forecast_hours))
+    if steps:
+        lead = icon_eu_previous_step(steps[0])
+        if lead is not None and lead not in steps:
+            steps.insert(0, lead)
+
+    n_points = len(point_lats)
+    # None = no prior step for that point (unknown, missing-data-safe for the
+    # firing gate). Not 0.0 — a real 0.0 would actively hold a tower down.
+    prev_rain_con_per_point: list[float | None] = [None] * n_points
+    prev_valid_utc: datetime | None = None
 
     total_enriched = 0
-    for fhour in forecast_hours:
-        ck = cache_key(fhour, "ICON_EU_CLOUD_DIAG")
+    for fhour in steps:
+        ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
         if not is_cached(run_dir, ck):
             try:
                 fetched = fetch_icon_eu_single_level(
@@ -3167,6 +3202,41 @@ def _enrich_icon_eu_cloud_diagnostics(
 
         diagnostics_per_point = [build_icon_cloud_diagnostics(raw) for raw in decoded_points]
 
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+
+        # Convective precip rate (#421): rain_con is accumulated since init
+        # (kg/m² ≡ mm), so difference it against the previous step and inject the
+        # mm/h rate onto the just-built diagnostics so it rides the same
+        # forward-fill / spatial-interp path as the rest of the cloud
+        # diagnostics. Compute the window from the two valid times — ICON drops
+        # to 3-hourly past +78h. The rate helper does the mm/h conversion
+        # (already mm — NO ×1000, unlike ECMWF `cp`) and the None-vs-0.0
+        # missing-data handling.
+        window_h: float | None = None
+        if prev_valid_utc is not None:
+            _dh = (valid_utc - prev_valid_utc).total_seconds() / 3600.0
+            if _dh > 0:
+                window_h = _dh
+        for i, raw in enumerate(decoded_points):
+            diag_i = diagnostics_per_point[i]
+            if diag_i is None:
+                continue
+            rate = icon_eu_conv_rain_rate_mm_h(
+                raw.get("conv_rain_kg_m2"), prev_rain_con_per_point[i], window_h,
+            )
+            if rate is not None:
+                # Reconstruct rather than mutate so the NWPCloudDiagnostics
+                # immutability contract holds (review #284).
+                diagnostics_per_point[i] = diag_i.model_copy(
+                    update={"convective_precip_mm_h": rate}
+                )
+        # Carry this step's cumulative rain_con + valid time forward.
+        for i, raw in enumerate(decoded_points):
+            rc = raw.get("conv_rain_kg_m2")
+            if rc is not None:
+                prev_rain_con_per_point[i] = rc
+        prev_valid_utc = valid_utc
+
         # Fill missing layer base/top from CLC-derived boundaries
         if clc_layers_per_point:
             for pt_idx, diag in enumerate(diagnostics_per_point):
@@ -3181,8 +3251,6 @@ def _enrich_icon_eu_cloud_diagnostics(
                         layer.base_ft = clc[f"{band}_base_ft"]
                     if layer.top_ft is None and f"{band}_top_ft" in clc:
                         layer.top_ft = clc[f"{band}_top_ft"]
-
-        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
 
         # Use _apply_cloud_diagnostics_to_sections with GFS-priority guard
         for cs in icon_sections:

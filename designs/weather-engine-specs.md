@@ -148,7 +148,7 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Domain:** 29.5–70.5°N, 23.5°W–62.5°E
 - **Variables fetched:**
   - Model-level: QC, QI, CLC, P, T, QV, U, V, W — **full sounding replacement** (replaces Open-Meteo pressure levels entirely)
-  - Single-level: CEILING, HBAS_CON/HTOP_CON, CLCL/CLCM/CLCH/CLCT, **CAPE_ML/CIN_ML** → `NWPCloudDiagnostics` (cape_ml/cin_ml → `ml_cape_jkg`/`ml_cin_jkg`, instantaneous, feed the native convective track #283). RAIN_CON (convective rain, accumulated-since-init) is **not yet fetched** — it would need step-difference de-accumulation in the ICON merge path; the firing gate is missing-data-safe meanwhile.
+  - Single-level: CEILING, HBAS_CON/HTOP_CON, CLCL/CLCM/CLCH/CLCT, **CAPE_ML/CIN_ML**, **RAIN_CON** → `NWPCloudDiagnostics` (cape_ml/cin_ml → `ml_cape_jkg`/`ml_cin_jkg`, instantaneous, feed the native convective track #283; rain_con → `convective_precip_mm_h`, accumulated-since-init and de-accumulated in the merge loop, #421). rain_con is kg/m² ≡ mm — already mm, so **no** ×1000 (unlike ECMWF `cp`, m water equivalent). The ICON merge prepends one leading single-level step (`icon_eu_previous_step`) so the first window hour has a predecessor to difference against, and the cloud-diag cache key is bumped (`ICON_EU_CLOUD_DIAG_V2`) so warm caches re-fetch.
 - **Model levels → pressure levels:** Log-pressure interpolation using P field; 40 model levels → standard pressure levels (`EXTENDED_PRESSURE_LEVELS`, 28-level set)
 - **Single-level → NWPCloudDiagnostics:** Heights in meters converted to feet (× 3.28084)
 - **W → omega:** physical vertical velocity (m/s) converted to omega (`vertical_velocity_pa_s`) per level via −ρ·g·w

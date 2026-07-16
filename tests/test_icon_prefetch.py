@@ -20,7 +20,10 @@ import weatherbrief.fetch.grib as grib_mod
 import weatherbrief.fetch.grib.icon_eu_fetch as icon_fetch_mod
 from weatherbrief.fetch.grib import _IconEuContext, _prefetch_icon_eu_data_inner
 from weatherbrief.fetch.grib.cache import cache_key, get_cached, put_cached
-from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
+from weatherbrief.fetch.grib.icon_eu_fetch import (
+    ICON_EU_CLOUD_DIAG_CACHE_KEY,
+    ICON_EU_VARIABLES,
+)
 
 
 def _make_ctx(tmp_path: Path, forecast_hours: list[int]) -> _IconEuContext:
@@ -96,18 +99,24 @@ def test_all_uncached_units_fetched_and_cached(tmp_path, tracker):
         (fh, var, tracker["var_calls"][0][2])
         for fh in (6, 9) for var in ICON_EU_VARIABLES
     )
-    assert sorted(fh for fh, _ in tracker["diag_calls"]) == [6, 9]
+    # Cloud-diag fetch also pulls the leading step (fhour 5 = min(6,9) − 1) so
+    # the first window hour can de-accumulate rain_con against it (#421).
+    assert sorted(fh for fh, _ in tracker["diag_calls"]) == [5, 6, 9]
     for fh in (6, 9):
         for var in ICON_EU_VARIABLES:
             ck = cache_key(fh, f"ICON_EU_{var.upper()}")
             assert get_cached(tmp_path, ck) == f"{fh}-{var}".encode()
-        assert get_cached(tmp_path, cache_key(fh, "ICON_EU_CLOUD_DIAG")) == f"diag-{fh}".encode()
+    for fh in (5, 6, 9):
+        assert (
+            get_cached(tmp_path, cache_key(fh, ICON_EU_CLOUD_DIAG_CACHE_KEY))
+            == f"diag-{fh}".encode()
+        )
 
 
 def test_cached_units_skipped(tmp_path, tracker):
     # fhour 6 fully covered by the legacy combined key; one var of fhour 9 cached.
     put_cached(tmp_path, cache_key(6, "ICON_EU_QC_QI_P"), b"legacy")
-    put_cached(tmp_path, cache_key(6, "ICON_EU_CLOUD_DIAG"), b"diag")
+    put_cached(tmp_path, cache_key(6, ICON_EU_CLOUD_DIAG_CACHE_KEY), b"diag")
     put_cached(tmp_path, cache_key(9, "ICON_EU_QC"), b"have-qc")
 
     ctx = _make_ctx(tmp_path, forecast_hours=[6, 9])
@@ -117,16 +126,18 @@ def test_cached_units_skipped(tmp_path, tracker):
     assert all(fh == 9 for fh, _ in fetched)
     assert (9, "qc") not in fetched
     assert {var for _, var in fetched} == set(ICON_EU_VARIABLES) - {"qc"}
-    assert [fh for fh, _ in tracker["diag_calls"]] == [9]
+    # fhour 6 diag already cached; the uncached diag steps are the leading
+    # step (5) and fhour 9 (#421).
+    assert sorted(fh for fh, _ in tracker["diag_calls"]) == [5, 9]
     # The pre-existing cache entry was not overwritten
     assert get_cached(tmp_path, cache_key(9, "ICON_EU_QC")) == b"have-qc"
 
 
 def test_units_run_concurrently(tmp_path, tracker, monkeypatch):
     monkeypatch.delenv("GRIB_ICON_PREFETCH_WORKERS", raising=False)
-    # 10 units (9 vars + diag) on a 4-worker outer pool, each sleeping 100ms:
-    # expected peak is 4. Assert only >= 2 (any overlap at all) so a starved
-    # CI host that staggers thread starts can't flake the test.
+    # 11 units (9 vars + diag f6 + leading diag f5) on a 4-worker outer pool,
+    # each sleeping 100ms: expected peak is 4. Assert only >= 2 (any overlap at
+    # all) so a starved CI host that staggers thread starts can't flake it.
     tracker["delay"] = 0.1
     ctx = _make_ctx(tmp_path, forecast_hours=[6])
     _prefetch_icon_eu_data_inner(ctx)

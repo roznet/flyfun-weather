@@ -109,14 +109,25 @@ ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
 
 # Single-level cloud diagnostic variables.
 # cape_ml / cin_ml (mixed-layer CAPE/CIN, instantaneous) added for the
-# native convective track (#283 Phase 2). rain_con (convective rain) is
-# accumulated since init and needs step-difference de-accumulation — deferred
-# (the firing gate is missing-data-safe, so ICON keeps its tower-top tier).
+# native convective track (#283 Phase 2). rain_con (convective rain,
+# accumulated since init) added in #421 so the convective firing gate and
+# native corroboration can evaluate ICON towers — the rate is de-accumulated
+# in the enrichment loop, not here.
 ICON_EU_CLOUD_DIAG_VARIABLES = (
     "ceiling", "hbas_con", "htop_con",
     "clcl", "clcm", "clch", "clct",
     "cape_ml", "cin_ml",
+    "rain_con",
 )
+
+# Cache-key label for the single-level cloud-diagnostic blob. Bumped to V2 in
+# #421 when rain_con was added: the blob is cached under ONE key for all
+# variables, so adding a variable changes the blob's *content* but not its key.
+# Bumping the label forces existing (rain_con-less) cached blobs to re-fetch —
+# without it a warm cache would silently keep the pre-#421 gate-less behaviour.
+# Referenced everywhere the blob is cached (prefetch, enrichment, precache,
+# standalone verification) so the four call sites can never drift apart.
+ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V2"
 
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 8
@@ -393,6 +404,49 @@ def _snap_to_icon_eu_grid_floor(fhour: float) -> int:
         return int(fhour)
     base = 78 + int((fhour - 78) / 3) * 3
     return min(base, 120)
+
+
+def icon_eu_previous_step(fhour: int) -> int | None:
+    """Return the ICON-EU forecast hour immediately preceding *fhour*.
+
+    Respects the temporal grid — 1-hourly at or below 78h (step −1), 3-hourly
+    above it (step −3) — mirroring :func:`_snap_to_icon_eu_grid`. Returns
+    ``None`` for ``fhour == 0``: accumulation is 0 at init by definition, so
+    there is no earlier step to difference an accumulated field against.
+
+    Used to prepend one leading single-level step to the on-demand cloud-diag
+    fetch so the first flight-window hour has a predecessor to de-accumulate
+    ``rain_con`` against. ICON is downloaded exactly on the window hours (no
+    ±margin like the locally-mirrored ECMWF run), so without this the first
+    hour would have no rate (#421).
+    """
+    if fhour <= 0:
+        return None
+    if fhour <= 78:
+        return fhour - 1
+    return fhour - 3
+
+
+def icon_eu_conv_rain_rate_mm_h(
+    rain_con: float | None,
+    prev_rain_con: float | None,
+    window_h: float | None,
+) -> float | None:
+    """De-accumulate ICON ``rain_con`` into a convective-precip rate (mm/h).
+
+    ``rain_con`` is accumulated since init in kg/m² ≡ mm — **already mm**, so
+    there is NO ×1000 (that conversion is only for ECMWF ``cp``, which is m
+    water equivalent). Clamped at 0 so a decreasing accumulation (new run /
+    GRIB glitch) yields 0 rather than a negative rate.
+
+    Returns ``None`` — not ``0.0`` — when any input is missing (no predecessor
+    step, uncovered point, or non-positive window). ``None`` = unknown, which
+    the firing gate treats as missing-data-safe; ``0.0`` would actively hold a
+    tower down. The two are **not** interchangeable (#421).
+    """
+    if rain_con is None or prev_rain_con is None or window_h is None or window_h <= 0:
+        return None
+    return max(0.0, (rain_con - prev_rain_con) / window_h)
 
 
 def compute_icon_eu_flight_window_hours(
