@@ -147,11 +147,15 @@ _ICON_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
 # cares about, so adding entries here is non-invasive.
 # cfgrib shortName → internal raw field name.
 _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
-    # Cloud diagnostics (used by build_ecmwf_cloud_diagnostics)
-    "ceil": "ceiling_m",                   # meters, 9999 = no cloud sentinel
-    "cbh": "cloud_base_height_m",          # meters, 9999 = no cloud sentinel
-    "hcct": "convective_cloud_top_m",      # meters, 9999 = no cloud sentinel
-    "deg0l": "freezing_level_m",           # meters (geopotential height above MSL)
+    # Cloud diagnostics (used by build_ecmwf_cloud_diagnostics).
+    # DATUM: ECMWF ceil/cbh/hcct/deg0l are all metres ABOVE GROUND (AGL),
+    # confirmed against eccodes names + the ECMWF Parameter DB — NOT MSL. See
+    # issue #441 finding #3 (datum normalization for airport-vs-en-route use is
+    # a separate follow-up; these are AGL as delivered).
+    "ceil": "ceiling_m",                   # meters AGL, 9999 = no cloud sentinel
+    "cbh": "cloud_base_height_m",          # meters AGL, 9999 = no cloud sentinel
+    "hcct": "convective_cloud_top_m",      # meters AGL, 9999 = no cloud sentinel
+    "deg0l": "freezing_level_m",           # meters AGL (geometric height above ground, not MSL)
     # Native convective realization + stability (#283 Phase 2, delivered in a1).
     "cp": "conv_precip_m",                 # m water equiv, ACCUMULATED since init
     "kx": "k_index_c",                     # °C (K-index)
