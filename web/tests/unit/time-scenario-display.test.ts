@@ -95,6 +95,17 @@ describe('invertAdvisoryStatus', () => {
     expect(byModel.gfs.get('convective')).toBe('GREEN'); // GREEN preserved
   });
 
+  it('surfaces the full confirmed model set from a widened map (#435 round-3)', () => {
+    // Post-confirm, advisory_status is widened to every checked model. Scoped
+    // by confirmed.models_checked it must surface all of them — including the
+    // GFS/ICON disagreement that flipped the disposition — not be filtered back
+    // down to the sweep's stale ['ecmwf'].
+    const widened = { convective: { ecmwf: 'AMBER', gfs: 'RED', icon: 'AMBER' } };
+    const out = invertAdvisoryStatus(widened, ['ecmwf', 'gfs', 'icon']);
+    const byModel = Object.fromEntries(out.map((pm) => [pm.model, pm.map.get('convective')]));
+    expect(byModel).toEqual({ ecmwf: 'AMBER', gfs: 'RED', icon: 'AMBER' });
+  });
+
   it('returns empty for an absent map', () => {
     expect(invertAdvisoryStatus(undefined, ['ecmwf'])).toEqual([]);
   });
