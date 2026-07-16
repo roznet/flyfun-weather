@@ -8,6 +8,7 @@ import { fetchPirepsByFlight } from './adapters/pirep-adapter';
 import { renderPirepList } from './managers/pirep-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
+import { improvingCount, invertAdvisoryStatus, isWorseCandidate } from './helpers/time-scenario-display';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -912,10 +913,15 @@ async function init(): Promise<void> {
       ];
       if (!c.is_baseline) {
         // The provisional grade is the ECMWF-extension view unless the free
-        // tier already covered this hour with every model in-window.
+        // tier already covered this hour with every model in-window. Its
+        // per-model dot breakdown is reconstructed from the persisted
+        // advisory_status map (coverage-scoped: ECMWF-only for the sweep, the
+        // full set after a confirm) — #434/#435, no re-grade needed.
+        const candPerModel = invertAdvisoryStatus(c.advisory_status, c.models_used);
         cols.push({
           label: c.confirmed || c.confidence === 'ecmwf_only' ? 'ECMWF only' : 'All models',
           map: parseReason(c.assessment_reason),
+          perModel: candPerModel.length ? candPerModel : undefined,
         });
         if (c.confirmed) {
           cols.push({
@@ -986,17 +992,13 @@ async function init(): Promise<void> {
     // A *confirmed* row is never hidden: the user paid a tap + a full model
     // check for it, so a confirm-downgrade (disposition flips to worse, #435)
     // stays visible with its "not clearly better after all" verdict rather than
-    // vanishing into "show all".
-    const isWorse = (c: api.TimeCandidateDTO) =>
-      !c.is_baseline && !c.is_alternate && c.disposition === 'worse' && !c.confirmed;
-    const defaultCandidates = scan.candidates.filter((c) => !isWorse(c));
-    const worseCandidates = scan.candidates.filter(isWorse);
+    // vanishing into "show all". Partition rules live in a tested helper.
+    const defaultCandidates = scan.candidates.filter((c) => !isWorseCandidate(c));
+    const worseCandidates = scan.candidates.filter(isWorseCandidate);
 
-    const improvingCount = scan.candidates.filter(
-      (c) => !c.is_baseline && !c.is_alternate && c.disposition === 'improving',
-    ).length;
-    const headline = improvingCount > 0
-      ? `${improvingCount} departure window${improvingCount > 1 ? 's' : ''} look${improvingCount === 1 ? 's' : ''} smoother than the planned time — worth a look, not a verdict.`
+    const nImproving = improvingCount(scan.candidates);
+    const headline = nImproving > 0
+      ? `${nImproving} departure window${nImproving > 1 ? 's' : ''} look${nImproving === 1 ? 's' : ''} smoother than the planned time — worth a look, not a verdict.`
       : 'No clearly better window found in the hours checkable from this briefing.';
 
     // Not-checkable (refused) hours — revealed greyed under "show all". The

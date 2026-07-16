@@ -105,6 +105,7 @@ from weatherbrief.models.advisories import (  # noqa: F401
     RouteAdvisoryResult,
 )
 from weatherbrief.models.time_scan import (  # noqa: F401
+    Disposition,
     FlexibilityMode,
     ModelCoverage,
     TimeCandidate,
