@@ -494,7 +494,6 @@ private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
     @Environment(AppState.self) private var appState
-    @Environment(\.horizontalSizeClass) private var sizeClass
 
     private var tabs: [BriefingTab] {
         var tabs = BriefingTab.core
@@ -511,20 +510,18 @@ private struct BriefingContentView: View {
             .refreshable { await viewModel.syncLatestPack() }
     }
 
-    @ViewBuilder
     private var content: some View {
-        if sizeClass == .regular {
-            VStack(spacing: 0) {
-                BriefingTabBand(tabs: tabs, selection: $viewModel.selectedTab)
-                tabContent(viewModel.selectedTab)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        } else {
-            TabView(selection: $viewModel.selectedTab) {
-                ForEach(tabs, id: \.self) { tab in
-                    Tab(tab.title, systemImage: tab.systemImage, value: tab) {
-                        tabContent(tab)
-                    }
+        // Native TabView on BOTH idioms: iPhone renders a bottom tab bar, iPad a
+        // top tab bar. This replaced a custom `BriefingTabBand` (a horizontally-
+        // scrolling pill bar pinned as a sibling above the tab content on regular
+        // width) which — like the section spy bar (#436) — composited zero pixels
+        // when the reused NavigationSplitView detail column re-presented on iPad,
+        // leaving the briefing with no way to switch tabs. The system-hosted tab
+        // bar isn't a custom sibling of the scroll content, so it is immune.
+        TabView(selection: $viewModel.selectedTab) {
+            ForEach(tabs, id: \.self) { tab in
+                Tab(tab.title, systemImage: tab.systemImage, value: tab) {
+                    tabContent(tab)
                 }
             }
         }
@@ -545,46 +542,6 @@ private struct BriefingContentView: View {
             PirepListView(pirepsState: viewModel.pirepsState) {
                 await viewModel.loadPireps()
             }
-        }
-    }
-}
-
-/// Custom top tab band (iPad / regular width, #310): pill-styled tabs driving
-/// the selection, behaving identically nested in the split-view detail.
-private struct BriefingTabBand: View {
-    let tabs: [BriefingTab]
-    @Binding var selection: BriefingTab
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.spacingS) {
-                    ForEach(tabs, id: \.self) { tab in
-                        let active = tab == selection
-                        Button { selection = tab } label: {
-                            Label(tab.title, systemImage: tab.systemImage)
-                                .font(.subheadline.weight(active ? .semibold : .regular))
-                                .foregroundStyle(active ? Theme.primary : Theme.textMuted)
-                                .padding(.horizontal, 14).padding(.vertical, 8)
-                                .background(active ? Theme.primary.opacity(0.12) : Color.clear, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .id(tab)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, Theme.cardPadding)
-                .padding(.vertical, Theme.spacingS)
-            }
-            // Keep the active tab visible if a deep-link switches tabs while the
-            // band is scrolled (robust if the tab set ever overflows).
-            .onChange(of: selection) { _, newValue in
-                withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(newValue, anchor: .center) }
-            }
-        }
-        .background(Theme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.border).frame(height: 0.5)
         }
     }
 }
