@@ -220,6 +220,23 @@ class TestPerModelReasons:
         ])
         assert per_model_status_from_manifest(manifest) == {}
 
+    def test_confirmation_round_trips_field(self):
+        from weatherbrief.models import TimeConfirmation
+
+        conf = TimeConfirmation(
+            models_checked=["ecmwf", "gfs"],
+            assessment="RED",
+            per_model_reasons={"gfs": "turbulence=RED"},
+            better_than_baseline=False,
+            confirmed_at=DEP,
+        )
+        again = TimeConfirmation.model_validate(conf.model_dump(mode="json"))
+        assert again.per_model_reasons == {"gfs": "turbulence=RED"}
+        # Old artifacts (pre-field) still validate.
+        legacy = conf.model_dump(mode="json")
+        legacy.pop("per_model_reasons")
+        assert TimeConfirmation.model_validate(legacy).per_model_reasons == {}
+
 
 class TestDisposition:
     """#434 taxonomy: improving / neutral / worse vs the like-coverage baseline."""
@@ -245,23 +262,6 @@ class TestDisposition:
         from weatherbrief.tasks.time_scan import _disposition
 
         assert _disposition(-1, []) == "worse"
-
-    def test_confirmation_round_trips_field(self):
-        from weatherbrief.models import TimeConfirmation
-
-        conf = TimeConfirmation(
-            models_checked=["ecmwf", "gfs"],
-            assessment="RED",
-            per_model_reasons={"gfs": "turbulence=RED"},
-            better_than_baseline=False,
-            confirmed_at=DEP,
-        )
-        again = TimeConfirmation.model_validate(conf.model_dump(mode="json"))
-        assert again.per_model_reasons == {"gfs": "turbulence=RED"}
-        # Old artifacts (pre-field) still validate.
-        legacy = conf.model_dump(mode="json")
-        legacy.pop("per_model_reasons")
-        assert TimeConfirmation.model_validate(legacy).per_model_reasons == {}
 
 
 # ---------------------------------------------------------------------------
