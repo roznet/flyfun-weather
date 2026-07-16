@@ -1968,3 +1968,61 @@ class TestGribSkipDiagnostics:
         generic = [d for d in diags if d.code == FetchCode.GRIB_UNAVAILABLE_FOR_MODEL]
         assert len(generic) == 1
         assert generic[0].level == "warn"
+
+
+class TestIconClcGeometryPerForecastHour:
+    """#441 finding #4: CLC-derived layer geometry is applied per forecast
+    hour (each valid time uses its own), not reused from the first hour."""
+
+    def test_each_hour_uses_its_own_clc_geometry(self, monkeypatch):
+        import re
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        import weatherbrief.fetch.grib as grib_mod
+        from weatherbrief.models import (
+            HourlyForecast, ModelSource, PressureLevelData, RoutePoint,
+            RouteCrossSection, Waypoint, WaypointForecast,
+        )
+
+        def _utc(h):
+            return datetime(2026, 7, 16, h, 0, tzinfo=timezone.utc)
+
+        forecast_hours = [6, 7]
+        hourly = [
+            HourlyForecast(time=_utc(h), pressure_levels=[PressureLevelData(pressure_hpa=500)])
+            for h in forecast_hours
+        ]
+        wf = WaypointForecast(
+            waypoint=Waypoint(icao="XXXX", name="Test", lat=50.0, lon=0.0),
+            model=ModelSource.ICON,
+            fetched_at=datetime.now(tz=timezone.utc), hourly=hourly,
+        )
+        cs = RouteCrossSection(
+            model=ModelSource.ICON, route_points=[], fetched_at=wf.fetched_at,
+            point_forecasts=[wf],
+        )
+
+        monkeypatch.setattr(grib_mod, "is_cached", lambda run_dir, ck: True)
+
+        # Each hour decodes a low deck with NO base (so CLC fills base_ft).
+        def fake_dispatch(worker, path, lats, lons, **kw):
+            return [{"low_cover_pct": 60.0}]
+        monkeypatch.setattr(grib_mod, "_dispatch_decode", fake_dispatch)
+
+        # Distinct CLC geometry per forecast hour.
+        clc_by_fhour = {
+            6: [{"low_base_ft": 2000.0}],
+            7: [{"low_base_ft": 8000.0}],
+        }
+
+        grib_mod._enrich_icon_eu_cloud_diagnostics(
+            [cs], [], [RoutePoint(lat=50.0, lon=0.0, distance_from_origin_nm=0.0)],
+            "20260716", 0, list(forecast_hours),
+            Path("/unused"), [50.0], [0.0], session=None,
+            clc_layers_by_fhour=clc_by_fhour,
+        )
+
+        by_hour = {h.time.hour: h.nwp_cloud_diagnostics for h in wf.hourly}
+        assert by_hour[6].low.base_ft == 2000.0
+        assert by_hour[7].low.base_ft == 8000.0  # NOT reused from f006
