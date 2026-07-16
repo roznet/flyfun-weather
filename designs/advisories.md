@@ -250,6 +250,24 @@ badge, not the user's selected method), and `HighlightRegion.reason_code` /
 `metric_id` / `method_id` (stable non-localised tokens; `metric_id` lets a chip
 jump to the right cross-section layer). Old packs deserialize with all absent.
 
+**Consuming `reason_code` — the ribbon-hover tooltip (#412).** Hovering the
+verdict ribbon in the cross-section surfaces *why* the advisory is flagged at the
+cursor's x, not just its colour: advisory name + verdict + — when the flagged
+region under the cursor carries one — the human phrasing of `reason_code`. Only
+`icing_escape` / `fiki_icing` / `convective` emit a code (their colour+shape
+genuinely can't disambiguate `no_escape` vs `warm_escape`, `sld` vs
+`thick_transit`, `active_track` vs `thermo_floor`); every other region carries
+`None`, so the tooltip shows just the verdict — a reason that restates the
+advisory's definition would be noise. The lookup is web-side and geometry-free:
+the ribbon (`RibbonSegment`) owns the verdict at a distance, the flagged regions
+(`HighlightRegion`) own the reason; `ribbonSeverityAt` / `reasonCodeAt` /
+`reasonLabelKey` in `web/ts/visualization/cross-section/advisory-highlights.ts`
+resolve both, and a per-code localized label (`advisories.reason.<code>`, en/de/es/fr)
+gives the phrasing — an unknown/absent code → verdict only, never invented text.
+The tooltip is a mouse-hover interaction handled inline in `interaction.ts` (like
+`current-conditions`), so it is web-only for now; an iOS tap-based equivalent is a
+follow-up. The optional layer-jump via `metric_id` is deferred (a second pass).
+
 **Populating `method_id` from the EFFECTIVE method (#408).** #393 declared these
 fields but no evaluator filled them. #408 joins the two halves: the producer,
 `_resolve_analyses` (`tasks/advise.py`), stamps `icing_method_effective` and

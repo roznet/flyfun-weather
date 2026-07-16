@@ -17,6 +17,9 @@
 import type {
   AdvisoryHighlights,
   EngineMethodDefaults,
+  HighlightRegion,
+  HighlightSeverity,
+  RibbonSegment,
   RouteAdvisoriesManifest,
   RouteAdvisoryResult,
 } from '../../types/advisories';
@@ -158,6 +161,94 @@ export function deriveGradedMethods(
     found.add(group);
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Ribbon-hover tooltip lookups (#412)
+//
+// The verdict ribbon already tells the pilot *how bad* the route is at each x.
+// These pure lookups let the hover tooltip also say *why* the advisory fired
+// there — the `reason_code` provenance shipped in 5fe6b571 — without duplicating
+// any geometry: the ribbon owns the verdict, the flagged regions own the reason.
+// ---------------------------------------------------------------------------
+
+/** Rank severities so a "worst wins" pick over overlapping regions is total. */
+function severityRank(sev: HighlightSeverity): number {
+  switch (sev) {
+    case 'red': return 3;
+    case 'amber': return 2;
+    case 'green': return 1;
+    default: return 0;  // unavailable
+  }
+}
+
+/**
+ * The ribbon verdict at a route distance (nm), or `null` when the distance
+ * falls outside every segment (empty ribbon / out of range). The ribbon is a
+ * gapless partition of `[0, total_nm]`, so a segment is matched on the half-open
+ * `[from, to)`; the final segment includes its right edge so the arrival point
+ * still resolves.
+ */
+export function ribbonSeverityAt(
+  ribbon: RibbonSegment[],
+  distanceNm: number,
+): HighlightSeverity | null {
+  for (let i = 0; i < ribbon.length; i++) {
+    const seg = ribbon[i];
+    const withinRight = i === ribbon.length - 1
+      ? distanceNm <= seg.dist_to_nm
+      : distanceNm < seg.dist_to_nm;
+    if (distanceNm >= seg.dist_from_nm && withinRight) return seg.severity;
+  }
+  return null;
+}
+
+/**
+ * The `reason_code` of the flagged region covering a route distance, or `null`.
+ *
+ * `reason_code` is emitted only by `icing_escape` / `fiki_icing` / `convective`
+ * and only on flagged (amber/red) regions — every other region carries `null`,
+ * because its reason IS the advisory's definition (see `HighlightRegion` in
+ * `models/advisories.py`). Those single-kind evaluators produce regions that
+ * don't overlap in x, but a multi-kind composite could; when regions overlap we
+ * take the most severe one carrying a code so the tooltip names what dominates.
+ */
+export function reasonCodeAt(
+  regions: HighlightRegion[],
+  distanceNm: number,
+): string | null {
+  let best: HighlightRegion | null = null;
+  for (const r of regions) {
+    if (distanceNm < r.dist_from_nm || distanceNm > r.dist_to_nm) continue;
+    if (!r.reason_code) continue;
+    if (best === null || severityRank(r.severity) > severityRank(best.severity)) {
+      best = r;
+    }
+  }
+  return best?.reason_code ?? null;
+}
+
+/** The reason codes the ribbon tooltip has localized phrasing for (#412) — the
+ *  three evaluators whose colour+shape genuinely can't say *why* (see the issue).
+ *  A code outside this set (or absent) resolves to `null`: show just the verdict,
+ *  never invented text. */
+const RIBBON_REASON_CODES = new Set<string>([
+  // icing_escape
+  'no_escape', 'no_escape_unknown', 'tight_margin', 'warm_escape',
+  // fiki_icing
+  'sld', 'severe_icing', 'thick_transit', 'icing_at_cruise', 'transit_exposure',
+  // convective
+  'active_track', 'thermo_floor',
+]);
+
+/**
+ * The i18n key for a reason code's human phrasing, or `null` when the code is
+ * unknown/absent. Kept pure (returns the key, not the translated text) so it is
+ * deterministically testable; `interaction.ts` resolves it through `t()`.
+ */
+export function reasonLabelKey(code: string | null | undefined): string | null {
+  if (!code || !RIBBON_REASON_CODES.has(code)) return null;
+  return `advisories.reason.${code}`;
 }
 
 /** Find one advisory by id in a manifest (or null). */

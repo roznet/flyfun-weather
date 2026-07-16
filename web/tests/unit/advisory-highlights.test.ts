@@ -10,11 +10,16 @@ import {
   representativeModel,
   deriveHighlights,
   findAdvisory,
+  ribbonSeverityAt,
+  reasonCodeAt,
+  reasonLabelKey,
   HIGHLIGHT_LAYER_ID,
 } from '../../ts/visualization/cross-section/advisory-highlights';
 import type {
   AdvisoryHighlights,
+  HighlightRegion,
   ModelAdvisoryResult,
+  RibbonSegment,
   RouteAdvisoriesManifest,
   RouteAdvisoryResult,
 } from '../../ts/types/advisories';
@@ -384,5 +389,89 @@ describe('deriveGradedMethods — graded methods come from the manifest, not acc
   it('honours a DD default cloud source when the pack is silent', () => {
     const out = deriveGradedMethods(null, { ...DEFAULTS, cloud_source: 'dd' });
     expect(out.clouds).toBe('dd');
+  });
+});
+
+// --- ribbon-hover verdict/reason lookups (#412) ------------------------------
+
+describe('ribbonSeverityAt', () => {
+  const ribbon: RibbonSegment[] = [
+    { dist_from_nm: 0, dist_to_nm: 30, severity: 'green' },
+    { dist_from_nm: 30, dist_to_nm: 70, severity: 'amber' },
+    { dist_from_nm: 70, dist_to_nm: 100, severity: 'red' },
+  ];
+
+  it('resolves a distance to the segment covering it', () => {
+    expect(ribbonSeverityAt(ribbon, 10)).toBe('green');
+    expect(ribbonSeverityAt(ribbon, 50)).toBe('amber');
+    expect(ribbonSeverityAt(ribbon, 85)).toBe('red');
+  });
+
+  it('assigns a boundary to the segment whose half-open [from, to) owns it', () => {
+    // 30 nm belongs to the amber run [30, 70), not the green run that ends at 30.
+    expect(ribbonSeverityAt(ribbon, 30)).toBe('amber');
+    expect(ribbonSeverityAt(ribbon, 70)).toBe('red');
+  });
+
+  it('includes the final segment right edge (the arrival point)', () => {
+    expect(ribbonSeverityAt(ribbon, 100)).toBe('red');
+  });
+
+  it('returns null outside the ribbon range and for an empty ribbon', () => {
+    expect(ribbonSeverityAt(ribbon, 150)).toBeNull();
+    expect(ribbonSeverityAt(ribbon, -1)).toBeNull();
+    expect(ribbonSeverityAt([], 10)).toBeNull();
+  });
+});
+
+describe('reasonCodeAt', () => {
+  const regions: HighlightRegion[] = [
+    { dist_from_nm: 20, dist_to_nm: 40, kind: 'icing_band', severity: 'amber', reason_code: 'tight_margin' },
+    { dist_from_nm: 60, dist_to_nm: 90, kind: 'icing_band', severity: 'red', reason_code: 'no_escape' },
+  ];
+
+  it('returns the reason_code of the region covering the distance', () => {
+    expect(reasonCodeAt(regions, 30)).toBe('tight_margin');
+    expect(reasonCodeAt(regions, 75)).toBe('no_escape');
+  });
+
+  it('returns null where no flagged region covers the distance', () => {
+    expect(reasonCodeAt(regions, 50)).toBeNull();
+    expect(reasonCodeAt([], 30)).toBeNull();
+  });
+
+  it('ignores regions that carry no reason_code (their reason IS the definition)', () => {
+    const noCode: HighlightRegion[] = [
+      { dist_from_nm: 0, dist_to_nm: 100, kind: 'cruise_imc', severity: 'red' },
+    ];
+    expect(reasonCodeAt(noCode, 50)).toBeNull();
+  });
+
+  it('prefers the most severe region when several with codes overlap', () => {
+    const overlap: HighlightRegion[] = [
+      { dist_from_nm: 0, dist_to_nm: 100, kind: 'a', severity: 'amber', reason_code: 'transit_exposure' },
+      { dist_from_nm: 40, dist_to_nm: 60, kind: 'b', severity: 'red', reason_code: 'sld' },
+    ];
+    expect(reasonCodeAt(overlap, 50)).toBe('sld');
+    expect(reasonCodeAt(overlap, 20)).toBe('transit_exposure');
+  });
+});
+
+describe('reasonLabelKey', () => {
+  it('maps every known code to its i18n key', () => {
+    for (const code of [
+      'no_escape', 'no_escape_unknown', 'tight_margin', 'warm_escape',
+      'sld', 'severe_icing', 'thick_transit', 'icing_at_cruise', 'transit_exposure',
+      'active_track', 'thermo_floor',
+    ]) {
+      expect(reasonLabelKey(code)).toBe(`advisories.reason.${code}`);
+    }
+  });
+
+  it('returns null for an unknown or absent code (show just the verdict)', () => {
+    expect(reasonLabelKey('cruise_imc')).toBeNull();
+    expect(reasonLabelKey(null)).toBeNull();
+    expect(reasonLabelKey(undefined)).toBeNull();
+    expect(reasonLabelKey('')).toBeNull();
   });
 });

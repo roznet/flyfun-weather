@@ -35,14 +35,15 @@ import { HIGHLIGHT_LAYER_ID } from '../advisory-highlights';
  *  sits ABOVE the distance-axis labels — axes.ts pushes those to DISTANCE_LABEL_DY
  *  (+11) / WAYPOINT_LABEL_DY (+25) to keep this strip clear (#373). Keep in sync
  *  with those offsets so the ribbon never paints over the tick labels. */
-const RIBBON_HEIGHT = 6;
-const RIBBON_GAP = 2;      // gap below the plot area before the ribbon
+export const RIBBON_HEIGHT = 6;
+export const RIBBON_GAP = 2;      // gap below the plot area before the ribbon
 const CUTOUT_OUTLINE_WIDTH = 1.5;
 
 /** Theme-aware severity colour, aligned with the advisory status colours
  *  (`--red` / `--amber` / `--green` CSS vars, which flip in dark mode).
- *  Unavailable = neutral gray. */
-function severityColor(sev: HighlightSeverity): string {
+ *  Unavailable = neutral gray. Exported so the ribbon-hover tooltip (#412)
+ *  swatches match the strip exactly. */
+export function severityColor(sev: HighlightSeverity): string {
   switch (sev) {
     case 'red': return cssVar('--red', '#dc3545');
     case 'amber': return cssVar('--amber', '#cc8800');

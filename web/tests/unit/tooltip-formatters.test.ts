@@ -54,9 +54,10 @@ describe('LAYER_TOOLTIPS registry — structural integrity', () => {
       // Full-column X-span tint behind the weather; no per-altitude data, so no
       // tooltip row (handled like terrain/current-conditions).
       'night-shading',
-      // Advisory highlight (scrim + verdict ribbon, #373): deliberately carries
-      // no tooltip rows in v1 — the ribbon is self-explanatory and the scrim is a
-      // focus cue, not per-point data.
+      // Advisory highlight (scrim + verdict ribbon, #373): the ribbon-hover
+      // verdict/reason tooltip (#412) is handled inline in interaction.ts
+      // (distance-space, not per-VizPoint zones — like current-conditions), so
+      // it is not a LAYER_TOOLTIPS row and stays exempt here.
       'advisory-highlight',
     ]);
 
