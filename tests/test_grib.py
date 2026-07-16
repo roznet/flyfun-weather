@@ -771,16 +771,46 @@ class TestIconEuLevels:
         assert 300 not in result
         assert 1000 not in result
 
-    def test_negative_values_clamped(self):
-        """Negative interpolation results clamped to zero."""
+    def test_bounds_clamp_when_requested(self):
+        """A (min, max) bound clamps interpolated values."""
         from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
 
-        # Values that could produce negative interpolation
+        # Negative inputs → negative interpolation; clamp floor at 0.
         model_p = [50000.0, 60000.0, 70000.0]
-        model_v = [0.0, 0.0, 0.0]
+        model_v = [-0.5, -0.5, -0.5]
+
+        result = interpolate_model_to_pressure_levels(
+            model_p, model_v, [600], bounds=(0.0, None),
+        )
+        assert result[600] == 0.0
+
+        # Cloud-fraction ceiling at 100.
+        result = interpolate_model_to_pressure_levels(
+            [50000.0, 70000.0], [150.0, 150.0], [600], bounds=(0.0, 100.0),
+        )
+        assert result[600] == 100.0
+
+    def test_signed_values_preserved_by_default(self):
+        """#441: with no bounds, negative values (T/U/V/W) pass through unclamped."""
+        from weatherbrief.fetch.grib.icon_eu_levels import interpolate_model_to_pressure_levels
+
+        # Wind component swinging negative (e.g. easterly U) must survive.
+        model_p = [50000.0, 60000.0, 70000.0]
+        model_v = [-12.0, -8.0, -4.0]
 
         result = interpolate_model_to_pressure_levels(model_p, model_v, [600])
-        assert result.get(600, 0.0) >= 0.0
+        assert result[600] < 0.0  # NOT clamped to 0
+
+    def test_wind_fields_are_unbounded(self):
+        """#441: U/V/W/T map to no bounds; condensate/fraction map to clamps."""
+        from weatherbrief.fetch.grib.icon_eu_levels import bounds_for_field
+
+        assert bounds_for_field("raw_u_wind_m_s") is None
+        assert bounds_for_field("raw_v_wind_m_s") is None
+        assert bounds_for_field("raw_w_m_s") is None
+        assert bounds_for_field("raw_temperature_k") is None
+        assert bounds_for_field("cloud_liquid_water_kg_kg") == (0.0, None)
+        assert bounds_for_field("cloud_area_fraction_pct") == (0.0, 100.0)
 
     def test_insufficient_data(self):
         """Less than 2 valid points returns empty."""
