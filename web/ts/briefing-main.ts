@@ -912,25 +912,42 @@ async function init(): Promise<void> {
         { label: 'Current', map: parseReason(baselineReason), perModel: currentPerModel },
       ];
       if (!c.is_baseline) {
-        // The provisional grade is the ECMWF-extension view unless the free
-        // tier already covered this hour with every model in-window. Its
-        // per-model dot breakdown is reconstructed from the persisted
-        // advisory_status map (coverage-scoped: ECMWF-only for the sweep, the
-        // full set after a confirm) — #434/#435, no re-grade needed.
-        const candPerModel = invertAdvisoryStatus(c.advisory_status, c.models_used);
+        // Middle column = this candidate's own grade, per-model dots
+        // reconstructed from the persisted advisory_status map (#434/#435).
+        // While NOT confirmed the map is the candidate's coverage (ECMWF-only
+        // for the sweep, or the full in-window set). Once confirmed the map has
+        // been WIDENED to the multi-model set and the provisional ECMWF-only
+        // snapshot is gone — so this "ECMWF only" column keeps its aggregate
+        // row-status but drops the now-mismatched tooltip; the widened dots move
+        // to the "All models" column below (round-3 fix: previously the widened
+        // map was filtered back to ['ecmwf'] by a stale models_used and never
+        // rendered).
+        const midPerModel = c.confirmed
+          ? undefined
+          : invertAdvisoryStatus(c.advisory_status, c.models_used);
         cols.push({
           label: c.confirmed || c.confidence === 'ecmwf_only' ? 'ECMWF only' : 'All models',
           map: parseReason(c.assessment_reason),
-          perModel: candPerModel.length ? candPerModel : undefined,
+          perModel: midPerModel && midPerModel.length ? midPerModel : undefined,
         });
         if (c.confirmed) {
+          // Surface the confirm-widened advisory_status (green included) so the
+          // multi-model disagreement that flipped the disposition is visible in
+          // the dot table a pilot expands to ask "why was this downgraded?"
+          // Fall back to the confirmation's RED/AMBER reason strings for a
+          // legacy artifact whose map wasn't widened.
+          const confirmedPerModel = invertAdvisoryStatus(
+            c.advisory_status, c.confirmed.models_checked,
+          );
           cols.push({
             label: 'All models',
             map: parseReason(c.confirmed.assessment_reason),
-            perModel: c.confirmed.models_checked.map((model) => ({
-              model,
-              map: parseReason(c.confirmed?.per_model_reasons?.[model] ?? ''),
-            })),
+            perModel: confirmedPerModel.length
+              ? confirmedPerModel
+              : c.confirmed.models_checked.map((model) => ({
+                  model,
+                  map: parseReason(c.confirmed?.per_model_reasons?.[model] ?? ''),
+                })),
           });
         }
       }
@@ -950,10 +967,15 @@ async function init(): Promise<void> {
       const etaSpan = c.valid_times.length
         ? `${formatDepartureTime(c.valid_times[0])} → ${formatDepartureTime(c.valid_times[c.valid_times.length - 1])}`
         : '';
+      // models_used is the sweep-time set and isn't updated on confirm; show
+      // the confirmed model set once a check has run, so the footer doesn't say
+      // "Graded with ECMWF" for a multi-model-confirmed row (#435 round-3).
+      const gradedWith = (c.confirmed?.models_checked ?? c.models_used)
+        .map((m) => m.toUpperCase()).join(', ');
       const detailHtml = `
         <div class="time-detail-box">
           ${tableHtml}
-          <div class="muted" style="font-size:0.85em; margin-top:0.35rem;">Graded with ${escapeHtml(c.models_used.map((m) => m.toUpperCase()).join(', '))}${etaSpan ? ` · route ETAs ${escapeHtml(etaSpan)}` : ''}</div>
+          <div class="muted" style="font-size:0.85em; margin-top:0.35rem;">Graded with ${escapeHtml(gradedWith)}${etaSpan ? ` · route ETAs ${escapeHtml(etaSpan)}` : ''}</div>
         </div>`;
 
       // "Set as alternate time" — pins this scenario so the full per-advisory
