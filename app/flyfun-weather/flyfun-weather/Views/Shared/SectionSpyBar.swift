@@ -31,38 +31,42 @@ struct SectionSpyBar: View {
     let active: String
     let onTap: (String) -> Void
 
+    /// Native scroll position to keep the active pill centered (replaces a
+    /// `ScrollViewReader`). Ids are the plain `section.id` (no `"pill-"` prefix).
+    @State private var pillPosition = ScrollPosition(idType: String.self)
+
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.spacingS) {
-                    ForEach(sections) { section in
-                        let isActive = section.id == active
-                        Button { onTap(section.id) } label: {
-                            Text(section.title)
-                                .font(.caption.weight(isActive ? .semibold : .regular))
-                                .foregroundStyle(isActive ? Theme.primary : Theme.textMuted)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(
-                                    isActive ? Theme.primary.opacity(0.14) : Theme.surface,
-                                    in: Capsule()
-                                )
-                                .overlay(
-                                    Capsule().stroke(Theme.border, lineWidth: isActive ? 0 : 0.5)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .id("pill-\(section.id)")
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Theme.spacingS) {
+                ForEach(sections) { section in
+                    let isActive = section.id == active
+                    Button { onTap(section.id) } label: {
+                        Text(section.title)
+                            .font(.caption.weight(isActive ? .semibold : .regular))
+                            .foregroundStyle(isActive ? Theme.primary : Theme.textMuted)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                isActive ? Theme.primary.opacity(0.14) : Theme.surface,
+                                in: Capsule()
+                            )
+                            .overlay(
+                                Capsule().stroke(Theme.border, lineWidth: isActive ? 0 : 0.5)
+                            )
                     }
+                    .buttonStyle(.plain)
+                    .id(section.id)
                 }
-                .padding(.horizontal, Theme.cardPadding)
-                .padding(.vertical, Theme.spacingS)
             }
-            .onChange(of: active) { _, newValue in
-                // Keep the active pill in view as the user scrolls content.
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    proxy.scrollTo("pill-\(newValue)", anchor: .center)
-                }
+            .padding(.horizontal, Theme.cardPadding)
+            .padding(.vertical, Theme.spacingS)
+            .scrollTargetLayout()
+        }
+        .scrollPosition($pillPosition)
+        .onChange(of: active) { _, newValue in
+            // Keep the active pill in view as the user scrolls content.
+            withAnimation(.easeInOut(duration: 0.2)) {
+                pillPosition.scrollTo(id: newValue, anchor: .center)
             }
         }
         .background(.regularMaterial)

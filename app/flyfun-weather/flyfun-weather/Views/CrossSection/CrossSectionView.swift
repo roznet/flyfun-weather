@@ -21,9 +21,11 @@ struct CrossSectionView: View {
     @AppStorage("crossSectionGraphLeftMetric") private var graphLeftMetricId = "headwind"
     @AppStorage("crossSectionGraphRightMetric") private var graphRightMetricId = "cloud-cover"
     /// Scroll-to target inside the tab (#310): the "Sounding ›" deep-link and a
-    /// `FocusIntent.target == .skewT` set this to "skewt"; the ScrollViewReader
-    /// scrolls to the embedded Skew-T and resets it to nil.
+    /// `FocusIntent.target == .skewT` set this to "skewt"; the portrait scroll
+    /// view scrolls to the embedded Skew-T and resets it to nil.
     @State private var scrollTarget: String?
+    /// Native scroll position for the portrait layout (replaces `ScrollViewReader`).
+    @State private var scrollPosition = ScrollPosition(idType: String.self)
     @Environment(\.verticalSizeClass) private var vSizeClass
 
     // Contextual tips (#312), gated on this tab being visible.
@@ -75,47 +77,47 @@ struct CrossSectionView: View {
     // MARK: Portrait layout
 
     private var portrait: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(spacing: 0) {
-                    chromeBar
-                    CrossSectionReadoutView(
-                        vizData: csVM.vizData ?? Self.emptyViz,
-                        scrubDistanceNm: scrubDistanceNm,
-                        scrubAltitudeFt: scrubAltitudeFt,
-                        onSounding: goToSounding,
-                        routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
-                    )
-                    // "Tap any point" coachmark above the canvas (#312); cleared
-                    // on the first scrub via `updateScrub`. Only render once
-                    // there's a canvas to interact with — otherwise the tip
-                    // would be consumed coaching against a loading/error
-                    // placeholder.
-                    if csVM.vizData != nil {
-                        TipView(scrubTip)
-                            .padding(.horizontal, Theme.cardPadding)
-                    }
-                    crossSectionCanvas
-                    RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
-                                   leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)
-                    skewTSection
+        ScrollView {
+            VStack(spacing: 0) {
+                chromeBar
+                CrossSectionReadoutView(
+                    vizData: csVM.vizData ?? Self.emptyViz,
+                    scrubDistanceNm: scrubDistanceNm,
+                    scrubAltitudeFt: scrubAltitudeFt,
+                    onSounding: goToSounding,
+                    routeGraphMetricIds: [graphLeftMetricId, graphRightMetricId]
+                )
+                // "Tap any point" coachmark above the canvas (#312); cleared
+                // on the first scrub via `updateScrub`. Only render once
+                // there's a canvas to interact with — otherwise the tip
+                // would be consumed coaching against a loading/error
+                // placeholder.
+                if csVM.vizData != nil {
+                    TipView(scrubTip)
+                        .padding(.horizontal, Theme.cardPadding)
                 }
+                crossSectionCanvas
+                RouteGraphView(viewModel: viewModel, vizData: csVM.vizData, scrubDistanceNm: scrubDistanceNm,
+                               leftMetricId: $graphLeftMetricId, rightMetricId: $graphRightMetricId)
+                skewTSection
             }
-            .background(Theme.bg)
-            .onChange(of: scrollTarget) { _, target in
-                guard let target else { return }
-                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .top) }
+            .scrollTargetLayout()
+        }
+        .scrollPosition($scrollPosition)
+        .background(Theme.bg)
+        .onChange(of: scrollTarget) { _, target in
+            guard let target else { return }
+            withAnimation(.easeInOut(duration: 0.3)) { scrollPosition.scrollTo(id: target, anchor: .top) }
+            scrollTarget = nil
+        }
+        .onAppear {
+            // The landscape-immersive layout has no portrait scroll view, so a
+            // "Sounding ›" tap there sets `scrollTarget` with nothing to consume
+            // it. Returning to portrait re-mounts this scroll view — honor the
+            // pending target here (onChange won't fire: unchanged).
+            if let target = scrollTarget {
+                scrollPosition.scrollTo(id: target, anchor: .top)
                 scrollTarget = nil
-            }
-            .onAppear {
-                // The landscape-immersive layout has no ScrollViewReader, so a
-                // "Sounding ›" tap there sets `scrollTarget` with nothing to
-                // consume it. Returning to portrait re-mounts this scroll view —
-                // honor the pending target here (onChange won't fire: unchanged).
-                if let target = scrollTarget {
-                    proxy.scrollTo(target, anchor: .top)
-                    scrollTarget = nil
-                }
             }
         }
     }
@@ -231,10 +233,7 @@ struct CrossSectionView: View {
                 .overlay {
                     CrossSectionCursorOverlay(data: vizData, cursorDistanceNm: cursor, aircraft: aircraft)
                 }
-                .background(GeometryReader { geo in
-                    Color.clear.onAppear { canvasSize = geo.size }
-                        .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
-                })
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
                 .gesture(scrubGesture)
                 // A Canvas has no intrinsic a11y children, so expose it as a
                 // single element with a stable id. The XCUITest cross-section
