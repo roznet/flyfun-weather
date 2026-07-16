@@ -30,18 +30,18 @@ export function renderTourOfferBanner(host: HTMLElement): void {
   host.style.display = '';
 
   host.querySelector<HTMLButtonElement>('[data-action="accept"]')?.addEventListener('click', () => {
-    markOffered();
+    markOffered('briefing');
     host.style.display = 'none';
     startBriefingTour();
   });
   host.querySelector<HTMLButtonElement>('[data-action="dismiss"]')?.addEventListener('click', () => {
-    markOffered();
+    markOffered('briefing');
     host.style.display = 'none';
   });
 }
 
 export function maybeOfferTour(gate?: TourOfferGate): void {
-  if (hasBeenOffered()) return;
+  if (hasBeenOffered('briefing')) return;
   const params = new URLSearchParams(window.location.search);
   if (params.get('tour') === '1') return;
   // Wait until the briefing stream is fully complete so every tour target
