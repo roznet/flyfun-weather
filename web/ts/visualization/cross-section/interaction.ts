@@ -112,7 +112,10 @@ export function attachInteraction(
     const sections: string[] = [
       `<span class="tt-header">${swatch}<strong>${escapeHtml(name)}</strong> · ${escapeHtml(verdict)}</span>`,
     ];
-    const reasonKey = reasonLabelKey(reasonCodeAt(hl.regions, distanceNm));
+    // Pass the resolved verdict so the reason is only sourced from a region of
+    // that same severity — a touching RED/AMBER boundary must never render the
+    // RED reason under an AMBER verdict (#412 review).
+    const reasonKey = reasonLabelKey(reasonCodeAt(hl.regions, distanceNm, severity));
     if (reasonKey) sections.push(escapeHtml(t(reasonKey)));
 
     tooltip.innerHTML = sections.map((s) => `<div class="tt-section">${s}</div>`).join('');
