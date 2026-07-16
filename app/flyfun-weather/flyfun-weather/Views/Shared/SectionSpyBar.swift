@@ -1,12 +1,5 @@
 import SwiftUI
 
-/// Shared coordinate-space name for scroll-spy offset reporting. Kept on a
-/// non-generic type so `spyAnchor` can reference it without `ScrollSpyScroll`'s
-/// generic parameter.
-private enum SpyConstants {
-    static let coordSpace = "spyScroll"
-}
-
 /// One registrable section in a scroll-spy tab (#310 item 5).
 struct SpySection: Identifiable, Equatable {
     let id: String
@@ -18,34 +11,15 @@ struct SpySection: Identifiable, Equatable {
     }
 }
 
-/// Reports each anchored section's top offset within the scroll coordinate
-/// space so `ScrollSpyScroll` can decide which section is currently "active".
-private struct SpyOffsetKey: PreferenceKey {
-    static let defaultValue: [String: CGFloat] = [:]
-    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
-        value.merge(nextValue()) { _, new in new }
-    }
-}
-
 extension View {
-    /// Mark a scroll target and report its top offset for scroll-spy tracking.
-    /// Pair with `ScrollSpyScroll`; the `id` must match a `SpySection.id`.
-    ///
-    /// `.id()` is applied LAST (outermost): `ScrollViewReader.scrollTo` only
-    /// finds a target whose `.id` is on the outermost layout view, so applying it
-    /// before `.background(GeometryReader…)` left tap-to-scroll a silent no-op
-    /// (scroll-position tracking still worked, masking it). (#3)
+    /// Mark a scroll target for scroll-spy tracking. Pair with `ScrollSpyScroll`;
+    /// the `id` must match a `SpySection.id`. It is a plain `.id(id)` — the native
+    /// scroll APIs (`scrollPosition` for tap-to-scroll, `onScrollTargetVisibilityChange`
+    /// for the active section) key off the target's id directly, so no offset
+    /// plumbing is needed. `ScrollSpyScroll` marks the enclosing layout with
+    /// `.scrollTargetLayout()`, which is what promotes these to scroll targets.
     func spyAnchor(_ id: String) -> some View {
-        self
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: SpyOffsetKey.self,
-                        value: [id: geo.frame(in: .named(SpyConstants.coordSpace)).minY]
-                    )
-                }
-            )
-            .id(id)
+        self.id(id)
     }
 }
 
@@ -103,13 +77,16 @@ struct SectionSpyBar: View {
 /// nearest the top and taps scroll to it. The bar is suppressed when there is
 /// only one section, so single-concept tabs pay nothing.
 struct ScrollSpyScroll<Content: View>: View {
-    static var coordSpace: String { SpyConstants.coordSpace }
-
     let sections: [SpySection]
     @ViewBuilder var content: () -> Content
 
-    @State private var active: String = ""
-    @State private var scrollTarget: String?
+    /// Active section id (nil until the first visibility report), and the scroll
+    /// position we drive on a pill tap. Native iOS 18+ scroll state — this
+    /// replaced a `PreferenceKey` + `GeometryReader` offset reporter, a shared
+    /// hardcoded coordinate-space name, a hand-rolled active-section reducer, and
+    /// a `ScrollViewReader`.
+    @State private var active: String?
+    @State private var position = ScrollPosition(idType: String.self)
 
     var body: some View {
         // The bar is a PINNED SECTION HEADER inside the vertical ScrollView, not a
@@ -119,55 +96,30 @@ struct ScrollSpyScroll<Content: View>: View {
         // content composited zero pixels on every briefing opened after the first
         // (correct frame, no draw). The scroll content itself always re-composites
         // correctly, so the bar rides inside it as a pinned header — same sticky
-        // behaviour, immune to the reuse bug. Tap-to-scroll drives `scrollTarget`,
-        // consumed by the reader's `.onChange` (the reader+trigger shape
-        // CrossSectionView uses; driving `proxy.scrollTo` straight from the tap
-        // handler silently did nothing). (#3)
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        content()
-                    } header: {
-                        if sections.count > 1 {
-                            SectionSpyBar(sections: sections, active: active.isEmpty ? (sections.first?.id ?? "") : active) { id in
-                                scrollTarget = id
+        // behaviour, immune to the reuse bug. (#436)
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                Section {
+                    // `.scrollTargetLayout()` promotes the content's `.spyAnchor`'d
+                    // children to scroll targets, so `onScrollTargetVisibilityChange`
+                    // and `scrollPosition` can address them by id.
+                    content()
+                        .scrollTargetLayout()
+                } header: {
+                    if sections.count > 1 {
+                        SectionSpyBar(sections: sections, active: active ?? sections.first?.id ?? "") { id in
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                position.scrollTo(id: id, anchor: .top)
                             }
                         }
                     }
                 }
             }
-            .coordinateSpace(name: Self.coordSpace)
-            .onPreferenceChange(SpyOffsetKey.self) { offsets in
-                active = Self.activeSection(sections: sections, offsets: offsets)
-            }
-            .onChange(of: scrollTarget) { _, target in
-                guard let target else { return }
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    proxy.scrollTo(target, anchor: .top)
-                }
-                scrollTarget = nil
-            }
         }
-    }
-
-    /// Active = the last section whose top has scrolled up to (or behind) the
-    /// pinned bar's bottom edge. Falls back to the first known section before any
-    /// offsets arrive.
-    ///
-    /// The bar is now a pinned header INSIDE the scroll view, overlapping the top
-    /// ~44pt of the viewport, so a section's offset (measured from the raw
-    /// viewport top) reaches 0 while it is still hidden behind the bar. The
-    /// threshold therefore matches the bar's height, so a section flips to active
-    /// as its top clears the bar — not one bar-height early. (Approximate height;
-    /// the pending native-scroll rewrite replaces this reducer with
-    /// `onScrollTargetVisibilityChange`, which needs no threshold at all.)
-    private static func activeSection(sections: [SpySection], offsets: [String: CGFloat]) -> String {
-        let threshold: CGFloat = 44
-        var current = sections.first(where: { offsets[$0.id] != nil })?.id ?? sections.first?.id ?? ""
-        for section in sections {
-            if let y = offsets[section.id], y <= threshold { current = section.id }
+        .scrollPosition($position)
+        .onScrollTargetVisibilityChange(idType: String.self) { visible in
+            // Topmost visible anchored section is the active one. Ordered top→bottom.
+            if let first = visible.first { active = first }
         }
-        return current
     }
 }
