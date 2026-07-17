@@ -506,12 +506,18 @@ def execute_briefing(
                 corridor_nm=options.metar_taf_corridor_nm,
                 airports_db_path=options.airports_db_path,
             )
-            # Collect runway data for wind advisory comparison
+            # Collect runway data for wind advisory comparison + field
+            # elevation for the ceiling AGL conversion (#441 finding #3).
+            obs_elevations = None
             try:
-                from weatherbrief.airports import get_runway_ends
+                from weatherbrief.airports import (
+                    get_airport_elevations,
+                    get_runway_ends,
+                )
 
                 obs_icaos = [a.icao for a in route_observations.airports]
                 obs_runway_data = get_runway_ends(obs_icaos, options.airports_db_path)
+                obs_elevations = get_airport_elevations(obs_icaos, options.airports_db_path)
             except Exception:
                 obs_runway_data = None
 
@@ -522,6 +528,7 @@ def execute_briefing(
                 route=route,
                 runway_data=obs_runway_data,
                 route_analyses=analysis_result.route_analyses,
+                airport_elevations=obs_elevations,
             )
             result_usage_metar = True
             result_usage_metar_airports = route_observations.airports_with_metar

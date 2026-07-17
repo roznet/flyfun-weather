@@ -366,6 +366,7 @@ def run_observation_comparison(
     route: RouteConfig,
     runway_data: dict[str, list[RunwayEnd]] | None = None,
     route_analyses: list | None = None,
+    airport_elevations: dict[str, float | None] | None = None,
 ) -> RouteObservations:
     """Compare METAR observations against model predictions at nearest waypoints.
 
@@ -432,7 +433,14 @@ def run_observation_comparison(
         if rpa is not None:
             model_name = wf.model.value if hasattr(wf.model, "value") else str(wf.model)
             sounding = rpa.sounding.get(model_name) if hasattr(rpa, "sounding") else None
-            ceiling_ft = reconcile_ceiling(sounding, hourly)
+            # AGL so the comparison against the AGL METAR category is on the
+            # same datum (#441 finding #3). Elevation keyed on the observed
+            # airport (obs.icao), which is what the METAR reports above.
+            ceiling_ft = reconcile_ceiling(
+                sounding, hourly,
+                field_elevation_ft=(airport_elevations or {}).get(obs.icao),
+                model=model_name,
+            )
 
         vis_sm = round(hourly.visibility_m / _M_PER_SM, 1) if hourly.visibility_m is not None else None
         model_fc = classify_flight_category(ceiling_ft=ceiling_ft, visibility_sm=vis_sm)
@@ -701,11 +709,13 @@ def run_realtime_refresh(
         route_analyses = load_route_analyses(pack_dir).analyses
 
     obs_runway_data = None
+    obs_elevations = None
     try:
-        from weatherbrief.airports import get_runway_ends
+        from weatherbrief.airports import get_airport_elevations, get_runway_ends
 
         obs_icaos = list({a.icao for a in new_obs.airports})
         obs_runway_data = get_runway_ends(obs_icaos, db_path)
+        obs_elevations = get_airport_elevations(obs_icaos, db_path)
     except Exception:
         logger.warning("Failed to load runway data for observation comparison", exc_info=True)
 
@@ -716,6 +726,7 @@ def run_realtime_refresh(
         route=route,
         runway_data=obs_runway_data,
         route_analyses=route_analyses,
+        airport_elevations=obs_elevations,
     )
 
     # Fetch fresh route SIGMETs (area hazards). Non-fatal: a SIGMET source

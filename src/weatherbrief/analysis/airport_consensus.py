@@ -22,8 +22,10 @@ from collections import Counter
 from typing import Any
 
 from weatherbrief.analysis.airport_conditions import (
+    _nwp_ceiling_is_agl,
     classify_flight_category,
     compute_runway_winds,
+    to_agl_ceiling,
 )
 from weatherbrief.analysis.comparison import (
     circular_spread,
@@ -33,54 +35,75 @@ from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.models.airport_conditions import FlightCategory, RunwayEnd
 from weatherbrief.units import M_PER_SM as _M_PER_SM
 
-# Two independent primary ceiling estimates — the LOWER (more conservative) is
-# used when both exist, matching ``analysis.airport_conditions.reconcile_ceiling``
-# so the airport-conditions pipeline and this snapshot pipeline derive the same
-# per-model ceiling. ``cloud_base_ft`` / ``lcl_ft`` are lower-priority fallbacks
-# used only when neither primary estimate is present.
-_CEILING_PRIMARY = ("sounding_ceiling_ft", "nwp_ceiling_ft")
-_CEILING_FALLBACK = ("cloud_base_ft", "lcl_ft")
-
-
-def best_ceiling(snap: dict[str, Any]) -> float | None:
+# Ceiling estimate priority: min(sounding_ceiling_ft, nwp_ceiling_ft) when
+# either primary is present (conservative, matching
+# ``airport_conditions.reconcile_ceiling``), else cloud_base_ft, then lcl_ft.
+# All are converted to a common AGL datum first (see best_ceiling).
+def best_ceiling(
+    snap: dict[str, Any],
+    *,
+    field_elevation_ft: float | None = None,
+) -> float | None:
     """Pick the per-model ceiling estimate from a snapshot dict.
 
     Takes ``min(sounding_ceiling_ft, nwp_ceiling_ft)`` when either primary
     estimate is present (the conservative reconciliation shared with
     ``reconcile_ceiling``), otherwise falls back to ``cloud_base_ft`` then
     ``lcl_ft``. ``snap`` keys are the ``AirportForecastSnapshotRow`` column names.
+
+    Datum (#441 finding #3): when ``field_elevation_ft`` is given, each estimate
+    is converted to AGL before the min so the returned ceiling matches the AGL
+    flight-category thresholds and METAR ceilings. The model (for the ECMWF-AGL
+    exception) is read from ``snap["model"]``. Without elevation the legacy
+    datum-naive value is returned.
     """
-    primary = [snap.get(f) for f in _CEILING_PRIMARY]
-    primary = [v for v in primary if v is not None]
+    fe = field_elevation_ft
+    nwp_is_agl = _nwp_ceiling_is_agl(snap.get("model"))
+
+    # (value, source_is_agl) per estimate. Sounding & LCL are sounding-derived
+    # geopotential MSL; NWP ceiling and cloud base follow the model's datum.
+    sounding = to_agl_ceiling(snap.get("sounding_ceiling_ft"), fe, source_is_agl=False)
+    nwp = to_agl_ceiling(snap.get("nwp_ceiling_ft"), fe, source_is_agl=nwp_is_agl)
+    primary = [v for v in (sounding, nwp) if v is not None]
     if primary:
         return min(primary)
-    for field in _CEILING_FALLBACK:
-        val = snap.get(field)
-        if val is not None:
-            return val
-    return None
+
+    cloud_base = to_agl_ceiling(snap.get("cloud_base_ft"), fe, source_is_agl=nwp_is_agl)
+    if cloud_base is not None:
+        return cloud_base
+    return to_agl_ceiling(snap.get("lcl_ft"), fe, source_is_agl=False)
 
 
-def flight_category(snap: dict[str, Any]) -> str:
+def flight_category(
+    snap: dict[str, Any],
+    *,
+    field_elevation_ft: float | None = None,
+) -> str:
     """Derive flight category from a snapshot dict.
 
     Visibility is always converted from metres to statute miles before
     classification (the map and alternates must agree on units).
     """
-    ceiling = best_ceiling(snap)
+    ceiling = best_ceiling(snap, field_elevation_ft=field_elevation_ft)
     vis_m = snap.get("visibility_m")
     vis_sm = vis_m / _M_PER_SM if vis_m is not None else None
     return classify_flight_category(ceiling, vis_sm).value
 
 
-def snap_to_dict(snap: dict[str, Any]) -> dict[str, Any]:
+def snap_to_dict(
+    snap: dict[str, Any],
+    *,
+    field_elevation_ft: float | None = None,
+) -> dict[str, Any]:
     """Convert a column-keyed snapshot dict into the lightweight per-model dict.
 
     The output is the per-model shape consumed by :func:`enrich_wind` and
     :func:`consensus` (and surfaced verbatim in the forecast-map API response).
+    ``field_elevation_ft`` (when known) makes ``ceiling_ft``/``flight_category``
+    AGL — see :func:`best_ceiling`. (#441 finding #3)
     """
     return {
-        "ceiling_ft": best_ceiling(snap),
+        "ceiling_ft": best_ceiling(snap, field_elevation_ft=field_elevation_ft),
         "visibility_m": snap.get("visibility_m"),
         "wind_speed_kt": snap.get("wind_speed_10m_kt"),
         "wind_dir_deg": snap.get("wind_direction_10m_deg"),
@@ -89,7 +112,7 @@ def snap_to_dict(snap: dict[str, Any]) -> dict[str, Any]:
         "cape_jkg": snap.get("cape_jkg"),
         "convective_risk": snap.get("sounding_convective_risk") or "none",
         "temperature_c": snap.get("temperature_2m_c"),
-        "flight_category": flight_category(snap),
+        "flight_category": flight_category(snap, field_elevation_ft=field_elevation_ft),
     }
 
 

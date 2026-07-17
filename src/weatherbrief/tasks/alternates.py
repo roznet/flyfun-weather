@@ -204,6 +204,7 @@ def _assess(
     by_icao: dict[str, dict[str, dict]],
     runways: dict,
     aggregation: str = "majority",
+    elevations: dict[str, float | None] | None = None,
 ) -> tuple[dict[str, dict], dict] | None:
     """Build (per_model, consensus) for one airport via the shared assembly.
 
@@ -216,7 +217,8 @@ def _assess(
     models_raw = by_icao.get(icao)
     if not models_raw:
         return None
-    per_model = {m: snap_to_dict(s) for m, s in models_raw.items()}
+    fe = (elevations or {}).get(icao)  # AGL ceiling conversion (#441 #3)
+    per_model = {m: snap_to_dict(s, field_elevation_ft=fe) for m, s in models_raw.items()}
     rwy_ends = runways.get(icao, [])
     for d in per_model.values():
         enrich_wind(d, rwy_ends)
@@ -247,6 +249,7 @@ def _build_alternate(
     origin,
     dest_ctx: _DestContext,
     aggregation: str = "majority",
+    elevations: dict[str, float | None] | None = None,
 ) -> AlternateAirport | None:
     """Assemble one ``AlternateAirport`` from a candidate's fetched snapshots.
 
@@ -257,7 +260,7 @@ def _build_alternate(
     """
     ap = c["airport"]
     try:
-        assessed = _assess(ap.ident, by_icao, runways, aggregation)
+        assessed = _assess(ap.ident, by_icao, runways, aggregation, elevations)
     except Exception:
         logger.debug("Alternates: assessment failed for %s", ap.ident, exc_info=True)
         return None
@@ -566,6 +569,7 @@ def run_alternates(
     dest_wa = WatchlistAirport(icao=dest.icao, lat=dest.lat, lon=dest.lon)
     by_icao: dict[str, dict[str, dict]] = {}
     runways: dict = {}
+    elevations: dict[str, float | None] = {}  # field elevation for AGL (#441 #3)
     alternates: list[AlternateAirport] = []
     dest_ctx: _DestContext | None = None
     dest_category = None
@@ -591,13 +595,16 @@ def run_alternates(
 
         by_icao.update(_fetch_eta_snapshots(fetch_airports, eta_dt))
         try:
-            runways.update(get_runway_ends([a.icao for a in fetch_airports], airports_db_path))
+            icaos = [a.icao for a in fetch_airports]
+            runways.update(get_runway_ends(icaos, airports_db_path))
+            from weatherbrief.airports import get_airport_elevations
+            elevations.update(get_airport_elevations(icaos, airports_db_path))
         except Exception:
-            logger.warning("Alternates: runway lookup failed", exc_info=True)
+            logger.warning("Alternates: runway/elevation lookup failed", exc_info=True)
 
         # Destination assessment (drives axes + the instrument-approach gate).
         if batch_idx == 0:
-            dest_assessed = _assess(dest.icao, by_icao, runways, aggregation)
+            dest_assessed = _assess(dest.icao, by_icao, runways, aggregation, elevations)
             if dest_assessed is None:
                 logger.info("Alternates: no destination snapshot at ETA; skipping stage")
                 return None
@@ -630,7 +637,7 @@ def run_alternates(
         # Build this batch's alternates (a single malformed airport skips only
         # itself, not the stage — _build_alternate returns None for it).
         for c in batch:
-            alt = _build_alternate(c, by_icao, runways, origin, dest_ctx, aggregation)
+            alt = _build_alternate(c, by_icao, runways, origin, dest_ctx, aggregation, elevations)
             if alt is not None:
                 alternates.append(alt)
         evaluated_count += len(batch)
