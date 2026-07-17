@@ -1080,7 +1080,7 @@ def _score_cycle(
 
     Returns number of scores created.
     """
-    from weatherbrief.airports import get_runway_ends
+    from weatherbrief.airports import get_airport_elevations, get_runway_ends
     from weatherbrief.tasks.scoring import _score_model_vs_metar, _score_taf_vs_metar
 
     # Fetch all snapshots that predict within ±90 min of cycle_time
@@ -1130,6 +1130,13 @@ def _score_cycle(
     # Load runway data for wind advisory scoring
     unique_icaos = list(set(obs_by_icao.keys()))
     runway_map = get_runway_ends(unique_icaos, airports_db_path)
+    # Field elevation for the ceiling AGL conversion, mirroring score_flight
+    # (#441 #3). Enhancement, not required: on failure scoring stays datum-naive.
+    try:
+        elev_map = get_airport_elevations(unique_icaos, airports_db_path)
+    except Exception:
+        logger.warning("Elevation lookup failed; standalone scoring stays datum-naive", exc_info=True)
+        elev_map = {}
 
     # Bulk-fetch existing score keys to avoid per-row duplicate checks
     def _strip_tz(dt: datetime) -> datetime:
@@ -1201,6 +1208,7 @@ def _score_cycle(
             model_init_time=snap.model_init_time,
             days_out=days_out,
             source="standalone",
+            field_elevation_ft=elev_map.get(snap.icao),
         )
 
         if score_row is not None:

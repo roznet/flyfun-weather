@@ -100,12 +100,18 @@ TS implementations are pinned identical by `tests/fixtures/consensus_vectors.jso
 operating on a **plain snapshot dict** whose keys equal `AirportForecastSnapshotRow`
 column names (NOT the ORM row):
 
-- `best_ceiling(snap)` — `min(sounding_ceiling_ft, nwp_ceiling_ft)` when either
-  primary estimate is present (the conservative reconciliation shared with
-  `analysis.airport_conditions.reconcile_ceiling`), else falls back to
-  `cloud_base_ft` then `lcl_ft`
-- `flight_category(snap)` — `classify_flight_category(ceiling, visibility_mi)`
-- `snap_to_dict(snap)` — column-keyed → lightweight per-model dict
+- `best_ceiling(snap, *, field_elevation_ft=None)` — `min(sounding_ceiling_ft,
+  nwp_ceiling_ft)` when either primary estimate is present (the conservative
+  reconciliation shared with `analysis.airport_conditions.reconcile_ceiling`),
+  else falls back to `cloud_base_ft` then `lcl_ft`. When `field_elevation_ft` is
+  given, each estimate is converted to **AGL** first (sounding/GFS/ICON are MSL
+  → subtract elevation; ECMWF NWP and `lcl_ft` are already AGL) via the shared
+  `to_agl_ceiling` helper, so the ceiling matches the AGL flight-category
+  thresholds and METAR — the model for the ECMWF exception is read from
+  `snap["model"]`. Callers (`map_queries`, `alternates`) pass the airport's
+  published `get_airport_elevations` value. (#441 finding #3)
+- `flight_category(snap, *, field_elevation_ft=None)` — `classify_flight_category(ceiling, visibility_mi)`
+- `snap_to_dict(snap, *, field_elevation_ft=None)` — column-keyed → lightweight per-model dict
 - `enrich_wind(d, runway_ends)` — `compute_runway_winds`, best runway, gusts
 - `consensus(per_model, mode=<aggregation>)` — default `"majority"`; the mode is
   the user's advisory aggregation preference (see "Consensus" above)
