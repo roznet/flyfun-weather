@@ -153,6 +153,7 @@ def _score_model_vs_metar(
     model_init_time: datetime,
     days_out: int,
     source: str = "flight",
+    field_elevation_ft: float | None = None,
 ) -> VerificationScoreRow | None:
     """Compute a single model-vs-METAR score using advisory pipeline functions."""
     from weatherbrief.analysis.airport_conditions import (
@@ -169,8 +170,11 @@ def _score_model_vs_metar(
     init_time = _ensure_utc(model_init_time)
     lead_hours = int((obs_time - init_time).total_seconds() / 3600)
 
-    # Ceiling — same as advisory pipeline
-    model_ceiling = reconcile_ceiling(sounding, hourly)
+    # Ceiling — same as advisory pipeline, converted to AGL so the comparison
+    # against the AGL METAR ceiling/category is on the same datum. (#441 #3)
+    model_ceiling = reconcile_ceiling(
+        sounding, hourly, field_elevation_ft=field_elevation_ft, model=model,
+    )
 
     # Visibility in statute miles — same conversion as advisory
     model_vis_sm = (
@@ -423,13 +427,18 @@ def score_flight(
     # Batch-load runway data
     runway_map = get_runway_ends(sorted(icaos), airports_db_path)
 
-    # Load airport coordinates for route-point matching
+    # Load airport coordinates for route-point matching + field elevation for
+    # the ceiling AGL conversion (#441 finding #3).
     airport_model = _load_airport_model(airports_db_path)
     airport_coords: dict[str, tuple[float, float]] = {}
+    airport_elev_ft: dict[str, float | None] = {}
     for icao in icaos:
         apt = airport_model.get_airport(icao)
         if apt is not None:
             airport_coords[icao] = (apt.latitude_deg, apt.longitude_deg)
+            airport_elev_ft[icao] = (
+                float(apt.elevation_ft) if apt.elevation_ft is not None else None
+            )
 
     # Load observations
     obs_rows = db.execute(
@@ -520,6 +529,7 @@ def score_flight(
                     model=model_name,
                     model_init_time=init_dt,
                     days_out=days_out,
+                    field_elevation_ft=airport_elev_ft.get(icao),
                 )
                 if score_row is not None:
                     db.add(score_row)

@@ -143,11 +143,36 @@ def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
 def _nwp_ceiling_is_agl(model: str | None) -> bool:
     """Whether a model's NWP ceiling is already AGL (height above ground).
 
-    ECMWF ceil/cbh/hcct are AGL; GFS (geopotential) and ICON (CEILING/HBAS_CON)
-    are MSL. Unknown/aggregate models (best_match, …) are treated as MSL — the
-    majority case, and the conservative direction at elevated airports. (#441)
+    ECMWF ceil/cbh/hcct are AGL (eccodes names + ECMWF Parameter DB); GFS
+    ceiling is geopotential height (MSL); ICON CEILING/HBAS_CON/HTOP_CON are
+    MSL — the eccodes names read "…above msl" and the DWD ICON database doc
+    documents these cloud-geometry heights as MSL. Unknown/aggregate models
+    (best_match, …) are treated as MSL — the majority case, and the
+    conservative direction at elevated airports. (#441 finding #3)
     """
     return (model or "").lower() == "ecmwf"
+
+
+def to_agl_ceiling(
+    value: float | None,
+    field_elevation_ft: float | None,
+    *,
+    source_is_agl: bool,
+) -> float | None:
+    """Convert a ceiling value to AGL (feet above field elevation). (#441 #3)
+
+    Sources already AGL (ECMWF NWP ceiling) pass through unchanged; MSL sources
+    (sounding geopotential height, GFS/ICON NWP ceiling) have the field
+    elevation subtracted, clamped at 0 (a deck at/below the field = surface).
+    When ``field_elevation_ft`` is None the value is returned unchanged — the
+    legacy datum-naive behaviour for callers without elevation. Single source of
+    truth shared by reconcile_ceiling and airport_consensus.best_ceiling.
+    """
+    if value is None:
+        return None
+    if field_elevation_ft is None:
+        return value
+    return value if source_is_agl else max(0.0, value - field_elevation_ft)
 
 
 def reconcile_ceiling(
@@ -177,22 +202,14 @@ def reconcile_ceiling(
     if hourly and hourly.nwp_cloud_diagnostics:
         nwp_ceil = hourly.nwp_cloud_diagnostics.ceiling_ft
 
-    if field_elevation_ft is None:
-        # Legacy datum-naive behaviour (callers not yet migrated to elevation).
-        if sounding_ceil is not None and nwp_ceil is not None:
-            return min(sounding_ceil, nwp_ceil)
-        return sounding_ceil if sounding_ceil is not None else nwp_ceil
-
-    fe = field_elevation_ft
-    # Sounding ceiling is MSL → AGL. Clamp at 0 (cloud at/below field = surface).
-    s_agl = max(0.0, sounding_ceil - fe) if sounding_ceil is not None else None
-    if nwp_ceil is None:
-        n_agl = None
-    elif _nwp_ceiling_is_agl(model):
-        n_agl = max(0.0, nwp_ceil)          # ECMWF: already AGL
-    else:
-        n_agl = max(0.0, nwp_ceil - fe)     # GFS/ICON: MSL → AGL
-    candidates = [c for c in (s_agl, n_agl) if c is not None]
+    # Convert each to AGL (no-op when field_elevation_ft is None → legacy min),
+    # then take the lower on a single datum. Sounding is MSL; NWP is MSL for
+    # GFS/ICON, AGL for ECMWF.
+    s = to_agl_ceiling(sounding_ceil, field_elevation_ft, source_is_agl=False)
+    n = to_agl_ceiling(
+        nwp_ceil, field_elevation_ft, source_is_agl=_nwp_ceiling_is_agl(model),
+    )
+    candidates = [c for c in (s, n) if c is not None]
     return min(candidates) if candidates else None
 
 
@@ -331,6 +348,10 @@ def compute_airport_conditions(
         arr_icao: Arrival airport ICAO code.
         arr_name: Arrival airport name.
         runway_data: Optional dict of ICAO -> list of RunwayEnd.
+        airport_elevations: Optional dict of ICAO -> published field elevation
+            (ft AMSL). When present, the reconciled ceiling is converted to AGL
+            for flight-category classification; absent, the legacy datum-naive
+            ceiling is used. (#441 finding #3)
 
     Returns:
         AirportConditions with departure and arrival summaries.

@@ -77,6 +77,32 @@ def _get_runways(airports_db_path: str) -> dict[str, list[RunwayEnd]]:
     return _runway_cache
 
 
+_elevation_cache: dict[str, float | None] | None = None
+
+
+def _get_elevations(airports_db_path: str) -> dict[str, float | None]:
+    """Return icao → published field elevation (ft AMSL), cached in-process.
+
+    Used to convert MSL model/sounding ceilings to AGL for flight-category and
+    FAA/EASA alternate triggers. Mirrors the runway cache. (#441 finding #3)
+    """
+    global _elevation_cache
+    if _elevation_cache is None:
+        try:
+            from weatherbrief.airports import get_airport_elevations
+
+            coords = _get_coords(airports_db_path)
+            _elevation_cache = get_airport_elevations(
+                list(coords.keys()), airports_db_path,
+            )
+        except Exception:
+            # Elevation is an enhancement, not required: on failure the ceiling
+            # stays datum-naive rather than breaking the forecast map. (#441)
+            logger.warning("Elevation lookup failed; ceilings stay datum-naive", exc_info=True)
+            _elevation_cache = {}
+    return _elevation_cache
+
+
 _approach_cache: dict[str, tuple[str | None, bool]] | None = None
 
 
@@ -154,6 +180,7 @@ def _alt_required(
 
 # Snapshot columns the shared assembly reads, copied off the ORM row.
 _SNAPSHOT_DICT_FIELDS = (
+    "model",  # needed for the ECMWF-AGL ceiling exception (#441 finding #3)
     "sounding_ceiling_ft",
     "nwp_ceiling_ft",
     "cloud_base_ft",
@@ -178,19 +205,31 @@ def _row_to_snapshot_dict(snap: AirportForecastSnapshotRow) -> dict[str, Any]:
     return {field: getattr(snap, field, None) for field in _SNAPSHOT_DICT_FIELDS}
 
 
-def _best_ceiling(snap: AirportForecastSnapshotRow) -> float | None:
+def _best_ceiling(
+    snap: AirportForecastSnapshotRow, field_elevation_ft: float | None = None,
+) -> float | None:
     """Pick the best ceiling estimate from a snapshot (row→dict adapter)."""
-    return _shared_best_ceiling(_row_to_snapshot_dict(snap))
+    return _shared_best_ceiling(
+        _row_to_snapshot_dict(snap), field_elevation_ft=field_elevation_ft,
+    )
 
 
-def _flight_category(snap: AirportForecastSnapshotRow) -> str:
+def _flight_category(
+    snap: AirportForecastSnapshotRow, field_elevation_ft: float | None = None,
+) -> str:
     """Derive flight category from snapshot fields (row→dict adapter)."""
-    return _shared_flight_category(_row_to_snapshot_dict(snap))
+    return _shared_flight_category(
+        _row_to_snapshot_dict(snap), field_elevation_ft=field_elevation_ft,
+    )
 
 
-def _snap_to_dict(snap: AirportForecastSnapshotRow) -> dict[str, Any]:
+def _snap_to_dict(
+    snap: AirportForecastSnapshotRow, field_elevation_ft: float | None = None,
+) -> dict[str, Any]:
     """Convert a forecast snapshot to a lightweight dict for the API response."""
-    return _shared_snap_to_dict(_row_to_snapshot_dict(snap))
+    return _shared_snap_to_dict(
+        _row_to_snapshot_dict(snap), field_elevation_ft=field_elevation_ft,
+    )
 
 
 def _enrich_wind(d: dict, runway_ends: list[RunwayEnd]) -> None:
@@ -248,12 +287,15 @@ def get_forecast_map_data(
         select(AirportForecastSnapshotRow).where(or_(*conditions))
     ).scalars().all()
 
-    # Group by airport
+    # Group by airport (ceiling → AGL via published field elevation, #441 #3)
+    elevations = _get_elevations(airports_db_path)
     by_airport: dict[str, dict[str, dict]] = {}
     for snap in snaps:
         if snap.icao not in by_airport:
             by_airport[snap.icao] = {}
-        by_airport[snap.icao][snap.model] = _snap_to_dict(snap)
+        by_airport[snap.icao][snap.model] = _snap_to_dict(
+            snap, field_elevation_ft=elevations.get(snap.icao),
+        )
 
     # Enrich per-model data with runway crosswind/headwind
     runways = _get_runways(airports_db_path)
