@@ -353,7 +353,7 @@ def test_build_context_convective_model_scheme_and_cross_check(sample_snapshot):
     assert "Convective model scheme [gfs]" in context
     assert "cover=0%" in context
     assert "cross-check:" in context
-    assert "not corroborated" in context
+    assert "Thermo Convective shows" in context
 
 
 def test_build_context_convective_cross_check_when_thermo_none(sample_snapshot):
@@ -378,4 +378,112 @@ def test_build_context_convective_cross_check_when_thermo_none(sample_snapshot):
     assert "Convective model scheme [gfs]" in context
     assert "cover=40%" in context
     assert "cross-check:" in context
-    assert "model convective scheme fired" in context
+    assert "NWP Convective shows convection" in context
+
+
+# --- SIGMET flight-window activity tagging ------------------------------------
+
+
+def _sigmet(valid_from, valid_to):
+    from weatherbrief.models import SigmetAlongRoute
+
+    return SigmetAlongRoute(
+        fir_id="LFFF",
+        fir_name="PARIS FIR/UIR",
+        hazard="TS",
+        qualifier="EMBD",
+        top_ft=37000,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        direction="ENE",
+        speed_kt=25,
+        enroute_distance_from_nm=200,
+        enroute_distance_to_nm=220,
+        raw_text="LFFF SIGMET T10 VALID 170605/170800 ... EMBD TS ... MOV ENE 25KT NC=",
+    )
+
+
+def _sigmet_context(sig_report, departure, arrival):
+    from weatherbrief.digest.prompt_builder import _format_sigmets_context
+
+    return _format_sigmets_context(sig_report, departure=departure, arrival=arrival)
+
+
+def test_sigmet_expired_before_departure_tagged_inactive():
+    """A SIGMET whose validity ends before departure is flagged INACTIVE with
+    the explicit expiry/departure times — the real 0605Z-0800Z vs 1030Z case."""
+    from datetime import timedelta
+
+    from weatherbrief.models import RouteSigmets
+
+    dep = datetime(2026, 7, 17, 10, 30, tzinfo=timezone.utc)
+    arr = dep + timedelta(hours=1.75)
+    s = _sigmet(
+        datetime(2026, 7, 17, 6, 5, tzinfo=timezone.utc),
+        datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc),
+    )
+    ctx = _sigmet_context(
+        RouteSigmets(corridor_nm=50, fetch_time=dep, sigmets=[s]), dep, arr
+    )
+
+    assert "INACTIVE during flight — expired 0800Z, before 1030Z departure" in ctx
+    assert "Flight window: 1030Z" in ctx
+    assert "ACTIVE during flight window" not in ctx
+
+
+def test_sigmet_overlapping_flight_tagged_active():
+    from datetime import timedelta
+
+    from weatherbrief.models import RouteSigmets
+
+    dep = datetime(2026, 7, 17, 10, 30, tzinfo=timezone.utc)
+    arr = dep + timedelta(hours=1.75)
+    s = _sigmet(
+        datetime(2026, 7, 17, 10, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 17, 14, 0, tzinfo=timezone.utc),
+    )
+    ctx = _sigmet_context(
+        RouteSigmets(corridor_nm=50, fetch_time=dep, sigmets=[s]), dep, arr
+    )
+
+    assert "ACTIVE during flight window (1000Z–1400Z)" in ctx
+    # The instructional header mentions INACTIVE; assert no per-SIGMET tag is.
+    assert "** INACTIVE" not in ctx
+
+
+def test_sigmet_begins_after_arrival_tagged_inactive():
+    from datetime import timedelta
+
+    from weatherbrief.models import RouteSigmets
+
+    dep = datetime(2026, 7, 17, 10, 30, tzinfo=timezone.utc)
+    arr = dep + timedelta(hours=1.75)
+    s = _sigmet(
+        datetime(2026, 7, 17, 15, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 17, 18, 0, tzinfo=timezone.utc),
+    )
+    ctx = _sigmet_context(
+        RouteSigmets(corridor_nm=50, fetch_time=dep, sigmets=[s]), dep, arr
+    )
+
+    assert "INACTIVE during flight — begins 1500Z, after 1215Z arrival" in ctx
+
+
+def test_sigmet_no_departure_omits_activity_tag():
+    """Old packs without a departure_time get no window header or activity tag
+    (we cannot compute the relationship) — behaviour is unchanged for them."""
+    from weatherbrief.models import RouteSigmets
+
+    s = _sigmet(
+        datetime(2026, 7, 17, 6, 5, tzinfo=timezone.utc),
+        datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc),
+    )
+    ctx = _sigmet_context(
+        RouteSigmets(corridor_nm=50, fetch_time=datetime(2026, 7, 17, 7, 0, tzinfo=timezone.utc), sigmets=[s]),
+        None,
+        None,
+    )
+
+    assert "Flight window:" not in ctx
+    assert "INACTIVE" not in ctx
+    assert "ACTIVE during flight" not in ctx

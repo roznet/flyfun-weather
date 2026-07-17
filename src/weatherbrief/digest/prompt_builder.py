@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from weatherbrief.analysis.advisories.altitude_table import (
@@ -28,6 +28,7 @@ from weatherbrief.models import (
     RouteAlternates,
     RouteObservations,
     RouteSigmets,
+    SigmetAlongRoute,
     SoundingAnalysis,
 )
 
@@ -271,7 +272,14 @@ def _append_shared_sections(
 
     # --- Route SIGMETs (D-0 only) ---
     if snapshot.route_sigmets and snapshot.route_sigmets.count:
-        sections.append(_format_sigmets_context(snapshot.route_sigmets))
+        dep = snapshot.departure_time
+        arr = (
+            dep + timedelta(hours=snapshot.route.flight_duration_hours)
+            if dep is not None else None
+        )
+        sections.append(
+            _format_sigmets_context(snapshot.route_sigmets, departure=dep, arrival=arr)
+        )
 
     # NOTE: Weather alternates are intentionally NOT fed to the LLM prompt for
     # now (#210) — they surface in the briefing UI only. Re-enable by appending
@@ -660,12 +668,66 @@ def _format_observations_context(obs: RouteObservations) -> str:
     return "\n".join(lines)
 
 
-def _format_sigmets_context(sig: RouteSigmets) -> str:
+def _hhmmz(dt: datetime) -> str:
+    """Format an aware/naive datetime as a compact UTC 'HHMMZ' token."""
+    d = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    return d.strftime("%H%MZ")
+
+
+def _sigmet_flight_activity(
+    s: SigmetAlongRoute,
+    departure: datetime | None,
+    arrival: datetime | None,
+) -> str | None:
+    """Explicit active/inactive tag for a SIGMET vs the actual flight window.
+
+    SIGMETs are collected from a wider window (now → end of the departure day),
+    so one can intersect the route geographically yet be temporally *inactive*
+    during the flight — the flight may depart after it expires, or land before
+    it begins. We compute that relationship here and state it plainly rather
+    than leaving the LLM to parse validity out of the raw SIGMET text (which
+    misled a real briefing: an 0605Z–0800Z SIGMET was narrated as "active" for
+    a 1030Z departure).
+    """
+    if departure is None or (s.valid_from is None and s.valid_to is None):
+        return None
+    dep = departure
+    arr = arrival or departure
+    # Overlap test: inactive only if the SIGMET wholly precedes or follows the
+    # flight window. Open-ended bounds are treated permissively (still active).
+    if s.valid_to is not None and s.valid_to < dep:
+        return (
+            f"INACTIVE during flight — expired {_hhmmz(s.valid_to)}, "
+            f"before {_hhmmz(dep)} departure"
+        )
+    if s.valid_from is not None and s.valid_from > arr:
+        return (
+            f"INACTIVE during flight — begins {_hhmmz(s.valid_from)}, "
+            f"after {_hhmmz(arr)} arrival"
+        )
+    win = ""
+    if s.valid_from is not None and s.valid_to is not None:
+        win = f" ({_hhmmz(s.valid_from)}–{_hhmmz(s.valid_to)})"
+    return f"ACTIVE during flight window{win}"
+
+
+def _format_sigmets_context(
+    sig: RouteSigmets,
+    departure: datetime | None = None,
+    arrival: datetime | None = None,
+) -> str:
     """Format route SIGMETs into a compact LLM context section."""
     lines: list[str] = ["=== SIGMETs ALONG ROUTE ==="]
     lines.append(
         f"Corridor: {sig.corridor_nm:.0f}nm | {sig.count} SIGMET(s) intersecting route"
     )
+    if departure is not None:
+        arr = arrival or departure
+        lines.append(
+            f"Flight window: {_hhmmz(departure)}–{_hhmmz(arr)}. SIGMETs are pulled "
+            "from a wider window, so some below may be INACTIVE during the flight — "
+            "treat an INACTIVE tag as authoritative and do NOT describe it as active."
+        )
     if sig.hazards:
         lines.append(f"Hazards: {', '.join(sig.hazards)}")
     if sig.has_severe:
@@ -682,6 +744,9 @@ def _format_sigmets_context(sig: RouteSigmets) -> str:
         if s.direction and s.speed_kt:
             parts.append(f"moving {s.direction} {s.speed_kt}kt")
         lines.append("  " + ", ".join(parts))
+        activity = _sigmet_flight_activity(s, departure, arrival)
+        if activity:
+            lines.append(f"    ** {activity} **")
         if s.raw_text:
             lines.append(f"    {s.raw_text}")
 
