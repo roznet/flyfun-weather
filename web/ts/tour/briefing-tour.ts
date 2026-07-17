@@ -215,7 +215,7 @@ export function startBriefingTour(): void {
   }
   stopWatchingLayerToggleStep();
   preloadSkewT();
-  track(EVENTS.TOUR_STARTED);
+  track(EVENTS.TOUR_STARTED, { tour: 'briefing' });
   activeDriver = driver({
     showProgress: true,
     allowClose: true,
@@ -225,7 +225,7 @@ export function startBriefingTour(): void {
     // closing while on it) counts as completed; closing earlier does not.
     onDestroyStarted: () => {
       if (activeDriver?.isLastStep()) {
-        track(EVENTS.TOUR_COMPLETED);
+        track(EVENTS.TOUR_COMPLETED, { tour: 'briefing' });
       }
       activeDriver?.destroy();
     },
