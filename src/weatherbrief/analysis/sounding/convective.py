@@ -986,8 +986,9 @@ def convective_cross_check(
         else:
             cover_txt = "no convective precip/cover"
         note = (
-            f"DD {thermo.risk_level.value.upper()}{cape_txt} but model scheme quiet "
-            f"({cover_txt}) — not corroborated by the model's own convection"
+            f"Thermo Convective shows {thermo.risk_level.value.upper()} instability"
+            f"{cape_txt}, but the model's own NWP Convective forecast is quiet "
+            f"({cover_txt})"
         )
         return ConvectiveCrossCheck(direction="dd_not_corroborated", note=note)
 
@@ -1000,13 +1001,16 @@ def convective_cross_check(
         if top_fl is not None and top_fl >= _XCHECK_DEEP_TOP_FL:
             # Round to a conventional FL for display (top_fl is geometric AMSL).
             bits.append(f"tops FL{round(top_fl / 10) * 10:.0f}")
-        desc = " / ".join(bits) if bits else "model scheme"
+        desc = " / ".join(bits) if bits else "convection"
         dd_txt = (
-            "no DD instability"
+            "little instability"
             if thermo.risk_level == ConvectiveRisk.NONE
-            else "marginal DD instability"
+            else "only marginal instability"
         )
-        note = f"model convective scheme fired ({desc}) despite {dd_txt}"
+        note = (
+            f"NWP Convective shows convection ({desc}), but Thermo Convective "
+            f"shows {dd_txt}"
+        )
         return ConvectiveCrossCheck(direction="model_active_dd_quiet", note=note)
 
     return None

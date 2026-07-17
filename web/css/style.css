@@ -4175,6 +4175,33 @@ label {
   margin-left: auto;
 }
 
+/* Cross-check presence tag (#442): a muted, tappable summary marker shown when a
+   model's own convective forecast disagrees with the thermodynamics, so the
+   pilot knows from the summary there's something to look at. Presence cue + entry
+   point; the per-model detail lives in the (i) popup. Never coloured like a
+   status badge. */
+.advisory-crosscheck-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.35rem 0 0;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.advisory-crosscheck-tag:hover,
+.advisory-crosscheck-tag:focus-visible {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
 /* Mitigation presence hint (#330): soft lightbulb on the card header. A
    presence cue only — the text lives in the (i) popup. Deliberately low-key and
    never coloured like a status badge. */

@@ -143,10 +143,6 @@ class ConvectiveEvaluator:
             worst_risk = ConvectiveRisk.NONE
             below_cruise_count = 0  # risky points skipped because tops below cruise
             max_cover_pct: float | None = None
-            # Details-only DD-vs-model-scheme cross-check tally (never grades).
-            xcheck_fired = 0
-            xcheck_dirs: dict[str, int] = {}
-            xcheck_worst_dd_risk = ConvectiveRisk.NONE
             # Per-point highlight geometry (#373). Every route point contributes
             # a ribbon severity (no sounding → UNAVAILABLE, unaffected → GREEN);
             # flagged points also contribute a tower cutout.
@@ -155,6 +151,9 @@ class ConvectiveEvaluator:
             # Worst affected point for peak_dist_nm: max graded risk, ties → CAPE.
             peak_key: tuple[int, float] | None = None
             peak_dist: float | None = None
+            peak_nwp_risk = ConvectiveRisk.NONE  # NWP tier at the driving point
+            peak_dd_risk = ConvectiveRisk.NONE   # DD (thermo) tier at that point
+            peak_has_both = False  # both signals present at the driving point
 
             for rpa in ctx.analyses:
                 dist = rpa.distance_from_origin_nm or 0.0
@@ -176,15 +175,11 @@ class ConvectiveEvaluator:
                 # nwp_cape_fallback guard can't catch (#283 review). If thermo is
                 # missing, convective_cross_check returns None on its own.
                 thermo_conv = sounding.convective_thermo
+                # Per-point DD-vs-firing check — still used as the dd_trigger gate
+                # below (a green NWP raised to amber only when the thermodynamics
+                # are uncorroborated here). The advisory's surfaced cross-check note
+                # is anchored on the driving point instead (see below).
                 xc = convective_cross_check(thermo_conv, sounding.convective_nwp)
-                if xc is not None:
-                    xcheck_fired += 1
-                    xcheck_dirs[xc.direction] = xcheck_dirs.get(xc.direction, 0) + 1
-                    if xc.direction == "dd_not_corroborated" and thermo_conv is not None:
-                        if _RISK_ORDER.index(thermo_conv.risk_level) > _RISK_ORDER.index(
-                            xcheck_worst_dd_risk
-                        ):
-                            xcheck_worst_dd_risk = thermo_conv.risk_level
 
                 conv = sounding.convective
                 if conv is None:
@@ -345,6 +340,24 @@ class ConvectiveEvaluator:
                 if peak_key is None or key > peak_key:
                     peak_key = key
                     peak_dist = dist
+                    # Capture the two raw method tiers AT the grade-driving point,
+                    # so the cross-check reports divergence on what actually drives
+                    # the advisory (not some unrelated minority stretch). #442 f/u.
+                    # Compare the two cross-section layers directly — the model's
+                    # own scheme (convective_nwp) vs the thermodynamics
+                    # (convective_thermo) — not the resolved active track.
+                    peak_has_both = (
+                        sounding.convective_nwp is not None and thermo_conv is not None
+                    )
+                    peak_nwp_risk = (
+                        sounding.convective_nwp.risk_level
+                        if sounding.convective_nwp is not None
+                        else ConvectiveRisk.NONE
+                    )
+                    peak_dd_risk = (
+                        thermo_conv.risk_level if thermo_conv is not None
+                        else ConvectiveRisk.NONE
+                    )
 
             ext = format_extent(affected, total, ctx.total_distance_nm)
             ext_mod = format_extent(affected_mod, total, ctx.total_distance_nm)
@@ -410,23 +423,35 @@ class ConvectiveEvaluator:
                     # review).
                     detail = adv_t("convective.favorability", loc, extent=ext) + cover_suffix
 
+            # Cross-check anchored on the GRADE DRIVER (#442 follow-up). Principle:
+            # only report a divergence when the two convective signals disagree on
+            # the point that actually drives the advisory — not on some unrelated
+            # minority stretch (which read as contradicting the headline: "ICON red"
+            # next to "ICON's NWP is quiet", where the quiet stretch was a different
+            # 9 nm than the red-driving towers). We compare the NWP and DD tiers AT
+            # the peak (driving) point and only flag a **≥2-level** gap; same-or-
+            # one-off is normal method spread, not worth surfacing. Named after the
+            # cross-section layer toggles ("Thermo Convective" / "NWP Convective")
+            # so a pilot can pull up exactly these two overlays to compare.
             cross_check: str | None = None
-            if xcheck_fired > 0:
-                dominant = max(xcheck_dirs, key=lambda d: xcheck_dirs[d])
-                # Extent reflects only the dominant direction's points, not the
-                # combined fire count — otherwise a mix of both directions would
-                # overstate the extent of the direction we're describing.
-                xc_ext = format_extent(xcheck_dirs[dominant], total, ctx.total_distance_nm)
-                if dominant == "dd_not_corroborated":
-                    cross_check = (
-                        f"DD {xcheck_worst_dd_risk.value.upper()} not corroborated — "
-                        f"model convective scheme quiet over {xc_ext}"
-                    )
-                else:  # model_active_dd_quiet
-                    cross_check = (
-                        f"model convective scheme active where DD shows little/none "
-                        f"over {xc_ext}"
-                    )
+            if status != AdvisoryStatus.GREEN and peak_has_both:
+                nwp_idx = _RISK_ORDER.index(peak_nwp_risk)
+                dd_idx = _RISK_ORDER.index(peak_dd_risk)
+                if abs(nwp_idx - dd_idx) >= 2:
+                    if nwp_idx > dd_idx:
+                        # The model's own forecast drives it; thermodynamics lag.
+                        cross_check = (
+                            f"NWP Convective (the model's own forecast) drives this "
+                            f"— Thermo Convective shows only "
+                            f"{peak_dd_risk.value.upper()} instability here"
+                        )
+                    else:
+                        # The thermodynamics drive it; the model itself is quiet.
+                        cross_check = (
+                            f"Thermo Convective shows {peak_dd_risk.value.upper()} "
+                            f"instability, but the model's own NWP Convective forecast "
+                            f"is quiet here"
+                        )
 
             # Build highlights only when the model has data (total > 0).
             highlights = None

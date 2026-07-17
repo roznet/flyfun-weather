@@ -1928,6 +1928,28 @@ their "MODERATE+ peak" headline (the wrinkle that rule fixes).
 - Deferred: optional `dd_amber_min_risk` param (default MODERATE) for eval-corpus
   tuning; the shallow-NWP+deep-DD gap above.
 
+### Cross-check surfacing (follow-up, same PR family)
+
+The per-model `cross_check` note (advisory + digest) was reworked twice as a
+follow-up:
+
+1. **Plain, layer-named copy.** Dropped "corroborated"/"DD"/"NWP scheme" for the
+   cross-section toggle names — *"Thermo Convective shows MODERATE instability,
+   but the model's own NWP Convective forecast is quiet"* — so a pilot can pull up
+   exactly those two overlays. Web header → "Convective signals disagree" + a
+   muted tappable `ℹ` summary-card tag when a note is present.
+2. **Driver-anchored, ≥2-tier gate.** The old route-wide "dominant divergence"
+   scan surfaced a note about *any* stretch where the signals differed — which
+   read as contradicting the grade (e.g. "ICON red" next to "ICON's NWP quiet",
+   where the quiet stretch was a *different* 9 nm than the red-driving towers).
+   Now the note compares `convective_nwp` vs `convective_thermo` **at the
+   grade-driving (peak) point only**, and fires **only on a ≥2-tier gap**
+   (same-or-one-off = normal method spread). It names the driver: NWP-higher →
+   "NWP Convective drives this — Thermo Convective shows only {DD}"; DD-higher
+   (the `dd_trigger` case) → "Thermo Convective … but the NWP forecast is quiet
+   here". This makes the note *explain* the grade instead of contradicting it,
+   and reuses the peak/highlight tracking already computed for `peak_dist_nm`.
+
 ### Real-world validation needed
 
 - Replay the eval-digest corpus old-vs-new (same config) and confirm the red→amber

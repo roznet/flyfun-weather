@@ -228,6 +228,15 @@ function renderAdvisoryCard(
     ? `<span class="advisory-mitigation-hint advisory-mitigation-hint--tappable" data-advisory-id="${escapeHtml(adv.advisory_id)}" role="button" tabindex="0" title="${t('advisories.mitigationAvailable')}" aria-label="${t('advisories.mitigationAvailable')}">\u{1F4A1}</span>`
     : '';
 
+  // Cross-check tag (#442 follow-up): a muted, tappable tag surfaced on the card
+  // when a model's own convective forecast disagrees with the thermodynamics, so
+  // the pilot knows from the summary there's something to look at. High-level
+  // only — tapping opens the (i) popup with the per-model detail. Reuses the
+  // `.advisory-info-btn` click handler. Never alters the grade.
+  const crossCheckTag = adv.per_model.some((m: ModelAdvisoryResult) => m.cross_check)
+    ? `<button class="advisory-crosscheck-tag" data-advisory-id="${escapeHtml(adv.advisory_id)}" title="${t('advisories.crossCheckTooltip')}" aria-label="${t('advisories.crossCheck')}">\u{2139} ${escapeHtml(t('advisories.crossCheck'))}</button>`
+    : '';
+
   // Compact (two-line) variant for the all-clear band: header + the detail line,
   // dropping the per-model badge row and the description to save space.
   if (compact) {
@@ -241,6 +250,7 @@ function renderAdvisoryCard(
         ${infoBtn}
       </div>
       <div class="advisory-detail">${escapeHtml(adv.aggregate_detail)}</div>
+      ${crossCheckTag}
     </div>
   `;
   }
@@ -256,6 +266,7 @@ function renderAdvisoryCard(
       </div>
       <div class="advisory-models">${modelBadges}</div>
       <div class="advisory-detail">${escapeHtml(adv.aggregate_detail)}</div>
+      ${crossCheckTag}
       ${desc ? `<div class="advisory-desc">${desc}</div>` : ''}
     </div>
   `;
@@ -637,7 +648,7 @@ export function renderAdvisories(
 
   // Wire advisory info buttons (event delegation)
   el.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest('.advisory-info-btn') as HTMLElement | null;
+    const btn = (e.target as HTMLElement).closest('.advisory-info-btn, .advisory-crosscheck-tag') as HTMLElement | null;
     if (!btn) return;
     const advId = btn.dataset.advisoryId;
     if (!advId) return;

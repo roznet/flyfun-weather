@@ -35,7 +35,7 @@ ADVISORIES = {
                  "cross_check": None},
                 {"model": "ecmwf", "status": "red", "detail": "EXTREME over 57%",
                  "affected_pct": 57.0, "affected_nm": 85.0, "total_nm": 150.0,
-                 "cross_check": "DD MODERATE not corroborated — model scheme quiet over 40nm"},
+                 "cross_check": "Thermo Convective shows MODERATE instability, but the model's own NWP Convective forecast stays quiet — over 40nm"},
                 {"model": "meteofrance", "status": "red", "detail": "EXTREME over 60%",
                  "affected_pct": 60.0, "affected_nm": 90.0, "total_nm": 150.0,
                  "cross_check": None},

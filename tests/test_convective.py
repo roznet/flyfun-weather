@@ -1288,7 +1288,8 @@ def test_cross_check_dd_not_corroborated():
     xc = convective_cross_check(thermo, nwp)
     assert isinstance(xc, ConvectiveCrossCheck)
     assert xc.direction == "dd_not_corroborated"
-    assert "not corroborated" in xc.note
+    assert "Thermo Convective shows" in xc.note
+    assert "NWP Convective forecast is quiet" in xc.note
     assert "MODERATE" in xc.note
     assert "1100" in xc.note
     assert "0%" in xc.note
@@ -1303,7 +1304,7 @@ def test_cross_check_model_active_dd_quiet():
     xc = convective_cross_check(thermo, nwp)
     assert xc is not None
     assert xc.direction == "model_active_dd_quiet"
-    assert "fired" in xc.note
+    assert "NWP Convective shows convection" in xc.note
     assert "40% cover" in xc.note
 
 

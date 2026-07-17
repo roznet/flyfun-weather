@@ -399,9 +399,10 @@ class TestConvective:
         assert result.aggregate_status == AdvisoryStatus.RED
 
     def test_cross_check_populated_grade_unchanged(self):
-        """High-CAPE thermo + zero-cover NWP scheme populates per-model
-        cross_check, but the grade is identical to the same context with no
-        NWP scheme attached (cross-check is additive metadata only)."""
+        """When the two signals diverge by >=2 tiers AT the driving point, the
+        per-model cross_check is populated (#442 f/u), but the grade is identical
+        to the same context with no NWP scheme attached — the cross-check is
+        additive metadata only, never a regrade."""
         from datetime import datetime
 
         from weatherbrief.models import (
@@ -412,6 +413,8 @@ class TestConvective:
             ThermodynamicIndices,
         )
 
+        # Thermodynamics MODERATE at the driving point; the model's own scheme
+        # quiet (NONE) — a 3-tier gap → the note fires ("thermo drives, NWP quiet").
         thermo = ConvectiveAssessment(
             risk_level=ConvectiveRisk.MODERATE,
             cape_jkg=1100.0,
@@ -419,7 +422,7 @@ class TestConvective:
             method="thermo",
         )
         nwp_quiet = ConvectiveAssessment(
-            risk_level=ConvectiveRisk.MODERATE, cover_pct=0.0, method="nwp"
+            risk_level=ConvectiveRisk.NONE, cover_pct=0.0, method="nwp"
         )
 
         def _ctx(conv_nwp: ConvectiveAssessment | None) -> RouteContext:
@@ -464,11 +467,81 @@ class TestConvective:
         res_without = ConvectiveEvaluator.evaluate(_ctx(None), params)
 
         assert res_with.per_model[0].cross_check is not None
-        assert "not corroborated" in res_with.per_model[0].cross_check
+        assert "Thermo Convective shows" in res_with.per_model[0].cross_check
         assert res_without.per_model[0].cross_check is None
         # Grade must be unchanged by the cross-check.
         assert res_with.aggregate_status == res_without.aggregate_status
         assert res_with.per_model[0].status == res_without.per_model[0].status
+
+    def _driver_ctx(self, nwp_risk, dd_risk, *, nwp_top=30000.0):
+        """Route where every point has the given NWP-scheme + thermo tiers, so the
+        driving (peak) point carries exactly that pair."""
+        from datetime import datetime
+
+        from weatherbrief.models import (
+            ConvectiveAssessment,
+            RoutePointAnalysis,
+            SoundingAnalysis,
+            ThermodynamicIndices,
+        )
+        nwp = ConvectiveAssessment(
+            risk_level=nwp_risk, top_ft=nwp_top,
+            base_ft=(3000.0 if nwp_top is not None else None), method="nwp",
+        )
+        dd = ConvectiveAssessment(
+            risk_level=dd_risk, cape_jkg=500.0, top_ft=30000.0, base_ft=3000.0,
+            method="thermo",
+        )
+        analyses = [
+            RoutePointAnalysis(
+                point_index=i, lat=48.0 + i * 0.5, lon=2.0 + i * 0.5,
+                distance_from_origin_nm=i * 20.0,
+                interpolated_time=datetime(2026, 3, 1, 10, 0),
+                forecast_hour=datetime(2026, 3, 1, 9, 0), track_deg=135.0,
+                sounding={"gfs": SoundingAnalysis(
+                    indices=ThermodynamicIndices(),
+                    convective=nwp, convective_nwp=nwp, convective_thermo=dd,
+                )},
+            )
+            for i in range(10)
+        ]
+        return RouteContext(
+            analyses=analyses, cross_sections=[], elevation=None, models=["gfs"],
+            cruise_altitude_ft=8000, flight_ceiling_ft=18000, total_distance_nm=200,
+        )
+
+    def test_cross_check_nwp_drives_two_tier_gap(self):
+        """#442 f/u: NWP fires (HIGH) at the driver while thermo lags (LOW, a
+        2-tier gap) → note names the model's own forecast as the driver."""
+        from weatherbrief.models import ConvectiveRisk
+        params = {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50, "top_clearance_ft": 2000}
+        res = ConvectiveEvaluator.evaluate(
+            self._driver_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.LOW), params)
+        xc = res.per_model[0].cross_check
+        assert xc is not None
+        assert "NWP Convective" in xc and "drives this" in xc and "LOW" in xc
+
+    def test_cross_check_suppressed_when_driver_one_off(self):
+        """#442 f/u: NWP HIGH + thermo MODERATE (1-tier apart — normal spread) at
+        the driver → no note. This is the ICON case that read as contradictory."""
+        from weatherbrief.models import ConvectiveRisk
+        params = {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50, "top_clearance_ft": 2000}
+        res = ConvectiveEvaluator.evaluate(
+            self._driver_ctx(ConvectiveRisk.HIGH, ConvectiveRisk.MODERATE), params)
+        assert res.per_model[0].status == AdvisoryStatus.RED
+        assert res.per_model[0].cross_check is None
+
+    def test_cross_check_thermo_drives_when_nwp_quiet(self):
+        """#442 f/u: green NWP (no tower) + thermo MODERATE → dd_trigger amber, and
+        the note names the thermodynamics as the driver."""
+        from weatherbrief.models import ConvectiveRisk
+        params = {"min_risk": 2, "affected_pct_amber": 20, "affected_pct_red": 50, "top_clearance_ft": 2000}
+        res = ConvectiveEvaluator.evaluate(
+            self._driver_ctx(ConvectiveRisk.NONE, ConvectiveRisk.MODERATE, nwp_top=None), params)
+        assert res.per_model[0].status == AdvisoryStatus.AMBER
+        xc = res.per_model[0].cross_check
+        assert xc is not None
+        assert "Thermo Convective shows MODERATE" in xc and "quiet here" in xc
 
     def test_dd_trigger_uses_thermo_el_for_altitude_filter(self):
         """Regression (#283 review I1, updated for #442): when a green NWP is raised
