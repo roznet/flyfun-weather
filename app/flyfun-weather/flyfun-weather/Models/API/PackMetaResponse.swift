@@ -21,6 +21,13 @@ struct PackMetaResponse: Codable, Sendable {
     let gribInitTimes: [String: Int]
     let modelsSkippedRegion: [String]
     let dataStatus: DataStatus?
+    /// Live flight Flexibility mode, injected fresh from the flight row at
+    /// serve time (not baked into the stored pack). Gates the Timing Scenarios
+    /// panel on the *current* value even when the seeded `flight` object is
+    /// stale (e.g. flexibility set on another device after the flights list was
+    /// last fetched). `nil` on older packs whose server didn't send it — callers
+    /// then fall back to `flight.effectiveFlexibility`.
+    let flexibility: FlexibilityMode?
 }
 
 struct DataStatus: Codable, Sendable {

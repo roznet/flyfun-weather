@@ -72,7 +72,9 @@ def client(app_db, tmp_path, monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _seed(app_db, *, has_digest: bool, llm_digest_requested: bool) -> tuple[Flight, BriefingPackMeta]:
+def _seed(
+    app_db, *, has_digest: bool, llm_digest_requested: bool, flexibility: str = "none"
+) -> tuple[Flight, BriefingPackMeta]:
     fid = "egtk_lsgs-" + hashlib.sha256(b"digest").hexdigest()[:4]
     session = app_db()
     flight = Flight(
@@ -80,6 +82,7 @@ def _seed(app_db, *, has_digest: bool, llm_digest_requested: bool) -> tuple[Flig
         waypoints=["EGTK", "LSGS"], departure_time=_DEP,
         cruise_altitude_ft=8000, flight_ceiling_ft=18000,
         flight_duration_hours=4.5, created_at=_NOW - timedelta(days=1),
+        flexibility=flexibility,
     )
     save_flight(session, flight, DEV_USER_ID)
     meta = BriefingPackMeta(
@@ -101,6 +104,19 @@ def test_pack_meta_response_exposes_llm_digest_requested(client, app_db):
     resp = client.get(f"/api/flights/{flight.id}/packs/latest")
     assert resp.status_code == 200, resp.text
     assert resp.json()["llm_digest_requested"] is False
+
+
+def test_pack_meta_response_surfaces_live_flexibility(client, app_db):
+    """`/packs/latest` injects the flight's CURRENT flexibility (not a value
+    baked into the stored pack) so clients gate the timing-scenario panel on the
+    live setting even for an old pack. Regression for the iOS panel staying
+    hidden after flexibility was set on another device (stale seeded flight)."""
+    flight, meta = _seed(
+        app_db, has_digest=False, llm_digest_requested=False, flexibility="same_day"
+    )
+    resp = client.get(f"/api/flights/{flight.id}/packs/latest")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["flexibility"] == "same_day"
 
 
 def test_generate_404_when_pack_data_missing(client, app_db):

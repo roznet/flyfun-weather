@@ -278,6 +278,18 @@ struct FlightListView: View {
             // refresh — the current list stays on screen (see loadFlights).
             Task { await viewModel?.loadFlights() }
         }
+        .onChange(of: selection) { _, newValue in
+            // Returned from a briefing (or the map) to the list — re-pull so any
+            // per-flight field edited elsewhere (flexibility, departure times,
+            // name, alternates config) is current, not just what was cached when
+            // the list last loaded. Warm refresh: `loadFlights` self-dedupes
+            // (guard on `isLoading`) and keeps the current list on screen. Fires
+            // only on a real transition, never the initial `nil`, so it can't
+            // double-load against the `.task` first load.
+            if newValue == nil {
+                Task { await viewModel?.loadFlights() }
+            }
+        }
         // Sequence the forecast-map tip after the add-flight tip: when the
         // add-flight tip is dismissed — closed via its × OR acted on — donate the
         // event that makes the forecast-map tip eligible, so the pair reads in

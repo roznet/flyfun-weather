@@ -66,6 +66,7 @@ from weatherbrief.models import (
     BriefingPackMeta,
     DiagnosticPublic,
     Flight,
+    FlexibilityMode,
     # Imported eagerly so an ImportError surfaces at module load rather than
     # being silently swallowed by the broad except in _assessment_from_advisories.
     RouteAdvisoriesManifest as _RouteAdvisoriesManifest,
@@ -400,11 +401,18 @@ class PackMetaResponse(BaseModel):
     metoffice_charts_in_coverage: bool = False
     metoffice_charts_within_horizon: bool = False
     metoffice_charts_public: bool = False
+    # Live flight Flexibility mode (timing scenarios). Injected fresh from the
+    # flight row at serve time — NOT baked into the stored pack — so clients gate
+    # the timing-scenario panel on the CURRENT value even when viewing an old
+    # pack. None on legacy/un-enriched responses; clients then fall back to the
+    # flight object's own flexibility.
+    flexibility: FlexibilityMode | None = None
 
 
 def _meta_to_response(
     meta: BriefingPackMeta,
     data_status: DataStatus | None = None,
+    flexibility: FlexibilityMode | None = None,
 ) -> PackMetaResponse:
     has_advisories = pack_has_advisories(meta.artifact_path)
 
@@ -439,6 +447,7 @@ def _meta_to_response(
         metoffice_charts_in_coverage=meta.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=meta.metoffice_charts_within_horizon,
         metoffice_charts_public=_metoffice_public(),
+        flexibility=flexibility,
     )
 
 
@@ -449,9 +458,9 @@ def list_flight_packs(
     db: Session = Depends(get_db),
 ):
     """List all packs (history) for a flight. Any authenticated user can view."""
-    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
-    return [_meta_to_response(p) for p in packs]
+    return [_meta_to_response(p, flexibility=flight.flexibility) for p in packs]
 
 
 @router.get("/latest", response_model=PackMetaResponse)
@@ -461,11 +470,11 @@ def get_latest_pack(
     db: Session = Depends(get_db),
 ):
     """Get the most recent pack for a flight. Any authenticated user can view."""
-    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
-    return _meta_to_response(packs[0])
+    return _meta_to_response(packs[0], flexibility=flight.flexibility)
 
 
 @router.get("/freshness", response_model=DataStatus)
@@ -2057,7 +2066,9 @@ async def refresh_briefing_stream(
                     status.refresh_decision = decision.model_copy(
                         update={"mode": effective_mode},
                     )
-                    pack_resp = _meta_to_response(latest, data_status=status).model_dump(mode="json")
+                    pack_resp = _meta_to_response(
+                        latest, data_status=status, flexibility=flight.flexibility
+                    ).model_dump(mode="json")
                     decision_payload = decision.model_dump(mode="json")
                     decision_payload["mode"] = effective_mode
 
@@ -2226,7 +2237,9 @@ async def refresh_briefing_stream(
                 thread_db.close()
             complete_event = {
                 "type": "complete",
-                "pack": _meta_to_response(meta).model_dump(mode="json"),
+                "pack": _meta_to_response(
+                    meta, flexibility=flight.flexibility
+                ).model_dump(mode="json"),
                 "elapsed_seconds": total_elapsed,
             }
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
@@ -2352,13 +2365,13 @@ def get_pack(
     db: Session = Depends(get_db),
 ):
     """Get a specific pack's metadata. Any authenticated user can view."""
-    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     try:
         meta = load_pack_meta(db, flight_id, timestamp)
     except KeyError:
         raise HTTPException(status_code=404, detail="Pack not found")
     audit_pack_access(user_id, flight_id, "get_pack", request)
-    return _meta_to_response(meta)
+    return _meta_to_response(meta, flexibility=flight.flexibility)
 
 
 @router.get("/{timestamp}/snapshot")
@@ -3407,7 +3420,7 @@ def generate_digest(
     # Already has a summary — nothing to do. Return current meta so the client
     # simply re-renders (keeps the action idempotent).
     if meta.has_digest:
-        return _meta_to_response(meta)
+        return _meta_to_response(meta, flexibility=flight.flexibility)
 
     briefing_data = load_briefing(pack_dir)
     if not briefing_data:
@@ -3522,7 +3535,7 @@ def generate_digest(
     _charge_briefing_cost(db, user_id, usage, pack_size, usage_row_id)
 
     logger.info("On-demand digest generated for %s @ %s", flight_id, timestamp)
-    return _meta_to_response(meta)
+    return _meta_to_response(meta, flexibility=flight.flexibility)
 
 
 @router.get("/{timestamp}/advisories/altitude-table")

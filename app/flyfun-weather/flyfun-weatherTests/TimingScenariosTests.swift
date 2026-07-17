@@ -160,6 +160,39 @@ import Foundation
         #expect(try decode(FlightResponse.self, flightJSON(flexibility: "same_day")).flexibility == .sameDay)
     }
 
+    // MARK: Pack-level flexibility (gates the timing panel on the LIVE flight
+    // setting, injected fresh at serve time — see PackMetaResponse.flexibility).
+
+    private func packJSON(flexibility: String?) -> String {
+        let flexLine = flexibility.map { "\"flexibility\": \($0),\n" } ?? ""
+        return """
+        {"flight_id":"f1","fetch_timestamp":"2026-07-05T10:00:00+00:00","days_out":2,
+         "is_historical":false,"has_gramet":false,"has_skewt":false,"has_digest":false,
+         "has_advisories":true,"assessment":"AMBER","assessment_reason":"x",
+         "model_init_times":{},"grib_init_times":{},"models_skipped_region":[],
+         \(flexLine)"data_status":null}
+        """
+    }
+
+    @Test func packDecodesLiveFlexibility() throws {
+        let pack = try decode(PackMetaResponse.self, packJSON(flexibility: "\"same_day\""))
+        #expect(pack.flexibility == .sameDay)
+    }
+
+    @Test func packFlexibilityAbsentDecodesToNil() throws {
+        // Older packs (server before this field) omit the key → nil, so the
+        // client falls back to the flight object rather than forcing `.none`.
+        let pack = try decode(PackMetaResponse.self, packJSON(flexibility: nil))
+        #expect(pack.flexibility == nil)
+    }
+
+    @Test func packFlexibilityNullDecodesToNil() throws {
+        // An un-enriched serve path may emit `flexibility: null`; that must also
+        // read as nil (fall back), not throw.
+        let pack = try decode(PackMetaResponse.self, packJSON(flexibility: "null"))
+        #expect(pack.flexibility == nil)
+    }
+
     // MARK: Usage-summary gate
 
     @Test func usageSummaryDefaultsToNeverScanned() throws {

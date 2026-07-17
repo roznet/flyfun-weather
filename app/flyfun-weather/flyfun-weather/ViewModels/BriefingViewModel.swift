@@ -639,10 +639,19 @@ final class BriefingViewModel {
 
     // MARK: - Timing scenarios (#357)
 
+    /// Flexibility mode that gates timing scenarios. Prefers the pack's value —
+    /// injected fresh from the flight row at serve time — over the `flight`
+    /// object, which is seeded once at open and goes stale if flexibility was
+    /// changed on another device after this flights list was last fetched.
+    /// Falls back to the flight object for older packs missing the field.
+    var effectiveFlexibility: FlexibilityMode {
+        pack?.flexibility ?? flight.effectiveFlexibility
+    }
+
     /// Whether the Timing Scenarios panel should be shown at all — the flight has
     /// a Flexibility mode set (the panel then renders its own state ladder).
     var showsTimingScenarios: Bool {
-        flight.effectiveFlexibility != .none
+        effectiveFlexibility != .none
     }
 
     /// (Re)start the poll loop for a pack. Cancels any in-flight poll first, so a
@@ -659,7 +668,7 @@ final class BriefingViewModel {
             timeOptions = nil
             timeOptionsOffline = false
         }
-        guard flight.effectiveFlexibility != .none else {
+        guard effectiveFlexibility != .none else {
             timeOptions = nil
             timeOptionsOffline = false
             return
