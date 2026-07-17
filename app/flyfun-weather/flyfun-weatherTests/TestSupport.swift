@@ -91,6 +91,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
     func packs(flightId: String) async throws -> [PackMetaResponse] { throw MockError.notStubbed("packs") }
+    func flightByShareCode(_ code: String) async throws -> FlightResponse { throw MockError.notStubbed("flightByShareCode") }
+    func subscribeFlight(id: String) async throws { throw MockError.notStubbed("subscribeFlight") }
+    func unsubscribeFlight(id: String) async throws { throw MockError.notStubbed("unsubscribeFlight") }
     func latestPack(flightId: String) async throws -> PackMetaResponse {
         if let h = latestPackHandler { return try h() }
         throw MockError.notStubbed("latestPack")

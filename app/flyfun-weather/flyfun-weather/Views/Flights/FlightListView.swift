@@ -26,6 +26,12 @@ struct FlightListView: View {
     /// the deep-link state it opens with.
     @State private var showMapCover = false
     @State private var mapDeepLink: MapDeepLink?
+    /// A shared flight resolved from a `/s/{code}` deep link, presented as a
+    /// preview-before-subscribe cover (#446). nil when no shared link is open.
+    @State private var sharedPreviewFlight: FlightResponse?
+    /// Error surfaced when a `/s/{code}` link can't be resolved (unknown code,
+    /// private flight, or the owner's own private link).
+    @State private var shareResolveError: String?
     /// Bumped on every `openForecastMap`, used as the map view's `.id` so a *new*
     /// inbound deep link while the map is already open re-creates the view (the
     /// deep link is applied only at `ForecastMapViewModel.init`).
@@ -243,6 +249,25 @@ struct FlightListView: View {
                 .id(mapOpenToken)
             }
         }
+        .fullScreenCover(item: $sharedPreviewFlight) { flight in
+            // Shared-flight preview (#446): the flight isn't in /api/flights until
+            // the viewer subscribes, so it's presented on its own rather than via
+            // the sidebar selection. Reload the list on any subscribe change so a
+            // now-subscribed flight appears (and an unsubscribe drops it).
+            NavigationStack {
+                SharedFlightPreviewView(flight: flight) {
+                    Task { await viewModel?.loadFlights() }
+                }
+            }
+        }
+        .alert("Shared flight unavailable", isPresented: Binding(
+            get: { shareResolveError != nil },
+            set: { if !$0 { shareResolveError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(shareResolveError ?? "")
+        }
         .task {
             guard let repo = appState.repository else { return }
             let vm = FlightListViewModel(repository: repo, networkMonitor: appState.networkMonitor)
@@ -330,6 +355,27 @@ struct FlightListView: View {
         case .forecastMap(let deepLink):
             openForecastMap(deepLink: deepLink.isEmpty ? nil : deepLink)
             appState.clearPendingNavigation()
+        case .share(let code):
+            // Resolve the share code to a flight and present the preview. Keep the
+            // pending target when the repository isn't ready yet (e.g. the link
+            // arrived while signed out) so it re-applies once the list appears
+            // authenticated — that's the sign-in resumption path (#446).
+            guard let repo = appState.repository else { return }
+            appState.clearPendingNavigation()
+            Task {
+                do {
+                    sharedPreviewFlight = try await repo.flightByShareCode(code)
+                } catch let error as APIError {
+                    shareResolveError = {
+                        if case .notFound = error {
+                            return "This shared flight isn’t available. The link may be wrong, or the owner made it private."
+                        }
+                        return error.errorDescription ?? "Couldn’t open the shared flight."
+                    }()
+                } catch {
+                    shareResolveError = error.localizedDescription
+                }
+            }
         case .briefing(let flightId):
             guard let vm = viewModel, case .loaded(let flights) = vm.state else { return }
             if let match = flights.first(where: { $0.id == flightId }) {
@@ -357,6 +403,18 @@ struct FlightListView: View {
                 reloadRetryFlightId = nil
                 appState.clearPendingNavigation()
             }
+        }
+    }
+
+    /// Drop the viewer's subscription to a shared flight, then reload the list so
+    /// the row disappears. If the just-unsubscribed flight is the current detail
+    /// selection (iPad), clear it so the detail pane doesn't dangle on a flight no
+    /// longer in the list.
+    private func unsubscribe(_ flight: FlightResponse, viewModel: FlightListViewModel) {
+        Task {
+            try? await appState.repository?.unsubscribeFlight(id: flight.id)
+            if selection == .flight(flight) { selection = nil }
+            await viewModel.loadFlights()
         }
     }
 
@@ -414,6 +472,15 @@ struct FlightListView: View {
                 }
                 .tint(.blue)
             }
+            // Unsubscribe from a shared flight — the first row-removal flow on iOS
+            // (#446). Online-only; drops the viewer's subscription then reloads.
+            if !viewModel.isOffline && flight.role == .subscriber {
+                Button(role: .destructive) {
+                    unsubscribe(flight, viewModel: viewModel)
+                } label: {
+                    Label("Unsubscribe", systemImage: "person.badge.minus")
+                }
+            }
         }
         .contextMenu {
             if !viewModel.isOffline && flight.isEditable {
@@ -421,6 +488,13 @@ struct FlightListView: View {
                     editingFlight = flight
                 } label: {
                     Label("Edit Flight", systemImage: "pencil")
+                }
+            }
+            if !viewModel.isOffline && flight.role == .subscriber {
+                Button(role: .destructive) {
+                    unsubscribe(flight, viewModel: viewModel)
+                } label: {
+                    Label("Unsubscribe", systemImage: "person.badge.minus")
                 }
             }
         }

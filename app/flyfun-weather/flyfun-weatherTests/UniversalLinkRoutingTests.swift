@@ -70,4 +70,53 @@ struct UniversalLinkRoutingTests {
         #expect(AppState.navigationTarget(
             for: url("flyfunweather://auth?token=abc")) == nil)
     }
+
+    // MARK: - Share links (#446)
+
+    @Test func routesShareLinkToShareCode() {
+        let target = AppState.navigationTarget(
+            for: url("https://weather.flyfun.aero/s/aB3xy7Q9"))
+        #expect(target == .share(code: "aB3xy7Q9"))
+    }
+
+    @Test func shareLinkWithPackQueryStillRoutes() {
+        // The web appends `?pack=` to pin a specific briefing; the code parse
+        // ignores the query, and the preview loads the latest pack anyway.
+        let target = AppState.navigationTarget(
+            for: url("https://weather.flyfun.aero/s/aB3xy7Q9?pack=2026-04-30T08:00:00Z"))
+        #expect(target == .share(code: "aB3xy7Q9"))
+    }
+
+    @Test func shortShareCodeReturnsNil() {
+        // Below the 4-char minimum — reject before presenting an empty preview.
+        #expect(AppState.navigationTarget(
+            for: url("https://weather.flyfun.aero/s/ab")) == nil)
+    }
+
+    @Test func shareCodeWithExtraPathSegmentReturnsNil() {
+        // A nested path isn't a valid single-segment code.
+        #expect(AppState.navigationTarget(
+            for: url("https://weather.flyfun.aero/s/abc/def")) == nil)
+    }
+
+    @Test func shareLinkOnForeignHostReturnsNil() {
+        #expect(AppState.navigationTarget(
+            for: url("https://evil.example.com/s/aB3xy7Q9")) == nil)
+    }
+
+    @Test func pendingNavigationRoundTripsShare() {
+        // The cold-launch-safe store must round-trip a share target so a link
+        // that arrives before AppState/list exists (or across a sign-in) resumes.
+        PendingNavigationStore.set(.share(code: "aB3xy7Q9"))
+        #expect(PendingNavigationStore.take() == .share(code: "aB3xy7Q9"))
+    }
+
+    @Test func shareCodeShapeValidation() {
+        #expect(AppState.isValidShareCode("aB3xy7Q9"))
+        #expect(AppState.isValidShareCode("abcd"))
+        #expect(!AppState.isValidShareCode("abc"))          // too short
+        #expect(!AppState.isValidShareCode(String(repeating: "a", count: 17)))  // too long
+        #expect(!AppState.isValidShareCode("abc-123"))      // illegal char
+        #expect(!AppState.isValidShareCode("abc/def"))      // path separator
+    }
 }

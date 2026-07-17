@@ -27,6 +27,19 @@ protocol BriefingRepository: Sendable {
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute]
     func packs(flightId: String) async throws -> [PackMetaResponse]
     func latestPack(flightId: String) async throws -> PackMetaResponse
+    // Flight sharing (#446) — all online-only.
+    /// Resolve a share code (`/s/{code}`) to its flight for the preview-before-
+    /// subscribe on-ramp. Throws `APIError.notFound` (404) for an unknown/invalid
+    /// code or a private flight the viewer can't see. A non-owner gets a
+    /// `FlightResponse` with `role == .subscriber`, `ownerDisplayName`, and
+    /// `isSubscribed`.
+    func flightByShareCode(_ code: String) async throws -> FlightResponse
+    /// Subscribe the viewer to another pilot's flight. Idempotent 200; throws
+    /// `APIError.notFound` (404 private/not-visible) or `APIError.serverError(409,…)`
+    /// (own flight).
+    func subscribeFlight(id: String) async throws
+    /// Remove the viewer's subscription. Idempotent (204 either way).
+    func unsubscribeFlight(id: String) async throws
     /// Quick forecast + observation for one airport (mirrors the MCP
     /// `get_airport_weather` tool). Online-only — not part of the offline bundle.
     /// `day`: 0=today…3, `hour`: forecast hour UTC (snapped server-side).
@@ -165,6 +178,20 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func latestPack(flightId: String) async throws -> PackMetaResponse {
         try await client.request("/api/flights/\(flightId)/packs/latest")
+    }
+
+    func flightByShareCode(_ code: String) async throws -> FlightResponse {
+        // The code is validated client-side before we get here (deep-link parse),
+        // but percent-encode it anyway so it's a single opaque path segment.
+        try await client.requestURL("/api/flights/by-share/\(Self.queryValueEncoded(code))")
+    }
+
+    func subscribeFlight(id: String) async throws {
+        _ = try await client.requestData("/api/flights/\(id)/subscribe", method: "POST")
+    }
+
+    func unsubscribeFlight(id: String) async throws {
+        try await client.requestVoid("/api/flights/\(id)/subscribe")
     }
 
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse {

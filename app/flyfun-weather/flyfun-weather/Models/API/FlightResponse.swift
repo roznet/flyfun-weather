@@ -63,6 +63,29 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// absent on very old rows → nil (no share affordance).
     var shareCode: String? = nil
 
+    /// The flight owner's display name — set by the server only on the subscriber
+    /// view (`role == .subscriber`). Drives the "Shared by …" preview banner; nil
+    /// falls back to a generic "Shared flight" label (server never sends the
+    /// owner's email). `var … = nil` so it decodes AND keeps memberwise-init call
+    /// sites unchanged; absent on older servers / the owner's own view → nil.
+    var ownerDisplayName: String? = nil
+
+    /// Whether the viewer has already subscribed to this (someone else's) flight.
+    /// Flips the shared-flight preview banner button Subscribe ↔ Unsubscribe.
+    /// `var … = nil` so it decodes AND keeps memberwise-init call sites unchanged;
+    /// absent on older servers → treated as not-subscribed via `hasSubscribed`.
+    var isSubscribed: Bool? = nil
+
+    /// `isSubscribed` folded to a plain Bool so callers never juggle the optional.
+    var hasSubscribed: Bool { isSubscribed ?? false }
+
+    /// Whether this flight can be shared: only the owner, and only when it isn't
+    /// private (recipients of a private link would 404), and only once the server
+    /// has minted a share code. Mirrors the web share-affordance gate.
+    var isShareable: Bool {
+        isEditable && !`private` && !(shareCode ?? "").isEmpty
+    }
+
     /// Per-flight override folded to an enum, tolerant of unknown/absent values.
     var notifyOverrideMode: FlightNotifyOverride {
         FlightNotifyOverride(rawValue: notifyOverride ?? "default") ?? .default
