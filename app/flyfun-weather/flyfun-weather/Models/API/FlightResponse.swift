@@ -55,6 +55,14 @@ struct FlightResponse: Codable, Identifiable, Sendable {
     /// per-flight round-trip.
     var debrief: DebriefResponse? = nil
 
+    /// Short base62 token for the flight's share link (`/s/{shareCode}`). The
+    /// server emits `share_code` on every flight created after migration 049; the
+    /// app uses it to build the ShareLink URL (owner) and it round-trips through
+    /// the by-share resolver (subscriber preview). `var … = nil` so it decodes
+    /// AND the synthesized memberwise init keeps existing call sites unchanged;
+    /// absent on very old rows → nil (no share affordance).
+    var shareCode: String? = nil
+
     /// Per-flight override folded to an enum, tolerant of unknown/absent values.
     var notifyOverrideMode: FlightNotifyOverride {
         FlightNotifyOverride(rawValue: notifyOverride ?? "default") ?? .default
