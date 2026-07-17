@@ -2026,3 +2026,39 @@ class TestIconClcGeometryPerForecastHour:
         by_hour = {h.time.hour: h.nwp_cloud_diagnostics for h in wf.hourly}
         assert by_hour[6].low.base_ft == 2000.0
         assert by_hour[7].low.base_ft == 8000.0  # NOT reused from f006
+
+
+class TestIconVectorisedInterpEquivalence:
+    """#441 efficiency #2: the vectorised _decode_icon_eu_single_var must match
+    the per-level xarray .interp() reference on the same data."""
+
+    def test_matches_per_level_reference(self, monkeypatch):
+        import numpy as np
+        import xarray as xr
+        import cfgrib
+        from weatherbrief.fetch.grib import decode as dec
+
+        lats = np.array([48.0, 49.0, 50.0, 51.0])   # ascending
+        lons = np.array([0.0, 1.0, 2.0, 3.0])
+        levels = np.array([40, 45, 50])
+        # Deterministic, non-linear-ish values incl. negatives (wind-like).
+        data = (np.arange(3 * 4 * 4, dtype=float).reshape(3, 4, 4) - 20.0) * 0.5
+        ds = xr.Dataset(
+            {"u": (["generalVerticalLayer", "latitude", "longitude"], data)},
+            coords={"generalVerticalLayer": levels, "latitude": lats, "longitude": lons},
+        )
+        monkeypatch.setattr(cfgrib, "open_datasets", lambda *a, **k: [ds])
+
+        tgt_lat = [48.5, 50.25]
+        tgt_lon = [0.5, 2.75]
+        got = dec._decode_icon_eu_single_var(b"dummy", tgt_lat, tgt_lon)
+
+        # Reference: per-level xarray .interp via _interpolate_per_point.
+        for lev in levels:
+            ref = dec._interpolate_per_point(
+                ds["u"].sel(generalVerticalLayer=lev), tgt_lat, tgt_lon,
+            )
+            for a, b in zip(got[int(lev)], ref):
+                assert (a is None) == (b is None)
+                if a is not None:
+                    assert abs(a - b) < 1e-9
