@@ -280,13 +280,16 @@ def _compute_airport_conditions(
         from weatherbrief.analysis.airport_conditions import compute_airport_conditions
 
         runway_data = None
+        airport_elevations = None
         if airports_db_path:
-            from weatherbrief.airports import get_runway_ends
-
-            runway_data = get_runway_ends(
-                [route.origin.icao, route.destination.icao],
-                airports_db_path,
+            from weatherbrief.airports import (
+                get_airport_elevations,
+                get_runway_ends,
             )
+
+            icaos = [route.origin.icao, route.destination.icao]
+            runway_data = get_runway_ends(icaos, airports_db_path)
+            airport_elevations = get_airport_elevations(icaos, airports_db_path)
 
         return compute_airport_conditions(
             analyses=rp_analyses,
@@ -297,6 +300,7 @@ def _compute_airport_conditions(
             arr_icao=route.destination.icao,
             arr_name=route.destination.name,
             runway_data=runway_data,
+            airport_elevations=airport_elevations,
         )
     except Exception:
         logger.warning("Airport conditions computation failed", exc_info=True)

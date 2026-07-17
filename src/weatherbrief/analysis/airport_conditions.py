@@ -140,9 +140,22 @@ def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:
     return min(ceilings) if ceilings else None
 
 
+def _nwp_ceiling_is_agl(model: str | None) -> bool:
+    """Whether a model's NWP ceiling is already AGL (height above ground).
+
+    ECMWF ceil/cbh/hcct are AGL; GFS (geopotential) and ICON (CEILING/HBAS_CON)
+    are MSL. Unknown/aggregate models (best_match, …) are treated as MSL — the
+    majority case, and the conservative direction at elevated airports. (#441)
+    """
+    return (model or "").lower() == "ecmwf"
+
+
 def reconcile_ceiling(
     sounding: SoundingAnalysis | None,
     hourly: HourlyForecast | None,
+    *,
+    field_elevation_ft: float | None = None,
+    model: str | None = None,
 ) -> float | None:
     """Reconcile ceiling from sounding-derived cloud layers and NWP diagnostics.
 
@@ -150,6 +163,13 @@ def reconcile_ceiling(
     - Both available: use the lower (more conservative for flight safety)
     - Only one available: use whichever exists
     - Neither: return None (VFR assumed)
+
+    Datum (#441 finding #3): the sounding ceiling is geopotential-height MSL and
+    the NWP ceiling is MSL for GFS/ICON but AGL for ECMWF. When
+    ``field_elevation_ft`` is given, both are converted to **AGL** so the
+    returned value (and the flight-category threshold applied to it) are on the
+    same above-ground datum as METAR ceilings. Without it, the legacy
+    datum-naive ``min()`` is returned for callers not yet migrated.
     """
     sounding_ceil = _ceiling_from_sounding(sounding) if sounding else None
 
@@ -157,9 +177,23 @@ def reconcile_ceiling(
     if hourly and hourly.nwp_cloud_diagnostics:
         nwp_ceil = hourly.nwp_cloud_diagnostics.ceiling_ft
 
-    if sounding_ceil is not None and nwp_ceil is not None:
-        return min(sounding_ceil, nwp_ceil)
-    return sounding_ceil if sounding_ceil is not None else nwp_ceil
+    if field_elevation_ft is None:
+        # Legacy datum-naive behaviour (callers not yet migrated to elevation).
+        if sounding_ceil is not None and nwp_ceil is not None:
+            return min(sounding_ceil, nwp_ceil)
+        return sounding_ceil if sounding_ceil is not None else nwp_ceil
+
+    fe = field_elevation_ft
+    # Sounding ceiling is MSL → AGL. Clamp at 0 (cloud at/below field = surface).
+    s_agl = max(0.0, sounding_ceil - fe) if sounding_ceil is not None else None
+    if nwp_ceil is None:
+        n_agl = None
+    elif _nwp_ceiling_is_agl(model):
+        n_agl = max(0.0, nwp_ceil)          # ECMWF: already AGL
+    else:
+        n_agl = max(0.0, nwp_ceil - fe)     # GFS/ICON: MSL → AGL
+    candidates = [c for c in (s_agl, n_agl) if c is not None]
+    return min(candidates) if candidates else None
 
 
 def _find_airport_rpa(
@@ -200,6 +234,7 @@ def _compute_for_airport(
     cross_sections: list[RouteCrossSection],
     models: list[str],
     runway_ends: list[RunwayEnd],
+    field_elevation_ft: float | None = None,
 ) -> AirportConditionsSummary:
     """Compute conditions at one airport across all models."""
     rpa = _find_airport_rpa(analyses, icao, is_departure)
@@ -213,9 +248,12 @@ def _compute_for_airport(
             cross_sections, model, rpa.point_index, rpa.interpolated_time,
         )
 
-        # Ceiling: reconcile sounding-derived and NWP diagnostics
+        # Ceiling: reconcile sounding-derived and NWP diagnostics, converted to
+        # AGL for flight-category classification when field elevation is known.
         sounding = rpa.sounding.get(model)
-        ceiling_ft = reconcile_ceiling(sounding, hourly)
+        ceiling_ft = reconcile_ceiling(
+            sounding, hourly, field_elevation_ft=field_elevation_ft, model=model,
+        )
 
         visibility_m: float | None = None
         visibility_sm: float | None = None
@@ -280,6 +318,7 @@ def compute_airport_conditions(
     arr_icao: str,
     arr_name: str,
     runway_data: dict[str, list[RunwayEnd]] | None = None,
+    airport_elevations: dict[str, float | None] | None = None,
 ) -> AirportConditions:
     """Compute airport conditions at departure and arrival.
 
@@ -297,6 +336,7 @@ def compute_airport_conditions(
         AirportConditions with departure and arrival summaries.
     """
     runway_data = runway_data or {}
+    elevations = airport_elevations or {}
 
     departure = _compute_for_airport(
         icao=dep_icao,
@@ -306,6 +346,7 @@ def compute_airport_conditions(
         cross_sections=cross_sections,
         models=models,
         runway_ends=runway_data.get(dep_icao, []),
+        field_elevation_ft=elevations.get(dep_icao),
     )
     arrival = _compute_for_airport(
         icao=arr_icao,
@@ -315,6 +356,7 @@ def compute_airport_conditions(
         cross_sections=cross_sections,
         models=models,
         runway_ends=runway_data.get(arr_icao, []),
+        field_elevation_ft=elevations.get(arr_icao),
     )
 
     return AirportConditions(departure=departure, arrival=arrival)

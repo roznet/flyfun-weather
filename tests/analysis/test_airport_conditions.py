@@ -436,3 +436,50 @@ class TestReconcileCeiling:
         )
         result = reconcile_ceiling(sounding, hourly)
         assert result == 2500
+
+    # --- datum (#441 finding #3): AGL conversion when field elevation known ---
+
+    def _sounding(self, base_ft):
+        return SoundingAnalysis(cloud_layers=[
+            EnhancedCloudLayer(base_ft=base_ft, top_ft=base_ft + 2000,
+                               coverage=CloudCoverage.OVC),
+        ])
+
+    def _hourly(self, ceiling_ft):
+        return HourlyForecast(
+            time=datetime(2026, 3, 1, 10, 0),
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(ceiling_ft=ceiling_ft),
+        )
+
+    def test_icon_msl_ceiling_converted_to_agl(self):
+        """ICON NWP ceiling is MSL → subtract field elevation; sounding too."""
+        # Mountain airport at 3000 ft. Model says cloud base 5000 ft MSL.
+        r = reconcile_ceiling(
+            self._sounding(6000), self._hourly(5000),
+            field_elevation_ft=3000, model="icon",
+        )
+        # sounding 6000-3000=3000 AGL; nwp 5000-3000=2000 AGL → min 2000 (MVFR),
+        # NOT the legacy 5000 (which would read VFR).
+        assert r == 2000
+
+    def test_ecmwf_ceiling_already_agl_not_double_subtracted(self):
+        """ECMWF NWP ceiling is AGL — must NOT have elevation subtracted."""
+        r = reconcile_ceiling(
+            self._sounding(6000), self._hourly(2000),
+            field_elevation_ft=3000, model="ecmwf",
+        )
+        # nwp stays 2000 AGL; sounding 6000-3000=3000 AGL → min 2000.
+        assert r == 2000
+
+    def test_ceiling_below_field_clamped_to_zero(self):
+        """An MSL ceiling below field elevation clamps to 0 AGL (surface)."""
+        r = reconcile_ceiling(
+            self._sounding(2500), self._hourly(2800),
+            field_elevation_ft=3000, model="gfs",
+        )
+        assert r == 0.0
+
+    def test_legacy_unchanged_without_field_elevation(self):
+        """No field_elevation_ft → datum-naive min(), unchanged behaviour."""
+        r = reconcile_ceiling(self._sounding(6000), self._hourly(5000), model="icon")
+        assert r == 5000  # raw min, no AGL conversion
