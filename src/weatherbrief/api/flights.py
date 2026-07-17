@@ -29,6 +29,7 @@ from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.storage.flights import (
+    SHARE_CODE_RE,
     SubscriptionError,
     bulk_delete_flights as _bulk_delete_flights,
     delete_flight,
@@ -63,7 +64,6 @@ MAX_ROUTE_WAYPOINTS = 32
 # Shape of a share code, kept in lock-step with the ``/s/{code}`` redirect route
 # in ``api/app.py``. Validated before any DB hit so scanner/injection-shaped
 # strings never reach the lookup.
-_SHARE_CODE_RE = re.compile(r"^[0-9A-Za-z]{4,16}$")
 
 
 class CreateFlightRequest(BaseModel):
@@ -1656,7 +1656,7 @@ def get_flight_by_share_code(
     Registered before ``/{flight_id}`` so ``by-share`` can never be swallowed as
     a flight id (e.g. a share code that happens to spell ``export``).
     """
-    if not _SHARE_CODE_RE.match(code):
+    if not SHARE_CODE_RE.match(code):
         # Reject obviously-bogus codes before the DB hit (mirrors /s/{code}).
         raise HTTPException(status_code=404, detail="Unknown share link")
     flight_id = lookup_flight_id_by_share_code(db, code)

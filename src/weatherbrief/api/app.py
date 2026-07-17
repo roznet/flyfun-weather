@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -668,16 +667,17 @@ def create_app() -> FastAPI:
     # sensitive than the long ID URL).
     from urllib.parse import urlencode
 
-    from weatherbrief.storage.flights import lookup_flight_id_by_share_code
+    from weatherbrief.storage.flights import (
+        SHARE_CODE_RE,
+        lookup_flight_id_by_share_code,
+    )
     from flyfun_common.db import get_db as _get_db_for_share
-
-    _SHARE_CODE_RE = re.compile(r"^[0-9A-Za-z]{4,16}$")
 
     @app.get("/s/{code}")
     def share_redirect(code: str, request: Request, db=Depends(_get_db_for_share)):
         # Reject obviously-bogus codes before hitting the DB so log spam
         # from random scanners doesn't blow up the index.
-        if not _SHARE_CODE_RE.match(code):
+        if not SHARE_CODE_RE.match(code):
             raise _HTTPException(status_code=404, detail="Unknown share link")
         flight_id = lookup_flight_id_by_share_code(db, code)
         if flight_id is None:

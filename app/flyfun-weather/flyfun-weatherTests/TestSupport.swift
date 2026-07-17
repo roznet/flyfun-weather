@@ -144,7 +144,11 @@ func makeFlight(
     departureTime: String = "2026-06-24T12:00:00Z",
     cruiseAltitudeFt: Int = 8000,
     flightDurationHours: Double = 2.0,
+    private: Bool = false,
     role: FlightRole? = nil,
+    shareCode: String? = nil,
+    ownerDisplayName: String? = nil,
+    isSubscribed: Bool? = nil,
     flexibility: FlexibilityMode? = nil,
     altDepartureTime: String? = nil,
     latestBriefing: BriefingStatusInfo? = nil
@@ -163,7 +167,7 @@ func makeFlight(
         cruiseAltitudeFt: cruiseAltitudeFt,
         flightCeilingFt: 13000,
         flightDurationHours: flightDurationHours,
-        private: false,
+        private: `private`,
         autoRefresh: false,
         autoRefreshHour: nil,
         createdAt: "2026-06-20T09:00:00Z",
@@ -171,7 +175,10 @@ func makeFlight(
         coverage: nil,
         role: role,
         flexibility: flexibility,
-        altDepartureTime: altDepartureTime
+        altDepartureTime: altDepartureTime,
+        shareCode: shareCode,
+        ownerDisplayName: ownerDisplayName,
+        isSubscribed: isSubscribed
     )
 }
 

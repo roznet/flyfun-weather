@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 from datetime import datetime, timezone
@@ -53,6 +54,14 @@ _SHARE_CODE_ALPHABET = (
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 _SHARE_CODE_LEN = 8
+
+# Permissive shape check for a share code arriving from a URL path, used to
+# reject obviously-bogus input before a DB lookup (scanner/log-spam guard).
+# Deliberately broader than the 8-char minted length so legacy/future codes
+# still pass; the DB lookup is the real validation. Single source of truth,
+# imported by both the ``/s/{code}`` redirect (api/app.py) and the
+# ``/api/flights/by-share/{code}`` resolver (api/flights.py).
+SHARE_CODE_RE = re.compile(r"^[0-9A-Za-z]{4,16}$")
 
 
 def _generate_share_code() -> str:

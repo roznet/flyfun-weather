@@ -32,6 +32,9 @@ struct FlightListView: View {
     /// Error surfaced when a `/s/{code}` link can't be resolved (unknown code,
     /// private flight, or the owner's own private link).
     @State private var shareResolveError: String?
+    /// Error surfaced when a swipe/context-menu unsubscribe fails, so the row
+    /// staying put reads as a failure rather than a silent no-op (#446).
+    @State private var unsubscribeError: String?
     /// Bumped on every `openForecastMap`, used as the map view's `.id` so a *new*
     /// inbound deep link while the map is already open re-creates the view (the
     /// deep link is applied only at `ForecastMapViewModel.init`).
@@ -268,6 +271,14 @@ struct FlightListView: View {
         } message: {
             Text(shareResolveError ?? "")
         }
+        .alert("Couldn’t unsubscribe", isPresented: Binding(
+            get: { unsubscribeError != nil },
+            set: { if !$0 { unsubscribeError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(unsubscribeError ?? "")
+        }
         .task {
             guard let repo = appState.repository else { return }
             let vm = FlightListViewModel(repository: repo, networkMonitor: appState.networkMonitor)
@@ -364,7 +375,23 @@ struct FlightListView: View {
             appState.clearPendingNavigation()
             Task {
                 do {
-                    sharedPreviewFlight = try await repo.flightByShareCode(code)
+                    let flight = try await repo.flightByShareCode(code)
+                    if flight.role == .subscriber {
+                        sharedPreviewFlight = flight
+                    } else {
+                        // Opening your OWN share link (self-share, testing, a link
+                        // that bounced back via Messages): the resolver returns
+                        // role == .owner. Skip the subscriber "Subscribe" banner —
+                        // subscribing to your own flight 409s — and just open the
+                        // flight normally, preferring the list's instance so the
+                        // sidebar selection highlights.
+                        if case .loaded(let flights)? = viewModel?.state,
+                           let match = flights.first(where: { $0.id == flight.id }) {
+                            selection = .flight(match)
+                        } else {
+                            selection = .flight(flight)
+                        }
+                    }
                 } catch let error as APIError {
                     shareResolveError = {
                         if case .notFound = error {
@@ -412,9 +439,15 @@ struct FlightListView: View {
     /// longer in the list.
     private func unsubscribe(_ flight: FlightResponse, viewModel: FlightListViewModel) {
         Task {
-            try? await appState.repository?.unsubscribeFlight(id: flight.id)
-            if selection == .flight(flight) { selection = nil }
-            await viewModel.loadFlights()
+            do {
+                try await appState.repository?.unsubscribeFlight(id: flight.id)
+                if selection == .flight(flight) { selection = nil }
+                await viewModel.loadFlights()
+            } catch let error as APIError {
+                unsubscribeError = error.errorDescription ?? "Couldn’t unsubscribe from this flight."
+            } catch {
+                unsubscribeError = error.localizedDescription
+            }
         }
     }
 
