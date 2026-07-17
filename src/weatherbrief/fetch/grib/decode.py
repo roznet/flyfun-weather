@@ -717,39 +717,121 @@ def _decode_icon_eu_single_var(
         tmp_path = Path(tmp.name)
 
     try:
+        import numpy as np
+
         # indexpath="" disables cfgrib's on-disk .idx sidecar. These are
         # one-shot temp files: only the .grib2 gets unlinked, so a written
         # .idx would be orphaned (604 found in the wild). (#441 efficiency)
         datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
-        # ICON-EU uses -180 to +180 longitude convention
-        target_lons = list(longitudes)
+        n_points = len(latitudes)
+        # ICON-EU uses -180..+180 longitude convention (targets pass through).
+        targets_lat = np.asarray(latitudes, dtype=np.float64)
+        targets_lon = np.asarray(longitudes, dtype=np.float64)
         level_values: dict[int, list[float | None]] = {}
 
         for ds in datasets:
+            # Bilinear corner indices + weights computed ONCE per dataset, then
+            # every model level gathered in one numpy op — replaces the per-level
+            # xarray `.interp` loop, which was GIL-bound (blocking concurrent
+            # decode threads). Same machinery as
+            # _decode_pressure_vars_from_datasets; verified numerically identical
+            # to the old path (max Δ ~1e-13). (#441 efficiency #2)
+            lat_dim = lon_dim = None
+            for dim in ds.dims:
+                dim_lower = str(dim).lower()
+                if "lat" in dim_lower:
+                    lat_dim = dim
+                elif "lon" in dim_lower:
+                    lon_dim = dim
+            if lat_dim is None or lon_dim is None:
+                ds.close()
+                continue
+            try:
+                lat_arr = np.asarray(ds.coords[lat_dim].values, dtype=np.float64)
+                lon_arr = np.asarray(ds.coords[lon_dim].values, dtype=np.float64)
+            except Exception:
+                ds.close()
+                continue
+            H, W = lat_arr.size, lon_arr.size
+            if H < 2 or W < 2:
+                ds.close()
+                continue
+
+            frac_lat, lat_ok = _frac_grid_indices(lat_arr, targets_lat)
+            frac_lon, lon_ok = _frac_grid_indices(lon_arr, targets_lon)
+            in_bounds = lat_ok & lon_ok
+            inb_idx = np.flatnonzero(in_bounds)
+            fl = frac_lat[in_bounds]
+            fln = frac_lon[in_bounds]
+            i0 = np.clip(np.floor(fl).astype(np.intp), 0, H - 2)
+            j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
+            i1 = i0 + 1
+            j1 = j0 + 1
+            ai = fl - i0
+            aj = fln - j0
+            w00 = (1.0 - ai) * (1.0 - aj)
+            w01 = (1.0 - ai) * aj
+            w10 = ai * (1.0 - aj)
+            w11 = ai * aj
+
             for var_name, xr_var in ds.data_vars.items():
-                # Find the model-level dimension
                 var_level_coord = None
                 for coord_name in ("generalVerticalLayer", "generalVertical", "level", "hybrid"):
                     if coord_name in xr_var.dims:
                         var_level_coord = coord_name
                         break
 
+                var_dims = list(xr_var.dims)
+                try:
+                    lat_axis = var_dims.index(lat_dim)
+                    lon_axis = var_dims.index(lon_dim)
+                except ValueError:
+                    continue
+                values = np.asarray(xr_var.values, dtype=np.float64)
+                other_axes = [a for a in range(values.ndim) if a not in (lat_axis, lon_axis)]
+                values = np.transpose(values, other_axes + [lat_axis, lon_axis])
+
                 if var_level_coord is not None:
                     levels = ds.coords[var_level_coord].values
-                    for lev_val in levels:
+                    if values.ndim != 3:
+                        # Unexpected extra dim — fall back to per-level interp.
+                        for lev_val in levels:
+                            lev = int(float(lev_val))
+                            level_values[lev] = _interpolate_per_point(
+                                xr_var.sel({var_level_coord: lev_val}),
+                                latitudes, list(longitudes),
+                            )
+                        continue
+                    if inb_idx.size:
+                        interp = (
+                            w00 * values[:, i0, j0] + w01 * values[:, i0, j1]
+                            + w10 * values[:, i1, j0] + w11 * values[:, i1, j1]
+                        )  # (L, n_inb)
+                    for li, lev_val in enumerate(levels):
                         lev = int(float(lev_val))
-                        level_data = xr_var.sel({var_level_coord: lev_val})
-                        values = _interpolate_per_point(
-                            level_data, latitudes, target_lons,
-                        )
-                        level_values[lev] = values
+                        col: list[float | None] = [None] * n_points
+                        if inb_idx.size:
+                            row = interp[li]
+                            for k, pt in enumerate(inb_idx):
+                                v = row[k]
+                                if not np.isnan(v):
+                                    col[pt] = float(v)
+                        level_values[lev] = col
                 else:
                     lev = int(xr_var.attrs.get("level", xr_var.attrs.get("GRIB_level", 0)))
-                    if lev > 0:
-                        values = _interpolate_per_point(
-                            xr_var, latitudes, target_lons,
+                    if lev <= 0 or values.ndim != 2:
+                        continue
+                    col = [None] * n_points
+                    if inb_idx.size:
+                        vv = (
+                            w00 * values[i0, j0] + w01 * values[i0, j1]
+                            + w10 * values[i1, j0] + w11 * values[i1, j1]
                         )
-                        level_values[lev] = values
+                        for k, pt in enumerate(inb_idx):
+                            v = vv[k]
+                            if not np.isnan(v):
+                                col[pt] = float(v)
+                    level_values[lev] = col
 
             ds.close()
         del datasets
