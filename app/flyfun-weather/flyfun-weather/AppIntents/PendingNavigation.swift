@@ -12,6 +12,10 @@ enum PendingNavigation: Equatable, Sendable {
     /// Open the forecast map, optionally in a shared `fc.*` state (#420). A map
     /// link shared from desktop opens the phone on the same day/hour/metric/airport.
     case forecastMap(MapDeepLink)
+    /// Open a shared flight by its share code (`/s/{code}`) as a preview with a
+    /// Subscribe banner (#446). The flight isn't in `/api/flights` until the
+    /// viewer subscribes, so the UI resolves the code via the by-share endpoint.
+    case share(code: String)
 
     /// The target flight id, when this navigation names one.
     var flightId: String? {
@@ -70,6 +74,7 @@ enum PendingNavigationStore {
         case .flightList: "flightList"
         case .briefing(let id): "briefing:\(id)"
         case .forecastMap(let dl): "forecastMap:" + encodeMap(dl)
+        case .share(let code): "share:\(code)"
         }
     }
 
@@ -81,6 +86,10 @@ enum PendingNavigationStore {
         }
         if raw.hasPrefix("forecastMap:") {
             return .forecastMap(decodeMap(String(raw.dropFirst("forecastMap:".count))))
+        }
+        if raw.hasPrefix("share:") {
+            let code = String(raw.dropFirst("share:".count))
+            return code.isEmpty ? nil : .share(code: code)
         }
         return nil
     }

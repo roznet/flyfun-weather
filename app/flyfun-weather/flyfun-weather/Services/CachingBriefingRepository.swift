@@ -217,6 +217,20 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.frequentAirports()
     }
 
+    // Flight sharing (#446) — always online: resolving a code, subscribing, and
+    // unsubscribing are live account actions, never part of the offline bundle.
+    func flightByShareCode(_ code: String) async throws -> FlightResponse {
+        try await online.flightByShareCode(code)
+    }
+
+    func subscribeFlight(id: String) async throws {
+        try await online.subscribeFlight(id: id)
+    }
+
+    func unsubscribeFlight(id: String) async throws {
+        try await online.unsubscribeFlight(id: id)
+    }
+
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         await online.refreshStream(flightId: flightId, source: source)
     }

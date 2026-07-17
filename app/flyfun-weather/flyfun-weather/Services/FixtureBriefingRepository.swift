@@ -193,6 +193,9 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
             waypoints: waypoints
         )
     }
+    func flightByShareCode(_ code: String) async throws -> FlightResponse { throw FixtureError.notProvided("flightByShareCode") }
+    func subscribeFlight(id: String) async throws { throw FixtureError.notProvided("subscribeFlight") }
+    func unsubscribeFlight(id: String) async throws { throw FixtureError.notProvided("unsubscribeFlight") }
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw FixtureError.notProvided("routeDistance") }
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] { [] }
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws { throw FixtureError.notProvided("recalculateAdvisories") }

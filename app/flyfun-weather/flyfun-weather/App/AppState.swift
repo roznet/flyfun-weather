@@ -410,8 +410,24 @@ final class AppState {
         case "/maps.html":
             return .forecastMap(mapDeepLink(from: comps.queryItems ?? []))
         default:
+            // Short share link `/s/{code}` → preview-before-subscribe (#446). The
+            // code is the single path component after `/s/`. Validate its shape
+            // (matching the server's `/s/{code}` route + by-share resolver) so a
+            // stray `/s/` path can't route to an empty preview.
+            if comps.path.hasPrefix("/s/") {
+                let code = String(comps.path.dropFirst("/s/".count))
+                if isValidShareCode(code) { return .share(code: code) }
+            }
             return nil
         }
+    }
+
+    /// Whether a string matches the share-code shape (`^[0-9A-Za-z]{4,16}$`),
+    /// kept in lock-step with the server's `_SHARE_CODE_RE`. Pure + `nonisolated`
+    /// so the routing parser stays unit-testable off the MainActor.
+    nonisolated static func isValidShareCode(_ code: String) -> Bool {
+        (4...16).contains(code.count)
+            && code.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
     }
 
     /// Read the forecast map's `fc.*` share-state keys from a `/maps.html` query.
