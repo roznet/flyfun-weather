@@ -509,17 +509,21 @@ def execute_briefing(
             # Collect runway data for wind advisory comparison + field
             # elevation for the ceiling AGL conversion (#441 finding #3).
             obs_elevations = None
+            obs_icaos = [a.icao for a in route_observations.airports]
             try:
-                from weatherbrief.airports import (
-                    get_airport_elevations,
-                    get_runway_ends,
-                )
+                from weatherbrief.airports import get_runway_ends
 
-                obs_icaos = [a.icao for a in route_observations.airports]
                 obs_runway_data = get_runway_ends(obs_icaos, options.airports_db_path)
-                obs_elevations = get_airport_elevations(obs_icaos, options.airports_db_path)
             except Exception:
                 obs_runway_data = None
+            # Separate try: an elevation-lookup failure must not discard
+            # otherwise-good runway data. (#441 review)
+            try:
+                from weatherbrief.airports import get_airport_elevations
+
+                obs_elevations = get_airport_elevations(obs_icaos, options.airports_db_path)
+            except Exception:
+                obs_elevations = None
 
             route_observations = run_observation_comparison(
                 observations=route_observations,
