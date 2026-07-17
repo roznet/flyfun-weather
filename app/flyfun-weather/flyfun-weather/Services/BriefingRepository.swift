@@ -197,9 +197,13 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse {
-        // Encode the timestamp path segment for consistency with recalculateAdvisories.
-        let encodedTimestamp = timestamp.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? timestamp
-        return try await client.request("/api/flights/\(flightId)/packs/\(encodedTimestamp)/advisories/\(advisoryId)/detail")
+        // Pass the RAW timestamp: `client.request` → `requestData` builds the URL
+        // with `appendingPathComponent`, which already percent-encodes the segment
+        // (`:` → `%3A`). Pre-encoding here would double-encode (`%3A` → `%253A`),
+        // and the server's `fromisoformat` would 500 on the still-encoded string.
+        // Matches `advisories` above. (The `requestDataURL`/`requestURL` variants —
+        // e.g. `recalculateAdvisories` — do NOT re-encode, so those DO pre-encode.)
+        return try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/advisories/\(advisoryId)/detail")
     }
 
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws {
@@ -211,27 +215,25 @@ final class OnlineBriefingRepository: BriefingRepository {
         _ = try await client.requestDataURL(path, method: "POST")
     }
 
+    // NOTE: the timing endpoints pass the RAW timestamp. `client.request` /
+    // `client.requestData` build the URL with `appendingPathComponent`, which
+    // already percent-encodes the path segment (`:` → `%3A`). Pre-encoding first
+    // double-encoded it (`%3A` → `%253A`); the server then received a literal
+    // `%3A`, `datetime.fromisoformat` raised `ValueError`, and every poll got a
+    // 500 → the panel stayed hidden. Matches `advisories`/`snapshot`.
     func timeOptions(flightId: String, timestamp: String) async throws -> TimeOptionsResponse {
-        let ts = Self.encodedTimestamp(timestamp)
-        return try await client.request("/api/flights/\(flightId)/packs/\(ts)/time-options")
+        try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/time-options")
     }
 
     func confirmTimeOption(flightId: String, timestamp: String, departureTime: String) async throws {
-        let ts = Self.encodedTimestamp(timestamp)
         let body = try JSONEncoder.weatherBrief.encode(ConfirmTimeOptionRequest(departureTime: departureTime))
-        _ = try await client.requestData("/api/flights/\(flightId)/packs/\(ts)/time-options/confirm",
+        _ = try await client.requestData("/api/flights/\(flightId)/packs/\(timestamp)/time-options/confirm",
                                          method: "POST", body: body)
     }
 
     func rescanTimeOptions(flightId: String, timestamp: String) async throws {
-        let ts = Self.encodedTimestamp(timestamp)
-        _ = try await client.requestData("/api/flights/\(flightId)/packs/\(ts)/time-options/rescan",
+        _ = try await client.requestData("/api/flights/\(flightId)/packs/\(timestamp)/time-options/rescan",
                                          method: "POST")
-    }
-
-    /// Percent-encode a timestamp path segment (matches `advisoryDetail`).
-    private static func encodedTimestamp(_ timestamp: String) -> String {
-        timestamp.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? timestamp
     }
 
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse {
