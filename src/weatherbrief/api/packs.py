@@ -2993,8 +2993,16 @@ def _recompute_airport_conditions(
         def _elevations(icaos: list[str]) -> dict[str, float | None] | None:
             if not db_path:
                 return None
-            from weatherbrief.airports import get_airport_elevations
-            return get_airport_elevations(icaos, db_path)
+            # Elevation is an enhancement, not required: on failure the ceiling
+            # stays datum-naive rather than aborting the whole recompute (which
+            # the outer except would otherwise turn into a None result). Matches
+            # the resilience pattern used at the other elevation call sites. (#441)
+            try:
+                from weatherbrief.airports import get_airport_elevations
+                return get_airport_elevations(icaos, db_path)
+            except Exception:
+                logger.warning("Elevation lookup failed; recompute stays datum-naive", exc_info=True)
+                return None
 
         if prev_manifest and prev_manifest.airport_conditions:
             prev_dep = prev_manifest.airport_conditions.departure
