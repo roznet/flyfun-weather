@@ -183,3 +183,89 @@ class TestShareRedirect:
         resp = client.get("/s/../etc/passwd", follow_redirects=False)
         # Path normalization may even 404 earlier; either way, never 302.
         assert resp.status_code != 302
+
+
+# --- JSON resolver endpoint (iOS preview-before-subscribe on-ramp) ---
+
+
+def _seed_other_owner_flight(
+    app_db,
+    *,
+    idx: int,
+    share_code: str,
+    private: bool = False,
+    owner_id: str = "owner-user",
+    owner_name: str = "Flight Owner",
+) -> Flight:
+    """Seed a flight owned by a *different* user than the DEV viewer.
+
+    Lets the resolver tests exercise the subscriber view (role/owner name) and
+    the private-flight 404, which a self-owned flight can't.
+    """
+    s = app_db()
+    if s.get(UserRow, owner_id) is None:
+        s.add(UserRow(
+            id=owner_id, provider="local", provider_sub=owner_id,
+            email=f"{owner_id}@example.com", display_name=owner_name, approved=True,
+        ))
+        s.flush()
+    f = _make_flight(idx, share_code=share_code)
+    f.id = f"{f.id}-{owner_id}"
+    f.user_id = owner_id
+    f.private = private
+    save_flight(s, f, owner_id)
+    s.commit()
+    s.close()
+    return f
+
+
+class TestShareResolver:
+    def test_public_flight_returns_subscriber_view(self, client, app_db):
+        # A public flight owned by someone else resolves to a normal
+        # FlightResponse with the subscriber-facing fields the preview reads.
+        f = _seed_other_owner_flight(app_db, idx=20, share_code="Pub12345")
+        resp = client.get(f"/api/flights/by-share/{f.share_code}")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["id"] == f.id
+        assert body["role"] == "subscriber"
+        assert body["is_subscribed"] is False
+        assert body["owner_display_name"] == "Flight Owner"
+        assert body["share_code"] == f.share_code
+
+    def test_owner_view_when_viewer_owns_flight(self, client, app_db):
+        # The DEV viewer resolving their own flight's code sees the owner view.
+        f = _seed_flight(app_db, idx=21, share_code="Own12345")
+        resp = client.get(f"/api/flights/by-share/{f.share_code}")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["role"] == "owner"
+        assert body["is_subscribed"] is False
+
+    def test_unknown_code_returns_404(self, client):
+        resp = client.get("/api/flights/by-share/nope0000")
+        assert resp.status_code == 404
+
+    def test_invalid_shape_returns_404_without_db_hit(self, client):
+        # Too short / illegal chars are rejected by the regex before the lookup.
+        assert client.get("/api/flights/by-share/ab").status_code == 404
+        assert client.get("/api/flights/by-share/has spaces").status_code == 404
+
+    def test_private_flight_hidden_from_non_owner(self, client, app_db):
+        # Private + non-owner → 404, identical to GET /{flight_id}.
+        f = _seed_other_owner_flight(app_db, idx=22, share_code="Prv12345", private=True)
+        resp = client.get(f"/api/flights/by-share/{f.share_code}")
+        assert resp.status_code == 404
+
+    def test_owner_can_resolve_own_private_flight(self, client, app_db):
+        # A private flight the viewer owns still resolves for them.
+        f = _seed_flight(app_db, idx=23, share_code="PrvOwn12")
+        s = app_db()
+        loaded = load_flight(s, f.id)
+        loaded.private = True
+        save_flight(s, loaded, DEV_USER_ID)
+        s.commit()
+        s.close()
+        resp = client.get(f"/api/flights/by-share/{f.share_code}")
+        assert resp.status_code == 200
+        assert resp.json()["role"] == "owner"

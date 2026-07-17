@@ -35,6 +35,7 @@ from weatherbrief.storage.flights import (
     is_subscribed,
     list_flights_with_role,
     load_flight,
+    lookup_flight_id_by_share_code,
     pack_has_advisories,
     parse_advisory_summary,
     safe_path_component,
@@ -58,6 +59,11 @@ if TYPE_CHECKING:
 # the cap only guards against pathological input. Shared by the create and
 # update request models so the two paths stay in lock-step.
 MAX_ROUTE_WAYPOINTS = 32
+
+# Shape of a share code, kept in lock-step with the ``/s/{code}`` redirect route
+# in ``api/app.py``. Validated before any DB hit so scanner/injection-shaped
+# strings never reach the lookup.
+_SHARE_CODE_RE = re.compile(r"^[0-9A-Za-z]{4,16}$")
 
 
 class CreateFlightRequest(BaseModel):
@@ -1627,6 +1633,37 @@ def get_frequent_airports(
     Add-Flight prefill. See ``compute_frequent_airports``.
     """
     return compute_frequent_airports(db, user_id)
+
+
+@router.get("/by-share/{code}", response_model=FlightResponse)
+def get_flight_by_share_code(
+    code: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Resolve a share code to a flight — the iOS preview-before-subscribe on-ramp.
+
+    The web ``/s/{code}`` link 302-redirects a *browser* to the briefing page;
+    the app can't follow that redirect, so it resolves the code to a flight
+    itself. Authenticated like every other ``/api/flights`` route (unauth → 401,
+    which the app handles via ``handleUnauthorized``). Visibility is enforced
+    identically to ``get_flight`` by delegating to ``_load_flight_or_404`` with
+    ``viewer_id``: a private flight owned by someone else — or an unknown/invalid
+    code — is a 404. A non-owner viewer gets a normal ``FlightResponse`` with
+    ``role: subscriber`` / ``is_subscribed`` / ``owner_display_name`` so the app
+    can render the Subscribe affordance.
+
+    Registered before ``/{flight_id}`` so ``by-share`` can never be swallowed as
+    a flight id (e.g. a share code that happens to spell ``export``).
+    """
+    if not _SHARE_CODE_RE.match(code):
+        # Reject obviously-bogus codes before the DB hit (mirrors /s/{code}).
+        raise HTTPException(status_code=404, detail="Unknown share link")
+    flight_id = lookup_flight_id_by_share_code(db, code)
+    if flight_id is None:
+        raise HTTPException(status_code=404, detail="Unknown share link")
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    return _flight_to_response(flight, db, viewer_id=user_id)
 
 
 @router.get("/{flight_id}", response_model=FlightResponse)
