@@ -49,6 +49,23 @@ def test_flight_category_uses_agl():
     assert flight_category(snap) == "VFR"  # legacy over-reads
 
 
+def test_lcl_fallback_is_agl_not_subtracted():
+    # lcl_ft (Espy surface T/Td approximation) is already AGL — must pass
+    # through unchanged even at an elevated field, NOT double-subtracted to 0.
+    snap = _snap("gfs", lcl_ft=2000.0)  # only the LCL fallback rung is present
+    assert best_ceiling(snap, field_elevation_ft=3000.0) == 2000.0
+    assert flight_category(snap, field_elevation_ft=3000.0) == "MVFR"  # not LIFR
+
+
+def test_cloud_base_fallback_follows_model_datum():
+    # cloud_base_ft follows the NWP datum: MSL for ICON → subtract elevation.
+    snap = _snap("icon", cloud_base_ft=5000.0)
+    assert best_ceiling(snap, field_elevation_ft=3000.0) == 2000.0
+    # ECMWF cloud base is AGL → unchanged.
+    snap_e = _snap("ecmwf", cloud_base_ft=2000.0)
+    assert best_ceiling(snap_e, field_elevation_ft=3000.0) == 2000.0
+
+
 def test_ecmwf_model_read_from_snap():
     # model comes from the snap dict; missing model → treated as MSL.
     assert best_ceiling(_snap("ecmwf", nwp_ceiling_ft=2000.0), field_elevation_ft=1000.0) == 2000.0

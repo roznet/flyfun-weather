@@ -60,8 +60,11 @@ def best_ceiling(
     fe = field_elevation_ft
     nwp_is_agl = _nwp_ceiling_is_agl(snap.get("model"))
 
-    # (value, source_is_agl) per estimate. Sounding & LCL are sounding-derived
-    # geopotential MSL; NWP ceiling and cloud base follow the model's datum.
+    # Per-estimate datum. sounding_ceiling_ft is geopotential-height MSL; NWP
+    # ceiling and cloud base follow the model's datum (AGL for ECMWF). lcl_ft is
+    # the Espy surface T/Td approximation (_LCL_CONSTANT_FT * (T2m - Td2m)) — a
+    # height ABOVE THE STATION, i.e. already AGL, so it must NOT have field
+    # elevation subtracted. (#441 finding #3)
     sounding = to_agl_ceiling(snap.get("sounding_ceiling_ft"), fe, source_is_agl=False)
     nwp = to_agl_ceiling(snap.get("nwp_ceiling_ft"), fe, source_is_agl=nwp_is_agl)
     primary = [v for v in (sounding, nwp) if v is not None]
@@ -71,7 +74,7 @@ def best_ceiling(
     cloud_base = to_agl_ceiling(snap.get("cloud_base_ft"), fe, source_is_agl=nwp_is_agl)
     if cloud_base is not None:
         return cloud_base
-    return to_agl_ceiling(snap.get("lcl_ft"), fe, source_is_agl=False)
+    return to_agl_ceiling(snap.get("lcl_ft"), fe, source_is_agl=True)
 
 
 def flight_category(
