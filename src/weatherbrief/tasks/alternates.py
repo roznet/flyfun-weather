@@ -433,7 +433,11 @@ def run_alternates(
         A populated ``RouteAlternates``, or ``None`` if the destination
         assessment could not be computed (caller degrades gracefully).
     """
-    from weatherbrief.airports import _load_airport_model, get_runway_ends
+    from weatherbrief.airports import (
+        _load_airport_model,
+        get_airport_elevations,
+        get_runway_ends,
+    )
     from weatherbrief.analysis.route_geometry import compute_route_distances
 
     now = now or datetime.now(timezone.utc)
@@ -597,7 +601,6 @@ def run_alternates(
         try:
             icaos = [a.icao for a in fetch_airports]
             runways.update(get_runway_ends(icaos, airports_db_path))
-            from weatherbrief.airports import get_airport_elevations
             elevations.update(get_airport_elevations(icaos, airports_db_path))
         except Exception:
             logger.warning("Alternates: runway/elevation lookup failed", exc_info=True)

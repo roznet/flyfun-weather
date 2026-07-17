@@ -14,6 +14,7 @@ import logging
 import tempfile
 import warnings
 from pathlib import Path
+from typing import NamedTuple
 
 # Silence xarray FutureWarning about combine compat default change (cfgrib trigger)
 warnings.filterwarnings(
@@ -359,6 +360,57 @@ def _frac_grid_indices(
     return frac, ~np.isnan(frac)
 
 
+class _GridWeights(NamedTuple):
+    """Bilinear corner indices + weights for target points on a lat/lon grid."""
+    i0: np.ndarray
+    j0: np.ndarray
+    i1: np.ndarray
+    j1: np.ndarray
+    w00: np.ndarray
+    w01: np.ndarray
+    w10: np.ndarray
+    w11: np.ndarray
+    inb_idx: np.ndarray  # indices into the target list that fall in-bounds
+
+
+def _bilinear_grid_weights(
+    lat_arr: np.ndarray,
+    lon_arr: np.ndarray,
+    targets_lat: np.ndarray,
+    targets_lon: np.ndarray,
+) -> "_GridWeights | None":
+    """Compute bilinear corner indices + weights once per dataset.
+
+    Single source of truth shared by ``_decode_pressure_vars_from_datasets`` and
+    ``_decode_icon_eu_single_var`` — the same gather then reuses these across
+    every variable/level. Returns None for a degenerate grid (< 2 points on an
+    axis); ``inb_idx`` may be empty when no target is inside the grid, which each
+    caller handles per its own out-of-bounds semantics.
+    """
+    import numpy as np
+
+    H, W = lat_arr.size, lon_arr.size
+    if H < 2 or W < 2:
+        return None
+    frac_lat, lat_ok = _frac_grid_indices(lat_arr, targets_lat)
+    frac_lon, lon_ok = _frac_grid_indices(lon_arr, targets_lon)
+    in_bounds = lat_ok & lon_ok
+    inb_idx = np.flatnonzero(in_bounds)
+    fl = frac_lat[in_bounds]
+    fln = frac_lon[in_bounds]
+    i0 = np.clip(np.floor(fl).astype(np.intp), 0, H - 2)
+    j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
+    i1 = i0 + 1
+    j1 = j0 + 1
+    ai = fl - i0
+    aj = fln - j0
+    return _GridWeights(
+        i0, j0, i1, j1,
+        (1.0 - ai) * (1.0 - aj), (1.0 - ai) * aj, ai * (1.0 - aj), ai * aj,
+        inb_idx,
+    )
+
+
 def _decode_pressure_vars_from_datasets(
     datasets: list,
     latitudes: list[float],
@@ -419,31 +471,14 @@ def _decode_pressure_vars_from_datasets(
             logger.debug("skip dataset: lat/lon coord extract failed", exc_info=True)
             continue
 
-        H, W = lat_arr.size, lon_arr.size
-        if H < 2 or W < 2:
-            continue
-
-        frac_lat, lat_ok = _frac_grid_indices(lat_arr, targets_lat)
-        frac_lon, lon_ok = _frac_grid_indices(lon_arr, targets_lon)
-        in_bounds = lat_ok & lon_ok
-        if not np.any(in_bounds):
-            continue
-
         # Bilinear corner indices + weights — computed once per dataset and
         # reused for every variable in that dataset.
-        fl = frac_lat[in_bounds]
-        fln = frac_lon[in_bounds]
-        i0 = np.clip(np.floor(fl).astype(np.intp), 0, H - 2)
-        j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
-        i1 = i0 + 1
-        j1 = j0 + 1
-        ai = fl - i0
-        aj = fln - j0
-        w00 = (1.0 - ai) * (1.0 - aj)
-        w01 = (1.0 - ai) * aj
-        w10 = ai * (1.0 - aj)
-        w11 = ai * aj
-        inb_idx = np.flatnonzero(in_bounds)
+        bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
+        if bw is None or bw.inb_idx.size == 0:
+            continue
+        i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
+        w00, w01, w10, w11 = bw.w00, bw.w01, bw.w10, bw.w11
+        inb_idx = bw.inb_idx
 
         for var_name, xr_var in ds.data_vars.items():
             var_lower = str(var_name).lower()
@@ -730,12 +765,11 @@ def _decode_icon_eu_single_var(
         level_values: dict[int, list[float | None]] = {}
 
         for ds in datasets:
-            # Bilinear corner indices + weights computed ONCE per dataset, then
-            # every model level gathered in one numpy op — replaces the per-level
-            # xarray `.interp` loop, which was GIL-bound (blocking concurrent
-            # decode threads). Same machinery as
-            # _decode_pressure_vars_from_datasets; verified numerically identical
-            # to the old path (max Δ ~1e-13). (#441 efficiency #2)
+            # Bilinear corner indices + weights computed ONCE per dataset (shared
+            # _bilinear_grid_weights), then every model level gathered in one
+            # numpy op — replaces the per-level xarray `.interp` loop, which was
+            # GIL-bound (blocking concurrent decode threads). Verified
+            # numerically identical to the old path (max Δ ~1e-13). (#441 #2)
             lat_dim = lon_dim = None
             for dim in ds.dims:
                 dim_lower = str(dim).lower()
@@ -752,27 +786,13 @@ def _decode_icon_eu_single_var(
             except Exception:
                 ds.close()
                 continue
-            H, W = lat_arr.size, lon_arr.size
-            if H < 2 or W < 2:
+            bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
+            if bw is None:
                 ds.close()
                 continue
-
-            frac_lat, lat_ok = _frac_grid_indices(lat_arr, targets_lat)
-            frac_lon, lon_ok = _frac_grid_indices(lon_arr, targets_lon)
-            in_bounds = lat_ok & lon_ok
-            inb_idx = np.flatnonzero(in_bounds)
-            fl = frac_lat[in_bounds]
-            fln = frac_lon[in_bounds]
-            i0 = np.clip(np.floor(fl).astype(np.intp), 0, H - 2)
-            j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
-            i1 = i0 + 1
-            j1 = j0 + 1
-            ai = fl - i0
-            aj = fln - j0
-            w00 = (1.0 - ai) * (1.0 - aj)
-            w01 = (1.0 - ai) * aj
-            w10 = ai * (1.0 - aj)
-            w11 = ai * aj
+            i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
+            w00, w01, w10, w11 = bw.w00, bw.w01, bw.w10, bw.w11
+            inb_idx = bw.inb_idx
 
             for var_name, xr_var in ds.data_vars.items():
                 var_level_coord = None
