@@ -60,7 +60,11 @@ class AirportModelCondition(BaseModel):
 
     model: str
     flight_category: FlightCategory
-    ceiling_ft: int | None = None  # lowest BKN/OVC base
+    # Lowest BKN/OVC base, AGL (feet above field elevation) when the airport's
+    # published elevation was available at compute time — matching METAR
+    # ceilings and the AGL flight-category thresholds. Falls back to the legacy
+    # datum-naive value if elevation was unknown. (#441 finding #3)
+    ceiling_ft: int | None = None
     visibility_m: float | None = None  # raw meters (canonical; format by user region)
     visibility_sm: float | None = None  # statute miles (derived; kept for back-compat)
     wind_speed_kt: float | None = None

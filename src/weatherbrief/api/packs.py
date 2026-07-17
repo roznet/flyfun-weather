@@ -2990,6 +2990,12 @@ def _recompute_airport_conditions(
             if adv_path.exists() else None
         )
 
+        def _elevations(icaos: list[str]) -> dict[str, float | None] | None:
+            if not db_path:
+                return None
+            from weatherbrief.airports import get_airport_elevations
+            return get_airport_elevations(icaos, db_path)
+
         if prev_manifest and prev_manifest.airport_conditions:
             prev_dep = prev_manifest.airport_conditions.departure
             prev_arr = prev_manifest.airport_conditions.arrival
@@ -3006,6 +3012,7 @@ def _recompute_airport_conditions(
                 arr_icao=prev_arr.icao,
                 arr_name=prev_arr.name,
                 runway_data=runway_data,
+                airport_elevations=_elevations([prev_dep.icao, prev_arr.icao]),
             )
 
         if flight.waypoints and len(flight.waypoints) >= 2:
@@ -3025,6 +3032,7 @@ def _recompute_airport_conditions(
                 arr_icao=arr_icao,
                 arr_name=arr_icao,
                 runway_data=runway_data,
+                airport_elevations=_elevations([dep_icao, arr_icao]),
             )
     except Exception:
         logger.warning("Airport conditions computation failed in recalculate", exc_info=True)

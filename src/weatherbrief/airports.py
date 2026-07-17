@@ -246,3 +246,25 @@ def get_runway_ends(icao_codes: list[str], db_path: str) -> dict[str, list[Runwa
         result[icao] = ends
 
     return result
+
+
+def get_airport_elevations(icao_codes: list[str], db_path: str) -> dict[str, float | None]:
+    """Get published field elevation (ft AMSL) for given airports.
+
+    Used to convert MSL model/sounding ceilings to AGL for aviation
+    flight-category classification — METAR ceilings are AGL above this
+    published field elevation. (#441 finding #3)
+
+    Returns:
+        Dict mapping ICAO code to elevation in feet AMSL, or None if unknown.
+    """
+    model = _load_airport_model(db_path)
+    result: dict[str, float | None] = {}
+    for icao in icao_codes:
+        airport = model.airports.get(icao)
+        result[icao] = (
+            float(airport.elevation_ft)
+            if airport is not None and airport.elevation_ft is not None
+            else None
+        )
+    return result
