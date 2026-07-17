@@ -123,6 +123,13 @@ final class AppState {
 
     static let productionBaseURL = URL(string: "https://weather.flyfun.aero")!
 
+    /// The canonical share URL for a flight's share code (`/s/{code}`, #446).
+    /// Always production — a shared link must open for the recipient regardless
+    /// of which server the sender's DEBUG build points at.
+    static func shareURL(forShareCode code: String) -> URL {
+        productionBaseURL.appendingPathComponent("s").appendingPathComponent(code)
+    }
+
     #if DEBUG
     @ObservationIgnored
     static var serverEnvironment: ServerEnvironment {

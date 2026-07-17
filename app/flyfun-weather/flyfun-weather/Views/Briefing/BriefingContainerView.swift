@@ -78,6 +78,16 @@ struct BriefingContainerView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
+                        // Owner sharing (#446): a ShareLink to the short /s/{code}
+                        // URL. Only the owner sees it, and only for a non-private
+                        // flight with a minted code (isShareable) — a private link
+                        // would 404 for the recipient, matching the web gate.
+                        if flight.isShareable, let code = flight.shareCode {
+                            ShareLink(item: AppState.shareURL(forShareCode: code)) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                                    .font(.caption)
+                            }
+                        }
                         if isInFlightWindow && appState.userPreferences.preferences.pirepCanPublish {
                             Button {
                                 showingPirepSheet = true

@@ -490,6 +490,14 @@ struct FlightListView: View {
                     Label("Edit Flight", systemImage: "pencil")
                 }
             }
+            // Owner sharing (#446): share the short /s/{code} link. Hidden for
+            // private flights and subscribers (isShareable) — recipients of a
+            // private link would 404, mirroring the web share gate.
+            if flight.isShareable, let code = flight.shareCode {
+                ShareLink(item: AppState.shareURL(forShareCode: code)) {
+                    Label("Share Flight", systemImage: "square.and.arrow.up")
+                }
+            }
             if !viewModel.isOffline && flight.role == .subscriber {
                 Button(role: .destructive) {
                     unsubscribe(flight, viewModel: viewModel)
