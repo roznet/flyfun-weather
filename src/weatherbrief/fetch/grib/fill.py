@@ -709,14 +709,6 @@ def _lerp(a: float | None, b: float | None, frac: float) -> float | None:
     return a + (b - a) * frac
 
 
-def _lerp_circ(a: float | None, b: float | None, frac: float) -> float | None:
-    """Shortest-arc linear interpolation in degrees (0..360)."""
-    if a is None or b is None:
-        return None
-    diff = ((b - a + 540) % 360) - 180
-    return (a + diff * frac) % 360
-
-
 def _wind_uv(speed_kt: float, direction_deg: float) -> tuple[float, float]:
     """Meteorological (speed, from-direction) → (u, v) components.
 

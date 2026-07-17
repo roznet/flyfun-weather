@@ -326,8 +326,10 @@ conservative starting values:
 
 The gate requires at least one observed condensate value inside the band —
 otherwise it cannot distinguish "no condensate" from "no data" and leaves
-the forecast as-is. Convective and boundary bands are instantaneous in GFS
-pgrb2 and not gated.
+the forecast as-is. Convective cover is instantaneous in GFS pgrb2;
+boundary-layer cover is published averaged-only and so is window-midpoint
+aligned like low/mid/high (#441). Neither the convective nor the boundary
+band is gated.
 
 ### Reasoning
 
