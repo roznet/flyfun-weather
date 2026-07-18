@@ -49,6 +49,13 @@ from weatherbrief.models.verification import (
 
 logger = logging.getLogger(__name__)
 
+# FORCE INDEX (#448): the activity COUNT(DISTINCT) queries name this index
+# explicitly (see get_activity_summary for why). FORCE INDEX raises a hard SQL
+# error on MySQL if the index is missing — it is declared on
+# VerificationScoreRow.__table_args__ and created by migration 038; keep the
+# three in sync.
+_SCORES_SOURCE_TIME_HINT = "FORCE INDEX (ix_verif_scores_source_time)"
+
 _DAYS_OUT_COLS = (0, 1, 2, 3)
 # Lead times a *miss* is worth surfacing at. An observation is scored once per
 # lead time, so without this scope one storm returns as one row per days_out —
@@ -129,21 +136,13 @@ def get_activity_summary(
     obs_count = db.execute(
         select(func.count(func.distinct(VerificationScoreRow.observation_id)))
         .select_from(VerificationScoreRow)
-        .with_hint(
-            VerificationScoreRow,
-            "FORCE INDEX (ix_verif_scores_source_time)",
-            dialect_name="mysql",
-        )
+        .with_hint(VerificationScoreRow, _SCORES_SOURCE_TIME_HINT, dialect_name="mysql")
         .where(*common_where)
     ).scalar() or 0
     airport_count = db.execute(
         select(func.count(func.distinct(VerificationScoreRow.icao)))
         .select_from(VerificationScoreRow)
-        .with_hint(
-            VerificationScoreRow,
-            "FORCE INDEX (ix_verif_scores_source_time)",
-            dialect_name="mysql",
-        )
+        .with_hint(VerificationScoreRow, _SCORES_SOURCE_TIME_HINT, dialect_name="mysql")
         .where(*common_where)
     ).scalar() or 0
 

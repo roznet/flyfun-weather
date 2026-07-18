@@ -567,6 +567,11 @@ class VerificationScoreRow(Base):
         Index("ix_verif_scores_icao", "icao"),
         Index("ix_verif_scores_lead", "lead_hours"),
         Index("ix_verif_scores_source_model_days", "source", "model", "days_out"),
+        # Created by migration 038; load-bearing since #448 — the activity
+        # COUNT(DISTINCT) queries FORCE INDEX it by name (hard SQL error on
+        # MySQL if dropped), so the model must declare it. See
+        # verification_stats._SCORES_SOURCE_TIME_HINT.
+        Index("ix_verif_scores_source_time", "source", "observation_time"),
         Index(
             "ix_verif_scores_source_days_time",
             "source", "days_out", "observation_time",
