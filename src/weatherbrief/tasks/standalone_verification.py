@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import requests
-from sqlalchemy import select, tuple_
+from sqlalchemy import insert, select, tuple_
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -28,11 +28,9 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
-from weatherbrief.analysis.sounding.edr import EdrAccumulator
 from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
 from weatherbrief.process_rss import current_rss_mb, log_memory
 from weatherbrief.tasks.airport_watchlist import WatchlistAirport
-from weatherbrief.tasks.edr_calibration import flush_accumulator
 from weatherbrief.tasks.forecast_grid import (
     FINE_SAMPLE_HOURS,
     MAP_FORECAST_DAYS,
@@ -41,6 +39,7 @@ from weatherbrief.tasks.forecast_grid import (
 )
 
 if TYPE_CHECKING:
+    from weatherbrief.analysis.sounding.edr import EdrAccumulator
     from weatherbrief.fetch.grib import DecodePriority
 
 logger = logging.getLogger(__name__)
@@ -399,6 +398,10 @@ def _fetch_forecasts_for_model(
             model, chunk_num, total_chunks, len(chunk_list),
             time.monotonic() - chunk_started,
         )
+        # Time the post-fetch loop separately: sounding analysis is the
+        # dominant cycle cost (85–92% of each model leg, #448) and was
+        # previously log-silent.
+        analysis_started = time.monotonic()
         chunk_results: list[dict] = []
         init_date = init_time.date()
         for airport, wpf in zip(chunk_list, forecasts):
@@ -451,6 +454,11 @@ def _fetch_forecasts_for_model(
                 _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
 
                 chunk_results.append(snap)
+        logger.info(
+            "Model %s chunk %d/%d: analyzed %d snapshots in %.1fs",
+            model, chunk_num, total_chunks, len(chunk_results),
+            time.monotonic() - analysis_started,
+        )
         return chunk_results, client._thread_call_count()
 
     all_results: list[dict] = []
@@ -789,6 +797,10 @@ def fetch_ecmwf_grib_snapshots(
     snapshots: list[dict] = []
     max_step = max(files_by_step.keys())
     delivered_steps = sorted(files_by_step)
+    # Decode is logged per file by the worker; the per-step airport loop
+    # (sounding analysis, ~92% of this leg per #448) was log-silent — track it.
+    analysis_s = 0.0
+    steps_processed = 0
 
     def _previous_delivered_step(step_h: int) -> int | None:
         """Nearest delivered step before ``step_h``, for the accumulation diff.
@@ -837,6 +849,7 @@ def fetch_ecmwf_grib_snapshots(
                     )
                     pl_data = None
 
+            t_step = time.monotonic()
             for i, airport in enumerate(airports):
                 cur_raw = cur_a1[i] if i < len(cur_a1) else {}
                 snap_fields = build_ecmwf_surface_snapshot(cur_raw)
@@ -911,12 +924,19 @@ def fetch_ecmwf_grib_snapshots(
 
                 snapshots.append(snap)
 
+            analysis_s += time.monotonic() - t_step
+            steps_processed += 1
+
             # Drop the previous-step cache once we've moved past it; the
             # next iteration only re-reads (step_h, step_h-1).
             stale_keys = [k for k in a1_cache if k < step_h - 1]
             for k in stale_keys:
                 a1_cache.pop(k, None)
 
+    logger.info(
+        "ECMWF GRIB leg: %d steps, %d snapshots, sounding analysis %.0fs",
+        steps_processed, len(snapshots), analysis_s,
+    )
     return snapshots
 
 
@@ -969,8 +989,12 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
         for r in rows:
             existing_keys.add(_normalize_key(*r))
 
-    stored = 0
+    # Bulk executemany insert (#448): building 15–20K ORM objects and pushing
+    # them through the unit-of-work cost ~1–2 min/cycle. The in-memory key
+    # dedup above already guarantees uniqueness (uq_afs_key backs it up), so
+    # plain dict rows through a Core insert are equivalent and far cheaper.
     now = datetime.now(timezone.utc)
+    rows: list[dict] = []
     for snap in snapshots:
         key = _normalize_key(
             snap["icao"], snap["model"],
@@ -978,42 +1002,41 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
         )
         if key in existing_keys:
             continue
-
-        row = AirportForecastSnapshotRow(
-            icao=snap["icao"],
-            model=snap["model"],
-            model_init_time=snap["model_init_time"],
-            forecast_hour=snap["forecast_hour"],
-            fetched_at=now,
-            temperature_2m_c=snap.get("temperature_2m_c"),
-            dewpoint_2m_c=snap.get("dewpoint_2m_c"),
-            visibility_m=snap.get("visibility_m"),
-            wind_speed_10m_kt=snap.get("wind_speed_10m_kt"),
-            wind_direction_10m_deg=snap.get("wind_direction_10m_deg"),
-            wind_gusts_10m_kt=snap.get("wind_gusts_10m_kt"),
-            precipitation_mm=snap.get("precipitation_mm"),
-            snowfall_cm=snap.get("snowfall_cm"),
-            precip_period_h=snap.get("precip_period_h"),
-            cape_jkg=snap.get("cape_jkg"),
-            cloud_cover_pct=snap.get("cloud_cover_pct"),
-            cloud_cover_low_pct=snap.get("cloud_cover_low_pct"),
-            nwp_ceiling_ft=snap.get("nwp_ceiling_ft"),
-            cloud_base_ft=snap.get("cloud_base_ft"),
-            lcl_ft=snap.get("lcl_ft"),
-            sounding_ceiling_ft=snap.get("sounding_ceiling_ft"),
-            sounding_cloud_base_ft=snap.get("sounding_cloud_base_ft"),
-            freezing_level_ft=snap.get("freezing_level_ft"),
-            sounding_cape_jkg=snap.get("sounding_cape_jkg"),
-            sounding_cin_jkg=snap.get("sounding_cin_jkg"),
-            sounding_lifted_index=snap.get("sounding_lifted_index"),
-            sounding_convective_risk=snap.get("sounding_convective_risk"),
-        )
-        db.add(row)
         existing_keys.add(key)  # prevent duplicates within same batch
-        stored += 1
 
-    db.flush()
-    return stored
+        rows.append({
+            "icao": snap["icao"],
+            "model": snap["model"],
+            "model_init_time": snap["model_init_time"],
+            "forecast_hour": snap["forecast_hour"],
+            "fetched_at": now,
+            "temperature_2m_c": snap.get("temperature_2m_c"),
+            "dewpoint_2m_c": snap.get("dewpoint_2m_c"),
+            "visibility_m": snap.get("visibility_m"),
+            "wind_speed_10m_kt": snap.get("wind_speed_10m_kt"),
+            "wind_direction_10m_deg": snap.get("wind_direction_10m_deg"),
+            "wind_gusts_10m_kt": snap.get("wind_gusts_10m_kt"),
+            "precipitation_mm": snap.get("precipitation_mm"),
+            "snowfall_cm": snap.get("snowfall_cm"),
+            "precip_period_h": snap.get("precip_period_h"),
+            "cape_jkg": snap.get("cape_jkg"),
+            "cloud_cover_pct": snap.get("cloud_cover_pct"),
+            "cloud_cover_low_pct": snap.get("cloud_cover_low_pct"),
+            "nwp_ceiling_ft": snap.get("nwp_ceiling_ft"),
+            "cloud_base_ft": snap.get("cloud_base_ft"),
+            "lcl_ft": snap.get("lcl_ft"),
+            "sounding_ceiling_ft": snap.get("sounding_ceiling_ft"),
+            "sounding_cloud_base_ft": snap.get("sounding_cloud_base_ft"),
+            "freezing_level_ft": snap.get("freezing_level_ft"),
+            "sounding_cape_jkg": snap.get("sounding_cape_jkg"),
+            "sounding_cin_jkg": snap.get("sounding_cin_jkg"),
+            "sounding_lifted_index": snap.get("sounding_lifted_index"),
+            "sounding_convective_risk": snap.get("sounding_convective_risk"),
+        })
+
+    for i in range(0, len(rows), 1000):
+        db.execute(insert(AirportForecastSnapshotRow), rows[i : i + 1000])
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1328,12 +1351,13 @@ def run_standalone_cycle(
         _rss_log(f"start ({cycle_type})")
 
         if fetch_forecasts:
-            # EDR calibration accumulator (issue #221). PARKED / INERT as of
-            # 2026-06-10: accumulates nothing because the standalone path uses
-            # `analyze_sounding_lite`, which skips Richardson computation. See
-            # the note at `observe_richardson_levels` call site for details.
-            # Kept wired (fail-silent, ~zero cost) pending a subsampling design.
-            edr_acc = EdrAccumulator()
+            # EDR calibration accumulator (issue #221) no longer instantiated
+            # (#448): it iterated every derived level of ~56K soundings per
+            # cycle while collecting nothing — `analyze_sounding_lite` never
+            # computes Richardson, so every level was dropped on arrival. The
+            # `edr_acc` plumbing below is retained for a future subsampled
+            # calibration design; passing None short-circuits it entirely.
+            edr_acc = None
 
             # Phase A+B: Fetch and store forecasts per model. One model at a
             # time to bound memory — each model's snapshots are stored and
@@ -1419,9 +1443,6 @@ def run_standalone_cycle(
                 models_fetched += 1
                 _rss_log(f"after {model}")
 
-            # Single batched, additive upsert of this run's EDR ln-moments.
-            # Fail-silent inside flush_accumulator — never aborts the cycle.
-            flush_accumulator(db, edr_acc)
         else:
             logger.info("Skipping forecast fetch (score-only cycle)")
 
@@ -1599,38 +1620,51 @@ def run_post_cycle_tasks(airports_db_path: str, cycle_type: str) -> None:
     behaviour identical. Each step is independently fail-safe — a rollup
     failure must not block the cache rebuild, and neither failure marks
     the cycle itself as failed.
+
+    Cycle-aware (#448): each cycle type only rebuilds what it can have
+    changed. Forecast cycles write snapshots but create no scores, so the
+    rollup and the stats/leaderboard caches are input-unchanged; light
+    cycles score but don't touch snapshots, so the forecast_map cache is
+    input-unchanged. The legacy combined ``full`` cycle rebuilds everything.
     """
     from flyfun_common.db import SessionLocal
+
+    include_score_stats = cycle_type != "forecast"
+    include_forecast_map = cycle_type != "light"
 
     # Roll up freshly-scored days into verification_daily_stats BEFORE the
     # cache rebuild so the cache reflects today's scores. Idempotent — re-
     # rolls "yesterday" once per cycle, plus any older missing days. Cheap
     # (~12K rows/day, pure SQL).
-    try:
-        from weatherbrief.tasks.verification_daily_rollup import (
-            rollup_today_and_pending,
+    if include_score_stats:
+        try:
+            from weatherbrief.tasks.verification_daily_rollup import (
+                rollup_today_and_pending,
+            )
+
+            rollup_db = SessionLocal()
+            try:
+                n_rows = rollup_today_and_pending(rollup_db)
+                rollup_db.commit()
+                if n_rows:
+                    logger.info(
+                        "Standalone %s cycle: %d daily-stats rows rolled up",
+                        cycle_type, n_rows,
+                    )
+            except Exception:
+                rollup_db.rollback()
+                raise
+            finally:
+                rollup_db.close()
+        except Exception:
+            logger.error("verification_daily_stats rollup failed", exc_info=True)
+    else:
+        logger.info(
+            "Standalone %s cycle: skipping rollup + stats/leaderboard cache "
+            "(cycle creates no scores)",
+            cycle_type,
         )
 
-        rollup_db = SessionLocal()
-        try:
-            n_rows = rollup_today_and_pending(rollup_db)
-            rollup_db.commit()
-            if n_rows:
-                logger.info(
-                    "Standalone %s cycle: %d daily-stats rows rolled up",
-                    cycle_type, n_rows,
-                )
-        except Exception:
-            rollup_db.rollback()
-            raise
-        finally:
-            rollup_db.close()
-    except Exception:
-        logger.error("verification_daily_stats rollup failed", exc_info=True)
-
-    # Light (score-only) cycles don't touch forecast snapshots, so the
-    # forecast_map cache would be regenerated to identical content — skip it
-    # to halve the rebuild cost on the hourly light cycles.
     try:
         from weatherbrief.tasks.cache_builder import rebuild_all
 
@@ -1638,7 +1672,8 @@ def run_post_cycle_tasks(airports_db_path: str, cycle_type: str) -> None:
         try:
             cache_result = rebuild_all(
                 cache_db, airports_db_path,
-                include_forecast_map=(cycle_type != "light"),
+                include_forecast_map=include_forecast_map,
+                include_score_stats=include_score_stats,
             )
             logger.info(
                 "Standalone %s cycle: cache rebuilt (%dms)",

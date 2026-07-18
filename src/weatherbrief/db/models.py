@@ -630,6 +630,10 @@ class TafVerificationScoreRow(Base):
         ),
         Index("ix_taf_verif_obs", "observation_id"),
         Index("ix_taf_verif_icao", "icao"),
+        # TAF pseudo-model stats are aggregated at query time from this table
+        # (no rollup — key shape differs); without a (source, observation_time)
+        # index every digest/dashboard TAF aggregate was a full scan (#448).
+        Index("ix_taf_verif_source_time", "source", "observation_time"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -854,6 +858,11 @@ class VerificationDailyStatsRow(Base):
         ),
         Index("ix_vds_date_model", "date", "source", "model", "days_out"),
         Index("ix_vds_icao_model", "icao", "source", "model", "days_out"),
+        # The bias-leaderboard query filters (source, model, days_out) as
+        # constants with a date *range*. The date-leading index only works for
+        # narrow ranges; at 30d/90d MySQL fell back to full scans (~9.5 s per
+        # key × 18 keys per rebuild, #448). Equality columns first, range last.
+        Index("ix_vds_source_model_days_date", "source", "model", "days_out", "date"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

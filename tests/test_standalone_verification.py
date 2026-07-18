@@ -797,3 +797,44 @@ class TestEnrichWithSounding:
 
         assert snap["temperature_2m_c"] == 15.0  # preserved
         assert "sounding_ceiling_ft" not in snap  # not added
+
+
+class TestRunPostCycleTasks:
+    """Cycle-aware post-cycle work (#448): rebuild only what the cycle changed."""
+
+    def _run(self, cycle_type):
+        from weatherbrief.tasks.standalone_verification import run_post_cycle_tasks
+
+        with patch("flyfun_common.db.SessionLocal") as sl, \
+             patch(
+                 "weatherbrief.tasks.verification_daily_rollup.rollup_today_and_pending",
+                 return_value=3,
+             ) as rollup, \
+             patch(
+                 "weatherbrief.tasks.cache_builder.rebuild_all",
+                 return_value={"duration_ms": 1},
+             ) as rebuild:
+            sl.return_value = MagicMock()
+            run_post_cycle_tasks("/fake/db", cycle_type)
+        return rollup, rebuild
+
+    def test_forecast_cycle_skips_rollup_and_score_stats(self):
+        rollup, rebuild = self._run("forecast")
+        assert not rollup.called, "forecast cycles create no scores — no rollup"
+        kwargs = rebuild.call_args.kwargs
+        assert kwargs["include_score_stats"] is False
+        assert kwargs["include_forecast_map"] is True
+
+    def test_light_cycle_skips_forecast_map(self):
+        rollup, rebuild = self._run("light")
+        assert rollup.called
+        kwargs = rebuild.call_args.kwargs
+        assert kwargs["include_score_stats"] is True
+        assert kwargs["include_forecast_map"] is False
+
+    def test_full_cycle_rebuilds_everything(self):
+        rollup, rebuild = self._run("full")
+        assert rollup.called
+        kwargs = rebuild.call_args.kwargs
+        assert kwargs["include_score_stats"] is True
+        assert kwargs["include_forecast_map"] is True

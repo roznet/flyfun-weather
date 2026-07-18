@@ -264,3 +264,30 @@ class TestRebuildAllForecastMapSkip:
 
         assert forecast.called
         assert result["forecast_map"] == 20
+
+    def test_skip_score_stats_rebuilds_only_forecast_map(
+        self, db_session, mocker, tmp_path,
+    ):
+        """Forecast cycles create no scores → stats/leaderboard skipped (#448)."""
+        stats = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_stats_cache",
+            return_value=6,
+        )
+        leaderboard = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_bias_leaderboard_cache",
+            return_value=27,
+        )
+        forecast = mocker.patch(
+            "weatherbrief.tasks.cache_builder.rebuild_forecast_map_cache",
+            return_value=20,
+        )
+
+        result = rebuild_all(db_session, str(tmp_path / "nav.db"),
+                             include_score_stats=False)
+
+        assert not stats.called, "stats must be skipped on forecast cycles"
+        assert not leaderboard.called, "leaderboard must be skipped on forecast cycles"
+        assert forecast.called
+        assert result["stats"] == 0
+        assert result["bias_leaderboard"] == 0
+        assert result["forecast_map"] == 20

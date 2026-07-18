@@ -183,6 +183,7 @@ def rebuild_stats_cache(db: Session) -> int:
     for source in _SOURCES:
         source_max = get_source_max_time(db, source)
         for period_label, hours in _PERIODS.items():
+            t_key = time.monotonic()
             since = now - timedelta(hours=hours)
             data = get_digest_data(
                 db, since, now,
@@ -193,6 +194,12 @@ def rebuild_stats_cache(db: Session) -> int:
             cache_key = f"stats:{source}:{period_label}"
             _upsert(db, cache_key, data.model_dump(mode="json"), source_max)
             count += 1
+            # Per-key timing: the 2026-07-17 cycles spent ~19 min EACH on the
+            # standalone 7d/30d keys with zero log output — never again.
+            logger.info(
+                "Cache rebuild: %s in %dms",
+                cache_key, int((time.monotonic() - t_key) * 1000),
+            )
 
     db.flush()
     return count
@@ -217,6 +224,7 @@ def rebuild_bias_leaderboard_cache(db: Session) -> int:
     count = 0
 
     for period_label, hours in _LEADERBOARD_PERIODS.items():
+        t_period = time.monotonic()
         since = now - timedelta(hours=hours)
         for model in _LEADERBOARD_MODELS:
             for days_out in _LEADERBOARD_DAYS_OUT:
@@ -229,6 +237,10 @@ def rebuild_bias_leaderboard_cache(db: Session) -> int:
                 cache_key = f"bias_leaderboard:{model}:{days_out}:{period_label}"
                 _upsert(db, cache_key, payload, source_max)
                 count += 1
+        logger.info(
+            "Cache rebuild: bias_leaderboard:*:%s (9 keys) in %dms",
+            period_label, int((time.monotonic() - t_period) * 1000),
+        )
 
     db.flush()
     return count
@@ -285,6 +297,7 @@ def rebuild_all(
     airports_db_path: str,
     *,
     include_forecast_map: bool = True,
+    include_score_stats: bool = True,
 ) -> dict:
     """Rebuild all caches. Called after standalone verification cycles.
 
@@ -292,34 +305,44 @@ def rebuild_all(
     light (score-only) cycles where snapshots haven't changed and the
     forecast_map cache would be regenerated to identical content.
 
-    Returns a summary dict with counts.
+    ``include_score_stats=False`` skips the stats + bias_leaderboard rebuilds —
+    used by forecast (fetch-only) cycles, which create no new scores, so those
+    caches' inputs are unchanged (and ``is_stale`` compares against
+    MAX(observation_time), which a forecast cycle doesn't move).
+
+    Returns a summary dict with counts and per-step timings.
     """
     t0 = time.monotonic()
 
-    stats_count = rebuild_stats_cache(db)
-    leaderboard_count = rebuild_bias_leaderboard_cache(db)
+    stats_count = leaderboard_count = forecast_map_count = 0
+    stats_ms = leaderboard_ms = forecast_map_ms = 0
+    if include_score_stats:
+        t = time.monotonic()
+        stats_count = rebuild_stats_cache(db)
+        stats_ms = int((time.monotonic() - t) * 1000)
+        t = time.monotonic()
+        leaderboard_count = rebuild_bias_leaderboard_cache(db)
+        leaderboard_ms = int((time.monotonic() - t) * 1000)
     if include_forecast_map:
+        t = time.monotonic()
         forecast_map_count = rebuild_forecast_map_cache(db, airports_db_path)
-    else:
-        forecast_map_count = 0
+        forecast_map_ms = int((time.monotonic() - t) * 1000)
 
     db.commit()
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    if include_forecast_map:
-        logger.info(
-            "Cache rebuild: %d stats + %d bias_leaderboard + %d forecast_map entries (%dms)",
-            stats_count, leaderboard_count, forecast_map_count, duration_ms,
-        )
-    else:
-        logger.info(
-            "Cache rebuild: %d stats + %d bias_leaderboard entries, "
-            "forecast_map skipped (%dms)",
-            stats_count, leaderboard_count, duration_ms,
-        )
+    logger.info(
+        "Cache rebuild: %d stats (%dms) + %d bias_leaderboard (%dms) + "
+        "%d forecast_map (%dms) entries (%dms total)",
+        stats_count, stats_ms, leaderboard_count, leaderboard_ms,
+        forecast_map_count, forecast_map_ms, duration_ms,
+    )
     return {
         "stats": stats_count,
         "bias_leaderboard": leaderboard_count,
         "forecast_map": forecast_map_count,
         "duration_ms": duration_ms,
+        "stats_ms": stats_ms,
+        "leaderboard_ms": leaderboard_ms,
+        "forecast_map_ms": forecast_map_ms,
     }
