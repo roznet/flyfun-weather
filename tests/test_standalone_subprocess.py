@@ -342,8 +342,10 @@ def _run_cli_standalone(monkeypatch, args):
 
     calls: dict = {}
 
-    def fake_cycle(watchlist, db, *, fetch_forecasts, score_observations):
+    def fake_cycle(watchlist, db, *, fetch_forecasts, score_observations,
+                   pool_soundings=False):
         calls["flags"] = (fetch_forecasts, score_observations)
+        calls["pool_soundings"] = pool_soundings
         return {
             "cycle_type": "forecast" if not score_observations else "light",
             "models_fetched": 0, "snapshots_stored": 0,
@@ -374,6 +376,9 @@ def test_cli_forecast_only_maps_to_fetch_no_score(monkeypatch):
     )
     calls = _run_cli_standalone(monkeypatch, args)
     assert calls["flags"] == (True, False)
+    # The CLI owns a disposable process → pooled soundings on (#450 review);
+    # the scheduler's in-process fallback keeps the default False.
+    assert calls["pool_soundings"] is True
     calls["post"].assert_called_once_with("/tmp/airports.db", "forecast")
 
 

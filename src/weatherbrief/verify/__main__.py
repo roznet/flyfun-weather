@@ -348,11 +348,17 @@ def cmd_standalone(args):
         run_standalone_cycle,
     )
 
+    from weatherbrief.fetch.grib import shutdown_decode_pool
+
     try:
         result = run_standalone_cycle(
             watchlist, airports_db,
             fetch_forecasts=not args.light,
             score_observations=not args.forecast_only,
+            # Pool the ~56K sounding analyses (#448 PR B): the CLI owns a
+            # disposable process, so its pool can't contend with the web
+            # app's. The scheduler's in-process fallback keeps this False.
+            pool_soundings=True,
         )
         print(f"\nStandalone verification cycle complete:")
         print(f"  Models fetched: {result.get('models_fetched', 0)}")
@@ -360,6 +366,13 @@ def cmd_standalone(args):
         print(f"  Observations stored: {result.get('observations_stored', 0)}")
         print(f"  Scores created: {result.get('scores_created', 0)}")
         print(f"  Duration: {result.get('duration_ms', 0)}ms")
+
+        # Drop the pool BEFORE post-cycle tasks: the cache rebuild never
+        # dispatches, so keeping 2+ workers (MetPy/cfgrib imports + accrued
+        # RSS, recycling disabled) resident through it would raise peak
+        # memory exactly while the rebuild allocates. Graceful here — the
+        # workers are idle; the finally below stays as the failure-path net.
+        shutdown_decode_pool(wait=True, drain_dispatcher=True)
 
         if args.with_rollup:
             t_post = time.monotonic()
@@ -376,11 +389,15 @@ def cmd_standalone(args):
         # exception would otherwise reach interpreter exit, where
         # concurrent.futures' atexit handler does a *blocking* join of the
         # workers, i.e. exactly the wedged-child hang this teardown exists
-        # to avoid. wait=False leaves any hung worker for the OS to reap.
+        # to avoid. force=True actually KILLs wedged workers (wait=False
+        # alone only abandons them, and the atexit join would still hang on
+        # a worker stuck in native code) — including orphans from a pool the
+        # dispatcher's timeout recovery replaced mid-cycle. The child is
+        # disposable: any surviving worker is useless by definition.
+        # Idempotent — a no-op on the happy path, where the graceful
+        # shutdown above already ran.
         try:
-            from weatherbrief.fetch.grib import shutdown_decode_pool
-
-            shutdown_decode_pool(wait=False, drain_dispatcher=True)
+            shutdown_decode_pool(wait=False, drain_dispatcher=True, force=True)
         except Exception:
             pass
 

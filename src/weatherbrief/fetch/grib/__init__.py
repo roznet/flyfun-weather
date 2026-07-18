@@ -256,6 +256,15 @@ _DECODE_DIAG_LOCK = threading.Lock()
 # pool — the missing signal in the workers=[] hang pattern observed in prod.
 _DECODE_WORKER_REGISTRY: dict[int, multiprocessing.Process] = {}
 
+# Every worker Process ever observed in this interpreter — unlike
+# _DECODE_WORKER_REGISTRY it is NEVER cleared on pool rebuild. This is what
+# lets a force teardown (#448 PR B) reach workers orphaned by an earlier pool
+# replacement: dispatcher timeout recovery abandons a wedged worker and lazily
+# builds a new pool, so the current pool's ``_processes`` no longer knows the
+# orphan. Bounded by workers-per-pool × pool rebuilds in one process lifetime
+# (a handful per day in the web app; 1–2 pools in a cycle child).
+_ALL_DECODE_WORKERS: dict[int, multiprocessing.Process] = {}
+
 
 def _diag_reset_pool_counters() -> None:
     global _DECODE_POOL_INIT_TIME, _DECODE_TASKS_DISPATCHED
@@ -282,6 +291,7 @@ def _diag_register_workers(pool: ProcessPoolExecutor | None) -> None:
     with _DECODE_DIAG_LOCK:
         for pid, proc in procs.items():
             _DECODE_WORKER_REGISTRY.setdefault(pid, proc)
+            _ALL_DECODE_WORKERS.setdefault(pid, proc)
 
 
 def _diag_record_dispatch(n: int = 1) -> int:
@@ -928,7 +938,50 @@ def _get_decode_pool() -> ProcessPoolExecutor | None:
     return _DECODE_POOL
 
 
-def shutdown_decode_pool(*, wait: bool = True, drain_dispatcher: bool = False) -> None:
+def _force_kill_workers(pool: ProcessPoolExecutor | None) -> int:
+    """TERM → join(2 s) → KILL every known decode worker; return count signalled.
+
+    Covers the current pool's workers AND orphans from replaced pools (via
+    ``_ALL_DECODE_WORKERS``). SIGTERM is a courtesy to healthy collateral
+    workers; a worker wedged in cfgrib/ECCODES native code never runs Python
+    signal handlers, so the SIGKILL rung is the one that actually ends it.
+    (Python 3.14 adds public ``ProcessPoolExecutor.kill_workers()``, but it
+    only reaches the current pool — the orphan case still needs the
+    accumulated registry, so we keep one manual path for all versions.)
+    """
+    handles: dict[int, multiprocessing.Process] = {}
+    if pool is not None:
+        try:
+            handles.update(dict(getattr(pool, "_processes", {}) or {}))
+        except Exception:
+            pass
+    with _DECODE_DIAG_LOCK:
+        handles.update(_ALL_DECODE_WORKERS)
+
+    alive = [p for p in handles.values() if p.is_alive()]
+    for p in alive:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    deadline = _time_mod.monotonic() + 2.0
+    for p in alive:
+        try:
+            p.join(max(0.0, deadline - _time_mod.monotonic()))
+        except Exception:
+            pass
+    for p in alive:
+        if p.is_alive():
+            try:
+                p.kill()
+            except Exception:
+                pass
+    return len(alive)
+
+
+def shutdown_decode_pool(
+    *, wait: bool = True, drain_dispatcher: bool = False, force: bool = False,
+) -> None:
     """Shut down the decode pool. Safe to call repeatedly; idempotent.
 
     ``wait=False`` is for the hung-worker recovery path: a worker stuck
@@ -944,6 +997,16 @@ def shutdown_decode_pool(*, wait: bool = True, drain_dispatcher: bool = False) -
     path (``_handle_fault``) reuses this teardown and must **not** touch the
     dispatcher's durable pending heap — that heap is what lets interrupted work
     be rescheduled on the rebuilt pool.
+
+    ``force=True`` (#448 PR B) additionally TERM→KILLs every known worker —
+    current pool AND orphans from earlier pool replacements — before the
+    executor shutdown. Without it, ``wait=False`` merely *abandons* a wedged
+    worker: at interpreter exit, concurrent.futures' atexit hook joins the
+    executor management thread, which never finishes while a worker lives in
+    native code — hanging the process. Used by the disposable standalone
+    child's exit path, where any surviving worker is useless by definition.
+    The web app's fault-recovery path deliberately does NOT force (see the
+    bounded-leak trade-off above; revisiting that is tracked separately).
     """
     if drain_dispatcher:
         _drain_dispatcher_for_shutdown()
@@ -951,8 +1014,12 @@ def shutdown_decode_pool(*, wait: bool = True, drain_dispatcher: bool = False) -
     with _DECODE_POOL_LOCK:
         pool = _DECODE_POOL
         _DECODE_POOL = None
+    if force:
+        n = _force_kill_workers(pool)
+        if n:
+            logger.info("GRIB decode pool force-terminated %d worker(s)", n)
     if pool is not None:
-        pool.shutdown(wait=wait, cancel_futures=not wait)
+        pool.shutdown(wait=wait and not force, cancel_futures=force or not wait)
         logger.info(
             "GRIB decode pool shut down (wait=%s, %s)",
             wait, _diag_pool_summary(pool),

@@ -218,6 +218,11 @@ _LCL_CONSTANT_FT = 400  # 400 * (T - Td) approximation for LCL in feet
 # ~100 profiles (~5 s of MetPy work per job on the droplet) while keeping
 # enough jobs in flight to feed every pool worker.
 _SOUNDING_BATCH_SIZE = 100
+# Flush pending payloads to the pool once this many accumulate, instead of
+# collecting a whole chunk (~3K profiles for a 100-airport GFS chunk) — the
+# same bounded-accumulation rationale as the ECMWF per-step merge, plus a
+# pipelining win: workers start analysing while the chunk is still parsing.
+_SOUNDING_FLUSH_THRESHOLD = _SOUNDING_BATCH_SIZE * 5
 
 
 def _pooled_soundings_active(pool_soundings: bool) -> bool:
@@ -547,6 +552,20 @@ def _fetch_forecasts_for_model(
                     _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
 
                 chunk_results.append(snap)
+
+                # Bounded accumulation + pipelining: flush to the pool once
+                # enough payloads pile up (after the append — the last
+                # pending index refers to the snap just appended) instead of
+                # collecting the whole ~3K-profile chunk. Mirrors the ECMWF
+                # per-step merge rationale.
+                if len(pending_soundings) >= _SOUNDING_FLUSH_THRESHOLD:
+                    from weatherbrief.fetch.grib import DecodePriority
+
+                    _analyze_soundings_pooled(
+                        pending_soundings, chunk_results,
+                        priority=DecodePriority.BACKGROUND,
+                    )
+                    pending_soundings.clear()
         if pending_soundings:
             from weatherbrief.fetch.grib import DecodePriority
 
@@ -1369,6 +1388,7 @@ def run_standalone_cycle(
     *,
     fetch_forecasts: bool = True,
     score_observations: bool = True,
+    pool_soundings: bool = False,
 ) -> dict:
     """Run one standalone cycle.
 
@@ -1387,6 +1407,14 @@ def run_standalone_cycle(
 
     Note: METAR fetch is owned by :func:`run_metar_ingest_cycle`, which fires
     every 30 min on its own loop. Scoring cycles only read from DB.
+
+    ``pool_soundings`` opts sounding analysis into the decode process pool
+    (#448 PR B). Only the standalone CLI passes ``True`` — its process owns
+    a disposable pool. The scheduler's in-process fallback
+    (``STANDALONE_SUBPROCESS=0``) keeps the default ``False``: it runs inside
+    the uvicorn process, where pooling would stream ~560 BACKGROUND batch
+    jobs into the web app's interactive decode pool for the whole fetch
+    phase — far beyond the accepted handful of decode dispatches.
 
     Returns a summary dict with counts and timing.
     """
@@ -1490,7 +1518,7 @@ def run_standalone_cycle(
                         # interactive briefing. (The cycle ContextVar also
                         # resolves to BACKGROUND; explicit here for clarity.)
                         priority=DecodePriority.BACKGROUND,
-                        pool_soundings=True,
+                        pool_soundings=pool_soundings,
                     )
                     api_calls = 0
                     logger.info(
@@ -1503,7 +1531,7 @@ def run_standalone_cycle(
                     snapshots, api_calls = _fetch_forecasts_for_model(
                         model, init_time, airports, session, edr_acc=edr_acc,
                         days=map_days,
-                        pool_soundings=True,
+                        pool_soundings=pool_soundings,
                     )
                     total_api_calls += api_calls
                     logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
