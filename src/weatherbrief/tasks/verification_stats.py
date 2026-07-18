@@ -119,12 +119,31 @@ def get_activity_summary(
     # Two COUNT(DISTINCT) calls run as two separate queries (PR #150) so
     # MySQL can plan each with its own index instead of falling into a
     # tmp-table dedup.
+    #
+    # FORCE INDEX (#448): left to itself, MySQL picks
+    # ix_verif_scores_source_model_days with ref=const on `source` alone and
+    # scans every standalone row ever (3.8M at time of fix) — the time window
+    # never enters the plan, so 7d and 30d both took ~19 min while 24h (which
+    # got the range plan) took 2 s. Forcing the (source, observation_time)
+    # range index returns in ~6 s on the same data. SQLite ignores the hint.
     obs_count = db.execute(
         select(func.count(func.distinct(VerificationScoreRow.observation_id)))
+        .select_from(VerificationScoreRow)
+        .with_hint(
+            VerificationScoreRow,
+            "FORCE INDEX (ix_verif_scores_source_time)",
+            dialect_name="mysql",
+        )
         .where(*common_where)
     ).scalar() or 0
     airport_count = db.execute(
         select(func.count(func.distinct(VerificationScoreRow.icao)))
+        .select_from(VerificationScoreRow)
+        .with_hint(
+            VerificationScoreRow,
+            "FORCE INDEX (ix_verif_scores_source_time)",
+            dialect_name="mysql",
+        )
         .where(*common_where)
     ).scalar() or 0
 
@@ -625,17 +644,40 @@ def get_digest_data(
     icao_filter: list[str] | None = None,
 ) -> VerificationDigestData:
     """Build complete digest payload for email or web dashboard."""
-    activity = get_activity_summary(db, since, until, source, icao_filter)
-    category_today = get_category_accuracy(db, since, until, source, icao_filter)
-    notable = get_notable_misses(db, since, until, source, icao_filter)
-    bias = get_category_bias_stats(db, since, until, source, icao_filter)
-    wind = get_wind_advisory_accuracy(db, since, until, source, icao_filter)
-    missed = get_missed_warnings(db, since, until, source, icao_filter)
+    import time as _time
+
+    timings: dict[str, int] = {}
+
+    def _timed(label: str, fn, *args):
+        t = _time.monotonic()
+        result = fn(*args)
+        timings[label] = int((_time.monotonic() - t) * 1000)
+        return result
+
+    activity = _timed("activity", get_activity_summary, db, since, until, source, icao_filter)
+    category_today = _timed("category", get_category_accuracy, db, since, until, source, icao_filter)
+    notable = _timed("notable", get_notable_misses, db, since, until, source, icao_filter)
+    bias = _timed("bias", get_category_bias_stats, db, since, until, source, icao_filter)
+    wind = _timed("wind", get_wind_advisory_accuracy, db, since, until, source, icao_filter)
+    missed = _timed("missed", get_missed_warnings, db, since, until, source, icao_filter)
 
     category_7d: list[CategoryAccuracyRow] = []
     if include_7d:
         seven_days_ago = until - timedelta(days=7)
-        category_7d = get_category_accuracy(db, seven_days_ago, until, source, icao_filter)
+        category_7d = _timed(
+            "category_7d", get_category_accuracy, db, seven_days_ago, until, source, icao_filter,
+        )
+
+    # Sub-query breakdown so a pathological plan is visible in one log line
+    # (#448 — the activity COUNT(DISTINCT)s ran at ~9.5 min each for months
+    # with no trace). INFO when anything is meaningfully slow, DEBUG otherwise.
+    total_ms = sum(timings.values())
+    log = logger.info if total_ms > 5000 else logger.debug
+    log(
+        "get_digest_data(%s, %s): %dms total (%s)",
+        source, period_label or "-", total_ms,
+        " ".join(f"{k}={v}ms" for k, v in timings.items()),
+    )
 
     return VerificationDigestData(
         period_label=period_label,
