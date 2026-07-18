@@ -1045,10 +1045,16 @@ async def _run_standalone_cycle_supervised(
     if mode_flag:
         cmd.append(mode_flag)
 
-    # The child needs no decode parallelism: it has a whole process to itself
-    # and exits after one cycle. Inline decode (workers=0) avoids spawning a
-    # second decode pool inside the cgroup next to the parent's.
-    env = {**os.environ, "GRIB_DECODE_WORKERS": "0"}
+    # The child gets its own small process pool (#448 PR B): the forecast
+    # cycle's dominant cost is ~56K GIL-bound sounding analyses, so the child
+    # runs STANDALONE_ANALYSIS_WORKERS pool workers (default 2) for pooled
+    # sounding batches + GRIB decode. This is a deliberate, bounded second
+    # pool in the cgroup — the child and its workers are reniced
+    # (--background), so interactive work preempts them, and a worker OOM
+    # kills only the disposable child's pool, never the web app's. Set
+    # STANDALONE_ANALYSIS_WORKERS=0 to restore the old inline behaviour.
+    analysis_workers = os.environ.get("STANDALONE_ANALYSIS_WORKERS", "2").strip() or "2"
+    env = {**os.environ, "GRIB_DECODE_WORKERS": analysis_workers}
 
     launched_at = datetime.now(timezone.utc)
     t_start = time.monotonic()

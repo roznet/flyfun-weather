@@ -214,6 +214,67 @@ MODEL_FORECAST_DAYS = {
 _OPEN_METEO_BATCH_SIZE = 100  # airports per Open-Meteo API call (also retry boundary)
 _OPEN_METEO_CONCURRENCY = int(os.environ.get("STANDALONE_FETCH_CONCURRENCY", "4"))
 _LCL_CONSTANT_FT = 400  # 400 * (T - Td) approximation for LCL in feet
+# Profiles per pooled sounding-analysis job (#448 PR B). Amortises IPC over
+# ~100 profiles (~5 s of MetPy work per job on the droplet) while keeping
+# enough jobs in flight to feed every pool worker.
+_SOUNDING_BATCH_SIZE = 100
+
+
+def _pooled_soundings_active(pool_soundings: bool) -> bool:
+    """Should sounding analysis go to the decode process pool?
+
+    Requires BOTH the caller's opt-in (only the standalone cycle sets it —
+    the interactive alternates path shares these fetchers and stays inline)
+    AND an enabled pool (``GRIB_DECODE_WORKERS`` > 0; the cycle child gets
+    ``STANDALONE_ANALYSIS_WORKERS``, default 2, via the scheduler).
+    """
+    if not pool_soundings:
+        return False
+    from weatherbrief.fetch.grib import decode_pool_enabled
+
+    return decode_pool_enabled()
+
+
+def _analyze_soundings_pooled(
+    pending: list[tuple[int, dict]],
+    results: list[dict],
+) -> None:
+    """Dispatch pending profiles to the pool in batches; merge fields back.
+
+    ``pending`` pairs an index into ``results`` with a serialised payload
+    (see ``build_sounding_payload``). Degradation contract matches the inline
+    path: on dispatch failure the affected snapshots simply keep surface-only
+    data (scoring then skips sounding-based comparisons) — the cycle never
+    aborts over sounding analysis.
+    """
+    if not pending:
+        return
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel
+
+    jobs = []
+    for i in range(0, len(pending), _SOUNDING_BATCH_SIZE):
+        batch = [payload for _, payload in pending[i : i + _SOUNDING_BATCH_SIZE]]
+        jobs.append(("analyze_sounding_batch", (batch,)))
+
+    try:
+        batch_results = _dispatch_decode_parallel(jobs)
+    except Exception:
+        logger.warning(
+            "Pooled sounding analysis failed for %d profiles; "
+            "snapshots keep surface data only",
+            len(pending), exc_info=True,
+        )
+        return
+
+    flat = [fields for br in batch_results for fields in (br or [])]
+    if len(flat) != len(pending):
+        logger.warning(
+            "Pooled sounding analysis returned %d results for %d profiles",
+            len(flat), len(pending),
+        )
+    for (idx, _), fields in zip(pending, flat):
+        if fields:
+            results[idx].update(fields)
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +357,7 @@ def _fetch_forecasts_for_model(
     sample_hours: list[int] | None = None,
     edr_acc: "EdrAccumulator | None" = None,
     days: int | None = None,
+    pool_soundings: bool = False,
 ) -> tuple[list[dict], int]:
     """Fetch Open-Meteo surface forecasts for all airports for one model.
 
@@ -403,6 +465,11 @@ def _fetch_forecasts_for_model(
         # previously log-silent.
         analysis_started = time.monotonic()
         chunk_results: list[dict] = []
+        # Pooled path (#448 PR B): collect payloads during the loop, dispatch
+        # in batches after it, merge scalar fields back by index. Inline path
+        # (pool disabled, or interactive alternates caller) is unchanged.
+        pooled = _pooled_soundings_active(pool_soundings)
+        pending_soundings: list[tuple[int, dict]] = []
         init_date = init_time.date()
         for airport, wpf in zip(chunk_list, forecasts):
             # Filter to sample hours only
@@ -450,14 +517,26 @@ def _fetch_forecasts_for_model(
                     "lcl_ft": lcl_ft,
                 }
 
-                # Run sounding analysis on pressure levels (already fetched)
-                _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
+                # Sounding analysis on pressure levels (already fetched):
+                # pooled → defer to a process-pool batch; else inline.
+                if pooled and getattr(hourly, "pressure_levels", None):
+                    from weatherbrief.analysis.sounding.snapshot_fields import (
+                        build_sounding_payload,
+                    )
+
+                    pending_soundings.append(
+                        (len(chunk_results), build_sounding_payload(hourly, model))
+                    )
+                else:
+                    _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
 
                 chunk_results.append(snap)
+        _analyze_soundings_pooled(pending_soundings, chunk_results)
         logger.info(
-            "Model %s chunk %d/%d: analyzed %d snapshots in %.1fs",
+            "Model %s chunk %d/%d: analyzed %d snapshots in %.1fs%s",
             model, chunk_num, total_chunks, len(chunk_results),
             time.monotonic() - analysis_started,
+            " (pooled)" if pooled else "",
         )
         return chunk_results, client._thread_call_count()
 
@@ -513,61 +592,15 @@ def _enrich_with_sounding(
     accumulator (issue #221). The accumulation shares this function's
     fail-silent try, so it can never break a forecast run.
     """
-    if not getattr(hourly, "pressure_levels", None):
-        return
+    # Implementation lives in analysis/sounding/snapshot_fields.py so the
+    # inline path and the pooled batch worker (#448 PR B) share one code
+    # path — including the parked EDR harvest (#221) and the fail-silent
+    # contract. This wrapper only keeps the historical call shape.
+    from weatherbrief.analysis.sounding.snapshot_fields import (
+        compute_snapshot_sounding_fields,
+    )
 
-    try:
-        from weatherbrief.analysis.sounding import analyze_sounding_lite
-        from weatherbrief.models.analysis import CloudCoverage
-
-        sounding = analyze_sounding_lite(
-            hourly.pressure_levels, hourly, model_key=model,
-        )
-        if sounding is None:
-            return
-
-        # Thermodynamic indices
-        if sounding.indices:
-            snap["sounding_ceiling_ft"] = sounding.indices.sounding_ceiling_ft
-            snap["freezing_level_ft"] = sounding.indices.freezing_level_ft
-            snap["sounding_cape_jkg"] = sounding.indices.cape_surface_jkg
-            snap["sounding_cin_jkg"] = sounding.indices.cin_surface_jkg
-            snap["sounding_lifted_index"] = sounding.indices.lifted_index
-
-        # Lowest BKN/OVC cloud layer base → sounding_cloud_base_ft
-        bkn_ovc = [
-            cl for cl in sounding.dd_cloud_layers
-            if cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
-        ]
-        if bkn_ovc:
-            lowest = min(bkn_ovc, key=lambda cl: cl.base_ft)
-            snap["sounding_cloud_base_ft"] = lowest.base_ft
-
-        # Convective risk
-        if sounding.convective and sounding.convective.risk_level is not None:
-            snap["sounding_convective_risk"] = sounding.convective.risk_level.value
-
-        # EDR calibration: harvest the full per-level Richardson distribution
-        # into the streaming accumulator. Standalone-only — None on the
-        # per-user briefing path.
-        #
-        # PARKED / INERT (issue #221, 2026-06-10): this collects ZERO data.
-        # `analyze_sounding_lite` (used here) does NOT call
-        # `compute_stability_indicators`, so `richardson_number` is never set
-        # and `observe_richardson_levels` drops every level. The original "free
-        # data" premise was wrong — Richardson is only computed in
-        # `_analyze_sounding_heavy`. Making it available here means recomputing
-        # stability on ~45k soundings/cycle, which the cycle's memory budget
-        # (peak_cgroup pinned at the limit) can't spare. Left in place pending a
-        # decision on a subsampled calibration; do not assume it works.
-        if edr_acc is not None and sounding.derived_levels:
-            edr_acc.observe_richardson_levels(model, sounding.derived_levels)
-
-    except Exception:
-        logger.warning(
-            "Sounding analysis failed for %s %s, surface data preserved",
-            snap.get("icao"), model, exc_info=True,
-        )
+    snap.update(compute_snapshot_sounding_fields(hourly, model, edr_acc=edr_acc))
 
 
 def _enrich_with_grib(
@@ -712,6 +745,7 @@ def fetch_ecmwf_grib_snapshots(
     days: int,
     edr_acc: "EdrAccumulator | None" = None,
     priority: "int | DecodePriority | None" = None,
+    pool_soundings: bool = False,
 ) -> list[dict]:
     """Decode an ECMWF run on disk into standalone-snapshot dicts.
 
@@ -801,6 +835,7 @@ def fetch_ecmwf_grib_snapshots(
     # (sounding analysis, ~92% of this leg per #448) was log-silent — track it.
     analysis_s = 0.0
     steps_processed = 0
+    pooled = _pooled_soundings_active(pool_soundings)
 
     def _previous_delivered_step(step_h: int) -> int | None:
         """Nearest delivered step before ``step_h``, for the accumulation diff.
@@ -850,6 +885,7 @@ def fetch_ecmwf_grib_snapshots(
                     pl_data = None
 
             t_step = time.monotonic()
+            step_pending: list[tuple[int, dict]] = []
             for i, airport in enumerate(airports):
                 cur_raw = cur_a1[i] if i < len(cur_a1) else {}
                 snap_fields = build_ecmwf_surface_snapshot(cur_raw)
@@ -920,9 +956,22 @@ def fetch_ecmwf_grib_snapshots(
                             cloud_cover_low_pct=snap_fields.get("cloud_cover_low_pct"),
                             pressure_levels=levels,
                         )
-                        _enrich_with_sounding(snap, hourly, "ecmwf", edr_acc=edr_acc)
+                        if pooled:
+                            from weatherbrief.analysis.sounding.snapshot_fields import (
+                                build_sounding_payload,
+                            )
+
+                            step_pending.append(
+                                (len(snapshots), build_sounding_payload(hourly, "ecmwf"))
+                            )
+                        else:
+                            _enrich_with_sounding(snap, hourly, "ecmwf", edr_acc=edr_acc)
 
                 snapshots.append(snap)
+
+            # Merge per step (not per run) so pending payloads stay bounded
+            # at ~len(airports) and results land before the next decode.
+            _analyze_soundings_pooled(step_pending, snapshots)
 
             analysis_s += time.monotonic() - t_step
             steps_processed += 1
@@ -934,8 +983,9 @@ def fetch_ecmwf_grib_snapshots(
                 a1_cache.pop(k, None)
 
     logger.info(
-        "ECMWF GRIB leg: %d steps, %d snapshots, sounding analysis %.0fs",
+        "ECMWF GRIB leg: %d steps, %d snapshots, sounding analysis %.0fs%s",
         steps_processed, len(snapshots), analysis_s,
+        " (pooled)" if pooled else "",
     )
     return snapshots
 
@@ -1413,6 +1463,7 @@ def run_standalone_cycle(
                         # interactive briefing. (The cycle ContextVar also
                         # resolves to BACKGROUND; explicit here for clarity.)
                         priority=DecodePriority.BACKGROUND,
+                        pool_soundings=True,
                     )
                     api_calls = 0
                     logger.info(
@@ -1425,6 +1476,7 @@ def run_standalone_cycle(
                     snapshots, api_calls = _fetch_forecasts_for_model(
                         model, init_time, airports, session, edr_acc=edr_acc,
                         days=map_days,
+                        pool_soundings=True,
                     )
                     total_api_calls += api_calls
                     logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",

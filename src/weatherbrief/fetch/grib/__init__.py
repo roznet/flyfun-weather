@@ -714,6 +714,16 @@ def _decode_pool_workers() -> int:
         return default
 
 
+def decode_pool_enabled() -> bool:
+    """Public: is the decode process pool available (workers > 0)?
+
+    Call sites that can batch work for the pool (e.g. the standalone cycle's
+    pooled sounding analysis, #448 PR B) use this to choose between dispatch
+    and the inline fallback without touching private config helpers.
+    """
+    return _decode_pool_workers() > 0
+
+
 def _decode_pool_max_tasks_per_child() -> int | None:
     """Worker recycle threshold; ``None`` disables recycling (default).
 
