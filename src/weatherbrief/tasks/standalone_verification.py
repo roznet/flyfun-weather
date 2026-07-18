@@ -238,26 +238,37 @@ def _pooled_soundings_active(pool_soundings: bool) -> bool:
 def _analyze_soundings_pooled(
     pending: list[tuple[int, dict]],
     results: list[dict],
+    priority: "int | DecodePriority | None" = None,
 ) -> None:
     """Dispatch pending profiles to the pool in batches; merge fields back.
 
     ``pending`` pairs an index into ``results`` with a serialised payload
     (see ``build_sounding_payload``). Degradation contract matches the inline
-    path: on dispatch failure the affected snapshots simply keep surface-only
-    data (scoring then skips sounding-based comparisons) — the cycle never
-    aborts over sounding analysis.
+    path, isolated per batch (``return_exceptions=True``): a batch that fails
+    post-retry loses only its own ~100 snapshots' sounding fields (they keep
+    surface-only data; scoring then skips sounding-based comparisons) — the
+    cycle never aborts over sounding analysis.
+
+    ``priority`` follows the same convention as every other dispatch in this
+    module: the standalone cycle passes ``DecodePriority.BACKGROUND``
+    explicitly (the subprocess path never sets the decode-priority
+    ContextVar, so leaving it unset would silently dispatch at SCHEDULED).
     """
     if not pending:
         return
     from weatherbrief.fetch.grib import _dispatch_decode_parallel
 
     jobs = []
+    slices: list[list[tuple[int, dict]]] = []
     for i in range(0, len(pending), _SOUNDING_BATCH_SIZE):
-        batch = [payload for _, payload in pending[i : i + _SOUNDING_BATCH_SIZE]]
-        jobs.append(("analyze_sounding_batch", (batch,)))
+        chunk = pending[i : i + _SOUNDING_BATCH_SIZE]
+        slices.append(chunk)
+        jobs.append(("analyze_sounding_batch", ([payload for _, payload in chunk],)))
 
     try:
-        batch_results = _dispatch_decode_parallel(jobs)
+        batch_results = _dispatch_decode_parallel(
+            jobs, priority=priority, return_exceptions=True,
+        )
     except Exception:
         logger.warning(
             "Pooled sounding analysis failed for %d profiles; "
@@ -266,15 +277,20 @@ def _analyze_soundings_pooled(
         )
         return
 
-    flat = [fields for br in batch_results for fields in (br or [])]
-    if len(flat) != len(pending):
+    failed = 0
+    for chunk, br in zip(slices, batch_results):
+        if isinstance(br, Exception) or br is None:
+            failed += len(chunk)
+            continue
+        for (idx, _), fields in zip(chunk, br):
+            if fields:
+                results[idx].update(fields)
+    if failed:
         logger.warning(
-            "Pooled sounding analysis returned %d results for %d profiles",
-            len(flat), len(pending),
+            "Pooled sounding analysis: %d/%d profiles failed dispatch; "
+            "their snapshots keep surface data only",
+            failed, len(pending),
         )
-    for (idx, _), fields in zip(pending, flat):
-        if fields:
-            results[idx].update(fields)
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +547,17 @@ def _fetch_forecasts_for_model(
                     _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
 
                 chunk_results.append(snap)
-        _analyze_soundings_pooled(pending_soundings, chunk_results)
+        if pending_soundings:
+            from weatherbrief.fetch.grib import DecodePriority
+
+            # Explicit BACKGROUND, mirroring _enrich_with_grib: pooled
+            # soundings only run for the standalone cycle (see
+            # _pooled_soundings_active), and the subprocess path never sets
+            # the decode-priority ContextVar.
+            _analyze_soundings_pooled(
+                pending_soundings, chunk_results,
+                priority=DecodePriority.BACKGROUND,
+            )
         logger.info(
             "Model %s chunk %d/%d: analyzed %d snapshots in %.1fs%s",
             model, chunk_num, total_chunks, len(chunk_results),
@@ -971,7 +997,8 @@ def fetch_ecmwf_grib_snapshots(
 
             # Merge per step (not per run) so pending payloads stay bounded
             # at ~len(airports) and results land before the next decode.
-            _analyze_soundings_pooled(step_pending, snapshots)
+            # Same explicit priority as this function's own a1/a2 decodes.
+            _analyze_soundings_pooled(step_pending, snapshots, priority=priority)
 
             analysis_s += time.monotonic() - t_step
             steps_processed += 1

@@ -125,6 +125,82 @@ class TestPooledMergeHelper:
             _analyze_soundings_pooled(pending, snaps)
         assert snaps == [{"icao": "LFPG"}]
 
+    def test_partial_batch_failure_isolated(self, monkeypatch):
+        """One dead-lettered batch loses only its own snapshots' fields."""
+        from weatherbrief.tasks import standalone_verification as sv
+
+        monkeypatch.setattr(sv, "_SOUNDING_BATCH_SIZE", 1)  # 1 job per profile
+        hourly = _make_hourly()
+        snaps = [{"icao": "LFPG"}, {"icao": "EGLL"}]
+        pending = [
+            (0, build_sounding_payload(hourly, "gfs")),
+            (1, build_sounding_payload(hourly, "gfs")),
+        ]
+
+        def fake_dispatch(jobs, **kw):
+            assert kw.get("return_exceptions") is True
+            out = []
+            for j, (_, args) in enumerate(jobs):
+                if j == 0:
+                    out.append(RuntimeError("dead-lettered"))
+                else:
+                    out.append(analyze_sounding_batch_items(args[0]))
+            return out
+
+        with patch(
+            "weatherbrief.fetch.grib._dispatch_decode_parallel",
+            side_effect=fake_dispatch,
+        ):
+            sv._analyze_soundings_pooled(pending, snaps)
+
+        assert snaps[0] == {"icao": "LFPG"}, "failed batch stays surface-only"
+        assert len(snaps[1]) > 1, "sibling batch must keep its results"
+
+    def test_priority_forwarded_to_dispatch(self):
+        """The cycle's explicit BACKGROUND priority must reach the dispatcher
+        (prod subprocess path never sets the ContextVar — PR #450 review)."""
+        from weatherbrief.fetch.grib import DecodePriority
+        from weatherbrief.tasks.standalone_verification import (
+            _analyze_soundings_pooled,
+        )
+
+        captured: dict = {}
+
+        def fake_dispatch(jobs, **kw):
+            captured.update(kw)
+            return [analyze_sounding_batch_items(args[0]) for _, args in jobs]
+
+        snaps = [{"icao": "LFPG"}]
+        pending = [(0, build_sounding_payload(_make_hourly(), "gfs"))]
+        with patch(
+            "weatherbrief.fetch.grib._dispatch_decode_parallel",
+            side_effect=fake_dispatch,
+        ):
+            _analyze_soundings_pooled(
+                pending, snaps, priority=DecodePriority.BACKGROUND,
+            )
+        assert captured["priority"] == DecodePriority.BACKGROUND
+
+
+class TestDispatchReturnExceptions:
+    def test_per_job_isolation_inline(self, monkeypatch):
+        """return_exceptions=True yields the exception in-slot; default raises."""
+        monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")
+        from weatherbrief.fetch.grib import _dispatch_decode_parallel
+
+        jobs = [
+            ("_test_echo", ("ok",)),
+            ("_test_echo", ("x", 0.0, "boom")),
+            ("_test_echo", ("also-ok",)),
+        ]
+        res = _dispatch_decode_parallel(jobs, return_exceptions=True)
+        assert res[0] == "ok"
+        assert isinstance(res[1], Exception)
+        assert res[2] == "also-ok"
+
+        with pytest.raises(Exception):
+            _dispatch_decode_parallel(jobs)
+
 
 class TestGating:
     def test_requires_both_opt_in_and_pool(self, monkeypatch):

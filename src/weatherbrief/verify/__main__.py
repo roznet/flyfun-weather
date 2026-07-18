@@ -348,35 +348,41 @@ def cmd_standalone(args):
         run_standalone_cycle,
     )
 
-    result = run_standalone_cycle(
-        watchlist, airports_db,
-        fetch_forecasts=not args.light,
-        score_observations=not args.forecast_only,
-    )
-    print(f"\nStandalone verification cycle complete:")
-    print(f"  Models fetched: {result.get('models_fetched', 0)}")
-    print(f"  Snapshots stored: {result.get('snapshots_stored', 0)}")
-    print(f"  Observations stored: {result.get('observations_stored', 0)}")
-    print(f"  Scores created: {result.get('scores_created', 0)}")
-    print(f"  Duration: {result.get('duration_ms', 0)}ms")
-
-    if args.with_rollup:
-        t_post = time.monotonic()
-        run_post_cycle_tasks(airports_db, result["cycle_type"])
-        post_ms = int((time.monotonic() - t_post) * 1000)
-        # The cycle Duration above excludes post-cycle work, which historically
-        # hid a ~40-min cache rebuild (#448) — print the full picture.
-        print(f"  Post-cycle tasks (rollup + cache rebuild): {post_ms}ms")
-        print(f"  Total: {result.get('duration_ms', 0) + post_ms}ms")
-
-    # Tidy teardown of the child's sounding/decode pool (#448 PR B). A hung
-    # worker must not block process exit — wait=False leaves it for the OS.
     try:
-        from weatherbrief.fetch.grib import shutdown_decode_pool
+        result = run_standalone_cycle(
+            watchlist, airports_db,
+            fetch_forecasts=not args.light,
+            score_observations=not args.forecast_only,
+        )
+        print(f"\nStandalone verification cycle complete:")
+        print(f"  Models fetched: {result.get('models_fetched', 0)}")
+        print(f"  Snapshots stored: {result.get('snapshots_stored', 0)}")
+        print(f"  Observations stored: {result.get('observations_stored', 0)}")
+        print(f"  Scores created: {result.get('scores_created', 0)}")
+        print(f"  Duration: {result.get('duration_ms', 0)}ms")
 
-        shutdown_decode_pool(wait=False, drain_dispatcher=True)
-    except Exception:
-        pass
+        if args.with_rollup:
+            t_post = time.monotonic()
+            run_post_cycle_tasks(airports_db, result["cycle_type"])
+            post_ms = int((time.monotonic() - t_post) * 1000)
+            # The cycle Duration above excludes post-cycle work, which
+            # historically hid a ~40-min cache rebuild (#448) — print the
+            # full picture.
+            print(f"  Post-cycle tasks (rollup + cache rebuild): {post_ms}ms")
+            print(f"  Total: {result.get('duration_ms', 0) + post_ms}ms")
+    finally:
+        # Tidy teardown of the child's sounding/decode pool (#448 PR B) —
+        # in a finally because the failure path needs it MOST: an uncaught
+        # exception would otherwise reach interpreter exit, where
+        # concurrent.futures' atexit handler does a *blocking* join of the
+        # workers, i.e. exactly the wedged-child hang this teardown exists
+        # to avoid. wait=False leaves any hung worker for the OS to reap.
+        try:
+            from weatherbrief.fetch.grib import shutdown_decode_pool
+
+            shutdown_decode_pool(wait=False, drain_dispatcher=True)
+        except Exception:
+            pass
 
 
 def cmd_rebuild_cache(args):

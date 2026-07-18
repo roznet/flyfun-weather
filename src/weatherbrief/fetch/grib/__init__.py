@@ -1599,21 +1599,44 @@ def _dispatch_decode(
 
 
 def _dispatch_decode_parallel(
-    jobs: list[tuple[str, tuple]], *, priority: int | DecodePriority | None = None,
+    jobs: list[tuple[str, tuple]],
+    *,
+    priority: int | DecodePriority | None = None,
+    return_exceptions: bool = False,
 ) -> list[Any]:
     """Submit a batch of decode jobs; return results in input order.
 
     Routes through the dispatcher by default (per-job timeout + fault
     rescheduling). With ``GRIB_DECODE_PRIORITY_ENABLED=0`` it falls back to the
     legacy FIFO batch path (one shared deadline).
+
+    ``return_exceptions=True`` (asyncio.gather-style) isolates per-job
+    failures: a job that ultimately fails (post-retry dead-letter) yields its
+    exception instance in that slot instead of raising and discarding its
+    siblings' results. On the legacy path, whose fault handling is shared-fate
+    by design (one deadline, batch-wide cancel), a failure is represented as
+    the same exception in every slot.
     """
     if not jobs:
         return []
     if not _priority_enabled():
-        return _dispatch_decode_parallel_legacy(jobs)
+        if not return_exceptions:
+            return _dispatch_decode_parallel_legacy(jobs)
+        try:
+            return _dispatch_decode_parallel_legacy(jobs)
+        except Exception as exc:
+            return [exc for _ in jobs]
     eff = _resolve_priority(priority)
     futures = _get_dispatcher().submit_batch(jobs, eff)
-    return [f.result() for f in futures]
+    if not return_exceptions:
+        return [f.result() for f in futures]
+    results: list[Any] = []
+    for f in futures:
+        try:
+            results.append(f.result())
+        except Exception as exc:
+            results.append(exc)
+    return results
 
 
 def _dispatch_decode_legacy(worker_fn_name: str, *args) -> Any:
