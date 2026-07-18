@@ -60,6 +60,7 @@ Read:
 
 - All containers `(healthy)`. `weatherbrief` and `weatherbrief-mcp` are the two we own; the rest are siblings.
 - `weatherbrief` MEM USAGE / LIMIT — cgroup limit is **6 GiB** (raised from 4 GiB; do not cite the older "3 GiB" / "4 GiB" numbers from memory). Sustained >4.5 GiB warrants a note.
+- `shared-mysql` at **~1.2–1.6 GiB is expected and healthy** since 2026-07-18: `innodb_buffer_pool_size` was raised 128 MB → 1 GiB (flyfun-weather#448). Don't flag the jump from the old ~330 MiB baseline. Do flag if it reads ~330 MiB again — that means the container restarted *without* the compose-file setting (run `docker compose up -d` in `~/digitalocean/shared-infra`, or re-apply `SET GLOBAL innodb_buffer_pool_size`).
 - Host **Swap used** — anything more than a few hundred MB swap in use is a warn. The droplet has 4 GiB swap; production sometimes parks 1–2 GiB of mmap-backed cfgrib pages there under memory pressure (see lesson §L2 before reflexively flagging).
 - Host **free Mem** — single-digit MB free is fine if buff/cache is large; what matters is `available`.
 - `uptime` load triplet — same interpretation as the DO metrics, just current.
@@ -141,21 +142,28 @@ ssh brice@161.35.35.15 "docker logs --since <window> weatherbrief 2>&1 \
 
 ## 6. Standalone verification cycle
 
-The cycle runs at configured hours (default 06:15, 09:15, 12:15, 15:15, 18:15 UTC). Grep the latest cycle's footprint:
+Schedule: **light** (score-only) cycles at 06:15 / 09:15 / 12:15 / 15:15 / 18:15 UTC; **forecast** (heavy fetch) cycles at **07:15 / 19:15 UTC**; **METAR ingest** every 30 min. Grep the latest cycle's footprint:
 
 ```bash
 ssh brice@161.35.35.15 "docker logs --since 24h weatherbrief 2>&1 \
-  | grep -E 'Standalone .* cycle:|Standalone cycle peaks:|Standalone cycle RSS @|Standalone cycle memory anomaly|Recorded failed .* cycle|Memory anomaly check failed|ECMWF a. decode failed'"
+  | grep -E 'Standalone .* cycle:|Standalone cycle peaks:|Standalone cycle RSS @|Standalone cycle memory anomaly|Recorded failed .* cycle|Memory anomaly check failed|ECMWF a. decode failed|Cache rebuild:|ECMWF GRIB leg:|get_digest_data|analyzed [0-9]+ snapshots'"
 ```
 
 The cycle has **three flavours**, each with its own `Standalone <type> cycle:` summary line. Don't conflate them:
-- **light** — verification scoring rollup only (no model fetch). ~20-30 s. Runs every 10 min.
-- **forecast** — heavy model fetch (ECMWF / GFS / ICON / UKMO). 15–30 min typical. Runs at the configured hours.
-- **verification** / **METAR ingest** — observation pull + scoring.
+- **light** — scoring + rollup + stats/leaderboard cache rebuild (no model fetch, no forecast-map rebuild). Runs at the five light hours.
+- **forecast** — heavy model fetch (gfs / icon / ecmwf — no UKMO in standalone), then forecast-map cache rebuild ONLY (rollup + stats/leaderboard are skipped since #448: the cycle creates no scores). Runs at 07:15 / 19:15.
+- **metar_ingest** — observation pull, every 30 min, cheap.
 
 Read:
 
-- `Standalone <type> cycle: M models, S snapshots, ... (Tms)` — for the **forecast** flavour, >40 min is a warn, >60 min is an issue. For **light**, anything >2 min is unusual.
+- `Standalone <type> cycle: M models, S snapshots, ... (Tms)` — post-#448 expected bands (pre-PR-B; the sounding process pool will roughly halve the forecast figure again):
+  - **forecast**: ~65–80 min total wall (fetch ~68 min is single-core sounding analysis — the known cost). >95 min is a warn, >120 min an issue.
+  - **light**: ~2–5 min total wall. >10 min is a warn — check the `Cache rebuild:` breakdown below.
+- **Cache-rebuild breakdown (#448 instrumentation)** — `Cache rebuild: N stats (Xms) + M bias_leaderboard (Yms) + K forecast_map (Zms) entries (Tms total)`:
+  - stats should be **seconds** (tens of seconds worst case). Minutes again = the `COUNT(DISTINCT)` plan regressed — check the `get_digest_data(...)` INFO breakdown line (only logged when >5 s) for which sub-query, and confirm index `ix_verif_scores_source_time` still exists.
+  - After a **forecast** cycle the line `Standalone forecast cycle: skipping rollup + stats/leaderboard cache` must appear and `cache rebuilt (Nms)` should be **<60 s** (forecast-map only). A forecast cycle spending minutes in cache rebuild = the cycle-aware skip regressed.
+- **Hard failure to grep for**: any SQL error mentioning `ix_verif_scores_source_time` (e.g. MySQL 1176 "Key ... doesn't exist") — the activity queries FORCE INDEX it by name; if that index is ever dropped, every dashboard/digest stats call hard-fails. Always an issue.
+- **Sounding-analysis timings** — `Model <m> chunk N/7: analyzed S snapshots in Xs` (gfs/icon, ~2 chunks in flight) and `ECMWF GRIB leg: N steps, S snapshots, sounding analysis Xs`. These quantify the dominant single-core cost (~55–60 min/cycle total pre-PR-B). Use them to spot drift and to validate PR B when it lands.
 - `Standalone cycle peaks: rss=<N>MB cgroup=<N>MB samples=<N>` — **read `rss=`, not `cgroup=`** (see §L2). RSS is actual demand; cgroup will pin near the limit just from mmap'd GRIB cache and is not a pressure signal on its own. Flag when `rss=` >4.5 GiB.
 - **`Standalone cycle memory anomaly (source=...): peak_rss=<N>MB peak_cgroup=<N> baseline=<N> cgroup_limit=6144 (relative_threshold=<R>, absolute_threshold=<A>)`** — the app's own self-alert, currently thresholded on `peak_cgroup`. Because of §L2 this fires routinely without indicating a real problem; **read `peak_rss` to decide**:
   - `peak_rss` well under 4 GiB → false positive; mention in the summary but rank as note, not warn.
@@ -251,14 +259,14 @@ ssh brice@161.35.35.15 \
 
 Note: glob `binlog.0000*` (not `binlog.*`) — the unqualified glob picks up `binlog.index` (a 4 KB metadata file) and skews any `tail -1`.
 
-Expected (as of 2026-05-19):
-- `weatherbrief` DB **1.5–3 GB** — dominated by `verification_scores.ibd` (1.1 GB and growing as scoring accumulates), then `airport_forecast_snapshots.ibd` (~260 MB), `verification_observations.ibd` (~160 MB), `verification_daily_stats.ibd` (~140 MB). Anything else >100 MB is unusual.
+Expected (re-baselined 2026-07-18):
+- `weatherbrief` DB **4–6 GB** — dominated by `verification_scores.ibd` (~2.7 GB data+indexes at 7.6M rows, growing ~65K scores/day), then `verification_observations.ibd` (~740 MB), `verification_daily_stats.ibd` (~310 MB), `airport_forecast_snapshots.ibd` (~270 MB). Anything else >100 MB is unusual.
 - **Binary logs ~10 GB across ~10 files** of 1.1 GB each, spanning ~30 days. They auto-rotate at the configured `binlog_expire_logs_seconds` (default 30 days = 2592000 s).
 - Sibling DBs (wordpress_roz, flyfunboarding): tens of MB, ignore.
 
 **Flag when:**
 - Binlogs span >40 days (expiry not running) — `PURGE BINARY LOGS BEFORE '<date>'` or set `binlog_expire_logs_seconds` shorter.
-- `weatherbrief` DB >5 GB — investigate which table grew (likely `verification_scores` if forecast cycle ran longer/more models).
+- `weatherbrief` DB >8 GB — investigate which table grew (likely `verification_scores` if forecast cycle ran longer/more models).
 - A single `.ibd` file doubles between checks without an obvious cause (new feature, new model).
 
 ### 9d. Retention loop running?
@@ -309,7 +317,7 @@ The 4 vCPU / 7.8 GB droplet was upgraded based on a miscalculation; downgrade re
 Lines like `GET /joomla/.env`, `error_log.php`, `wp-login.php`, `.git/`, `xmlrpc` are random attack scans hitting the front door. Filter them out of any "errors" count; mention only if the rate is unusually high (e.g. ratelimit something).
 
 ### §L7 — Forecast cycle hours overlap with user peak
-06:15 / 09:15 / 12:15 / 15:15 / 18:15 UTC are the standalone cycle hours. Load spikes and slower briefings *during* these windows are expected. A briefing taking 2× normal at 09:20 UTC is not the same problem as one taking 2× at 02:00 UTC.
+06:15 / 09:15 / 12:15 / 15:15 / 18:15 UTC are the **light** cycle hours (short since #448); the **heavy forecast** cycles run 07:15 / 19:15 UTC and hold one core for the better part of an hour (pre-PR-B). Load spikes and slower briefings *during* these windows are expected. A briefing taking 2× normal at 07:40 UTC is not the same problem as one taking 2× at 02:00 UTC.
 
 ### §L8 — `docker compose` v2, not `docker-compose`
 On this droplet the binary is `docker compose` (two words). Don't try `docker-compose`.
@@ -324,7 +332,7 @@ On this droplet the binary is `docker compose` (two words). Don't try `docker-co
 | ECMWF deliveries | `/mnt/flyfun_data/ecmwf/data` | rotating | **15–25 GB** | 36 h TTL via `purge_old_ecmwf_deliveries`. |
 | SRTM terrain | `.cache/srtm/` | constant | **~4 GB** | Never aged. |
 | Pack store | `packs/` | growing | **see headroom math §9b** | Monotonic until T1 strip (30 d) and T2 delete (90/180 d) kick in. |
-| MySQL data | `mysql/<db>/*.ibd` | growing | **1.5–3 GB (weatherbrief DB)** | Dominated by `verification_scores`; grows with verification cycle output. |
+| MySQL data | `mysql/<db>/*.ibd` | growing | **4–6 GB (weatherbrief DB, 2026-07 baseline)** | Dominated by `verification_scores` (~2.7 GB); grows with verification cycle output. |
 | MySQL binlogs | `mysql/binlog.0000XX` | rotating | **~10 GB (~10 files × 1.1 GB, ~30 d span)** | Auto-purged at `binlog_expire_logs_seconds`. |
 | Sandboxes / forms / logs | misc | constant | **<1 GB combined** | Ignore unless growing. |
 
