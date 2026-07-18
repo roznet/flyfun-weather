@@ -130,7 +130,22 @@ async def test_forecast_cycle_command(monkeypatch):
     assert "--light" not in cmd
     assert "--with-rollup" in cmd
     assert "--background" in cmd
-    # The child decodes inline — no second decode pool inside the cgroup.
+    # The child runs its own bounded pool for sounding batches + decode
+    # (#448 PR B): default 2 workers, overridable via STANDALONE_ANALYSIS_WORKERS.
+    assert captured["env"]["GRIB_DECODE_WORKERS"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_analysis_workers_env_override(monkeypatch):
+    monkeypatch.delenv("STANDALONE_SUBPROCESS", raising=False)
+    monkeypatch.setenv("STANDALONE_ANALYSIS_WORKERS", "0")
+    captured = _patch_exec(monkeypatch, FakeProc(returncode=0))
+
+    await _run_standalone_cycle_supervised(
+        _app_state(), fetch_forecasts=True, score_observations=False,
+    )
+
+    # 0 restores the pre-#448 inline behaviour (rollback switch).
     assert captured["env"]["GRIB_DECODE_WORKERS"] == "0"
 
 

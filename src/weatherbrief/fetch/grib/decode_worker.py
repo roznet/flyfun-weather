@@ -241,6 +241,29 @@ def decode_icon_cloud_diag(
         return decode_icon_eu_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
+def analyze_sounding_batch(items: list[dict]) -> list[dict]:
+    """Lite sounding analysis for a batch of serialised profiles (#448 PR B).
+
+    The first non-decode entry point: the standalone forecast cycle ships
+    ~50–100 profiles per job (plain dicts — levels + surface fields + model
+    key) and gets back the snapshot scalar fields per profile. Pure and
+    idempotent, so the dispatcher may retry it freely. MetPy imports lazily
+    on the first batch a worker sees (~1–2 s once per worker); not added to
+    ``_worker_init`` so the web app's decode pool doesn't pay it.
+    """
+    pid = os.getpid()
+    start = _time.perf_counter()
+    from weatherbrief.analysis.sounding.snapshot_fields import (
+        analyze_sounding_batch_items,
+    )
+    results = analyze_sounding_batch_items(items)
+    logger.info(
+        "analyze_sounding_batch: %d profiles dur=%.1fms pid=%d",
+        len(items), (_time.perf_counter() - start) * 1000, pid,
+    )
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------

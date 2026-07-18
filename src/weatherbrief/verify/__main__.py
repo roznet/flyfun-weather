@@ -369,6 +369,15 @@ def cmd_standalone(args):
         print(f"  Post-cycle tasks (rollup + cache rebuild): {post_ms}ms")
         print(f"  Total: {result.get('duration_ms', 0) + post_ms}ms")
 
+    # Tidy teardown of the child's sounding/decode pool (#448 PR B). A hung
+    # worker must not block process exit — wait=False leaves it for the OS.
+    try:
+        from weatherbrief.fetch.grib import shutdown_decode_pool
+
+        shutdown_decode_pool(wait=False, drain_dispatcher=True)
+    except Exception:
+        pass
+
 
 def cmd_rebuild_cache(args):
     """Rebuild the verification/forecast map cache."""
