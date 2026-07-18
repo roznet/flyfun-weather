@@ -79,7 +79,10 @@ def compute_snapshot_sounding_fields(
         # EDR calibration harvest (issue #221) — inert today (the cycle no
         # longer instantiates an accumulator, and analyze_sounding_lite never
         # computes Richardson) but the plumbing is preserved for a future
-        # subsampled design. Inline path only; batch payloads never carry it.
+        # subsampled design. NOTE: inline path only — batch payloads
+        # (analyze_sounding_batch_items) deliberately don't carry an
+        # accumulator, so a revived #221 must either add EDR data to the
+        # batch result shape or route the calibration subsample inline.
         if edr_acc is not None and sounding.derived_levels:
             edr_acc.observe_richardson_levels(model_key, sounding.derived_levels)
 

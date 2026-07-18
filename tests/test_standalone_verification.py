@@ -838,3 +838,48 @@ class TestRunPostCycleTasks:
         kwargs = rebuild.call_args.kwargs
         assert kwargs["include_score_stats"] is True
         assert kwargs["include_forecast_map"] is True
+
+
+class TestPoolSoundingsGating:
+    """pool_soundings must reach the fetchers ONLY when explicitly requested.
+
+    The standalone CLI (disposable process, own pool) passes True; the
+    scheduler's in-process fallback (STANDALONE_SUBPROCESS=0, shares the web
+    app's interactive pool) relies on the default False — PR #450 review.
+    """
+
+    def _run(self, **cycle_kwargs):
+        from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+        with patch("flyfun_common.db.SessionLocal") as mock_session_local, \
+             patch("weatherbrief.fetch.model_status.fetch_model_metadata") as mock_meta, \
+             patch("weatherbrief.tasks.standalone_verification._select_ecmwf_grib_run",
+                   return_value=None), \
+             patch("weatherbrief.tasks.standalone_verification._fetch_forecasts_for_model",
+                   return_value=([], 0)) as mock_fetch, \
+             patch("weatherbrief.tasks.standalone_verification._enrich_with_grib"), \
+             patch("weatherbrief.tasks.standalone_verification._store_snapshots",
+                   return_value=0), \
+             patch("weatherbrief.tasks.standalone_verification._prune_old_snapshots",
+                   return_value=0):
+            mock_db = MagicMock()
+            mock_session_local.return_value = mock_db
+            mock_db.execute.return_value.scalar_one_or_none.return_value = None
+            mock_meta.return_value = {
+                "gfs": SimpleNamespace(last_init_time=int(GFS_INIT.timestamp())),
+            }
+            run_standalone_cycle(
+                [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)],
+                "/fake/db",
+                score_observations=False,
+                **cycle_kwargs,
+            )
+        return mock_fetch
+
+    def test_default_stays_inline(self):
+        fetch = self._run()
+        assert fetch.call_args.kwargs["pool_soundings"] is False
+
+    def test_explicit_opt_in_threads_through(self):
+        fetch = self._run(pool_soundings=True)
+        assert fetch.call_args.kwargs["pool_soundings"] is True

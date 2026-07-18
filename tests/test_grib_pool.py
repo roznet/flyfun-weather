@@ -517,3 +517,59 @@ def test_parallel_dispatch_timeout_resets_pool(monkeypatch):
     assert elapsed < 2.5, f"timeout fired in {elapsed:.2f}s, should be ~0.5s"
     # Pool was torn down — the TimeoutError branch calls shutdown_decode_pool(wait=False).
     assert grib_pkg._DECODE_POOL is None
+
+
+# ---------------------------------------------------------------------------
+# Force teardown (#448 PR B)
+# ---------------------------------------------------------------------------
+
+
+def test_force_shutdown_kills_hung_worker(monkeypatch):
+    """force=True must actually end workers, not just abandon them.
+
+    wait=False alone leaves a wedged worker alive; at interpreter exit the
+    concurrent.futures atexit hook would join it forever. The TERM->KILL
+    ladder is what lets the disposable standalone child exit promptly.
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "1")
+    pool = _get_decode_pool()
+    assert pool is not None
+    # Occupy the single worker with a long hang, then force-tear-down.
+    pool.submit(decode_worker._test_hang, 120.0)
+    grib_pkg._diag_register_workers(pool)
+    workers = [p for p in grib_pkg._ALL_DECODE_WORKERS.values() if p.is_alive()]
+    assert workers, "worker should be registered and alive"
+
+    t0 = time.perf_counter()
+    shutdown_decode_pool(wait=False, force=True)
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 15, f"force teardown took {elapsed:.1f}s"
+
+    deadline = time.perf_counter() + 5.0
+    while time.perf_counter() < deadline and any(p.is_alive() for p in workers):
+        time.sleep(0.1)
+    assert not any(p.is_alive() for p in workers), "workers must be dead"
+
+
+def test_force_shutdown_without_pool_is_noop(monkeypatch):
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")
+    shutdown_decode_pool(wait=False, force=True)  # must not raise
+
+
+def test_all_workers_registry_survives_pool_rebuild(monkeypatch):
+    """_ALL_DECODE_WORKERS must retain handles across pool replacements.
+
+    The per-pool _DECODE_WORKER_REGISTRY is cleared on rebuild, so it cannot
+    reach a worker orphaned by dispatcher timeout recovery — the accumulated
+    registry is what the force teardown kills from.
+    """
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "1")
+    _dispatch_decode("_test_echo", "a")
+    pids_first = set(grib_pkg._ALL_DECODE_WORKERS)
+    assert pids_first
+
+    shutdown_decode_pool(wait=True)
+    _dispatch_decode("_test_echo", "b")  # rebuild clears the per-pool registry
+
+    assert pids_first <= set(grib_pkg._ALL_DECODE_WORKERS), \
+        "accumulated registry lost first pool's workers"

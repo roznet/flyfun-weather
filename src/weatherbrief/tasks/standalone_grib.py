@@ -7,8 +7,9 @@ Decode goes through ``_dispatch_decode`` by cache path, same as the briefing
 path (``_fetch_cloud_diag_for_fhour``) — never in this process. cfgrib/xarray
 decode of full-domain grids in the orchestrating process was a parent-RSS
 contributor before issue #236 (the dispatcher exists precisely to keep that
-out of the parent). With ``GRIB_DECODE_WORKERS=0`` (the subprocess cycle's
-setting) the dispatch runs inline, which is fine — that process is disposable.
+out of the parent). The subprocess cycle runs its own small pool since #448
+PR B (``GRIB_DECODE_WORKERS`` = ``STANDALONE_ANALYSIS_WORKERS``, default 2;
+``0`` restores inline dispatch, which is fine — that process is disposable).
 """
 
 from __future__ import annotations
