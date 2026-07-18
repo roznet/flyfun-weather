@@ -22,6 +22,7 @@ flight-based and standalone verification data are never mixed.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date as date_t, datetime, timedelta, timezone
 
 from sqlalchemy import case, func, select
@@ -643,14 +644,12 @@ def get_digest_data(
     icao_filter: list[str] | None = None,
 ) -> VerificationDigestData:
     """Build complete digest payload for email or web dashboard."""
-    import time as _time
-
     timings: dict[str, int] = {}
 
     def _timed(label: str, fn, *args):
-        t = _time.monotonic()
+        t = time.monotonic()
         result = fn(*args)
-        timings[label] = int((_time.monotonic() - t) * 1000)
+        timings[label] = int((time.monotonic() - t) * 1000)
         return result
 
     activity = _timed("activity", get_activity_summary, db, since, until, source, icao_filter)

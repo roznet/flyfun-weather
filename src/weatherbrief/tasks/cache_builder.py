@@ -306,9 +306,11 @@ def rebuild_all(
     forecast_map cache would be regenerated to identical content.
 
     ``include_score_stats=False`` skips the stats + bias_leaderboard rebuilds —
-    used by forecast (fetch-only) cycles, which create no new scores, so those
-    caches' inputs are unchanged (and ``is_stale`` compares against
-    MAX(observation_time), which a forecast cycle doesn't move).
+    used by forecast (fetch-only) cycles, which create no new *standalone*
+    scores. Flight-source scores DO accumulate independently (10-min flight
+    verification loop), so a skipped rebuild can leave ``stats:flight:*``
+    stale — covered by ``is_stale()`` + the dashboard's live-query fallback,
+    which is cheap for the small flight source.
 
     Returns a summary dict with counts and per-step timings.
     """

@@ -1626,6 +1626,14 @@ def run_post_cycle_tasks(airports_db_path: str, cycle_type: str) -> None:
     rollup and the stats/leaderboard caches are input-unchanged; light
     cycles score but don't touch snapshots, so the forecast_map cache is
     input-unchanged. The legacy combined ``full`` cycle rebuilds everything.
+
+    Caveat: the "input-unchanged" invariant holds for standalone-source
+    stats only. Flight-source scores accumulate continuously on the 10-min
+    ``run_verification_loop``, so skipping the stats rebuild on forecast
+    cycles means ``stats:flight:*`` refreshes on light cycles only (5x/day
+    instead of 7x). Acceptable: ``is_stale()`` trips on the cached entry and
+    the admin dashboard falls back to a live query, which is cheap for the
+    small flight source.
     """
     from flyfun_common.db import SessionLocal
 

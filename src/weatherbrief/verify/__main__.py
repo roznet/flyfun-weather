@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -360,11 +361,9 @@ def cmd_standalone(args):
     print(f"  Duration: {result.get('duration_ms', 0)}ms")
 
     if args.with_rollup:
-        import time as _time
-
-        t_post = _time.monotonic()
+        t_post = time.monotonic()
         run_post_cycle_tasks(airports_db, result["cycle_type"])
-        post_ms = int((_time.monotonic() - t_post) * 1000)
+        post_ms = int((time.monotonic() - t_post) * 1000)
         # The cycle Duration above excludes post-cycle work, which historically
         # hid a ~40-min cache rebuild (#448) — print the full picture.
         print(f"  Post-cycle tasks (rollup + cache rebuild): {post_ms}ms")
