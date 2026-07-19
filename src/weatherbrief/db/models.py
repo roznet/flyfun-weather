@@ -780,6 +780,24 @@ class AirportForecastSnapshotRow(Base):
     sounding_convective_risk: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
+def snapshot_natural_key(
+    icao: str, model: str, model_init_time: datetime, forecast_hour: datetime,
+) -> tuple:
+    """Canonical natural key for `airport_forecast_snapshots` (`uq_afs_key`).
+
+    Strips tzinfo so tz-aware and SQLite's naive datetimes compare equal. Single
+    source of truth for dedup, shared by the standalone cycle's inserter and the
+    artifact importer so their idempotency logic can't drift apart.
+    """
+    init_naive = (
+        model_init_time.replace(tzinfo=None) if model_init_time.tzinfo else model_init_time
+    )
+    fhour_naive = (
+        forecast_hour.replace(tzinfo=None) if forecast_hour.tzinfo else forecast_hour
+    )
+    return (icao, model, init_naive, fhour_naive)
+
+
 class VerificationMonthlyStatsRow(Base):
     """Pre-aggregated monthly verification accuracy per airport/model/days_out.
 

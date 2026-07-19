@@ -27,6 +27,7 @@ from weatherbrief.db.models import (
     VerificationCycleRow,
     VerificationObservationRow,
     VerificationScoreRow,
+    snapshot_natural_key,
 )
 from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
 from weatherbrief.process_rss import current_rss_mb, log_memory
@@ -1041,13 +1042,12 @@ def fetch_ecmwf_grib_snapshots(
 # ---------------------------------------------------------------------------
 
 def _normalize_key(icao: str, model: str, init_time: datetime, fhour: datetime) -> tuple:
-    """Normalize a snapshot key by stripping tzinfo for consistent comparison.
+    """Normalize a snapshot key for consistent comparison.
 
-    SQLite returns naive datetimes, so we strip tzinfo from all keys to match.
+    Thin alias for the shared :func:`snapshot_natural_key` so the standalone
+    inserter and the artifact importer share one dedup technique.
     """
-    init_naive = init_time.replace(tzinfo=None) if init_time.tzinfo else init_time
-    fhour_naive = fhour.replace(tzinfo=None) if fhour.tzinfo else fhour
-    return (icao, model, init_naive, fhour_naive)
+    return snapshot_natural_key(icao, model, init_time, fhour)
 
 
 def _store_snapshots(snapshots: list[dict], db) -> int:
