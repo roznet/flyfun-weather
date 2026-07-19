@@ -705,6 +705,41 @@ def create_app() -> FastAPI:
     # Mount static files for web UI (if directory exists)
     web_dir = Path(__file__).resolve().parent.parent.parent.parent / "web"
     if web_dir.exists():
+        # Extensionless shortcut URLs: ``/maps`` → 302 → ``/maps.html`` for
+        # every page in web/. The StaticFiles mount below only maps directories
+        # to index.html (``html=True``); a bare ``/maps`` would otherwise 404.
+        # ``.html`` stays canonical (internal nav links and the Apple AASA
+        # paths still use it) — these are additive convenience aliases.
+        #
+        # Registered as explicit per-stem routes rather than a ``/{page}``
+        # catch-all on purpose: a path param would also swallow ``/favicon.ico``,
+        # ``/login.html`` etc. and shadow the static mount. Single-segment app
+        # routes (``/health``, ``/whats-new``) are declared above and so take
+        # precedence over these. Query strings are forwarded verbatim so
+        # ``/maps?...`` keeps its params through the redirect.
+        def _make_page_redirect(stem: str):
+            target = f"/{stem}.html"
+
+            def _redirect(request: Request):
+                query = request.url.query
+                return RedirectResponse(
+                    f"{target}?{query}" if query else target,
+                    status_code=302,
+                )
+
+            return _redirect
+
+        for _html_path in sorted(web_dir.glob("*.html")):
+            _stem = _html_path.stem
+            if _stem == "index":
+                continue  # already served at "/" by the html=True mount
+            app.add_api_route(
+                f"/{_stem}",
+                _make_page_redirect(_stem),
+                methods=["GET"],
+                include_in_schema=False,
+            )
+
         app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
 
     return app
