@@ -7,6 +7,7 @@ the compute-offload pipeline; the cross-machine dogfood test is layered on top.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -343,6 +344,86 @@ def test_malformed_manifest_rejected(tmp_path):
     dst = Dst()
     with pytest.raises(ArtifactValidationError, match="malformed manifest"):
         import_snapshots(dst, artifact)
+
+
+def test_corrupt_non_sqlite_file_rejected(tmp_path):
+    """A file that isn't valid SQLite at all is cleanly rejected, not a traceback.
+
+    The other corruption tests tamper *valid* SQLite files; this covers the
+    realistic transport failure (truncated mid-copy / wrong file shipped),
+    which raises sqlite3.DatabaseError — a sibling of OperationalError.
+    """
+    bad = tmp_path / "garbage.sqlite"
+    bad.write_bytes(b"this is definitely not a sqlite database" * 10)
+
+    Dst = _make_db()
+    dst = Dst()
+    with pytest.raises(ArtifactValidationError):
+        import_snapshots(dst, str(bad))
+    assert _all_snapshots(dst) == []
+
+
+def test_truncated_sqlite_header_rejected(tmp_path):
+    """An artifact truncated mid-copy is rejected rather than crashing."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", GFS_INIT, 12)])
+    artifact = tmp_path / "half.sqlite"
+    export_snapshots(src, str(artifact), generated_at=NOW)
+    data = artifact.read_bytes()
+    artifact.write_bytes(data[: len(data) // 3])  # simulate an interrupted transfer
+
+    Dst = _make_db()
+    dst = Dst()
+    with pytest.raises(ArtifactValidationError):
+        import_snapshots(dst, str(artifact))
+    assert _all_snapshots(dst) == []
+
+
+def test_manifest_missing_natural_key_column_rejected(tmp_path):
+    """A manifest whose columns omit a natural-key column is rejected."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", GFS_INIT, 12)])
+    artifact = str(tmp_path / "nokey.sqlite")
+    export_snapshots(src, artifact, generated_at=NOW)
+
+    conn = sqlite3.connect(artifact)
+    blob = conn.execute("SELECT manifest_json FROM _manifest").fetchone()[0]
+    m = json.loads(blob)
+    m["columns"] = [c for c in m["columns"] if c != "forecast_hour"]
+    conn.execute("UPDATE _manifest SET manifest_json = ?", (json.dumps(m),))
+    conn.commit()
+    conn.close()
+
+    Dst = _make_db()
+    dst = Dst()
+    with pytest.raises(ArtifactValidationError, match="natural-key"):
+        import_snapshots(dst, artifact)
+    assert _all_snapshots(dst) == []
+
+
+def test_manifest_unknown_column_rejected(tmp_path):
+    """A manifest listing a column the artifact table lacks is rejected cleanly."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", GFS_INIT, 12)])
+    artifact = str(tmp_path / "badcol.sqlite")
+    export_snapshots(src, artifact, generated_at=NOW)
+
+    conn = sqlite3.connect(artifact)
+    blob = conn.execute("SELECT manifest_json FROM _manifest").fetchone()[0]
+    m = json.loads(blob)
+    m["columns"] = m["columns"] + ["not_a_real_column"]
+    conn.execute("UPDATE _manifest SET manifest_json = ?", (json.dumps(m),))
+    conn.commit()
+    conn.close()
+
+    Dst = _make_db()
+    dst = Dst()
+    with pytest.raises(ArtifactValidationError):
+        import_snapshots(dst, artifact)
+    assert _all_snapshots(dst) == []
 
 
 def test_import_cycle_source_fits_column():

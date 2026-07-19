@@ -28,6 +28,22 @@ Design invariants:
   US-expansion work) is carried automatically. Import writes only the
   intersection of artifact columns and the target table, so a newer artifact
   ingested by an older importer degrades gracefully instead of crashing.
+
+Known limitations (deliberate, see PR #452 review):
+
+- **Single-writer assumption.** ``_idempotent_insert`` does a bulk existence
+  check then a bulk insert in one transaction, with no ``IntegrityError``
+  handling. If another writer inserted the same natural key in between, the
+  insert would abort the import (nothing is partially committed — it fails,
+  it does not corrupt). This is safe in the intended topology because the
+  serving box's own forecast cycle is *disabled* while ingest is active
+  (``STANDALONE_FORECAST_ENABLED=0``). Revisit if ingest is ever pointed at a
+  DB with a live concurrent standalone cycle.
+- **Chunking scaffolding is duplicated** with
+  ``standalone_verification._store_snapshots``. The dedup *key* is already
+  shared (:func:`weatherbrief.db.models.snapshot_natural_key`), which was the
+  real drift risk; factoring the remaining bulk-fetch/insert loop touches a hot
+  production path and deserves its own change rather than a drive-by.
 """
 
 from __future__ import annotations
@@ -273,8 +289,13 @@ def read_manifest(path: str) -> ArtifactManifest:
             row = conn.execute(
                 f'SELECT manifest_json FROM "{_MANIFEST_TABLE}"'
             ).fetchone()
-        except sqlite3.OperationalError as e:
-            raise ArtifactValidationError(f"artifact has no manifest: {e}") from e
+        # sqlite3.Error (not just OperationalError): a file that isn't valid
+        # SQLite at all — bit-flipped header, truncated mid-copy, wrong file
+        # shipped — raises DatabaseError, a *sibling* of OperationalError. An
+        # artifact crosses an untrusted transport, so that must be a clean
+        # rejection, not a raw traceback out of the CLI.
+        except sqlite3.Error as e:
+            raise ArtifactValidationError(f"unreadable artifact: {e}") from e
         if not row:
             raise ArtifactValidationError("artifact manifest is empty")
         return ArtifactManifest.from_json(row[0])
@@ -286,8 +307,15 @@ def _read_rows(path: str, columns: list[str]) -> list[dict]:
     conn = sqlite3.connect(path)
     try:
         col_list = ", ".join(f'"{c}"' for c in columns)
-        cur = conn.execute(f'SELECT {col_list} FROM "{_SNAPSHOT_TABLE}"')
-        return [dict(zip(columns, r)) for r in cur.fetchall()]
+        try:
+            cur = conn.execute(f'SELECT {col_list} FROM "{_SNAPSHOT_TABLE}"')
+            return [dict(zip(columns, r)) for r in cur.fetchall()]
+        # Covers a manifest listing a column the table doesn't have, a missing
+        # snapshot table, and an unreadable/corrupt file.
+        except sqlite3.Error as e:
+            raise ArtifactValidationError(
+                f"artifact rows unreadable (manifest/table mismatch?): {e}"
+            ) from e
     finally:
         conn.close()
 
@@ -305,6 +333,14 @@ def _validate(path: str, *, verify_checksum: bool = True) -> tuple[ArtifactManif
             f"v{ARTIFACT_SCHEMA_VERSION}"
         )
     columns = manifest.columns or snapshot_columns()
+    # The natural key must survive into the import, or _idempotent_insert would
+    # blow up with a raw KeyError on a syntactically-valid but semantically
+    # broken manifest. Reject it here instead.
+    missing_key = [c for c in _KEY_COLUMNS if c not in columns]
+    if missing_key:
+        raise ArtifactValidationError(
+            f"manifest columns missing natural-key column(s): {', '.join(missing_key)}"
+        )
     rows = _read_rows(path, columns)
 
     if len(rows) != manifest.row_count:
