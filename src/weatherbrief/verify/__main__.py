@@ -383,6 +383,28 @@ def cmd_standalone(args):
             # full picture.
             print(f"  Post-cycle tasks (rollup + cache rebuild): {post_ms}ms")
             print(f"  Total: {result.get('duration_ms', 0) + post_ms}ms")
+
+        if args.emit_artifact:
+            if args.light:
+                print("  WARNING: --emit-artifact with --light exports whatever "
+                      "snapshots are already in the DB (no fresh fetch).")
+            from flyfun_common.db import SessionLocal
+            from weatherbrief.tasks.snapshot_artifact import export_snapshots
+
+            emit_db = SessionLocal()
+            try:
+                manifest = export_snapshots(
+                    emit_db, args.emit_artifact,
+                    region=args.region,
+                    wall_time_ms=result.get("duration_ms", 0),
+                )
+            finally:
+                emit_db.close()
+            print(f"\nArtifact written: {args.emit_artifact}")
+            print(f"  Region: {manifest.region or 'all'}")
+            print(f"  Rows: {manifest.row_count}")
+            print(f"  Models: {', '.join(sorted(manifest.models)) or 'none'}")
+            print(f"  Checksum: {manifest.checksum[:12]}…")
     finally:
         # Tidy teardown of the child's sounding/decode pool (#448 PR B) —
         # in a finally because the failure path needs it MOST: an uncaught
@@ -400,6 +422,37 @@ def cmd_standalone(args):
             shutdown_decode_pool(wait=False, drain_dispatcher=True, force=True)
         except Exception:
             pass
+
+
+def cmd_ingest_artifact(args):
+    """Import a portable snapshot artifact into this DB (P3)."""
+    _init_db()
+    load_dotenv()
+
+    from flyfun_common.db import SessionLocal
+    from weatherbrief.tasks.snapshot_artifact import (
+        ArtifactValidationError,
+        import_snapshots,
+    )
+
+    db = SessionLocal()
+    try:
+        result = import_snapshots(
+            db, args.path,
+            verify_checksum=not args.no_verify_checksum,
+        )
+    except ArtifactValidationError as e:
+        print(f"ERROR: artifact rejected — {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        db.close()
+
+    m = result.manifest
+    print(f"Ingested artifact: {args.path}")
+    print(f"  Source host: {m.source_host}  generated: {m.generated_at}")
+    print(f"  Region: {m.region or 'all'}  models: {', '.join(sorted(m.models)) or 'none'}")
+    print(f"  Rows: total={result.rows_total} inserted={result.rows_inserted} "
+          f"skipped(existing)={result.rows_skipped}")
 
 
 def cmd_rebuild_cache(args):
@@ -660,6 +713,30 @@ def main():
         help="Renice and raise oom_score_adj — set by the scheduler when it "
              "runs the cycle as an isolated subprocess",
     )
+    p_standalone.add_argument(
+        "--emit-artifact", metavar="PATH",
+        help="After the cycle, export the fresh snapshots to a portable SQLite "
+             "artifact at PATH (P2). Off-box compute ships this to a serving "
+             "replica, which imports it with `ingest-artifact`.",
+    )
+    p_standalone.add_argument(
+        "--region", choices=["eu", "us", "all"],
+        help="Region scope recorded in the artifact manifest (and applied once "
+             "the snapshot table has a region column). Default: all.",
+    )
+
+    # ingest-artifact
+    p_ingest = subparsers.add_parser(
+        "ingest-artifact",
+        help="Import a portable snapshot artifact into this DB (P3)",
+    )
+    p_ingest.add_argument("path", help="Path to the SQLite artifact to import")
+    p_ingest.add_argument(
+        "--no-verify-checksum", action="store_true",
+        help="Skip the content-checksum check (row-count is still validated). "
+             "For debugging only — the checksum is what rejects a corrupt "
+             "artifact before any row is written.",
+    )
 
     # rebuild-cache
     subparsers.add_parser(
@@ -742,6 +819,8 @@ def main():
         cmd_discover(args)
     elif args.command == "standalone":
         cmd_standalone(args)
+    elif args.command == "ingest-artifact":
+        cmd_ingest_artifact(args)
     elif args.command == "rebuild-cache":
         cmd_rebuild_cache(args)
     elif args.command == "rollup-summary":
