@@ -73,11 +73,13 @@ def _seed(session, rows):
     session.commit()
 
 
-def _all_snapshots(session):
+def _all_snapshots(session, *, drop_fetched_at=False):
     """All snapshot rows as comparable dicts (natural-key sorted, no id)."""
     cols = snapshot_columns()
     rows = session.execute(select(AirportForecastSnapshotRow)).scalars().all()
     dicts = [{c: getattr(r, c) for c in cols} for r in rows]
+    if drop_fetched_at:
+        dicts = [{k: v for k, v in d.items() if k != "fetched_at"} for d in dicts]
     return sorted(dicts, key=lambda d: (d["icao"], d["model"],
                                         str(d["model_init_time"]),
                                         str(d["forecast_hour"])))
@@ -98,7 +100,6 @@ def test_round_trip_equivalence(tmp_path):
         _snap("LFPG", "ecmwf", ECMWF_INIT, 12, precip_period_h=3),
     ]
     _seed(src, seeded)
-    expected = _all_snapshots(src)
 
     artifact = str(tmp_path / "eu.sqlite")
     manifest = export_snapshots(src, artifact, region="eu", generated_at=NOW)
@@ -111,13 +112,19 @@ def test_round_trip_equivalence(tmp_path):
     assert result.rows_inserted == 4
     assert result.rows_skipped == 0
 
-    assert _all_snapshots(dst) == expected
+    # Every column except fetched_at round-trips identically...
+    assert _all_snapshots(dst, drop_fetched_at=True) == \
+        _all_snapshots(src, drop_fetched_at=True)
+    # ...and fetched_at is restamped at ingest, not carried from the source.
+    seeded_fetched = NOW.replace(tzinfo=None)
+    assert all(r["fetched_at"] != seeded_fetched for r in _all_snapshots(dst))
 
     # And a cycle row was recorded with the import source tag.
     cycles = dst.execute(select(VerificationCycleRow)).scalars().all()
     assert len(cycles) == 1
     assert cycles[0].source == IMPORT_CYCLE_SOURCE
     assert cycles[0].airports == 2  # LFPG + EDDF
+    assert cycles[0].duration_ms is not None  # this import's own elapsed, not the exporter's
 
 
 def test_latest_init_per_model_is_exported(tmp_path):
@@ -169,6 +176,12 @@ def test_ingest_is_idempotent(tmp_path):
     assert second.rows_inserted == 0
     assert second.rows_skipped == 2
     assert len(_all_snapshots(dst)) == 2  # no duplication
+
+    # The no-op re-import's cycle row records 0 airports (no work done), not 1.
+    cycles = dst.execute(
+        select(VerificationCycleRow).order_by(VerificationCycleRow.id)
+    ).scalars().all()
+    assert [c.airports for c in cycles] == [1, 0]
 
 
 def test_two_disjoint_artifacts_no_loss(tmp_path):
@@ -270,3 +283,71 @@ def test_bypass_checksum_still_imports(tmp_path):
     dst = Dst()
     result = import_snapshots(dst, artifact, verify_checksum=False)
     assert result.rows_inserted == 1
+
+
+def test_no_verify_checksum_still_rejects_truncated(tmp_path):
+    """--no-verify-checksum skips only the checksum — row-count is still checked."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", GFS_INIT, 12), _snap("EDDF", "gfs", GFS_INIT, 12)])
+    artifact = str(tmp_path / "trunc2.sqlite")
+    export_snapshots(src, artifact, generated_at=NOW)
+
+    conn = sqlite3.connect(artifact)
+    conn.execute('DELETE FROM airport_forecast_snapshots WHERE icao = "EDDF"')
+    conn.commit()
+    conn.close()
+
+    Dst = _make_db()
+    dst = Dst()
+    with pytest.raises(ArtifactValidationError, match="row count mismatch"):
+        import_snapshots(dst, artifact, verify_checksum=False)
+    assert _all_snapshots(dst) == []
+
+
+def test_export_overwrites_existing_path(tmp_path):
+    """Emitting to a path that already holds an artifact just replaces it."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", GFS_INIT, 12)])
+    artifact = str(tmp_path / "reused.sqlite")
+    export_snapshots(src, artifact, generated_at=NOW)
+
+    # Second emit to the same path must not raise "table already exists".
+    _seed(src, [_snap("EDDF", "gfs", GFS_INIT, 12)])
+    m2 = export_snapshots(src, artifact, generated_at=NOW)
+    assert m2.row_count == 2
+
+    Dst = _make_db()
+    dst = Dst()
+    import_snapshots(dst, artifact)
+    assert {r["icao"] for r in _all_snapshots(dst)} == {"LFPG", "EDDF"}
+    # No stray temp files left behind in the destination dir.
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".artifact-")]
+
+
+def test_malformed_manifest_rejected(tmp_path):
+    """A manifest with an unexpected shape raises ArtifactValidationError, not TypeError."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", GFS_INIT, 12)])
+    artifact = str(tmp_path / "badmani.sqlite")
+    export_snapshots(src, artifact, generated_at=NOW)
+
+    conn = sqlite3.connect(artifact)
+    conn.execute("UPDATE _manifest SET manifest_json = ?", ('{"unexpected": true}',))
+    conn.commit()
+    conn.close()
+
+    Dst = _make_db()
+    dst = Dst()
+    with pytest.raises(ArtifactValidationError, match="malformed manifest"):
+        import_snapshots(dst, artifact)
+
+
+def test_missing_file_rejected(tmp_path):
+    """A non-existent path errors cleanly and leaves no stray sqlite file."""
+    missing = str(tmp_path / "typo.sqlite")
+    with pytest.raises(ArtifactValidationError, match="not found"):
+        read_manifest(missing)
+    assert not (tmp_path / "typo.sqlite").exists()

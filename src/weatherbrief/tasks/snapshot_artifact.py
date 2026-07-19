@@ -34,14 +34,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import socket
 import sqlite3
+import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import insert, select, tuple_
 
-from weatherbrief.db.models import AirportForecastSnapshotRow, VerificationCycleRow
+from weatherbrief.db.models import (
+    AirportForecastSnapshotRow,
+    VerificationCycleRow,
+    snapshot_natural_key,
+)
 
 # Bump when the on-disk artifact layout changes incompatibly.
 ARTIFACT_SCHEMA_VERSION = 1
@@ -87,7 +94,13 @@ class ArtifactManifest:
 
     @classmethod
     def from_json(cls, blob: str) -> "ArtifactManifest":
-        return cls(**json.loads(blob))
+        # A manifest written by a mismatched producer (bad JSON, missing or
+        # extra keys) must fail as a clean rejection, not a raw TypeError that
+        # escapes the CLI's ArtifactValidationError handler.
+        try:
+            return cls(**json.loads(blob))
+        except (ValueError, TypeError) as e:
+            raise ArtifactValidationError(f"malformed manifest: {e}") from e
 
 
 @dataclass
@@ -136,9 +149,6 @@ def _canonical_checksum(rows: list[dict], columns: list[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _norm_key(icao, model, init, fhour) -> tuple:
-    """Natural key normalized to strings so tz/naive datetimes compare stably."""
-    return (icao, model, str(_iso(init)), str(_iso(fhour)))
 
 
 # ---------------------------------------------------------------------------
@@ -207,23 +217,41 @@ def export_snapshots(
         columns=columns,
     )
 
-    conn = sqlite3.connect(path)
+    # Write to a temp file in the destination dir, then atomically rename into
+    # place. This makes emit re-runnable (a fresh file each cycle, so no "table
+    # already exists" on a fixed path) and crash-safe (a killed mid-write leaves
+    # only the temp file — never a partial artifact at `path` that the shipping
+    # process could pick up or that would block future emits).
+    dest_dir = os.path.dirname(os.path.abspath(path))
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        prefix=".artifact-", suffix=".sqlite.tmp", dir=dest_dir,
+    )
+    os.close(tmp_fd)
     try:
-        col_defs = ", ".join(f'"{c}"' for c in columns)
-        conn.execute(f'CREATE TABLE "{_SNAPSHOT_TABLE}" ({col_defs})')
-        placeholders = ", ".join("?" for _ in columns)
-        conn.executemany(
-            f'INSERT INTO "{_SNAPSHOT_TABLE}" ({col_defs}) VALUES ({placeholders})',
-            [[_iso(r.get(c)) for c in columns] for r in rows],
-        )
-        conn.execute(f'CREATE TABLE "{_MANIFEST_TABLE}" (manifest_json TEXT)')
-        conn.execute(
-            f'INSERT INTO "{_MANIFEST_TABLE}" (manifest_json) VALUES (?)',
-            (manifest.to_json(),),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+        conn = sqlite3.connect(tmp_path)
+        try:
+            col_defs = ", ".join(f'"{c}"' for c in columns)
+            conn.execute(f'CREATE TABLE "{_SNAPSHOT_TABLE}" ({col_defs})')
+            placeholders = ", ".join("?" for _ in columns)
+            conn.executemany(
+                f'INSERT INTO "{_SNAPSHOT_TABLE}" ({col_defs}) VALUES ({placeholders})',
+                [[_iso(r.get(c)) for c in columns] for r in rows],
+            )
+            conn.execute(f'CREATE TABLE "{_MANIFEST_TABLE}" (manifest_json TEXT)')
+            conn.execute(
+                f'INSERT INTO "{_MANIFEST_TABLE}" (manifest_json) VALUES (?)',
+                (manifest.to_json(),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        os.replace(tmp_path, path)  # atomic within the same filesystem
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
     return manifest
 
@@ -233,6 +261,10 @@ def export_snapshots(
 # ---------------------------------------------------------------------------
 
 def read_manifest(path: str) -> ArtifactManifest:
+    # Guard first: sqlite3.connect() auto-creates a file, so a mistyped path
+    # would otherwise leave a stray empty .sqlite behind instead of erroring.
+    if not os.path.isfile(path):
+        raise ArtifactValidationError(f"artifact not found: {path}")
     conn = sqlite3.connect(path)
     try:
         try:
@@ -258,7 +290,12 @@ def _read_rows(path: str, columns: list[str]) -> list[dict]:
         conn.close()
 
 
-def _validate(path: str) -> tuple[ArtifactManifest, list[dict]]:
+def _validate(path: str, *, verify_checksum: bool = True) -> tuple[ArtifactManifest, list[dict]]:
+    """Read + validate an artifact. Row-count is ALWAYS checked; the (more
+    expensive) content checksum only when ``verify_checksum`` — so
+    ``--no-verify-checksum`` still rejects a truncated artifact, matching the
+    flag's documented contract.
+    """
     manifest = read_manifest(path)
     if manifest.schema_version > ARTIFACT_SCHEMA_VERSION:
         raise ArtifactValidationError(
@@ -272,12 +309,13 @@ def _validate(path: str) -> tuple[ArtifactManifest, list[dict]]:
         raise ArtifactValidationError(
             f"row count mismatch: manifest={manifest.row_count} actual={len(rows)}"
         )
-    actual = _canonical_checksum(rows, columns)
-    if actual != manifest.checksum:
-        raise ArtifactValidationError(
-            f"checksum mismatch: manifest={manifest.checksum[:12]}… "
-            f"actual={actual[:12]}…"
-        )
+    if verify_checksum:
+        actual = _canonical_checksum(rows, columns)
+        if actual != manifest.checksum:
+            raise ArtifactValidationError(
+                f"checksum mismatch: manifest={manifest.checksum[:12]}… "
+                f"actual={actual[:12]}…"
+            )
     return manifest, rows
 
 
@@ -291,56 +329,64 @@ def import_snapshots(
 
     Idempotent: rows whose natural key already exists are skipped. Raises
     :class:`ArtifactValidationError` (before writing anything) on a corrupt or
-    truncated artifact.
+    truncated artifact — row-count is checked even with ``verify_checksum=False``.
     """
-    if verify_checksum:
-        manifest, artifact_rows = _validate(path)
-    else:
-        manifest = read_manifest(path)
-        artifact_rows = _read_rows(path, manifest.columns or snapshot_columns())
+    t_start = time.monotonic()
+    manifest, artifact_rows = _validate(path, verify_checksum=verify_checksum)
 
     # Only import columns the target table actually has (graceful cross-version).
     target_columns = set(snapshot_columns())
     import_columns = [c for c in (manifest.columns or snapshot_columns())
                       if c in target_columns]
 
-    # Parse datetime columns back to datetimes for correct dialect storage.
+    # `fetched_at` drives retention (`_prune_old_snapshots` deletes rows older
+    # than 10 days by fetched_at). Stamp it at INGEST time, not the source's
+    # original fetch time, so compute→ship→ingest latency never eats into the
+    # replica's retention window and prunes freshly-arrived long-lead rows.
+    ingest_now = datetime.now(timezone.utc)
     parsed_rows: list[dict] = []
     for r in artifact_rows:
         row = {}
         for c in import_columns:
+            if c == "fetched_at":
+                continue  # restamped below, not carried from the source
             v = r.get(c)
             row[c] = _parse_dt(v) if c in _DATETIME_COLUMNS else v
+        row["fetched_at"] = ingest_now
         parsed_rows.append(row)
 
-    inserted = _idempotent_insert(session, parsed_rows)
+    inserted_rows = _idempotent_insert(session, parsed_rows)
 
-    distinct_icaos = len({r["icao"] for r in parsed_rows})
+    # Record this import's OWN elapsed time and the airports it actually wrote
+    # (a no-op re-ingest correctly records 0), not the exporter's numbers.
+    duration_ms = int((time.monotonic() - t_start) * 1000)
     session.add(VerificationCycleRow(
-        started_at=datetime.now(timezone.utc),
-        duration_ms=manifest.wall_time_ms,
+        started_at=ingest_now,
+        duration_ms=duration_ms,
         source=IMPORT_CYCLE_SOURCE,
-        airports=distinct_icaos,
+        airports=len({r["icao"] for r in inserted_rows}),
     ))
     session.commit()
 
     return ImportResult(
         rows_total=len(parsed_rows),
-        rows_inserted=inserted,
-        rows_skipped=len(parsed_rows) - inserted,
+        rows_inserted=len(inserted_rows),
+        rows_skipped=len(parsed_rows) - len(inserted_rows),
         manifest=manifest,
     )
 
 
-def _idempotent_insert(session, rows: list[dict]) -> int:
-    """Insert rows whose natural key is absent. Dialect-agnostic; returns count.
+def _idempotent_insert(session, rows: list[dict]) -> list[dict]:
+    """Insert rows whose natural key is absent. Dialect-agnostic.
 
-    Mirrors ``standalone_verification._store_snapshots`` (bulk key-fetch +
-    Core insert) without importing that heavy module — this file must stay light
-    enough to run ingest on the serving box.
+    Returns the rows actually inserted (so callers can report true work done).
+    Uses the shared :func:`snapshot_natural_key` for dedup — the same technique
+    as ``standalone_verification._store_snapshots``, so the two can't drift.
+    Kept as its own light implementation (no import of that heavy module) so
+    ingest stays runnable on the serving box.
     """
     if not rows:
-        return 0
+        return []
 
     keys = [
         (r["icao"], r["model"], r["model_init_time"], r["forecast_hour"])
@@ -367,12 +413,12 @@ def _idempotent_insert(session, rows: list[dict]) -> int:
             )
         ).all()
         for r in found:
-            existing.add(_norm_key(*r))
+            existing.add(snapshot_natural_key(*r))
 
     to_insert: list[dict] = []
     for row in rows:
-        k = _norm_key(row["icao"], row["model"],
-                      row["model_init_time"], row["forecast_hour"])
+        k = snapshot_natural_key(row["icao"], row["model"],
+                                 row["model_init_time"], row["forecast_hour"])
         if k in existing:
             continue
         existing.add(k)  # dedup within this artifact too
@@ -380,4 +426,4 @@ def _idempotent_insert(session, rows: list[dict]) -> int:
 
     for i in range(0, len(to_insert), 1000):
         session.execute(insert(AirportForecastSnapshotRow), to_insert[i : i + 1000])
-    return len(to_insert)
+    return to_insert

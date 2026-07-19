@@ -385,6 +385,10 @@ def cmd_standalone(args):
             print(f"  Total: {result.get('duration_ms', 0) + post_ms}ms")
 
         if args.emit_artifact:
+            # --emit-artifact pairs naturally with --forecast-only (a fetch
+            # cycle produces fresh snapshots to export). With --light there is
+            # no fresh fetch, so we warn rather than hard-fail — exporting the
+            # existing DB is a valid (if unusual) re-ship of the last cycle.
             if args.light:
                 print("  WARNING: --emit-artifact with --light exports whatever "
                       "snapshots are already in the DB (no fresh fetch).")
