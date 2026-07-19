@@ -53,8 +53,10 @@ from weatherbrief.db.models import (
 # Bump when the on-disk artifact layout changes incompatibly.
 ARTIFACT_SCHEMA_VERSION = 1
 
-# verification_cycles.source tag written by import_snapshots.
-IMPORT_CYCLE_SOURCE = "standalone_forecast_imported"
+# verification_cycles.source tag written by import_snapshots. MUST fit
+# VerificationCycleRow.source (String(24)) — prod MySQL rejects/truncates a
+# longer value and, sharing the import transaction, would roll the import back.
+IMPORT_CYCLE_SOURCE = "standalone_imported"
 
 _SNAPSHOT_TABLE = "airport_forecast_snapshots"
 _MANIFEST_TABLE = "_manifest"

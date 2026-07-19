@@ -393,7 +393,15 @@ def cmd_standalone(args):
                 print("  WARNING: --emit-artifact with --light exports whatever "
                       "snapshots are already in the DB (no fresh fetch).")
             from flyfun_common.db import SessionLocal
-            from weatherbrief.tasks.snapshot_artifact import export_snapshots
+            from weatherbrief.tasks.snapshot_artifact import (
+                export_snapshots,
+                snapshot_columns,
+            )
+
+            if (args.region and args.region != "all"
+                    and "region" not in snapshot_columns()):
+                print(f"  WARNING: --region {args.region} has no effect yet — the "
+                      "snapshot table has no region column; exporting all regions.")
 
             emit_db = SessionLocal()
             try:

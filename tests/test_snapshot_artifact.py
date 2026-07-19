@@ -345,6 +345,16 @@ def test_malformed_manifest_rejected(tmp_path):
         import_snapshots(dst, artifact)
 
 
+def test_import_cycle_source_fits_column():
+    """The import source tag must fit VerificationCycleRow.source (String(24)).
+
+    SQLite doesn't enforce VARCHAR length, so this dialect-independent guard is
+    what catches an over-long tag that would fail/truncate on prod MySQL.
+    """
+    col_len = VerificationCycleRow.__table__.c.source.type.length
+    assert len(IMPORT_CYCLE_SOURCE) <= col_len
+
+
 def test_missing_file_rejected(tmp_path):
     """A non-existent path errors cleanly and leaves no stray sqlite file."""
     missing = str(tmp_path / "typo.sqlite")
