@@ -540,12 +540,16 @@ struct FlightListView: View {
                     Label("Edit Flight", systemImage: "pencil")
                 }
             }
-            // File a pilot report for this flight (position-based; not gated on an
-            // in-flight window). Not gated on offline either — `PirepViewModel.submit`
-            // detects a transient-network failure and queues via `PirepOfflineStore`,
-            // so filing under poor cockpit connectivity (the primary use case) works
-            // and matches the other two entry points (toolbar + PIREPs-tab action).
-            if appState.userPreferences.preferences.pirepCanPublish {
+            // File a pilot report for this flight. Gated on the flight's tracking
+            // window (departure −2h … +duration +2h): a list-filed PIREP carries no
+            // pack_id, so the server links it to the flight ONLY when its
+            // observed_at falls in that window (storage/pireps.py). Offering it on an
+            // out-of-window flight (e.g. one months away) would file a report that
+            // silently never appears in that flight's tab. Not gated on offline —
+            // `PirepViewModel.submit` queues transient-network failures via
+            // `PirepOfflineStore`, so filing under poor cockpit connectivity works.
+            if appState.userPreferences.preferences.pirepCanPublish,
+               Self.isInFlightWindow(flight) {
                 Button {
                     pirepFlight = flight
                 } label: {
@@ -568,6 +572,17 @@ struct FlightListView: View {
                 }
             }
         }
+    }
+
+    /// True when `now` is within a flight's tracking window (departure −2h to
+    /// departure +duration +2h) — the same window `BriefingContainerView` uses,
+    /// and the window the server links a pack_id-less PIREP to a flight by. Gates
+    /// the flight-list "Add PIREP" so a list-filed report always links.
+    static func isInFlightWindow(_ flight: FlightResponse, now: Date = Date()) -> Bool {
+        guard let departure = flight.departureDate else { return false }
+        let start = departure.addingTimeInterval(-2 * 3600)
+        let end = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
+        return now >= start && now <= end
     }
 
     // MARK: - Logbook grouping (Future · Recent · Past, §4.4)

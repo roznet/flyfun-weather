@@ -1,55 +1,75 @@
 import SwiftUI
 
 /// List of PIREPs for a flight, shown as a briefing tab. When the pilot can
-/// publish, it carries a permanent "Report a PIREP" action (empty-state button
-/// + a persistent bottom bar) so filing a report is always one tap away — no
-/// in-flight-window gate.
+/// publish, it carries a permanent "Report a PIREP" action (a persistent bottom
+/// bar) so filing is always one tap away, independent of the list's load state.
 struct PirepListView: View {
     let pirepsState: LoadingState<[PirepResponse]>
     /// Whether to surface the add-PIREP action (mirrors `pirep_can_publish`).
     var canPublish: Bool = false
+    /// Whether the pilot may view others' reports (mirrors `pirep_can_view`).
+    /// When false the list query 403s, so the caller skips the load and we show
+    /// the publish-only message instead of a generic error — the add bar below
+    /// stays reachable either way.
+    var canView: Bool = true
     /// Opens the reporting form. nil hides every add affordance.
     var onAdd: (() -> Void)? = nil
     var retryAction: () async -> Void = {}
 
     var body: some View {
-        LoadingStateView(state: pirepsState, retryAction: retryAction) { pireps in
-            if pireps.isEmpty {
-                ContentUnavailableView {
-                    Label("No PIREPs", systemImage: "cloud.sun")
-                } description: {
-                    Text("No pilot reports for this flight yet.")
-                } actions: {
-                    addButton(prominent: true)
-                }
-            } else {
-                List(pireps) { pirep in
-                    PirepRowView(pirep: pirep)
-                }
-                .listStyle(.plain)
-                .safeAreaInset(edge: .bottom) {
-                    if canPublish, onAdd != nil {
-                        addButton(prominent: true)
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(.bar)
+        // The add bar sits OUTSIDE the load-state switch so it renders in every
+        // state (loading, loaded-empty, loaded-list, error, publish-only) — the
+        // previous version buried it in the loaded-and-empty branch, so a
+        // publish-only user (whose list load 403s to `.error`) never saw it.
+        content
+            .safeAreaInset(edge: .bottom) { addBar }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if canPublish && !canView {
+            // Publish-only: the list query would 403, so don't render it as an
+            // error. Filing (the add bar) is this tab's whole purpose here.
+            ContentUnavailableView {
+                Label("Report a PIREP", systemImage: "cloud.sun")
+            } description: {
+                Text("Filing is enabled for your account. Viewing other pilots' reports isn't yet.")
+            }
+        } else {
+            LoadingStateView(state: pirepsState, retryAction: retryAction) { pireps in
+                if pireps.isEmpty {
+                    ContentUnavailableView(
+                        "No PIREPs",
+                        systemImage: "cloud.sun",
+                        description: Text("No pilot reports for this flight yet.")
+                    )
+                } else {
+                    List(pireps) { pirep in
+                        PirepRowView(pirep: pirep)
                     }
+                    .listStyle(.plain)
                 }
             }
         }
     }
 
+    /// Persistent "Report a PIREP" bar, shown in every state when the pilot can
+    /// publish. Single guard here (not also at the call site) — no-ops to
+    /// `EmptyView`, so `safeAreaInset` adds nothing when publishing is off.
     @ViewBuilder
-    private func addButton(prominent: Bool) -> some View {
+    private var addBar: some View {
         if canPublish, let onAdd {
             Button {
                 onAdd()
             } label: {
                 Label("Report a PIREP", systemImage: "plus")
-                    .frame(maxWidth: prominent ? .infinity : nil)
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
         }
     }
 }
