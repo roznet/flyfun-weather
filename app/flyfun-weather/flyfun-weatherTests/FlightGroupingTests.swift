@@ -78,3 +78,28 @@ struct FlightGroupingTests {
         #expect(old.flightSection == .past)
     }
 }
+
+/// `FlightResponse.isInTrackingWindow` — the shared window used by the briefing
+/// Start/Stop + PIREP controls and the flight-list "Add PIREP" gate, and the
+/// window the server links a pack_id-less PIREP by. Pins the boundaries so a
+/// future edit can't silently drift the ±2h edges.
+@Suite("FlightTrackingWindow")
+struct FlightTrackingWindowTests {
+    // Departure 12:00Z, 2h flight → window [10:00Z, 16:00Z]
+    // (departure −2h … departure + duration + 2h).
+    static let flight = makeFlight(departureTime: "2026-06-24T12:00:00Z", flightDurationHours: 2.0)
+    static func at(_ iso: String) -> Date { ISO8601DateFormatter().date(from: iso)! }
+
+    @Test("inside: start edge, departure, and end edge are all in-window")
+    func inside() {
+        #expect(Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T10:00:00Z")))  // departure −2h
+        #expect(Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T12:00:00Z")))  // departure
+        #expect(Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T16:00:00Z")))  // departure +dur +2h
+    }
+
+    @Test("outside: one second before the start and after the end are out-of-window")
+    func outside() {
+        #expect(!Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T09:59:59Z")))
+        #expect(!Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T16:00:01Z")))
+    }
+}

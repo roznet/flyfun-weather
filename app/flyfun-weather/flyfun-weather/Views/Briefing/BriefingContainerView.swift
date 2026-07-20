@@ -33,13 +33,11 @@ struct BriefingContainerView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// Whether the current time is within the flight tracking window (departure - 2h to departure + duration + 2h).
+    /// Whether the current time is within the flight tracking window. Delegates
+    /// to the shared `FlightResponse.isInTrackingWindow` so the formula lives in
+    /// exactly one place (was duplicated here and in `FlightListView`).
     private var isInFlightWindow: Bool {
-        guard let departure = flight.departureDate else { return false }
-        let windowStart = departure.addingTimeInterval(-2 * 3600)
-        let windowEnd = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
-        let now = Date()
-        return now >= windowStart && now <= windowEnd
+        flight.isInTrackingWindow()
     }
 
     var body: some View {

@@ -120,6 +120,19 @@ struct FlightResponse: Codable, Identifiable, Sendable {
         return Date() > departure.addingTimeInterval(flightDurationHours * 3600)
     }
 
+    /// Whether `now` falls in the flight's tracking window: departure −2h to
+    /// departure + duration + 2h. This is the single source of truth for that
+    /// window — the briefing view (Start/Stop, PIREP button) and the flight list
+    /// ("Add PIREP" gate) both use it instead of reimplementing the formula, and
+    /// it mirrors the server's PIREP-linkage window in `storage/pireps.py`.
+    /// `now` is a parameter for deterministic testing.
+    func isInTrackingWindow(now: Date = Date()) -> Bool {
+        guard let departure = departureDate else { return false }
+        let start = departure.addingTimeInterval(-2 * 3600)
+        let end = departure.addingTimeInterval((flightDurationHours + 2) * 3600)
+        return now >= start && now <= end
+    }
+
     /// Short title: "ORIGIN → DEST" from waypoints.
     var shortTitle: String {
         guard let origin = waypoints.first, let dest = waypoints.last else {
