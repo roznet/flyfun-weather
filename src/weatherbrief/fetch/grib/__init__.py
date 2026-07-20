@@ -724,6 +724,37 @@ def _decode_pool_workers() -> int:
         return default
 
 
+def _decode_workers_ecmwf() -> int | None:
+    """Optional per-task concurrency window for the ECMWF standalone decode (#459).
+
+    Returns an int ``max_inflight`` window for ``_dispatch_decode_parallel``
+    when ``GRIB_DECODE_WORKERS_ECMWF`` is set, else ``None`` (submit all; the
+    pool bounds concurrency).
+
+    Because there is a **single** decode pool sized by ``GRIB_DECODE_WORKERS``,
+    this can only throttle the ECMWF loop *down* from the pool size — the pool
+    is the hard ceiling. To give ECMWF *more* workers, raise
+    ``GRIB_DECODE_WORKERS`` itself.
+
+    Rationale: concurrent ECMWF decode holds full GRIB grids in RAM, heavier
+    per-worker than the sounding batches the pool was tuned for. On a
+    memory-constrained fallback host (the prod droplet), set
+    ``GRIB_DECODE_WORKERS_ECMWF=1`` to keep the ECMWF leg serial while leaving
+    the shared pool wide for everything else.
+    """
+    raw = os.environ.get("GRIB_DECODE_WORKERS_ECMWF", "").strip()
+    if not raw:
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid GRIB_DECODE_WORKERS_ECMWF=%r, ignoring (using full pool)", raw,
+        )
+        return None
+    return v if v > 0 else None
+
+
 def decode_pool_enabled() -> bool:
     """Public: is the decode process pool available (workers > 0)?
 
@@ -1670,6 +1701,7 @@ def _dispatch_decode_parallel(
     *,
     priority: int | DecodePriority | None = None,
     return_exceptions: bool = False,
+    max_inflight: int | None = None,
 ) -> list[Any]:
     """Submit a batch of decode jobs; return results in input order.
 
@@ -1683,6 +1715,14 @@ def _dispatch_decode_parallel(
     siblings' results. On the legacy path, whose fault handling is shared-fate
     by design (one deadline, batch-wide cancel), a failure is represented as
     the same exception in every slot.
+
+    ``max_inflight`` (#459) throttles concurrency **below** the pool for a
+    memory-heavy loop: ``None`` submits the whole batch and lets the pool size
+    (``GRIB_DECODE_WORKERS``) bound concurrency; an int keeps at most that many
+    jobs in flight, submitting the next as each completes (sliding window). The
+    pool is always the hard ceiling — a window ``>=`` the pool size is a no-op.
+    Ignored on the legacy FIFO path (a rollback switch); there the pool size
+    alone bounds concurrency.
     """
     if not jobs:
         return []
@@ -1694,7 +1734,10 @@ def _dispatch_decode_parallel(
         except Exception as exc:
             return [exc for _ in jobs]
     eff = _resolve_priority(priority)
-    futures = _get_dispatcher().submit_batch(jobs, eff)
+    dispatcher = _get_dispatcher()
+    if max_inflight is not None and 0 < max_inflight < len(jobs):
+        return _collect_windowed(dispatcher, jobs, eff, max_inflight, return_exceptions)
+    futures = dispatcher.submit_batch(jobs, eff)
     if not return_exceptions:
         return [f.result() for f in futures]
     results: list[Any] = []
@@ -1703,6 +1746,59 @@ def _dispatch_decode_parallel(
             results.append(f.result())
         except Exception as exc:
             results.append(exc)
+    return results
+
+
+def _collect_windowed(
+    dispatcher: PriorityDecodeDispatcher,
+    jobs: list[tuple[str, tuple]],
+    priority: int,
+    max_inflight: int,
+    return_exceptions: bool,
+) -> list[Any]:
+    """Sliding-window batch dispatch (below the pool ceiling).
+
+    Keeps at most ``max_inflight`` caller futures outstanding at once,
+    submitting the next job as each completes. Results are returned in input
+    order. This bounds the number of full GRIB grids decoded concurrently for a
+    memory-heavy loop even when the pool (``GRIB_DECODE_WORKERS``) is wider.
+
+    ``return_exceptions`` mirrors :func:`_dispatch_decode_parallel`: on
+    ``False`` the first failing job re-raises (siblings still in flight are
+    abandoned, exactly as ``[f.result() for f in futures]`` would); on ``True``
+    each failure lands as an exception instance in its slot.
+    """
+    from concurrent.futures import FIRST_COMPLETED
+    from concurrent.futures import wait as _futures_wait
+
+    results: list[Any] = [None] * len(jobs)
+    fut_to_idx: dict[Future, int] = {}
+    live: set[Future] = set()
+    next_job = 0
+
+    def _submit(idx: int) -> None:
+        name, args = jobs[idx]
+        fut = dispatcher.submit_one(name, args, priority)
+        fut_to_idx[fut] = idx
+        live.add(fut)
+
+    while next_job < len(jobs) and len(live) < max_inflight:
+        _submit(next_job)
+        next_job += 1
+
+    while live:
+        done, live = _futures_wait(live, return_when=FIRST_COMPLETED)
+        for fut in done:
+            idx = fut_to_idx[fut]
+            try:
+                results[idx] = fut.result()
+            except Exception as exc:
+                if not return_exceptions:
+                    raise
+                results[idx] = exc
+            if next_job < len(jobs):
+                _submit(next_job)
+                next_job += 1
     return results
 
 

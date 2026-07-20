@@ -477,14 +477,14 @@ def test_grib_helper_priority_resolves_contextvar_vs_explicit():
 
     seen: list[int] = []
 
-    def fake_dispatch(name, path, lats, lons, priority=None):
+    def fake_dispatch(jobs, *, priority=None, return_exceptions=False, max_inflight=None):
         seen.append(_resolve_priority(priority))
-        return []  # empty decode → helper returns {} without touching GRIB
+        return [[] for _ in jobs]  # empty decode → helper returns {} without touching GRIB
 
     def _run():
         set_decode_priority(DecodePriority.INTERACTIVE)
         with patch("weatherbrief.tasks.standalone_grib.is_cached", return_value=True), \
-             patch("weatherbrief.fetch.grib._dispatch_decode", fake_dispatch):
+             patch("weatherbrief.fetch.grib._dispatch_decode_parallel", fake_dispatch):
             # Interactive path: no explicit priority → inherits the ContextVar.
             fetch_gfs_cloud_diag("20260618", 0, [6], [50.0], [0.0])
             # Standalone path: explicit BACKGROUND wins over the ContextVar.

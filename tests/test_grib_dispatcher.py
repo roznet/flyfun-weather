@@ -712,6 +712,116 @@ def test_contextvar_priority_ordering_concurrent(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 10b. max_inflight sliding window (issue #459)
+# ---------------------------------------------------------------------------
+
+
+def _window_dispatcher(monkeypatch, workers: int) -> PriorityDecodeDispatcher:
+    """Install a FakePool-backed dispatcher as the module singleton so
+    ``_dispatch_decode_parallel`` (which reaches for ``_get_dispatcher``) uses it."""
+    monkeypatch.setenv("GRIB_DECODE_PRIORITY_ENABLED", "1")
+    registry: dict[str, object] = {}
+    harness = PoolHarness(workers)
+    dispatcher = PriorityDecodeDispatcher(
+        worker_resolver=lambda name: registry[name],
+        pool_factory=harness.factory,
+        pool_teardown=harness.teardown,
+        workers_fn=harness.workers_fn,
+        timeout_fn=lambda: 5.0,
+    )
+    dispatcher._registry = registry  # test-only handle
+    monkeypatch.setattr(grib, "_DISPATCHER", dispatcher)
+    return dispatcher
+
+
+def test_parallel_max_inflight_caps_concurrency_below_pool(monkeypatch):
+    """``max_inflight`` bounds concurrent decodes *below* a wider pool, and
+    results still return in input order."""
+    dispatcher = _window_dispatcher(monkeypatch, workers=4)  # wide pool
+
+    concurrency = {"now": 0, "max": 0}
+    c_lock = threading.Lock()
+    proceed = threading.Event()
+
+    def _tracked(v):
+        with c_lock:
+            concurrency["now"] += 1
+            concurrency["max"] = max(concurrency["max"], concurrency["now"])
+        proceed.wait(5.0)
+        with c_lock:
+            concurrency["now"] -= 1
+        return v
+
+    dispatcher._registry["decode_x"] = _tracked
+    jobs = [("decode_x", (i,)) for i in range(8)]
+
+    box: dict[str, object] = {}
+
+    def _run():
+        box["out"] = grib._dispatch_decode_parallel(
+            jobs, priority=DecodePriority.SCHEDULED, max_inflight=2,
+        )
+
+    t = threading.Thread(target=_run)
+    t.start()
+    # Wait until the window saturates at 2, then prove it never exceeds 2.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        with c_lock:
+            if concurrency["now"] >= 2:
+                break
+        time.sleep(0.005)
+    time.sleep(0.05)
+    with c_lock:
+        peak = concurrency["max"]
+    proceed.set()
+    t.join(5.0)
+    dispatcher.drain()
+
+    assert peak == 2, f"max_inflight=2 should cap concurrency at 2, saw {peak}"
+    assert box["out"] == list(range(8)), "results must stay in input order"
+
+
+def test_parallel_max_inflight_isolates_failures_with_return_exceptions(monkeypatch):
+    """Windowed dispatch with ``return_exceptions=True`` places each failure in
+    its own slot and keeps siblings' results in order."""
+    dispatcher = _window_dispatcher(monkeypatch, workers=4)
+
+    def _maybe_fail(i):
+        if i % 3 == 0:
+            raise ValueError(f"boom-{i}")
+        return i
+
+    dispatcher._registry["decode_x"] = _maybe_fail
+    jobs = [("decode_x", (i,)) for i in range(7)]
+
+    out = grib._dispatch_decode_parallel(
+        jobs, priority=DecodePriority.SCHEDULED,
+        return_exceptions=True, max_inflight=2,
+    )
+    dispatcher.drain()
+
+    for i, r in enumerate(out):
+        if i % 3 == 0:
+            assert isinstance(r, ValueError) and str(r) == f"boom-{i}", (i, r)
+        else:
+            assert r == i, (i, r)
+
+
+def test_parallel_max_inflight_noop_when_ge_batch(monkeypatch):
+    """A window >= the batch size is a no-op — the whole batch is submitted."""
+    dispatcher = _window_dispatcher(monkeypatch, workers=4)
+    dispatcher._registry["decode_x"] = lambda v: v
+
+    jobs = [("decode_x", (i,)) for i in range(3)]
+    out = grib._dispatch_decode_parallel(
+        jobs, priority=DecodePriority.SCHEDULED, max_inflight=10,
+    )
+    dispatcher.drain()
+    assert out == [0, 1, 2]
+
+
+# ---------------------------------------------------------------------------
 # 11. Real ProcessPool — manager-thread recovery (FakePool can't reproduce this)
 # ---------------------------------------------------------------------------
 

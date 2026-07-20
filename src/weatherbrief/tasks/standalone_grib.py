@@ -3,8 +3,10 @@
 Thin wrapper around existing GRIB fetch/decode to extract ceiling and cloud base
 at airport coordinates. Reuses the shared GRIB cache — no duplicate downloads.
 
-Decode goes through ``_dispatch_decode`` by cache path, same as the briefing
-path (``_fetch_cloud_diag_for_fhour``) — never in this process. cfgrib/xarray
+Decode goes through the shared pool by cache path, same as the briefing
+path (``_fetch_cloud_diag_for_fhour``) — never in this process. The per-hour
+decodes are collected and fanned out via ``_dispatch_decode_parallel`` (#459)
+so pool workers overlap instead of one blocking dispatch at a time. cfgrib/xarray
 decode of full-domain grids in the orchestrating process was a parent-RSS
 contributor before issue #236 (the dispatcher exists precisely to keep that
 out of the parent). The subprocess cycle runs its own small pool since #448
@@ -62,7 +64,7 @@ def fetch_gfs_cloud_diag(
         Dict mapping forecast_hour → list of AirportCeilingData (same order as lats/lons).
         Missing hours are omitted from the dict.
     """
-    from weatherbrief.fetch.grib import _dispatch_decode
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel
     from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
     from weatherbrief.fetch.grib.gfs_idx import plan_cloud_diag_byte_ranges
     from weatherbrief.fetch.grib.grib_fetch import fetch_cloud_diag_ranges, fetch_idx
@@ -75,6 +77,12 @@ def fetch_gfs_cloud_diag(
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
     result: dict[int, list[AirportCeilingData]] = {}
 
+    # Phase 1: ensure each hour is cached (sequential network I/O), collecting
+    # the decode jobs to fan out. Decode is GIL-bound and was walked one
+    # blocking dispatch per hour (#459); batching lets the pool workers actually
+    # overlap. No dedicated concurrency cap — this leg is light (single field).
+    decode_jobs: list[tuple[str, tuple]] = []
+    job_fhours: list[int] = []
     for fhour in forecast_hours:
         ck = cache_key(fhour, "CLOUD_DIAG")
 
@@ -93,21 +101,30 @@ def fetch_gfs_cloud_diag(
                 logger.warning("GFS cloud diag fetch failed f%03d", fhour, exc_info=True)
                 continue
 
-        # TOCTOU: the decode worker re-reads the path, so a TTL expiry
-        # between is_cached and dispatch surfaces as FileNotFoundError here
-        # and skips this fhour (snapshot just lacks nwp_ceiling — same
-        # graceful degradation as any decode failure). TTLs are 12-24h, the
-        # window is milliseconds, and the briefing path
-        # (_fetch_cloud_diag_for_fhour) accepts the identical race.
-        try:
-            decoded = _dispatch_decode(
-                "decode_gfs_cloud_diag", str(run_dir / ck), lats, lons,
-                priority=priority,
-            )
-        except Exception:
-            logger.warning("GFS cloud diag decode failed f%03d", fhour, exc_info=True)
-            continue
+        decode_jobs.append(
+            ("decode_gfs_cloud_diag", (str(run_dir / ck), lats, lons)),
+        )
+        job_fhours.append(fhour)
 
+    if not decode_jobs:
+        return result
+
+    # Phase 2: fan the decodes out through the pool. TOCTOU: the decode worker
+    # re-reads the path, so a TTL expiry between is_cached and decode surfaces
+    # as a per-job exception here and skips that fhour (snapshot just lacks
+    # nwp_ceiling — same graceful degradation as any decode failure). TTLs are
+    # 12-24h, the window is milliseconds, and the briefing path
+    # (_fetch_cloud_diag_for_fhour) accepts the identical race.
+    decoded_all = _dispatch_decode_parallel(
+        decode_jobs, priority=priority, return_exceptions=True,
+    )
+
+    for fhour, decoded in zip(job_fhours, decoded_all):
+        if isinstance(decoded, Exception):
+            logger.warning(
+                "GFS cloud diag decode failed f%03d", fhour, exc_info=decoded,
+            )
+            continue
         if not decoded:
             continue
 
@@ -143,7 +160,7 @@ def fetch_icon_cloud_diag(
     Same interface as fetch_gfs_cloud_diag (incl. the ``priority`` pass-through)
     but uses DWD ICON-EU data source.
     """
-    from weatherbrief.fetch.grib import _dispatch_decode
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_CLOUD_DIAG_CACHE_KEY,
@@ -158,6 +175,10 @@ def fetch_icon_cloud_diag(
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
     result: dict[int, list[AirportCeilingData]] = {}
 
+    # Phase 1: ensure each hour is cached (sequential network I/O), collecting
+    # decode jobs to fan out — see fetch_gfs_cloud_diag for the rationale (#459).
+    decode_jobs: list[tuple[str, tuple]] = []
+    job_fhours: list[int] = []
     for fhour in forecast_hours:
         ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
 
@@ -175,16 +196,26 @@ def fetch_icon_cloud_diag(
                 logger.warning("ICON cloud diag fetch failed f%03d", fhour, exc_info=True)
                 continue
 
-        # TOCTOU window accepted — see the GFS branch above.
-        try:
-            decoded = _dispatch_decode(
-                "decode_icon_cloud_diag", str(run_dir / ck), lats, lons,
-                priority=priority,
-            )
-        except Exception:
-            logger.warning("ICON cloud diag decode failed f%03d", fhour, exc_info=True)
-            continue
+        decode_jobs.append(
+            ("decode_icon_cloud_diag", (str(run_dir / ck), lats, lons)),
+        )
+        job_fhours.append(fhour)
 
+    if not decode_jobs:
+        return result
+
+    # Phase 2: fan the decodes out through the pool. TOCTOU window accepted —
+    # see the GFS branch above.
+    decoded_all = _dispatch_decode_parallel(
+        decode_jobs, priority=priority, return_exceptions=True,
+    )
+
+    for fhour, decoded in zip(job_fhours, decoded_all):
+        if isinstance(decoded, Exception):
+            logger.warning(
+                "ICON cloud diag decode failed f%03d", fhour, exc_info=decoded,
+            )
+            continue
         if not decoded:
             continue
 
