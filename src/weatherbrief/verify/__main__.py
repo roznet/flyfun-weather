@@ -351,6 +351,10 @@ def cmd_standalone(args):
     from weatherbrief.fetch.grib import shutdown_decode_pool
 
     try:
+        # Region tags the stored rows and picks the region's model set. Only EU
+        # is onboarded today, so 'all'/None/unknown fall back to 'eu'; a real US
+        # cycle needs the US watchlist (us-expansion-plan step 7) before 'us'.
+        cycle_region = args.region if args.region in ("eu", "us") else "eu"
         result = run_standalone_cycle(
             watchlist, airports_db,
             fetch_forecasts=not args.light,
@@ -359,6 +363,7 @@ def cmd_standalone(args):
             # disposable process, so its pool can't contend with the web
             # app's. The scheduler's in-process fallback keeps this False.
             pool_soundings=True,
+            region=cycle_region,
         )
         print(f"\nStandalone verification cycle complete:")
         print(f"  Models fetched: {result.get('models_fetched', 0)}")

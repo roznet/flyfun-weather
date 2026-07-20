@@ -41,6 +41,7 @@ from weatherbrief.db.models import (
     VerificationCycleRow,
     VerificationObservationRow,
     VerificationScoreRow,
+    snapshot_insert_ignore,
 )
 from weatherbrief.tasks.airport_watchlist import (
     DEFAULT_PREFIXES,
@@ -276,6 +277,45 @@ class TestStoreSnapshots:
 
     def test_empty_list(self, db_session):
         assert _store_snapshots([], db_session) == 0
+
+    def test_region_is_tagged_on_stored_rows(self, db_session):
+        snap = {
+            "icao": "KJFK", "model": "gfs",
+            "model_init_time": GFS_INIT,
+            "forecast_hour": _utc(2026, 4, 2, 12, 0),
+            "temperature_2m_c": 20.0,
+        }
+        assert _store_snapshots([snap], db_session, region="us") == 1
+        row = db_session.execute(select(AirportForecastSnapshotRow)).scalar_one()
+        assert row.region == "us"
+
+    def test_store_snapshots_defaults_region_eu(self, db_session):
+        snap = {
+            "icao": "LFPG", "model": "gfs",
+            "model_init_time": GFS_INIT,
+            "forecast_hour": _utc(2026, 4, 2, 12, 0),
+        }
+        assert _store_snapshots([snap], db_session) == 1
+        assert db_session.execute(
+            select(AirportForecastSnapshotRow)
+        ).scalar_one().region == "eu"
+
+    def test_insert_ignore_no_raise_on_conflict(self, db_session):
+        """The shared INSERT-OR-IGNORE swallows a uq_afs_key collision (the Q9
+        concurrent-writer guarantee), rather than raising IntegrityError."""
+        row = {
+            "icao": "LFPG", "region": "eu", "model": "gfs",
+            "model_init_time": GFS_INIT,
+            "forecast_hour": _utc(2026, 4, 2, 12, 0),
+            "fetched_at": GFS_INIT,
+        }
+        snapshot_insert_ignore(db_session, [row])
+        db_session.commit()
+        # Same natural key again, bypassing any pre-filter — must NOT raise.
+        snapshot_insert_ignore(db_session, [dict(row, temperature_2m_c=99.0)])
+        db_session.commit()
+        rows = db_session.execute(select(AirportForecastSnapshotRow)).scalars().all()
+        assert len(rows) == 1  # second insert ignored, no duplicate, no crash
 
 
 # ---------------------------------------------------------------------------
