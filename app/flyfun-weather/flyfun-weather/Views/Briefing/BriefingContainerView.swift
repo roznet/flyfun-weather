@@ -60,7 +60,8 @@ struct BriefingContainerView: View {
                 VStack(spacing: 0) {
                     RefreshBannerView(state: viewModel.refreshState)
                     DownloadBannerView(state: viewModel.downloadState)
-                    BriefingContentView(viewModel: viewModel, trackingService: trackingService)
+                    BriefingContentView(viewModel: viewModel, trackingService: trackingService,
+                                        onAddPirep: { showingPirepSheet = true })
                 }
             } else {
                 ProgressView("Loading briefing...")
@@ -88,7 +89,12 @@ struct BriefingContainerView: View {
                                     .font(.caption)
                             }
                         }
-                        if isInFlightWindow && appState.userPreferences.preferences.pirepCanPublish {
+                        // No in-flight-window gate: a PIREP is a position report,
+                        // and the reporting form grabs its own GPS fix. Show it
+                        // whenever publishing is enabled; being in the window just
+                        // means the fix pre-fills a cruise altitude rather than a
+                        // ground one.
+                        if appState.userPreferences.preferences.pirepCanPublish {
                             Button {
                                 showingPirepSheet = true
                             } label: {
@@ -508,11 +514,22 @@ private struct DownloadBannerView: View {
 private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
+    /// Opens the PIREP reporting sheet (owned by the container's toolbar state),
+    /// so the PIREPs tab can carry its own permanent "+".
+    var onAddPirep: () -> Void
     @Environment(AppState.self) private var appState
+
+    private var canPublishPireps: Bool {
+        appState.userPreferences.preferences.pirepCanPublish
+    }
 
     private var tabs: [BriefingTab] {
         var tabs = BriefingTab.core
-        if appState.userPreferences.preferences.pirepCanView { tabs.append(.pireps) }
+        // A publisher can reach the tab even without view permission — that's
+        // where the permanent "Report a PIREP" action lives.
+        if appState.userPreferences.preferences.pirepCanView || canPublishPireps {
+            tabs.append(.pireps)
+        }
         return tabs
     }
 
@@ -554,9 +571,12 @@ private struct BriefingContentView: View {
         case .map:
             RouteMapView(viewModel: viewModel, trackingService: trackingService)
         case .pireps:
-            PirepListView(pirepsState: viewModel.pirepsState) {
-                await viewModel.loadPireps()
-            }
+            PirepListView(
+                pirepsState: viewModel.pirepsState,
+                canPublish: canPublishPireps,
+                onAdd: onAddPirep,
+                retryAction: { await viewModel.loadPireps() }
+            )
         }
     }
 }

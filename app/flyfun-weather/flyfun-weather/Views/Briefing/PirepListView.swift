@@ -1,24 +1,55 @@
 import SwiftUI
 
-/// Read-only list of PIREPs for a flight, shown as a briefing tab.
+/// List of PIREPs for a flight, shown as a briefing tab. When the pilot can
+/// publish, it carries a permanent "Report a PIREP" action (empty-state button
+/// + a persistent bottom bar) so filing a report is always one tap away — no
+/// in-flight-window gate.
 struct PirepListView: View {
     let pirepsState: LoadingState<[PirepResponse]>
+    /// Whether to surface the add-PIREP action (mirrors `pirep_can_publish`).
+    var canPublish: Bool = false
+    /// Opens the reporting form. nil hides every add affordance.
+    var onAdd: (() -> Void)? = nil
     var retryAction: () async -> Void = {}
 
     var body: some View {
         LoadingStateView(state: pirepsState, retryAction: retryAction) { pireps in
             if pireps.isEmpty {
-                ContentUnavailableView(
-                    "No PIREPs",
-                    systemImage: "cloud.sun",
-                    description: Text("No pilot reports for this flight yet.")
-                )
+                ContentUnavailableView {
+                    Label("No PIREPs", systemImage: "cloud.sun")
+                } description: {
+                    Text("No pilot reports for this flight yet.")
+                } actions: {
+                    addButton(prominent: true)
+                }
             } else {
                 List(pireps) { pirep in
                     PirepRowView(pirep: pirep)
                 }
                 .listStyle(.plain)
+                .safeAreaInset(edge: .bottom) {
+                    if canPublish, onAdd != nil {
+                        addButton(prominent: true)
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(.bar)
+                    }
+                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func addButton(prominent: Bool) -> some View {
+        if canPublish, let onAdd {
+            Button {
+                onAdd()
+            } label: {
+                Label("Report a PIREP", systemImage: "plus")
+                    .frame(maxWidth: prominent ? .infinity : nil)
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
 }

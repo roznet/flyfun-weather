@@ -30,11 +30,12 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 - Cross-section — Canvas renderer aligned with the web (smooth/soft cloud bands). Layer stack under `Views/CrossSection/Layers/` includes cloud bands (soft + NWP variants), icing (model, Ogimet NWP, SFIP), CAT, inversions, convective towers/background (thermo + NWP), terrain, temperature lines, reference lines. Model selector. Layer toggle chips.
 - Native Skew-T — tap cross-section point → `SkewTDetailView` (in `Views/CrossSection/`) renders `SkewTView` from the RZSkewT package below with thermodynamics, wind barbs, CAPE/CIN shading, LCL/LFC/EL markers, FL labels
 - Route map, digest view
-- PIREPs tab — read-only list for the flight, expandable rows with severity bars, hazard icons, own-badge. Tab gated by `userPreferences.pirepCanView`; in-flight reporting gated by `pirepCanPublish` (server flags, refreshed when the briefing opens)
+- PIREPs tab — list for the flight, expandable rows with severity bars, hazard icons, own-badge. Tab shown when `pirepCanView` **or** `pirepCanPublish` (a publisher reaches it even without view permission). When `pirepCanPublish`, the tab carries a permanent **"Report a PIREP"** action (empty-state button + persistent bottom bar) that opens the reporting sheet — no in-flight-window gate
 
 **PIREP reporting (M1)**:
-- In-flight reporting sheet (toolbar button during flight window)
+- Reporting sheet reachable three ways, all gated on `pirepCanPublish` only (no flight-window gate): the briefing toolbar "Report PIREP" button, the PIREPs-tab "Report a PIREP" action, and an "Add PIREP" flight-list context-menu item
 - `PirepViewModel` — GPS pre-fill altitude, all fields unselected (no confirmation bias), smart field ordering, location from `FlightTrackingService`
+- **Smart pre-population without an active track**: the form calls `FlightTrackingService.requestOneShotLocation()` on appear — a single `CLLocationManager.requestLocation()` fix (no route projection) — so lat/lon/altitude pre-fill even when the pilot never tapped "Start". No-op while a live track is already feeding positions
 - `PirepOfflineStore` actor — JSON-file queue in Documents, batch sync via `/api/pireps/batch`, dedup by `client_uuid`
 - **Auto-flush on connectivity**: on successful online submission, `offlineStore.sync(using: repository)` drains the queue
 - Network-error detection: `URLError` codes (`.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost`) via `underlyingError as? URLError` since `APIClient` wraps URL errors in `APIError` — the raw URL code is on the underlying error, not the top-level. Offline PIREPs enqueued with synthetic `PirepResponse.offline`
@@ -43,7 +44,7 @@ Phase 1 complete. Phase 2 complete (offline resilience hardening). Phase 3 M0 (a
 **Live in-flight tracking ("Start Flight")**:
 - `FlightTrackingService` (`NSObject` + `CLLocationManagerDelegate`) — `start(routePoints:flightEndTime:)` / `stop()`, projects live GPS onto the route, publishes `isTracking`, `currentLocation`, `projectedPosition`, `locationUpdateCount`
 - Start/Stop toolbar button in `BriefingContainerView` (only during the in-flight window)
-- Live aircraft position drawn on the cross-section (`CrossSectionView`) and route map (`RouteMapView`); also used to pre-fill PIREP location/altitude
+- Live aircraft position drawn on the cross-section (`CrossSectionView`) and route map (`RouteMapView`); also used to pre-fill PIREP location/altitude. The lighter `requestOneShotLocation()` path (no route projection) backs PIREP pre-fill when tracking isn't running
 
 **Pack management**: Pack history picker (toolbar dropdown with D-N labels + assessment badges). Server refresh with SSE streaming progress (stage, percentage). Active-refresh detection (polls for refreshes started elsewhere). Seamless pack sync — `BriefingViewModel.syncLatestPack()` (cheap, no-op if unchanged) fires on appear / pull-to-refresh / foreground / push, distinct from the ↻ full-refresh.
 

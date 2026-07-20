@@ -22,6 +22,12 @@ struct FlightListView: View {
     @State private var showSettings = false
     @State private var showSignOutWarning = false
     @State private var editingFlight: FlightResponse?
+    /// A flight the user chose to file a PIREP for from the list (context menu),
+    /// presented as the reporting sheet. nil when closed.
+    @State private var pirepFlight: FlightResponse?
+    /// One-shot-location tracking service backing the list-presented PIREP sheet
+    /// — the list carries no live route track, so the form fetches its own fix.
+    @State private var pirepTrackingService = FlightTrackingService()
     /// Compact-width forecast-map cover (the app's first `fullScreenCover`) and
     /// the deep-link state it opens with.
     @State private var showMapCover = false
@@ -219,6 +225,17 @@ struct FlightListView: View {
                             selection = .flight(updated)
                         }
                     }
+                }
+            }
+            .sheet(item: $pirepFlight) { flight in
+                // File a PIREP straight from the list (context menu). The form
+                // grabs a one-shot GPS fix to pre-fill lat/lon/altitude.
+                if let repo = appState.repository {
+                    PirepReportingView(
+                        viewModel: PirepViewModel(flight: flight, repository: repo,
+                                                  offlineStore: appState.pirepOfflineStore),
+                        trackingService: pirepTrackingService
+                    )
                 }
             }
             .alert("Sign Out?", isPresented: $showSignOutWarning) {
@@ -521,6 +538,15 @@ struct FlightListView: View {
                     editingFlight = flight
                 } label: {
                     Label("Edit Flight", systemImage: "pencil")
+                }
+            }
+            // File a pilot report for this flight (position-based; not gated on an
+            // in-flight window). Online-only — submission needs the server.
+            if !viewModel.isOffline && appState.userPreferences.preferences.pirepCanPublish {
+                Button {
+                    pirepFlight = flight
+                } label: {
+                    Label("Add PIREP", systemImage: "cloud.sun")
                 }
             }
             // Owner sharing (#446): share the short /s/{code} link. Hidden for
