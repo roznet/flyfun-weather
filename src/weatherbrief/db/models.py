@@ -730,10 +730,21 @@ class AirportForecastSnapshotRow(Base):
         # day" scan. Without it that DISTINCT has no usable index and reads the
         # whole table on every map page load (#415).
         Index("ix_afs_hour_model", "forecast_hour", "model"),
+        # Region-leading variant: once the map serving query filters by region
+        # (EU/US seam), this covers "which hours/models exist per day, in this
+        # region" as an index-only scan. Added alongside ix_afs_hour_model;
+        # the latter is dropped in a follow-up once serving is region-aware.
+        Index("ix_afs_region_hour_model", "region", "forecast_hour", "model"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     icao: Mapped[str] = mapped_column(String(4), nullable=False)
+    # Region scope: 'eu' (default, all pre-seam rows) or 'us'. Carried by the
+    # snapshot artifact so an off-box region cycle ingests without collision,
+    # and used to split the forecast-map cache per region.
+    region: Mapped[str] = mapped_column(
+        String(2), nullable=False, default="eu", server_default="eu"
+    )
     model: Mapped[str] = mapped_column(String(20), nullable=False)
     model_init_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -796,6 +807,39 @@ def snapshot_natural_key(
         forecast_hour.replace(tzinfo=None) if forecast_hour.tzinfo else forecast_hour
     )
     return (icao, model, init_naive, fhour_naive)
+
+
+def snapshot_insert_ignore(db, rows: list[dict], *, chunk: int = 1000) -> None:
+    """Bulk-insert ``airport_forecast_snapshots`` rows, ignoring ``uq_afs_key`` conflicts.
+
+    Dialect-aware INSERT-OR-IGNORE — SQLite ``ON CONFLICT DO NOTHING``, MySQL
+    ``INSERT IGNORE``. A second writer on the same natural key (e.g. a droplet
+    fallback cycle racing an artifact ingest) becomes a clean no-op instead of an
+    ``IntegrityError``, so concurrent writes are safe and the old single-writer
+    assumption is dropped. Shared by the standalone cycle's ``_store_snapshots``
+    and the importer's ``_idempotent_insert`` so their write paths can't drift.
+
+    Callers still pre-filter existing keys for an accurate inserted-count and to
+    cut write load; this is the last-line safety net against the check-then-insert
+    race, not a replacement for that pre-filter.
+    """
+    if not rows:
+        return
+    table = AirportForecastSnapshotRow.__table__
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as _ins
+        stmt = _ins(table).on_conflict_do_nothing(
+            index_elements=["icao", "model", "model_init_time", "forecast_hour"],
+        )
+    elif dialect == "mysql":
+        from sqlalchemy.dialects.mysql import insert as _ins
+        stmt = _ins(table).prefix_with("IGNORE")
+    else:  # pragma: no cover - other dialects fall back to a plain insert
+        from sqlalchemy import insert as _ins
+        stmt = _ins(table)
+    for i in range(0, len(rows), chunk):
+        db.execute(stmt, rows[i : i + chunk])
 
 
 class VerificationMonthlyStatsRow(Base):

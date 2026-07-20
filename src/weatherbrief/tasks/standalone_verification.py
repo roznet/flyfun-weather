@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import requests
-from sqlalchemy import insert, select, tuple_
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -27,6 +27,7 @@ from weatherbrief.db.models import (
     VerificationCycleRow,
     VerificationObservationRow,
     VerificationScoreRow,
+    snapshot_insert_ignore,
     snapshot_natural_key,
 )
 from weatherbrief.process_memory_sampler import MemorySampler, MemoryPeaks
@@ -187,6 +188,15 @@ def _check_memory_anomaly(
 # ---------------------------------------------------------------------------
 
 STANDALONE_MODELS = ["gfs", "icon", "ecmwf"]
+
+# Region-scoped model sets. EU is the pre-seam default; the US entry lands with
+# US onboarding (us-expansion-plan.md steps 3/§model-names) once the `ncep_`
+# Open-Meteo models are registered in MODEL_ENDPOINTS — until then an unknown
+# region falls back to the EU list, which is harmless because no US cycle runs.
+STANDALONE_MODELS_BY_REGION = {
+    "eu": STANDALONE_MODELS,
+    # "us": ["ncep_gfs025", "ecmwf"],  # ICON is European-domain only
+}
 # Verification target hours. Derived from the map grid rather than restated:
 # a second literal here is a rule that can silently drift out of step with
 # forecast_grid, which is the thing that module exists to prevent.
@@ -1096,8 +1106,13 @@ def _normalize_key(icao: str, model: str, init_time: datetime, fhour: datetime) 
     return snapshot_natural_key(icao, model, init_time, fhour)
 
 
-def _store_snapshots(snapshots: list[dict], db) -> int:
-    """Insert new forecast snapshot rows, skipping duplicates. Returns count of new rows."""
+def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
+    """Insert new forecast snapshot rows, skipping duplicates. Returns count of new rows.
+
+    ``region`` tags every stored row (EU/US seam). The final write is an
+    INSERT-OR-IGNORE (``snapshot_insert_ignore``), so a concurrent writer on the
+    same natural key is a no-op rather than an ``IntegrityError``.
+    """
     if not snapshots:
         return 0
 
@@ -1148,6 +1163,7 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
 
         rows.append({
             "icao": snap["icao"],
+            "region": region,
             "model": snap["model"],
             "model_init_time": snap["model_init_time"],
             "forecast_hour": snap["forecast_hour"],
@@ -1176,8 +1192,7 @@ def _store_snapshots(snapshots: list[dict], db) -> int:
             "sounding_convective_risk": snap.get("sounding_convective_risk"),
         })
 
-    for i in range(0, len(rows), 1000):
-        db.execute(insert(AirportForecastSnapshotRow), rows[i : i + 1000])
+    snapshot_insert_ignore(db, rows)
     return len(rows)
 
 
@@ -1435,6 +1450,7 @@ def run_standalone_cycle(
     fetch_forecasts: bool = True,
     score_observations: bool = True,
     pool_soundings: bool = False,
+    region: str = "eu",
 ) -> dict:
     """Run one standalone cycle.
 
@@ -1513,8 +1529,9 @@ def run_standalone_cycle(
             # Phase A+B: Fetch and store forecasts per model. One model at a
             # time to bound memory — each model's snapshots are stored and
             # freed before the next fetch.
-            metadata = fetch_model_metadata(STANDALONE_MODELS)
-            for model in STANDALONE_MODELS:
+            models = STANDALONE_MODELS_BY_REGION.get(region, STANDALONE_MODELS)
+            metadata = fetch_model_metadata(models)
+            for model in models:
                 meta = metadata.get(model)
                 if meta is None:
                     logger.warning("No metadata for model %s, skipping", model)
@@ -1588,7 +1605,7 @@ def run_standalone_cycle(
                         priority=DecodePriority.BACKGROUND,
                     )
 
-                stored = _store_snapshots(snapshots, db)
+                stored = _store_snapshots(snapshots, db, region=region)
                 db.commit()
                 snapshots_stored += stored
                 logger.info("Model %s: stored %d snapshots", model, stored)

@@ -58,11 +58,12 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import insert, select, tuple_
+from sqlalchemy import select, tuple_
 
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
     VerificationCycleRow,
+    snapshot_insert_ignore,
     snapshot_natural_key,
 )
 
@@ -462,6 +463,5 @@ def _idempotent_insert(session, rows: list[dict]) -> list[dict]:
         existing.add(k)  # dedup within this artifact too
         to_insert.append(row)
 
-    for i in range(0, len(to_insert), 1000):
-        session.execute(insert(AirportForecastSnapshotRow), to_insert[i : i + 1000])
+    snapshot_insert_ignore(session, to_insert)
     return to_insert

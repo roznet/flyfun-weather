@@ -195,7 +195,8 @@ def test_two_disjoint_artifacts_no_loss(tmp_path):
 
     Us = _make_db()
     us = Us()
-    _seed(us, [_snap("KJFK", "gfs", GFS_INIT, 12), _snap("KLAX", "gfs", GFS_INIT, 12)])
+    _seed(us, [_snap("KJFK", "gfs", GFS_INIT, 12, region="us"),
+               _snap("KLAX", "gfs", GFS_INIT, 12, region="us")])
     us_art = str(tmp_path / "us.sqlite")
     export_snapshots(us, us_art, region="us", generated_at=NOW)
 
@@ -208,6 +209,74 @@ def test_two_disjoint_artifacts_no_loss(tmp_path):
     assert r_us.rows_inserted == 2
     icaos = {r["icao"] for r in _all_snapshots(dst)}
     assert icaos == {"LFPG", "EDDF", "KJFK", "KLAX"}
+
+
+# ---------------------------------------------------------------------------
+# Region seam (Stage 2)
+# ---------------------------------------------------------------------------
+
+def test_region_is_carried_and_defaults_to_eu(tmp_path):
+    """`region` round-trips through the artifact; a row seeded without it is 'eu'."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [
+        _snap("LFPG", "gfs", GFS_INIT, 12),                 # default region
+        _snap("EDDF", "gfs", GFS_INIT, 12, region="eu"),    # explicit
+    ])
+    # server_default backfills the row seeded without an explicit region.
+    src.expire_all()
+    assert {r.region for r in src.execute(select(AirportForecastSnapshotRow)).scalars()} == {"eu"}
+
+    artifact = str(tmp_path / "eu.sqlite")
+    export_snapshots(src, artifact, region="eu", generated_at=NOW)
+    assert "region" in snapshot_columns()
+
+    Dst = _make_db()
+    dst = Dst()
+    import_snapshots(dst, artifact)
+    assert all(r.region == "eu"
+               for r in dst.execute(select(AirportForecastSnapshotRow)).scalars())
+
+
+def test_export_filters_by_region(tmp_path):
+    """With the region column live, export(region=) selects only that region."""
+    Src = _make_db()
+    src = Src()
+    _seed(src, [
+        _snap("LFPG", "gfs", GFS_INIT, 12, region="eu"),
+        _snap("KJFK", "gfs", GFS_INIT, 12, region="us"),
+    ])
+    eu_art = str(tmp_path / "eu.sqlite")
+    m_eu = export_snapshots(src, eu_art, region="eu", generated_at=NOW)
+    assert m_eu.row_count == 1
+
+    Dst = _make_db()
+    dst = Dst()
+    import_snapshots(dst, eu_art)
+    icaos = {r["icao"] for r in _all_snapshots(dst)}
+    assert icaos == {"LFPG"}  # the US row is excluded by the region filter
+
+
+def test_ingest_same_key_twice_no_crash(tmp_path):
+    """A second ingest of the same natural key is a clean no-op, not IntegrityError.
+
+    This is the concurrency guarantee: `_idempotent_insert` pre-filters, but the
+    shared INSERT-OR-IGNORE means even a row that slips past the pre-filter (a
+    concurrent writer) can't raise on `uq_afs_key`.
+    """
+    Src = _make_db()
+    src = Src()
+    _seed(src, [_snap("LFPG", "gfs", GFS_INIT, 12)])
+    artifact = str(tmp_path / "eu.sqlite")
+    export_snapshots(src, artifact, region="eu", generated_at=NOW)
+
+    Dst = _make_db()
+    dst = Dst()
+    assert import_snapshots(dst, artifact).rows_inserted == 1
+    # Re-ingest: idempotent, and (critically) does not raise.
+    r2 = import_snapshots(dst, artifact)
+    assert r2.rows_inserted == 0
+    assert r2.rows_skipped == 1
 
 
 # ---------------------------------------------------------------------------
