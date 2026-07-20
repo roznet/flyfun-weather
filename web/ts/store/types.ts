@@ -39,6 +39,10 @@ export interface BriefingStatusInfo {
   // Compact RED/AMBER breakdown + top named categories for the card chips.
   // null for old packs (pre-#276 or not yet refreshed).
   advisory_summary?: AdvisorySummary | null;
+  // True when this flight has a notify-qualifying briefing update the viewer
+  // hasn't opened yet (same predicate as the app-icon badge). Drives the
+  // flight-card red "unseen" dot. Absent on older servers → treated as false.
+  unseen?: boolean;
 }
 
 /** Weather-coverage status for a flight saved beyond the forecast horizon.

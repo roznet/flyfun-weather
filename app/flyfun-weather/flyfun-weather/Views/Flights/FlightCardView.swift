@@ -41,6 +41,16 @@ struct FlightCardView: View, Equatable {
             // Title row carries the status badge so the metadata row below can
             // use the full card width without being squeezed by the badge.
             HStack(spacing: 6) {
+                // Red "unseen" dot: a notify-qualifying briefing update the
+                // pilot hasn't opened yet (same predicate as the app-icon
+                // badge). Opening the briefing marks it seen and clears this.
+                if flight.latestBriefing?.unseen == true {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Unopened briefing update")
+                }
+
                 Text(flight.shortTitle)
                     .font(.headline)
                     .lineLimit(1)

@@ -14,6 +14,7 @@
   "flights.showMorePast": "Afficher plus ({count})",
   "flights.deleteConfirm": "Supprimer le vol {id} ? Tout l'historique des briefings sera supprimé.",
   "flights.noBriefings": "Aucun briefing pour le moment",
+  "flights.unseenDot": "Nouvelle mise à jour du briefing — pas encore ouverte",
   "flights.pendingAvailable": "En attente · dispo {date}",
   "flights.pendingTitle": "Enregistré à l'avance — pas encore de données modèle ; un briefing apparaîtra à cette date.",
   "flights.advRedCount": "{count} RED",

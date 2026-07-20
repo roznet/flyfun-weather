@@ -26,6 +26,7 @@ from weatherbrief.fetch.variables import (
     is_beyond_forecast_horizon,
 )
 from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
+from weatherbrief.notify.badge import unseen_flight_ids
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.storage.flights import (
@@ -151,6 +152,12 @@ class BriefingStatusInfo(BaseModel):
     # flights-list card chips. Read straight from the denormalized pack column
     # (no per-flight route_advisories.json parse). None for old packs.
     advisory_summary: AdvisorySummary | None = None
+    # True when this flight has a notify-qualifying briefing update the viewer
+    # hasn't opened yet — the same server-derived predicate that drives the
+    # app-icon badge (notify/badge.py::_is_unseen). Lets the flight list mark
+    # unopened flights with a red dot, kept exactly consistent with the badge
+    # (dot count == badge count). Only set by the list endpoint; False elsewhere.
+    unseen: bool = False
 
 
 class CoveragePending(BaseModel):
@@ -443,6 +450,7 @@ def _flight_to_response(
     owner_display_name: str | None = None,
     debrief: FlightDebrief | None = None,
     section: Literal["future", "recent", "past"] | None = None,
+    unseen: bool = False,
 ) -> FlightResponse:
     # viewer_id is required: the role derivation below compares flight.user_id
     # against it, and with viewer_id=None we would silently classify the
@@ -477,6 +485,12 @@ def _flight_to_response(
             has_debrief=debrief is not None,
             recent_set=set(),  # single-flight call: no recent context available
         )
+
+    # Stamp the per-flight unseen flag onto the briefing summary (copy rather
+    # than mutate — the caller owns the passed-in object). Only the list
+    # endpoint passes unseen=True; single-flight callers leave it False.
+    if latest_briefing is not None and unseen:
+        latest_briefing = latest_briefing.model_copy(update={"unseen": True})
 
     return FlightResponse(
         id=flight.id,
@@ -637,6 +651,9 @@ def list_all_flights(
     paired = list_flights_with_role(db, user_id)
     pack_status = _get_latest_packs(db, [f.id for f, _, _ in paired])
     debrief_map = _bulk_debriefs_for_owned(db, paired, user_id)
+    # Flights with an unopened notify-qualifying update — drives the flight-list
+    # red dot, kept consistent with the app-icon badge. One cheap query.
+    unseen_ids = unseen_flight_ids(db, user_id)
 
     owned_pairs: list[tuple[Flight, FlightDebrief | None]] = [
         (f, debrief_map.get(f.id)) for f, role, _ in paired if role == "owner"
@@ -662,6 +679,7 @@ def list_all_flights(
             owner_display_name=owner_name,
             debrief=debrief,
             section=section,
+            unseen=f.id in unseen_ids,
         )
         (past if section == "past" else other).append(resp)
 

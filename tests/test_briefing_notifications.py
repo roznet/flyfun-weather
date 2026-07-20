@@ -229,6 +229,29 @@ def test_badge_multiple_flights(db_session, dev_user):
     assert badge_mod.compute_badge_count(db_session, DEV_USER_ID) == 1
 
 
+def test_unseen_flight_ids_matches_badge(db_session, dev_user):
+    # unseen_flight_ids is the per-flight set the badge counts — the two must
+    # stay consistent so the flight-list dots equal the app-icon badge.
+    _add_flight(db_session, "f1")
+    _add_flight(db_session, "f2")
+    _add_flight(db_session, "f3")
+    t0 = datetime(2026, 7, 8, 8, 0, tzinfo=timezone.utc)
+    for fid in ("f1", "f2", "f3"):
+        _add_pack(db_session, fid, t0)
+    badge_mod.record_notify_qualifying(db_session, DEV_USER_ID, "f1", t0)
+    badge_mod.record_notify_qualifying(db_session, DEV_USER_ID, "f2", t0)
+    db_session.flush()
+
+    ids = badge_mod.unseen_flight_ids(db_session, DEV_USER_ID)
+    assert ids == {"f1", "f2"}  # f3 was never notified
+    assert len(ids) == badge_mod.compute_badge_count(db_session, DEV_USER_ID)
+
+    # Opening f1 clears it from the set (and the badge).
+    badge_mod.mark_flight_seen(db_session, DEV_USER_ID, "f1")
+    db_session.flush()
+    assert badge_mod.unseen_flight_ids(db_session, DEV_USER_ID) == {"f2"}
+
+
 # ---------------------------------------------------------------------------
 # APNs sender: config, provider token, payloads
 # ---------------------------------------------------------------------------
@@ -728,6 +751,31 @@ def test_badge_and_seen_flow(client, app_db):
     r = client.post("/api/flights/f1/seen")
     assert r.status_code == 200 and r.json()["count"] == 0
     assert client.get("/api/flights/badge").json()["count"] == 0
+
+
+def test_flights_list_exposes_unseen_flag(client, app_db):
+    # The flight list carries a per-flight `unseen` flag (drives the red dot),
+    # kept consistent with the badge: true once a notify-qualifying refresh
+    # lands, false again after the briefing is opened.
+    def _unseen():
+        flights = client.get("/api/flights").json()
+        f1 = next(f for f in flights if f["id"] == "f1")
+        return f1["latest_briefing"]["unseen"]
+
+    assert _unseen() is False  # seeded pack, never notified
+
+    s = app_db()
+    badge_mod.record_notify_qualifying(
+        s, DEV_USER_ID, "f1", datetime(2026, 7, 8, 10, tzinfo=timezone.utc),
+    )
+    s.commit()
+    s.close()
+
+    assert _unseen() is True
+    assert client.get("/api/flights/badge").json()["count"] == 1
+
+    client.post("/api/flights/f1/seen")
+    assert _unseen() is False
 
 
 def test_badge_route_not_shadowed_by_flight_route(client):

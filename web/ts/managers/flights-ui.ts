@@ -119,6 +119,14 @@ function renderFlightCard(
   const past = isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time);
   const pastBadge = past ? `<span class="badge badge-past">${t('flights.pastBadge')}</span> ` : '';
 
+  // Red "unseen" dot: this flight has a notify-qualifying briefing update the
+  // pilot hasn't opened yet (same server predicate as the app-icon badge).
+  // Clears naturally on the next flights load after the briefing is opened.
+  const unseenLabel = t('flights.unseenDot');
+  const unseenDot = f.latest_briefing?.unseen
+    ? `<span class="unseen-dot" role="img" title="${escapeHtml(unseenLabel)}" aria-label="${escapeHtml(unseenLabel)}"></span>`
+    : '';
+
   const isShared = f.role === 'subscriber';
   // When owner_display_name is null (no display_name set on the owner),
   // fall back to the generic shared-flight label instead of rendering
@@ -195,7 +203,7 @@ function renderFlightCard(
       <div class="flight-card-main">
         <div class="flight-card-body">
           <div class="flight-header">
-            ${sharedBadge}${pastBadge}<span class="flight-route">${escapeHtml(title)}</span>
+            ${sharedBadge}${pastBadge}${unseenDot}<span class="flight-route">${escapeHtml(title)}</span>
             <span class="flight-date">${formatDate(f.target_date)} ${formatDepartureTime(f.departure_time)}</span>
             <span class="flight-alt">${formatAlt(f.cruise_altitude_ft)}</span>${debriefPill}
           </div>
