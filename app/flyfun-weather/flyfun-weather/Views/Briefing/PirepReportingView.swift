@@ -18,6 +18,13 @@ struct PirepReportingView: View {
         return Int(loc.altitude * 3.28084)
     }
 
+    /// Seed the reported-altitude field from the current GPS fix, but only once
+    /// and only while the pilot hasn't typed their own value.
+    private func prefillAltitude() {
+        guard viewModel.reportedAltitudeFt == nil, let gps = gpsAltitudeFt else { return }
+        viewModel.reportedAltitudeFt = gps
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -37,11 +44,17 @@ struct PirepReportingView: View {
                 }
             }
             .onAppear {
-                // Pre-fill altitude from GPS if available
-                if let loc = currentLocation, loc.verticalAccuracy >= 0,
-                   viewModel.reportedAltitudeFt == nil {
-                    viewModel.reportedAltitudeFt = Int(loc.altitude * 3.28084)
-                }
+                // Smart pre-fill: grab a one-shot GPS fix so lat/lon/altitude
+                // populate without the pilot tapping "Start" first (the entry
+                // point isn't gated on an active track any more). No-op while a
+                // live track is already feeding positions.
+                trackingService.requestOneShotLocation()
+                prefillAltitude()
+            }
+            // The one-shot fix arrives asynchronously — pre-fill altitude when it
+            // lands. `locationUpdateCount` bumps on every fix (@Observable).
+            .onChange(of: trackingService.locationUpdateCount) {
+                prefillAltitude()
             }
         }
     }

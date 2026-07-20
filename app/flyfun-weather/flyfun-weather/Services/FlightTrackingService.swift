@@ -43,6 +43,9 @@ final class FlightTrackingService: NSObject {
     private var destinationCoordinate: CLLocationCoordinate2D?
     private var lastProjectionTime: Date = .distantPast
     private let projectionThrottleInterval: TimeInterval = 5.0
+    /// A one-shot `requestLocation()` is in flight (PIREP pre-fill outside an
+    /// active route track). Cleared once a fix (or failure) lands.
+    private var oneShotActive = false
 
     // MARK: - Start / Stop
 
@@ -79,12 +82,42 @@ final class FlightTrackingService: NSObject {
         locationManager?.delegate = nil
         locationManager = nil
         isTracking = false
+        oneShotActive = false
         currentLocation = nil
         projectedPosition = nil
         routePoints = []
         flightEndTime = nil
         destinationCoordinate = nil
         logger.info("Flight tracking stopped")
+    }
+
+    /// Request a single current-position fix WITHOUT starting full route
+    /// tracking. Populates `currentLocation` (and its altitude) so the PIREP
+    /// reporting form can pre-fill lat/lon/altitude even when the pilot hasn't
+    /// tapped "Start" — the entry point is no longer gated on an active track.
+    /// No-op while already tracking, since the live track already updates
+    /// `currentLocation`.
+    func requestOneShotLocation() {
+        guard !isTracking else { return }
+        let manager = locationManager ?? CLLocationManager()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        self.locationManager = manager
+        oneShotActive = true
+
+        switch manager.authorizationStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            manager.requestLocation()
+        case .notDetermined:
+            // The fix fires from `locationManagerDidChangeAuthorization` once
+            // the user answers the permission prompt.
+            manager.requestWhenInUseAuthorization()
+        default:
+            // Denied/restricted — nothing to pre-fill; the form falls back to
+            // manual entry.
+            oneShotActive = false
+            logger.warning("One-shot location unavailable: authorization denied/restricted")
+        }
     }
 
     // MARK: - Projection
@@ -199,6 +232,8 @@ extension FlightTrackingService: @preconcurrency CLLocationManagerDelegate {
                     manager.startUpdatingLocation()
                     isTracking = true
                     logger.info("Authorization granted, tracking started")
+                } else if oneShotActive {
+                    manager.requestLocation()
                 }
             } else if status == .denied || status == .restricted {
                 logger.warning("Location authorization denied")
@@ -211,10 +246,13 @@ extension FlightTrackingService: @preconcurrency CLLocationManagerDelegate {
         guard let location = locations.last else { return }
         Task { @MainActor in
             projectLocation(location)
+            // A one-shot fix has landed; the manager auto-stops after delivery.
+            oneShotActive = false
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         logger.error("Location error: \(error.localizedDescription)")
+        Task { @MainActor in oneShotActive = false }
     }
 }

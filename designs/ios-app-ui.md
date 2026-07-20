@@ -74,8 +74,9 @@ Planning/viewer mode — default when not in an active flight session. What the 
 > §4.1 "one narrative scroll" decision — the single scroll stays the iPhone
 > *fallback shape*, but content is regrouped into purpose-built tabs. Settings is
 > still reached from the flight-list ellipsis menu; the PIREP reporting sheet is
-> still a toolbar button (during the flight window when `pirepCanPublish`), not a
-> tab.
+> a toolbar button (shown whenever `pirepCanPublish`, no flight-window gate), not
+> a tab — plus a "Report a PIREP" action on the PIREPs tab and an "Add PIREP"
+> flight-list context-menu item.
 
 | Tab | Contents (code) |
 |---|---|
@@ -215,7 +216,7 @@ Original concept: when pilot taps "Report" manually. All fields pre-populated fr
 
 ## As-built PIREP reporting sheet
 
-`PirepReportingView` (opened from the briefing toolbar during the flight window via `BriefingContainerView`, driven by `PirepViewModel`). One manual `Form` sheet, severity fields start **unselected**, GPS pre-fills only altitude/position via `FlightTrackingService`. Toolbar cancel button is labelled "Skip". `Form` sections, in order:
+`PirepReportingView` (driven by `PirepViewModel`), reachable whenever `pirepCanPublish` — from the briefing toolbar, the PIREPs-tab "Report a PIREP" action, or the flight-list "Add PIREP" context menu. **No flight-window gate.** One manual `Form` sheet, severity fields start **unselected**, GPS pre-fills only altitude/position via `FlightTrackingService` — the sheet requests a one-shot fix on appear (`requestOneShotLocation()`) so pre-fill works without an active track. Toolbar cancel button is labelled "Skip". `Form` sections, in order:
 
 - **Altitude** — read-only GPS altitude row + editable "Reported altitude" (ft) text field (pre-filled from GPS on appear)
 - **Icing** — severity picker (none/trace/light/moderate/severe); if non-none, an icing-**type** picker appears (rime/clear/mixed)
