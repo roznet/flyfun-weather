@@ -57,7 +57,7 @@ final class PirepViewModel {
     /// from the tracking service via @Observable (same pattern as CrossSectionView).
     func submit(location: CLLocation?) async {
         guard let loc = location else {
-            errorMessage = "No GPS position available — start flight tracking first"
+            errorMessage = "No GPS position yet — wait a moment for a location fix, or enable location access in Settings"
             Self.logger.warning("PIREP submit blocked: no GPS location")
             return
         }

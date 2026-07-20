@@ -541,8 +541,11 @@ struct FlightListView: View {
                 }
             }
             // File a pilot report for this flight (position-based; not gated on an
-            // in-flight window). Online-only — submission needs the server.
-            if !viewModel.isOffline && appState.userPreferences.preferences.pirepCanPublish {
+            // in-flight window). Not gated on offline either — `PirepViewModel.submit`
+            // detects a transient-network failure and queues via `PirepOfflineStore`,
+            // so filing under poor cockpit connectivity (the primary use case) works
+            // and matches the other two entry points (toolbar + PIREPs-tab action).
+            if appState.userPreferences.preferences.pirepCanPublish {
                 Button {
                     pirepFlight = flight
                 } label: {
