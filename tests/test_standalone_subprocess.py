@@ -393,6 +393,17 @@ def test_cli_light_maps_to_score_no_fetch(monkeypatch):
     calls["post"].assert_not_called()
 
 
+def test_cli_region_us_errors_before_running(monkeypatch):
+    """--region us must fail fast (US not onboarded) rather than store EU data
+    mislabeled as us; it exits before the cycle runs."""
+    args = SimpleNamespace(
+        light=False, forecast_only=True, with_rollup=False, background=False,
+        region="us", emit_artifact=None,
+    )
+    with pytest.raises(SystemExit):
+        _run_cli_standalone(monkeypatch, args)
+
+
 def test_failed_cycle_ignores_rows_from_before_launch(db_engine, monkeypatch):
     """Old cycle rows (previous fires) must not mask a missing row for the
     current launch."""
