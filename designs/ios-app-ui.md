@@ -225,7 +225,7 @@ Original concept: when pilot taps "Report" manually. All fields pre-populated fr
 - **Optional** — cloud tops (ft MSL) with a tops-**basis** picker (crossed/estimated_above/below_min), ceiling (ft MSL), wind dir (°) + speed (kt), temperature (°C). All free-entry.
 - **Remarks** — optional free-text field
 - (No flight-rules, visibility, or precip fields; no "All correct" shortcut)
-- **Submit** ("Submit Report" button) — state machine: idle/error → loading → loaded ("Saved offline — will sync when connected" when no connectivity) with "Submit Another" (resets form) / "Done". Offline submissions set `queuedOffline` and enqueue to `PirepOfflineStore` to flush on reconnect.
+- **Submit** ("Submit Report" button) — state machine: idle/error → loading → loaded ("Saved offline — will sync when connected" when no connectivity) with "Submit Another" / "Done". "Submit Another" resets the form (incl. reported altitude) **and re-requests a one-shot GPS fix**, so each report in a multi-PIREP session gets a fresh position rather than reusing the first fix (which `requestLocation()` auto-stops after). Offline submissions set `queuedOffline` and enqueue to `PirepOfflineStore` to flush on reconnect.
 
 Severity color mapping (`severityPicker`): none→green, trace/light→yellow, moderate→orange, severe→red. This is the real cockpit color coding referenced by the constraints above.
 

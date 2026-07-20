@@ -229,6 +229,13 @@ struct PirepReportingView: View {
 
                 Button("Submit Another") {
                     viewModel.resetForm()
+                    // Fetch a fresh position for the next report. The onAppear
+                    // one-shot fix has already been consumed (requestLocation
+                    // auto-stops after one delivery), so without this a second
+                    // PIREP filed without an active track would silently carry the
+                    // first report's lat/lon/altitude. No-op while tracking (the
+                    // live track keeps currentLocation fresh on its own).
+                    trackingService.requestOneShotLocation()
                 }
 
                 Button("Done") { dismiss() }
