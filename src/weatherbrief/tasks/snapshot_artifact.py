@@ -29,21 +29,22 @@ Design invariants:
   intersection of artifact columns and the target table, so a newer artifact
   ingested by an older importer degrades gracefully instead of crashing.
 
-Known limitations (deliberate, see PR #452 review):
+Concurrency & code-sharing:
 
-- **Single-writer assumption.** ``_idempotent_insert`` does a bulk existence
-  check then a bulk insert in one transaction, with no ``IntegrityError``
-  handling. If another writer inserted the same natural key in between, the
-  insert would abort the import (nothing is partially committed — it fails,
-  it does not corrupt). This is safe in the intended topology because the
-  serving box's own forecast cycle is *disabled* while ingest is active
-  (``STANDALONE_FORECAST_ENABLED=0``). Revisit if ingest is ever pointed at a
-  DB with a live concurrent standalone cycle.
-- **Chunking scaffolding is duplicated** with
-  ``standalone_verification._store_snapshots``. The dedup *key* is already
-  shared (:func:`weatherbrief.db.models.snapshot_natural_key`), which was the
-  real drift risk; factoring the remaining bulk-fetch/insert loop touches a hot
-  production path and deserves its own change rather than a drive-by.
+- **Concurrent writers are safe.** ``_idempotent_insert`` does a bulk existence
+  check, then inserts through
+  :func:`weatherbrief.db.models.snapshot_insert_ignore` — a dialect-aware
+  INSERT-OR-IGNORE scoped to the ``uq_afs_key`` natural key. If another writer
+  inserted the same key in between (e.g. a droplet fallback cycle racing an
+  ingest), that row becomes a silent no-op instead of an ``IntegrityError``, so
+  the old single-writer assumption no longer applies. Unrelated insert errors
+  still raise loudly (the MySQL path uses ``ON DUPLICATE KEY UPDATE id=id``, not
+  bare ``INSERT IGNORE``).
+- **Write path is shared** with ``standalone_verification._store_snapshots``:
+  both the dedup *key* (:func:`snapshot_natural_key`) and the *insert*
+  (:func:`snapshot_insert_ignore`) are shared, so their idempotency logic can't
+  drift. The surrounding chunking/bulk-fetch scaffolding is still lightly
+  duplicated — a hot-path refactor that deserves its own change.
 """
 
 from __future__ import annotations

@@ -352,9 +352,21 @@ def cmd_standalone(args):
 
     try:
         # Region tags the stored rows and picks the region's model set. Only EU
-        # is onboarded today, so 'all'/None/unknown fall back to 'eu'; a real US
-        # cycle needs the US watchlist (us-expansion-plan step 7) before 'us'.
-        cycle_region = args.region if args.region in ("eu", "us") else "eu"
+        # is onboarded today. Running --region us now would fetch the EU watchlist
+        # with EU models (STANDALONE_MODELS_BY_REGION has no 'us' entry, and
+        # load_watchlist_with_coords is not region-aware yet) and mislabel every
+        # row as region='us' — fail fast rather than store mislabeled data. US
+        # onboarding = watchlist split + STANDALONE_MODELS_BY_REGION['us']
+        # (us-expansion-plan steps 3/7). 'eu'/'all'/None all run the EU cycle.
+        if args.region == "us":
+            print(
+                "ERROR: --region us is not supported yet — the US watchlist and "
+                "model set are not onboarded, so a us cycle would store EU data "
+                "mislabeled as us. Use --region eu (the default).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        cycle_region = "eu"
         result = run_standalone_cycle(
             watchlist, airports_db,
             fetch_forecasts=not args.light,
@@ -398,15 +410,7 @@ def cmd_standalone(args):
                 print("  WARNING: --emit-artifact with --light exports whatever "
                       "snapshots are already in the DB (no fresh fetch).")
             from flyfun_common.db import SessionLocal
-            from weatherbrief.tasks.snapshot_artifact import (
-                export_snapshots,
-                snapshot_columns,
-            )
-
-            if (args.region and args.region != "all"
-                    and "region" not in snapshot_columns()):
-                print(f"  WARNING: --region {args.region} has no effect yet — the "
-                      "snapshot table has no region column; exporting all regions.")
+            from weatherbrief.tasks.snapshot_artifact import export_snapshots
 
             emit_db = SessionLocal()
             try:
@@ -737,9 +741,10 @@ def main():
              "replica, which imports it with `ingest-artifact`.",
     )
     p_standalone.add_argument(
-        "--region", choices=["eu", "us", "all"],
-        help="Region scope recorded in the artifact manifest (and applied once "
-             "the snapshot table has a region column). Default: all.",
+        "--region", choices=["eu", "us", "all"], default="all",
+        help="Region scope: filters the emitted artifact and (for the cycle) "
+             "tags stored rows. Only 'eu' is onboarded — 'us' errors, 'all'/'eu' "
+             "run the EU cycle. Default: all.",
     )
 
     # ingest-artifact

@@ -1432,6 +1432,10 @@ def run_standalone_cycle(
     jobs into the web app's interactive decode pool for the whole fetch
     phase — far beyond the accepted handful of decode dispatches.
 
+    ``region`` selects the model set (``STANDALONE_MODELS_BY_REGION``, EU default)
+    and tags every stored snapshot row (EU/US seam). Callers pass a concrete
+    region; only ``eu`` is onboarded today.
+
     Returns a summary dict with counts and timing.
     """
     if not fetch_forecasts and not score_observations:

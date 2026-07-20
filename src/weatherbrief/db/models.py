@@ -812,12 +812,21 @@ def snapshot_natural_key(
 def snapshot_insert_ignore(db, rows: list[dict], *, chunk: int = 1000) -> None:
     """Bulk-insert ``airport_forecast_snapshots`` rows, ignoring ``uq_afs_key`` conflicts.
 
-    Dialect-aware INSERT-OR-IGNORE — SQLite ``ON CONFLICT DO NOTHING``, MySQL
-    ``INSERT IGNORE``. A second writer on the same natural key (e.g. a droplet
-    fallback cycle racing an artifact ingest) becomes a clean no-op instead of an
-    ``IntegrityError``, so concurrent writes are safe and the old single-writer
-    assumption is dropped. Shared by the standalone cycle's ``_store_snapshots``
-    and the importer's ``_idempotent_insert`` so their write paths can't drift.
+    Dialect-aware INSERT-OR-IGNORE **scoped to the natural-key conflict only** —
+    SQLite ``ON CONFLICT (uq_afs_key) DO NOTHING``, MySQL ``ON DUPLICATE KEY
+    UPDATE id=id`` (a no-op that fires solely on a duplicate key). A second writer
+    on the same natural key (e.g. a droplet fallback cycle racing an artifact
+    ingest) becomes a clean no-op instead of an ``IntegrityError``, so concurrent
+    writes are safe and the old single-writer assumption is dropped. Shared by the
+    standalone cycle's ``_store_snapshots`` and the importer's ``_idempotent_insert``
+    so their write paths can't drift.
+
+    Deliberately NOT MySQL bare ``INSERT IGNORE``: that downgrades *every*
+    insert-time error (truncation, out-of-range, NOT NULL) to a warning and skips
+    the row, which would let this prod-only hot path silently swallow unrelated
+    data bugs that SQLite tests can't catch. ``ON DUPLICATE KEY UPDATE`` narrows it
+    to duplicate-key conflicts only, matching the SQLite branch's scope so other
+    errors still raise loudly.
 
     Callers still pre-filter existing keys for an accurate inserted-count and to
     cut write load; this is the last-line safety net against the check-then-insert
@@ -834,7 +843,13 @@ def snapshot_insert_ignore(db, rows: list[dict], *, chunk: int = 1000) -> None:
         )
     elif dialect == "mysql":
         from sqlalchemy.dialects.mysql import insert as _ins
-        stmt = _ins(table).prefix_with("IGNORE")
+        stmt = _ins(table)
+        # No-op self-assign to the EXISTING row's PK (``id = id``): fires ONLY on
+        # a duplicate uq_afs_key, so unrelated insert errors still raise (unlike
+        # bare INSERT IGNORE). Must reference the table column, not
+        # ``stmt.inserted.id`` — ``id`` is auto-increment and absent from the
+        # INSERT column list, so ``new.id`` would be an unknown column.
+        stmt = stmt.on_duplicate_key_update(id=table.c.id)
     else:  # pragma: no cover - other dialects fall back to a plain insert
         from sqlalchemy import insert as _ins
         stmt = _ins(table)
