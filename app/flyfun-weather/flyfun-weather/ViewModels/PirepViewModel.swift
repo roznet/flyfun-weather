@@ -116,8 +116,12 @@ final class PirepViewModel {
         }
     }
 
-    /// Reset form for another report.
+    /// Reset form for another report. Clears the reported altitude too so the
+    /// next GPS fix (re-requested by the view on "Submit Another") re-seeds it —
+    /// otherwise the fill-only-when-nil pre-fill guard would keep the previous
+    /// report's altitude for every subsequent PIREP in the same session.
     func resetForm() {
+        reportedAltitudeFt = nil
         icingIntensity = nil
         icingType = nil
         turbulenceIntensity = nil
