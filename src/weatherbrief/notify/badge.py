@@ -81,12 +81,23 @@ def compute_badge_count(db: Session, user_id: str) -> int:
     Server-authoritative. Cheap: flights per user are few, so we load the
     user's seen rows and count in Python (tz-normalized comparison).
     """
+    return len(unseen_flight_ids(db, user_id))
+
+
+def unseen_flight_ids(db: Session, user_id: str) -> set[str]:
+    """Return the ids of the user's flights with an unseen briefing update.
+
+    Same predicate that drives the badge (``_is_unseen``), so the per-flight
+    dot on the flight list stays exactly consistent with the aggregate count
+    (``compute_badge_count`` is just ``len`` of this). One cheap query — flights
+    per user are few.
+    """
     rows = (
         db.query(FlightBriefingSeenRow)
         .filter(FlightBriefingSeenRow.user_id == user_id)
         .all()
     )
-    return sum(1 for r in rows if _is_unseen(r))
+    return {r.flight_id for r in rows if _is_unseen(r)}
 
 
 def record_notify_qualifying(

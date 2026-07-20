@@ -2552,6 +2552,20 @@ label {
   display: inline-block;
 }
 
+/* Flight-card "unseen briefing" dot — this flight has a notify-qualifying
+   update the pilot hasn't opened yet (same predicate as the app-icon badge).
+   Rendered as a flex item in `.flight-header` (align-items: baseline), so it's
+   vertically centred with align-self and spaced by the header's flex gap. */
+.unseen-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  align-self: center;
+  flex-shrink: 0;
+}
+
 /* --- User info in header --- */
 
 .user-info {

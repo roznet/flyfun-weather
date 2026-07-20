@@ -192,7 +192,8 @@ func makeBriefingStatus(
     outlookReason: String? = nil,
     hasAdvisories: Bool? = nil,
     advisorySummary: AdvisorySummary? = nil,
-    fetchTimestamp: String? = nil
+    fetchTimestamp: String? = nil,
+    unseen: Bool? = nil
 ) -> BriefingStatusInfo {
     BriefingStatusInfo(
         assessment: assessment,
@@ -201,7 +202,8 @@ func makeBriefingStatus(
         outlookReason: outlookReason,
         hasAdvisories: hasAdvisories,
         advisorySummary: advisorySummary,
-        fetchTimestamp: fetchTimestamp
+        fetchTimestamp: fetchTimestamp,
+        unseen: unseen
     )
 }
 

@@ -292,6 +292,12 @@ struct BriefingStatusInfo: Codable, Sendable, Equatable {
     /// default — a `let` with a default would be dropped from the synthesized
     /// `Codable`, never decoding the field); absent on older servers → nil.
     let fetchTimestamp: String?
+    /// True when this flight has a notify-qualifying briefing update the pilot
+    /// hasn't opened yet — the same server predicate that drives the app-icon
+    /// badge. Drives the flight-row red "unseen" dot; the dot count matches the
+    /// badge. Optional (no default — like `fetchTimestamp`, so it still decodes)
+    /// and absent on older servers → nil (treated as not-unseen).
+    let unseen: Bool?
 }
 
 /// Compact RED/AMBER advisory breakdown for the flights-list card chips.
