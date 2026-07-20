@@ -192,7 +192,7 @@ if not status.fresh:
     schedule_refresh()
 ```
 
-Nine tracked source/model pairs (`SOURCE_REGISTRY` in `fetch/freshness/registry.py`): 3 direct GRIB (`ecmwf:direct`, `gfs:noaa`, `icon_eu:dwd`) + 6 Open-Meteo republishes (`gfs/ecmwf/icon/meteofrance/ukmo/gem:openmeteo`). Each `SourceConfig` carries schedule (cycles, delivery_offset, horizon) plus descriptive metadata (model/provider label, role, resolution, coverage, pressure_levels) feeding `/api/data-sources` and the help-page table.
+Ten tracked source/model pairs (`SOURCE_REGISTRY` in `fetch/freshness/registry.py`): 4 direct GRIB (`ecmwf:direct`, `gfs:noaa`, `icon_eu:dwd`, `icon_d2:dwd`) + 6 Open-Meteo republishes (`gfs/ecmwf/icon/meteofrance/ukmo/gem:openmeteo`). Each `SourceConfig` carries schedule (cycles, delivery_offset, horizon) plus descriptive metadata (model/provider label, role, resolution, coverage, pressure_levels) feeding `/api/data-sources` and the help-page table.
 
 The legacy `fetch/model_status.py` module (`fetch_model_metadata`, `check_freshness`, `compute_next_update`) is no longer consumed by the freshness endpoint's per-request path. `fetch_model_metadata` survives as a direct Open-Meteo init-time probe: it backs the Open-Meteo marker population in `fetch/freshness/sources.py` (background loop, not per-call) and is called directly by `tasks/alternates.py`, `tasks/standalone_verification.py`, `hewson/precompute.py`, `frontal/` (grid + CLI), and pack building in `api/packs.py`.
 
@@ -219,7 +219,7 @@ grib_init_times, grib_skip_reasons = enrich_forecasts(
 |--------|---------|
 | `gfs_idx.py` | Parse `.idx` files, plan HTTP byte ranges for CLMR/ICMR and cloud diagnostic variables |
 | `grib_fetch.py` | Find latest GFS run, bracket forecast hours, download via HTTP Range from S3 |
-| `icon_eu_fetch.py` | Find latest ICON-EU run, download model-level (QC/QI/P) and single-level diagnostics from DWD. Per-variable download for memory-efficient chunked decode |
+| `icon_eu_fetch.py` | Find latest DWD ICON run + download model-level (QC/QI/P) and single-level diagnostics. Parametrized by `IconVariant` (`ICON_EU` / `ICON_D2`) — one code path, two variants differing in domain, cycles, horizon, level slice, filename conventions, cache slug and freshness source key (#456). Per-variable download for memory-efficient chunked decode |
 | `icon_eu_levels.py` | Log-pressure interpolation from ICON-EU model levels to pressure levels |
 | `ecmwf_fetch.py` | Parse ECPDS filenames, scan delivery directory, find latest run. No HTTP — files land on local disk via ECPDS push |
 | `decode.py` | cfgrib → xarray decode, bilinear interpolation to route points. Chunked ICON-EU decoder (`decode_icon_eu_per_point_chunked()`) processes one variable at a time with explicit `gc.collect()` between — peak ~270MB vs ~800MB. ECMWF decoders handle multi-grid files (first-wins per point) |
@@ -240,9 +240,10 @@ grib_init_times, grib_skip_reasons = enrich_forecasts(
 6. Merge CLWMR/ICMR into `PressureLevelData` objects in-place
 7. Attach `NWPCloudDiagnostics` and override Open-Meteo cloud cover with GRIB values
 
-**ICON-EU enrichment** (two-phase sequential decode for memory safety):
-1. Check route is within ICON-EU domain (29.5–70.5°N, 23.5°W–62.5°E) — silently skip if outside
-2. Find latest ICON-EU run (3h cycles, ~3h publication delay)
+**ICON enrichment — EU or D2** (two-phase sequential decode for memory safety):
+0. **Variant gate (#456):** if the *whole* route fits the ICON-D2 domain (43.18–58.08°N, 3.94°W–20.34°E) AND a complete D2 run's 48h horizon reaches the flight-window end, source the icon slot from **ICON-D2** (2.2 km); otherwise **ICON-EU** (6.5 km). All-or-nothing, never a per-point mix. `_prepare_icon_eu` resolves the D2 run inline while gating so it never picks D2 without a usable run; on total D2 failure the slot re-runs cleanly on ICON-EU. The chosen source is reported out of `enrich_forecasts` via `grib_sources` and recorded on the pack (`model_sources["icon"]` = `icon_eu:dwd` / `icon_d2:dwd`) so the freshness bar can badge `ICON (D2)`.
+1. Check route is within the chosen variant's domain — silently skip if outside
+2. Find latest run (3h cycles; EU ~3h / D2 ~2h publication delay)
 3. **Phase 1 (parallel with GFS):** Download model-level files (QC/QI/P levels 35–74) and single-level diagnostics (CEILING, CLCL/CLCM/CLCH/CLCT, HBAS_CON, HTOP_CON) to disk cache
 4. **Phase 2 (after GFS completes):** Chunked decode — process one variable at a time via `decode_icon_eu_per_point_chunked()`, explicitly freeing memory between variables. Log-pressure interpolate to ICON pressure levels
 5. Merge QC→CLWMR, QI→ICMR into pressure-level data

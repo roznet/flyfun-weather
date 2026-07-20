@@ -152,6 +152,7 @@ def test_all_expected_sources_registered():
         "ecmwf:direct",
         "gfs:noaa",
         "icon_eu:dwd",
+        "icon_d2:dwd",
         "gfs:openmeteo",
         "ecmwf:openmeteo",
         "icon:openmeteo",

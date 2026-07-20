@@ -134,6 +134,9 @@ class FetchResult:
     grib_enriched: bool = False
     grib_enrichment_failed: bool = False
     grib_init_times: dict[str, int] = field(default_factory=dict)
+    # model → freshness source key actually used for the direct-GRIB run.
+    # Distinguishes the icon slot's variant (icon_eu:dwd vs icon_d2:dwd, #456).
+    grib_sources: dict[str, str] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     open_meteo_api_calls: int = 0
 
@@ -447,12 +450,13 @@ def run_fetch(
     grib_enrichment_failed = False
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
+    grib_sources: dict[str, str] = {}
     if enrich_grib and cross_sections:
         _notify("grib_enrichment")
         try:
             from weatherbrief.fetch.grib import enrich_forecasts
 
-            grib_init_times, grib_skip_reasons = enrich_forecasts(
+            grib_init_times, grib_skip_reasons, grib_sources = enrich_forecasts(
                 cross_sections, all_forecasts, route_points,
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
@@ -515,6 +519,7 @@ def run_fetch(
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,
+        grib_sources=grib_sources,
         diagnostics=diagnostics,
         open_meteo_api_calls=client.call_count,
     )

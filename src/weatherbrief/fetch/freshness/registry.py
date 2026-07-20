@@ -165,6 +165,13 @@ _ICON_EU_HORIZON: dict[int, timedelta] = {
     for h in (0, 3, 6, 9, 12, 15, 18, 21)
 }
 
+# ICON-D2: 2.2 km convection-permitting, 8 runs/day (every 3h), all cycles
+# hourly to 48h. Publication delay ~1–2h — 2h with margin (ICON_D2.publish_
+# delay_hours in icon_eu_fetch.py). Used in place of ICON-EU for the icon slot
+# on short, central-European flights (issue #456).
+_ICON_D2_OFFSET = timedelta(hours=2)
+_ICON_D2_HORIZON = timedelta(hours=48)
+
 # Open-Meteo offsets — calibrated against meta.json observation 2026-05-03.
 # Open-Meteo republishes other providers' models with notable lag; the figures
 # in issue #108's table (sourced from OM docs) underestimate real delivery.
@@ -251,6 +258,28 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
             "cycles 00/06/12/18 reach 120h, intermediate cycles reach 78h."
         ),
     ),
+    "icon_d2:dwd": SourceConfig(
+        key="icon_d2:dwd",
+        cycles=(0, 3, 6, 9, 12, 15, 18, 21),
+        delivery_offset=_ICON_D2_OFFSET,
+        horizon=_ICON_D2_HORIZON,
+        readiness_check="icon_d2_dwd",
+        model_label="ICON-D2",
+        provider_label="DWD",
+        provider_url="https://www.dwd.de/EN/ourservices/opendata/opendata.html",
+        role="primary-sounding",
+        resolution="~2.2 km",
+        coverage="Central Europe (43.18–58.08°N, 3.94°W–20.34°E)",
+        pressure_levels=41,
+        description=(
+            "Direct GRIB from DWD ICON-D2 opendata (2.2 km, convection-"
+            "permitting). 65 model levels interpolated to pressure levels — "
+            "full sounding replacement plus cloud microphysics and "
+            "diagnostics. 8 cycles/day (every 3h), hourly to 48h. Serves the "
+            "icon slot in place of ICON-EU when the whole route fits the D2 "
+            "domain and the flight window is within 48h; otherwise ICON-EU."
+        ),
+    ),
     "gfs:openmeteo": SourceConfig(
         key="gfs:openmeteo",
         cycles=(0, 6, 12, 18),
@@ -313,8 +342,8 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         description=(
             "Open-Meteo's ICON seamless feed (19 pressure levels). Serves "
             "the global ICON-Global variant; over Europe the regional "
-            "ICON-EU GRIB from DWD takes over as the primary sounding. "
-            "Note: ICON-D2 (2.2 km, central Europe, 27h) is not yet fetched."
+            "ICON-EU GRIB from DWD takes over as the primary sounding, and "
+            "ICON-D2 (2.2 km) supersedes it on short central-European routes."
         ),
     ),
     "meteofrance:openmeteo": SourceConfig(

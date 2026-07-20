@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 MODEL_TTL_SECONDS: dict[str, int] = {
     "gfs": 24 * 3600,       # no precache, small footprint (~0.5 GB/run)
     "icon-eu": 12 * 3600,   # precached each main run; previous run is fallback
+    "icon-d2": 6 * 3600,    # 8 runs/day (every 3h); keep current + prior run
 }
 
 # Fallback TTL for models without an explicit entry. Currently unreachable

@@ -2000,11 +2000,13 @@ def enrich_forecasts(
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
     priority: int | DecodePriority | None = None,
-) -> tuple[dict[str, int], dict[str, str]]:
+) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
 
     Enriches GFS cross-sections with CLWMR/ICMR and cloud diagnostics.
-    Enriches ICON cross-sections with QC/QI if route is within ICON-EU domain.
+    Enriches ICON cross-sections with QC/QI when the route is within a DWD ICON
+    domain — from ICON-D2 (2.2 km) when the whole route fits the D2 domain and
+    the flight window is within 48h, otherwise ICON-EU (issue #456).
 
     This modifies PressureLevelData and HourlyForecast objects in-place.
 
@@ -2025,13 +2027,13 @@ def enrich_forecasts(
             level.
 
     Returns:
-        Tuple of (grib_init_times, grib_skip_reasons):
+        Tuple of (grib_init_times, grib_skip_reasons, grib_sources):
         - grib_init_times: model name → GRIB init Unix timestamp.
         - grib_skip_reasons: model name → skip reason string (e.g. "out_of_range").
+        - grib_sources: model name → freshness source key actually used
+          (e.g. ``"icon"`` → ``"icon_eu:dwd"`` or ``"icon_d2:dwd"``). Lets pack
+          building attribute the icon slot to the right variant.
     """
-    grib_init_times: dict[str, int] = {}
-    grib_skip_reasons: dict[str, str] = {}
-
     timer = _GribTimer()
     token = _GRIB_TIMER.set(timer)
     ptoken = _DECODE_PRIORITY.set(_resolve_priority(priority))
@@ -2064,6 +2066,10 @@ def _enrich_forecasts_inner(
     """Inner body of enrich_forecasts; assumes _GRIB_TIMER is set to *timer*."""
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
+    # model → freshness source key actually used for the direct-GRIB run. The
+    # icon slot varies (icon_eu:dwd vs icon_d2:dwd) so it can't be inferred from
+    # the model name alone — pack recording reads this (issue #456).
+    grib_sources: dict[str, str] = {}
 
     timer.rss_mark("enrich_start")
 
@@ -2125,21 +2131,50 @@ def _enrich_forecasts_inner(
 
     if ecmwf_grib_ts is not None:
         grib_init_times["ecmwf"] = ecmwf_grib_ts
+        grib_sources["ecmwf"] = "ecmwf:direct"
 
-    # Phase 2: Decode ICON-EU sequentially (memory-heavy, GFS is done).
+    # Phase 2: Decode ICON sequentially (memory-heavy, GFS is done).
+    active_icon_variant = icon_ctx.variant if icon_ctx is not None else None
     with _grib_time("phase2_icon_decode"):
         if icon_ctx is not None:
             icon_ts, icon_skip = _decode_and_merge_icon_eu(
                 icon_ctx, cross_sections, all_forecasts, route_points,
             )
+            # Fallback robustness (#456): if ICON-D2 was selected but produced
+            # NO enrichment at all (D2 feed hiccup / decode failure), re-run the
+            # whole icon slot on ICON-EU rather than leave it un-enriched — never
+            # a half-D2 pack. A partial D2 success (some hours) keeps D2 and lets
+            # the normal time/spatial fill cover gaps, same as ICON-EU today.
+            if icon_ts is None and active_icon_variant is not None \
+                    and active_icon_variant.slug == "icon-d2":
+                from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
+                logger.warning(
+                    "ICON-D2 enrichment produced nothing; falling back to ICON-EU",
+                )
+                eu_ctx, eu_skip = _prepare_icon_eu(
+                    cross_sections, route_points, departure_time,
+                    data_dir=data_dir, flight_duration_hours=flight_duration_hours,
+                    as_of_time=as_of_time, force_variant=ICON_EU,
+                )
+                if eu_ctx is not None:
+                    _prefetch_icon_eu_data(eu_ctx)
+                    icon_ts, icon_skip = _decode_and_merge_icon_eu(
+                        eu_ctx, cross_sections, all_forecasts, route_points,
+                    )
+                    active_icon_variant = eu_ctx.variant
+                elif eu_skip is not None:
+                    icon_skip = eu_skip
         else:
             icon_ts, icon_skip = None, icon_prepare_skip
     timer.rss_mark("after_phase2")
 
     if gfs_ts is not None:
         grib_init_times["gfs"] = gfs_ts
+        grib_sources["gfs"] = "gfs:noaa"
     if icon_ts is not None:
         grib_init_times["icon"] = icon_ts
+        if active_icon_variant is not None:
+            grib_sources["icon"] = active_icon_variant.source_key
     elif icon_skip is not None:
         grib_skip_reasons["icon"] = icon_skip
 
@@ -2160,7 +2195,7 @@ def _enrich_forecasts_inner(
         apply_gfs_rh_condensate_gate(cross_sections, all_forecasts)
 
     timer.rss_mark("enrich_end")
-    return grib_init_times, grib_skip_reasons
+    return grib_init_times, grib_skip_reasons, grib_sources
 
 
 # ---------------------------------------------------------------------------
@@ -2975,18 +3010,18 @@ def _enrich_cloud_diagnostics(
 
 
 class _IconEuContext:
-    """Holds resolved ICON-EU run info for split download/decode phases."""
+    """Holds resolved ICON run info (EU or D2) for split download/decode phases."""
 
     __slots__ = (
         "init_date", "init_hour", "forecast_hours", "run_dir",
-        "levels", "point_lats", "point_lons", "session",
+        "levels", "point_lats", "point_lons", "session", "variant",
     )
 
     def __init__(
         self, init_date: str, init_hour: int, forecast_hours: list[int],
         run_dir: Path, levels: list[int],
         point_lats: list[float], point_lons: list[float],
-        session: requests.Session,
+        session: requests.Session, variant,
     ):
         self.init_date = init_date
         self.init_hour = init_hour
@@ -2996,6 +3031,8 @@ class _IconEuContext:
         self.point_lats = point_lats
         self.point_lons = point_lons
         self.session = session
+        # IconVariant (ICON_EU / ICON_D2) chosen for this briefing's icon slot.
+        self.variant = variant
 
 
 def _prepare_icon_eu(
@@ -3006,24 +3043,33 @@ def _prepare_icon_eu(
     data_dir: Path,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
+    force_variant=None,
 ) -> tuple[_IconEuContext | None, str | None]:
-    """Resolve ICON-EU run info and check eligibility.
+    """Resolve the ICON run (EU or D2) for the icon slot and check eligibility.
+
+    The ``icon`` slot is served by **ICON-D2** (2.2 km, convection-permitting)
+    when the *whole* route fits the D2 domain AND a complete D2 run's 48h
+    horizon reaches the flight-window end (issue #456 all-or-nothing gate);
+    otherwise by **ICON-EU** exactly as before. Never a per-point mix.
+
+    ``force_variant`` pins the variant (used by the total-D2-failure fallback to
+    re-run cleanly on ICON-EU) and skips the D2 gate.
 
     Returns ``(context, skip_reason)``. When the context is None the enrichment
     is skipped; ``skip_reason`` classifies *why* so the fetch stage can emit an
     accurate diagnostic instead of the generic "unavailable for this model"
     warning:
 
-    - ``"out_of_domain"`` — route lies outside the ICON-EU grid (expected for
-      non-European routes).
-    - ``"out_of_range"`` — flight window is beyond ICON-EU's 120h horizon
-      (expected for flights >~5 days out).
+    - ``"out_of_domain"`` — route lies outside the chosen grid (expected for
+      non-European routes on the EU fallback).
+    - ``"out_of_range"`` — flight window is beyond the chosen model's horizon
+      (EU 120h / D2 48h).
     - ``None`` — no ICON sections, or a genuine failure (run-finder raised, or
       a run should exist but couldn't be probed); the generic warning stands.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_MODEL_LEVEL_MAX,
-        ICON_EU_MODEL_LEVEL_MIN,
+        ICON_D2,
+        ICON_EU,
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
         icon_eu_window_out_of_range,
@@ -3035,50 +3081,74 @@ def _prepare_icon_eu(
         logger.debug("No ICON cross-sections to enrich")
         return None, None
 
-    if not route_in_icon_eu_domain(route_points):
-        logger.info("Route outside ICON-EU domain, skipping ICON-EU enrichment")
+    session = _grib_session()
+    cover_until = departure_time + timedelta(hours=flight_duration_hours)
+
+    # Variant selection. Prefer ICON-D2 when the whole route fits its domain and
+    # a complete D2 run covers the window; the run is resolved here (not
+    # re-probed) so we never pick D2 without a usable run. Otherwise ICON-EU.
+    variant = force_variant
+    run_info: tuple[str, int] | None = None
+    if variant is None:
+        variant = ICON_EU
+        if route_in_icon_eu_domain(route_points, ICON_D2):
+            try:
+                d2_run = find_latest_icon_eu_run(
+                    departure_time, session=session, as_of_time=as_of_time,
+                    cover_until=cover_until, variant=ICON_D2,
+                )
+            except Exception:
+                logger.warning("Failed to find ICON-D2 run; using ICON-EU", exc_info=True)
+                d2_run = None
+            if d2_run is not None:
+                variant, run_info = ICON_D2, d2_run
+                logger.info(
+                    "ICON slot sourced from ICON-D2 (route in D2 domain, run %s %02dz)",
+                    d2_run[0], d2_run[1],
+                )
+
+    if not route_in_icon_eu_domain(route_points, variant):
+        logger.info("Route outside %s domain, skipping ICON enrichment", variant.slug)
         return None, "out_of_domain"
 
-    session = _grib_session()
-
-    cover_until = departure_time + timedelta(hours=flight_duration_hours)
-    try:
-        run_info = find_latest_icon_eu_run(
-            departure_time, session=session, as_of_time=as_of_time,
-            cover_until=cover_until,
-        )
-    except Exception:
-        logger.warning("Failed to find ICON-EU model run", exc_info=True)
-        return None, None
+    if run_info is None:
+        try:
+            run_info = find_latest_icon_eu_run(
+                departure_time, session=session, as_of_time=as_of_time,
+                cover_until=cover_until, variant=variant,
+            )
+        except Exception:
+            logger.warning("Failed to find %s model run", variant.slug, exc_info=True)
+            return None, None
 
     if run_info is None:
-        # The run-finder returns None both when the window is past ICON-EU's
+        # The run-finder returns None both when the window is past the model's
         # horizon and when a run should exist but the probe failed. Only the
         # former is an expected "out of range" skip — classify deterministically.
         if icon_eu_window_out_of_range(
-            departure_time, flight_duration_hours, as_of_time,
+            departure_time, flight_duration_hours, as_of_time, variant,
         ):
-            logger.info("Flight window beyond ICON-EU horizon, skipping ICON-EU enrichment")
+            logger.info("Flight window beyond %s horizon, skipping ICON enrichment", variant.slug)
             return None, "out_of_range"
-        logger.info("No ICON-EU run found that covers the flight window")
+        logger.info("No %s run found that covers the flight window", variant.slug)
         return None, None
 
     init_date, init_hour = run_info
 
     forecast_hours = compute_icon_eu_flight_window_hours(
-        init_date, init_hour, departure_time, flight_duration_hours,
+        init_date, init_hour, departure_time, flight_duration_hours, variant,
     )
 
-    purge_old_runs(data_dir, model="icon-eu")
-    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
-    levels = list(range(ICON_EU_MODEL_LEVEL_MIN, ICON_EU_MODEL_LEVEL_MAX + 1))
+    purge_old_runs(data_dir, model=variant.slug)
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+    levels = list(range(variant.level_min, variant.level_max + 1))
 
     return _IconEuContext(
         init_date=init_date, init_hour=init_hour,
         forecast_hours=forecast_hours, run_dir=run_dir, levels=levels,
         point_lats=[rp.lat for rp in route_points],
         point_lons=[rp.lon for rp in route_points],
-        session=session,
+        session=session, variant=variant,
     ), None
 
 
@@ -3117,12 +3187,16 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     completion.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_CLOUD_DIAG_CACHE_KEY,
         ICON_EU_VARIABLES,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
+        icon_cloud_diag_cache_key,
         icon_eu_previous_step,
     )
+
+    variant = ctx.variant
+    prefix = variant.cache_prefix
+    diag_key = icon_cloud_diag_cache_key(variant)
 
     outer = _icon_prefetch_workers()
     # Keep outer x inner within the session's connection pool for ALL outer
@@ -3139,12 +3213,13 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
                     variables=[var],
                     session=ctx.session,
                     max_workers=inner,
+                    variant=variant,
                 )
             data = per_var.get(var)
             if data:
                 put_cached(ctx.run_dir, ck, data)
         except Exception:
-            logger.warning("Prefetch ICON-EU f%03d %s failed", fhour, var, exc_info=True)
+            logger.warning("Prefetch %s f%03d %s failed", variant.slug, fhour, var, exc_info=True)
 
     def _fetch_diag(fhour: int, ck: str) -> None:
         try:
@@ -3153,25 +3228,26 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
                     ctx.init_date, ctx.init_hour, [fhour],
                     session=ctx.session,
                     max_workers=inner,
+                    variant=variant,
                 )
             grib_bytes = fetched.get(fhour)
             if grib_bytes:
                 put_cached(ctx.run_dir, ck, grib_bytes)
         except Exception:
-            logger.warning("Prefetch ICON-EU cloud diag f%03d failed", fhour, exc_info=True)
+            logger.warning("Prefetch %s cloud diag f%03d failed", variant.slug, fhour, exc_info=True)
 
     jobs: list[tuple] = []
     for fhour in ctx.forecast_hours:
         # Model-level data (P, QC, QI) — per variable
-        legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
+        legacy_ck = cache_key(fhour, f"{prefix}_QC_QI_P")
         if not is_cached(ctx.run_dir, legacy_ck):  # legacy cache hit skips per-var download
             for var in ICON_EU_VARIABLES:
-                ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
+                ck = cache_key(fhour, f"{prefix}_{var.upper()}")
                 if not is_cached(ctx.run_dir, ck):
                     jobs.append((_fetch_var, fhour, var, ck))
 
         # Single-level cloud diagnostics
-        diag_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+        diag_ck = cache_key(fhour, diag_key)
         if not is_cached(ctx.run_dir, diag_ck):
             jobs.append((_fetch_diag, fhour, diag_ck))
 
@@ -3179,9 +3255,9 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     # to de-accumulate rain_con against (#421). Cloud-diag fetch only — the
     # model-level sounding list above is untouched.
     if ctx.forecast_hours:
-        lead = icon_eu_previous_step(min(ctx.forecast_hours))
+        lead = icon_eu_previous_step(min(ctx.forecast_hours), variant)
         if lead is not None and lead not in ctx.forecast_hours:
-            lead_ck = cache_key(lead, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+            lead_ck = cache_key(lead, diag_key)
             if not is_cached(ctx.run_dir, lead_ck):
                 jobs.append((_fetch_diag, lead, lead_ck))
 
@@ -3210,6 +3286,8 @@ def _decode_and_merge_icon_eu(
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
 
+    variant = ctx.variant
+    prefix = variant.cache_prefix
     icon_sections = [cs for cs in cross_sections if cs.model == ModelSource.ICON]
 
     # CLC-derived cloud layers are a time-VARYING forecast field, so keep each
@@ -3225,7 +3303,7 @@ def _decode_and_merge_icon_eu(
     # skipped. The decode bytes are read inside the worker.
     fhour_jobs: dict[int, tuple[str, tuple]] = {}
     for fhour in ctx.forecast_hours:
-        legacy_ck = cache_key(fhour, "ICON_EU_QC_QI_P")
+        legacy_ck = cache_key(fhour, f"{prefix}_QC_QI_P")
         if is_cached(ctx.run_dir, legacy_ck):
             fhour_jobs[fhour] = (
                 "decode_icon_legacy",
@@ -3235,7 +3313,7 @@ def _decode_and_merge_icon_eu(
 
         var_paths: dict[str, str] = {}
         for var in ICON_EU_VARIABLES:
-            ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
+            ck = cache_key(fhour, f"{prefix}_{var.upper()}")
             if is_cached(ctx.run_dir, ck):
                 var_paths[var] = str(ctx.run_dir / ck)
         if var_paths:
@@ -3302,12 +3380,12 @@ def _decode_and_merge_icon_eu(
     _grib_rss_mark("icon_fhour_post_gc")
 
     if not total_enriched:
-        logger.warning("No ICON-EU GRIB2 data retrieved for enrichment")
+        logger.warning("No %s GRIB2 data retrieved for enrichment", variant.slug)
         return None, None
 
     logger.info(
-        "GRIB2 ICON full sounding replacement: %d hourly entries replaced",
-        total_enriched,
+        "GRIB2 ICON full sounding replacement (%s): %d hourly entries replaced",
+        variant.slug, total_enriched,
     )
 
     # Cloud diagnostics (ceiling, convective base/top) from single-level files.
@@ -3316,7 +3394,7 @@ def _decode_and_merge_icon_eu(
         icon_sections, all_forecasts, route_points,
         ctx.init_date, ctx.init_hour, ctx.forecast_hours,
         ctx.run_dir, ctx.point_lats, ctx.point_lons, ctx.session,
-        clc_layers_by_fhour=clc_layers_by_fhour,
+        clc_layers_by_fhour=clc_layers_by_fhour, variant=variant,
     )
 
     return _run_info_to_timestamp(ctx.init_date, ctx.init_hour), None
@@ -3335,6 +3413,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     session: requests.Session,
     *,
     clc_layers_by_fhour: dict[int, list[dict[str, float]]] | None = None,
+    variant=None,
 ) -> None:
     """Enrich ICON forecasts with single-level cloud diagnostics (ceiling, etc.).
 
@@ -3342,14 +3421,21 @@ def _enrich_icon_eu_cloud_diagnostics(
     from model-level data, keyed by forecast hour), missing ``base_ft``/
     ``top_ft`` on low/mid/high NWPCloudLayerDiag are filled from THAT forecast
     hour's geometry — clouds evolve over time, so each valid time uses its own.
+
+    *variant* selects ICON-EU vs ICON-D2 URL/cache conventions (defaults to EU).
     """
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_CLOUD_DIAG_CACHE_KEY,
+        ICON_EU,
         fetch_icon_eu_single_level,
+        icon_cloud_diag_cache_key,
         icon_eu_conv_rain_rate_mm_h,
         icon_eu_previous_step,
     )
+
+    if variant is None:
+        variant = ICON_EU
+    diag_key = icon_cloud_diag_cache_key(variant)
 
     # Prepend one leading step so the first window hour has a predecessor to
     # de-accumulate rain_con against, then walk steps in sorted order carrying
@@ -3359,7 +3445,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     # seeds the de-accumulation state.
     steps = sorted(set(forecast_hours))
     if steps:
-        lead = icon_eu_previous_step(steps[0])
+        lead = icon_eu_previous_step(steps[0], variant)
         if lead is not None and lead not in steps:
             steps.insert(0, lead)
 
@@ -3371,11 +3457,12 @@ def _enrich_icon_eu_cloud_diagnostics(
 
     total_enriched = 0
     for fhour in steps:
-        ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+        ck = cache_key(fhour, diag_key)
         if not is_cached(run_dir, ck):
             try:
                 fetched = fetch_icon_eu_single_level(
                     init_date, init_hour, [fhour], session=session,
+                    variant=variant,
                 )
                 grib_bytes = fetched.get(fhour)
                 if grib_bytes:

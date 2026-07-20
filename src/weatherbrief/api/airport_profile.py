@@ -478,7 +478,7 @@ def _grib_enrich_levels(
     duration_h = (hours[-1] - hours[0]).total_seconds() / 3600.0
 
     try:
-        grib_init_times, grib_skip_reasons = enrich_forecasts(
+        grib_init_times, grib_skip_reasons, grib_sources = enrich_forecasts(
             cross_sections=[cs],
             all_forecasts=[waypoint_forecast],
             route_points=[point],
@@ -493,7 +493,13 @@ def _grib_enrich_levels(
 
     sources: dict[str, dict[str, Any]] = {}
     for m, ts in grib_init_times.items():
-        sources[m] = {"init_time_unix": ts}
+        entry: dict[str, Any] = {"init_time_unix": ts}
+        # Which direct-GRIB source produced this model's run — lets the icon
+        # slot report ICON-D2 vs ICON-EU (issue #456).
+        src = grib_sources.get(m)
+        if src:
+            entry["source"] = src
+        sources[m] = entry
     skipped = {m: reason for m, reason in grib_skip_reasons.items()}
     return {"sources": sources, "skipped": skipped}
 
