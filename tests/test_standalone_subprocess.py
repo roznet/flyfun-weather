@@ -343,9 +343,10 @@ def _run_cli_standalone(monkeypatch, args):
     calls: dict = {}
 
     def fake_cycle(watchlist, db, *, fetch_forecasts, score_observations,
-                   pool_soundings=False):
+                   pool_soundings=False, region="eu"):
         calls["flags"] = (fetch_forecasts, score_observations)
         calls["pool_soundings"] = pool_soundings
+        calls["region"] = region
         return {
             "cycle_type": "forecast" if not score_observations else "light",
             "models_fetched": 0, "snapshots_stored": 0,

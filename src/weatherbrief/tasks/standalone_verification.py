@@ -1441,6 +1441,19 @@ def run_standalone_cycle(
     if not fetch_forecasts and not score_observations:
         raise ValueError("must enable at least one of fetch_forecasts or score_observations")
 
+    # Guard the region at the library boundary, not just in the CLI: an
+    # unonboarded region would fetch the EU watchlist with the fallback EU model
+    # set and tag every stored row with the caller's region string — silently
+    # mislabeling data. Fail loudly for ANY caller (scheduler, admin hub, script,
+    # test), not only cmd_standalone. Onboarding a region = add its model set here
+    # (and a region-aware watchlist).
+    if region not in STANDALONE_MODELS_BY_REGION:
+        raise ValueError(
+            f"region {region!r} is not onboarded — no model set in "
+            f"STANDALONE_MODELS_BY_REGION (have {sorted(STANDALONE_MODELS_BY_REGION)}). "
+            "Add its model set and a region-aware watchlist before running it."
+        )
+
     from flyfun_common.db import SessionLocal
     from weatherbrief.fetch.grib import DecodePriority
     from weatherbrief.fetch.model_status import fetch_model_metadata
