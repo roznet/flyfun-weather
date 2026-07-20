@@ -36,8 +36,8 @@ Propagation mirrors the existing `_GRIB_TIMER` pattern via a `ContextVar` `_DECO
   - `api/packs.py` user refresh (both `run_pipeline`s): set INTERACTIVE *inside* `run_pipeline` (`run_in_executor` does not copy the caller context).
   - `api/airport_profile.py`: `enrich_forecasts(priority=INTERACTIVE)`.
   - `scheduler.py` `_auto_refresh_one`: SCHEDULED. `_run_standalone_once`: BACKGROUND (runs in `asyncio.to_thread`, which copies the context).
-  - `tasks/standalone_verification.py`: both `_dispatch_decode` calls pass `priority=BACKGROUND` explicitly (their decode runs off the standalone context).
-  - `tasks/standalone_grib.py`: the GFS/ICON cloud-diag adapter dispatches by cache path with `priority=BACKGROUND` (#236 — it previously called the decode functions directly in the orchestrating process, putting cfgrib/xarray full-grid decode on that process's heap). Note: scheduled standalone cycles run in a subprocess whose `GRIB_DECODE_WORKERS` is set from `STANDALONE_ANALYSIS_WORKERS` (default 2, `0` restores inline; #448 PR B), so the child runs its own small pool for decode **and** pooled sounding batches (`analyze_sounding_batch` — the first non-decode worker fn); the parent app's pool is untouched.
+  - `tasks/standalone_verification.py`: the ECMWF a1/a2 decode batch passes `priority=BACKGROUND` explicitly (its decode runs off the standalone context); since #459 it fans out via `_dispatch_decode_parallel` (with an optional `GRIB_DECODE_WORKERS_ECMWF` window) rather than one blocking `_dispatch_decode` per step.
+  - `tasks/standalone_grib.py`: the GFS/ICON cloud-diag adapter dispatches by cache path with `priority=BACKGROUND` (#236 — it previously called the decode functions directly in the orchestrating process, putting cfgrib/xarray full-grid decode on that process's heap), batched via `_dispatch_decode_parallel` since #459 (light leg, no cap). Note: scheduled standalone cycles run in a subprocess whose `GRIB_DECODE_WORKERS` is set from `STANDALONE_ANALYSIS_WORKERS` (default 2, `0` restores inline; #448 PR B), so the child runs its own small pool for decode **and** pooled sounding batches (`analyze_sounding_batch` — the first non-decode worker fn); the parent app's pool is untouched.
   - Precache (`scheduler.py`): download-only, no decode → nothing to prioritise.
 
 ## Dispatcher architecture
@@ -59,6 +59,18 @@ Propagation mirrors the existing `_GRIB_TIMER` pattern via a `ContextVar` `_DECO
 ### Per-job timeout (deliberate improvement)
 
 The legacy `_dispatch_decode_parallel` shared **one** deadline across a whole batch, which false-times-out large batches. The dispatcher gives **each job its own** `GRIB_DECODE_TIMEOUT_S`, which is also what makes timeout-victim identification possible.
+
+### `max_inflight` — throttle a memory-heavy batch below the pool (#459)
+
+`_dispatch_decode_parallel(jobs, ..., max_inflight=None)`:
+
+- `None` — submit the whole batch; the pool size (`GRIB_DECODE_WORKERS`) bounds concurrency. This is the default and what every fan-out used before #459.
+- an `int` — a caller-side **sliding window** (`_collect_windowed`): keep at most that many caller futures outstanding, submit the next as each completes. Bounds how many full GRIB grids decode concurrently for a memory-heavy loop even when the pool is wider. Because there is a **single** pool, the pool is always the hard ceiling — a window `>=` the batch size (or `>=` the pool) is a no-op, and a per-task window can only throttle *down* from `GRIB_DECODE_WORKERS`; to give a task *more*, raise the pool. Ignored on the legacy FIFO path (`GRIB_DECODE_PRIORITY_ENABLED=0`), a rollback switch where the pool size alone bounds concurrency.
+
+Two standalone decode loops that used to walk one blocking `_dispatch_decode` per step (only ever 1 worker busy) now collect their jobs and fan out through this primitive:
+
+- **ECMWF a1/a2** (`tasks/standalone_verification.py::fetch_ecmwf_grib_snapshots`) — the dominant standalone wall-time cost (~6 min, ~70% idle on the M4). Passes `max_inflight=_decode_workers_ecmwf()` (`GRIB_DECODE_WORKERS_ECMWF`, unset → full pool). Concurrent ECMWF decode holds full grids in RAM, heavier per-worker than the sounding batches the pool was tuned for, so a memory-constrained fallback host can set `GRIB_DECODE_WORKERS_ECMWF=1` to keep this leg serial while leaving the shared pool wide for everything else.
+- **GFS/ICON cloud-diag** (`tasks/standalone_grib.py`) — light (single field); batched with no dedicated cap (`max_inflight` left `None`). Fetch stays sequential (network I/O); only the decodes fan out.
 
 ## Recovery — `_handle_fault(reason, victim=None)`
 
@@ -102,6 +114,7 @@ Auto-rescheduling interrupted work is **only safe because dispatched jobs are pu
 | Var | Default | Meaning |
 |---|---|---|
 | `GRIB_DECODE_WORKERS` | 2 | Pool size; `0` = in-process |
+| `GRIB_DECODE_WORKERS_ECMWF` | unset | `max_inflight` window for the standalone ECMWF decode batch (#459); unset/`<=0` → full pool. Only throttles *down* from `GRIB_DECODE_WORKERS` |
 | `GRIB_DECODE_TIMEOUT_S` | 300 | **Per-job** deadline |
 | `GRIB_DECODE_PRIORITY_ENABLED` | on | `0` = legacy FIFO (rollback) |
 | `GRIB_DECODE_RETRY_CAP` | 2 | Max reschedules of one crash-interrupted job |

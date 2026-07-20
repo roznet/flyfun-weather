@@ -50,8 +50,13 @@ def airports():
 
 @pytest.fixture
 def fake_decode(monkeypatch):
-    """Stand in for the GRIB decoder: surface returns the accumulation."""
-    def _dispatch(job: str, path: str, lats, lons, **kwargs):
+    """Stand in for the GRIB decoder: surface returns the accumulation.
+
+    Since #459 the fetcher batches a1/a2 decodes through
+    ``_dispatch_decode_parallel``; the fake decodes each job by its file path
+    and returns results in the batch's input order.
+    """
+    def _decode_one(job: str, path: str):
         step_h = int(path.split("_")[-1].removesuffix("h.grib"))
         if job == "decode_ecmwf_surface":
             return [{
@@ -62,8 +67,13 @@ def fake_decode(monkeypatch):
             }], None
         return None, None  # pressure levels: not exercised here
 
-    monkeypatch.setattr("weatherbrief.fetch.grib._dispatch_decode", _dispatch)
-    return _dispatch
+    def _dispatch_parallel(jobs, *, priority=None, return_exceptions=False, max_inflight=None):
+        return [_decode_one(name, args[0]) for name, args in jobs]
+
+    monkeypatch.setattr(
+        "weatherbrief.fetch.grib._dispatch_decode_parallel", _dispatch_parallel,
+    )
+    return _dispatch_parallel
 
 
 def _by_step(snapshots):

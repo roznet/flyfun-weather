@@ -823,7 +823,10 @@ def fetch_ecmwf_grib_snapshots(
     """
     from datetime import time as dt_time
 
-    from weatherbrief.fetch.grib import _dispatch_decode
+    from weatherbrief.fetch.grib import (
+        _decode_workers_ecmwf,
+        _dispatch_decode_parallel,
+    )
     from weatherbrief.fetch.grib.decode import (
         build_ecmwf_surface_snapshot,
         build_pressure_levels_from_grib,
@@ -852,28 +855,6 @@ def fetch_ecmwf_grib_snapshots(
     n = len(airports)
     empty: list[dict] = [{} for _ in range(n)]
 
-    # Cache decoded a1 dicts per step — step-diff for tp/sf reads the
-    # previous-hour step, which is reused by the next iteration.
-    a1_cache: dict[int, list[dict[str, float]]] = {}
-
-    def _decode_a1(step_h: int) -> list[dict[str, float]]:
-        if step_h in a1_cache:
-            return a1_cache[step_h]
-        a1_path = files_by_step.get(step_h, {}).get("a1")
-        if a1_path is None:
-            a1_cache[step_h] = empty
-            return empty
-        try:
-            data, _ = _dispatch_decode(
-                "decode_ecmwf_surface", str(a1_path), lats, lons,
-                priority=priority,
-            )
-        except Exception:
-            logger.warning("ECMWF a1 decode failed for step %dh", step_h, exc_info=True)
-            data = empty
-        a1_cache[step_h] = data
-        return data
-
     snapshots: list[dict] = []
     max_step = max(files_by_step.keys())
     delivered_steps = sorted(files_by_step)
@@ -895,6 +876,82 @@ def fetch_ecmwf_grib_snapshots(
         prev = [s for s in delivered_steps if s < step_h]
         return prev[-1] if prev else None
 
+    # Fan the whole run's a1/a2 decodes out through the pool in one batch (#459)
+    # instead of walking one blocking dispatch per step — the ~6 min ECMWF leg
+    # sat ~70% idle because only one decode worker was ever busy. Enumerate the
+    # (day_offset × sample_hour) grid to the set of delivered steps we touch:
+    # each target step plus the previous delivered step its tp/sf accumulation
+    # diff reads.
+    a1_needed: set[int] = set()
+    a2_needed: set[int] = set()
+    for day_offset in range(days + 1):
+        target_date = (init_time + timedelta(days=day_offset)).date()
+        hours = sample_hours if sample_hours is not None else sample_hours_for_day(day_offset)
+        for hour in hours:
+            target_dt = datetime.combine(
+                target_date, dt_time(hour, 0, 0), tzinfo=timezone.utc,
+            )
+            step_h = int((target_dt - init_time).total_seconds() / 3600)
+            if step_h <= 0 or step_h > max_step or step_h not in files_by_step:
+                continue
+            a1_needed.add(step_h)
+            prev_step = _previous_delivered_step(step_h)
+            if prev_step is not None:
+                a1_needed.add(prev_step)
+            if files_by_step[step_h].get("a2") is not None:
+                a2_needed.add(step_h)
+
+    # A step lacking an a1 file resolves to the empty sentinel without a decode
+    # (matches the old per-step short-circuit in ``_decode_a1``).
+    a1_steps = sorted(
+        s for s in a1_needed if files_by_step.get(s, {}).get("a1") is not None
+    )
+    a2_steps = sorted(a2_needed)
+
+    decode_jobs: list[tuple[str, tuple]] = [
+        ("decode_ecmwf_surface", (str(files_by_step[s]["a1"]), lats, lons))
+        for s in a1_steps
+    ]
+    decode_jobs += [
+        ("decode_ecmwf_pressure", (str(files_by_step[s]["a2"]), lats, lons))
+        for s in a2_steps
+    ]
+
+    # ``max_inflight`` throttles concurrency *below* the pool for a
+    # memory-constrained host via GRIB_DECODE_WORKERS_ECMWF; unset → the pool
+    # (GRIB_DECODE_WORKERS) bounds it. Same explicit priority as the per-step
+    # sounding merge below.
+    ecmwf_window = _decode_workers_ecmwf()
+    t_decode = time.monotonic()
+    decoded = (
+        _dispatch_decode_parallel(
+            decode_jobs, priority=priority, return_exceptions=True,
+            max_inflight=ecmwf_window,
+        )
+        if decode_jobs
+        else []
+    )
+    decode_s = time.monotonic() - t_decode
+
+    # ``empty`` is shared read-only across steps with no/failed a1 — never
+    # mutated, so aliasing it is safe (as the old cache did).
+    a1_cache: dict[int, list[dict[str, float]]] = {}
+    for step_h, res in zip(a1_steps, decoded):
+        if isinstance(res, Exception):
+            logger.warning("ECMWF a1 decode failed for step %dh", step_h, exc_info=res)
+            a1_cache[step_h] = empty
+        else:
+            data, _ = res
+            a1_cache[step_h] = data
+    a2_cache: dict[int, list[dict[int, dict[str, float]]] | None] = {}
+    for step_h, res in zip(a2_steps, decoded[len(a1_steps):]):
+        if isinstance(res, Exception):
+            logger.warning("ECMWF a2 decode failed for step %dh", step_h, exc_info=res)
+            a2_cache[step_h] = None
+        else:
+            pl_data, _ = res
+            a2_cache[step_h] = pl_data
+
     for day_offset in range(days + 1):
         target_date = (init_time + timedelta(days=day_offset)).date()
         hours = sample_hours if sample_hours is not None else sample_hours_for_day(day_offset)
@@ -908,27 +965,17 @@ def fetch_ecmwf_grib_snapshots(
             if step_h not in files_by_step:
                 continue
 
-            cur_a1 = _decode_a1(step_h)
+            cur_a1 = a1_cache.get(step_h, empty)
             prev_step = _previous_delivered_step(step_h)
-            prev_a1 = _decode_a1(prev_step) if prev_step is not None else None
+            prev_a1 = (
+                a1_cache.get(prev_step, empty) if prev_step is not None else None
+            )
             # Window the accumulation actually covers: 1 h inside the hourly
             # region, 3 h or 6 h further out. Recorded per row so a 6 h total is
             # never mistaken for an hourly one.
             precip_period_h = (step_h - prev_step) if prev_step is not None else None
 
-            a2_path = files_by_step[step_h].get("a2")
-            pl_data: list[dict[int, dict[str, float]]] | None = None
-            if a2_path is not None:
-                try:
-                    pl_data, _ = _dispatch_decode(
-                        "decode_ecmwf_pressure", str(a2_path), lats, lons,
-                        priority=priority,
-                    )
-                except Exception:
-                    logger.warning(
-                        "ECMWF a2 decode failed for step %dh", step_h, exc_info=True,
-                    )
-                    pl_data = None
+            pl_data = a2_cache.get(step_h)
 
             t_step = time.monotonic()
             step_pending: list[tuple[int, dict]] = []
@@ -1023,16 +1070,12 @@ def fetch_ecmwf_grib_snapshots(
             analysis_s += time.monotonic() - t_step
             steps_processed += 1
 
-            # Drop the previous-step cache once we've moved past it; the
-            # next iteration only re-reads (step_h, step_h-1).
-            stale_keys = [k for k in a1_cache if k < step_h - 1]
-            for k in stale_keys:
-                a1_cache.pop(k, None)
-
     logger.info(
-        "ECMWF GRIB leg: %d steps, %d snapshots, sounding analysis %.0fs%s",
-        steps_processed, len(snapshots), analysis_s,
-        " (pooled)" if pooled else "",
+        "ECMWF GRIB leg: %d steps, %d snapshots, decode %.0fs "
+        "(%d a1 + %d a2, %s), sounding analysis %.0fs%s",
+        steps_processed, len(snapshots), decode_s, len(a1_steps), len(a2_steps),
+        f"max_inflight={ecmwf_window}" if ecmwf_window else "full pool",
+        analysis_s, " (pooled)" if pooled else "",
     )
     return snapshots
 
