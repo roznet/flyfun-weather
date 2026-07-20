@@ -76,7 +76,8 @@ Planning/viewer mode — default when not in an active flight session. What the 
 > still reached from the flight-list ellipsis menu; the PIREP reporting sheet is
 > a toolbar button (shown whenever `pirepCanPublish`, no flight-window gate), not
 > a tab — plus a "Report a PIREP" action on the PIREPs tab and an "Add PIREP"
-> flight-list context-menu item.
+> flight-list context-menu item (the latter additionally gated on the flight's
+> tracking window, so a list-filed report links to the flight — see §PIREP sheet).
 
 | Tab | Contents (code) |
 |---|---|
@@ -216,7 +217,7 @@ Original concept: when pilot taps "Report" manually. All fields pre-populated fr
 
 ## As-built PIREP reporting sheet
 
-`PirepReportingView` (driven by `PirepViewModel`), reachable whenever `pirepCanPublish` — from the briefing toolbar, the PIREPs-tab "Report a PIREP" action, or the flight-list "Add PIREP" context menu. **No flight-window gate.** One manual `Form` sheet, severity fields start **unselected**, GPS pre-fills only altitude/position via `FlightTrackingService` — the sheet requests a one-shot fix on appear (`requestOneShotLocation()`) so pre-fill works without an active track. Toolbar cancel button is labelled "Skip". `Form` sections, in order:
+`PirepReportingView` (driven by `PirepViewModel`), reachable whenever `pirepCanPublish` — from the briefing toolbar and the PIREPs-tab "Report a PIREP" action (permanent, no flight-window gate), or the flight-list "Add PIREP" context menu (additionally gated on the flight's tracking window). **Linkage caveat:** `submit` sends no `pack_id`, so the server attaches a report to a flight only when its `observed_at` is inside that flight's window; the list entry is window-gated for that reason, while an in-briefing report filed far outside the window is kept as standalone community data. One manual `Form` sheet, severity fields start **unselected**, GPS pre-fills only altitude/position via `FlightTrackingService` — the sheet requests a one-shot fix on appear (`requestOneShotLocation()`) so pre-fill works without an active track. Toolbar cancel button is labelled "Skip". `Form` sections, in order:
 
 - **Altitude** — read-only GPS altitude row + editable "Reported altitude" (ft) text field (pre-filled from GPS on appear)
 - **Icing** — severity picker (none/trace/light/moderate/severe); if non-none, an icing-**type** picker appears (rime/clear/mixed)

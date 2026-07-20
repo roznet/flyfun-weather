@@ -141,7 +141,12 @@ struct BriefingContainerView: View {
             viewModel = vm
             await vm.loadBriefing()
             await vm.checkActiveRefresh()
-            await vm.loadPireps()
+            // Only load PIREPs when the user may view them — the query 403s for a
+            // publish-only account, which would strand the PIREPs tab on an error
+            // screen and hide its "Report a PIREP" action.
+            if appState.userPreferences.preferences.pirepCanView {
+                await vm.loadPireps()
+            }
             // Opening the briefing clears this flight from the badge (web + app),
             // and fires a silent badge-sync push to the user's other devices.
             await appState.markBriefingSeen(flightId: flight.id)
@@ -574,6 +579,7 @@ private struct BriefingContentView: View {
             PirepListView(
                 pirepsState: viewModel.pirepsState,
                 canPublish: canPublishPireps,
+                canView: appState.userPreferences.preferences.pirepCanView,
                 onAdd: onAddPirep,
                 retryAction: { await viewModel.loadPireps() }
             )
