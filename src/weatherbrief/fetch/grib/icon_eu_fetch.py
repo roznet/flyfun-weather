@@ -1,12 +1,27 @@
-"""DWD ICON-EU GRIB2 download from opendata.dwd.de.
+"""DWD ICON GRIB2 download from opendata.dwd.de.
 
-ICON-EU provides cloud liquid water (QC) and ice mixing ratio (QI) on model
-levels, covering Europe at ~6.5 km resolution on a regular lat-lon grid.
+Serves two DWD ICON variants that share this entire download/decode machinery
+(same server layout, same variable names, same regular-lat-lon grid type),
+differing only in a handful of config values captured by :class:`IconVariant`
+(issue #456):
+
+- **ICON-EU** — ~6.5 km, all of Europe, hourly to 78h then 3-hourly to 120h.
+  The default variant; every helper here keeps ``variant=ICON_EU`` so existing
+  callers are unchanged.
+- **ICON-D2** — ~2.2 km convection-permitting, central Europe only, hourly to
+  48h. Selected in place of ICON-EU for the ``icon`` slot when the whole route
+  fits the D2 domain and the flight window is within a D2 run's 48h horizon.
+
+Both provide cloud liquid water (QC) and ice mixing ratio (QI) on model levels.
 
 Data structure differs from GFS:
 - Individual bz2-compressed files per variable/level/timestep
 - Model levels (not pressure levels) — need P field for vertical interpolation
 - Separate files per level (no .idx companion files)
+
+The historical ``icon_eu_*`` names are retained (many callers + tests import
+them) even though they now dispatch on ``variant``; think of the prefix as
+"DWD ICON GRIB", not "ICON-EU specifically".
 """
 
 from __future__ import annotations
@@ -15,89 +30,195 @@ import bz2
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-# DWD Open Data base URL
+# DWD Open Data base URL (ICON-EU). ICON-D2 lives under a sibling path — see
+# the ``base_url`` field on each :class:`IconVariant` below.
 DWD_BASE_URL = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
+
+@dataclass(frozen=True)
+class IconVariant:
+    """Config for one DWD ICON GRIB variant (ICON-EU or ICON-D2).
+
+    Pure data, no behaviour — every ``icon_eu_*`` helper below reads these
+    fields so the same download/decode path serves both variants (issue #456).
+
+    Attributes:
+        slug: Cache-dir model key and filename model token ("icon-eu"/"icon-d2").
+        source_key: Freshness ``SOURCE_REGISTRY`` key ("icon_eu:dwd"/"icon_d2:dwd").
+        cache_prefix: Prefix for per-run cache-key variable labels
+            ("ICON_EU"/"ICON_D2") so the two variants never collide in a cache dir.
+        base_url: DWD opendata grib base for this model.
+        grid_label: Filename region token ("europe"/"germany").
+        lat_min/lat_max/lon_min/lon_max: All-or-nothing domain bbox.
+        cycles: UTC run hours, freshest-first (run-finder order).
+        publish_delay_hours: Hours after init before a run is expected published.
+        level_min/level_max: Inclusive model-level slice (aviation altitude band).
+        var_suffix_upper: True → uppercase variable suffix in filenames (EU);
+            False → lowercase (D2). Governs both model- and single-level names.
+        single_level_2d: True → single-level filenames carry a "_2d_" segment (D2).
+        main_cycles: Cycles reaching ``horizon_main_h`` (others reach the short one).
+        horizon_main_h/horizon_short_h: Per-cycle model-level forecast horizon.
+        hourly_to_h: Last hourly forecast step; steps above it are ``coarse_step_h``.
+        coarse_step_h: Step size in the post-hourly region (EU 3h; D2 has none → 1).
+    """
+
+    slug: str
+    source_key: str
+    cache_prefix: str
+    base_url: str
+    grid_label: str
+    lat_min: float
+    lat_max: float
+    lon_min: float
+    lon_max: float
+    cycles: tuple[int, ...]
+    publish_delay_hours: float
+    level_min: int
+    level_max: int
+    var_suffix_upper: bool
+    single_level_2d: bool
+    main_cycles: frozenset[int]
+    horizon_main_h: int
+    horizon_short_h: int
+    hourly_to_h: int
+    coarse_step_h: int
+
 
 # ICON-EU model-level horizon depends on the run cycle (verified empirically
 # against opendata.dwd.de directory listings):
 # - Main runs (00z, 06z, 12z, 18z): hourly to 78h, 3-hourly to 120h
 # - Short runs (03z, 09z, 15z, 21z): hourly to 30h, then 6-hourly to 48h
-#
 # We cap short-run usage at 30h so the run-picker falls back to the prior main
-# run for any flight extending past +30h. This keeps every briefing on a
-# uniform hourly grid (short run hourly 0-30h, OR main run hourly 0-78h) and
-# avoids 404s on f031–f035/f037–f041/f043–f047 which are not published.
-ICON_EU_MAIN_CYCLES = {0, 6, 12, 18}
-ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN = 120
-ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = 30
+# run for any flight extending past +30h — keeps every briefing on a uniform
+# hourly grid and avoids 404s on f031–f047 which are not published.
+ICON_EU = IconVariant(
+    slug="icon-eu",
+    source_key="icon_eu:dwd",
+    cache_prefix="ICON_EU",
+    base_url="https://opendata.dwd.de/weather/nwp/icon-eu/grib",
+    grid_label="europe",
+    lat_min=29.5,
+    lat_max=70.5,
+    lon_min=-23.5,
+    lon_max=62.5,
+    cycles=(21, 18, 15, 12, 9, 6, 3, 0),
+    publish_delay_hours=3.0,
+    level_min=35,  # levels 35-74 ≈ 300-1000 hPa (surface to ~FL280)
+    level_max=74,
+    var_suffix_upper=True,
+    single_level_2d=False,
+    main_cycles=frozenset({0, 6, 12, 18}),
+    horizon_main_h=120,
+    horizon_short_h=30,
+    hourly_to_h=78,
+    coarse_step_h=3,
+)
+
+# ICON-D2: 2.2 km convection-permitting, central-Europe domain, 8 runs/day,
+# hourly to 48h (no coarse tail). Filename quirks vs EU (issue #456): lowercase
+# variable suffix (..._60_t.grib2.bz2), single-level files carry a "_2d_"
+# segment (..._006_2d_ceiling.grib2.bz2), region token "germany", model token
+# "icon-d2". Domain corners + 65-level count from DWD's ICON-D2 regular-lat-lon
+# product (1215×746 ≈ 906k points ≈ ICON-EU's ~905k).
+#
+# level_min=25 is a deliberately-conservative top: the log-pressure
+# interpolation clips any target pressure level above the fetched column, so
+# over-fetching a few thin upper levels only costs a little bandwidth while
+# under-fetching would truncate the sounding at cruise. 25–65 (41 levels)
+# comfortably spans surface→~FL300. Validate the exact top against DWD's D2 HHL
+# table once the feed is reachable. Publication delay ~1–2h — 2h with margin;
+# the run-finder HEAD-probes anyway so a small miss just walks back one cycle.
+ICON_D2 = IconVariant(
+    slug="icon-d2",
+    source_key="icon_d2:dwd",
+    cache_prefix="ICON_D2",
+    base_url="https://opendata.dwd.de/weather/nwp/icon-d2/grib",
+    grid_label="germany",
+    lat_min=43.18,
+    lat_max=58.08,
+    lon_min=-3.94,
+    lon_max=20.34,
+    cycles=(21, 18, 15, 12, 9, 6, 3, 0),
+    publish_delay_hours=2.0,
+    level_min=25,
+    level_max=65,
+    var_suffix_upper=False,
+    single_level_2d=True,
+    main_cycles=frozenset({0, 3, 6, 9, 12, 15, 18, 21}),
+    horizon_main_h=48,
+    horizon_short_h=48,
+    hourly_to_h=48,
+    coarse_step_h=1,
+)
+
+# Back-compat module constants (ICON-EU). The variant above is the single
+# source of truth; these aliases keep existing imports/tests working.
+ICON_EU_MAIN_CYCLES = set(ICON_EU.main_cycles)
+ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN = ICON_EU.horizon_main_h
+ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT = ICON_EU.horizon_short_h
+ICON_EU_LAT_MIN = ICON_EU.lat_min
+ICON_EU_LAT_MAX = ICON_EU.lat_max
+ICON_EU_LON_MIN = ICON_EU.lon_min
+ICON_EU_LON_MAX = ICON_EU.lon_max
+ICON_EU_CYCLES = list(ICON_EU.cycles)
+ICON_EU_PUBLISH_DELAY_HOURS = ICON_EU.publish_delay_hours
+ICON_EU_MODEL_LEVEL_MIN = ICON_EU.level_min
+ICON_EU_MODEL_LEVEL_MAX = ICON_EU.level_max
 
 
-def icon_eu_model_level_max_hour(init_hour: int) -> int:
-    """Return the model-level forecast horizon for the given ICON-EU cycle."""
-    if init_hour in ICON_EU_MAIN_CYCLES:
-        return ICON_EU_MODEL_LEVEL_MAX_HOUR_MAIN
-    return ICON_EU_MODEL_LEVEL_MAX_HOUR_SHORT
+def icon_eu_model_level_max_hour(
+    init_hour: int, variant: IconVariant = ICON_EU,
+) -> int:
+    """Return the model-level forecast horizon for the given cycle + variant."""
+    if init_hour in variant.main_cycles:
+        return variant.horizon_main_h
+    return variant.horizon_short_h
 
 
 def icon_eu_window_out_of_range(
     target_time: datetime,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
+    variant: IconVariant = ICON_EU,
 ) -> bool:
-    """True when no publishable ICON-EU run has enough horizon for the flight.
+    """True when no publishable run of *variant* has enough horizon for the flight.
 
     Deterministic (no network): walks the same cycles and publication-delay
     logic as :func:`find_latest_icon_eu_run_with_response` and checks whether
     any run available as-of *as_of_time* reaches ``target_time +
     flight_duration_hours``. ICON-EU's model-level horizon is only 120h (5
-    days), so any flight departing >~5 days out is beyond it.
+    days) and ICON-D2's only 48h, so a flight beyond that is out of range.
 
-    Used to distinguish the *expected* "flight beyond ICON-EU horizon" skip
-    (an info-level condition, common for flights 5–9 days out) from a genuine
-    upstream/probe failure — the run-finder returns ``None`` for both.
+    Used to distinguish the *expected* "flight beyond horizon" skip (an
+    info-level condition) from a genuine upstream/probe failure — the
+    run-finder returns ``None`` for both.
     """
     reference_time = as_of_time or datetime.now(timezone.utc)
     need_until = target_time + timedelta(hours=flight_duration_hours)
     for days_back in range(2):
         check_date = reference_time - timedelta(days=days_back)
-        for cycle in ICON_EU_CYCLES:
+        for cycle in variant.cycles:
             init_time = check_date.replace(
                 hour=cycle, minute=0, second=0, microsecond=0,
             )
             if init_time > reference_time:
                 continue
             hours_since_init = (reference_time - init_time).total_seconds() / 3600
-            if hours_since_init < ICON_EU_PUBLISH_DELAY_HOURS:
+            if hours_since_init < variant.publish_delay_hours:
                 continue
-            horizon = init_time + timedelta(hours=icon_eu_model_level_max_hour(cycle))
+            horizon = init_time + timedelta(
+                hours=icon_eu_model_level_max_hour(cycle, variant),
+            )
             if horizon >= need_until:
                 # At least one publishable run reaches the flight window.
                 return False
     return True
-
-# ICON-EU domain bounds (regular lat-lon grid)
-ICON_EU_LAT_MIN = 29.5
-ICON_EU_LAT_MAX = 70.5
-ICON_EU_LON_MIN = -23.5
-ICON_EU_LON_MAX = 62.5
-
-# ICON-EU cycles: every 3 hours
-ICON_EU_CYCLES = [21, 18, 15, 12, 9, 6, 3, 0]
-
-# Publication delay: ICON-EU is typically available ~3h after init
-ICON_EU_PUBLISH_DELAY_HOURS = 3
-
-# Model levels covering surface (~74) to ~FL280 (~level 35).
-# Level 74 is near surface, level 1 is top of atmosphere.
-# Levels 35-74 cover approximately 300-1000 hPa.
-ICON_EU_MODEL_LEVEL_MIN = 35
-ICON_EU_MODEL_LEVEL_MAX = 74
 
 # Variables to fetch: sounding + cloud microphysics + pressure for vertical interpolation.
 # Note: "qv" (specific humidity) is used instead of "relhum" because relhum is only
@@ -136,22 +257,39 @@ ICON_EU_CLOUD_DIAG_VARIABLES = (
 # standalone verification) so the four call sites can never drift apart.
 ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V2"
 
+
+def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
+    """Cache-key label for a variant's single-level cloud-diagnostic blob.
+
+    ``{cache_prefix}_CLOUD_DIAG_V2`` — the ``_V2`` suffix matches the ICON-EU
+    constant so the two share the same rain_con-inclusive schema; only the
+    prefix differs so ICON-D2 blobs never masquerade as ICON-EU in a cache dir.
+    """
+    return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
+
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 8
 REQUEST_TIMEOUT = 30  # seconds per file
 
 
-def route_in_icon_eu_domain(route_points: list) -> bool:
-    """Check if all route points fall within the ICON-EU domain.
+def route_in_icon_eu_domain(
+    route_points: list, variant: IconVariant = ICON_EU,
+) -> bool:
+    """Check if all route points fall within *variant*'s domain.
 
     All-or-nothing: returns False if any point is outside.
     """
     for rp in route_points:
-        if not (ICON_EU_LAT_MIN <= rp.lat <= ICON_EU_LAT_MAX):
+        if not (variant.lat_min <= rp.lat <= variant.lat_max):
             return False
-        if not (ICON_EU_LON_MIN <= rp.lon <= ICON_EU_LON_MAX):
+        if not (variant.lon_min <= rp.lon <= variant.lon_max):
             return False
     return True
+
+
+def _icon_var_suffix(variable: str, variant: IconVariant) -> str:
+    """Filename variable suffix, cased per variant (EU upper, D2 lower)."""
+    return variable.upper() if variant.var_suffix_upper else variable.lower()
 
 
 def icon_eu_file_url(
@@ -160,20 +298,21 @@ def icon_eu_file_url(
     forecast_hour: int,
     level: int,
     variable: str,
+    variant: IconVariant = ICON_EU,
 ) -> str:
-    """Build URL for a single ICON-EU GRIB2 bz2 file.
+    """Build URL for a single DWD ICON model-level GRIB2 bz2 file.
 
-    Example:
-        https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/qc/
-        icon-eu_europe_regular-lat-lon_model-level_2026022100_000_35_QC.grib2.bz2
+    Examples:
+        ICON-EU: .../icon-eu/grib/00/qc/
+          icon-eu_europe_regular-lat-lon_model-level_2026022100_000_35_QC.grib2.bz2
+        ICON-D2: .../icon-d2/grib/00/t/
+          icon-d2_germany_regular-lat-lon_model-level_2026072000_006_60_t.grib2.bz2
     """
-    var_lower = variable.lower()
-    var_upper = variable.upper()
     return (
-        f"{DWD_BASE_URL}/{init_hour:02d}/{var_lower}/"
-        f"icon-eu_europe_regular-lat-lon_model-level_"
-        f"{init_date}{init_hour:02d}_{forecast_hour:03d}_{level:02d}_{var_upper}"
-        f".grib2.bz2"
+        f"{variant.base_url}/{init_hour:02d}/{variable.lower()}/"
+        f"{variant.slug}_{variant.grid_label}_regular-lat-lon_model-level_"
+        f"{init_date}{init_hour:02d}_{forecast_hour:03d}_{level:02d}_"
+        f"{_icon_var_suffix(variable, variant)}.grib2.bz2"
     )
 
 
@@ -182,20 +321,25 @@ def icon_eu_single_level_url(
     init_hour: int,
     forecast_hour: int,
     variable: str,
+    variant: IconVariant = ICON_EU,
 ) -> str:
-    """Build URL for a single ICON-EU GRIB2 bz2 file (no level number).
+    """Build URL for a single DWD ICON single-level GRIB2 bz2 file (no level).
 
-    Example:
-        https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/ceiling/
-        icon-eu_europe_regular-lat-lon_single-level_2026022100_006_CEILING.grib2.bz2
+    ICON-D2 single-level files carry a ``_2d_`` segment between the forecast
+    hour and the variable; ICON-EU does not.
+
+    Examples:
+        ICON-EU: .../icon-eu/grib/00/ceiling/
+          icon-eu_europe_regular-lat-lon_single-level_2026022100_006_CEILING.grib2.bz2
+        ICON-D2: .../icon-d2/grib/00/ceiling/
+          icon-d2_germany_regular-lat-lon_single-level_2026072000_006_2d_ceiling.grib2.bz2
     """
-    var_lower = variable.lower()
-    var_upper = variable.upper()
+    segment = "_2d_" if variant.single_level_2d else "_"
     return (
-        f"{DWD_BASE_URL}/{init_hour:02d}/{var_lower}/"
-        f"icon-eu_europe_regular-lat-lon_single-level_"
-        f"{init_date}{init_hour:02d}_{forecast_hour:03d}_{var_upper}"
-        f".grib2.bz2"
+        f"{variant.base_url}/{init_hour:02d}/{variable.lower()}/"
+        f"{variant.slug}_{variant.grid_label}_regular-lat-lon_single-level_"
+        f"{init_date}{init_hour:02d}_{forecast_hour:03d}{segment}"
+        f"{_icon_var_suffix(variable, variant)}.grib2.bz2"
     )
 
 
@@ -206,8 +350,9 @@ def fetch_icon_eu_single_level(
     variables: list[str] | None = None,
     session: requests.Session | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
+    variant: IconVariant = ICON_EU,
 ) -> dict[int, bytes]:
-    """Download ICON-EU single-level GRIB2 fields and return concatenated bytes per fhour.
+    """Download ICON single-level GRIB2 fields and return concatenated bytes per fhour.
 
     Downloads single-level cloud diagnostic files (no level dimension)
     using the same parallel pattern as model-level fetch.
@@ -221,6 +366,7 @@ def fetch_icon_eu_single_level(
         max_workers: Per-call download thread count. Callers that already
             run several fetches concurrently pass a smaller value so the
             total connection count stays bounded.
+        variant: ICON variant (EU/D2) whose URL conventions to use.
 
     Returns:
         Dict of {forecast_hour: concatenated decompressed GRIB2 bytes}.
@@ -233,7 +379,7 @@ def fetch_icon_eu_single_level(
 
     for fhour in forecast_hours:
         urls = [
-            icon_eu_single_level_url(init_date, init_hour, fhour, var)
+            icon_eu_single_level_url(init_date, init_hour, fhour, var, variant)
             for var in variables
         ]
 
@@ -258,14 +404,14 @@ def fetch_icon_eu_single_level(
         if buf:
             result[fhour] = bytes(buf)
             logger.info(
-                "ICON-EU single-level f%03d: downloaded %d/%d files (%.1f KB)%s",
-                fhour, downloaded, downloaded + total_failed, len(buf) / 1024,
-                _format_failure_summary(failures),
+                "%s single-level f%03d: downloaded %d/%d files (%.1f KB)%s",
+                variant.slug, fhour, downloaded, downloaded + total_failed,
+                len(buf) / 1024, _format_failure_summary(failures),
             )
         elif total_failed:
             logger.warning(
-                "ICON-EU single-level f%03d: all %d files failed%s",
-                fhour, total_failed, _format_failure_summary(failures),
+                "%s single-level f%03d: all %d files failed%s",
+                variant.slug, fhour, total_failed, _format_failure_summary(failures),
             )
 
     return result
@@ -276,14 +422,15 @@ def find_latest_icon_eu_run(
     session: requests.Session | None = None,
     as_of_time: datetime | None = None,
     cover_until: datetime | None = None,
+    variant: IconVariant = ICON_EU,
 ) -> tuple[str, int] | None:
-    """Find the latest available ICON-EU model run whose horizon covers the flight.
+    """Find the latest available ICON model run whose horizon covers the flight.
 
     Thin wrapper around :func:`find_latest_icon_eu_run_with_response` for
     callers that don't need the HEAD response.
     """
     found = find_latest_icon_eu_run_with_response(
-        target_time, session, as_of_time, cover_until,
+        target_time, session, as_of_time, cover_until, variant,
     )
     return (found[0], found[1]) if found is not None else None
 
@@ -293,8 +440,9 @@ def find_latest_icon_eu_run_with_response(
     session: requests.Session | None = None,
     as_of_time: datetime | None = None,
     cover_until: datetime | None = None,
+    variant: IconVariant = ICON_EU,
 ) -> tuple[str, int, requests.Response] | None:
-    """Find the latest ICON-EU run + return the matching probe HEAD response.
+    """Find the latest ICON run + return the matching probe HEAD response.
 
     Tries cycles in reverse chronological order, checking that enough time
     has passed for publication and that the run's model-level horizon
@@ -323,32 +471,37 @@ def find_latest_icon_eu_run_with_response(
     for days_back in range(2):
         check_date = reference_time - timedelta(days=days_back)
         date_str = check_date.strftime("%Y%m%d")
-        for cycle in ICON_EU_CYCLES:
+        for cycle in variant.cycles:
             init_time = check_date.replace(
                 hour=cycle, minute=0, second=0, microsecond=0,
             )
             if init_time > reference_time:
                 continue
             hours_since_init = (reference_time - init_time).total_seconds() / 3600
-            if hours_since_init < ICON_EU_PUBLISH_DELAY_HOURS:
+            if hours_since_init < variant.publish_delay_hours:
                 continue
 
             # Check if this run's horizon covers the flight
-            max_hour = icon_eu_model_level_max_hour(cycle)
+            max_hour = icon_eu_model_level_max_hour(cycle, variant)
             horizon = init_time + timedelta(hours=max_hour)
             if horizon < need_until:
                 logger.debug(
-                    "ICON-EU %s %02dz: horizon %dh doesn't reach flight end, skipping",
-                    date_str, cycle, max_hour,
+                    "%s %s %02dz: horizon %dh doesn't reach flight end, skipping",
+                    variant.slug, date_str, cycle, max_hour,
                 )
                 continue
 
-            # Probe: check if a level-74 P file for forecast hour 000 exists
-            probe_url = icon_eu_file_url(date_str, cycle, 0, 74, "p")
+            # Probe: check if the bottom-level P file for forecast hour 000 exists
+            probe_url = icon_eu_file_url(
+                date_str, cycle, 0, variant.level_max, "p", variant,
+            )
             try:
                 resp = sess.head(probe_url, timeout=10)
                 if resp.status_code == 200:
-                    logger.info("Found ICON-EU run: %s %02dz (horizon %dh)", date_str, cycle, max_hour)
+                    logger.info(
+                        "Found %s run: %s %02dz (horizon %dh)",
+                        variant.slug, date_str, cycle, max_hour,
+                    )
                     return date_str, cycle, resp
             except requests.RequestException:
                 continue
@@ -360,10 +513,11 @@ def bracket_icon_eu_forecast_hours(
     init_date: str,
     init_hour: int,
     target_time: datetime,
+    variant: IconVariant = ICON_EU,
 ) -> tuple[int, int]:
     """Find the two forecast hours that bracket the target time.
 
-    ICON-EU has hourly forecasts for 0-78h, 3-hourly for 78-120h.
+    ICON-EU is hourly for 0–78h then 3-hourly to 120h; ICON-D2 is hourly to 48h.
 
     Returns:
         (f_prev, f_next) bracketing the target.
@@ -374,52 +528,53 @@ def bracket_icon_eu_forecast_hours(
     delta_hours = (target_time - init_dt).total_seconds() / 3600
     delta_hours = max(0, delta_hours)
 
-    if delta_hours <= 78:
+    if delta_hours <= variant.hourly_to_h:
         # Hourly region
         f_prev = int(delta_hours)
         f_next = f_prev + 1
     else:
-        # 3-hourly region
-        base = int((delta_hours - 78) / 3)
-        f_prev = 78 + base * 3
-        f_next = f_prev + 3
+        # Coarse (post-hourly) region
+        step = variant.coarse_step_h
+        base = int((delta_hours - variant.hourly_to_h) / step)
+        f_prev = variant.hourly_to_h + base * step
+        f_next = f_prev + step
 
     # Clamp to max forecast hour
-    f_prev = min(f_prev, 120)
-    f_next = min(f_next, 120)
+    f_prev = min(f_prev, variant.horizon_main_h)
+    f_next = min(f_next, variant.horizon_main_h)
 
     return f_prev, f_next
 
 
-def _snap_to_icon_eu_grid(fhour: float) -> int:
-    """Snap a fractional forecast hour to the nearest ICON-EU grid point.
+def _snap_to_icon_eu_grid(fhour: float, variant: IconVariant = ICON_EU) -> int:
+    """Snap a fractional forecast hour to the nearest grid point for *variant*.
 
-    ICON-EU: 1-hourly for 0–78h, 3-hourly for 78–120h.
+    ICON-EU: 1-hourly for 0–78h, 3-hourly for 78–120h. ICON-D2: 1-hourly to 48h.
     """
-    if fhour <= 78:
+    if fhour <= variant.hourly_to_h:
         return round(fhour)
-    base = 78 + round((fhour - 78) / 3) * 3
-    return min(base, 120)
+    step = variant.coarse_step_h
+    base = variant.hourly_to_h + round((fhour - variant.hourly_to_h) / step) * step
+    return min(base, variant.horizon_main_h)
 
 
-def _snap_to_icon_eu_grid_floor(fhour: float) -> int:
-    """Snap DOWN to nearest ICON-EU grid point (floor, not round).
-
-    ICON-EU: 1-hourly for 0–78h, 3-hourly for 78–120h.
-    """
-    if fhour <= 78:
+def _snap_to_icon_eu_grid_floor(fhour: float, variant: IconVariant = ICON_EU) -> int:
+    """Snap DOWN to nearest grid point (floor, not round) for *variant*."""
+    if fhour <= variant.hourly_to_h:
         return int(fhour)
-    base = 78 + int((fhour - 78) / 3) * 3
-    return min(base, 120)
+    step = variant.coarse_step_h
+    base = variant.hourly_to_h + int((fhour - variant.hourly_to_h) / step) * step
+    return min(base, variant.horizon_main_h)
 
 
-def icon_eu_previous_step(fhour: int) -> int | None:
-    """Return the ICON-EU forecast hour immediately preceding *fhour*.
+def icon_eu_previous_step(fhour: int, variant: IconVariant = ICON_EU) -> int | None:
+    """Return the forecast hour immediately preceding *fhour* for *variant*.
 
-    Respects the temporal grid — 1-hourly at or below 78h (step −1), 3-hourly
-    above it (step −3) — mirroring :func:`_snap_to_icon_eu_grid`. Returns
-    ``None`` for ``fhour == 0``: accumulation is 0 at init by definition, so
-    there is no earlier step to difference an accumulated field against.
+    Respects the temporal grid — 1-hourly at or below ``hourly_to_h`` (step −1),
+    coarse above it (step −``coarse_step_h``) — mirroring
+    :func:`_snap_to_icon_eu_grid`. Returns ``None`` for ``fhour == 0``:
+    accumulation is 0 at init by definition, so there is no earlier step to
+    difference an accumulated field against.
 
     Used to prepend one leading single-level step to the on-demand cloud-diag
     fetch so the first flight-window hour has a predecessor to de-accumulate
@@ -429,9 +584,9 @@ def icon_eu_previous_step(fhour: int) -> int | None:
     """
     if fhour <= 0:
         return None
-    if fhour <= 78:
+    if fhour <= variant.hourly_to_h:
         return fhour - 1
-    return fhour - 3
+    return fhour - variant.coarse_step_h
 
 
 def icon_eu_conv_rain_rate_mm_h(
@@ -461,10 +616,11 @@ def compute_icon_eu_flight_window_hours(
     init_hour: int,
     departure_time: datetime,
     flight_duration_hours: float,
+    variant: IconVariant = ICON_EU,
 ) -> list[int]:
-    """Compute ICON-EU forecast hours covering a flight window.
+    """Compute ICON forecast hours covering a flight window.
 
-    Same logic as GFS but snapped to the ICON-EU temporal grid.
+    Same logic as GFS but snapped to the variant's temporal grid.
     """
     init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
@@ -478,21 +634,21 @@ def compute_icon_eu_flight_window_hours(
         utc = dep_dt + timedelta(hours=h)
         delta = (utc - init_dt).total_seconds() / 3600
         delta = max(0.0, delta)
-        fhours.add(_snap_to_icon_eu_grid(delta))
+        fhours.add(_snap_to_icon_eu_grid(delta, variant))
 
     # Include the floor hour so non-round departure times get coverage
     if dep_dt.minute > 0:
         floor_utc = dep_dt.replace(minute=0, second=0, microsecond=0)
         floor_delta = (floor_utc - init_dt).total_seconds() / 3600
         if floor_delta >= 0:
-            fhours.add(_snap_to_icon_eu_grid(floor_delta))
+            fhours.add(_snap_to_icon_eu_grid(floor_delta, variant))
 
     # Include the floor native hour before departure for forward-fill coverage.
-    # In the 3-hourly region (>78h), rounding may skip the preceding native
+    # In a coarse (post-hourly) region, rounding may skip the preceding native
     # hour, leaving interpolated hours without GRIB diagnostics.
     dep_delta = (dep_dt - init_dt).total_seconds() / 3600
     if dep_delta > 0:
-        fhours.add(_snap_to_icon_eu_grid_floor(dep_delta))
+        fhours.add(_snap_to_icon_eu_grid_floor(dep_delta, variant))
 
     return sorted(fhours)
 
@@ -535,8 +691,9 @@ def fetch_icon_eu_fields(
     levels: list[int],
     variables: list[str],
     session: requests.Session | None = None,
+    variant: IconVariant = ICON_EU,
 ) -> bytes:
-    """Download ICON-EU GRIB2 fields in parallel and return concatenated bytes.
+    """Download ICON model-level GRIB2 fields in parallel and concat bytes.
 
     Downloads individual bz2-compressed files for each variable/level
     combination using a thread pool, decompresses, and concatenates into
@@ -549,6 +706,7 @@ def fetch_icon_eu_fields(
         levels: Model level numbers to download.
         variables: Variable names (e.g. ["qc", "qi", "p"]).
         session: Optional requests session.
+        variant: ICON variant (EU/D2) whose URL conventions to use.
 
     Returns:
         Concatenated decompressed GRIB2 bytes.
@@ -557,7 +715,9 @@ def fetch_icon_eu_fields(
     urls: list[str] = []
     for var in variables:
         for level in levels:
-            urls.append(icon_eu_file_url(init_date, init_hour, forecast_hour, level, var))
+            urls.append(
+                icon_eu_file_url(init_date, init_hour, forecast_hour, level, var, variant),
+            )
 
     result = bytearray()
     downloaded = 0
@@ -578,9 +738,9 @@ def fetch_icon_eu_fields(
 
     total_failed = sum(failures.values())
     logger.info(
-        "ICON-EU f%03d: downloaded %d/%d files (%.1f KB)%s",
-        forecast_hour, downloaded, downloaded + total_failed, len(result) / 1024,
-        _format_failure_summary(failures),
+        "%s f%03d: downloaded %d/%d files (%.1f KB)%s",
+        variant.slug, forecast_hour, downloaded, downloaded + total_failed,
+        len(result) / 1024, _format_failure_summary(failures),
     )
     return bytes(result)
 
@@ -593,8 +753,9 @@ def fetch_icon_eu_per_variable(
     variables: list[str],
     session: requests.Session | None = None,
     max_workers: int = MAX_DOWNLOAD_WORKERS,
+    variant: IconVariant = ICON_EU,
 ) -> dict[str, bytes]:
-    """Download ICON-EU GRIB2 fields per variable for memory-efficient decoding.
+    """Download ICON model-level GRIB2 fields per variable for chunked decode.
 
     Same as fetch_icon_eu_fields but returns separate bytes per variable,
     so callers can decode one variable at a time and free memory between.
@@ -611,7 +772,7 @@ def fetch_icon_eu_per_variable(
 
     for var in variables:
         urls = [
-            icon_eu_file_url(init_date, init_hour, forecast_hour, level, var)
+            icon_eu_file_url(init_date, init_hour, forecast_hour, level, var, variant)
             for level in levels
         ]
 
@@ -636,14 +797,16 @@ def fetch_icon_eu_per_variable(
         if buf:
             result[var] = bytes(buf)
             logger.info(
-                "ICON-EU f%03d %s: downloaded %d/%d levels (%.1f KB)%s",
-                forecast_hour, var, downloaded, downloaded + total_failed,
-                len(buf) / 1024, _format_failure_summary(failures),
+                "%s f%03d %s: downloaded %d/%d levels (%.1f KB)%s",
+                variant.slug, forecast_hour, var, downloaded,
+                downloaded + total_failed, len(buf) / 1024,
+                _format_failure_summary(failures),
             )
         else:
             logger.warning(
-                "ICON-EU f%03d %s: all %d files failed%s",
-                forecast_hour, var, total_failed, _format_failure_summary(failures),
+                "%s f%03d %s: all %d files failed%s",
+                variant.slug, forecast_hour, var, total_failed,
+                _format_failure_summary(failures),
             )
 
     return result

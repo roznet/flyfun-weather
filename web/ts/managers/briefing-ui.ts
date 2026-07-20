@@ -463,7 +463,13 @@ function buildBasisFromSources(
   for (const [model, rows] of byModel) {
     const primary = rows.find(r => r.role === 'primary') || rows[0];
     const base = rows.find(r => r !== primary);
-    const label = modelLabel(model);
+    // The icon slot can be sourced from ICON-D2 (2.2km) instead of ICON-EU on
+    // short central-European routes (issue #456). modelLabel() keys off the
+    // model name ("icon") and can't tell them apart, so tag the D2 variant
+    // explicitly from the primary source key.
+    const label = primary.source === 'icon_d2:dwd'
+      ? `${modelLabel(model)} (D2)`
+      : modelLabel(model);
     // Drop the provider tag when it's already a token in the model label
     // (e.g. "DWD ICON 12Z DWD" → "DWD ICON 12Z", "ECMWF IFS 12Z ECMWF" →
     // "ECMWF IFS 12Z").  Avoids visible duplication for ICON/ECMWF where

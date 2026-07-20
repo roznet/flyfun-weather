@@ -122,6 +122,34 @@ def _check_icon_eu_dwd(model: str) -> Observation | None:
     )
 
 
+def _check_icon_d2_dwd(model: str) -> Observation | None:
+    """Return latest ICON-D2 run whose bottom-level P file responds 200 on HEAD.
+
+    Same shape as :func:`_check_icon_eu_dwd` but for the ICON-D2 variant — the
+    run-finder is parametrized on ``ICON_D2`` so it probes the D2 filename and
+    honours D2's 8-cycle / 2h-delay schedule. As with ICON-EU the marker itself
+    is horizon-agnostic; the freshness check applies horizon-awareness later.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_D2,
+        find_latest_icon_eu_run_with_response,
+    )
+    now = datetime.now(timezone.utc)
+    result = find_latest_icon_eu_run_with_response(
+        target_time=now, cover_until=now, variant=ICON_D2,
+    )
+    if result is None:
+        return None
+    init_date, init_hour, resp = result
+    init = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
+        tzinfo=timezone.utc,
+    )
+    return Observation(
+        init=init,
+        published_at=_parse_last_modified(resp.headers.get("Last-Modified")),
+    )
+
+
 def _parse_last_modified(header: str | None) -> datetime | None:
     """Parse a ``Last-Modified`` HTTP header into an aware UTC datetime.
 
@@ -174,6 +202,7 @@ _DISPATCH = {
     "ecmwf_direct": _check_ecmwf_direct,
     "gfs_noaa": _check_gfs_noaa,
     "icon_eu_dwd": _check_icon_eu_dwd,
+    "icon_d2_dwd": _check_icon_d2_dwd,
     "om_meta": _check_om_meta,
 }
 

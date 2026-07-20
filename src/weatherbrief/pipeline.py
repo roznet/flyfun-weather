@@ -156,6 +156,9 @@ class BriefingResult:
     digest_trace_id: str | None = None
     text_digest: str | None = None
     grib_init_times: dict[str, int] = field(default_factory=dict)
+    # model → freshness source key used for the direct-GRIB run (icon slot may
+    # be icon_eu:dwd or icon_d2:dwd, #456). Consumed by pack building.
+    grib_sources: dict[str, str] = field(default_factory=dict)
     models_fetched: list[str] = field(default_factory=list)
     models_skipped_region: list[str] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
@@ -643,6 +646,7 @@ def execute_briefing(
     result = BriefingResult(snapshot=snapshot, snapshot_path=snapshot_path)
     result.llm_digest_requested = options.generate_llm_digest
     result.grib_init_times = fetch_result.grib_init_times
+    result.grib_sources = fetch_result.grib_sources
     result.models_fetched = fetch_result.models_fetched
     result.models_skipped_region = fetch_result.models_skipped_region
     result.diagnostics = fetch_result.diagnostics

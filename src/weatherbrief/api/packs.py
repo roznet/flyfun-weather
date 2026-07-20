@@ -501,6 +501,12 @@ def get_freshness(
 # that model.  Single source of truth: used by both ``_finalize_refresh``
 # (records ``model_sources`` on new packs) and ``_backfill_sources`` (infers
 # source for legacy packs missing the column).
+#
+# The icon slot's default here is ICON-EU; when a briefing was actually
+# enriched from ICON-D2 the pipeline reports it via ``result.grib_sources``,
+# which ``_finalize_refresh`` prefers over this static map (issue #456).
+# Legacy packs (pre-#456) predate ICON-D2, so ``icon → icon_eu:dwd`` remains
+# correct for ``_backfill_sources``.
 _DIRECT_SOURCE_KEYS: dict[str, str] = {
     "ecmwf": "ecmwf:direct",
     "gfs": "gfs:noaa",
@@ -1315,8 +1321,11 @@ def _build_pack_meta(
     # direct-GRIB source where GRIB enrichment succeeded.  Used by the
     # marker-based freshness check (issue #108).
     model_sources: dict[str, str] = {m: f"{m}:openmeteo" for m in init_times}
+    grib_sources = getattr(result, "grib_sources", None) or {}
     for m in result.grib_init_times:
-        key = _DIRECT_SOURCE_KEYS.get(m)
+        # Prefer the source the enrichment actually used (icon may be D2 or EU,
+        # #456); fall back to the static default for legacy results.
+        key = grib_sources.get(m) or _DIRECT_SOURCE_KEYS.get(m)
         if key:
             model_sources[m] = key
 
