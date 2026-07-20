@@ -540,16 +540,17 @@ struct FlightListView: View {
                     Label("Edit Flight", systemImage: "pencil")
                 }
             }
-            // File a pilot report for this flight. Gated on the flight's tracking
-            // window (departure −2h … +duration +2h): a list-filed PIREP carries no
-            // pack_id, so the server links it to the flight ONLY when its
-            // observed_at falls in that window (storage/pireps.py). Offering it on an
-            // out-of-window flight (e.g. one months away) would file a report that
-            // silently never appears in that flight's tab. Not gated on offline —
-            // `PirepViewModel.submit` queues transient-network failures via
-            // `PirepOfflineStore`, so filing under poor cockpit connectivity works.
+            // File a pilot report for this flight. Gated so a list-filed report
+            // actually links to the flight's tab: the server links a pack_id-less
+            // PIREP only when observed_at is in the flight's window AND the report's
+            // user_id equals the flight OWNER's (storage/pireps.py:130-140). So we
+            // require both `isEditable` (owner — a subscriber's report never carries
+            // the owner's id, so it'd orphan regardless of timing) and the tracking
+            // window. Not gated on offline — `PirepViewModel.submit` queues
+            // transient-network failures via `PirepOfflineStore`.
             if appState.userPreferences.preferences.pirepCanPublish,
-               Self.isInFlightWindow(flight) {
+               flight.isEditable,
+               flight.isInTrackingWindow() {
                 Button {
                     pirepFlight = flight
                 } label: {
@@ -572,17 +573,6 @@ struct FlightListView: View {
                 }
             }
         }
-    }
-
-    /// True when `now` is within a flight's tracking window (departure −2h to
-    /// departure +duration +2h) — the same window `BriefingContainerView` uses,
-    /// and the window the server links a pack_id-less PIREP to a flight by. Gates
-    /// the flight-list "Add PIREP" so a list-filed report always links.
-    static func isInFlightWindow(_ flight: FlightResponse, now: Date = Date()) -> Bool {
-        guard let departure = flight.departureDate else { return false }
-        let start = departure.addingTimeInterval(-2 * 3600)
-        let end = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
-        return now >= start && now <= end
     }
 
     // MARK: - Logbook grouping (Future · Recent · Past, §4.4)
