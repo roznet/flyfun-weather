@@ -667,6 +667,15 @@ class TestRunStandaloneCycle:
         assert result["duration_ms"] >= 0
         assert mock_db.commit.call_count >= 1
 
+    def test_rejects_unonboarded_region(self):
+        """The region guard lives in the library, not just the CLI: any caller
+        passing an unonboarded region raises before fetching/storing anything, so
+        EU data can't be silently tagged as another region."""
+        from weatherbrief.tasks.standalone_verification import run_standalone_cycle
+
+        with pytest.raises(ValueError, match="not onboarded"):
+            run_standalone_cycle([], "/fake/db", region="us")
+
     @patch("weatherbrief.fetch.model_status.fetch_model_metadata")
     @patch("flyfun_common.db.SessionLocal")
     def test_skips_already_fetched_model(self, mock_session_local, mock_meta):

@@ -351,13 +351,11 @@ def cmd_standalone(args):
     from weatherbrief.fetch.grib import shutdown_decode_pool
 
     try:
-        # Region tags the stored rows and picks the region's model set. Only EU
-        # is onboarded today. Running --region us now would fetch the EU watchlist
-        # with EU models (STANDALONE_MODELS_BY_REGION has no 'us' entry, and
-        # load_watchlist_with_coords is not region-aware yet) and mislabel every
-        # row as region='us' — fail fast rather than store mislabeled data. US
-        # onboarding = watchlist split + STANDALONE_MODELS_BY_REGION['us']
-        # (us-expansion-plan steps 3/7). 'eu'/'all'/None all run the EU cycle.
+        # Only EU is onboarded, so the CLI always runs the EU cycle. Screen the
+        # one region a user might plausibly type (--region us) with a clean error
+        # rather than the raw ValueError run_standalone_cycle would raise; 'eu',
+        # 'all' and the default all run the EU cycle. run_standalone_cycle guards
+        # the region itself, so this is a friendlier front door, not the only gate.
         if args.region == "us":
             print(
                 "ERROR: --region us is not supported yet — the US watchlist and "
@@ -366,7 +364,6 @@ def cmd_standalone(args):
                 file=sys.stderr,
             )
             sys.exit(1)
-        cycle_region = "eu"
         result = run_standalone_cycle(
             watchlist, airports_db,
             fetch_forecasts=not args.light,
@@ -375,7 +372,7 @@ def cmd_standalone(args):
             # disposable process, so its pool can't contend with the web
             # app's. The scheduler's in-process fallback keeps this False.
             pool_soundings=True,
-            region=cycle_region,
+            region="eu",  # only EU onboarded (validated above + in run_standalone_cycle)
         )
         print(f"\nStandalone verification cycle complete:")
         print(f"  Models fetched: {result.get('models_fetched', 0)}")
