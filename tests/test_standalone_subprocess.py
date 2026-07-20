@@ -373,6 +373,7 @@ def _run_cli_standalone(monkeypatch, args):
 def test_cli_forecast_only_maps_to_fetch_no_score(monkeypatch):
     args = SimpleNamespace(
         light=False, forecast_only=True, with_rollup=True, background=False,
+        emit_artifact=None, region=None,
     )
     calls = _run_cli_standalone(monkeypatch, args)
     assert calls["flags"] == (True, False)
@@ -385,6 +386,7 @@ def test_cli_forecast_only_maps_to_fetch_no_score(monkeypatch):
 def test_cli_light_maps_to_score_no_fetch(monkeypatch):
     args = SimpleNamespace(
         light=True, forecast_only=False, with_rollup=False, background=False,
+        emit_artifact=None, region=None,
     )
     calls = _run_cli_standalone(monkeypatch, args)
     assert calls["flags"] == (False, True)
