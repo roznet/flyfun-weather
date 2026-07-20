@@ -66,6 +66,7 @@ struct PirepListView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("reportPirepBarButton")
             .padding(.horizontal)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity)

@@ -556,6 +556,7 @@ struct FlightListView: View {
                 } label: {
                     Label("Add PIREP", systemImage: "cloud.sun")
                 }
+                .accessibilityIdentifier("addPirepMenuItem")
             }
             // Owner sharing (#446): share the short /s/{code} link. Hidden for
             // private flights and subscribers (isShareable) — recipients of a

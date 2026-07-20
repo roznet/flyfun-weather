@@ -99,6 +99,7 @@ struct BriefingContainerView: View {
                                 Label("Report PIREP", systemImage: "square.and.pencil")
                                     .font(.caption)
                             }
+                            .accessibilityIdentifier("reportPirepButton")
                         }
                         // Hide the notify bell for flown flights (matches web's
                         // renderNotifyOverrideBar isPast guard) — an override on a
