@@ -99,6 +99,13 @@ final class FlightTrackingService: NSObject {
     /// `currentLocation`.
     func requestOneShotLocation() {
         guard !isTracking else { return }
+        // Drop any prior fix so a *stale* position can't be pre-filled before the
+        // fresh one lands. The reporting form reads `currentLocation` synchronously
+        // on appear (to seed altitude), and this service instance is shared across
+        // repeated sheet presentations — without this reset, the second PIREP of a
+        // flight would silently inherit the first one's altitude and the fresh fix
+        // (delivered async) would be discarded by the "only fill when nil" guard.
+        currentLocation = nil
         let manager = locationManager ?? CLLocationManager()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
