@@ -1977,6 +1977,12 @@ the parameterized concepts.
 
 ### The decision — v1 firing/severity table
 
+**Superseded by the 2026-07-21 amendment at the end of this section (#466/#467):
+the corroborator algebra is now LPI-primary, CAPE/UH are narrative-only, the
+≥ 50 dBZ row no longer bypasses corroboration, and a bright-band gate was added.
+The v1 table is retained below as the historical baseline the amendment argues
+against.**
+
 The firing signal is `dbz_ctmax` (column-max simulated reflectivity, max over
 the previous hour), reduced to a **corridor maximum** over a ~10 NM route
 buffer. The corroborator set C (each channel counts 1 when **complete AND over
@@ -2169,3 +2175,145 @@ the −10 °C isotherm) as the replacement corroborator — it is the column
 mixed-phase quantity #462 wanted and will co-locate with the reflectivity
 cores. It must clear the same three-run corridor test above before being wired
 in, so it is deferred pending calibration.
+
+### Amendment (2026-07-21, #466/#467): LPI-primary corroboration + bright-band gate
+
+**Status:** Implemented. Supersedes the v1 firing/severity table above.
+**Composes with #468 (immediately above), which landed first.** The two were
+developed in parallel and agree: #468 removed `grau_gsp` outright as a provably
+dead input, and this amendment independently demoted it from an independent vote
+to LPI-embedded detail. Net result — the vote set is `lpi_max` (primary) with
+`w_ctmax` as its **only** substitute, so the substitute path tops out at
+|C| = 1 and **|C| ≥ 2 is reachable only via LPI ≥ 5**. The `|C| ≥ 2` column of
+the v2 table is therefore an *electrification* column in practice, which is
+deliberate: LPI is the one channel that actually integrates the mixed-phase
+updraft the tier is trying to name.
+**Context:** The v1 table shipped with #462 as calibration *starting points*
+requiring validation before it could be trusted (its own "revisit against the
+validation cases" caveat). Two independent pressures then landed together:
+
+1. **The corroborator argument from the parallel PR #464 implementation** (the
+   #466 issue body). DWD's LPI (Lynn & Yair) is essentially `∫ ε w² dz` with ε
+   weighted by mixed-phase (graupel/ice) content in the charging zone — it
+   *already integrates* updraft and graupel. Counting `lpi_max`, `w_ctmax` and
+   `grau_gsp` as three independent votes triple-counts one mixed-phase updraft,
+   so a moderately-electrified (or bright-band) cell can reach |C| ≥ 2 on
+   physically one signal. And `cape_ml` is *environment*, not storm process: it
+   duplicates the independent thermo track and let a 35–44 dBZ stratiform band
+   upgrade to MARGINAL on ML-CAPE alone — the exact false alarm the quiet
+   controls exist to catch.
+2. **The #467 forward validation.** The #462 retrospective cases proved
+   unrecoverable (DWD open-data keeps only the current D2 run; saved packs from
+   those dates predate the D2 slot), so validation became *forward*. A live
+   stratiform control (**EDDE→EDQD, 2026-07-21**, widespread non-convective
+   rain) ran the D2-vs-forced-EU A/B and **the v1 table false-alarmed HIGH at 4
+   of 8 route points** — 50–54 dBZ column-max with LPI ≈ 0, updraft ≤ 5.5 m/s
+   and ML-CAPE ≤ 242 J/kg, while every other signal (its own LPI/updraft/CAPE,
+   the thermo track, ICON-EU, GFS) said no convection. The 35–44 band this issue
+   was *originally* about behaved correctly (43 and 36 dBZ, |C| = 0 → none). The
+   hole was the **≥ 50 dBZ row bypassing corroborators entirely.**
+
+### The decision — v2 table
+
+| Corridor `dbz_ctmax` | \|C\| = 0 | \|C\| = 1 | \|C\| ≥ 2 |
+|---|---|---|---|
+| < 35 dBZ | no fire | no fire | no fire |
+| 35–44 dBZ | no fire (stratiform note) | MARGINAL | MODERATE |
+| 45–49 dBZ | MODERATE | MODERATE | HIGH |
+| ≥ 50 dBZ | **MODERATE** | HIGH | HIGH |
+
+Three coupled changes (`analysis/sounding/convective.py`):
+
+**A. LPI-primary corroborator algebra** (`_explicit_corroborators`). |C| now
+counts **storm-process** signal only:
+- **LPI is the primary channel.** When present (complete), it votes alone:
+  `≥ 5` → 2, `≥ 1` → 1. `w_ctmax` is then *narrative detail, not additive* — it
+  is an ingredient LPI already integrates.
+- **`w_ctmax` substitutes only when LPI does not vote** — LPI missing *or*
+  present-but-below-floor. The substitute (`w ≥ 10 m/s` → 1) counts only when
+  its own channel is complete-and-over-threshold. It is the only substitute:
+  `grau_gsp`, the other v1 candidate, was removed in #468.
+- **CAPE and UH are narrative-only, never votes.**
+
+  *Completeness invariant (issue #466 note; rule 5 unchanged).* The substitution
+  is **identical** whether LPI is missing or present-and-quiet, so an incomplete
+  LPI channel can never *silently promote* w into counting beyond what a
+  present-but-quiet LPI would give. A masked substitute channel (None) still
+  contributes nothing.
+
+**B. ≥ 50 dBZ no longer self-certifies.** `dbz_ctmax` is a **column max**, and a
+strong melting-layer bright band in heavy stratiform rain reaches 50+ dBZ with
+no convection in the column. |C| = 0 now caps the row at **MODERATE** (was HIGH);
+|C| ≥ 1 restores HIGH.
+
+**C. Bright-band gate** (`assess_convective_explicit`). When the 18 dBZ echo top
+sits **< 10,000 ft above the freezing level** *and* |C| = 0 (no storm-process
+corroboration), the high reflectivity is treated as melting-layer bright band,
+not convection, and the fire is suppressed to **NONE** at any dBZ. Physically a
+bright band sits *at* the melting layer, so its echo top is only a few kft above
+the 0 °C level, whereas a real convective core carries hydrometeors far higher.
+#467 measured the discriminator cleanly: **6.5–7.8 kft** in the stratiform
+control vs **24–27 kft** in the ESMX real storms — a wide margin around the
+10 kft threshold. This finally gives `echo_top_18dbz_ft` a real job while
+preserving rule 1 (it never becomes `top_ft`, so it still cannot reach the
+overfly-clearance filter). Freezing level is taken from the sounding's own 0 °C
+crossing, falling back to the model-native / NWP-diagnostic freezing level.
+
+Under B+C the EDDE→EDQD ≥ 50 dBZ false-alarm points go HIGH → MODERATE (table) →
+NONE (gate); the 35–44 rows are unchanged; and the ESMX real hit (LPI 89, updraft
+23, Δ ≈ 25 kft) stays HIGH. Both directions are pinned as regression tests in
+`tests/test_convective_explicit.py` (`TestExplicitValidationMatrix`,
+`TestExplicitBrightBandGate`, `TestExplicitLpiPrimaryAlgebra`).
+
+### Rejected alternatives
+
+- **Keep the v1 four-way independent |C|** (`lpi + w + graupel + cape`). Rejected:
+  triple-counts the mixed-phase updraft LPI already integrates, and lets CAPE
+  (environment) upgrade a stratiform band — the mechanism behind the #467 false
+  alarm on the corroborated rows.
+- **A straight swap to LPI-primary at #462 implementation time** (what PR #464
+  proposed inline). Rejected then: the v1 table survived two external review
+  rounds, so the firing algebra could not change without running the validation
+  matrix under both schemes. That is why this landed as its own issue with a
+  both-directions acceptance bar, not as a silent edit — the recalibration is
+  now *earned* by the #467 run rather than asserted.
+- **An unconditional bright-band gate** (suppress at Δ < 10 kft regardless of
+  |C|), as the #467 comment framed it ("independent of the corroborator
+  algebra"). Rejected in favour of gating on |C| = 0: a suppressor that can hide
+  a *corroborated* cell is a dangerous false negative, against this codebase's
+  under-warning-is-worse asymmetry and its "never silently hide a storm" bias.
+  A shallow echo top and a firing LPI are physically contradictory (electrification
+  needs ice aloft), so the two rarely conflict; when they do, the positive
+  electrification evidence wins. On the #467 cases the outcome is identical
+  either way (the false-alarm points are all |C| = 0), so no validated behaviour
+  is lost by the safer gating.
+- **A lower / higher Δ threshold than 10 kft.** 10 kft sits in the wide gap
+  between the two observed populations (7.8 vs 24.4 kft). The one residual
+  ambiguous case is the ESMX 45–49 dBZ |C| = 0 points already flagged as
+  suspicious in #467 (Δ ≈ 9.8 / 12.6 kft): the 9.8 kft point is now suppressed,
+  the 12.6 kft one stays MODERATE (the 45–49 |C| = 0 row). That is acceptable —
+  MODERATE, not HIGH, for a 47.8 dBZ echo with LPI 0 and a 3.5 m/s updraft — and
+  the threshold is a calibration knob to revisit as more forward cases land.
+
+### Known interactions / follow-ups
+
+- **Graupel is gone, not merely dead (#468, resolved).** This bullet originally
+  read "`grau_gsp` freezes bitwise from ~f024, so the corroborator is
+  effectively always 0" and treated it as a bug to fix. The #468 investigation
+  landed a different and firmer diagnosis: `grau_gsp` is *surface* graupel
+  precipitation, so it is ~always 0 under warm-season corridor cores by
+  construction — nothing to fix, and it was dropped outright (see the #468
+  section above). The LPI-primary scheme is unaffected either way: LPI carries
+  the storm-process vote when present, and graupel only ever mattered as a
+  substitute when LPI is absent/quiet, where its being 0 simply means `w` must
+  carry it. No v2 grade on the validated cases changes. The consequence that
+  *does* survive is the |C| ≥ 2 ceiling noted at the top of this amendment. If
+  `tcond10_mx` is later wired in as the column replacement (#468 follow-up), it
+  enters as a second substitute and restores a non-LPI route to |C| = 2 — that
+  is a recalibration to validate, not a drop-in.
+- **Aggregation is still not decided here** (unchanged from v1): a lone D2
+  explicit cell against quiet coarse models still aggregates by majority — the
+  "floor the aggregate at AMBER" question belongs in the #442 grade framework.
+- **Still-outstanding #467 controls**: a winter graupel-shower day (needs the
+  season) and a second/third convective hit before the thresholds are treated as
+  fully calibrated rather than validated on one case each way.
