@@ -208,6 +208,10 @@ class TestPrepareIconVariantSelection:
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
             self._run_finder(d2_run=("20260720", 12), eu_run=("20260720", 12)),
+        ), patch(
+            # Keep the #462 validity-mask gate hermetic (it would otherwise
+            # try to download a D2 probe file to build the bitmap mask).
+            "weatherbrief.fetch.grib._d2_corridor_mask_ok", return_value=True,
         ):
             ctx, skip = _prepare_icon_eu(
                 self._icon_cross_sections(), route, dep,

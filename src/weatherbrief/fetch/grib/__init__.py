@@ -3035,6 +3035,84 @@ class _IconEuContext:
         self.variant = variant
 
 
+def _d2_corridor_mask_ok(
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    *,
+    data_dir: Path,
+    session: requests.Session,
+    variant,
+) -> bool:
+    """Domain-gate hardening (#462): corridor-buffer check against the D2 bitmap.
+
+    The D2 regular-lat-lon product masks ~17% of cells (native domain is not a
+    lat/lon rectangle, and the delivered files carry no rotated-pole metadata),
+    so a route can pass the bbox gate yet clip masked corner cells. This builds
+    a validity mask ONCE from a delivered message's bitmap (an invariant of the
+    product — any field carries the same bitmap), caches it beside the GRIB
+    cache, and requires the route's ENTIRE corridor buffer (not just the
+    centreline) to lie in valid cells.
+
+    Returns False only when the mask POSITIVELY shows the corridor clipping
+    masked cells (→ caller falls back to ICON-EU, all-or-nothing). Any failure
+    to obtain the mask fails OPEN (True, logged): behaviour is then no worse
+    than the pre-#462 bbox gate — corner points decode as unavailable rather
+    than wrong — and a DWD hiccup on one probe file can't flip the whole slot.
+    """
+    import numpy as np
+
+    from weatherbrief.fetch.grib.decode import (
+        build_d2_validity_mask,
+        d2_corridor_fully_valid,
+    )
+    from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
+
+    mask_path = data_dir / ".cache" / "grib" / f"{variant.slug}-validity-mask-v1.npz"
+    mask: dict | None = None
+    try:
+        if mask_path.exists():
+            with np.load(mask_path) as npz:
+                mask = {"lats": npz["lats"], "lons": npz["lons"], "valid": npz["valid"]}
+    except Exception:
+        logger.warning("Failed to load cached D2 validity mask", exc_info=True)
+        mask = None
+
+    if mask is None:
+        try:
+            fetched = fetch_icon_eu_single_level(
+                init_date, init_hour, [0], variables=["ceiling"],
+                session=session, variant=variant,
+            )
+            grib_bytes = fetched.get(0)
+            if grib_bytes:
+                mask = build_d2_validity_mask(grib_bytes)
+            if mask is not None:
+                mask_path.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(
+                    mask_path,
+                    lats=mask["lats"], lons=mask["lons"], valid=mask["valid"],
+                )
+        except Exception:
+            logger.warning("Failed to build D2 validity mask", exc_info=True)
+            mask = None
+
+    if mask is None:
+        logger.info("D2 validity mask unavailable; keeping bbox-gate behaviour")
+        return True
+
+    ok = d2_corridor_fully_valid(
+        mask,
+        [rp.lat for rp in route_points],
+        [rp.lon for rp in route_points],
+    )
+    if not ok:
+        logger.info(
+            "Route corridor clips masked ICON-D2 cells; falling back to ICON-EU",
+        )
+    return ok
+
+
 def _prepare_icon_eu(
     cross_sections: list[RouteCrossSection],
     route_points: list[RoutePoint],
@@ -3099,6 +3177,15 @@ def _prepare_icon_eu(
                 )
             except Exception:
                 logger.warning("Failed to find ICON-D2 run; using ICON-EU", exc_info=True)
+                d2_run = None
+            if d2_run is not None and not _d2_corridor_mask_ok(
+                route_points, d2_run[0], d2_run[1],
+                data_dir=data_dir, session=session, variant=ICON_D2,
+            ):
+                # Bbox passed but the corridor buffer clips bitmap-masked
+                # corner cells (#462 domain-gate hardening) → same
+                # all-or-nothing rule as the bbox gate: the whole slot runs
+                # on ICON-EU, never a per-point mix.
                 d2_run = None
             if d2_run is not None:
                 variant, run_info = ICON_D2, d2_run
@@ -3192,6 +3279,7 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
         fetch_icon_eu_single_level,
         icon_cloud_diag_cache_key,
         icon_eu_previous_step,
+        icon_explicit_conv_cache_key,
     )
 
     variant = ctx.variant
@@ -3236,6 +3324,37 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
         except Exception:
             logger.warning("Prefetch %s cloud diag f%03d failed", variant.slug, fhour, exc_info=True)
 
+    def _fetch_expl(fhour: int, var: str, ck: str) -> None:
+        # Explicit-convection fields (#462) are fetched one variable per blob:
+        # the decoder must know which physical field each blob holds (several
+        # are multi-message sub-hourly files selected by stepRange, and DWD's
+        # eccodes shortName mappings are not trustworthy for matching).
+        try:
+            with _grib_time("icon_prefetch_explicit_conv"):
+                fetched = fetch_icon_eu_single_level(
+                    ctx.init_date, ctx.init_hour, [fhour],
+                    variables=[var],
+                    session=ctx.session,
+                    max_workers=inner,
+                    variant=variant,
+                )
+            grib_bytes = fetched.get(fhour)
+            if grib_bytes:
+                put_cached(ctx.run_dir, ck, grib_bytes)
+        except Exception:
+            logger.warning(
+                "Prefetch %s explicit-conv %s f%03d failed",
+                variant.slug, var, fhour, exc_info=True,
+            )
+
+    def _explicit_jobs(fhour: int) -> list[tuple]:
+        return [
+            (_fetch_expl, fhour, var, ck)
+            for var in variant.explicit_conv_variables
+            for ck in [cache_key(fhour, icon_explicit_conv_cache_key(var, variant))]
+            if not is_cached(ctx.run_dir, ck)
+        ]
+
     jobs: list[tuple] = []
     for fhour in ctx.forecast_hours:
         # Model-level data (P, QC, QI) — per variable
@@ -3251,17 +3370,23 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
         if not is_cached(ctx.run_dir, diag_ck):
             jobs.append((_fetch_diag, fhour, diag_ck))
 
+        # Explicit-convection storm diagnostics (D2 only, #462)
+        jobs.extend(_explicit_jobs(fhour))
+
     # One leading single-level step so the first window hour has a predecessor
-    # to de-accumulate rain_con against (#421). Cloud-diag fetch only — the
-    # model-level sounding list above is untouched. Skipped when the variant
-    # doesn't fetch rain_con (ICON-D2, #456/#462) — no accumulated field, no
-    # predecessor needed.
-    if ctx.forecast_hours and "rain_con" in variant.cloud_diag_variables:
+    # (variant-level flag, #421/#462): rain_con (EU) and grau_gsp (D2) need it
+    # to de-accumulate the first hour, and the D2 hourly echo top needs the
+    # previous file's three quarter-hour windows. Single-level fetches only —
+    # the model-level sounding list above is untouched. Each list is fetched
+    # for the lead step only when that list is what needs the predecessor.
+    if ctx.forecast_hours and variant.needs_predecessor_step:
         lead = icon_eu_previous_step(min(ctx.forecast_hours), variant)
         if lead is not None and lead not in ctx.forecast_hours:
-            lead_ck = cache_key(lead, diag_key)
-            if not is_cached(ctx.run_dir, lead_ck):
-                jobs.append((_fetch_diag, lead, lead_ck))
+            if "rain_con" in variant.cloud_diag_variables:
+                lead_ck = cache_key(lead, diag_key)
+                if not is_cached(ctx.run_dir, lead_ck):
+                    jobs.append((_fetch_diag, lead, lead_ck))
+            jobs.extend(_explicit_jobs(lead))
 
     if not jobs:
         return
@@ -3398,6 +3523,18 @@ def _decode_and_merge_icon_eu(
         ctx.run_dir, ctx.point_lats, ctx.point_lons, ctx.session,
         clc_layers_by_fhour=clc_layers_by_fhour, variant=variant,
     )
+
+    # Explicit-convection storm diagnostics (ICON-D2 only, #462). Failure here
+    # never triggers the total-failure EU fallback: the D2 sounding replacement
+    # above already succeeded, and a missing explicit channel is an honest
+    # "explicit assessment unavailable" per hour, not a broken slot.
+    if variant.explicit_conv_variables:
+        _enrich_icon_d2_explicit_convective(
+            icon_sections, all_forecasts, route_points,
+            ctx.init_date, ctx.init_hour, ctx.forecast_hours,
+            ctx.run_dir, ctx.point_lats, ctx.point_lons, ctx.session,
+            variant=variant,
+        )
 
     return _run_info_to_timestamp(ctx.init_date, ctx.init_hour), None
 
@@ -3588,6 +3725,282 @@ def _enrich_icon_eu_cloud_diagnostics(
         )
     else:
         logger.debug("No ICON-EU cloud diagnostic GRIB2 data retrieved")
+
+
+# ---------------------------------------------------------------------------
+# ICON-D2 explicit-convection enrichment (#462)
+# ---------------------------------------------------------------------------
+
+
+def _echo_top_pa_to_ft(pa: float, hourly: HourlyForecast) -> float:
+    """Convert an echo-top pressure (Pa) to feet using the hour's own column.
+
+    Log-pressure interpolation over the hourly's pressure levels when they
+    carry geopotential heights (the ECMWF-replaced case); ISA standard
+    atmosphere otherwise (the ICON model-level replacement derives heights
+    later, in sounding analysis, itself hypsometrically). The echo top is a
+    depth/character detail — never a clearance input — so the ISA
+    approximation's few-hundred-ft error is acceptable and documented.
+    """
+    import math as _math
+
+    from weatherbrief.models.analysis import pressure_pa_to_altitude_ft
+
+    hpa = pa / 100.0
+    levels = [
+        lv for lv in hourly.pressure_levels
+        if lv.geopotential_height_m is not None
+    ]
+    if len(levels) >= 2:
+        levels.sort(key=lambda lv: lv.pressure_hpa)  # ascending hPa (high→low alt)
+        if levels[0].pressure_hpa <= hpa <= levels[-1].pressure_hpa:
+            for above, below in zip(levels, levels[1:]):
+                if above.pressure_hpa <= hpa <= below.pressure_hpa:
+                    frac = (
+                        _math.log(hpa) - _math.log(above.pressure_hpa)
+                    ) / (_math.log(below.pressure_hpa) - _math.log(above.pressure_hpa))
+                    z_m = above.geopotential_height_m + frac * (
+                        below.geopotential_height_m - above.geopotential_height_m
+                    )
+                    return round(z_m * _M_TO_FT)
+    return round(pressure_pa_to_altitude_ft(pa))
+
+
+def _enrich_icon_d2_explicit_convective(
+    icon_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    run_dir: Path,
+    point_lats: list[float],
+    point_lons: list[float],
+    session: requests.Session,
+    *,
+    variant,
+) -> None:
+    """Attach :class:`NWPExplicitConvectiveDiagnostics` to ICON-D2 hours (#462).
+
+    Walks forecast hours in order with one leading step prepended (the
+    predecessor file provides BOTH the graupel de-accumulation baseline and
+    the three quarter-hour echo-top windows of the hour before the window's
+    first hour), decoding each hour's per-variable explicit-conv blobs via
+    the corridor-extremum decoder, then:
+
+    - de-accumulates ``grau_gsp`` (on-the-hour messages only) into
+      ``graupel_hour_mm``;
+    - constructs the HOURLY echo top for valid hour H as the minimum pressure
+      across the four 15-min windows ending at H−45, H−30, H−15 and H minutes
+      — three from file f(H−1), one from f(H). A missing/invalid quarter
+      degrades ``echo_top_complete`` and yields ``echo_top_18dbz_ft=None``
+      (never a partial min presented as the hourly value);
+    - converts the echo-top pressure to feet against the hour's own column.
+
+    Interval-max semantics: every value attached at hour H describes the
+    ``(H−1, H]`` window. Per-hour channel failures produce ``None`` +
+    completeness flags — deliberately NO time-axis or spatial fill for these
+    fields: a 1-hour interval maximum from a failed hour has no covering
+    interval to hold over (contrast the ECMWF gust, whose window spans the
+    gap), and corridor extrema are already spatial reductions, so generic
+    per-point interpolation must not touch them.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        fetch_icon_eu_single_level,
+        icon_d2_hourly_accum_mm,
+        icon_eu_previous_step,
+        icon_explicit_conv_cache_key,
+    )
+    from weatherbrief.models import NWPExplicitConvectiveDiagnostics
+
+    steps = sorted(set(forecast_hours))
+    if not steps:
+        return
+    lead = icon_eu_previous_step(steps[0], variant)
+    if lead is not None and lead not in steps:
+        steps.insert(0, lead)
+
+    n_points = len(point_lats)
+    # Per-point de-accumulation / quarter-window state from the previous step.
+    # None / {} = no usable predecessor (missing-data-safe: first hour then
+    # reads graupel None + echo_top incomplete rather than a fabricated value).
+    prev_grau_accum: list[float | None] = [None] * n_points
+    prev_quarters: list[dict[int, tuple[float | None, bool]]] = [
+        {} for _ in range(n_points)
+    ]
+    prev_fhour: int | None = None
+    prev_valid_utc: datetime | None = None
+
+    total_enriched = 0
+    for fhour in steps:
+        var_paths: dict[str, str] = {}
+        for var in variant.explicit_conv_variables:
+            ck = cache_key(fhour, icon_explicit_conv_cache_key(var, variant))
+            if not is_cached(run_dir, ck):
+                # Prefetch normally covers this; fetch on demand as a fallback
+                # (mirrors the cloud-diag loop).
+                try:
+                    fetched = fetch_icon_eu_single_level(
+                        init_date, init_hour, [fhour], variables=[var],
+                        session=session, variant=variant,
+                    )
+                    grib_bytes = fetched.get(fhour)
+                    if grib_bytes:
+                        put_cached(run_dir, ck, grib_bytes)
+                except Exception:
+                    logger.warning(
+                        "Failed to fetch ICON-D2 explicit-conv %s f%03d",
+                        var, fhour, exc_info=True,
+                    )
+            if is_cached(run_dir, ck):
+                var_paths[var] = str(run_dir / ck)
+
+        if var_paths:
+            with _grib_time("icon_d2_explicit_conv_decode"):
+                decoded_points = _dispatch_decode(
+                    "decode_icon_d2_explicit_conv",
+                    var_paths, point_lats, point_lons,
+                )
+        else:
+            decoded_points = None
+        if not decoded_points:
+            decoded_points = [{"echotop_quarters": {}} for _ in range(n_points)]
+
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        window_h: float | None = None
+        if prev_valid_utc is not None:
+            _dh = (valid_utc - prev_valid_utc).total_seconds() / 3600.0
+            if _dh > 0:
+                window_h = _dh
+        contiguous = prev_fhour is not None and fhour - prev_fhour == 1
+
+        # The four quarter windows covering (H−1, H], as end-minutes since init.
+        hour_end_m = fhour * 60
+        prev_file_quarter_minutes = (hour_end_m - 45, hour_end_m - 30, hour_end_m - 15)
+
+        payloads: list[NWPExplicitConvectiveDiagnostics | None] = []
+        echo_pa_per_point: list[float | None] = []
+        for i in range(n_points):
+            point = decoded_points[i] if i < len(decoded_points) else {}
+            dbz_val, dbz_valid = point.get("dbz_ctmax", (None, False))
+            lpi_val, lpi_valid = point.get("lpi_max", (None, False))
+            w_val, w_valid = point.get("w_ctmax", (None, False))
+            uh_val, uh_valid = point.get("uh_max", (None, False))
+            grau_val, grau_valid = point.get("grau_gsp", (None, False))
+
+            graupel_mm = icon_d2_hourly_accum_mm(
+                grau_val if grau_valid else None,
+                prev_grau_accum[i],
+                window_h,
+            )
+
+            # Hourly echo top: min over exactly the four quarters ending in
+            # (H−1, H]. Quarters must all be present AND corridor-valid;
+            # value None with valid=True is a real "no echo" quarter.
+            quarters: list[tuple[float | None, bool]] = []
+            if contiguous:
+                quarters.extend(
+                    prev_quarters[i].get(m, (None, False))
+                    for m in prev_file_quarter_minutes
+                )
+            else:
+                quarters.extend((None, False) for _ in prev_file_quarter_minutes)
+            quarters.append(
+                point.get("echotop_quarters", {}).get(hour_end_m, (None, False))
+            )
+            echo_complete = all(valid for _v, valid in quarters)
+            echo_pa: float | None = None
+            if echo_complete:
+                echoes = [v for v, _valid in quarters if v is not None]
+                if echoes:
+                    echo_pa = min(echoes)
+
+            lpi = lpi_val if lpi_valid else None
+            w = w_val if w_valid else None
+            uh = uh_val if uh_valid else None
+            has_any = (
+                dbz_valid or lpi is not None or w is not None or uh is not None
+                or graupel_mm is not None or echo_complete
+            )
+            if not has_any:
+                payloads.append(None)
+                echo_pa_per_point.append(None)
+                continue
+
+            payloads.append(NWPExplicitConvectiveDiagnostics(
+                source="icon_d2",
+                reflectivity_hour_max_dbz=dbz_val if dbz_valid else None,
+                lightning_potential_hour_max_jkg=lpi,
+                updraft_hour_max_ms=w,
+                updraft_helicity_2_8km_hour_max_m2s2=uh,
+                graupel_hour_mm=graupel_mm,
+                detection_complete=dbz_valid,
+                strength_complete=(
+                    lpi is not None and w is not None and graupel_mm is not None
+                ),
+                echo_top_complete=echo_complete,
+            ))
+            echo_pa_per_point.append(echo_pa)
+
+        # Carry state forward BEFORE the attach filter so the lead step (and
+        # any out-of-window step) still seeds de-accumulation + quarters.
+        for i in range(n_points):
+            point = decoded_points[i] if i < len(decoded_points) else {}
+            grau_val, grau_valid = point.get("grau_gsp", (None, False))
+            prev_grau_accum[i] = grau_val if grau_valid else None
+            prev_quarters[i] = dict(point.get("echotop_quarters", {}))
+        prev_fhour = fhour
+        prev_valid_utc = valid_utc
+
+        if fhour not in forecast_hours:
+            continue  # lead step: state seeding only, never attached
+
+        def _attach(hourly: HourlyForecast, idx: int) -> bool:
+            payload = payloads[idx]
+            if payload is None or hourly.explicit_convective_diagnostics is not None:
+                return False
+            echo_pa = echo_pa_per_point[idx]
+            if echo_pa is not None:
+                payload = payload.model_copy(update={
+                    "echo_top_18dbz_ft": _echo_top_pa_to_ft(echo_pa, hourly),
+                })
+            hourly.explicit_convective_diagnostics = payload
+            return True
+
+        for cs in icon_sections:
+            for point_idx, wf in enumerate(cs.point_forecasts):
+                if point_idx >= len(payloads):
+                    break
+                for hourly in wf.hourly:
+                    if _matches_valid_time(hourly.time, valid_utc):
+                        if _attach(hourly, point_idx):
+                            total_enriched += 1
+
+        wp_idx_lookup: dict[str, int] = {
+            rp.waypoint_icao: idx
+            for idx, rp in enumerate(route_points)
+            if rp.waypoint_icao
+        }
+        for wf in all_forecasts:
+            if wf.model.value != "icon":
+                continue
+            idx = wp_idx_lookup.get(wf.waypoint.icao)
+            if idx is None:
+                continue
+            for hourly in wf.hourly:
+                if _matches_valid_time(hourly.time, valid_utc):
+                    _attach(hourly, idx)
+
+        del decoded_points
+        _grib_gc()
+
+    if total_enriched:
+        logger.info(
+            "ICON-D2 explicit-convection enrichment: %d hourly entries",
+            total_enriched,
+        )
+    else:
+        logger.info("ICON-D2 explicit-convection enrichment produced no entries")
 
 
 # ---------------------------------------------------------------------------

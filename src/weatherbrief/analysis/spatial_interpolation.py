@@ -44,6 +44,14 @@ def interpolate_all_spatially(
 
     Called once before sounding analysis.  Fills gaps in both CLW/ICMR
     (per-pressure-level) and cloud diagnostics (per-point scalar).
+
+    Registered SKIP (#462): ``explicit_convective_diagnostics`` (ICON-D2
+    explicit-convection) is deliberately NOT interpolated here. Its values are
+    already corridor MAXIMA over a route buffer computed at decode — a spatial
+    reduction, not a point sample — so interpolating them between route points
+    would double-smooth extrema (and linear interpolation of dBZ is invalid
+    anyway, dBZ being logarithmic). A point whose corridor decode failed is an
+    honest per-hour "unavailable", carried by the payload's completeness flags.
     """
     interpolate_cloud_water_spatially(cross_sections, route_points, max_gap_nm)
     interpolate_diagnostics_spatially(cross_sections, route_points, max_gap_nm)

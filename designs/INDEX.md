@@ -46,7 +46,7 @@ Key exports: `compute_wind_components`, `analyze_sounding`, `compute_altitude_ad
 → Full doc: analysis.md
 
 ### meteorology-decisions
-Dated log of explicit meteorological design decisions, each with context, reasoning, and rejected alternatives: ceiling DD-vs-NWP-adjusted, Ogimet icing-zone width / convective contribution at moderate CAPE, GFS cloud-diagnostics window-midpoint interp + RH/condensate gate, convective realizable-CAPE / regime discrimination / DD-stays-pure, NWP-cover vs CAPE-driven risk. Read before changing any weather calibration or threshold — the choice was likely made deliberately.
+Dated log of explicit meteorological design decisions, each with context, reasoning, and rejected alternatives: ceiling DD-vs-NWP-adjusted, Ogimet icing-zone width / convective contribution at moderate CAPE, GFS cloud-diagnostics window-midpoint interp + RH/condensate gate, convective realizable-CAPE / regime discrimination / DD-stays-pure, NWP-cover vs CAPE-driven risk, ICON-D2 explicit-convection firing table (reflectivity × corroborators, §19). Read before changing any weather calibration or threshold — the choice was likely made deliberately.
 → Full doc: meteorology-decisions.md
 
 ### analysis-metrics

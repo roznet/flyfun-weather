@@ -377,10 +377,22 @@ class ConvectiveCharacterEvaluator:
                     base_ft = nwp.base_ft if nwp is not None else None
                     top_ft = nwp.top_ft if nwp is not None else None
                     has_geom = base_ft is not None and top_ft is not None
+                    # Explicit-convection mode (#462): a fired ICON-D2 cell is
+                    # realized by construction (the decision table only fires
+                    # on a simulated echo), but its precip/cover/geometry
+                    # channels are structurally None — without this branch a
+                    # firing D2 cell would read "not realized".
+                    explicit_fired = (
+                        nwp is not None
+                        and nwp.method == "nwp_explicit"
+                        and _RISK_ORDER.index(nwp.risk_level)
+                        >= _RISK_ORDER.index(ConvectiveRisk.MODERATE)
+                    )
                     realized = (
                         (showers is not None and showers >= showers_mm)
                         or (cover is not None and cover >= CHAR_COVER_REALIZED_PCT)
                         or has_geom
+                        or explicit_fired
                     )
                     embedded = _point_embedded(sounding, cruise_ft)
                     # Below-base avoidability geometry (#298): is the layer from
