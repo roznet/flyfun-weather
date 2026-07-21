@@ -943,7 +943,10 @@ _EXPLICIT_DBZ_SEVERE = 50.0      # >= 50 still needs |C| >= 1 for HIGH (bright b
 _EXPLICIT_LPI_CORROB_JKG = 1.0
 _EXPLICIT_LPI_STRONG_JKG = 5.0   # LPI (the primary channel) >= 5 counts as 2
 _EXPLICIT_UPDRAFT_CORROB_MS = 10.0
-_EXPLICIT_CAPE_CORROB_JKG = 500.0  # narrative-only threshold (never a vote)
+# Narrative-only threshold: CAPE is ENVIRONMENT, never a corroborator vote
+# (v2, #466/#467) — hence NARRATIVE, not CORROB, unlike
+# _EXPLICIT_UPDRAFT_CORROB_MS below which is a genuine substitute vote.
+_EXPLICIT_CAPE_NARRATIVE_JKG = 500.0
 _EXPLICIT_UH_NOTE_M2S2 = 25.0    # rotation NOTE only, never a tier input
 # Bright-band gate (#466/#467): the 18 dBZ echo top of a melting-layer bright
 # band sits only a few kft above the freezing level, whereas a real convective
@@ -1044,7 +1047,7 @@ def _explicit_corroborators(
 
     # CAPE: environment, narrative-only (never a vote) — see the docstring.
     cape_ml = nwp_diagnostics.ml_cape_jkg if nwp_diagnostics is not None else None
-    if cape_ml is not None and cape_ml >= _EXPLICIT_CAPE_CORROB_JKG:
+    if cape_ml is not None and cape_ml >= _EXPLICIT_CAPE_NARRATIVE_JKG:
         notes.append(
             f"unstable environment (ML-CAPE {cape_ml:.0f} J/kg) — environment, "
             "narrative only"
