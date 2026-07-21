@@ -3014,7 +3014,8 @@ class _IconEuContext:
 
     __slots__ = (
         "init_date", "init_hour", "forecast_hours", "run_dir",
-        "levels", "point_lats", "point_lons", "session", "variant",
+        "levels", "levels_by_var", "point_lats", "point_lons",
+        "session", "variant",
     )
 
     def __init__(
@@ -3022,17 +3023,34 @@ class _IconEuContext:
         run_dir: Path, levels: list[int],
         point_lats: list[float], point_lons: list[float],
         session: requests.Session, variant,
+        levels_by_var: dict[str, list[int]] | None = None,
     ):
         self.init_date = init_date
         self.init_hour = init_hour
         self.forecast_hours = forecast_hours
         self.run_dir = run_dir
         self.levels = levels
+        # Per-variable level subset for the ceiling-limited fetch (#469 phase 2).
+        # None → every variable uses the full ``levels`` list. When set, only the
+        # limited sounding variables (u/v/w/qc/qi/clc) carry a reduced list; the
+        # full-column variables (t/qv/p) are absent and fall back to ``levels``.
+        self.levels_by_var = levels_by_var
         self.point_lats = point_lats
         self.point_lons = point_lons
         self.session = session
         # IconVariant (ICON_EU / ICON_D2) chosen for this briefing's icon slot.
         self.variant = variant
+
+    def levels_for_var(self, variable: str) -> list[int]:
+        """Model levels to fetch/decode for *variable* (ceiling-limited, #469).
+
+        Falls back to the full ``levels`` list when no per-variable override is
+        set (phase 1, ICON-EU, or an unlimited fetch) or for a variable not in
+        the override map (the full-column t/qv/p).
+        """
+        if self.levels_by_var is None:
+            return self.levels
+        return self.levels_by_var.get(variable, self.levels)
 
 
 def _d2_corridor_mask_ok(
@@ -3275,11 +3293,14 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_VARIABLES,
+        fetch_icon_eu_per_level,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
         icon_cloud_diag_cache_key,
         icon_eu_previous_step,
         icon_explicit_conv_cache_key,
+        icon_model_level_var_label,
+        icon_model_level_var_legacy_label,
     )
 
     variant = ctx.variant
@@ -3308,6 +3329,34 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
                 put_cached(ctx.run_dir, ck, data)
         except Exception:
             logger.warning("Prefetch %s f%03d %s failed", variant.slug, fhour, var, exc_info=True)
+
+    def _fetch_var_levels(fhour: int, var: str, levels: list[int]) -> None:
+        # Per-level cache (#469): download the missing (var, level) files and
+        # cache each under its own key so a later briefing needing more levels
+        # tops up only what it lacks. One download pool for all levels of this
+        # variable (same connection budget as _fetch_var).
+        try:
+            with _grib_time("icon_prefetch_var"):
+                per_level = fetch_icon_eu_per_level(
+                    ctx.init_date, ctx.init_hour, fhour,
+                    levels=levels,
+                    variables=[var],
+                    session=ctx.session,
+                    max_workers=inner,
+                    variant=variant,
+                )
+            for (v, level), data in per_level.items():
+                if data:
+                    put_cached(
+                        ctx.run_dir,
+                        cache_key(fhour, icon_model_level_var_label(variant, v, level)),
+                        data,
+                    )
+        except Exception:
+            logger.warning(
+                "Prefetch %s f%03d %s (per-level) failed",
+                variant.slug, fhour, var, exc_info=True,
+            )
 
     def _fetch_diag(fhour: int, ck: str) -> None:
         try:
@@ -3357,11 +3406,33 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
 
     jobs: list[tuple] = []
     for fhour in ctx.forecast_hours:
-        # Model-level data (P, QC, QI) — per variable
+        # Model-level data (t, qv, p, u, v, w, qc, qi, clc) — per variable.
+        # Migration: the even-older combined blob is a hit for the whole column.
         legacy_ck = cache_key(fhour, f"{prefix}_QC_QI_P")
-        if not is_cached(ctx.run_dir, legacy_ck):  # legacy cache hit skips per-var download
+        if is_cached(ctx.run_dir, legacy_ck):
+            pass  # legacy combined cache hit covers every variable + level
+        elif variant.per_level_cache:
+            # ICON-D2: cache one file per (variable, level). A whole-column
+            # per-variable blob (older D2 code) still counts as covered — it
+            # holds every level. Otherwise fetch only the levels this briefing
+            # wants that aren't already on disk (#469).
             for var in ICON_EU_VARIABLES:
-                ck = cache_key(fhour, f"{prefix}_{var.upper()}")
+                if is_cached(
+                    ctx.run_dir, cache_key(fhour, icon_model_level_var_legacy_label(variant, var)),
+                ):
+                    continue
+                missing = [
+                    level for level in ctx.levels_for_var(var)
+                    if not is_cached(
+                        ctx.run_dir,
+                        cache_key(fhour, icon_model_level_var_label(variant, var, level)),
+                    )
+                ]
+                if missing:
+                    jobs.append((_fetch_var_levels, fhour, var, missing))
+        else:
+            for var in ICON_EU_VARIABLES:
+                ck = cache_key(fhour, icon_model_level_var_legacy_label(variant, var))
                 if not is_cached(ctx.run_dir, ck):
                     jobs.append((_fetch_var, fhour, var, ck))
 
@@ -3411,7 +3482,11 @@ def _decode_and_merge_icon_eu(
 
     Called after prefetch has cached all data to disk.
     """
-    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU_VARIABLES
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_VARIABLES,
+        icon_model_level_var_label,
+        icon_model_level_var_legacy_label,
+    )
 
     variant = ctx.variant
     prefix = variant.cache_prefix
@@ -3438,11 +3513,29 @@ def _decode_and_merge_icon_eu(
             )
             continue
 
-        var_paths: dict[str, str] = {}
+        # Each variable maps to a LIST of cache-file paths the worker
+        # concatenates: a one-element whole-column blob (ICON-EU, or a legacy
+        # ICON-D2 hit), else one file per model level (ICON-D2 per-level cache,
+        # #469). A whole-column blob is preferred when present — it holds every
+        # level, so any ceiling-limited subset is satisfiable from it.
+        var_paths: dict[str, list[str]] = {}
         for var in ICON_EU_VARIABLES:
-            ck = cache_key(fhour, f"{prefix}_{var.upper()}")
-            if is_cached(ctx.run_dir, ck):
-                var_paths[var] = str(ctx.run_dir / ck)
+            legacy_var_ck = cache_key(fhour, icon_model_level_var_legacy_label(variant, var))
+            if is_cached(ctx.run_dir, legacy_var_ck):
+                var_paths[var] = [str(ctx.run_dir / legacy_var_ck)]
+                continue
+            if variant.per_level_cache:
+                level_paths = [
+                    str(ctx.run_dir / cache_key(
+                        fhour, icon_model_level_var_label(variant, var, level),
+                    ))
+                    for level in ctx.levels_for_var(var)
+                    if is_cached(ctx.run_dir, cache_key(
+                        fhour, icon_model_level_var_label(variant, var, level),
+                    ))
+                ]
+                if level_paths:
+                    var_paths[var] = level_paths
         if var_paths:
             fhour_jobs[fhour] = (
                 "decode_icon_chunked",

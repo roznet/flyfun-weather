@@ -76,6 +76,20 @@ class IconVariant:
             EU. Fetched into their OWN per-variable cache blobs (not the shared
             cloud-diag blob) because several are multi-message sub-hourly files
             that need message-level ``stepRange`` selection at decode.
+        per_level_cache: True → the model-level sounding is cached one file per
+            (variable, level) (``f029_ICON_D2_T_L27.grib2``) rather than one
+            whole-column blob per variable (#469 phase 1). This is what makes a
+            partial-level fetch SAFE: with a whole-column key, writing a subset
+            of levels and then reporting the key as cached would silently serve
+            a truncated column to the next briefing that needs more levels. Per
+            level, ``is_cached`` answers per level, so a briefing needing deeper
+            levels fetches only the missing files (the ceiling-limited top-up,
+            phase 2). ICON-EU keeps the whole-column blob (False): its 40-level
+            column is cheap and no EU path fetches a subset. Whole-column blobs
+            written by older code (both ``{prefix}_{VAR}`` and the even-older
+            ``{prefix}_QC_QI_P``) stay valid — the read path treats them as a
+            hit for the full range (see the migration note in the prefetch/decode
+            loops), so no cache flush is needed.
     """
 
     slug: str
@@ -100,6 +114,7 @@ class IconVariant:
     coarse_step_h: int
     cloud_diag_variables: tuple[str, ...]
     explicit_conv_variables: tuple[str, ...] = ()
+    per_level_cache: bool = False
 
     @property
     def needs_predecessor_step(self) -> bool:
@@ -259,6 +274,10 @@ ICON_D2 = IconVariant(
     coarse_step_h=1,
     cloud_diag_variables=ICON_D2_CLOUD_DIAG_VARIABLES,
     explicit_conv_variables=ICON_D2_EXPLICIT_CONV_VARIABLES,
+    # D2's 50-level, 2.6×-heavier column is where a ceiling-limited fetch pays
+    # off (#469), so it caches per (variable, level) to make that partial fetch
+    # safe. ICON-EU stays on the whole-column blob.
+    per_level_cache=True,
 )
 
 # Back-compat module constants (ICON-EU). The variant above is the single
@@ -358,6 +377,31 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     files use message-level decode instead of the cfgrib blob path.
     """
     return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
+
+
+def icon_model_level_var_label(
+    variant: IconVariant, variable: str, level: int,
+) -> str:
+    """Cache-key label for ONE (variable, level) model-level file (#469).
+
+    ``{cache_prefix}_{VAR}_L{level:02d}`` → e.g. ``ICON_D2_T_L27``, which
+    :func:`cache_key` turns into ``f029_ICON_D2_T_L27.grib2``. Used only by
+    ``per_level_cache`` variants (ICON-D2); ICON-EU keeps the whole-column
+    per-variable blob under :func:`icon_model_level_var_legacy_label`.
+    """
+    return f"{variant.cache_prefix}_{variable.upper()}_L{level:02d}"
+
+
+def icon_model_level_var_legacy_label(variant: IconVariant, variable: str) -> str:
+    """Cache-key label for a whole-column per-variable blob (``{prefix}_{VAR}``).
+
+    This is the layout ICON-EU still writes, and the layout ICON-D2 wrote
+    before #469. For a ``per_level_cache`` variant it is treated as a hit for
+    the FULL level range only (it contains every level, so any requested subset
+    is satisfiable from it) — the read path prefers it and skips the per-level
+    files when present.
+    """
+    return f"{variant.cache_prefix}_{variable.upper()}"
 
 
 def icon_explicit_conv_cache_key(variable: str, variant: IconVariant) -> str:
@@ -913,5 +957,72 @@ def fetch_icon_eu_per_variable(
                 variant.slug, forecast_hour, var, total_failed,
                 _format_failure_summary(failures),
             )
+
+    return result
+
+
+def fetch_icon_eu_per_level(
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    levels: list[int],
+    variables: list[str],
+    session: requests.Session | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
+    variant: IconVariant = ICON_EU,
+) -> dict[tuple[str, int], bytes]:
+    """Download ICON model-level files individually, keyed by (variable, level).
+
+    Unlike :func:`fetch_icon_eu_per_variable` (which concatenates all levels of
+    a variable into ONE blob), this keeps every level separate so the caller can
+    cache each ``(variable, level)`` under its own key — the per-level cache
+    layout (#469 phase 1) that makes a partial-level fetch safe. All requested
+    files download on a single pool, exactly like the per-variable path.
+
+    Returns:
+        ``{(variable, level): decompressed_grib2_bytes}`` for each file that
+        downloaded successfully; failures are logged and omitted (the caller
+        top-ups the missing levels on the next pass, same as a per-variable
+        failure leaves that variable uncached).
+    """
+    sess = session or requests.Session()
+    targets = [(var, level) for var in variables for level in levels]
+
+    result: dict[tuple[str, int], bytes] = {}
+    failures: dict[int | str, int] = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(
+                _download_one_file,
+                icon_eu_file_url(
+                    init_date, init_hour, forecast_hour, level, var, variant,
+                ),
+                sess,
+            ): (var, level)
+            for (var, level) in targets
+        }
+        for future in as_completed(futures):
+            var, level = futures[future]
+            data, status = future.result()
+            if data is not None:
+                result[(var, level)] = data
+            else:
+                failures[status] = failures.get(status, 0) + 1
+
+    total_failed = sum(failures.values())
+    total_bytes = sum(len(b) for b in result.values())
+    if result:
+        logger.info(
+            "%s f%03d per-level: downloaded %d/%d files (%.1f KB)%s",
+            variant.slug, forecast_hour, len(result), len(result) + total_failed,
+            total_bytes / 1024, _format_failure_summary(failures),
+        )
+    elif total_failed:
+        logger.warning(
+            "%s f%03d per-level: all %d files failed%s",
+            variant.slug, forecast_hour, total_failed,
+            _format_failure_summary(failures),
+        )
 
     return result
