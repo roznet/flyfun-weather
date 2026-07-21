@@ -3735,34 +3735,57 @@ def _enrich_icon_eu_cloud_diagnostics(
 def _echo_top_pa_to_ft(pa: float, hourly: HourlyForecast) -> float:
     """Convert an echo-top pressure (Pa) to feet using the hour's own column.
 
-    Log-pressure interpolation over the hourly's pressure levels when they
-    carry geopotential heights (the ECMWF-replaced case); ISA standard
-    atmosphere otherwise (the ICON model-level replacement derives heights
-    later, in sounding analysis, itself hypsometrically). The echo top is a
-    depth/character detail — never a clearance input — so the ISA
-    approximation's few-hundred-ft error is acceptable and documented.
+    Height is linear in log-pressure between the two column levels bracketing
+    the target. A deep D2 echo can sit ABOVE the aviation pressure slice, so
+    the nearest two levels carry a short extrapolation rather than silently
+    switching the datum to ISA pressure altitude mid-field (PR #465's
+    approach, adopted here): a metre-datum column and an ISA column disagree
+    by hundreds of feet, and flipping between them across route points would
+    make echo tops incomparable. ISA remains the fallback only when the hour
+    has fewer than two usable levels — the ICON model-level replacement
+    derives its heights later, in sounding analysis.
+
+    The echo top is a depth/character detail, never a clearance input, so the
+    extrapolation's error at the extremes is acceptable and documented.
     """
     import math as _math
 
     from weatherbrief.models.analysis import pressure_pa_to_altitude_ft
 
     hpa = pa / 100.0
-    levels = [
-        lv for lv in hourly.pressure_levels
-        if lv.geopotential_height_m is not None
-    ]
-    if len(levels) >= 2:
-        levels.sort(key=lambda lv: lv.pressure_hpa)  # ascending hPa (high→low alt)
-        if levels[0].pressure_hpa <= hpa <= levels[-1].pressure_hpa:
-            for above, below in zip(levels, levels[1:]):
-                if above.pressure_hpa <= hpa <= below.pressure_hpa:
-                    frac = (
-                        _math.log(hpa) - _math.log(above.pressure_hpa)
-                    ) / (_math.log(below.pressure_hpa) - _math.log(above.pressure_hpa))
-                    z_m = above.geopotential_height_m + frac * (
-                        below.geopotential_height_m - above.geopotential_height_m
-                    )
-                    return round(z_m * _M_TO_FT)
+    levels = sorted(
+        (
+            lv for lv in hourly.pressure_levels
+            if lv.geopotential_height_m is not None and lv.pressure_hpa > 0
+        ),
+        key=lambda lv: lv.pressure_hpa,  # ascending hPa (high→low altitude)
+    )
+    if hpa > 0 and len(levels) >= 2:
+        if hpa <= levels[0].pressure_hpa:
+            pair = (levels[0], levels[1])          # above the slice: extrapolate up
+        elif hpa >= levels[-1].pressure_hpa:
+            pair = (levels[-2], levels[-1])        # below the slice: extrapolate down
+        else:
+            pair = next(
+                (
+                    (above, below)
+                    for above, below in zip(levels, levels[1:])
+                    if above.pressure_hpa <= hpa <= below.pressure_hpa
+                ),
+                (levels[0], levels[1]),
+            )
+        above, below = pair
+        span = _math.log(below.pressure_hpa) - _math.log(above.pressure_hpa)
+        # Duplicate pressures would divide by zero. Today's level constants are
+        # strictly distinct, but this runs inside the per-hour attach loop with
+        # no try/except above it, so a degenerate column must not abort the
+        # whole enrichment pass (PR #463 review round 2).
+        if span != 0.0:
+            frac = (_math.log(hpa) - _math.log(above.pressure_hpa)) / span
+            z_m = above.geopotential_height_m + frac * (
+                below.geopotential_height_m - above.geopotential_height_m
+            )
+            return round(z_m * _M_TO_FT)
     return round(pressure_pa_to_altitude_ft(pa))
 
 

@@ -425,6 +425,67 @@ class TestExplicitConvEnrichment:
 
 
 # ---------------------------------------------------------------------------
+# Echo-top pressure → feet: the hour's own column, one datum throughout
+# ---------------------------------------------------------------------------
+
+
+class TestEchoTopPressureToFeet:
+    """The Pa→ft conversion keeps the column datum instead of flipping to ISA.
+
+    Adopted from PR #465's review of the same issue: a metre-datum model
+    column and an ISA pressure altitude disagree by hundreds of feet, so an
+    echo above the aviation slice must be extrapolated along the column rather
+    than silently switched to the other datum — otherwise echo tops are not
+    comparable between route points.
+    """
+
+    def _hourly(self, levels: list[tuple[float, float | None]]) -> HourlyForecast:
+        from weatherbrief.models import PressureLevelData
+
+        return HourlyForecast(
+            time=datetime(2026, 7, 21, 12, tzinfo=timezone.utc),
+            pressure_levels=[
+                PressureLevelData(pressure_hpa=p, geopotential_height_m=z)
+                for p, z in levels
+            ],
+        )
+
+    def _convert(self, pa: float, levels) -> float:
+        from weatherbrief.fetch.grib import _echo_top_pa_to_ft
+
+        return _echo_top_pa_to_ft(pa, self._hourly(levels))
+
+    _COLUMN = [(500.0, 6000.0), (400.0, 7800.0), (300.0, 10100.0)]
+
+    def test_interpolates_within_the_column(self):
+        # 450 hPa sits between 500/400 → ~6.9 km ≈ 22.6 kft, well away from
+        # ISA's ~20.8 kft for the same pressure.
+        assert 22000 < self._convert(45000.0, self._COLUMN) < 23500
+
+    def test_extrapolates_above_the_slice_on_the_column_datum(self):
+        # 250 hPa is above the top level: keep extrapolating the 400/300 slope
+        # instead of returning an ISA altitude on a different datum.
+        ft = self._convert(25000.0, self._COLUMN)
+        assert ft > 10100.0 * 3.28084
+
+    def test_falls_back_to_isa_without_a_usable_column(self):
+        from weatherbrief.models.analysis import pressure_pa_to_altitude_ft
+
+        assert self._convert(45000.0, [(500.0, 6000.0)]) == round(
+            pressure_pa_to_altitude_ft(45000.0)
+        )
+        assert self._convert(45000.0, [(500.0, None), (400.0, None)]) == round(
+            pressure_pa_to_altitude_ft(45000.0)
+        )
+
+    def test_duplicate_pressures_never_raise(self):
+        # A degenerate column must not abort the enrichment pass — the attach
+        # loop that calls this has no try/except above it (#463 review r2).
+        ft = self._convert(45000.0, [(450.0, 6900.0), (450.0, 6950.0)])
+        assert isinstance(ft, int | float)
+
+
+# ---------------------------------------------------------------------------
 # Prefetch — per-variable explicit blobs + generalized lead step
 # ---------------------------------------------------------------------------
 

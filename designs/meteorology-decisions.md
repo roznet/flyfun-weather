@@ -2006,6 +2006,14 @@ HRRR's 2–5 km).
    err in the dangerous direction ("safe to overfly" under a higher anvil).
    The value travels only as the dedicated `echo_top_18dbz_ft` detail field;
    D2 cells render with unresolved vertical geometry (ghost column).
+   The Pa→ft conversion stays on **one datum per hour**: log-pressure over the
+   hour's own geopotential column, extrapolated along the nearest two levels
+   when the echo sits above the aviation slice, rather than switching to ISA
+   pressure altitude mid-field (adopted from the parallel PR #465
+   implementation of this issue). A metre-datum column and ISA disagree by
+   hundreds of feet, so flipping between them across route points would make
+   echo tops incomparable. ISA remains the fallback only when the hour carries
+   fewer than two levels with heights.
 2. **Never linearly interpolate dBZ** (logarithmic). Corridor-max extraction at
    decode replaces per-point bilinear sampling entirely for these fields, and
    they are registered as explicit SKIPs in both the time-axis fill and the

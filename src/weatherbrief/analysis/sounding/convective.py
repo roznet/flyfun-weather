@@ -967,7 +967,10 @@ def _explicit_corroborators(
         count += 1
         # Hard wording rule (#462): graupel / mixed-phase core — never "hail".
         notes.append(
-            f"graupel / strong mixed-phase core ({graupel:.1f} mm/h)"
+            # An hourly ACCUMULATION in mm — not a rate. The neighbouring
+            # parameterized notes above are genuinely mm/h (convective_precip_
+            # mm_h), so the unit has to differ here (PR #463 review round 2).
+            f"graupel / strong mixed-phase core ({graupel:.1f} mm this hour)"
         )
 
     cape_ml = nwp_diagnostics.ml_cape_jkg if nwp_diagnostics is not None else None
