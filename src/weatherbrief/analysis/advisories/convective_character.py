@@ -381,6 +381,11 @@ class ConvectiveCharacterEvaluator:
                         (showers is not None and showers >= showers_mm)
                         or (cover is not None and cover >= CHAR_COVER_REALIZED_PCT)
                         or has_geom
+                        or (
+                            nwp is not None
+                            and nwp.method == "nwp_explicit"
+                            and nwp.risk_level != ConvectiveRisk.NONE
+                        )
                     )
                     embedded = _point_embedded(sounding, cruise_ft)
                     # Below-base avoidability geometry (#298): is the layer from

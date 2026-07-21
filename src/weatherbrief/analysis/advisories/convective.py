@@ -165,8 +165,9 @@ class ConvectiveEvaluator:
                 total += 1
 
                 # Independent of the grade filters below: compare the chosen
-                # thermo (CAPE-derived) risk against the model's own convective
-                # scheme. Use convective_thermo explicitly (matches the digest
+                # thermo (CAPE-derived) risk against the model's own native
+                # convective track (parameterized or explicit). Use
+                # convective_thermo explicitly (matches the digest
                 # and dd_nwp_agreement) so this stays a DD-vs-NWP comparison even
                 # if convective ever becomes the chosen (possibly NWP) method.
                 # Do NOT fall back to sounding.convective: when the active track
@@ -199,8 +200,8 @@ class ConvectiveEvaluator:
                 # the divergence is surfaced via the cross-check below and the
                 # dd_nwp_agreement advisory, not blended into the DD tier. When
                 # the active track is DD this is a no-op.
-                # NWP-native grade (#442, meteorology-decisions §18). The colour
-                # comes from the model's OWN convective scheme (the active track;
+                # NWP-native grade (#442, meteorology-decisions §18/§19). The
+                # colour comes from the model's OWN convective track (the active track;
                 # convective_method defaults to "nwp"), NOT max(NWP, DD). A quiet
                 # NWP is no longer floored up to a loaded DD tower — that floor
                 # produced the loaded-gun false-alarm REDs. The DD tier still

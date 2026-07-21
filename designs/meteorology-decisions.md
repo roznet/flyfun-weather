@@ -1958,3 +1958,101 @@ follow-up:
 - Watch for any all-quiet-NWP sounding that *did* produce observed convection
   (lightning/METAR-TS) — that is the case the removed floor was protecting, and
   the one that would argue for a narrower cap.
+
+---
+
+## 19. ICON-D2 explicit convection: reflectivity fires, independent fields corroborate
+
+**Date:** 2026-07-21
+**Status:** Implemented (#462); thresholds require case-based calibration
+**Context:** ICON-D2 is convection-permitting and has no deep-convection
+parameterization. Its reflectivity, updraft, lightning-potential, graupel and
+echo-top products are explicit storm evidence, not substitutes for ICON-EU's
+parameterized convective cloud base/top and rain fields. Treating the two signal
+classes as interchangeable would hide both their strengths and their failure
+modes.
+
+### Decision
+
+The `icon` model keeps one NWP convective track but two explicitly labelled
+methods:
+
+- ICON-EU uses the existing parameterized-scheme assessment.
+- ICON-D2 uses `nwp_explicit`, sourced from 10 NM corridor extrema. The core
+  firing signal is the preceding-hour maximum column reflectivity
+  (`dbz_ctmax`). LPI, 0–10 km maximum updraft, hourly grid-scale graupel and
+  mixed-layer CAPE corroborate it. UH remains signed narrative evidence in v1.
+
+The v1 table is:
+
+| Hourly corridor reflectivity | no corroborator | one | two or more |
+|---|---:|---:|---:|
+| <35 dBZ | none | none | none |
+| 35–44 dBZ | none | marginal | moderate |
+| 45–49 dBZ | moderate | moderate | high |
+| ≥50 dBZ | high | high | high |
+
+Corroborators are LPI ≥1 J/kg, updraft ≥10 m/s, hourly graupel accumulation
+≥0.5 mm, and ML-CAPE ≥500 J/kg; LPI ≥5 counts twice. A channel counts only when
+its corridor value decoded validly. Missing data never becomes zero and never
+suppresses another positive channel. Detection incompleteness makes the explicit
+assessment unavailable, allowing the separately labelled thermo track to be
+used; it is not reported as a quiet D2 forecast.
+
+### Meteorological rationale
+
+1. **Reflectivity supplies realization.** CAPE describes an environment that
+   may not initiate. Hourly column-maximum reflectivity is direct evidence that
+   D2 resolved a hydrometeor core during the interval.
+2. **The 35–44 dBZ band needs corroboration.** Stratiform bright bands and
+   melting-layer enhancement can occupy this range. Requiring an independent
+   storm-process signal limits false thunderstorm narratives on widespread rain.
+3. **Strong reflectivity is sufficient at the upper tiers.** A 45–49 dBZ core
+   is at least moderate even when optional diagnostics fail; ≥50 dBZ is high.
+   Missing corroborators must not turn a strongly resolved core into a quiet
+   forecast.
+4. **A corridor maximum fits the aviation question.** Bilinear centreline
+   sampling can miss a 2.2 km cell between route samples or one displaced a few
+   kilometres. A 10 NM kernel asks whether a cell affects the usable corridor,
+   while retaining source/model identity so precision is not confused with
+   deterministic placement skill.
+5. **Temporal operators follow the product.** Graupel is differenced cell by
+   cell from on-hour since-init accumulations before spatial maximisation.
+   Hourly 18-dBZ echo top combines exactly four quarter-hour windows ending in
+   `(H−1,H]`. Partial quarters are unavailable, not a biased minimum-pressure
+   maximum.
+
+### Geometry boundary
+
+The pressure echo top is converted through the same point/hour D2
+pressure–geopotential-height column. It is still only the highest **18 dBZ echo**:
+weak anvil ice and the physical cloud top can be higher. Therefore it travels as
+`echo_top_18dbz_ft` detail while `ConvectiveAssessment.top_ft` and `base_ft` stay
+unset. The advisory must render unresolved vertical geometry and can never infer
+that cruise is safely above the cell from this field.
+
+### Rejected alternatives
+
+- **CAPE-only D2 verdict:** rejected because it relabels potential instability as
+  explicitly resolved convection and duplicates the independent thermo track.
+- **Instantaneous `dbz_cmax` as the primary trigger:** rejected because a narrow
+  core between hourly samples can disappear; `dbz_ctmax` represents the whole
+  assessment interval.
+- **Echo top as convective cloud top:** rejected because the 18-dBZ threshold
+  systematically underestimates anvil/physical height and would create unsafe
+  overflight-clearance conclusions.
+- **UH as a severity threshold:** deferred because D2's signed 2–8 km UH is not
+  directly portable from common HRRR 2–5 km calibration thresholds.
+- **Graupel called hail:** rejected; it is a grid-scale graupel/mixed-phase-core
+  signal, not a diagnosed surface hail product.
+- **A lone D2 cell floors the aggregate at AMBER:** meteorologically plausible,
+  but rejected as a silent #462 change. It belongs in the #442 aggregation
+  framework and remains an explicit open question.
+
+### Calibration obligation
+
+Replay convective cases with spatial/temporal tolerance and observed
+radar/lightning where available, but pair them with stratiform 30–40 dBZ
+bright-band and winter graupel controls. Exact cell placement should be trusted
+less with lead time; coarser models remain valuable for synoptic environment and
+timing even though D2 has the sharpest deterministic structure.

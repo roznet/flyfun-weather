@@ -21,6 +21,7 @@ import weatherbrief.fetch.grib.icon_eu_fetch as icon_fetch_mod
 from weatherbrief.fetch.grib import _IconEuContext, _prefetch_icon_eu_data_inner
 from weatherbrief.fetch.grib.cache import cache_key, get_cached, put_cached
 from weatherbrief.fetch.grib.icon_eu_fetch import (
+    ICON_EU,
     ICON_EU_CLOUD_DIAG_CACHE_KEY,
     ICON_EU_VARIABLES,
 )
@@ -36,6 +37,7 @@ def _make_ctx(tmp_path: Path, forecast_hours: list[int]) -> _IconEuContext:
         point_lats=[48.0],
         point_lons=[2.0],
         session=None,
+        variant=ICON_EU,
     )
 
 
@@ -63,8 +65,16 @@ def tracker(monkeypatch):
         with state["lock"]:
             state["active"] -= 1
 
-    def fake_per_variable(init_date, init_hour, fhour, levels, variables,
-                          session=None, max_workers=8):
+    def fake_per_variable(
+        init_date,
+        init_hour,
+        fhour,
+        levels,
+        variables,
+        session=None,
+        max_workers=8,
+        variant=ICON_EU,
+    ):
         _enter()
         try:
             (var,) = variables
@@ -76,7 +86,14 @@ def tracker(monkeypatch):
         finally:
             _exit()
 
-    def fake_single_level(init_date, init_hour, fhours, session=None, max_workers=8):
+    def fake_single_level(
+        init_date,
+        init_hour,
+        fhours,
+        session=None,
+        max_workers=8,
+        variant=ICON_EU,
+    ):
         _enter()
         try:
             (fhour,) = fhours

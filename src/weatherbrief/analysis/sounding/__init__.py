@@ -234,6 +234,7 @@ def analyze_sounding_lite(
         detect_cloud_layers,
     )
     from weatherbrief.analysis.sounding.convective import (
+        assess_convective_explicit,
         assess_convective_nwp,
         assess_convective_thermo,
     )
@@ -311,9 +312,16 @@ def analyze_sounding_lite(
     convective = assess_convective_thermo(
         indices, omega_700_pa_s=_omega_near_700(derived_levels)
     )
-    convective_nwp = assess_convective_nwp(
-        indices, hourly.nwp_cloud_diagnostics if hourly else None,
-    )
+    if hourly and hourly.explicit_convective_diagnostics is not None:
+        convective_nwp = assess_convective_explicit(
+            indices,
+            hourly.explicit_convective_diagnostics,
+            hourly.nwp_cloud_diagnostics,
+        )
+    else:
+        convective_nwp = assess_convective_nwp(
+            indices, hourly.nwp_cloud_diagnostics if hourly else None,
+        )
 
     # Compute ceiling from NWP-reclassified cloud layers
     sounding_ceiling_ft = compute_sounding_ceiling_ft(

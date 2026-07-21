@@ -11,6 +11,7 @@ Handles two categories of GFS variables:
 from __future__ import annotations
 
 import logging
+import math
 import tempfile
 import warnings
 from pathlib import Path
@@ -1388,6 +1389,322 @@ def decode_icon_eu_cloud_diag_per_point(
         return [{} for _ in range(n_points)]
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _icon_d2_step_hours(xr_var) -> list[float]:
+    """Return forecast-step coordinates as hours for a cfgrib variable."""
+    import numpy as np
+
+    if "step" not in xr_var.coords:
+        return []
+    raw = np.atleast_1d(xr_var.coords["step"].values)
+    return [float(v / np.timedelta64(1, "h")) for v in raw]
+
+
+def _icon_d2_step_grid(xr_var, target_hour: float):
+    """Select one exact D2 message by forecast-step hour."""
+    import numpy as np
+
+    steps = _icon_d2_step_hours(xr_var)
+    if "step" in xr_var.dims:
+        for idx, step_h in enumerate(steps):
+            if abs(step_h - target_hour) < 1e-6:
+                return np.asarray(xr_var.isel(step=idx).values, dtype=np.float64)
+        return None
+    if steps and abs(steps[0] - target_hour) >= 1e-6:
+        return None
+    return np.asarray(xr_var.values, dtype=np.float64)
+
+
+def _corridor_extrema(
+    grid,
+    grid_lats,
+    grid_lons,
+    target_lats: list[float],
+    target_lons: list[float],
+    *,
+    radius_nm: float,
+    mode: str,
+    require_complete: bool = True,
+) -> tuple[list[float | None], list[bool]]:
+    """Reduce a 2-D regular lat/lon grid over circular route corridors.
+
+    Completeness requires every delivered grid cell in the kernel to be
+    finite.  This keeps a partially masked domain edge distinct from a valid
+    quiet value. ``abs_signed_max`` selects by magnitude but retains UH sign.
+    """
+    import numpy as np
+
+    arr = np.asarray(grid, dtype=np.float64)
+    lats = np.asarray(grid_lats, dtype=np.float64)
+    lons = np.asarray(grid_lons, dtype=np.float64)
+    values: list[float | None] = []
+    complete: list[bool] = []
+    for lat, lon in zip(target_lats, target_lons):
+        lat_delta = radius_nm / 60.0
+        lon_delta = radius_nm / max(1e-6, 60.0 * math.cos(math.radians(lat)))
+        # The finite-cell test below catches an internal bitmap edge. Check the
+        # coordinate envelope separately so a kernel clipped by the outer grid
+        # boundary is not mistaken for a smaller-but-complete corridor.
+        if (
+            lat - lat_delta < float(lats.min())
+            or lat + lat_delta > float(lats.max())
+            or lon - lon_delta < float(lons.min())
+            or lon + lon_delta > float(lons.max())
+        ):
+            values.append(None)
+            complete.append(False)
+            continue
+        ii = np.flatnonzero((lats >= lat - lat_delta) & (lats <= lat + lat_delta))
+        jj = np.flatnonzero((lons >= lon - lon_delta) & (lons <= lon + lon_delta))
+        if ii.size == 0 or jj.size == 0:
+            values.append(None)
+            complete.append(False)
+            continue
+        lat_nm = (lats[ii] - lat) * 60.0
+        lon_nm = (lons[jj] - lon) * 60.0 * math.cos(math.radians(lat))
+        kernel = lat_nm[:, None] ** 2 + lon_nm[None, :] ** 2 <= radius_nm ** 2
+        subset = arr[np.ix_(ii, jj)][kernel]
+        finite = np.isfinite(subset)
+        is_complete = bool(subset.size and finite.all())
+        complete.append(is_complete)
+        if require_complete and not is_complete:
+            values.append(None)
+            continue
+        subset = subset[finite]
+        if subset.size == 0:
+            values.append(None)
+            continue
+        if mode == "max":
+            values.append(float(subset.max()))
+        elif mode == "min":
+            values.append(float(subset.min()))
+        elif mode == "abs_signed_max":
+            values.append(float(subset[np.argmax(np.abs(subset))]))
+        else:  # pragma: no cover - internal programming error
+            raise ValueError(f"Unknown corridor reduction mode: {mode}")
+    return values, complete
+
+
+def _deaccumulate_nonnegative_grid(current, previous):
+    """Cell-wise accumulated-field difference; missing remains missing."""
+    import numpy as np
+
+    current_arr = np.asarray(current, dtype=np.float64)
+    previous_arr = np.asarray(previous, dtype=np.float64)
+    finite = np.isfinite(current_arr) & np.isfinite(previous_arr)
+    return np.where(
+        finite,
+        np.maximum(0.0, current_arr - previous_arr),
+        np.nan,
+    )
+
+
+def _hourly_echo_min_pressure_grid(quarters: list):
+    """Highest 18-dBZ echo over four quarters as minimum positive pressure."""
+    import numpy as np
+
+    if len(quarters) != 4:
+        return None
+    result = np.full_like(quarters[0], np.nan, dtype=np.float64)
+    for quarter in quarters:
+        physical = np.where(np.asarray(quarter) > 0.0, quarter, np.nan)
+        result = np.fmin(result, physical)
+    return result
+
+
+def decode_icon_d2_explicit_per_point(
+    current_grib_bytes: bytes,
+    previous_grib_bytes: bytes | None,
+    forecast_hour: int,
+    latitudes: list[float],
+    longitudes: list[float],
+    corridor_radius_nm: float = 10.0,
+) -> list[dict[str, float | bool]]:
+    """Decode ICON-D2 explicit convection with correct space/time semantics.
+
+    Hourly graupel is differenced on the grid *before* corridor maximisation;
+    differencing two corridor maxima is invalid when their maximizing cells
+    differ.  Hourly ECHOTOP is the minimum pressure across exactly four
+    15-minute windows ending in ``(H-1, H]``.
+    """
+    import cfgrib
+    import numpy as np
+
+    n_points = len(latitudes)
+    empty: list[dict[str, float | bool]] = [{} for _ in range(n_points)]
+    if not current_grib_bytes:
+        return empty
+
+    paths: list[Path] = []
+    datasets: list[list] = []
+
+    def _open(raw: bytes | None) -> list:
+        if not raw:
+            return []
+        with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+            tmp.write(raw)
+            path = Path(tmp.name)
+        paths.append(path)
+        opened = cfgrib.open_datasets(str(path), backend_kwargs={"indexpath": ""})
+        datasets.append(opened)
+        return opened
+
+    def _find_all(dss: list, names: set[str]) -> list:
+        matches = []
+        for ds in dss:
+            for name, var in ds.data_vars.items():
+                short = str(var.attrs.get("GRIB_shortName", name)).lower()
+                if str(name).lower() in names or short in names:
+                    matches.append(var)
+        return matches
+
+    def _select(dss: list, names: set[str], target_hour: float):
+        # cfgrib normally groups the four quarter-hour messages on a ``step``
+        # dimension, but it may split heterogeneous GRIB metadata into separate
+        # datasets. Search every matching variable and select the exact validity
+        # endpoint either way; never assume the first decoded message is the one
+        # for this interval.
+        for var in _find_all(dss, names):
+            grid = _icon_d2_step_grid(var, target_hour)
+            if grid is not None:
+                return grid
+        return None
+
+    try:
+        current = _open(current_grib_bytes)
+        previous = _open(previous_grib_bytes)
+        reference = next((ds for ds in current if "latitude" in ds.coords), None)
+        if reference is None:
+            return empty
+        grid_lats = np.asarray(reference.coords["latitude"].values, dtype=np.float64)
+        grid_lons = np.asarray(reference.coords["longitude"].values, dtype=np.float64)
+
+        results: list[dict[str, float | bool]] = [{} for _ in range(n_points)]
+
+        def _put_field(names: set[str], key: str, mode: str = "max") -> list[bool]:
+            grid = _select(current, names, float(forecast_hour))
+            if grid is None:
+                return [False] * n_points
+            vals, flags = _corridor_extrema(
+                grid, grid_lats, grid_lons, latitudes, longitudes,
+                radius_nm=corridor_radius_nm, mode=mode,
+            )
+            for out, val in zip(results, vals):
+                if val is not None:
+                    out[key] = val
+            return flags
+
+        detection = _put_field({"dbz_ctmax"}, "reflectivity_hour_max_dbz")
+        _put_field({"dbz_cmax"}, "reflectivity_instant_dbz")
+        lpi_ok = _put_field({"lpi_max"}, "lightning_potential_hour_max_jkg")
+        w_ok = _put_field({"w_ctmax"}, "updraft_hour_max_ms")
+        _put_field(
+            {"uh_max"}, "updraft_helicity_2_8km_hour_max_m2s2",
+            mode="abs_signed_max",
+        )
+
+        # De-accumulate since-init graupel at each grid cell first.
+        grau_now = _select(current, {"tgrp", "grau_gsp"}, float(forecast_hour))
+        grau_prev = _select(
+            previous, {"tgrp", "grau_gsp"}, float(forecast_hour - 1),
+        )
+        grau_ok = [False] * n_points
+        if grau_now is not None and grau_prev is not None:
+            increment = _deaccumulate_nonnegative_grid(grau_now, grau_prev)
+            vals, grau_ok = _corridor_extrema(
+                increment, grid_lats, grid_lons, latitudes, longitudes,
+                radius_nm=corridor_radius_nm, mode="max",
+            )
+            for out, val in zip(results, vals):
+                if val is not None:
+                    out["graupel_hour_mm"] = val
+
+        # Four ECHOTOP quarter windows: previous file's :15/:30/:45 plus
+        # current file's on-the-hour message.  Build the hourly minimum-pressure
+        # field, but judge completeness from the raw finite grids before the
+        # -999 no-echo sentinel is removed.
+        wanted = [forecast_hour - 0.75, forecast_hour - 0.5,
+                  forecast_hour - 0.25, float(forecast_hour)]
+        quarters: list = []
+        for wanted_h in wanted:
+            source = previous if wanted_h < forecast_hour else current
+            grid = _select(source, {"min_pres", "echotop"}, wanted_h)
+            if grid is not None:
+                quarters.append(grid)
+        echo_complete = [False] * n_points
+        if len(quarters) == 4:
+            raw_complete = []
+            for quarter in quarters:
+                _, flags = _corridor_extrema(
+                    quarter, grid_lats, grid_lons, latitudes, longitudes,
+                    radius_nm=corridor_radius_nm, mode="min",
+                )
+                raw_complete.append(flags)
+            echo_complete = [
+                all(flags[i] for flags in raw_complete) for i in range(n_points)
+            ]
+            hourly_echo = _hourly_echo_min_pressure_grid(quarters)
+            echo_vals, _ = _corridor_extrema(
+                hourly_echo, grid_lats, grid_lons, latitudes, longitudes,
+                radius_nm=corridor_radius_nm, mode="min", require_complete=False,
+            )
+            for i, (out, val) in enumerate(zip(results, echo_vals)):
+                if echo_complete[i] and val is not None:
+                    out["echo_top_18dbz_pressure_pa"] = val
+
+        for i, out in enumerate(results):
+            out["detection_complete"] = detection[i]
+            out["strength_complete"] = lpi_ok[i] and w_ok[i] and grau_ok[i]
+            out["echo_top_complete"] = echo_complete[i]
+        return results
+    except Exception:
+        logger.warning("cfgrib failed to decode ICON-D2 explicit diagnostics", exc_info=True)
+        return empty
+    finally:
+        for group in datasets:
+            for ds in group:
+                ds.close()
+        for path in paths:
+            path.unlink(missing_ok=True)
+
+
+def decode_icon_d2_domain_coverage(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+    corridor_radius_nm: float = 10.0,
+) -> bool:
+    """True when every route corridor kernel lies inside the delivered mask."""
+    import cfgrib
+
+    if not grib_bytes:
+        return False
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        path = Path(tmp.name)
+    datasets = []
+    try:
+        datasets = cfgrib.open_datasets(str(path), backend_kwargs={"indexpath": ""})
+        for ds in datasets:
+            if "latitude" not in ds.coords or "longitude" not in ds.coords:
+                continue
+            for var in ds.data_vars.values():
+                _, complete = _corridor_extrema(
+                    var.values,
+                    ds.coords["latitude"].values,
+                    ds.coords["longitude"].values,
+                    latitudes,
+                    longitudes,
+                    radius_nm=corridor_radius_nm,
+                    mode="max",
+                )
+                return bool(complete) and all(complete)
+        return False
+    finally:
+        for ds in datasets:
+            ds.close()
+        path.unlink(missing_ok=True)
 
 
 _M_TO_FT = 3.28084
