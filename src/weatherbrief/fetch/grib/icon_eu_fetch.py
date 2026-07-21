@@ -29,6 +29,7 @@ from __future__ import annotations
 import bz2
 import logging
 import math
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -482,8 +483,28 @@ def icon_explicit_conv_cache_key(variable: str, variant: IconVariant) -> str:
     """
     return f"{variant.cache_prefix}_EXPL_{variable.upper()}_V1"
 
-# Parallel download settings
-MAX_DOWNLOAD_WORKERS = 8
+# Parallel download settings.
+#
+# 16 measured 37.1 MB/s droplet→opendata.dwd.de vs 29.6 at 8 (#469) — ~25% for
+# one constant, and the dominant term in D2 refresh wall time is this download.
+# It is only the DEFAULT for a single fetch call: the cold-cache prefetch already
+# sizes its inner pools from ``_POOL_MAXSIZE`` (so outer×inner stays within one
+# session's connection pool regardless of this value), and every session caps
+# concurrent connections at ``_POOL_MAXSIZE``. The value is env-tunable
+# (``MAX_DOWNLOAD_WORKERS``) so a sustained-load regression can be dialed back
+# in prod without a deploy — the issue's requested concurrency-aware safety
+# valve, since the throughput samples were sub-second bursts, not sustained load.
+def _default_download_workers() -> int:
+    raw = os.environ.get("MAX_DOWNLOAD_WORKERS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            logger.warning("Invalid MAX_DOWNLOAD_WORKERS=%r, defaulting to 16", raw)
+    return 16
+
+
+MAX_DOWNLOAD_WORKERS = _default_download_workers()
 REQUEST_TIMEOUT = 30  # seconds per file
 
 

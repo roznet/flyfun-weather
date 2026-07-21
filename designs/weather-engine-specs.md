@@ -100,7 +100,7 @@ Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py, decode.py):
 - **Cloud diagnostics** — single-level: ceiling, hbas_con, htop_con, clcl, clcm, clch, clct, cape_ml, cin_ml, rain_con → `NWPCloudDiagnostics`
 - Source: `opendata.dwd.de/weather/nwp/{icon-eu,icon-d2}/grib/` (public, no auth)
 - Individual bz2-compressed files per variable/level/timestep
-- Parallel download with ThreadPoolExecutor (8 workers)
+- Parallel download with ThreadPoolExecutor (`MAX_DOWNLOAD_WORKERS`, default 16 — 37.1 MB/s vs 29.6 at 8, #469; env-tunable)
 - **Variant selection (issue #456):** the `icon` slot is served by **ICON-D2** (2.2 km, convection-permitting) when the *whole* route fits the D2 domain (43.18–58.08°N, 3.94°W–20.34°E) AND a complete D2 run's 48h horizon reaches the flight-window end; otherwise by **ICON-EU** (6.5 km, all-Europe) exactly as before. All-or-nothing — never a per-point mix of D2 and EU within one briefing. On total D2 failure the icon slot re-runs cleanly on ICON-EU (never a half-D2 pack).
 - The two variants share the whole download/decode path via `IconVariant` (a config object holding domain, cycles, horizon, level slice, filename conventions, cache slug and freshness source key). ICON-D2 filename quirks: model token `icon-d2`, region token `germany`, **lowercase** variable suffix (`…_60_t`), and a `_2d_` segment on single-level files (`…_006_2d_ceiling`).
 - Domain: EU 29.5–70.5°N, 23.5°W–62.5°E; D2 43.18–58.08°N, 3.94°W–20.34°E. Routes outside the chosen domain skip silently.
@@ -158,7 +158,7 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Gaps:** No geopotential (FI not on model levels) — derived via hypsometric equation from T+P
 - **Publication delay:** ~3h after init time
 - **Data retention:** DWD deletes files after ~24h (only latest run available per cycle)
-- **Download:** Individual bz2-compressed files, parallel with 8 workers
+- **Download:** Individual bz2-compressed files, parallel with `MAX_DOWNLOAD_WORKERS` (default 16, env-tunable)
 
 ### C.2 DWD ICON-D2 (Central Europe, convection-permitting) — IMPLEMENTED (full sounding, #456)
 - **Server:** `https://opendata.dwd.de/weather/nwp/icon-d2/grib/`

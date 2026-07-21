@@ -309,3 +309,26 @@ def test_icon_d2_readiness_dispatch_registered():
 
 def _utc(y, mo, d, h=0):
     return datetime(y, mo, d, h, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Download-worker default (#469 "also worth doing")
+# ---------------------------------------------------------------------------
+
+
+def test_download_workers_default_is_16():
+    from weatherbrief.fetch.grib.icon_eu_fetch import MAX_DOWNLOAD_WORKERS
+    assert MAX_DOWNLOAD_WORKERS == 16
+
+
+def test_download_workers_env_override(monkeypatch):
+    from weatherbrief.fetch.grib.icon_eu_fetch import _default_download_workers
+
+    monkeypatch.setenv("MAX_DOWNLOAD_WORKERS", "24")
+    assert _default_download_workers() == 24
+    monkeypatch.setenv("MAX_DOWNLOAD_WORKERS", "garbage")
+    assert _default_download_workers() == 16
+    monkeypatch.setenv("MAX_DOWNLOAD_WORKERS", "0")
+    assert _default_download_workers() == 1  # clamped to >= 1
+    monkeypatch.delenv("MAX_DOWNLOAD_WORKERS")
+    assert _default_download_workers() == 16
