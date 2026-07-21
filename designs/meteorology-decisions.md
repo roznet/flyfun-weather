@@ -1970,7 +1970,7 @@ either 404 on the D2 feed or silently change meaning. #461 deliberately shipped
 those fields **unfetched** on D2 (missing-data semantics); until this entry, a
 D2-sourced icon slot therefore had *no* model-native convective signal at all.
 Deep convection in D2 lives in explicit storm fields — simulated reflectivity,
-echo top, lightning potential, updrafts, graupel — a different *kind* of signal,
+echo top, lightning potential, updrafts — a different *kind* of signal,
 carried end-to-end as its own track (`NWPExplicitConvectiveDiagnostics` payload,
 `assess_convective_explicit`, `method="nwp_explicit"`) and never blended into
 the parameterized concepts.
@@ -1981,7 +1981,8 @@ The firing signal is `dbz_ctmax` (column-max simulated reflectivity, max over
 the previous hour), reduced to a **corridor maximum** over a ~10 NM route
 buffer. The corroborator set C (each channel counts 1 when **complete AND over
 threshold**): `lpi_max ≥ 1 J/kg` (≥ 5 counts 2) · `w_ctmax ≥ 10 m/s` ·
-`graupel_hour_mm ≥ 0.5` · `cape_ml ≥ 500 J/kg`.
+`cape_ml ≥ 500 J/kg`. (A fourth corroborator, `grau_gsp ≥ 0.5 mm`, shipped in
+#462 but was dropped in #468 — see the update block below.)
 
 | Corridor `dbz_ctmax` | \|C\| = 0 | \|C\| = 1 | \|C\| ≥ 2 |
 |---|---|---|---|
@@ -1992,8 +1993,8 @@ threshold**): `lpi_max ≥ 1 J/kg` (≥ 5 counts 2) · `w_ctmax ≥ 10 m/s` ·
 
 These are **calibration starting points, not physical constants** — revisit
 against the #462 validation cases (2026-06-27 EGTF→LFAT→LFQA, 2026-06-21
-LFMD→EGTF hits; stratiform bright-band and winter graupel-shower quiet
-controls). `|uh_max| ≥ 25 m²/s²` is a rotation/character **note only** in v1 —
+LFMD→EGTF hits; stratiform bright-band quiet controls). `|uh_max| ≥ 25 m²/s²`
+is a rotation/character **note only** in v1 —
 HRRR updraft-helicity thresholds are NOT portable (2–8 km layer here vs
 HRRR's 2–5 km).
 
@@ -2030,12 +2031,9 @@ HRRR's 2–5 km).
    core", including the `_severity_modifiers` freezing-level+CAPE heuristic,
    which is rephrased on the explicit track (its "hail risk" string is a
    parameterized-era proxy; D2's mixed-phase signal does not discriminate
-   hail). De-accumulation uses the **on-the-hour** since-init messages only
-   (the quarter-hour accumulations in the same file are never mixed in), and
-   is **per cell, then corridor max** (diff-then-reduce): differencing two
-   independently-reduced corridor maxima understates whenever the
-   max-holding cell shifts between hours — a moving cell's real hourly peak
-   would vanish from the corroborator count (PR #463 review).
+   hail). This wording rule stays even though the `grau_gsp` corroborator
+   itself was dropped in #468 (below): the freezing-level+CAPE modifier is
+   thermodynamic, not tied to any graupel channel.
 5. **None ≠ 0 (#421), per tier.** Completeness means "valid unmasked corridor
    cells decoded", not "file downloaded": an all-masked corridor is
    UNAVAILABLE; a −150 dBZ encoder floor is genuinely QUIET (normalized to
@@ -2073,10 +2071,13 @@ HRRR's 2–5 km).
   alarms. Hence the corroborated middle rows and the C0 no-fire band.
 - **dbz_cmax (instantaneous) as the core field** — a brief core between hourly
   samples would be missed; the hour-max `dbz_ctmax` is the firing signal
-  (dbz_cmax left unfetched in v1). Same reasoning prefers accumulated
-  `grau_gsp` over instantaneous `prg_gsp`.
+  (dbz_cmax left unfetched in v1).
 - **`tcond10_mx`** — deferred from v1 (no payload field); the "10" is the
-  −10 °C isotherm, not 10 g/kg — revisit with calibration.
+  −10 °C isotherm, not 10 g/kg — revisit with calibration. Now the leading
+  candidate to *replace* the dropped `grau_gsp` corroborator (#468 below):
+  column condensate above the −10 °C isotherm is the mixed-phase-core column
+  property, and unlike surface graupel it co-locates with the reflectivity
+  cores.
 - **Sharing the cloud-diag cache blob + V2→V3 key bump** (the issue's sketch)
   — the explicit fields live in **per-variable blobs** with their own key
   (`ICON_D2_EXPL_<VAR>_V1`) instead: the decoder must know which physical
@@ -2117,3 +2118,53 @@ defeated the mask gate outright: the gate compares valid-cell against
 all-cell counts inside the buffer, and at the boundary both gathers clip
 identically, so they can never disagree. `_d2_corridor_window` now requires
 the whole buffer to lie inside the grid extent before either check runs.
+
+### Update (#468): `grau_gsp` dropped from the corroborator set
+
+**Date:** 2026-07-21
+**Status:** Implemented (#468, amends the §19 v1 table above).
+**Context:** The first live run of the explicit-convection track against real
+DWD data (#467) showed `grau_gsp` reads ~always 0 on a warm-season route
+corridor.
+
+`grau_gsp` (shortName `tgrp`, paramId 231040) is **surface graupel
+precipitation** — snow pellets that reach the ground — a `stepType=accum`
+SURFACE field, not the **column** mixed-phase-core property #462 specified it
+as. Nearly every deep convective core is graupel-laden aloft, but surface
+graupel needs the pellets to survive the fall without melting, which in
+warm-season convection they almost never do. Measured over the ESMX→EKRK
+corridor (same valid time, three independent runs): hundreds of ≥45 dBZ cells
+with LPI to 89 J/kg and updrafts to 23 m/s, and **exactly zero** surface
+graupel at those cells. Where the field *is* nonzero it is tiny and orographic
+(0.05 % of the domain, median 0.017 mm, clustered at 45.9–47.5°N over the
+Alps) — a terrain confound, not a corridor-storm signal.
+
+Consequences of leaving it in:
+- The graupel corroborator could never realistically fire on a route corridor,
+  so `|C|` effectively topped out at 3 (LPI ≤ 2, updraft, ML-CAPE) not 5, and
+  where it *could* fire it was Alpine-biased.
+- `strength_complete` was misleading: a valid `0.0` satisfied it, so the
+  payload reported a healthy corroborator tier built partly on a channel that
+  carries no usable information here.
+- The error direction is toward **under-warning**, concentrated in the 35–44
+  dBZ band where corroborators decide NONE / MARGINAL / MODERATE. At ≥ 50 dBZ
+  nothing changes (dBZ alone gives HIGH), which is why the live ESMX→EKRK case
+  still graded correctly and this stayed invisible to the tests (synthetic
+  fixtures supplied their own graupel values).
+
+**Decision.** Drop `grau_gsp` from `ICON_D2_EXPLICIT_CONV_VARIABLES` and from
+the corroborator set; redefine `strength_complete` as `lpi_max + w_ctmax` both
+valid. This removes a provably wrong input rather than recalibrating — but it
+does alter `|C|`, so it lands as its own logged decision (related: #466
+corroborator recalibration, #467 validation matrix). The whole `grau_gsp`
+fetch / per-cell de-accumulation / decode machinery (`grau_gsp_cells`,
+`icon_d2_hourly_graupel_mm`, `_d2_corridor_cell_map`, the `graupel_hour_mm`
+payload field) is removed with it, so the tidy diff-then-reduce de-accumulation
+described in the old rule 4 no longer exists. Bandwidth was **not** the
+argument: `grau_gsp` is ~1.3 % of a D2 run's download.
+
+**Follow-up (not done here):** evaluate `tcond10_mx` (column condensate above
+the −10 °C isotherm) as the replacement corroborator — it is the column
+mixed-phase quantity #462 wanted and will co-locate with the reflectivity
+cores. It must clear the same three-run corridor test above before being wired
+in, so it is deferred pending calibration.

@@ -71,7 +71,7 @@ class IconVariant:
             convection parameterization, so ``hbas_con``/``htop_con``/``rain_con``
             don't exist (or are meaningless) on its feed — see the D2 tuple below.
         explicit_conv_variables: Explicit-convection storm diagnostics (#462) —
-            reflectivity, echo top, LPI, updraft, updraft helicity, graupel.
+            reflectivity, echo top, LPI, updraft, updraft helicity.
             Only convection-permitting variants (D2) publish these; empty for
             EU. Fetched into their OWN per-variable cache blobs (not the shared
             cloud-diag blob) because several are multi-message sub-hourly files
@@ -107,8 +107,8 @@ class IconVariant:
 
         Two independent reasons (#421 / #462), one variant-level flag so the
         prefetch and enrichment loops can't drift apart:
-        - an accumulated-since-init field (``rain_con`` on EU, ``grau_gsp`` on
-          D2) needs the previous step to de-accumulate the first hour's value;
+        - an accumulated-since-init field (``rain_con`` on EU) needs the
+          previous step to de-accumulate the first hour's value;
         - the D2 hourly echo top is constructed from four 15-min windows, three
           of which live in file f(H−1) (see #462 sub-hourly message structure).
         """
@@ -171,16 +171,22 @@ ICON_D2_CLOUD_DIAG_VARIABLES = (
 # - w_ctmax — max updraft 0–10 km over previous hour (m/s).
 # - uh_max — updraft helicity 2–8 km AGL, SIGNED max amplitude (m²/s²).
 #   Narrative/character only in v1 (HRRR 2–5 km thresholds NOT portable).
-# - grau_gsp — grid-scale graupel, kg/m² ≡ mm, ACCUMULATED since init; one
-#   on-the-hour message + three quarter-hour messages per file. De-accumulated
-#   from the ON-THE-HOUR messages only (rain_con machinery precedent, #421).
+# grau_gsp (surface graupel precipitation, tgrp/231040) was DROPPED from v1
+# (#468): despite the name it is a SURFACE accumulation — snow pellets that
+# survive the fall to ground — NOT the column mixed-phase-core property #462
+# intended it as. It reads ~always 0 under warm-season route-corridor cores
+# (graupel almost never survives to sea level in July) and is nonzero only over
+# Alpine terrain, so it can never realistically corroborate a corridor storm.
 # dbz_cmax (instantaneous) and tcond10_mx are deliberately NOT fetched in v1
-# (optional per #462; tcond10_mx deferred pending calibration). These fields
-# are fetched into per-variable cache blobs (see icon_explicit_conv_cache_key)
-# and decoded with message-level stepRange selection — NOT via the shared
-# cloud-diag cfgrib path, whose blob/decode assumes one message per variable.
+# (optional per #462). tcond10_mx — column condensate above the −10 °C isotherm
+# — IS the column mixed-phase quantity grau_gsp was meant to be, and is the
+# candidate corroborator replacement (#468), deferred pending calibration and
+# corridor validation. These fields are fetched into per-variable cache blobs
+# (see icon_explicit_conv_cache_key) and decoded with message-level stepRange
+# selection — NOT via the shared cloud-diag cfgrib path, whose blob/decode
+# assumes one message per variable.
 ICON_D2_EXPLICIT_CONV_VARIABLES = (
-    "dbz_ctmax", "echotop", "lpi_max", "w_ctmax", "uh_max", "grau_gsp",
+    "dbz_ctmax", "echotop", "lpi_max", "w_ctmax", "uh_max",
 )
 
 
@@ -708,42 +714,6 @@ def icon_eu_conv_rain_rate_mm_h(
     if rain_con is None or prev_rain_con is None or window_h is None or window_h <= 0:
         return None
     return max(0.0, (rain_con - prev_rain_con) / window_h)
-
-
-def icon_d2_hourly_graupel_mm(
-    cells: dict | None,
-    prev_cells: dict | None,
-    window_h: float | None,
-) -> float | None:
-    """De-accumulate per-cell ``grau_gsp`` into a corridor-max hourly value (mm).
-
-    Each input maps a corridor grid cell (keyed by grid index) to its
-    since-init accumulation at the current / previous on-the-hour step. The
-    hourly value is the **corridor max of the per-cell deltas** — diff first,
-    reduce second: differencing two independently-reduced corridor maxima
-    understates whenever the cell holding the running maximum shifts between
-    hours (a moving cell's real hourly peak would vanish, #463 review). Cells
-    without a predecessor value (fresh in the corridor decode) can't be
-    differenced and are skipped; no common cells → ``None``.
-
-    Units: kg/m² ≡ mm — already mm, NO ×1000 (that conversion is only for
-    ECMWF metre-water-equivalent fields). The window must be exactly one hour
-    — D2 is hourly, so any other window means a step went missing and
-    differencing across it would silently average a multi-hour delta into one
-    "hour"; unknown (``None``) is the honest value then. Per-cell deltas are
-    clamped at 0 (a decreasing accumulation is a new-run/GRIB glitch, not
-    negative graupel). Same None ≠ 0 contract as
-    :func:`icon_eu_conv_rain_rate_mm_h` (#421): a missing channel must never
-    read as a real dry hour.
-    """
-    if not cells or not prev_cells or window_h is None:
-        return None
-    if abs(window_h - 1.0) > 1e-6:
-        return None
-    common = cells.keys() & prev_cells.keys()
-    if not common:
-        return None
-    return max(max(0.0, cells[k] - prev_cells[k]) for k in common)
 
 
 def compute_icon_eu_flight_window_hours(

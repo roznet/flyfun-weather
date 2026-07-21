@@ -192,8 +192,6 @@ class NWPExplicitConvectiveDiagnostics(BaseModel):
       reflectivity > 18 dBZ. It sits BELOW the physical storm top (anvil ice
       reflects weakly) and must NEVER be used as a cloud top — in particular
       never for overfly-clearance decisions. Depth/character only.
-    - ``graupel_hour_mm`` is graupel (a strong mixed-phase core indicator) —
-      wording is never "hail".
     - ``None`` ≠ 0 (#421): a ``None`` channel is unknown; the completeness
       flags below say whether ``None`` reflectivity/echo-top means "quiet"
       (channel complete, no echo) or "unavailable" (channel failed).
@@ -210,10 +208,9 @@ class NWPExplicitConvectiveDiagnostics(BaseModel):
     lightning_potential_hour_max_jkg: Optional[float] = None  # lpi_max
     updraft_hour_max_ms: Optional[float] = None         # w_ctmax (0–10 km)
     updraft_helicity_2_8km_hour_max_m2s2: Optional[float] = None  # uh_max, SIGNED (corridor argmax |uh|)
-    graupel_hour_mm: Optional[float] = None             # grau_gsp hourly accumulation (on-the-hour de-accumulation)
 
     detection_complete: bool = False   # dbz_ctmax valid over the corridor this hour
-    strength_complete: bool = False    # lpi_max + w_ctmax + graupel all valid
+    strength_complete: bool = False    # lpi_max + w_ctmax both valid
     echo_top_complete: bool = False    # all 4 quarter windows present and valid
 
 
