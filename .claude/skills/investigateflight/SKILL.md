@@ -179,9 +179,23 @@ result = run_advisories_from_pack(
     enabled_ids={"icing_escape", "convective"},  # optional: specific evaluators
     user_params={"icing_escape": {"threshold_ft": 4000}},  # optional: tuned params
     aggregation=AdvisoryAggregation.WORST,
+    persist=False,   # ALWAYS when investigating — see warning below
 )
-# result is a RouteAdvisoriesManifest
+# result.manifest is the RouteAdvisoriesManifest
 ```
+
+> ⚠️ **`persist=False` is not optional here.** The default is `persist=True`, which
+> **overwrites `route_advisories.json` in the pack you are investigating** — and when
+> combined with `enabled_ids` it writes back a manifest containing *only* those
+> evaluators, silently discarding the rest of the saved results. The default is correct
+> for its production caller (the API recalculate endpoint, where the pack is *meant* to
+> track the user's current advisory selection), but it is wrong for every debugging use.
+> `eval_workbench/rerun.py` passes `persist=False` for the same reason: a "what changed"
+> comparison must never clobber the baseline it is comparing against.
+>
+> The same applies to any investigation helper that takes a `pack_dir` — check whether it
+> writes before you run it on a real pack. Prefer copying the pack to `data/packs/debug/`
+> first if you are unsure.
 
 ### C. Inspect sounding analysis at a specific point
 
@@ -467,6 +481,15 @@ Pattern: `/api/flights/{flight_id}/packs/{timestamp}/{resource}` (use `latest` f
 | `model_agreement` | Other | Cross-model divergence |
 
 ## Common pitfalls (field names & nullability)
+
+The first one below silently destroys data rather than erroring — the rest cause
+runtime errors:
+
+- **`run_advisories_from_pack` writes to the pack unless you pass `persist=False`** (see
+  step 5B). With `enabled_ids` it replaces the saved manifest with only those evaluators.
+  Investigation must never mutate the artifact it is investigating.
+- **`AdvisoryResult` is not the manifest** — use `result.manifest.advisories`, not
+  `result.advisories`.
 
 These are the mistakes most likely to cause runtime errors during investigation:
 
