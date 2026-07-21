@@ -131,7 +131,7 @@ class TestD2HorizonAndGrid:
         assert (ICON_D2.level_min, ICON_D2.level_max) == (16, 65)
         assert ICON_D2.slug == "icon-d2"
         assert ICON_D2.source_key == "icon_d2:dwd"
-        assert icon_cloud_diag_cache_key(ICON_D2) == "ICON_D2_CLOUD_DIAG_V2"
+        assert icon_cloud_diag_cache_key(ICON_D2) == "ICON_D2_CLOUD_DIAG_V3"
         assert icon_cloud_diag_cache_key(ICON_EU) == "ICON_EU_CLOUD_DIAG_V2"
 
     def test_d2_diag_list_drops_parameterized_convection_fields(self):
@@ -147,6 +147,12 @@ class TestD2HorizonAndGrid:
         for var in ("ceiling", "clcl", "clcm", "clch", "clct", "cape_ml", "cin_ml"):
             assert var in ICON_D2.cloud_diag_variables
             assert var in ICON_EU.cloud_diag_variables
+        for var in (
+            "dbz_ctmax", "dbz_cmax", "echotop", "lpi_max", "w_ctmax",
+            "uh_max", "grau_gsp",
+        ):
+            assert var in ICON_D2.cloud_diag_variables
+            assert var not in ICON_EU.cloud_diag_variables
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +214,9 @@ class TestPrepareIconVariantSelection:
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
             self._run_finder(d2_run=("20260720", 12), eu_run=("20260720", 12)),
+        ), patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.route_in_icon_d2_product_mask",
+            return_value=True,
         ):
             ctx, skip = _prepare_icon_eu(
                 self._icon_cross_sections(), route, dep,
@@ -226,6 +235,9 @@ class TestPrepareIconVariantSelection:
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
             self._run_finder(d2_run=("20260720", 12), eu_run=("20260720", 12)),
+        ), patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.route_in_icon_d2_product_mask",
+            return_value=True,
         ):
             ctx, skip = _prepare_icon_eu(
                 self._icon_cross_sections(), route, dep,
@@ -245,6 +257,29 @@ class TestPrepareIconVariantSelection:
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
             self._run_finder(d2_run=None, eu_run=("20260720", 12)),
+        ), patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.route_in_icon_d2_product_mask",
+            return_value=True,
+        ):
+            ctx, skip = _prepare_icon_eu(
+                self._icon_cross_sections(), route, dep,
+                data_dir=tmp_path, flight_duration_hours=2.0,
+            )
+        assert skip is None
+        assert ctx is not None
+        assert ctx.variant is ICON_EU
+
+    def test_falls_back_to_eu_when_corridor_clips_delivered_mask(self, tmp_path):
+        from weatherbrief.fetch.grib import _prepare_icon_eu
+
+        route = [_rp(48.35, 11.79), _rp(52.52, 13.4, 300)]
+        dep = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+        with patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
+            self._run_finder(d2_run=("20260720", 12), eu_run=("20260720", 12)),
+        ), patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.route_in_icon_d2_product_mask",
+            return_value=False,
         ):
             ctx, skip = _prepare_icon_eu(
                 self._icon_cross_sections(), route, dep,
@@ -262,6 +297,9 @@ class TestPrepareIconVariantSelection:
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
             self._run_finder(d2_run=("20260720", 12), eu_run=("20260720", 12)),
+        ), patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.route_in_icon_d2_product_mask",
+            return_value=True,
         ):
             ctx, skip = _prepare_icon_eu(
                 self._icon_cross_sections(), route, dep,
@@ -301,6 +339,47 @@ def test_icon_d2_readiness_dispatch_registered():
     from weatherbrief.fetch.freshness.sources import _DISPATCH, _check_icon_d2_dwd
 
     assert _DISPATCH["icon_d2_dwd"] is _check_icon_d2_dwd
+
+
+def test_total_d2_failure_reruns_cleanly_on_icon_eu(monkeypatch, tmp_path):
+    """Deferred #461 review case: no D2 enrichment triggers a full EU retry."""
+    from types import SimpleNamespace
+
+    import weatherbrief.fetch.grib as grib_mod
+
+    d2_ctx = SimpleNamespace(variant=ICON_D2)
+    eu_ctx = SimpleNamespace(variant=ICON_EU)
+    prepared: list[object | None] = []
+    prefetched: list[str] = []
+    decoded: list[str] = []
+
+    def fake_prepare(*args, force_variant=None, **kwargs):
+        prepared.append(force_variant)
+        return (eu_ctx, None) if force_variant is ICON_EU else (d2_ctx, None)
+
+    def fake_decode(ctx, *args):
+        decoded.append(ctx.variant.slug)
+        return (None, None) if ctx.variant is ICON_D2 else (1234567890, None)
+
+    monkeypatch.setattr(grib_mod, "_prepare_icon_eu", fake_prepare)
+    monkeypatch.setattr(
+        grib_mod, "_prefetch_icon_eu_data",
+        lambda ctx: prefetched.append(ctx.variant.slug),
+    )
+    monkeypatch.setattr(grib_mod, "_decode_and_merge_icon_eu", fake_decode)
+    monkeypatch.setattr(grib_mod, "_enrich_gfs", lambda *a, **k: None)
+    monkeypatch.setattr(grib_mod, "_enrich_ecmwf", lambda *a, **k: None)
+
+    _, _, sources = grib_mod._enrich_forecasts_inner(
+        grib_mod._GribTimer(), [], [], [],
+        datetime(2026, 7, 20, 12, tzinfo=timezone.utc),
+        data_dir=tmp_path,
+    )
+
+    assert prepared == [None, ICON_EU]
+    assert prefetched == ["icon-d2", "icon-eu"]
+    assert decoded == ["icon-d2", "icon-eu"]
+    assert sources["icon"] == "icon_eu:dwd"
 
 
 def _utc(y, mo, d, h=0):

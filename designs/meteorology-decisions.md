@@ -1958,3 +1958,46 @@ follow-up:
 - Watch for any all-quiet-NWP sounding that *did* produce observed convection
   (lightning/METAR-TS) — that is the case the removed floor was protecting, and
   the one that would argue for a narrower cap.
+
+---
+
+## 19. ICON-D2 explicit convection: storm-process vs environment corroborators (#462)
+
+**Date:** 2026-07-21
+**Status:** Implemented (#462).
+**Context:** After #461 sourced the `icon` slot from convection-permitting
+ICON-D2 (dropping parameterized `hbas_con`/`htop_con`/`rain_con`), #462 builds
+the replacement track from explicit storm fields (`dbz_ctmax`, `lpi_max`,
+`w_ctmax`, `grau_gsp`, constructed hourly `echotop`). The issue's v1 decision
+table counted LPI, updraft, graupel, **and** ML-CAPE as independent
+corroborators. Two meteorology problems:
+
+1. **LPI already embeds updraft² × graupel** (Lynn & Yair / DWD LPI). Counting
+   `lpi_max`, `w_ctmax`, and `grau_gsp` as three votes triple-counts one
+   mixed-phase updraft.
+2. **CAPE is environment, not storm process.** A 35–44 dBZ bright band over a
+   primed sounding would upgrade to MARGINAL on CAPE alone — exactly the
+   stratiform false-alarm the quiet-control matrix is meant to catch.
+
+### The decision
+
+- **Firing core:** corridor-max `dbz_ctmax` over `(valid_hour−1, valid_hour]`.
+- **Storm-process corroborators (|C|):** LPI is primary (≥1 → 1, ≥5 → 2). When
+  LPI is missing/below floor, `w_ctmax ≥ 10` and `graupel ≥ 0.5 mm` may each
+  *substitute* (count 1). When LPI is present, w/graupel are narrative detail
+  only — not additive.
+- **CAPE / UH:** narrative only after (or beside) a fire — never upgrade the
+  35–44 band alone. Wording: "graupel / mixed-phase core", never "hail".
+- **Echo top:** `echo_top_18dbz_ft` is character only; `top_ft=None` on
+  `method="nwp_explicit"` so overfly clearance cannot treat it as a cloud top.
+- **Incomplete detection:** assessment with `native_data_complete=False` stays
+  in the NWP slot (not CAPE fallback, not "scheme quiet" for #178/#442
+  cross-check).
+
+Rejected alternatives: (a) issue draft's four-way |C| including CAPE; (b)
+mapping `echotop` into `htop_con` consumers; (c) centreline bilinear sampling
+of 2.2 km extrema (cells between route points vanish).
+
+Aggregation when a lone D2 cell faces quiet coarse models remains an open
+#442 decision — do not silently majority-vote it away; make the per-model D2
+RED visible in details regardless.

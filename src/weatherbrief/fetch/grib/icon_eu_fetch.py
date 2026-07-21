@@ -29,6 +29,7 @@ from __future__ import annotations
 import bz2
 import logging
 import math
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,9 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 logger = logging.getLogger(__name__)
+
+_D2_DOMAIN_MASK_BYTES: dict[tuple[str, int], bytes] = {}
+_D2_DOMAIN_MASK_LOCK = threading.Lock()
 
 # DWD Open Data base URL (ICON-EU). ICON-D2 lives under a sibling path — see
 # the ``base_url`` field on each :class:`IconVariant` below.
@@ -70,6 +74,9 @@ class IconVariant:
             this variant. NOT identical between variants: ICON-D2 has no deep-
             convection parameterization, so ``hbas_con``/``htop_con``/``rain_con``
             don't exist (or are meaningless) on its feed — see the D2 tuple below.
+        cloud_diag_cache_version: Blob schema version for this variant.
+        cloud_diag_needs_predecessor: Fetch one leading single-level step for
+            accumulated or cross-file interval diagnostics.
     """
 
     slug: str
@@ -93,6 +100,8 @@ class IconVariant:
     hourly_to_h: int
     coarse_step_h: int
     cloud_diag_variables: tuple[str, ...]
+    cloud_diag_cache_version: int
+    cloud_diag_needs_predecessor: bool
 
 
 # Single-level cloud diagnostic variables (ICON-EU).
@@ -128,11 +137,15 @@ ICON_EU_CLOUD_DIAG_VARIABLES = (
 # All three therefore stay ABSENT for D2 → downstream fields are None
 # (missing-data semantics, which icon_eu_conv_rain_rate_mm_h and the firing
 # gate already handle). Issue #462 replaces them with D2's convection-
-# permitting diagnostics (dbz_cmax, echotop, lpi, uh_max, prg_gsp).
+# permitting diagnostics.  These remain in the same downloaded blob for I/O
+# efficiency, but decode into NWPExplicitConvectiveDiagnostics, never into the
+# parameterized fields on NWPCloudDiagnostics (#462).
 ICON_D2_CLOUD_DIAG_VARIABLES = (
     "ceiling",
     "clcl", "clcm", "clch", "clct",
     "cape_ml", "cin_ml",
+    "dbz_ctmax", "dbz_cmax", "echotop", "lpi_max", "w_ctmax",
+    "uh_max", "grau_gsp",
 )
 
 
@@ -165,6 +178,8 @@ ICON_EU = IconVariant(
     hourly_to_h=78,
     coarse_step_h=3,
     cloud_diag_variables=ICON_EU_CLOUD_DIAG_VARIABLES,
+    cloud_diag_cache_version=2,
+    cloud_diag_needs_predecessor=True,
 )
 
 # ICON-D2: 2.2 km convection-permitting, central-Europe domain, 8 runs/day,
@@ -204,6 +219,8 @@ ICON_D2 = IconVariant(
     hourly_to_h=48,
     coarse_step_h=1,
     cloud_diag_variables=ICON_D2_CLOUD_DIAG_VARIABLES,
+    cloud_diag_cache_version=3,
+    cloud_diag_needs_predecessor=True,
 )
 
 # Back-compat module constants (ICON-EU). The variant above is the single
@@ -290,11 +307,13 @@ ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V2"
 def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     """Cache-key label for a variant's single-level cloud-diagnostic blob.
 
-    ``{cache_prefix}_CLOUD_DIAG_V2`` — the ``_V2`` suffix matches the ICON-EU
-    constant so the two share the same rain_con-inclusive schema; only the
-    prefix differs so ICON-D2 blobs never masquerade as ICON-EU in a cache dir.
+    Versioning is per variant: ICON-EU remains V2; ICON-D2 is V3 after adding
+    the explicit-convection message set in #462.
     """
-    return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
+    return (
+        f"{variant.cache_prefix}_CLOUD_DIAG_V"
+        f"{variant.cloud_diag_cache_version}"
+    )
 
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 8
@@ -369,6 +388,53 @@ def icon_eu_single_level_url(
         f"{variant.slug}_{variant.grid_label}_regular-lat-lon_single-level_"
         f"{init_date}{init_hour:02d}_{forecast_hour:03d}{segment}"
         f"{_icon_var_suffix(variable, variant)}.grib2.bz2"
+    )
+
+
+def icon_d2_domain_mask_url(init_date: str, init_hour: int) -> str:
+    """URL for the small invariant regular-grid surface-height coverage mask."""
+    return (
+        f"{ICON_D2.base_url}/{init_hour:02d}/hsurf/"
+        f"icon-d2_germany_regular-lat-lon_time-invariant_"
+        f"{init_date}{init_hour:02d}_000_0_hsurf.grib2.bz2"
+    )
+
+
+def route_in_icon_d2_product_mask(
+    route_points: list,
+    init_date: str,
+    init_hour: int,
+    *,
+    session: requests.Session | None = None,
+    corridor_radius_nm: float = 10.0,
+) -> bool:
+    """Gate D2 on its delivered bitmap, including the extraction corridor.
+
+    The regular-lat/lon product is a rectangular container with masked corners;
+    its GRIB template carries no rotated-pole metadata. HSurf is invariant and
+    small, so its bitmap is the authoritative coverage mask for the actual
+    delivered product rather than an inferred native-grid polygon.
+    """
+    from weatherbrief.fetch.grib.decode import decode_icon_d2_domain_coverage
+
+    key = (init_date, init_hour)
+    with _D2_DOMAIN_MASK_LOCK:
+        raw = _D2_DOMAIN_MASK_BYTES.get(key)
+    if raw is None:
+        downloaded, _status = _download_one_file(
+            icon_d2_domain_mask_url(init_date, init_hour),
+            session or requests.Session(),
+        )
+        if downloaded is None:
+            return False
+        raw = downloaded
+        with _D2_DOMAIN_MASK_LOCK:
+            _D2_DOMAIN_MASK_BYTES[key] = raw
+    return decode_icon_d2_domain_coverage(
+        raw,
+        [rp.lat for rp in route_points],
+        [rp.lon for rp in route_points],
+        corridor_radius_nm,
     )
 
 

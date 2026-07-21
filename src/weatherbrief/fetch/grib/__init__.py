@@ -50,6 +50,7 @@ from weatherbrief.models import (
     HourlyForecast,
     ModelSource,
     NWPCloudDiagnostics,
+    NWPExplicitConvectiveDiagnostics,
     RouteCrossSection,
     RoutePoint,
     WaypointForecast,
@@ -3073,6 +3074,7 @@ def _prepare_icon_eu(
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
         icon_eu_window_out_of_range,
+        route_in_icon_d2_product_mask,
         route_in_icon_eu_domain,
     )
 
@@ -3101,11 +3103,18 @@ def _prepare_icon_eu(
                 logger.warning("Failed to find ICON-D2 run; using ICON-EU", exc_info=True)
                 d2_run = None
             if d2_run is not None:
-                variant, run_info = ICON_D2, d2_run
-                logger.info(
-                    "ICON slot sourced from ICON-D2 (route in D2 domain, run %s %02dz)",
-                    d2_run[0], d2_run[1],
-                )
+                if route_in_icon_d2_product_mask(
+                    route_points, d2_run[0], d2_run[1], session=session,
+                ):
+                    variant, run_info = ICON_D2, d2_run
+                    logger.info(
+                        "ICON slot sourced from ICON-D2 (route corridor in delivered mask, run %s %02dz)",
+                        d2_run[0], d2_run[1],
+                    )
+                else:
+                    logger.info(
+                        "Route corridor clips ICON-D2 delivered mask; using ICON-EU"
+                    )
 
     if not route_in_icon_eu_domain(route_points, variant):
         logger.info("Route outside %s domain, skipping ICON enrichment", variant.slug)
@@ -3251,12 +3260,10 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
         if not is_cached(ctx.run_dir, diag_ck):
             jobs.append((_fetch_diag, fhour, diag_ck))
 
-    # One leading single-level step so the first window hour has a predecessor
-    # to de-accumulate rain_con against (#421). Cloud-diag fetch only — the
-    # model-level sounding list above is untouched. Skipped when the variant
-    # doesn't fetch rain_con (ICON-D2, #456/#462) — no accumulated field, no
-    # predecessor needed.
-    if ctx.forecast_hours and "rain_con" in variant.cloud_diag_variables:
+    # One leading single-level step for cross-file interval products. ICON-EU
+    # needs it for rain_con de-accumulation; ICON-D2 needs it both for graupel
+    # de-accumulation and the three pre-hour ECHOTOP quarters (#462).
+    if ctx.forecast_hours and variant.cloud_diag_needs_predecessor:
         lead = icon_eu_previous_step(min(ctx.forecast_hours), variant)
         if lead is not None and lead not in ctx.forecast_hours:
             lead_ck = cache_key(lead, diag_key)
@@ -3446,7 +3453,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     # _matches_valid_time never matches an out-of-window hourly, so it only
     # seeds the de-accumulation state.
     steps = sorted(set(forecast_hours))
-    if steps and "rain_con" in variant.cloud_diag_variables:
+    if steps and variant.cloud_diag_needs_predecessor:
         lead = icon_eu_previous_step(steps[0], variant)
         if lead is not None and lead not in steps:
             steps.insert(0, lead)
@@ -3487,6 +3494,64 @@ def _enrich_icon_eu_cloud_diagnostics(
         diagnostics_per_point = [build_icon_cloud_diagnostics(raw) for raw in decoded_points]
 
         valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+
+        explicit_per_point: list[NWPExplicitConvectiveDiagnostics] | None = None
+        if variant.slug == "icon-d2" and fhour in forecast_hours:
+            previous_fhour = icon_eu_previous_step(fhour, variant)
+            previous_path: str | None = None
+            if previous_fhour is not None:
+                previous_ck = cache_key(previous_fhour, diag_key)
+                if is_cached(run_dir, previous_ck):
+                    previous_path = str(run_dir / previous_ck)
+            with _grib_time("icon_d2_explicit_decode"):
+                explicit_raw = _dispatch_decode(
+                    "decode_icon_d2_explicit",
+                    str(cache_path), previous_path, fhour,
+                    point_lats, point_lons, 10.0,
+                )
+            from weatherbrief.models import pressure_pa_to_altitude_ft
+
+            explicit_per_point = []
+            for raw in explicit_raw:
+                dbz_hour = raw.get("reflectivity_hour_max_dbz")
+                dbz_instant = raw.get("reflectivity_instant_dbz")
+                echo_pa = raw.get("echo_top_18dbz_pressure_pa")
+                explicit_per_point.append(NWPExplicitConvectiveDiagnostics(
+                    reflectivity_hour_max_dbz=(
+                        float(dbz_hour)
+                        if isinstance(dbz_hour, (int, float)) and dbz_hour > -100.0
+                        else None
+                    ),
+                    reflectivity_instant_dbz=(
+                        float(dbz_instant)
+                        if isinstance(dbz_instant, (int, float)) and dbz_instant > -100.0
+                        else None
+                    ),
+                    echo_top_18dbz_ft=(
+                        pressure_pa_to_altitude_ft(float(echo_pa))
+                        if isinstance(echo_pa, (int, float)) and echo_pa > 0.0
+                        else None
+                    ),
+                    lightning_potential_hour_max_jkg=(
+                        float(raw["lightning_potential_hour_max_jkg"])
+                        if "lightning_potential_hour_max_jkg" in raw else None
+                    ),
+                    updraft_hour_max_ms=(
+                        float(raw["updraft_hour_max_ms"])
+                        if "updraft_hour_max_ms" in raw else None
+                    ),
+                    updraft_helicity_2_8km_hour_max_m2s2=(
+                        float(raw["updraft_helicity_2_8km_hour_max_m2s2"])
+                        if "updraft_helicity_2_8km_hour_max_m2s2" in raw else None
+                    ),
+                    graupel_hour_mm=(
+                        float(raw["graupel_hour_mm"])
+                        if "graupel_hour_mm" in raw else None
+                    ),
+                    detection_complete=bool(raw.get("detection_complete", False)),
+                    strength_complete=bool(raw.get("strength_complete", False)),
+                    echo_top_complete=bool(raw.get("echo_top_complete", False)),
+                ))
 
         # Convective precip rate (#421): rain_con is accumulated since init
         # (kg/m² ≡ mm), so difference it against the previous step and inject the
@@ -3549,37 +3614,81 @@ def _enrich_icon_eu_cloud_diagnostics(
                 if point_idx >= len(diagnostics_per_point):
                     break
                 diag = diagnostics_per_point[point_idx]
-                if diag is None:
-                    continue
                 for hourly in wf.hourly:
                     if not _matches_valid_time(hourly.time, valid_utc):
                         continue
-                    if hourly.nwp_cloud_diagnostics is None:
+                    if diag is not None and hourly.nwp_cloud_diagnostics is None:
                         _apply_cloud_diagnostics(hourly, diag)
                         total_enriched += 1
+                    if explicit_per_point is not None:
+                        hourly.explicit_convective_diagnostics = explicit_per_point[point_idx]
 
         # Also enrich waypoint-only forecasts
         wp_diag_lookup: dict[str, NWPCloudDiagnostics] = {}
-        for rp, diag in zip(route_points, diagnostics_per_point):
+        wp_explicit_lookup: dict[str, NWPExplicitConvectiveDiagnostics] = {}
+        for point_idx, (rp, diag) in enumerate(zip(route_points, diagnostics_per_point)):
             if rp.waypoint_icao and diag is not None:
                 wp_diag_lookup[rp.waypoint_icao] = diag
+            if (
+                rp.waypoint_icao
+                and explicit_per_point is not None
+                and point_idx < len(explicit_per_point)
+            ):
+                wp_explicit_lookup[rp.waypoint_icao] = explicit_per_point[point_idx]
 
         for wf in all_forecasts:
             if wf.model.value != "icon":
                 continue
             diag = wp_diag_lookup.get(wf.waypoint.icao)
-            if diag is None:
+            explicit = wp_explicit_lookup.get(wf.waypoint.icao)
+            if diag is None and explicit is None:
                 continue
             for hourly in wf.hourly:
                 if not _matches_valid_time(hourly.time, valid_utc):
                     continue
-                if hourly.nwp_cloud_diagnostics is None:
+                if diag is not None and hourly.nwp_cloud_diagnostics is None:
                     _apply_cloud_diagnostics(hourly, diag)
+                if explicit is not None:
+                    hourly.explicit_convective_diagnostics = explicit
 
         del decoded_points
         del diagnostics_per_point
+        if explicit_per_point is not None:
+            del explicit_per_point
         del wp_diag_lookup
+        del wp_explicit_lookup
         _grib_gc()
+
+    # Preserve explicit-mode provenance even when the D2 diagnostic blob for a
+    # particular hour failed completely. Without this marker, a forward-filled
+    # cloud-cover object could be misread as a quiet parameterized-convection
+    # assessment even though D2 has no deep-convection scheme.
+    if variant.slug == "icon-d2":
+        requested_valid_times = {
+            _forecast_hour_to_utc(init_date, init_hour, fh)
+            for fh in forecast_hours
+        }
+        for cs in icon_sections:
+            for wf in cs.point_forecasts:
+                for hourly in wf.hourly:
+                    if (
+                        any(_matches_valid_time(hourly.time, vt) for vt in requested_valid_times)
+                        and hourly.explicit_convective_diagnostics is None
+                    ):
+                        hourly.explicit_convective_diagnostics = (
+                            NWPExplicitConvectiveDiagnostics()
+                        )
+        for wf in all_forecasts:
+            if wf.model.value != "icon":
+                continue
+            for hourly in wf.hourly:
+                if (
+                    any(_matches_valid_time(hourly.time, vt) for vt in requested_valid_times)
+                    and hourly.explicit_convective_diagnostics is None
+                ):
+                    hourly.explicit_convective_diagnostics = (
+                        NWPExplicitConvectiveDiagnostics()
+                    )
 
     if total_enriched:
         logger.info(

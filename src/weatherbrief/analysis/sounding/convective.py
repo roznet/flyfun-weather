@@ -15,6 +15,7 @@ from weatherbrief.models import (
     ConvectiveRegime,
     ConvectiveRisk,
     NWPCloudDiagnostics,
+    NWPExplicitConvectiveDiagnostics,
     ThermodynamicIndices,
 )
 
@@ -891,6 +892,167 @@ def assess_convective_nwp(
     )
 
 
+def _explicit_storm_corroboration(
+    diagnostics: NWPExplicitConvectiveDiagnostics,
+    nwp_diagnostics: NWPCloudDiagnostics | None,
+) -> tuple[int, list[str], list[str]]:
+    """Count storm-process corroborators for the D2 decision table (#462).
+
+    LPI already embeds updraft² weighted by graupel in the charging zone, so
+    LPI and (w_ctmax, grau_gsp) are one physical family — not three independent
+    votes. When LPI is usable it is the primary corroborator (weight 2 at
+    ≥5 J/kg); w/graupel become narrative detail only. When LPI is missing or
+    below floor, w and graupel may each substitute as one count.
+
+    CAPE is environment only — never counted toward |C|. Counting it would let
+    a bright-band 35–44 dBZ echo + unstable sounding narrate as a thunderstorm.
+    """
+    corroborators: list[str] = []
+    narrative: list[str] = []
+    count = 0
+
+    lpi = diagnostics.lightning_potential_hour_max_jkg
+    updraft = diagnostics.updraft_hour_max_ms
+    graupel = diagnostics.graupel_hour_mm
+
+    if lpi is not None and lpi >= 1.0:
+        count += 2 if lpi >= 5.0 else 1
+        corroborators.append(f"LPI {lpi:.1f} J/kg")
+        if updraft is not None and updraft >= 10.0:
+            narrative.append(f"updraft {updraft:.1f} m/s")
+        if graupel is not None and graupel >= 0.5:
+            narrative.append(f"graupel / mixed-phase core {graupel:.1f} mm/h")
+    else:
+        if updraft is not None and updraft >= 10.0:
+            count += 1
+            corroborators.append(f"updraft {updraft:.1f} m/s")
+        if graupel is not None and graupel >= 0.5:
+            count += 1
+            corroborators.append(f"graupel / mixed-phase core {graupel:.1f} mm/h")
+
+    model_ml_cape = nwp_diagnostics.ml_cape_jkg if nwp_diagnostics else None
+    if model_ml_cape is not None and model_ml_cape >= 500.0:
+        narrative.append(f"ML-CAPE {model_ml_cape:.0f} J/kg (environment)")
+
+    uh = diagnostics.updraft_helicity_2_8km_hour_max_m2s2
+    if uh is not None and abs(uh) >= 25.0:
+        narrative.append(f"updraft helicity {uh:.0f} m²/s² (rotation character)")
+
+    return count, corroborators, narrative
+
+
+def assess_convective_explicit(
+    indices: ThermodynamicIndices,
+    diagnostics: NWPExplicitConvectiveDiagnostics,
+    nwp_diagnostics: NWPCloudDiagnostics | None = None,
+) -> ConvectiveAssessment:
+    """Map ICON-D2 explicit-storm evidence onto the shared risk vocabulary.
+
+    This is intentionally separate from :func:`assess_convective_nwp`: D2's
+    reflectivity/updraft fields describe explicitly resolved convection, not a
+    deep-convection parameterization.
+
+    Incomplete detection (``detection_complete=False``) returns an assessment
+    with ``native_data_complete=False`` and risk NONE — never a quiet-scheme
+    claim, never a CAPE fallback presented as D2's explicit verdict. Callers
+    must keep this object in the NWP slot so resolution does not silently swap
+    to thermo. Cross-check treats incomplete as neither quiet nor active.
+    """
+    cape = _effective_cape(indices)
+    lpi = diagnostics.lightning_potential_hour_max_jkg
+    updraft = diagnostics.updraft_hour_max_ms
+    graupel = diagnostics.graupel_hour_mm
+    uh = diagnostics.updraft_helicity_2_8km_hour_max_m2s2
+    dbz = diagnostics.reflectivity_hour_max_dbz
+
+    base_kwargs = dict(
+        cape_jkg=cape,
+        cin_jkg=indices.cin_surface_jkg,
+        lcl_altitude_ft=indices.lcl_altitude_ft,
+        lfc_altitude_ft=indices.lfc_altitude_ft,
+        el_altitude_ft=indices.el_altitude_ft,
+        bulk_shear_0_6km_kt=indices.bulk_shear_0_6km_kt,
+        lifted_index=indices.lifted_index,
+        k_index=indices.k_index,
+        total_totals=indices.total_totals,
+        severe_modifiers=_severity_modifiers(indices, cape),
+        base_ft=None,
+        top_ft=None,
+        cover_pct=None,
+        method="nwp_explicit",
+        source=diagnostics.source,
+        reflectivity_hour_max_dbz=dbz,
+        echo_top_18dbz_ft=diagnostics.echo_top_18dbz_ft,
+        lightning_potential_hour_max_jkg=lpi,
+        updraft_hour_max_ms=updraft,
+        updraft_helicity_2_8km_hour_max_m2s2=uh,
+        graupel_hour_mm=graupel,
+    )
+
+    if not diagnostics.detection_complete:
+        return ConvectiveAssessment(
+            risk_level=ConvectiveRisk.NONE,
+            drivers=[],
+            suppressors=[
+                "ICON-D2 explicit-convection assessment unavailable "
+                "(detection channel incomplete over the corridor)"
+            ],
+            native_data_complete=False,
+            **base_kwargs,
+        )
+
+    dbz_for_table = dbz if dbz is not None else float("-inf")
+    corroborator_count, corroborators, narrative = _explicit_storm_corroboration(
+        diagnostics, nwp_diagnostics,
+    )
+
+    if dbz_for_table < 35.0:
+        risk = ConvectiveRisk.NONE
+    elif dbz_for_table < 45.0:
+        # 35–44 requires a storm-process corroborator (not CAPE alone).
+        if corroborator_count == 0:
+            risk = ConvectiveRisk.NONE
+        elif corroborator_count == 1:
+            risk = ConvectiveRisk.MARGINAL
+        else:
+            risk = ConvectiveRisk.MODERATE
+    elif dbz_for_table < 50.0:
+        risk = (
+            ConvectiveRisk.HIGH
+            if corroborator_count >= 2
+            else ConvectiveRisk.MODERATE
+        )
+    else:
+        risk = ConvectiveRisk.HIGH
+
+    drivers: list[str] = []
+    suppressors: list[str] = []
+    if dbz is not None:
+        drivers.append(f"ICON-D2 hourly corridor reflectivity {dbz:.0f} dBZ")
+    if corroborators:
+        drivers.append("Explicit-storm corroboration: " + ", ".join(corroborators))
+    if narrative:
+        drivers.append("Explicit-storm detail: " + ", ".join(narrative))
+    if 35.0 <= dbz_for_table < 45.0 and corroborator_count == 0:
+        suppressors.append(
+            "35–44 dBZ echo without storm-process corroboration; "
+            "likely stratiform or melting-band enhancement"
+        )
+    if diagnostics.echo_top_18dbz_ft is not None and diagnostics.echo_top_complete:
+        drivers.append(
+            f"18 dBZ echo top ~{diagnostics.echo_top_18dbz_ft:.0f} ft "
+            "(character only — not a cloud top for clearance)"
+        )
+
+    return ConvectiveAssessment(
+        risk_level=risk,
+        drivers=drivers,
+        suppressors=suppressors,
+        native_data_complete=True,
+        **base_kwargs,
+    )
+
+
 # Convective DD-vs-model cross-check thresholds (tunable module constants).
 # These gate the "does the model's own convective scheme corroborate the DD
 # (CAPE-derived) risk" signal surfaced in the advisory popup and LLM digest.
@@ -947,6 +1109,44 @@ def convective_cross_check(
         # itself. Skip it — same reasoning the dd_nwp_agreement convective block
         # used before it was removed. (#283 review) Reachable when a diagnostic
         # carries only stability indices (ml_cape/kx/...) and no cloud content.
+        return None
+
+    if nwp.method == "nwp_explicit":
+        explicit_active = nwp.risk_level != ConvectiveRisk.NONE
+        explicit_quiet = (
+            nwp.native_data_complete is True
+            and nwp.risk_level == ConvectiveRisk.NONE
+        )
+        thermo_high = _RISK_LEVELS.index(thermo.risk_level) >= _RISK_LEVELS.index(
+            ConvectiveRisk.MODERATE
+        )
+        thermo_low = thermo.risk_level in (
+            ConvectiveRisk.NONE, ConvectiveRisk.MARGINAL,
+        )
+        if thermo_high and explicit_quiet:
+            cape_txt = (
+                f" (CAPE {thermo.cape_jkg:.0f})"
+                if thermo.cape_jkg is not None else ""
+            )
+            return ConvectiveCrossCheck(
+                direction="dd_not_corroborated",
+                note=(
+                    f"Thermo Convective shows {thermo.risk_level.value.upper()} instability"
+                    f"{cape_txt}, but ICON-D2 explicit-convection diagnostics are quiet"
+                ),
+            )
+        if thermo_low and explicit_active:
+            dbz_txt = (
+                f" ({nwp.reflectivity_hour_max_dbz:.0f} dBZ corridor maximum)"
+                if nwp.reflectivity_hour_max_dbz is not None else ""
+            )
+            return ConvectiveCrossCheck(
+                direction="model_active_dd_quiet",
+                note=(
+                    f"ICON-D2 explicit convection is active{dbz_txt}, but Thermo "
+                    "Convective shows little instability"
+                ),
+            )
         return None
 
     precip = nwp.convective_precip_mm_h

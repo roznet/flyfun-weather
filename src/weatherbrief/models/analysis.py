@@ -172,6 +172,29 @@ class NWPCloudDiagnostics(BaseModel):
     freezing_level_ft: Optional[float] = None
 
 
+class NWPExplicitConvectiveDiagnostics(BaseModel):
+    """Convection-permitting model evidence kept separate from scheme output.
+
+    Values are extrema over a route-centred corridor, not interpolated
+    centreline samples.  Completeness describes the delivered data, separately
+    from the meteorological value: a complete quiet reflectivity field has
+    ``reflectivity_hour_max_dbz=None`` and ``detection_complete=True``.
+    """
+
+    source: Literal["icon_d2"] = "icon_d2"
+    corridor_radius_nm: float = 10.0
+    reflectivity_hour_max_dbz: Optional[float] = None
+    reflectivity_instant_dbz: Optional[float] = None
+    echo_top_18dbz_ft: Optional[float] = None
+    lightning_potential_hour_max_jkg: Optional[float] = None
+    updraft_hour_max_ms: Optional[float] = None
+    updraft_helicity_2_8km_hour_max_m2s2: Optional[float] = None
+    graupel_hour_mm: Optional[float] = None
+    detection_complete: bool = False
+    strength_complete: bool = False
+    echo_top_complete: bool = False
+
+
 class RouteConfig(BaseModel):
     """A flight route definition loaded from config."""
 
@@ -309,6 +332,7 @@ class HourlyForecast(BaseModel):
 
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
+    explicit_convective_diagnostics: Optional[NWPExplicitConvectiveDiagnostics] = None
 
     # Pressure level data
     pressure_levels: list[PressureLevelData] = Field(default_factory=list)
@@ -693,7 +717,18 @@ class ConvectiveAssessment(BaseModel):
     top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft
     cover_pct: Optional[float] = None  # NWP only; thermo: None
     convective_precip_mm_h: Optional[float] = None  # NWP native firing signal (#283); thermo: None
-    method: str = "thermo"  # "thermo", "nwp", "nwp_hybrid", "nwp_lcl_top", "nwp_precip", "nwp_cape_fallback"
+    # Explicit-convection detail is deliberately not geometry: echo_top is the
+    # 18-dBZ radar-echo top, below the physical/anvil top, so ``top_ft`` remains
+    # None for this method and the overflight-clearance filter cannot consume it.
+    source: Optional[str] = None
+    native_data_complete: Optional[bool] = None
+    reflectivity_hour_max_dbz: Optional[float] = None
+    echo_top_18dbz_ft: Optional[float] = None
+    lightning_potential_hour_max_jkg: Optional[float] = None
+    updraft_hour_max_ms: Optional[float] = None
+    updraft_helicity_2_8km_hour_max_m2s2: Optional[float] = None
+    graupel_hour_mm: Optional[float] = None
+    method: str = "thermo"  # includes "nwp_explicit" for convection-permitting evidence
 
 
 class CATRiskLayer(BaseModel):

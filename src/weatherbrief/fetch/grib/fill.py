@@ -143,14 +143,28 @@ def _fill_diag_hourly(hourly_list: list[HourlyForecast]) -> int:
     """Forward-fill: each gap hour gets a shallow copy of the preceding
     anchor's diag, so a downstream in-place mutation (e.g. icing analysis
     setting a flag) on one hour cannot leak across other hours that share
-    the same anchor."""
+    the same anchor.
+
+    Also hold-fills ``explicit_convective_diagnostics`` (#462): interval-max
+    fields attach to ``(valid_hour−1, valid_hour]`` and persist until the next
+    native hour. Corridor extrema are already reduced at decode — this is
+    temporal hold only, not spatial lerp.
+    """
+    from weatherbrief.models import NWPExplicitConvectiveDiagnostics
+
     filled = 0
     last_diag: NWPCloudDiagnostics | None = None
+    last_explicit: NWPExplicitConvectiveDiagnostics | None = None
     for h in sorted(hourly_list, key=lambda h: h.time):
         if h.nwp_cloud_diagnostics is not None:
             last_diag = h.nwp_cloud_diagnostics
         elif last_diag is not None:
             h.nwp_cloud_diagnostics = last_diag.model_copy()
+            filled += 1
+        if h.explicit_convective_diagnostics is not None:
+            last_explicit = h.explicit_convective_diagnostics
+        elif last_explicit is not None:
+            h.explicit_convective_diagnostics = last_explicit.model_copy()
             filled += 1
     return filled
 

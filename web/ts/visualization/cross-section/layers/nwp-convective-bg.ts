@@ -2,7 +2,8 @@
  *
  * Renders resolved tower columns from model convective base/top (GFS), plus a
  * depth-unresolved "ghost" column for convective points that fire without a
- * drawable tower — ECMWF `nwp_precip` on `cp`, or a GFS cover-only point with
+ * drawable tower — ECMWF `nwp_precip` on `cp`, ICON-D2 `nwp_explicit` (echo top
+ * is character-only, never clearance geometry), or a GFS cover-only point with
  * no top. Uses NWP model-computed convective cloud bounds directly — no
  * estimateTowerTop needed since these are model parameterization outputs, not
  * thermodynamic estimates. Same color palette as thermo layer for visual
