@@ -96,7 +96,7 @@ Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
 
 ### ICON-EU / ICON-D2 GRIB2 enrichment (the `icon` slot)
 Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py, decode.py):
-- **Full sounding replacement** — model levels 35–74 (EU) / 25–65 (D2): t, qv, u, v, qc, qi, clc, p, w. Log-pressure interpolated to standard pressure levels. **Replaces entire `pressure_levels` list**. `w` (m/s) is converted to omega (`vertical_velocity_pa_s`) per level via −ρ·g·w.
+- **Full sounding replacement** — model levels 35–74 (EU) / 16–65 (D2): t, qv, u, v, qc, qi, clc, p, w. Log-pressure interpolated to standard pressure levels. **Replaces entire `pressure_levels` list**. `w` (m/s) is converted to omega (`vertical_velocity_pa_s`) per level via −ρ·g·w.
 - **Cloud diagnostics** — single-level: ceiling, hbas_con, htop_con, clcl, clcm, clch, clct, cape_ml, cin_ml, rain_con → `NWPCloudDiagnostics`
 - Source: `opendata.dwd.de/weather/nwp/{icon-eu,icon-d2}/grib/` (public, no auth)
 - Individual bz2-compressed files per variable/level/timestep
@@ -166,9 +166,9 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Single-level path:** `{HH}/{var}/icon-d2_germany_regular-lat-lon_single-level_{YYYYMMDDHH}_{FFF}_2d_{var}.grib2.bz2` — note the `2d` segment (vs ICON-EU's absent segment).
 - **Resolution:** ~2.2 km, regular lat-lon grid (same grid *type* as ICON-EU → existing bilinear interpolation works unchanged).
 - **Domain:** 43.18–58.08°N, 3.94°W–20.34°E (Germany, Alps, Benelux, most of France, SE England; excludes Brittany, Scotland, Spain). ~906 k grid points ≈ ICON-EU's ~905 k, so no new download-volume / memory / decode-time concern.
-- **Model levels:** 65 total (bottom = 65). Aviation slice **25–65** (41 levels) — a deliberately conservative top so the log-p interpolation's fetched column spans surface→~FL300; validate against DWD's D2 HHL table when the feed is reachable.
+- **Model levels:** 65 total (bottom = 65; numbering NOT comparable to ICON-EU's 74). Aviation slice **16–65** (50 levels) — level 16 ≈ 9,460 m ≈ FL310, matching ICON-EU's level-35 (~300 hPa) top. Validated against DWD's HHL (half-level height) field decoded from the live feed 2026-07-21; the original guess of 25 sat at ~6,300 m ≈ FL207 and would have truncated every D2 sounding.
 - **Cycles/horizon:** 8 runs/day (00–21z every 3h), hourly steps to **48h** (no coarse tail). Publication delay ~1–2h.
-- **Variables:** identical set + names to ICON-EU (model-level `t, qv, u, v, p, w, qc, qi, clc`; single-level `ceiling, hbas_con, htop_con, clcl/clcm/clch/clct, cape_ml/cin_ml, rain_con`).
+- **Variables:** model-level set identical to ICON-EU (`t, qv, u, v, p, w, qc, qi, clc` — all verified live). Single-level set is **smaller**: `ceiling, clcl/clcm/clch/clct, cape_ml/cin_ml` only. D2 runs no deep-convection scheme, so `hbas_con`/`htop_con` don't exist (404; the shallow-only `hbas_sc`/`htop_sc` would mislead) and `rain_con` is near-zero even in explicit storms — all three deliberately unfetched → downstream fields **None** (missing-data semantics). Issue #462 adds the convection-permitting replacements (`dbz_cmax`, `echotop`, `lpi`, `uh_max`, `prg_gsp`).
 - **Gating (all-or-nothing):** used for the `icon` slot only when every route point is inside the D2 domain AND `flight_window_end ≤ selected_run_init + 48h`. If either fails → pure ICON-EU. If the freshest complete D2 run doesn't cover the window, fall back to ICON-EU rather than a stale D2 run.
 - **Freshness:** source key `icon_d2:dwd` in `SOURCE_REGISTRY` (readiness check `icon_d2_dwd`), cache dir `data/.cache/grib/icon-d2/{date}_{cycle}z/` (6h TTL).
 - **Out of scope:** per-point D2/EU mixing, D2's 15-min sub-hourly output, ICON-D2-EPS ensemble.
