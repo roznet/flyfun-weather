@@ -1,6 +1,7 @@
 """Tests for the ICON-D2 explicit-convection assessment (issue #462).
 
-Covers the v1 decision table (dbz × corroborators), the completeness
+Covers the v2 decision table (dbz × corroborators — LPI-primary algebra and
+the bright-band gate, §19 amendment #466/#467), the completeness
 semantics (incomplete detection → unavailable, never quiet; incomplete
 corroborator channels never downgrade or upgrade), the structural safety
 properties (top_ft always None so the overfly-clearance filter cannot consume
@@ -86,7 +87,7 @@ class TestExplicitAvailability:
 
 
 # ---------------------------------------------------------------------------
-# v1 decision table — dbz rows × corroborator columns
+# v2 decision table — dbz rows × corroborator columns
 # ---------------------------------------------------------------------------
 
 
@@ -105,7 +106,12 @@ class TestExplicitDecisionTable:
         assert result.risk_level == ConvectiveRisk.MARGINAL
 
     def test_35_44_two_corroborators_moderate(self):
-        result = _assess(_explicit(40.0, lpi=2.0, w=12.0))
+        # |C| = 2 under the LPI-primary algebra (v2, §19 amendment). With
+        # grau_gsp gone (#468) the substitute path tops out at 1, so strong LPI
+        # is the only route to 2 — see test_substitute_updraft_cannot_reach_two.
+        # (Under v1, lpi=2 + w=12 also read 2, but that double-counted: LPI
+        # already embeds the updraft.)
+        result = _assess(_explicit(40.0, lpi=6.0, w=12.0))
         assert result.risk_level == ConvectiveRisk.MODERATE
 
     def test_45_49_uncorroborated_moderate(self):
@@ -113,12 +119,28 @@ class TestExplicitDecisionTable:
         assert result.risk_level == ConvectiveRisk.MODERATE
 
     def test_45_49_two_corroborators_high(self):
-        # LPI (1) + strong updraft (1) → 2 corroborators → HIGH.
-        result = _assess(_explicit(47.0, lpi=2.0, w=12.0))
+        # Strong LPI votes 2 on its own → HIGH at 45–49.
+        result = _assess(_explicit(47.0, lpi=6.0, w=12.0))
         assert result.risk_level == ConvectiveRisk.HIGH
 
-    def test_50_plus_high_even_uncorroborated(self):
+    def test_substitute_updraft_cannot_reach_two(self):
+        # Post-#468 invariant: grau_gsp is gone, so when LPI does not vote the
+        # substitute path can contribute at most 1 (w_ctmax). A quiet-LPI cell
+        # with a strong updraft is therefore |C| = 1 → MODERATE at 45–49, NOT
+        # HIGH. |C| >= 2 is reachable only via LPI >= 5.
+        result = _assess(_explicit(47.0, lpi=0.0, w=12.0))
+        assert result.risk_level == ConvectiveRisk.MODERATE
+
+    def test_50_plus_uncorroborated_capped_at_moderate(self):
+        # v2 (#466/#467): ≥50 dBZ no longer self-certifies to HIGH — dbz_ctmax
+        # is a column max and a stratiform bright band reaches 50+. |C| = 0 caps
+        # at MODERATE (no echo top here, so the bright-band gate can't fire).
         result = _assess(_explicit(55.0, lpi=0.0, w=0.0))
+        assert result.risk_level == ConvectiveRisk.MODERATE
+
+    def test_50_plus_one_corroborator_high(self):
+        # A single storm-process corroborator restores HIGH at ≥50.
+        result = _assess(_explicit(55.0, lpi=2.0, w=0.0))
         assert result.risk_level == ConvectiveRisk.HIGH
 
     def test_strong_lpi_counts_double(self):
@@ -126,11 +148,17 @@ class TestExplicitDecisionTable:
         result = _assess(_explicit(47.0, lpi=6.0, w=0.0))
         assert result.risk_level == ConvectiveRisk.HIGH
 
-    def test_cape_ml_from_parameterized_diag_is_a_corroborator(self):
-        diag = NWPCloudDiagnostics(ml_cape_jkg=800.0)
-        # dbz 40 + ML-CAPE (1) + LPI (1) → 2 corroborators → MODERATE.
+    def test_cape_ml_is_narrative_only_not_a_vote(self):
+        # v2 (#466/#467): CAPE is environment (it duplicates the thermo track),
+        # never a corroborator vote. dbz 40 + LPI (1) + ML-CAPE (narrative) is
+        # still |C| = 1 → MARGINAL, and CAPE alone cannot fire anything.
+        diag = NWPCloudDiagnostics(ml_cape_jkg=2000.0)
         result = _assess(_explicit(40.0, lpi=2.0, w=0.0), diag=diag)
-        assert result.risk_level == ConvectiveRisk.MODERATE
+        assert result.risk_level == ConvectiveRisk.MARGINAL
+        assert any("environment, narrative only" in d for d in result.drivers)
+        # CAPE with no storm-process signal at all → no fire.
+        cape_only = _assess(_explicit(40.0, lpi=0.0, w=0.0), diag=diag)
+        assert cape_only.risk_level == ConvectiveRisk.NONE
 
 
 class TestExplicitCompletenessRules:
@@ -151,6 +179,135 @@ class TestExplicitCompletenessRules:
         assert result.risk_level == ConvectiveRisk.MARGINAL
 
 
+class TestExplicitLpiPrimaryAlgebra:
+    """LPI-primary corroborator algebra (§19 amendment, issue #466).
+
+    DWD's LPI ≈ ∫ ε w² dz weighted by mixed-phase content already embeds
+    updraft × graupel, so counting them as independent votes double-counts one
+    signal. LPI votes alone when present; w_ctmax substitutes only when LPI does
+    not vote (missing or below floor); CAPE/UH are narrative-only. With grau_gsp
+    dropped (#468), w_ctmax is the ONLY substitute, so the substitute path tops
+    out at |C| = 1 and |C| >= 2 requires LPI >= 5.
+    """
+
+    def test_lpi_present_makes_w_narrative_not_additive(self):
+        # LPI = 2 (votes 1). A strong updraft is present but must NOT add —
+        # |C| stays 1 → MARGINAL, not MODERATE (v1 read this 2).
+        result = _assess(_explicit(40.0, lpi=2.0, w=12.0))
+        assert result.risk_level == ConvectiveRisk.MARGINAL
+        assert any("not additive" in d for d in result.drivers)
+
+    def test_w_substitutes_when_lpi_below_floor(self):
+        # LPI present but below floor (0.4 < 1) → does not vote → w substitutes
+        # (1) → |C| = 1 → MARGINAL at 35–44.
+        result = _assess(_explicit(40.0, lpi=0.4, w=12.0))
+        assert result.risk_level == ConvectiveRisk.MARGINAL
+
+    def test_single_substitute_is_one(self):
+        result = _assess(_explicit(40.0, lpi=0.0, w=12.0))
+        assert result.risk_level == ConvectiveRisk.MARGINAL
+
+    def test_missing_lpi_does_not_promote_beyond_present_but_quiet(self):
+        # Issue #466 note: an incomplete LPI channel must not silently promote w
+        # into counting beyond what a present-but-quiet LPI gives. The
+        # substitution is identical whether LPI is missing or present-and-quiet.
+        missing = _assess(_explicit(47.0, lpi=None, w=12.0))
+        quiet = _assess(_explicit(47.0, lpi=0.0, w=12.0))
+        assert missing.risk_level == quiet.risk_level == ConvectiveRisk.MODERATE
+
+    def test_masked_substitute_channel_contributes_nothing(self):
+        # LPI missing → substitution regime, but w is also masked (None): it
+        # cannot count (rule 5), so |C| = 0 → the 35–44 row does not fire.
+        # Contrast with the same case where w is present and over threshold.
+        masked = _assess(_explicit(40.0, lpi=None, w=None))
+        assert masked.risk_level == ConvectiveRisk.NONE
+        present = _assess(_explicit(40.0, lpi=None, w=12.0))
+        assert present.risk_level == ConvectiveRisk.MARGINAL
+
+
+class TestExplicitBrightBandGate:
+    """Bright-band gate: shallow echo top vs freezing level (#466/#467).
+
+    A melting-layer bright band reaches high column-max reflectivity with its
+    18 dBZ echo top only a few kft above the freezing level. With no
+    storm-process corroboration, that is suppressed to no-fire.
+    """
+
+    def _indices(self, freezing_ft=None, nwp_freezing_ft=None):
+        return ThermodynamicIndices(
+            freezing_level_ft=freezing_ft, nwp_freezing_level_ft=nwp_freezing_ft,
+        )
+
+    def test_shallow_uncorroborated_echo_suppressed(self):
+        # dbz 52, |C| = 0, echo top 15000 ft, freezing 8000 → Δ 7000 < 10000.
+        expl = _explicit(52.0, lpi=0.0, w=5.0,
+                         echo_top_ft=15000.0, echo_complete=True)
+        result = _assess(expl, self._indices(freezing_ft=8000.0))
+        assert result.risk_level == ConvectiveRisk.NONE
+        assert any("bright band" in s.lower() for s in result.suppressors)
+
+    def test_deep_echo_top_not_suppressed(self):
+        # Same |C| = 0 but a deep echo (32000 ft, Δ 24000) is real convection.
+        expl = _explicit(52.0, lpi=0.0, w=5.0,
+                         echo_top_ft=32000.0, echo_complete=True)
+        result = _assess(expl, self._indices(freezing_ft=8000.0))
+        assert result.risk_level == ConvectiveRisk.MODERATE
+
+    def test_gate_never_overrides_corroborated_cell(self):
+        # Shallow echo top but LPI fires (|C| = 2): the gate must not hide a
+        # corroborated cell (safety asymmetry).
+        expl = _explicit(52.0, lpi=6.0, echo_top_ft=15000.0, echo_complete=True)
+        result = _assess(expl, self._indices(freezing_ft=8000.0))
+        assert result.risk_level == ConvectiveRisk.HIGH
+
+    def test_incomplete_echo_top_does_not_suppress(self):
+        # echo_top_complete=False → the gate cannot be evaluated → no downgrade.
+        expl = _explicit(52.0, lpi=0.0, w=5.0,
+                         echo_top_ft=15000.0, echo_complete=False)
+        result = _assess(expl, self._indices(freezing_ft=8000.0))
+        assert result.risk_level == ConvectiveRisk.MODERATE
+
+    def test_missing_freezing_level_does_not_suppress(self):
+        # No freezing level anywhere → gate unevaluable → no downgrade.
+        expl = _explicit(52.0, lpi=0.0, w=5.0,
+                         echo_top_ft=15000.0, echo_complete=True)
+        result = _assess(expl, self._indices())
+        assert result.risk_level == ConvectiveRisk.MODERATE
+
+    def test_freezing_level_nwp_fallback(self):
+        # Freezing level only from the model-native field still gates.
+        expl = _explicit(52.0, lpi=0.0, w=5.0,
+                         echo_top_ft=15000.0, echo_complete=True)
+        result = _assess(expl, self._indices(nwp_freezing_ft=8000.0))
+        assert result.risk_level == ConvectiveRisk.NONE
+
+
+class TestExplicitValidationMatrix:
+    """The #467 forward-validation cases, both directions (§19 acceptance).
+
+    The recalibration must (a) stop false-alarming on the stratiform bright-band
+    control and (b) not lose the real convective hit.
+    """
+
+    def test_stratiform_bright_band_control_no_longer_high(self):
+        # #467 EDDE→EDQD, 2026-07-21: v1 graded HIGH at ≥50 dBZ with LPI ≈ 0,
+        # updraft ≤ 5.5 m/s, ML-CAPE ≤ 242, echo_top − freezing ≈ 6.5–7.8 kft.
+        # v2: |C| = 0 (LPI quiet, updraft below floor, graupel dead) caps the
+        # row at MODERATE, then the bright-band gate drops it to no-fire.
+        diag = NWPCloudDiagnostics(ml_cape_jkg=242.0)
+        expl = _explicit(52.0, lpi=0.4, w=5.0,
+                         echo_top_ft=14900.0, echo_complete=True)
+        result = _assess(expl, ThermodynamicIndices(freezing_level_ft=7900.0), diag)
+        assert result.risk_level == ConvectiveRisk.NONE
+
+    def test_real_convective_hit_stays_high(self):
+        # #467 ESMX→EKRK: 57 dBZ, LPI 89, updraft 23, echo_top − freezing ≈ 25 kft.
+        expl = _explicit(56.0, lpi=89.2, w=23.1, uh=-55.9,
+                         echo_top_ft=36000.0, echo_complete=True)
+        result = _assess(expl, ThermodynamicIndices(freezing_level_ft=11000.0))
+        assert result.risk_level == ConvectiveRisk.HIGH
+
+
 class TestExplicitStructuralSafety:
     def test_top_ft_always_none_echo_top_is_detail_only(self):
         # The 18 dBZ echo top must be structurally unreachable by the
@@ -165,9 +322,10 @@ class TestExplicitStructuralSafety:
     def test_no_cin_suppression_of_a_simulated_echo(self):
         # The model already convected — penalising the echo on CIN would be
         # circular (nwp_precip precedent). A strong cap must not pull HIGH down.
+        # (LPI ≥ 5 corroborates so the ≥50 row reaches HIGH under v2.)
         indices = ThermodynamicIndices(cin_surface_jkg=-400.0)
         diag = NWPCloudDiagnostics(ml_cin_jkg=-400.0)
-        result = _assess(_explicit(55.0), indices, diag)
+        result = _assess(_explicit(55.0, lpi=6.0, w=0.0), indices, diag)
         assert result.risk_level == ConvectiveRisk.HIGH
 
     def test_uh_is_narrative_only(self):
@@ -272,7 +430,8 @@ def _make_hourly(explicit=None) -> HourlyForecast:
 
 class TestAnalyzeSoundingWiring:
     def test_payload_presence_selects_explicit_track(self):
-        hourly = _make_hourly(_explicit(50.0))
+        # LPI ≥ 5 corroborates so a real ≥50 cell grades HIGH under v2.
+        hourly = _make_hourly(_explicit(50.0, lpi=6.0))
         result = analyze_sounding_lite(hourly.pressure_levels, hourly, model_key="icon")
         assert result is not None
         assert result.convective_nwp is not None

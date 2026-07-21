@@ -900,77 +900,155 @@ def assess_convective_nwp(
 # from assess_convective_nwp's tower-top track, so it gets its own assessment
 # with its own method string ("nwp_explicit") — the two are never blended.
 #
-# v1 decision table (meteorology-decisions §19 — calibration starting points,
-# not physical constants). The firing signal is the corridor-max hour-max
-# reflectivity DBZ_CTMAX; a corroborator set C confirms storm character:
+# v2 decision table (meteorology-decisions §19, 2026-07-21 amendment #466/#467).
+# The firing signal is the corridor-max hour-max reflectivity DBZ_CTMAX; a
+# storm-process corroborator count |C| confirms it is real convection:
 #
 #   corridor dbz_ctmax | |C| = 0                    | |C| = 1  | |C| >= 2
 #   -------------------+----------------------------+----------+---------
 #   < 35 dBZ           | no fire                    | no fire  | no fire
 #   35–44 dBZ          | no fire (stratiform note)  | MARGINAL | MODERATE
 #   45–49 dBZ          | MODERATE                   | MODERATE | HIGH
-#   >= 50 dBZ          | HIGH                       | HIGH     | HIGH
+#   >= 50 dBZ          | MODERATE                   | HIGH     | HIGH
 #
-# Each corroborator counts 1 when its channel is COMPLETE (value non-None —
-# a valid quiet channel decodes to 0.0, #421 None ≠ 0) AND over threshold;
-# lpi >= 5 counts 2. Incomplete channels never downgrade below the dbz-alone
-# row and never upgrade (|C| counts only complete channels); zero on one
-# channel never suppresses positive evidence on another. |uh| is
-# narrative/character only in v1 — HRRR UH thresholds are NOT portable (2–8 km
-# vs 2–5 km layer).
+# Two changes from v1 (both driven by the #467 validation, where the v1 table
+# false-alarmed HIGH at 4 of 8 route points in widespread stratiform rain):
+#   1. The corroborator ALGEBRA is now LPI-primary (see _explicit_corroborators).
+#      DWD's LPI ≈ ∫ ε w² dz weighted by mixed-phase (graupel/ice) content, so it
+#      already embeds updraft × graupel — counting lpi_max + w_ctmax + grau_gsp
+#      as three independent votes triple-counted one mixed-phase updraft. CAPE
+#      (environment, and it duplicates the independent thermo track) and UH are
+#      narrative-only — neither is ever a vote.
+#   2. The >= 50 row no longer bypasses corroboration. dbz_ctmax is a COLUMN
+#      max, and a strong melting-layer bright band in heavy stratiform rain
+#      reaches 50+ dBZ with no convection in the column. |C| = 0 now caps at
+#      MODERATE (was HIGH), and the bright-band gate suppresses it to no-fire
+#      entirely when the echo is shallow — see assess_convective_explicit.
 #
-# The v1 corroborator set is lpi_max + w_ctmax + ml_cape. grau_gsp (surface
-# graupel precipitation) was dropped (#468): it measures snow pellets reaching
-# the GROUND, ~always 0 under warm-season route-corridor cores, not the column
-# mixed-phase property #462 intended — so it could never realistically fire.
-# Its column replacement (tcond10_mx) is deferred pending calibration (#468).
-_EXPLICIT_DBZ_FIRE = 35.0       # below → no fire (environment tracks unaffected)
+# The v2 vote set is therefore lpi_max (primary) with w_ctmax as its only
+# substitute. grau_gsp was dropped outright in #468 — it measures snow pellets
+# reaching the GROUND, ~always 0 under warm-season route-corridor cores, not the
+# column mixed-phase property #462 intended, so it could never realistically
+# fire. That lands in the same place this amendment does (graupel was never an
+# independent vote to begin with); its column replacement (tcond10_mx) is
+# deferred pending calibration (#468).
+#
+# Completeness (rule 5): |C| counts only COMPLETE channels (value non-None — a
+# valid quiet channel decodes to 0.0, #421 None ≠ 0) AND over threshold.
+# Incomplete channels never move the tier in either direction; a zero on one
+# channel never suppresses positive evidence on another.
+_EXPLICIT_DBZ_FIRE = 35.0        # below → no fire (environment tracks unaffected)
 _EXPLICIT_DBZ_CONVECTIVE = 45.0  # 35–44 band may be stratiform/melting-band
-_EXPLICIT_DBZ_SEVERE = 50.0     # >= → HIGH regardless of corroborators
+_EXPLICIT_DBZ_SEVERE = 50.0      # >= 50 still needs |C| >= 1 for HIGH (bright band)
 _EXPLICIT_LPI_CORROB_JKG = 1.0
-_EXPLICIT_LPI_STRONG_JKG = 5.0  # counts as 2 corroborators
+_EXPLICIT_LPI_STRONG_JKG = 5.0   # LPI (the primary channel) >= 5 counts as 2
 _EXPLICIT_UPDRAFT_CORROB_MS = 10.0
-_EXPLICIT_CAPE_CORROB_JKG = 500.0
-_EXPLICIT_UH_NOTE_M2S2 = 25.0   # rotation NOTE only, never a tier input
+_EXPLICIT_CAPE_CORROB_JKG = 500.0  # narrative-only threshold (never a vote)
+_EXPLICIT_UH_NOTE_M2S2 = 25.0    # rotation NOTE only, never a tier input
+# Bright-band gate (#466/#467): the 18 dBZ echo top of a melting-layer bright
+# band sits only a few kft above the freezing level, whereas a real convective
+# core carries hydrometeors far higher. #467 measured echo_top − freezing_level
+# at 6.5–7.8 kft (stratiform false alarm) vs 24–27 kft (real storms). Below this
+# margin, AND with no storm-process corroboration, high reflectivity is treated
+# as melting-layer bright band, not convection, at any dBZ.
+_EXPLICIT_BRIGHT_BAND_DELTA_FT = 10000.0
+
+
+def _explicit_freezing_level_ft(
+    indices: ThermodynamicIndices,
+    nwp_diagnostics: NWPCloudDiagnostics | None,
+) -> float | None:
+    """First available freezing level for the bright-band gate.
+
+    Prefer the sounding's own (DD/MetPy) 0 °C crossing — the same column the
+    echo top's altitude conversion uses — then the Open-Meteo / model-native
+    freezing level, then the NWP cloud-diagnostics one. Any is a usable datum
+    for the echo-top-vs-melting-layer comparison; the gate needs one, not all.
+    """
+    candidates = [indices.freezing_level_ft, indices.nwp_freezing_level_ft]
+    if nwp_diagnostics is not None:
+        candidates.append(nwp_diagnostics.freezing_level_ft)
+    for value in candidates:
+        if value is not None:
+            return value
+    return None
 
 
 def _explicit_corroborators(
     explicit: NWPExplicitConvectiveDiagnostics,
     nwp_diagnostics: NWPCloudDiagnostics | None,
 ) -> tuple[int, list[str], int]:
-    """Count complete-and-over-threshold corroborator channels.
+    """Count storm-process corroborators, LPI-primary (§19 amendment #466).
 
-    Returns ``(count, descriptions, incomplete_channels)``. Only complete
-    channels (non-None values) can count; incomplete ones are tallied so the
-    caller can say so without letting them downgrade or upgrade the tier.
+    Returns ``(count, descriptions, incomplete_channels)``.
+
+    DWD's LPI ≈ ``∫ ε w² dz`` weighted by mixed-phase content, so it already
+    embeds updraft × graupel. Counting ``lpi_max`` + ``w_ctmax`` + ``grau_gsp``
+    as three independent votes triple-counts one mixed-phase updraft, letting a
+    moderately-electrified (or a stratiform bright-band) cell reach |C| >= 2 on
+    physically one signal. So:
+
+    - **LPI is the primary storm-process channel.** When present (complete) it
+      votes alone: ``>= 5`` counts 2, ``>= 1`` counts 1. ``w_ctmax`` is then
+      narrative detail only — NOT additive (it is an ingredient LPI already
+      integrates).
+    - **w_ctmax substitutes only when LPI does not vote** — i.e. LPI is missing
+      OR present-but-below-floor. The substitution is IDENTICAL in both those
+      cases, so an incomplete LPI channel never silently promotes w beyond what
+      a present-but-quiet LPI would give (issue #466 note). It still counts only
+      when its OWN channel is complete-and-over-threshold (rule 5) — a masked
+      w_ctmax (None) contributes nothing.
+    - **CAPE is environment, not storm process** — it duplicates the independent
+      thermo track and let a bright band upgrade on ML-CAPE alone (#467). It is
+      narrative-only now, never a vote. **UH** stays a rotation NOTE only.
+
+    Note the consequence of #468 dropping ``grau_gsp`` (the other v1 substitute):
+    the substitute path can now contribute at most 1, so **|C| >= 2 is reachable
+    only via LPI >= 5**. The decision table's ``|C| >= 2`` column is therefore an
+    electrification column in practice — deliberate, since LPI is the one channel
+    that actually integrates the mixed-phase updraft the tier is trying to name.
     """
     count = 0
     notes: list[str] = []
     incomplete = 0
 
     lpi = explicit.lightning_potential_hour_max_jkg
+    w = explicit.updraft_hour_max_ms
+
+    lpi_voted = False
     if lpi is None:
         incomplete += 1
     elif lpi >= _EXPLICIT_LPI_STRONG_JKG:
         count += 2
+        lpi_voted = True
         notes.append(f"strong lightning potential (LPI {lpi:.1f} J/kg)")
     elif lpi >= _EXPLICIT_LPI_CORROB_JKG:
         count += 1
+        lpi_voted = True
         notes.append(f"lightning potential (LPI {lpi:.1f} J/kg)")
 
-    w = explicit.updraft_hour_max_ms
-    if w is None:
-        incomplete += 1
-    elif w >= _EXPLICIT_UPDRAFT_CORROB_MS:
-        count += 1
-        notes.append(f"strong updraft ({w:.0f} m/s)")
+    if lpi_voted:
+        # LPI already integrates the mixed-phase updraft — surface w as detail,
+        # but never add it to |C| (the v1 double/triple-count this amendment
+        # kills). grau_gsp, the other v1 vote, no longer exists (#468).
+        if w is not None and w >= _EXPLICIT_UPDRAFT_CORROB_MS:
+            notes.append(f"strong updraft ({w:.0f} m/s) — embedded in LPI, not additive")
+    else:
+        # LPI missing or present-but-quiet: w may substitute (1), only when its
+        # own channel is complete-and-over-threshold.
+        if w is None:
+            incomplete += 1
+        elif w >= _EXPLICIT_UPDRAFT_CORROB_MS:
+            count += 1
+            notes.append(f"strong updraft ({w:.0f} m/s)")
 
+    # CAPE: environment, narrative-only (never a vote) — see the docstring.
     cape_ml = nwp_diagnostics.ml_cape_jkg if nwp_diagnostics is not None else None
-    if cape_ml is None:
-        incomplete += 1
-    elif cape_ml >= _EXPLICIT_CAPE_CORROB_JKG:
-        count += 1
-        notes.append(f"unstable environment (ML-CAPE {cape_ml:.0f} J/kg)")
+    if cape_ml is not None and cape_ml >= _EXPLICIT_CAPE_CORROB_JKG:
+        notes.append(
+            f"unstable environment (ML-CAPE {cape_ml:.0f} J/kg) — environment, "
+            "narrative only"
+        )
 
     return count, notes, incomplete
 
@@ -978,11 +1056,15 @@ def _explicit_corroborators(
 def _explicit_risk_from_table(
     dbz: float | None, corroborators: int
 ) -> ConvectiveRisk:
-    """The v1 dbz × |C| decision table (see the constants block above)."""
+    """The v2 dbz × |C| decision table (see the constants block above)."""
     if dbz is None or dbz < _EXPLICIT_DBZ_FIRE:
         return ConvectiveRisk.NONE
     if dbz >= _EXPLICIT_DBZ_SEVERE:
-        return ConvectiveRisk.HIGH
+        # >= 50 dBZ no longer self-certifies (v1 bypass removed, #466/#467):
+        # dbz_ctmax is a column max and a stratiform melting-layer bright band
+        # reaches 50+ with no convection. Uncorroborated → MODERATE, not HIGH
+        # (and the bright-band gate downstream may drop it further to no-fire).
+        return ConvectiveRisk.HIGH if corroborators >= 1 else ConvectiveRisk.MODERATE
     if dbz >= _EXPLICIT_DBZ_CONVECTIVE:
         return ConvectiveRisk.HIGH if corroborators >= 2 else ConvectiveRisk.MODERATE
     # 35–44 dBZ: echo present but possibly stratiform rain / melting-band
@@ -1021,6 +1103,13 @@ def assess_convective_explicit(
       (same reasoning as the ``nwp_precip`` path).
     - A quiet-but-complete hour returns a real ``NONE`` assessment (not
       ``None``) so DD-vs-model cross-checks can still fire.
+    - Bright-band gate (§19 amendment #466/#467): when the 18 dBZ echo top sits
+      < ``_EXPLICIT_BRIGHT_BAND_DELTA_FT`` above the freezing level AND no
+      storm-process corroborator fired (|C| = 0), the high reflectivity is a
+      melting-layer bright band, not convection — the fire is suppressed to
+      ``NONE``. Gated on |C| = 0 so it can never override positive
+      electrification / updraft evidence (a corroborated cell is never hidden —
+      the codebase's under-warning-is-worse safety asymmetry).
     """
     if not explicit.detection_complete:
         return None
@@ -1042,40 +1131,68 @@ def assess_convective_explicit(
     )
     risk = _explicit_risk_from_table(dbz, corrob_count)
 
+    # Bright-band gate (§19 amendment #466/#467). A shallow 18 dBZ echo top
+    # relative to the freezing level is a melting-layer bright band, not a
+    # convective core. Only with |C| = 0 (no storm-process corroboration) and
+    # only when both the echo top (complete) and a freezing level are available
+    # — an unevaluable gate never downgrades (rule 5, safety asymmetry).
+    freezing_ft = _explicit_freezing_level_ft(indices, nwp_diagnostics)
+    echo_top_ft = explicit.echo_top_18dbz_ft
+    bright_band = (
+        risk is not ConvectiveRisk.NONE
+        and corrob_count == 0
+        and echo_top_ft is not None
+        and explicit.echo_top_complete
+        and freezing_ft is not None
+        and (echo_top_ft - freezing_ft) < _EXPLICIT_BRIGHT_BAND_DELTA_FT
+    )
+    if bright_band:
+        risk = ConvectiveRisk.NONE
+
     drivers: list[str] = []
     suppressors: list[str] = []
 
     if dbz is not None and dbz >= _EXPLICIT_DBZ_FIRE:
-        drivers.append(
-            f"Explicitly simulated storm echo — corridor-max reflectivity "
-            f"{dbz:.0f} dBZ over the past hour (ICON-D2, convection-permitting)"
-        )
-        if dbz < _EXPLICIT_DBZ_CONVECTIVE and corrob_count == 0:
+        if bright_band:
+            # echo_top_ft / freezing_ft are both non-None here (gate condition).
             suppressors.append(
-                "Echo present but uncorroborated at 35–44 dBZ — likely "
-                "stratiform rain / melting-band bright-band, not convection"
+                f"Corridor-max reflectivity {dbz:.0f} dBZ, but the 18 dBZ echo "
+                f"top (~{echo_top_ft:.0f} ft) sits only ~{echo_top_ft - freezing_ft:.0f} ft "
+                f"above the freezing level (~{freezing_ft:.0f} ft) with no "
+                "storm-process corroboration — melting-layer bright band in "
+                "stratiform rain, not convection"
             )
-        drivers.extend(corrob_notes)
-        if incomplete and corrob_count < 2:
+        else:
             drivers.append(
-                f"{incomplete} corroborator channel(s) unavailable — tier from "
-                "the reflectivity row alone (missing data never downgrades)"
+                f"Explicitly simulated storm echo — corridor-max reflectivity "
+                f"{dbz:.0f} dBZ over the past hour (ICON-D2, convection-permitting)"
             )
-        if explicit.echo_top_18dbz_ft is not None:
-            # Depth/character AFTER firing — explicitly NOT a cloud top: the
-            # physical storm top (weakly-reflecting anvil ice) sits higher.
-            drivers.append(
-                f"18 dBZ echo top ~{explicit.echo_top_18dbz_ft:.0f} ft "
-                "(storm depth indicator — the cloud top is higher; not for "
-                "overfly planning)"
-            )
-        uh = explicit.updraft_helicity_2_8km_hour_max_m2s2
-        if uh is not None and abs(uh) >= _EXPLICIT_UH_NOTE_M2S2:
-            sense = "cyclonic" if uh > 0 else "anticyclonic"
-            drivers.append(
-                f"Rotating updraft signature (updraft helicity {uh:.0f} m²/s², "
-                f"{sense}) — organized-storm character"
-            )
+            if dbz < _EXPLICIT_DBZ_CONVECTIVE and corrob_count == 0:
+                suppressors.append(
+                    "Echo present but uncorroborated at 35–44 dBZ — likely "
+                    "stratiform rain / melting-band bright-band, not convection"
+                )
+            drivers.extend(corrob_notes)
+            if incomplete and corrob_count < 2:
+                drivers.append(
+                    f"{incomplete} corroborator channel(s) unavailable — tier from "
+                    "the reflectivity row alone (missing data never downgrades)"
+                )
+            if explicit.echo_top_18dbz_ft is not None:
+                # Depth/character AFTER firing — explicitly NOT a cloud top: the
+                # physical storm top (weakly-reflecting anvil ice) sits higher.
+                drivers.append(
+                    f"18 dBZ echo top ~{explicit.echo_top_18dbz_ft:.0f} ft "
+                    "(storm depth indicator — the cloud top is higher; not for "
+                    "overfly planning)"
+                )
+            uh = explicit.updraft_helicity_2_8km_hour_max_m2s2
+            if uh is not None and abs(uh) >= _EXPLICIT_UH_NOTE_M2S2:
+                sense = "cyclonic" if uh > 0 else "anticyclonic"
+                drivers.append(
+                    f"Rotating updraft signature (updraft helicity {uh:.0f} m²/s², "
+                    f"{sense}) — organized-storm character"
+                )
 
     return ConvectiveAssessment(
         risk_level=risk,
