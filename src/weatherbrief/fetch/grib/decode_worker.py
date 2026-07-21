@@ -241,6 +241,24 @@ def decode_icon_cloud_diag(
         return decode_icon_eu_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
+def decode_icon_d2_explicit_conv(
+    var_paths: dict[str, str],
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict]:
+    """Read per-variable ICON-D2 explicit-convection bytes and decode corridor extrema (#462)."""
+    fn_label = "decode_icon_d2_explicit_conv"
+    rep_path = next(iter(var_paths.values()), "")
+    if var_paths:
+        fn_label = f"decode_icon_d2_explicit_conv[{len(var_paths)}v]"
+    with _log_decode(fn_label, rep_path):
+        from weatherbrief.fetch.grib.decode import (
+            decode_icon_d2_explicit_conv_per_point,
+        )
+        var_bytes = {var: Path(p).read_bytes() for var, p in var_paths.items()}
+        return decode_icon_d2_explicit_conv_per_point(var_bytes, latitudes, longitudes)
+
+
 def analyze_sounding_batch(items: list[dict]) -> list[dict]:
     """Lite sounding analysis for a batch of serialised profiles (#448 PR B).
 

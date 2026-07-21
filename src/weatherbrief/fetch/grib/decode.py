@@ -11,6 +11,7 @@ Handles two categories of GFS variables:
 from __future__ import annotations
 
 import logging
+import math
 import tempfile
 import warnings
 from pathlib import Path
@@ -1531,6 +1532,422 @@ def build_icon_cloud_diagnostics(
         ml_cape_jkg=ml_cape,
         ml_cin_jkg=ml_cin,
     )
+
+
+# ---------------------------------------------------------------------------
+# ICON-D2 explicit-convection decode (#462) — message-level, corridor extrema
+# ---------------------------------------------------------------------------
+#
+# The D2 explicit storm fields are NOT decoded through the cfgrib cloud-diag
+# path above, for two reasons:
+# - Sub-hourly message structure: an `echotop` file carries FOUR 15-min
+#   `min_pres` messages and a `grau_gsp` file carries an on-the-hour since-init
+#   accumulation PLUS three quarter-hour accumulations. cfgrib would either
+#   merge them along a step dimension or split datasets unpredictably; the
+#   consumer must select messages by their step window explicitly, never trust
+#   the merge (#462 verified structure).
+# - Corridor extrema: per-point bilinear sampling defeats a 2.2 km model — a
+#   storm cell between 10 NM route points (or displaced a few km by timing
+#   error) vanishes, making D2 LESS likely to fire than coarse models. These
+#   fields therefore reduce over a neighbourhood mask (max; min pressure for
+#   echo top; signed argmax|uh| for helicity) instead of interpolating. This is
+#   deliberately a different code path from `_interpolate_per_point`.
+
+# Route-buffer kernel radius for corridor extrema (NM). v1 starting point per
+# #462; values in the payload are corridor maxima over this buffer, not
+# centreline point values.
+ICON_D2_CORRIDOR_RADIUS_NM = 10.0
+
+# Reflectivity at/below this is "no echo": the D2 encoder floors quiet columns
+# at −150 dBZ (a VALID quiet value, not missing data) — normalize to None so a
+# physically meaningless floor never shows up as a number. Distinguishing
+# quiet-None from unavailable-None is the completeness flags' job.
+_D2_DBZ_QUIET_MAX_DBZ = -100.0
+
+# `min_pres` sentinel: −999 Pa means "no 18 dBZ echo in this window".
+_D2_ECHOTOP_NO_ECHO_PA = -998.0
+
+# Substitute for bitmap-missing cells during decode (native D2 domain is not a
+# lat/lon rectangle; ~17% of the regular-ll grid is masked).
+_D2_MISSING_VALUE = -1.0e30
+
+_NM_PER_DEG_LAT = 60.0
+
+
+def _d2_read_message_grid(gid) -> "tuple[np.ndarray, np.ndarray, np.ndarray] | None":
+    """Read one regular-ll GRIB message into (lats_axis, lons_axis, values).
+
+    Returns ascending-lat/lon axes with the values array reordered to match,
+    and NaN where the bitmap marks cells missing. None for a degenerate grid.
+    """
+    import eccodes
+    import numpy as np
+
+    ni = int(eccodes.codes_get(gid, "Ni"))
+    nj = int(eccodes.codes_get(gid, "Nj"))
+    if ni < 2 or nj < 2:
+        return None
+    lat_first = float(eccodes.codes_get(gid, "latitudeOfFirstGridPointInDegrees"))
+    lat_last = float(eccodes.codes_get(gid, "latitudeOfLastGridPointInDegrees"))
+    lon_first = float(eccodes.codes_get(gid, "longitudeOfFirstGridPointInDegrees"))
+    lon_last = float(eccodes.codes_get(gid, "longitudeOfLastGridPointInDegrees"))
+
+    eccodes.codes_set(gid, "missingValue", _D2_MISSING_VALUE)
+    values = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64)
+    if values.size != ni * nj:
+        return None
+    grid = values.reshape(nj, ni)
+    grid[grid == _D2_MISSING_VALUE] = np.nan
+
+    lats = np.linspace(lat_first, lat_last, nj)
+    lons = np.linspace(lon_first, lon_last, ni)
+    if lats[0] > lats[-1]:
+        lats = lats[::-1]
+        grid = grid[::-1, :]
+    if lons[0] > lons[-1]:
+        lons = lons[::-1]
+        grid = grid[:, ::-1]
+    return lats, lons, grid
+
+
+def _d2_corridor_cells(
+    lats_axis: "np.ndarray",
+    lons_axis: "np.ndarray",
+    grid: "np.ndarray",
+    lat: float,
+    lon: float,
+    radius_nm: float,
+) -> "np.ndarray | None":
+    """Return the valid (non-NaN) cell values within ``radius_nm`` of a point.
+
+    None when the point (plus buffer) lies outside the grid extent — callers
+    treat that as an invalid corridor, same as an all-masked one. The mask is
+    an exact great-circle distance test over a small bounding-box window, not
+    a lat/lon rectangle, so the kernel is genuinely circular.
+    """
+    import numpy as np
+
+    dlat = radius_nm / _NM_PER_DEG_LAT
+    coslat = math.cos(math.radians(lat))
+    if coslat <= 0.01:
+        return None
+    dlon = radius_nm / (_NM_PER_DEG_LAT * coslat)
+
+    if not (lats_axis[0] <= lat <= lats_axis[-1]) or not (
+        lons_axis[0] <= lon <= lons_axis[-1]
+    ):
+        return None
+
+    j0 = int(np.searchsorted(lats_axis, lat - dlat, side="left"))
+    j1 = int(np.searchsorted(lats_axis, lat + dlat, side="right"))
+    i0 = int(np.searchsorted(lons_axis, lon - dlon, side="left"))
+    i1 = int(np.searchsorted(lons_axis, lon + dlon, side="right"))
+    if j1 <= j0 or i1 <= i0:
+        return None
+
+    sub = grid[j0:j1, i0:i1]
+    sub_lats = lats_axis[j0:j1][:, None]
+    sub_lons = lons_axis[i0:i1][None, :]
+
+    # Equirectangular distance is accurate to <0.1% at a 10 NM scale.
+    dist_nm = _NM_PER_DEG_LAT * np.sqrt(
+        (sub_lats - lat) ** 2 + ((sub_lons - lon) * coslat) ** 2
+    )
+    cells = sub[dist_nm <= radius_nm]
+    return cells[~np.isnan(cells)]
+
+
+def _d2_reduce(
+    cells: "np.ndarray | None", mode: str
+) -> tuple[float | None, bool]:
+    """Reduce corridor cells → (value, corridor_valid).
+
+    ``corridor_valid`` False = no valid (unmasked, in-grid) cells — the channel
+    is UNAVAILABLE here, which is different from a quiet 0/None value.
+    """
+    import numpy as np
+
+    if cells is None or cells.size == 0:
+        return None, False
+    if mode == "max":
+        return float(np.max(cells)), True
+    if mode == "min":
+        return float(np.min(cells)), True
+    if mode == "absmax":
+        # Signed value at the argmax of |x| — keeps the payload's signed
+        # promise for updraft helicity (anticyclonic rotation is negative).
+        return float(cells[int(np.argmax(np.abs(cells)))]), True
+    raise ValueError(f"unknown reduction mode {mode!r}")
+
+
+def _d2_message_step_minutes(gid) -> tuple[int, int]:
+    """(startStep, endStep) of a message in minutes since init.
+
+    Parsed from the ``stepRange`` string, whose delivered forms on the D2 feed
+    are ``"705-720m"`` / ``"0-735m"`` (minutes, trailing ``m``) and ``"11-12"``
+    / ``"0-12"`` (hours, no suffix) — plus single-value forms for instant
+    steps. Reading ``startStep``/``endStep`` as integers is NOT reliable here:
+    eccodes converts them to hours (truncating sub-hourly steps), which is
+    exactly the merge-blindness #462 warns about.
+    """
+    import eccodes
+
+    step_range = str(eccodes.codes_get(gid, "stepRange"))
+    # The 'm' suffix may sit on the range ("705-720m") or on each part
+    # ("705m-720m", eccodes-written form); either way the range is minutes.
+    in_minutes = "m" in step_range
+    parts = [p.rstrip("m") for p in step_range.split("-")]
+    try:
+        if len(parts) == 2:
+            start, end = int(parts[0]), int(parts[1])
+        else:
+            start = end = int(parts[0])
+    except ValueError:
+        raise ValueError(f"unparseable GRIB stepRange {step_range!r}")
+    if not in_minutes:
+        start, end = start * 60, end * 60
+    return start, end
+
+
+def _d2_iter_messages(grib_bytes: bytes):
+    """Yield (gid) for each message in a GRIB byte blob; releases handles."""
+    import eccodes
+
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+    try:
+        with open(tmp_path, "rb") as f:
+            while True:
+                gid = eccodes.codes_grib_new_from_file(f)
+                if gid is None:
+                    break
+                try:
+                    yield gid
+                finally:
+                    eccodes.codes_release(gid)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+# Reduction mode per explicit-convection variable (hour-max single-message
+# fields). `echotop` and `grau_gsp` have bespoke multi-message handling below.
+_D2_HOUR_MAX_MODES = {
+    "dbz_ctmax": "max",
+    "lpi_max": "max",
+    "w_ctmax": "max",
+    "uh_max": "absmax",
+}
+
+
+def decode_icon_d2_explicit_conv_per_point(
+    var_bytes: dict[str, bytes],
+    latitudes: list[float],
+    longitudes: list[float],
+    radius_nm: float = ICON_D2_CORRIDOR_RADIUS_NM,
+) -> list[dict]:
+    """Decode ICON-D2 explicit-convection fields to per-point corridor extrema.
+
+    Args:
+        var_bytes: {variable_name: raw GRIB2 bytes for ONE forecast hour's
+            file}, keyed by the fetch variable names in
+            ``ICON_D2_EXPLICIT_CONV_VARIABLES``. Keying by variable (one file
+            per variable on the DWD feed) removes any dependence on eccodes
+            shortName mappings.
+        latitudes / longitudes: route points.
+        radius_nm: corridor buffer radius.
+
+    Returns one dict per route point:
+        - for dbz_ctmax / lpi_max / w_ctmax / uh_max / grau_gsp:
+            ``{var: (value | None, corridor_valid)}`` — the hour-max (signed
+            argmax|uh| for helicity; on-the-hour since-init accumulation for
+            graupel). ``corridor_valid`` False = channel unavailable here.
+            dbz values at/below the −100 dBZ quiet bar normalize to None
+            (valid + None = genuinely quiet).
+        - ``"echotop_quarters"``: ``{end_minute: (min_pres_pa | None, valid)}``
+            one entry per decoded 15-min window; value None with valid True =
+            no 18 dBZ echo in that window (sentinel −999). The HOURLY echo top
+            is constructed by the enrichment loop from the four windows ending
+            in (H−1, H] — three of them live in the PREVIOUS hour's file, so
+            it cannot be built here.
+
+    Message selection is explicit by step window (minutes since init):
+    hour-max fields take the message ending on the hour with the widest
+    window; graupel takes ONLY the on-the-hour accumulation (never the
+    quarter-hour ones — #462 de-accumulation rule); echotop keeps every
+    quarter window keyed by its end minute.
+    """
+    n_points = len(latitudes)
+    results: list[dict] = [
+        {"echotop_quarters": {}} for _ in range(n_points)
+    ]
+    if not var_bytes:
+        return results
+
+    for var, grib_bytes in var_bytes.items():
+        if not grib_bytes:
+            continue
+        try:
+            if var in _D2_HOUR_MAX_MODES or var == "grau_gsp":
+                _d2_decode_hour_field(
+                    var, grib_bytes, latitudes, longitudes, radius_nm, results,
+                )
+            elif var == "echotop":
+                _d2_decode_echotop(
+                    grib_bytes, latitudes, longitudes, radius_nm, results,
+                )
+            else:
+                logger.debug("Unknown D2 explicit-conv variable %s, skipping", var)
+        except Exception:
+            logger.warning(
+                "Failed to decode ICON-D2 explicit-conv %s", var, exc_info=True,
+            )
+
+    return results
+
+
+def _d2_decode_hour_field(
+    var: str,
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+    radius_nm: float,
+    results: list[dict],
+) -> None:
+    """Decode a single-value-per-hour field (hour-max or on-hour accumulation)."""
+    # Pick the message: end on the hour; among those, the widest window (a
+    # defensive tiebreak in case DWD ever adds quarter-hour messages to the
+    # hour-max files the way grau_gsp carries both).
+    best: tuple[int, tuple] | None = None  # (window_minutes, grid_tuple)
+    for gid in _d2_iter_messages(grib_bytes):
+        start_m, end_m = _d2_message_step_minutes(gid)
+        if end_m % 60 != 0:
+            continue
+        parsed = _d2_read_message_grid(gid)
+        if parsed is None:
+            continue
+        window = end_m - start_m
+        if best is None or window > best[0]:
+            best = (window, parsed)
+    if best is None:
+        return
+    lats_axis, lons_axis, grid = best[1]
+
+    mode = _D2_HOUR_MAX_MODES.get(var, "max")
+    for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
+        cells = _d2_corridor_cells(lats_axis, lons_axis, grid, lat, lon, radius_nm)
+        value, valid = _d2_reduce(cells, mode)
+        if var == "dbz_ctmax" and value is not None and value <= _D2_DBZ_QUIET_MAX_DBZ:
+            value = None  # encoder floor → genuinely quiet, not a number
+        results[i][var] = (value, valid)
+
+
+def _d2_decode_echotop(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+    radius_nm: float,
+    results: list[dict],
+) -> None:
+    """Decode all 15-min `min_pres` echo-top windows, keyed by end minute."""
+    import numpy as np
+
+    for gid in _d2_iter_messages(grib_bytes):
+        _start_m, end_m = _d2_message_step_minutes(gid)
+        parsed = _d2_read_message_grid(gid)
+        if parsed is None:
+            continue
+        lats_axis, lons_axis, grid = parsed
+        # The −999 sentinel means "no echo" — a VALID observation that must
+        # not win the min-pressure reduction. NaN it out but remember which
+        # cells were genuinely valid so completeness stays honest.
+        echo_grid = grid.copy()
+        echo_grid[echo_grid <= _D2_ECHOTOP_NO_ECHO_PA] = np.nan
+        for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
+            all_cells = _d2_corridor_cells(
+                lats_axis, lons_axis, grid, lat, lon, radius_nm,
+            )
+            _value_any, corridor_valid = _d2_reduce(all_cells, "max")
+            echo_cells = _d2_corridor_cells(
+                lats_axis, lons_axis, echo_grid, lat, lon, radius_nm,
+            )
+            min_pres, has_echo = _d2_reduce(echo_cells, "min")
+            results[i]["echotop_quarters"][end_m] = (
+                min_pres if has_echo else None,
+                corridor_valid,
+            )
+
+
+# ---------------------------------------------------------------------------
+# ICON-D2 domain validity mask (#462 domain-gate hardening)
+# ---------------------------------------------------------------------------
+#
+# The delivered D2 regular-lat-lon files are gridType=regular_ll with NO
+# rotated-pole metadata, and ~17% of cells (the corners outside the native
+# rotated-pole rectangle) are bitmap-masked. A route can pass the #461 bbox
+# gate yet clip masked cells. The mask below is built once from any delivered
+# message's bitmap (it tests the actual product, unlike hardcoded rotated-pole
+# constants) and cached; the gate requires the route's ENTIRE corridor buffer
+# to lie in valid cells.
+
+
+def build_d2_validity_mask(grib_bytes: bytes) -> dict | None:
+    """Build {lats, lons, valid} from the first message's bitmap.
+
+    ``valid`` is a bool grid: True where the cell carries data. Returns None
+    when the bytes can't be decoded.
+    """
+    import numpy as np
+
+    try:
+        for gid in _d2_iter_messages(grib_bytes):
+            parsed = _d2_read_message_grid(gid)
+            if parsed is None:
+                continue
+            lats_axis, lons_axis, grid = parsed
+            return {
+                "lats": lats_axis,
+                "lons": lons_axis,
+                "valid": ~np.isnan(grid),
+            }
+    except Exception:
+        logger.warning("Failed to build ICON-D2 validity mask", exc_info=True)
+    return None
+
+
+def d2_corridor_fully_valid(
+    mask: dict,
+    latitudes: list[float],
+    longitudes: list[float],
+    radius_nm: float = ICON_D2_CORRIDOR_RADIUS_NM,
+) -> bool:
+    """True when every route point's corridor buffer lies entirely in valid cells.
+
+    All-or-nothing, matching the #456 domain rule: one clipped corner fails
+    the whole route (→ ICON-EU), never a per-point mix.
+    """
+    import numpy as np
+
+    lats_axis = mask["lats"]
+    lons_axis = mask["lons"]
+    valid = mask["valid"]
+    # Invalid cells become NaN so the corridor gather counts them as missing;
+    # completeness of the gather then equals "no masked cell in the buffer".
+    grid = np.where(valid, 1.0, np.nan)
+
+    for lat, lon in zip(latitudes, longitudes):
+        cells = _d2_corridor_cells(lats_axis, lons_axis, grid, lat, lon, radius_nm)
+        if cells is None:
+            return False
+        # Count cells inside the buffer INCLUDING masked ones, by gathering on
+        # an all-ones grid; if any were dropped as NaN the corridor clips the
+        # masked corner.
+        all_cells = _d2_corridor_cells(
+            lats_axis, lons_axis, np.ones_like(grid), lat, lon, radius_nm,
+        )
+        if all_cells is None or cells.size != all_cells.size or cells.size == 0:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------

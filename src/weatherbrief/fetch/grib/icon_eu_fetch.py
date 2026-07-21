@@ -70,6 +70,12 @@ class IconVariant:
             this variant. NOT identical between variants: ICON-D2 has no deep-
             convection parameterization, so ``hbas_con``/``htop_con``/``rain_con``
             don't exist (or are meaningless) on its feed — see the D2 tuple below.
+        explicit_conv_variables: Explicit-convection storm diagnostics (#462) —
+            reflectivity, echo top, LPI, updraft, updraft helicity, graupel.
+            Only convection-permitting variants (D2) publish these; empty for
+            EU. Fetched into their OWN per-variable cache blobs (not the shared
+            cloud-diag blob) because several are multi-message sub-hourly files
+            that need message-level ``stepRange`` selection at decode.
     """
 
     slug: str
@@ -93,6 +99,23 @@ class IconVariant:
     hourly_to_h: int
     coarse_step_h: int
     cloud_diag_variables: tuple[str, ...]
+    explicit_conv_variables: tuple[str, ...] = ()
+
+    @property
+    def needs_predecessor_step(self) -> bool:
+        """True when the flight window's first hour needs the f(H−1) files too.
+
+        Two independent reasons (#421 / #462), one variant-level flag so the
+        prefetch and enrichment loops can't drift apart:
+        - an accumulated-since-init field (``rain_con`` on EU, ``grau_gsp`` on
+          D2) needs the previous step to de-accumulate the first hour's value;
+        - the D2 hourly echo top is constructed from four 15-min windows, three
+          of which live in file f(H−1) (see #462 sub-hourly message structure).
+        """
+        return (
+            "rain_con" in self.cloud_diag_variables
+            or bool(self.explicit_conv_variables)
+        )
 
 
 # Single-level cloud diagnostic variables (ICON-EU).
@@ -133,6 +156,31 @@ ICON_D2_CLOUD_DIAG_VARIABLES = (
     "ceiling",
     "clcl", "clcm", "clch", "clct",
     "cape_ml", "cin_ml",
+)
+
+# Explicit-convection storm diagnostics for ICON-D2 (#462) — the convection-
+# permitting replacement for the parameterized hbas_con/htop_con/rain_con
+# track. All verified live against opendata.dwd.de (2026-07-21):
+# - dbz_ctmax — column-max simulated reflectivity, max over the previous hour
+#   (dBZ, stepType=max, one full-hour message). The firing signal.
+# - echotop — LOWEST PRESSURE (= highest altitude) with reflectivity > 18 dBZ
+#   (shortName min_pres, Pa, stepType=min, sentinel −999). FOUR 15-min
+#   messages per file; the hourly value is CONSTRUCTED at enrichment as the
+#   min over the four windows ending in (H−1, H]. Never a cloud top.
+# - lpi_max — Lightning Potential Index, max over previous hour (J/kg).
+# - w_ctmax — max updraft 0–10 km over previous hour (m/s).
+# - uh_max — updraft helicity 2–8 km AGL, SIGNED max amplitude (m²/s²).
+#   Narrative/character only in v1 (HRRR 2–5 km thresholds NOT portable).
+# - grau_gsp — grid-scale graupel, kg/m² ≡ mm, ACCUMULATED since init; one
+#   on-the-hour message + three quarter-hour messages per file. De-accumulated
+#   from the ON-THE-HOUR messages only (rain_con machinery precedent, #421).
+# dbz_cmax (instantaneous) and tcond10_mx are deliberately NOT fetched in v1
+# (optional per #462; tcond10_mx deferred pending calibration). These fields
+# are fetched into per-variable cache blobs (see icon_explicit_conv_cache_key)
+# and decoded with message-level stepRange selection — NOT via the shared
+# cloud-diag cfgrib path, whose blob/decode assumes one message per variable.
+ICON_D2_EXPLICIT_CONV_VARIABLES = (
+    "dbz_ctmax", "echotop", "lpi_max", "w_ctmax", "uh_max", "grau_gsp",
 )
 
 
@@ -204,6 +252,7 @@ ICON_D2 = IconVariant(
     hourly_to_h=48,
     coarse_step_h=1,
     cloud_diag_variables=ICON_D2_CLOUD_DIAG_VARIABLES,
+    explicit_conv_variables=ICON_D2_EXPLICIT_CONV_VARIABLES,
 )
 
 # Back-compat module constants (ICON-EU). The variant above is the single
@@ -293,8 +342,28 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     ``{cache_prefix}_CLOUD_DIAG_V2`` — the ``_V2`` suffix matches the ICON-EU
     constant so the two share the same rain_con-inclusive schema; only the
     prefix differs so ICON-D2 blobs never masquerade as ICON-EU in a cache dir.
+
+    #462 note: the D2 explicit-convection fields deliberately do NOT join this
+    blob (they live in per-variable blobs under
+    :func:`icon_explicit_conv_cache_key`), so the cloud-diag blob's content is
+    unchanged and the #421-style version bump the issue sketched is not needed
+    — warm cloud-diag caches remain schema-correct. Keeping them separate also
+    keeps the EU/D2 cloud-diag schema shared and lets the sub-hourly explicit
+    files use message-level decode instead of the cfgrib blob path.
     """
     return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
+
+
+def icon_explicit_conv_cache_key(variable: str, variant: IconVariant) -> str:
+    """Cache-key label for one explicit-convection variable's per-fhour blob.
+
+    Per-variable (``ICON_D2_EXPL_DBZ_CTMAX_V1`` …) rather than one combined
+    blob: the decoder must know which physical field it is looking at without
+    guessing eccodes shortNames (DWD's mappings are quirky — rain_con decodes
+    as ``crr``), and several of these files carry multiple sub-hourly messages
+    that are selected by ``stepRange`` per field.
+    """
+    return f"{variant.cache_prefix}_EXPL_{variable.upper()}_V1"
 
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 8
@@ -639,6 +708,28 @@ def icon_eu_conv_rain_rate_mm_h(
     if rain_con is None or prev_rain_con is None or window_h is None or window_h <= 0:
         return None
     return max(0.0, (rain_con - prev_rain_con) / window_h)
+
+
+def icon_d2_hourly_accum_mm(
+    accum: float | None,
+    prev_accum: float | None,
+    window_h: float | None,
+) -> float | None:
+    """De-accumulate a since-init D2 field into an HOURLY accumulation (mm).
+
+    Used for ``grau_gsp`` (#462): kg/m² ≡ mm — already mm, NO ×1000 (that
+    conversion is only for ECMWF metre-water-equivalent fields). The window
+    must be exactly one hour — D2 is hourly, so any other window means a step
+    went missing and differencing across it would silently average a
+    multi-hour delta into one "hour"; unknown (``None``) is the honest value
+    then. Same None ≠ 0 contract as :func:`icon_eu_conv_rain_rate_mm_h`
+    (#421): a missing channel must never read as a real dry hour.
+    """
+    if accum is None or prev_accum is None or window_h is None:
+        return None
+    if abs(window_h - 1.0) > 1e-6:
+        return None
+    return max(0.0, accum - prev_accum)
 
 
 def compute_icon_eu_flight_window_hours(

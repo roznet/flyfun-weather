@@ -88,6 +88,15 @@ def propagate_all(
     # ``nwp_cloud_diagnostics is not None`` as the GRIB-anchor detector, and
     # diag fill propagates / interpolates diagnostics onto gap hours, making
     # every hour look like an anchor afterwards.
+    #
+    # Registered NO-FILL (#462): ``explicit_convective_diagnostics`` (ICON-D2
+    # explicit-convection corridor extrema) is deliberately absent from every
+    # pass here. Its fields are 1-hour interval maxima attached at the hour
+    # ending their window — on D2's hourly grid there are no gap hours to
+    # fill, and an hour whose channel failed has NO covering interval to hold
+    # over (unlike the ECMWF gust, whose window spans the gap), so any fill
+    # would fabricate a maximum for an unmeasured hour. Never linearly
+    # interpolate dBZ (logarithmic) either.
     _linear_interp_ecmwf_surface(sections, all_forecasts)
     _fill_cloud_diagnostics(sections, all_forecasts, gfs_init=gfs_init)
     _linear_interp_pressure_levels(sections, all_forecasts)

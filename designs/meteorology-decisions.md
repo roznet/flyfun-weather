@@ -1958,3 +1958,130 @@ follow-up:
 - Watch for any all-quiet-NWP sounding that *did* produce observed convection
   (lightning/METAR-TS) — that is the case the removed floor was protecting, and
   the one that would argue for a narrower cap.
+
+## 19. ICON-D2 explicit-convection track: reflectivity-driven firing with corroborated severity
+
+**Date:** 2026-07-21
+**Status:** Implemented (#462, building on the #456/#461 D2 slot).
+**Context:** ICON-D2 is convection-permitting — it runs **no deep-convection
+parameterization**, so the diagnostics the icon slot's NWP convective track
+grades on elsewhere (`hbas_con`/`htop_con` geometry, `rain_con` realization)
+either 404 on the D2 feed or silently change meaning. #461 deliberately shipped
+those fields **unfetched** on D2 (missing-data semantics); until this entry, a
+D2-sourced icon slot therefore had *no* model-native convective signal at all.
+Deep convection in D2 lives in explicit storm fields — simulated reflectivity,
+echo top, lightning potential, updrafts, graupel — a different *kind* of signal,
+carried end-to-end as its own track (`NWPExplicitConvectiveDiagnostics` payload,
+`assess_convective_explicit`, `method="nwp_explicit"`) and never blended into
+the parameterized concepts.
+
+### The decision — v1 firing/severity table
+
+The firing signal is `dbz_ctmax` (column-max simulated reflectivity, max over
+the previous hour), reduced to a **corridor maximum** over a ~10 NM route
+buffer. The corroborator set C (each channel counts 1 when **complete AND over
+threshold**): `lpi_max ≥ 1 J/kg` (≥ 5 counts 2) · `w_ctmax ≥ 10 m/s` ·
+`graupel_hour_mm ≥ 0.5` · `cape_ml ≥ 500 J/kg`.
+
+| Corridor `dbz_ctmax` | \|C\| = 0 | \|C\| = 1 | \|C\| ≥ 2 |
+|---|---|---|---|
+| < 35 dBZ | no fire | no fire | no fire |
+| 35–44 dBZ | **no fire** — "echo present, likely stratiform/melting-band" note | MARGINAL | MODERATE |
+| 45–49 dBZ | MODERATE | MODERATE | HIGH |
+| ≥ 50 dBZ | HIGH | HIGH | HIGH |
+
+These are **calibration starting points, not physical constants** — revisit
+against the #462 validation cases (2026-06-27 EGTF→LFAT→LFQA, 2026-06-21
+LFMD→EGTF hits; stratiform bright-band and winter graupel-shower quiet
+controls). `|uh_max| ≥ 25 m²/s²` is a rotation/character **note only** in v1 —
+HRRR updraft-helicity thresholds are NOT portable (2–8 km layer here vs
+HRRR's 2–5 km).
+
+### Hard rules carried into code (each with a test)
+
+1. **Echo top is not a cloud top.** The 18 dBZ echo top sits *below* the
+   physical storm top (anvil ice reflects weakly). The explicit assessment sets
+   `top_ft=None` unconditionally, so the overfly-clearance filter
+   (`top_ft + clearance ≤ cruise`) structurally cannot consume it — it would
+   err in the dangerous direction ("safe to overfly" under a higher anvil).
+   The value travels only as the dedicated `echo_top_18dbz_ft` detail field;
+   D2 cells render with unresolved vertical geometry (ghost column).
+2. **Never linearly interpolate dBZ** (logarithmic). Corridor-max extraction at
+   decode replaces per-point bilinear sampling entirely for these fields, and
+   they are registered as explicit SKIPs in both the time-axis fill and the
+   spatial interpolator.
+3. **Interval maxima attach to `(H−1, H]`.** The hourly echo top is
+   *constructed*: min pressure across exactly the four 15-min `min_pres`
+   windows ending at H−45 … H (three live in file f(H−1) — the predecessor
+   fetch now serves both this and graupel de-accumulation). A missing quarter
+   degrades `echo_top_complete` — never a partial min presented as the hourly
+   value. No hold-over fill: a 1-hour maximum from a failed hour has no
+   covering interval (contrast the ECMWF gust precedent, whose window spans
+   the gap), so a missing hour stays honestly unavailable.
+4. **Graupel ≠ hail** — wording everywhere is "graupel / strong mixed-phase
+   core". De-accumulation uses the **on-the-hour** since-init messages only
+   (the quarter-hour accumulations in the same file are never mixed in).
+5. **None ≠ 0 (#421), per tier.** Completeness means "valid unmasked corridor
+   cells decoded", not "file downloaded": an all-masked corridor is
+   UNAVAILABLE; a −150 dBZ encoder floor is genuinely QUIET (normalized to
+   `None` + `detection_complete=True`). `detection_complete=False` produces
+   **no assessment at all** (`convective_nwp=None` +
+   `convective_explicit_unavailable=True`) — never an NWP NONE ("scheme
+   quiet"), never a "quiet scheme" reading in cross-checks, never a CAPE-only
+   fallback presented as D2's explicit verdict. Grading then falls back to the
+   thermo track, truthfully badged. Incomplete corroborator channels never
+   move the tier in either direction — |C| counts only complete channels, and
+   a zero on one channel never suppresses positive evidence on another.
+6. **No CIN suppression of a simulated echo.** The model already convected;
+   penalising the echo on surface/ML CIN would be circular — same reasoning as
+   the `nwp_precip` path (§14).
+
+### Rejected alternatives
+
+- **Mapping `hbas_sc`/`htop_sc` (shallow scheme) into convective_base/top** —
+  would show a benign fair-weather-cumulus top during a real storm (#461).
+- **Feeding D2 `rain_con` into `convective_precip_mm_h`** — near-zero even in
+  severe explicit storms; would read "quiet" exactly when D2 sees a storm.
+- **Per-point bilinear sampling of the storm fields** — a cell between 10 NM
+  route points (or displaced a few km by timing error) vanishes, making the
+  2.2 km model *less* likely to fire than coarse models. Corridor extrema
+  instead; recorded as such in the payload docstring.
+- **Reflectivity alone (no corroborators)** — 35–44 dBZ is reachable by
+  stratiform rain and melting-band bright-band; the quiet controls exist
+  precisely because "fires at least as early as EU" alone rewards false
+  alarms. Hence the corroborated middle rows and the C0 no-fire band.
+- **dbz_cmax (instantaneous) as the core field** — a brief core between hourly
+  samples would be missed; the hour-max `dbz_ctmax` is the firing signal
+  (dbz_cmax left unfetched in v1). Same reasoning prefers accumulated
+  `grau_gsp` over instantaneous `prg_gsp`.
+- **`tcond10_mx`** — deferred from v1 (no payload field); the "10" is the
+  −10 °C isotherm, not 10 g/kg — revisit with calibration.
+- **Sharing the cloud-diag cache blob + V2→V3 key bump** (the issue's sketch)
+  — the explicit fields live in **per-variable blobs** with their own key
+  (`ICON_D2_EXPL_<VAR>_V1`) instead: the decoder must know which physical
+  field it is reading without trusting eccodes shortNames, several files are
+  multi-message sub-hourly (message-level `stepRange` selection, never a
+  cfgrib blob merge), and the cloud-diag blob's content is then unchanged so
+  no bump is needed — warm caches stay schema-correct.
+
+### Aggregation — explicitly NOT decided here
+
+A lone D2 explicit cell against quiet coarse models still aggregates GREEN
+under majority rules. The proposed "high-confidence D2 explicit convection
+floors the aggregate at AMBER" changes aggregation semantics → decide inside
+the #442 grade framework with its own entry. The per-model D2 tier is fully
+visible in the per-model breakdown regardless, and the explicit DD-vs-model
+cross-check (`_explicit_cross_check`) surfaces "ICON-D2 explicitly develops a
+cell; thermodynamics quiet" divergences per point.
+
+### Domain-gate hardening (carried from #461 review)
+
+The delivered D2 regular-lat-lon files are `regular_ll` with no rotated-pole
+metadata and ~17 % bitmap-masked corner cells. A route can pass the #461 bbox
+gate yet clip masked cells. The gate now also requires the route's **entire
+corridor buffer** to lie in valid cells, tested against a cached validity mask
+built once from a delivered message's bitmap (testing the actual product was
+preferred over hardcoding DWD's rotated-pole constants). Mask unavailable →
+fail-open to the bbox gate (behaviour then no worse than #461 — masked corners
+decode as unavailable, not wrong); corridor clips masked cells → the whole
+slot falls back to ICON-EU, same all-or-nothing rule as the bbox.

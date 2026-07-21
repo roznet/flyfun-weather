@@ -234,6 +234,7 @@ def analyze_sounding_lite(
         detect_cloud_layers,
     )
     from weatherbrief.analysis.sounding.convective import (
+        assess_convective_explicit,
         assess_convective_nwp,
         assess_convective_thermo,
     )
@@ -311,9 +312,25 @@ def analyze_sounding_lite(
     convective = assess_convective_thermo(
         indices, omega_700_pa_s=_omega_near_700(derived_levels)
     )
-    convective_nwp = assess_convective_nwp(
-        indices, hourly.nwp_cloud_diagnostics if hourly else None,
-    )
+    # NWP-track slot: explicit-convection mode when the hour carries a
+    # convection-permitting payload (ICON-D2, #462) — its presence IS the mode
+    # signal. The parameterized assess_convective_nwp path would otherwise read
+    # D2's structurally-absent scheme diagnostics as a quiet scheme exactly
+    # when the model sees a storm. When the explicit detection channel is
+    # incomplete the assessment is None ("explicit assessment unavailable" —
+    # never a quiet NONE, never a CAPE fallback) and the flag below keeps the
+    # unavailability distinguishable from an Open-Meteo-only model.
+    explicit_diag = hourly.explicit_convective_diagnostics if hourly else None
+    convective_explicit_unavailable = False
+    if explicit_diag is not None:
+        convective_nwp = assess_convective_explicit(
+            indices, hourly.nwp_cloud_diagnostics if hourly else None, explicit_diag,
+        )
+        convective_explicit_unavailable = convective_nwp is None
+    else:
+        convective_nwp = assess_convective_nwp(
+            indices, hourly.nwp_cloud_diagnostics if hourly else None,
+        )
 
     # Compute ceiling from NWP-reclassified cloud layers
     sounding_ceiling_ft = compute_sounding_ceiling_ft(
@@ -344,6 +361,7 @@ def analyze_sounding_lite(
         convective=convective,
         convective_thermo=convective,
         convective_nwp=convective_nwp,
+        convective_explicit_unavailable=convective_explicit_unavailable,
         precipitation=None,
         vertical_motion=None,
         cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,
