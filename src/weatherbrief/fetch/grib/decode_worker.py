@@ -196,26 +196,36 @@ def decode_gfs_cloud_diag(
 
 
 def decode_icon_chunked(
-    var_paths: dict[str, str],
+    var_paths: dict[str, list[str]],
     latitudes: list[float],
     longitudes: list[float],
 ) -> tuple[list[dict[int, dict[str, float]]], list[dict[str, float]]]:
-    """Read ICON-EU per-variable bytes from cache and decode chunked.
+    """Read ICON per-variable bytes from cache and decode chunked.
 
     Reading the bytes inside the worker keeps the parent process from
     holding ~70 MB × 8 vars = ~560 MB per fhour — that was the dominant
     parent-RSS contributor before this change.
+
+    ``var_paths`` maps each variable to a LIST of cache-file paths, which are
+    concatenated into that variable's GRIB2 byte stream. A whole-column blob
+    (ICON-EU, or a legacy ICON-D2 hit) is a one-element list; the per-level
+    cache (ICON-D2, #469) is one path per model level. cfgrib indexes messages
+    by their level coordinate, so concatenation order is irrelevant.
     """
-    # ICON takes a dict of var→path; log the first var's file as a representative.
+    # ICON takes a dict of var→paths; log the first var's first file as a rep.
     fn_label = "decode_icon_chunked"
     rep_path = ""
     if var_paths:
         first_var = next(iter(var_paths))
         fn_label = f"decode_icon_chunked[{first_var}+{len(var_paths)-1}]"
-        rep_path = var_paths[first_var]
+        first_paths = var_paths[first_var]
+        rep_path = first_paths[0] if first_paths else ""
     with _log_decode(fn_label, rep_path):
         from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point_chunked
-        var_bytes = {var: Path(p).read_bytes() for var, p in var_paths.items()}
+        var_bytes = {
+            var: b"".join(Path(p).read_bytes() for p in paths)
+            for var, paths in var_paths.items()
+        }
         return decode_icon_eu_per_point_chunked(var_bytes, latitudes, longitudes)
 
 

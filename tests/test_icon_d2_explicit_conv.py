@@ -565,8 +565,15 @@ class TestExplicitConvPrefetch:
             (var,) = variables
             return {var: f"{fhour}-{var}".encode()}
 
+        def fake_per_level(init_date, init_hour, fhour, levels, variables,
+                           session=None, max_workers=8, variant=ICON_D2):
+            # ICON-D2 caches per (variable, level) (#469); return one blob per file.
+            (var,) = variables
+            return {(var, level): f"{fhour}-{var}-{level}".encode() for level in levels}
+
         monkeypatch.setattr(icon_fetch_mod, "fetch_icon_eu_single_level", fake_single_level)
         monkeypatch.setattr(icon_fetch_mod, "fetch_icon_eu_per_variable", fake_per_variable)
+        monkeypatch.setattr(icon_fetch_mod, "fetch_icon_eu_per_level", fake_per_level)
         monkeypatch.setenv("GRIB_ICON_PREFETCH_WORKERS", "1")
 
         ctx = grib_mod._IconEuContext(
