@@ -1321,7 +1321,7 @@ def _build_pack_meta(
     # direct-GRIB source where GRIB enrichment succeeded.  Used by the
     # marker-based freshness check (issue #108).
     model_sources: dict[str, str] = {m: f"{m}:openmeteo" for m in init_times}
-    grib_sources = getattr(result, "grib_sources", None) or {}
+    grib_sources = result.grib_sources or {}
     for m in result.grib_init_times:
         # Prefer the source the enrichment actually used (icon may be D2 or EU,
         # #456); fall back to the static default for legacy results.

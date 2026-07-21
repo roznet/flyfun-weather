@@ -519,9 +519,14 @@ function renderSourcesPopupContent(sources: ModelSourceDetail[]): string {
   for (const [model, modelRows] of byModel) {
     const primary = modelRows.find(r => r.role === 'primary') || modelRows[0];
     const ordered = [primary, ...modelRows.filter(r => r !== primary)];
+    // Match the summary line's D2 tagging (#456): the icon slot may be served
+    // by ICON-D2, and the popover must show the same distinction.
+    const label = primary.source === 'icon_d2:dwd'
+      ? `${modelLabel(model)} (D2)`
+      : modelLabel(model);
     ordered.forEach((r, idx) => {
       const modelCell = idx === 0
-        ? `<td class="freshness-popup-model">${escapeHtml(modelLabel(model))}</td>`
+        ? `<td class="freshness-popup-model">${escapeHtml(label)}</td>`
         : `<td></td>`;
       const published = r.published_at
         ? formatPopupTime(r.published_at)
