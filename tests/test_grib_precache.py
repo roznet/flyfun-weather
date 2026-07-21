@@ -338,6 +338,17 @@ class TestIconD2FlightWarming:
         assert stats["flights_warmed"] == 0
         assert stats["flights_considered"] == 0
 
+    def test_default_now_resolves_without_nameerror(self):
+        # Production always omits `now` (scheduler passes only init + db_path),
+        # so the `now or datetime.now(timezone.utc)` branch must actually
+        # evaluate — with a non-empty db_path so it runs past the early return.
+        # Regression for the missing `timezone` import (PR #470 review).
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        with patch("flyfun_common.db.SessionLocal", return_value=_FakeDB([])):
+            stats = precache_icon_d2_flights(_utc(2026, 7, 21, 0), db_path="/db")
+        assert stats["flights_considered"] == 0  # no rows, but no NameError
+
     def test_only_d2_eligible_flights_warmed(self):
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
         from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
