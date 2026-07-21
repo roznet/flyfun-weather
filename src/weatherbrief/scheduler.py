@@ -1397,6 +1397,7 @@ async def run_grib_precache_loop(app_state) -> None:
     from weatherbrief.fetch.grib.precache import (
         MAIN_CYCLE_HOURS,
         precache_gfs_run,
+        precache_icon_d2_flights,
         precache_icon_eu_run,
     )
     from weatherbrief.fetch.freshness.markers import get_store
@@ -1434,6 +1435,24 @@ async def run_grib_precache_loop(app_state) -> None:
                     source_key, key, stats,
                 )
                 last_done[source_key] = key
+
+            # ICON-D2 flight warming (#469 phase 3). Distinct from the
+            # airport-profile precache above: it warms the D2 cache for the
+            # actual upcoming flights, on EVERY fresh D2 run (all 8 cycles, not
+            # just the four main ones) so a briefing lands on the freshest run's
+            # warm cache. Keyed separately so a shared run hour can't collide
+            # with an EU/GFS entry in last_done.
+            d2_marker = store.get_sync("icon_d2:dwd", "icon_d2")
+            if d2_marker is not None:
+                d2_key = d2_marker.init.strftime("%Y%m%d_%Hz")
+                if last_done.get("icon_d2:flights") != d2_key:
+                    db_path = getattr(app_state, "db_path", "")
+                    logger.info("Warming ICON-D2 cache for upcoming flights (run %s)", d2_key)
+                    stats = await asyncio.to_thread(
+                        precache_icon_d2_flights, d2_marker.init, db_path,
+                    )
+                    logger.info("ICON-D2 flight warm %s done: %s", d2_key, stats)
+                    last_done["icon_d2:flights"] = d2_key
         except Exception:
             logger.error("GRIB pre-cache loop cycle failed", exc_info=True)
         await asyncio.sleep(_GRIB_PRECACHE_POLL_SECONDS)

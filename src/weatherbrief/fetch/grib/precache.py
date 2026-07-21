@@ -162,6 +162,118 @@ def precache_icon_eu_run(init: datetime) -> dict[str, int]:
     }
 
 
+# ICON-D2 flight warming (#469 phase 3) -----------------------------------
+#
+# Unlike the airport-profile precache above (a fixed D-0..D-3 grid for the
+# maps), this warms ONLY what we already know will be asked for: the routes,
+# window hours, and ceilings of flights actually in the DB for the next
+# WARM_HORIZON_HOURS. It reuses the flight-briefing prepare+prefetch path
+# verbatim (_prepare_icon_eu → _prefetch_icon_eu_data), so the warmed cache is
+# byte-for-byte what an on-demand briefing would fetch — same run, same
+# ceiling-limited per-level files (phases 1+2) — giving a near-100% hit rate
+# instead of the ~20% a broad daylight precache would (the rejected option in
+# #469). Broad daylight precaching was 2–4× more DWD bandwidth than on-demand.
+
+# D2's model-level horizon is 48h, so a flight beyond that can't be served by
+# any single D2 run — no point warming it.
+WARM_HORIZON_HOURS = 48
+
+
+def precache_icon_d2_flights(
+    init: datetime,
+    db_path: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Warm the ICON-D2 cache for flights departing within the next 48h.
+
+    Called after a D2 run publishes. For each upcoming flight whose route fits
+    the D2 domain and whose window a D2 run covers, this runs the SAME
+    prepare+prefetch the briefing pipeline runs, so the cache it fills is
+    exactly what the briefing will read. Flights served by ICON-EU (outside the
+    D2 domain, or window beyond 48h) are skipped here — EU warming is the
+    airport-profile precache's job.
+
+    ``init`` is the freshly-published run (used only for logging; run selection
+    goes through the normal freshest-run finder so it matches the briefing).
+    ``db_path`` is the airports DB for waypoint resolution; empty → no-op.
+    """
+    from weatherbrief.fetch.grib import _prefetch_icon_eu_data, _prepare_icon_eu
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+    from weatherbrief.fetch.route_points import interpolate_route
+    from weatherbrief.models import ModelSource, RouteCrossSection
+
+    stats = {"flights_considered": 0, "flights_warmed": 0, "flights_skipped": 0}
+
+    if not db_path:
+        logger.warning("ICON-D2 flight warm: AIRPORTS_DB not configured, skipping")
+        return stats
+
+    from flyfun_common.db import SessionLocal
+    from sqlalchemy import select
+
+    from weatherbrief.api.packs import _build_route_config
+    from weatherbrief.db.models import FlightRow
+    from weatherbrief.storage.flights import _row_to_flight
+
+    reference = now or datetime.now(timezone.utc)
+    horizon_end = reference + timedelta(hours=WARM_HORIZON_HOURS)
+    data_dir = _data_dir()
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(FlightRow)
+            .where(FlightRow.departure_time >= reference)
+            .where(FlightRow.departure_time <= horizon_end)
+        ).scalars().all()
+    finally:
+        db.close()
+
+    for row in rows:
+        stats["flights_considered"] += 1
+        try:
+            flight = _row_to_flight(row)
+            route = _build_route_config(flight, db_path)
+            route_points = interpolate_route(route, spacing_nm=10.0)
+            if not route_points:
+                stats["flights_skipped"] += 1
+                continue
+
+            icon_section = RouteCrossSection(
+                model=ModelSource.ICON,
+                route_points=[],
+                fetched_at=reference,
+                point_forecasts=[],
+            )
+            ctx, _skip = _prepare_icon_eu(
+                [icon_section], route_points, flight.departure_time,
+                data_dir=data_dir,
+                flight_duration_hours=route.flight_duration_hours,
+                flight_ceiling_ft=route.flight_ceiling_ft,
+            )
+            # Only warm D2. An EU context means the route/window isn't D2-eligible
+            # (or no covering D2 run) — the airport-profile precache warms EU.
+            if ctx is None or ctx.variant is not ICON_D2:
+                stats["flights_skipped"] += 1
+                continue
+
+            _prefetch_icon_eu_data(ctx)
+            stats["flights_warmed"] += 1
+        except Exception:
+            stats["flights_skipped"] += 1
+            logger.warning(
+                "ICON-D2 flight warm failed for flight %s",
+                getattr(row, "id", "?"), exc_info=True,
+            )
+
+    logger.info(
+        "ICON-D2 flight warm (run %s): %s",
+        init.strftime("%Y%m%d_%Hz"), stats,
+    )
+    return stats
+
+
 def precache_gfs_run(init: datetime) -> dict[str, int]:
     """Pre-cache GFS CLWMR/ICMR + cloud diagnostics for D-0..D-3.
 
