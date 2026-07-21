@@ -710,26 +710,40 @@ def icon_eu_conv_rain_rate_mm_h(
     return max(0.0, (rain_con - prev_rain_con) / window_h)
 
 
-def icon_d2_hourly_accum_mm(
-    accum: float | None,
-    prev_accum: float | None,
+def icon_d2_hourly_graupel_mm(
+    cells: dict | None,
+    prev_cells: dict | None,
     window_h: float | None,
 ) -> float | None:
-    """De-accumulate a since-init D2 field into an HOURLY accumulation (mm).
+    """De-accumulate per-cell ``grau_gsp`` into a corridor-max hourly value (mm).
 
-    Used for ``grau_gsp`` (#462): kg/m² ≡ mm — already mm, NO ×1000 (that
-    conversion is only for ECMWF metre-water-equivalent fields). The window
-    must be exactly one hour — D2 is hourly, so any other window means a step
-    went missing and differencing across it would silently average a
-    multi-hour delta into one "hour"; unknown (``None``) is the honest value
-    then. Same None ≠ 0 contract as :func:`icon_eu_conv_rain_rate_mm_h`
-    (#421): a missing channel must never read as a real dry hour.
+    Each input maps a corridor grid cell (keyed by grid index) to its
+    since-init accumulation at the current / previous on-the-hour step. The
+    hourly value is the **corridor max of the per-cell deltas** — diff first,
+    reduce second: differencing two independently-reduced corridor maxima
+    understates whenever the cell holding the running maximum shifts between
+    hours (a moving cell's real hourly peak would vanish, #463 review). Cells
+    without a predecessor value (fresh in the corridor decode) can't be
+    differenced and are skipped; no common cells → ``None``.
+
+    Units: kg/m² ≡ mm — already mm, NO ×1000 (that conversion is only for
+    ECMWF metre-water-equivalent fields). The window must be exactly one hour
+    — D2 is hourly, so any other window means a step went missing and
+    differencing across it would silently average a multi-hour delta into one
+    "hour"; unknown (``None``) is the honest value then. Per-cell deltas are
+    clamped at 0 (a decreasing accumulation is a new-run/GRIB glitch, not
+    negative graupel). Same None ≠ 0 contract as
+    :func:`icon_eu_conv_rain_rate_mm_h` (#421): a missing channel must never
+    read as a real dry hour.
     """
-    if accum is None or prev_accum is None or window_h is None:
+    if not cells or not prev_cells or window_h is None:
         return None
     if abs(window_h - 1.0) > 1e-6:
         return None
-    return max(0.0, accum - prev_accum)
+    common = cells.keys() & prev_cells.keys()
+    if not common:
+        return None
+    return max(max(0.0, cells[k] - prev_cells[k]) for k in common)
 
 
 def compute_icon_eu_flight_window_hours(

@@ -19,7 +19,7 @@ from weatherbrief.fetch.grib.icon_eu_fetch import (
     ICON_D2,
     ICON_D2_EXPLICIT_CONV_VARIABLES,
     ICON_EU,
-    icon_d2_hourly_accum_mm,
+    icon_d2_hourly_graupel_mm,
     icon_explicit_conv_cache_key,
 )
 from weatherbrief.models import (
@@ -67,22 +67,37 @@ class TestExplicitConvConfig:
 
 
 class TestGraupelDeaccumulation:
-    def test_hourly_delta(self):
-        assert icon_d2_hourly_accum_mm(3.5, 2.0, 1.0) == pytest.approx(1.5)
+    def test_hourly_delta_per_cell(self):
+        cur = {(0, 0): 3.5}
+        prev = {(0, 0): 2.0}
+        assert icon_d2_hourly_graupel_mm(cur, prev, 1.0) == pytest.approx(1.5)
 
-    def test_clamped_at_zero(self):
+    def test_diff_then_reduce_catches_moving_cell(self):
+        # The cell holding the corridor max shifts between hours: reduce-then-
+        # diff would compute max(H) − max(H−1) = 5.0 − 5.0 = 0 and miss the
+        # real 4.0 mm hourly peak in cell (1,1) (#463 review). Diff-then-
+        # reduce takes the per-cell deltas first.
+        prev = {(0, 0): 5.0, (1, 1): 0.0}
+        cur = {(0, 0): 5.0, (1, 1): 4.0}
+        assert icon_d2_hourly_graupel_mm(cur, prev, 1.0) == pytest.approx(4.0)
+
+    def test_per_cell_clamped_at_zero(self):
         # Decreasing accumulation (new run / GRIB glitch) → 0, not negative.
-        assert icon_d2_hourly_accum_mm(1.0, 2.0, 1.0) == 0.0
+        assert icon_d2_hourly_graupel_mm({(0, 0): 1.0}, {(0, 0): 2.0}, 1.0) == 0.0
 
     def test_none_is_unknown_not_zero(self):
-        assert icon_d2_hourly_accum_mm(None, 2.0, 1.0) is None
-        assert icon_d2_hourly_accum_mm(3.5, None, 1.0) is None
-        assert icon_d2_hourly_accum_mm(3.5, 2.0, None) is None
+        assert icon_d2_hourly_graupel_mm(None, {(0, 0): 2.0}, 1.0) is None
+        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, None, 1.0) is None
+        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, {(0, 0): 2.0}, None) is None
+
+    def test_disjoint_cells_are_unknown(self):
+        # No common cells between the two hours → nothing to difference.
+        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, {(1, 1): 2.0}, 1.0) is None
 
     def test_non_hourly_window_is_unknown(self):
         # A skipped step means the delta spans >1h — differencing it into a
         # single "hour" would silently dilute the rate.
-        assert icon_d2_hourly_accum_mm(3.5, 2.0, 2.0) is None
+        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, {(0, 0): 2.0}, 2.0) is None
 
 
 # ---------------------------------------------------------------------------
@@ -195,13 +210,15 @@ class TestExplicitConvDecode:
         # The quarter-hour since-init accumulation (0–735m) carries a LARGER
         # value; de-accumulation must still read the on-the-hour (0–720m)
         # message — mixing the two would corrupt the hourly delta (#462 rule).
+        # Graupel decodes to a PER-CELL map (diff-then-reduce at enrichment).
         on_hour = _grid(2.0)
         quarter = _grid(9.0)
         blob = _make_msg(on_hour, 0, 720, "accum") + _make_msg(quarter, 0, 735, "accum")
         res = self._decode({"grau_gsp": blob}, [48.0], [11.5])
-        value, valid = res[0]["grau_gsp"]
+        cells, valid = res[0]["grau_gsp_cells"]
         assert valid is True
-        assert value == pytest.approx(2.0)
+        assert cells
+        assert all(v == pytest.approx(2.0) for v in cells.values())
 
     def test_uh_keeps_signed_value_at_absmax(self):
         vals = _grid(0.0)
@@ -272,7 +289,10 @@ _DECODED_BY_FHOUR = {
             "lpi_max": (0.5, True),
             "w_ctmax": (5.0, True),
             "uh_max": (2.0, True),
-            "grau_gsp": (2.0, True),
+            # Two corridor cells: the max-holding cell (0,0) stays flat into
+            # f012 while (1,1) produces the real hourly delta — catches a
+            # reduce-then-diff regression (#463 review).
+            "grau_gsp_cells": ({(0, 0): 2.0, (1, 1): 0.3}, True),
             "echotop_quarters": {
                 660: (50000.0, True),
                 675: (45000.0, True),
@@ -289,7 +309,9 @@ _DECODED_BY_FHOUR = {
             "lpi_max": (3.0, True),
             "w_ctmax": (12.0, True),
             "uh_max": (30.0, True),
-            "grau_gsp": (3.5, True),
+            # Corridor max of accumulations is (0,0)=2.0 both hours (delta 0);
+            # the true hourly peak is (1,1): 1.8 − 0.3 = 1.5 mm.
+            "grau_gsp_cells": ({(0, 0): 2.0, (1, 1): 1.8}, True),
             "echotop_quarters": {
                 720: (40000.0, True),
                 735: (None, True),
@@ -307,7 +329,7 @@ _DECODED_BY_FHOUR = {
             "lpi_max": (0.0, True),
             "w_ctmax": (2.0, True),
             "uh_max": (1.0, True),
-            "grau_gsp": (None, False),
+            "grau_gsp_cells": (None, False),
             "echotop_quarters": {
                 795: (None, True),
             },
@@ -355,7 +377,9 @@ class TestExplicitConvEnrichment:
         assert diag.reflectivity_hour_max_dbz == pytest.approx(48.0)
         assert diag.detection_complete is True
         assert diag.strength_complete is True
-        # Graupel: on-the-hour de-accumulation over exactly 1 h → 3.5 − 2.0.
+        # Graupel: per-cell de-accumulation over exactly 1 h, then corridor
+        # max — the max-holding cell (0,0) is flat (delta 0) while (1,1)
+        # carries the real 1.5 mm peak. Reduce-then-diff would read 0.0.
         assert diag.graupel_hour_mm == pytest.approx(1.5)
         # Hourly echo top = min pressure over EXACTLY the four windows ending
         # 11:15/11:30/11:45 (prev file) + 12:00 (this file): min = 40000 Pa.
@@ -382,10 +406,22 @@ class TestExplicitConvEnrichment:
         cs = self._run(tmp_path)
         assert self._hourly(cs, 0, 11).explicit_convective_diagnostics is None
 
-    def test_masked_point_gets_no_payload(self, tmp_path):
+    def test_masked_point_gets_unavailable_payload(self, tmp_path):
+        # A point whose every channel failed still gets a payload — with all
+        # channels None and every completeness flag False. Payload presence is
+        # the explicit-convection mode signal: with no payload the analysis
+        # layer would silently fall back to the parameterized path, which on
+        # D2 structurally reads as a QUIET scheme — a fetch hiccup must read
+        # "explicit assessment unavailable", never fake-quiet (#463 review).
         cs = self._run(tmp_path)
         for hour in (12, 13):
-            assert self._hourly(cs, 1, hour).explicit_convective_diagnostics is None
+            diag = self._hourly(cs, 1, hour).explicit_convective_diagnostics
+            assert diag is not None
+            assert diag.detection_complete is False
+            assert diag.strength_complete is False
+            assert diag.echo_top_complete is False
+            assert diag.reflectivity_hour_max_dbz is None
+            assert diag.graupel_hour_mm is None
 
 
 # ---------------------------------------------------------------------------

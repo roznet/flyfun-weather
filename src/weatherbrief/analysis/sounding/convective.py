@@ -1033,7 +1033,14 @@ def assess_convective_explicit(
     dbz = explicit.reflectivity_hour_max_dbz
     cape = _effective_cape(indices)
     cin = indices.cin_surface_jkg
-    modifiers = _severity_modifiers(indices, cape)
+    # Hard wording rule (#462 rule 4): the explicit track never says "hail" —
+    # D2's mixed-phase signal is graupel, which does not discriminate hail.
+    # _severity_modifiers' freezing-level+CAPE heuristic emits "hail risk", so
+    # rephrase it here to the graupel/mixed-phase framing (#463 review).
+    modifiers = [
+        m.replace("hail risk", "graupel / strong mixed-phase core potential")
+        for m in _severity_modifiers(indices, cape)
+    ]
 
     corrob_count, corrob_notes, incomplete = _explicit_corroborators(
         explicit, nwp_diagnostics,

@@ -179,10 +179,21 @@ class TestExplicitStructuralSafety:
         assert any("anticyclonic" in d for d in with_uh.drivers)
 
     def test_graupel_wording_never_hail(self):
-        result = _assess(_explicit(47.0, lpi=0.0, w=0.0, graupel=2.0))
-        text = " ".join(result.drivers + result.suppressors).lower()
+        # Rule 4 (#462): the explicit track never says "hail" — including via
+        # _severity_modifiers' freezing-level+CAPE heuristic, which emits
+        # "hail risk" and is plausible exactly when dbz reaches the HIGH band
+        # (#463 review). Indices below trigger that modifier.
+        indices = ThermodynamicIndices(
+            cape_surface_jkg=1500.0, freezing_level_ft=12500.0,
+        )
+        result = _assess(_explicit(52.0, lpi=0.0, w=0.0, graupel=2.0), indices)
+        text = " ".join(
+            result.drivers + result.suppressors + result.severe_modifiers
+        ).lower()
         assert "graupel" in text
         assert "hail" not in text
+        # The rephrased modifier keeps the freezing-level+CAPE signal itself.
+        assert any("mixed-phase" in m for m in result.severe_modifiers)
 
 
 # ---------------------------------------------------------------------------

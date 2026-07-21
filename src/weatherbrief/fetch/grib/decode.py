@@ -1657,6 +1657,58 @@ def _d2_corridor_cells(
     return cells[~np.isnan(cells)]
 
 
+def _d2_corridor_cell_map(
+    lats_axis: "np.ndarray",
+    lons_axis: "np.ndarray",
+    grid: "np.ndarray",
+    lat: float,
+    lon: float,
+    radius_nm: float,
+) -> "dict[tuple[int, int], float] | None":
+    """Valid corridor cells as {(j, i): value}, keyed by normalized grid index.
+
+    Same geometry as :func:`_d2_corridor_cells` but keeps cell identity, for
+    fields where the corridor reduction must happen AFTER a per-cell temporal
+    operation — the accumulated ``grau_gsp`` is de-accumulated per cell and
+    only then reduced, because ``corridor_max(H) − corridor_max(H−1)``
+    understates whenever the cell holding the running maximum shifts between
+    hours (#463 review). Keys are indices into the ascending-normalized axes,
+    which are stable across messages of the same product.
+    """
+    import numpy as np
+
+    dlat = radius_nm / _NM_PER_DEG_LAT
+    coslat = math.cos(math.radians(lat))
+    if coslat <= 0.01:
+        return None
+    dlon = radius_nm / (_NM_PER_DEG_LAT * coslat)
+
+    if not (lats_axis[0] <= lat <= lats_axis[-1]) or not (
+        lons_axis[0] <= lon <= lons_axis[-1]
+    ):
+        return None
+
+    j0 = int(np.searchsorted(lats_axis, lat - dlat, side="left"))
+    j1 = int(np.searchsorted(lats_axis, lat + dlat, side="right"))
+    i0 = int(np.searchsorted(lons_axis, lon - dlon, side="left"))
+    i1 = int(np.searchsorted(lons_axis, lon + dlon, side="right"))
+    if j1 <= j0 or i1 <= i0:
+        return None
+
+    cells: dict[tuple[int, int], float] = {}
+    for j in range(j0, j1):
+        for i in range(i0, i1):
+            v = grid[j, i]
+            if np.isnan(v):
+                continue
+            dist_nm = _NM_PER_DEG_LAT * math.sqrt(
+                (lats_axis[j] - lat) ** 2 + ((lons_axis[i] - lon) * coslat) ** 2
+            )
+            if dist_nm <= radius_nm:
+                cells[(j, i)] = float(v)
+    return cells
+
+
 def _d2_reduce(
     cells: "np.ndarray | None", mode: str
 ) -> tuple[float | None, bool]:
@@ -1758,12 +1810,16 @@ def decode_icon_d2_explicit_conv_per_point(
         radius_nm: corridor buffer radius.
 
     Returns one dict per route point:
-        - for dbz_ctmax / lpi_max / w_ctmax / uh_max / grau_gsp:
+        - for dbz_ctmax / lpi_max / w_ctmax / uh_max:
             ``{var: (value | None, corridor_valid)}`` — the hour-max (signed
-            argmax|uh| for helicity; on-the-hour since-init accumulation for
-            graupel). ``corridor_valid`` False = channel unavailable here.
-            dbz values at/below the −100 dBZ quiet bar normalize to None
-            (valid + None = genuinely quiet).
+            argmax|uh| for helicity). ``corridor_valid`` False = channel
+            unavailable here. dbz values at/below the −100 dBZ quiet bar
+            normalize to None (valid + None = genuinely quiet).
+        - ``"grau_gsp_cells"``: ``({(j, i): accum_mm} | None, corridor_valid)``
+            — the on-the-hour since-init accumulation kept PER CELL, so the
+            enrichment loop can de-accumulate per cell and only then take the
+            corridor max (diff-then-reduce; reduce-then-diff understates when
+            the max-holding cell shifts between hours).
         - ``"echotop_quarters"``: ``{end_minute: (min_pres_pa | None, valid)}``
             one entry per decoded 15-min window; value None with valid True =
             no 18 dBZ echo in that window (sentinel −999). The HOURLY echo top
@@ -1832,6 +1888,19 @@ def _d2_decode_hour_field(
     if best is None:
         return
     lats_axis, lons_axis, grid = best[1]
+
+    if var == "grau_gsp":
+        # Accumulated field: keep per-cell values so de-accumulation happens
+        # per cell BEFORE the corridor reduction (diff-then-reduce). Reducing
+        # first and differencing the two maxima understates whenever the
+        # max-holding cell shifts between hours (#463 review).
+        for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
+            cell_map = _d2_corridor_cell_map(
+                lats_axis, lons_axis, grid, lat, lon, radius_nm,
+            )
+            valid = bool(cell_map)
+            results[i]["grau_gsp_cells"] = (cell_map if valid else None, valid)
+        return
 
     mode = _D2_HOUR_MAX_MODES.get(var, "max")
     for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
