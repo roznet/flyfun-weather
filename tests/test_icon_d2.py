@@ -131,7 +131,7 @@ class TestD2HorizonAndGrid:
         assert (ICON_D2.level_min, ICON_D2.level_max) == (16, 65)
         assert ICON_D2.slug == "icon-d2"
         assert ICON_D2.source_key == "icon_d2:dwd"
-        assert icon_cloud_diag_cache_key(ICON_D2) == "ICON_D2_CLOUD_DIAG_V2"
+        assert icon_cloud_diag_cache_key(ICON_D2) == "ICON_D2_CLOUD_DIAG_V3"  # #462 bump
         assert icon_cloud_diag_cache_key(ICON_EU) == "ICON_EU_CLOUD_DIAG_V2"
 
     def test_d2_diag_list_drops_parameterized_convection_fields(self):
@@ -208,6 +208,11 @@ class TestPrepareIconVariantSelection:
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
             self._run_finder(d2_run=("20260720", 12), eu_run=("20260720", 12)),
+        ), patch(
+            # #462 domain-mask gate: corridor validity checked in
+            # test_icon_d2_explicit.py; keep this test on the bbox+run path.
+            "weatherbrief.fetch.grib._icon_d2_route_corridors_valid",
+            return_value=True,
         ):
             ctx, skip = _prepare_icon_eu(
                 self._icon_cross_sections(), route, dep,

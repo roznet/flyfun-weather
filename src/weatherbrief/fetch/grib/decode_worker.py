@@ -241,6 +241,37 @@ def decode_icon_cloud_diag(
         return decode_icon_eu_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
+def decode_icon_d2_diag(
+    file_path: str,
+    prev_file_path: str,
+    fhour: int,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> tuple[list[dict[str, float]], list[dict]]:
+    """ICON-D2 single-level decode: standard diagnostics + explicit convection (#462).
+
+    Returns ``(standard_results, explicit_raws)``: the cfgrib-decoded standard
+    cloud diagnostics (from the blob's non-explicit messages) and the per-point
+    corridor-extrema raw dicts for the explicit-convection payload. Multi-
+    message storm fields are selected/constructed by validity inside
+    decode_icon_d2_explicit — never merged by cfgrib.
+    """
+    with _log_decode("decode_icon_d2_diag", file_path):
+        from weatherbrief.fetch.grib.decode import (
+            decode_icon_d2_explicit,
+            decode_icon_eu_cloud_diag_per_point,
+        )
+        grib_bytes = Path(file_path).read_bytes()
+        prev_bytes = Path(prev_file_path).read_bytes() if prev_file_path else None
+        raws, standard = decode_icon_d2_explicit(
+            grib_bytes, prev_bytes, fhour, latitudes, longitudes,
+        )
+        standard_results = decode_icon_eu_cloud_diag_per_point(
+            standard, latitudes, longitudes,
+        )
+        return standard_results, raws
+
+
 def analyze_sounding_batch(items: list[dict]) -> list[dict]:
     """Lite sounding analysis for a batch of serialised profiles (#448 PR B).
 

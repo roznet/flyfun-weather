@@ -3035,6 +3035,91 @@ class _IconEuContext:
         self.variant = variant
 
 
+def _icon_d2_validity_mask(
+    d2_run: tuple[str, int],
+    *,
+    session: requests.Session,
+    data_dir: Path,
+) -> "tuple[object, object, object] | None":
+    """Cached bitmap validity mask for the delivered D2 grid (#462).
+
+    Built once from any regular-grid D2 field (dbz_ctmax; the domain bitmap is
+    identical on every field) and cached under the icon-d2 cache root — the
+    model TTL simply rebuilds it. Tests the ACTUAL delivered product rather
+    than documented domain geometry. Returns ``(lat_vec, lon_vec,
+    valid_mask)`` or None when no probe file decodes.
+    """
+    import numpy as np
+
+    from weatherbrief.fetch.grib.decode import read_icon_d2_grid_mask
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_D2,
+        fetch_icon_eu_single_level,
+    )
+
+    mask_dir = data_dir / ".cache" / "grib" / ICON_D2.slug / "grid-validity"
+    mask_path = mask_dir / "mask.npz"
+    try:
+        if mask_path.exists():
+            with np.load(mask_path) as z:
+                return z["lat_vec"], z["lon_vec"], z["valid_mask"]
+    except Exception:
+        logger.warning("Failed to read cached ICON-D2 validity mask; rebuilding", exc_info=True)
+
+    init_date, init_hour = d2_run
+    for probe_hour in (1, 6, 12, 0):
+        try:
+            fetched = fetch_icon_eu_single_level(
+                init_date, init_hour, [probe_hour], variables=["dbz_ctmax"],
+                session=session, max_workers=1, variant=ICON_D2,
+            )
+        except Exception:
+            logger.debug("ICON-D2 mask probe f%03d failed", probe_hour, exc_info=True)
+            continue
+        blob = fetched.get(probe_hour)
+        if not blob:
+            continue
+        mask = read_icon_d2_grid_mask(blob)
+        if mask is None:
+            continue
+        lat_vec, lon_vec, valid_mask = mask
+        try:
+            mask_dir.mkdir(parents=True, exist_ok=True)
+            np.savez(mask_path, lat_vec=lat_vec, lon_vec=lon_vec, valid_mask=valid_mask)
+        except Exception:
+            logger.debug("Failed to cache ICON-D2 validity mask", exc_info=True)
+        return lat_vec, lon_vec, valid_mask
+    return None
+
+
+def _icon_d2_route_corridors_valid(
+    route_points: list[RoutePoint],
+    d2_run: tuple[str, int],
+    *,
+    session: requests.Session,
+    data_dir: Path,
+) -> bool:
+    """True when every route point's corridor disc lies in valid D2 cells (#462).
+
+    A route can pass the bbox gate yet clip the bitmap-masked corners (~16.7%
+    of delivered cells) or the grid boundary; corridor extrema there would be
+    computed over partial neighbourhoods. When the mask itself is unavailable
+    (transient fetch/decode failure), keep D2 and let decode-time
+    completeness report masked corridors as unavailable rather than bouncing
+    the whole route to the coarser model.
+    """
+    from weatherbrief.fetch.grib.decode import corridor_fully_valid
+
+    mask = _icon_d2_validity_mask(d2_run, session=session, data_dir=data_dir)
+    if mask is None:
+        return True
+    lat_vec, lon_vec, valid_mask = mask
+    return all(
+        corridor_fully_valid(lat_vec, lon_vec, valid_mask, rp.lat, rp.lon)
+        for rp in route_points
+    )
+
+
 def _prepare_icon_eu(
     cross_sections: list[RouteCrossSection],
     route_points: list[RoutePoint],
@@ -3101,11 +3186,24 @@ def _prepare_icon_eu(
                 logger.warning("Failed to find ICON-D2 run; using ICON-EU", exc_info=True)
                 d2_run = None
             if d2_run is not None:
-                variant, run_info = ICON_D2, d2_run
-                logger.info(
-                    "ICON slot sourced from ICON-D2 (route in D2 domain, run %s %02dz)",
-                    d2_run[0], d2_run[1],
-                )
+                # Domain-mask hardening (#462): the bbox gate is not enough —
+                # the delivered D2 grid carries ~16.7% bitmap-masked cells
+                # (the native domain's corners), and corridor extrema need the
+                # FULL corridor unmasked. If any route point's corridor clips
+                # masked cells or the grid edge, fall back to ICON-EU (same
+                # all-or-nothing rule).
+                if _icon_d2_route_corridors_valid(
+                    route_points, d2_run, session=session, data_dir=data_dir,
+                ):
+                    variant, run_info = ICON_D2, d2_run
+                    logger.info(
+                        "ICON slot sourced from ICON-D2 (route in D2 domain, run %s %02dz)",
+                        d2_run[0], d2_run[1],
+                    )
+                else:
+                    logger.info(
+                        "Route corridor clips ICON-D2 masked domain cells; using ICON-EU",
+                    )
 
     if not route_in_icon_eu_domain(route_points, variant):
         logger.info("Route outside %s domain, skipping ICON enrichment", variant.slug)
@@ -3252,11 +3350,10 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
             jobs.append((_fetch_diag, fhour, diag_ck))
 
     # One leading single-level step so the first window hour has a predecessor
-    # to de-accumulate rain_con against (#421). Cloud-diag fetch only — the
-    # model-level sounding list above is untouched. Skipped when the variant
-    # doesn't fetch rain_con (ICON-D2, #456/#462) — no accumulated field, no
-    # predecessor needed.
-    if ctx.forecast_hours and "rain_con" in variant.cloud_diag_variables:
+    # (#421 rain_con; #462 D2 grau_gsp de-accumulation + the three leading
+    # echotop quarter messages — variant-level flag). Cloud-diag fetch only —
+    # the model-level sounding list above is untouched.
+    if ctx.forecast_hours and variant.needs_predecessor_step:
         lead = icon_eu_previous_step(min(ctx.forecast_hours), variant)
         if lead is not None and lead not in ctx.forecast_hours:
             lead_ck = cache_key(lead, diag_key)
@@ -3426,7 +3523,10 @@ def _enrich_icon_eu_cloud_diagnostics(
 
     *variant* selects ICON-EU vs ICON-D2 URL/cache conventions (defaults to EU).
     """
-    from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+    from weatherbrief.fetch.grib.decode import (
+        build_icon_cloud_diagnostics,
+        build_icon_d2_explicit_diagnostics,
+    )
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU,
         fetch_icon_eu_single_level,
@@ -3439,17 +3539,21 @@ def _enrich_icon_eu_cloud_diagnostics(
         variant = ICON_EU
     diag_key = icon_cloud_diag_cache_key(variant)
 
-    # Prepend one leading step so the first window hour has a predecessor to
-    # de-accumulate rain_con against, then walk steps in sorted order carrying
-    # the previous accumulated value + valid time — a direct port of the ECMWF
-    # a1 loop (#421). The leading step is a harmless no-op for enrichment:
-    # _matches_valid_time never matches an out-of-window hourly, so it only
-    # seeds the de-accumulation state.
+    # Prepend one leading step so the first window hour has a predecessor
+    # (#421 rain_con de-accumulation; #462 D2 grau_gsp de-accumulation + the
+    # three leading echotop quarter messages — variant-level flag), then walk
+    # steps in sorted order carrying the previous accumulated value + valid
+    # time — a direct port of the ECMWF a1 loop (#421). The leading step is a
+    # harmless no-op for enrichment: _matches_valid_time never matches an
+    # out-of-window hourly, so it only seeds the de-accumulation state (and,
+    # on D2, the previous-step blob path for the explicit decode).
     steps = sorted(set(forecast_hours))
-    if steps and "rain_con" in variant.cloud_diag_variables:
+    if steps and variant.needs_predecessor_step:
         lead = icon_eu_previous_step(steps[0], variant)
         if lead is not None and lead not in steps:
             steps.insert(0, lead)
+
+    is_d2 = variant.slug == "icon-d2"
 
     n_points = len(point_lats)
     # None = no prior step for that point (unknown, missing-data-safe for the
@@ -3458,7 +3562,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     prev_valid_utc: datetime | None = None
 
     total_enriched = 0
-    for fhour in steps:
+    for step_pos, fhour in enumerate(steps):
         ck = cache_key(fhour, diag_key)
         if not is_cached(run_dir, ck):
             try:
@@ -3476,11 +3580,38 @@ def _enrich_icon_eu_cloud_diagnostics(
             continue
 
         cache_path = run_dir / ck
-        with _grib_time("icon_cloud_diag_decode"):
-            decoded_points = _dispatch_decode(
-                "decode_icon_cloud_diag",
-                str(cache_path), point_lats, point_lons,
-            )
+        explicit_payloads: list | None = None
+        if is_d2:
+            # D2 (#462): one worker decodes BOTH the standard diagnostics
+            # (non-explicit messages, cfgrib) and the explicit-convection
+            # corridor extrema (eccodes per-message selection, multi-message
+            # storm fields never reach cfgrib's merge). The previous step's
+            # blob supplies the three leading echotop quarters and the
+            # grau_gsp predecessor accumulation.
+            prev_path = ""
+            if step_pos > 0:
+                prev_ck = cache_key(steps[step_pos - 1], diag_key)
+                if is_cached(run_dir, prev_ck):
+                    prev_path = str(run_dir / prev_ck)
+            with _grib_time("icon_cloud_diag_decode"):
+                decoded_points, explicit_raws = _dispatch_decode(
+                    "decode_icon_d2_diag",
+                    str(cache_path), prev_path, fhour, point_lats, point_lons,
+                )
+            # Always-attach: build a payload per point even when the explicit
+            # decode failed (all-None + completeness False) so "no payload"
+            # unambiguously means "not D2-sourced" — a failed detection
+            # channel can never masquerade as model-quiet (#462 handoff).
+            explicit_payloads = [
+                build_icon_d2_explicit_diagnostics(raw, lead_hours=float(fhour))
+                for raw in explicit_raws
+            ]
+        else:
+            with _grib_time("icon_cloud_diag_decode"):
+                decoded_points = _dispatch_decode(
+                    "decode_icon_cloud_diag",
+                    str(cache_path), point_lats, point_lons,
+                )
         if not decoded_points:
             continue
 
@@ -3549,32 +3680,50 @@ def _enrich_icon_eu_cloud_diagnostics(
                 if point_idx >= len(diagnostics_per_point):
                     break
                 diag = diagnostics_per_point[point_idx]
-                if diag is None:
+                payload = (
+                    explicit_payloads[point_idx]
+                    if explicit_payloads is not None else None
+                )
+                if diag is None and payload is None:
                     continue
                 for hourly in wf.hourly:
                     if not _matches_valid_time(hourly.time, valid_utc):
                         continue
-                    if hourly.nwp_cloud_diagnostics is None:
+                    if diag is not None and hourly.nwp_cloud_diagnostics is None:
                         _apply_cloud_diagnostics(hourly, diag)
                         total_enriched += 1
+                    # Always-attach (#462): first writer wins, mirroring the
+                    # cloud-diag guard; the payload goes on even when the
+                    # standard diag is absent for this point.
+                    if payload is not None and hourly.explicit_convective_diagnostics is None:
+                        hourly.explicit_convective_diagnostics = payload
 
         # Also enrich waypoint-only forecasts
         wp_diag_lookup: dict[str, NWPCloudDiagnostics] = {}
-        for rp, diag in zip(route_points, diagnostics_per_point):
+        wp_payload_lookup: dict[str, object] = {}
+        for rp, diag, payload in zip(
+            route_points, diagnostics_per_point,
+            explicit_payloads or [None] * len(diagnostics_per_point),
+        ):
             if rp.waypoint_icao and diag is not None:
                 wp_diag_lookup[rp.waypoint_icao] = diag
+            if rp.waypoint_icao and payload is not None:
+                wp_payload_lookup[rp.waypoint_icao] = payload
 
         for wf in all_forecasts:
             if wf.model.value != "icon":
                 continue
             diag = wp_diag_lookup.get(wf.waypoint.icao)
-            if diag is None:
+            payload = wp_payload_lookup.get(wf.waypoint.icao)
+            if diag is None and payload is None:
                 continue
             for hourly in wf.hourly:
                 if not _matches_valid_time(hourly.time, valid_utc):
                     continue
-                if hourly.nwp_cloud_diagnostics is None:
+                if diag is not None and hourly.nwp_cloud_diagnostics is None:
                     _apply_cloud_diagnostics(hourly, diag)
+                if payload is not None and hourly.explicit_convective_diagnostics is None:
+                    hourly.explicit_convective_diagnostics = payload
 
         del decoded_points
         del diagnostics_per_point

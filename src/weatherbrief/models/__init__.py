@@ -31,6 +31,7 @@ from weatherbrief.models.analysis import (  # noqa: F401
     ParcelPathPoint,
     NWPCloudDiagnostics,
     NWPCloudLayerDiag,
+    NWPExplicitConvectiveDiagnostics,
     PrecipIntensity,
     PrecipPhase,
     PrecipitationAssessment,

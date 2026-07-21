@@ -172,6 +172,60 @@ class NWPCloudDiagnostics(BaseModel):
     freezing_level_ft: Optional[float] = None
 
 
+class NWPExplicitConvectiveDiagnostics(BaseModel):
+    """Explicit-convection storm diagnostics from a convection-permitting model.
+
+    ICON-D2 runs no deep-convection parameterization (#456/#461), so the
+    parameterized diagnostics on :class:`NWPCloudDiagnostics`
+    (``convective_base/top_ft``, ``convective_precip_mm_h``) are structurally
+    ``None`` on D2-sourced packs. Deep convection in D2 lives in explicit storm
+    fields instead — a different KIND of signal, kept in this separate nested
+    object so the two tracks can never be conflated (#462).
+
+    Semantics (hard rules, all verified against the live DWD feed 2026-07-21):
+    - Every field is a **corridor extremum** over a route buffer (~10 NM), not
+      a centreline point value — per-point bilinear sampling would let a 2.2 km
+      storm cell slip between route points. ``reflectivity_point_dbz`` is the
+      exception: the centreline bilinear value, kept alongside the corridor max
+      so widespread stratiform echo (point ≈ corridor max) is distinguishable
+      from a discrete cell (max ≫ point).
+    - Interval-max fields describe the hour ENDING at the carrying
+      ``HourlyForecast.time`` — the ``(H−1, H]`` window — not the instant.
+    - ``echo_top_18dbz_ft`` is the highest altitude with simulated
+      reflectivity ≥ 18 dBZ. It sits BELOW the physical storm top (anvil ice
+      reflects weakly) and must NEVER be used as a cloud top — in particular
+      never for overfly-clearance decisions. Depth/character only.
+    - ``graupel_hour_mm`` is graupel (a strong mixed-phase core indicator) —
+      wording is never "hail".
+    - ``None`` ≠ 0 (#421): a ``None`` channel is unknown; the completeness
+      flags below say whether ``None`` reflectivity/echo-top means "quiet"
+      (channel complete, no echo) or "unavailable" (channel failed).
+
+    Completeness is per-tier and means "enough valid (unmasked) corridor cells
+    decoded" — NOT merely "file downloaded": an all-masked corridor is
+    UNAVAILABLE; a valid −150 dBZ reflectivity floor is genuinely QUIET. The
+    GRIB bitmap alone decides validity; encoded quiet-floor values (−150 dBZ,
+    −999 Pa echo-top sentinel) are real data and count as valid.
+    """
+
+    source: Literal["icon_d2"]
+    reflectivity_hour_max_dbz: Optional[float] = None   # dbz_ctmax corridor max (raw; ≤ −30 ≈ no echo)
+    reflectivity_point_dbz: Optional[float] = None      # dbz_ctmax centreline bilinear (cell-vs-shield discriminator)
+    echo_top_18dbz_ft: Optional[float] = None           # hourly min pressure over 4 quarter-windows, Pa→ft (ISA); NOT a cloud top
+    lightning_potential_hour_max_jkg: Optional[float] = None  # lpi_max corridor max
+    updraft_hour_max_ms: Optional[float] = None         # w_ctmax corridor max (0–10 km column)
+    updraft_helicity_2_5km_hour_max_m2s2: Optional[float] = None  # uh_max_med corridor argmax |uh|, SIGNED (2–5 km layer)
+    graupel_hour_mm: Optional[float] = None             # grau_gsp per-cell de-accumulated, corridor max
+    # Forecast lead of the carrying hour relative to run init — drives the
+    # explicit track's confidence wording (radar-nudged short leads are far
+    # more placement-trustworthy than 24–48h free-running cells).
+    lead_hours: Optional[float] = None
+
+    detection_complete: bool = False   # dbz_ctmax corridor valid this hour
+    strength_complete: bool = False    # lpi_max + w_ctmax + graupel corridors all valid
+    echo_top_complete: bool = False    # all 4 quarter windows present and corridor-valid
+
+
 class RouteConfig(BaseModel):
     """A flight route definition loaded from config."""
 
@@ -309,6 +363,13 @@ class HourlyForecast(BaseModel):
 
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
+
+    # Explicit-convection storm diagnostics (ICON-D2 GRIB2 enrichment, #462).
+    # Present on every ICON-D2-enriched hour — including failed/incomplete
+    # decode (then all-None with completeness flags False), so "no payload"
+    # unambiguously means "this hour was not D2-sourced" and a failed detection
+    # channel can never masquerade as model-quiet.
+    explicit_convective_diagnostics: Optional[NWPExplicitConvectiveDiagnostics] = None
 
     # Pressure level data
     pressure_levels: list[PressureLevelData] = Field(default_factory=list)
@@ -693,7 +754,15 @@ class ConvectiveAssessment(BaseModel):
     top_ft: Optional[float] = None  # thermo: el_altitude_ft; NWP: convective_top_ft
     cover_pct: Optional[float] = None  # NWP only; thermo: None
     convective_precip_mm_h: Optional[float] = None  # NWP native firing signal (#283); thermo: None
-    method: str = "thermo"  # "thermo", "nwp", "nwp_hybrid", "nwp_lcl_top", "nwp_precip", "nwp_cape_fallback"
+    method: str = "thermo"  # "thermo", "nwp", "nwp_hybrid", "nwp_lcl_top", "nwp_precip", "nwp_cape_fallback", "nwp_explicit"
+    # Explicit-convection provenance + detail fields (#462, method="nwp_explicit"
+    # only). Corridor maxima from the convection-permitting model's storm
+    # fields. echo_top_18dbz_ft is a depth/character detail — deliberately a
+    # separate field from top_ft so the overfly-clearance filter structurally
+    # cannot consume it as a cloud top.
+    explicit_source: Optional[str] = None            # "icon_d2"
+    reflectivity_hour_max_dbz: Optional[float] = None
+    echo_top_18dbz_ft: Optional[float] = None
 
 
 class CATRiskLayer(BaseModel):
@@ -736,6 +805,16 @@ class SoundingAnalysis(BaseModel):
     convective: Optional[ConvectiveAssessment] = None
     convective_thermo: Optional[ConvectiveAssessment] = None
     convective_nwp: Optional[ConvectiveAssessment] = None
+    # Explicit-convection unavailability marker (#462). True when this model's
+    # hour carried an explicit-convection payload (ICON-D2) whose detection
+    # channel was incomplete: the explicit assessment could not run, so
+    # ``convective_nwp`` is None — deliberately NOT a quiet NONE assessment
+    # (unknown must never read as "scheme quiet") and NOT a CAPE fallback
+    # presented as D2's explicit verdict. Grading falls back to the thermo
+    # track (badged truthfully by convective_method_effective); the advisory
+    # evaluator renders the point UNAVAILABLE, not GREEN. Sibling of
+    # ``active_icing_available`` (#391 pattern).
+    convective_explicit_unavailable: bool = False
     precipitation: Optional[PrecipitationAssessment] = None
     vertical_motion: Optional[VerticalMotionAssessment] = None
     # Bulk Open-Meteo 3-level cloud-cover summary. NOT the native NWP cloud

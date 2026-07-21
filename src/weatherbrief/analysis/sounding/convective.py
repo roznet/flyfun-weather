@@ -891,6 +891,332 @@ def assess_convective_nwp(
     )
 
 
+# --- Explicit-convection assessment (ICON-D2, issue #462) --------------------
+#
+# D2 is convection-permitting: deep convection lives in explicit storm fields
+# (simulated reflectivity, echo top, LPI, updrafts, graupel), not in a
+# parameterized scheme's diagnosed tower. This is a different KIND of signal
+# from assess_convective_nwp's tower-top track, so it gets its own assessment
+# with its own method string ("nwp_explicit") — the two are never blended.
+#
+# v1 decision table (meteorology-decisions §19 — calibration starting points,
+# not physical constants). The firing signal is the corridor-max hour-max
+# reflectivity DBZ_CTMAX; a corroborator set C confirms storm character:
+#
+#   corridor dbz_ctmax | |C| = 0                    | |C| = 1  | |C| >= 2
+#   -------------------+----------------------------+----------+---------
+#   < 35 dBZ           | no fire                    | no fire  | no fire
+#   35–44 dBZ          | no fire (stratiform note)  | MARGINAL | MODERATE
+#   45–49 dBZ          | MODERATE                   | MODERATE | HIGH
+#   >= 50 dBZ          | HIGH                       | HIGH     | HIGH
+#
+# Each corroborator counts 1 when its channel is COMPLETE (non-None — a valid
+# quiet channel decodes to 0.0, #421 None ≠ 0) AND over threshold; lpi >= 5
+# counts 2. Incomplete channels never downgrade below the dbz-alone row and
+# never upgrade (|C| counts only complete channels); zero on one channel never
+# suppresses positive evidence on another. |uh| is narrative/character only.
+_EXPLICIT_DBZ_FIRE = 35.0       # below → no fire (environment tracks unaffected)
+_EXPLICIT_DBZ_CONVECTIVE = 45.0  # 35–44 band may be stratiform/melting-band
+_EXPLICIT_DBZ_SEVERE = 50.0     # >= → HIGH regardless of corroborators
+_EXPLICIT_LPI_CORROB_JKG = 1.0
+_EXPLICIT_LPI_STRONG_JKG = 5.0  # counts as 2 corroborators
+_EXPLICIT_UPDRAFT_CORROB_MS = 10.0
+_EXPLICIT_GRAUPEL_CORROB_MM = 0.5
+_EXPLICIT_CAPE_CORROB_JKG = 500.0
+_EXPLICIT_UH_NOTE_M2S2 = 25.0   # rotation NOTE only, never a tier input
+# Corridor-vs-centreline discriminator: a corridor max this far above the
+# centreline value marks a discrete cell NEAR the route rather than a
+# widespread shield over it (geometry note, not a tier input).
+_EXPLICIT_CELL_MINUS_SHIELD_DBZ = 10.0
+
+# Lead-time confidence bands (meteorology-decisions §19): ICON-D2 is radar-
+# nudged (latent-heat nudging of 3-D volume reflectivity), so short leads are
+# observationally constrained; cell-placement trust decays with lead while
+# presence/character retains value much longer. Wording only, never a tier
+# input — placement uncertainty must not downgrade a simulated echo.
+_EXPLICIT_LEAD_RADAR_NUDGED_H = 6.0
+_EXPLICIT_LEAD_PLACEMENT_H = 24.0
+
+
+def _explicit_corroborators(
+    explicit: "NWPExplicitConvectiveDiagnostics",
+    nwp_diagnostics: NWPCloudDiagnostics | None,
+) -> tuple[int, list[str], int]:
+    """Count complete-and-over-threshold corroborator channels.
+
+    Returns ``(count, descriptions, incomplete_channels)``. Only complete
+    channels (non-None values) can count; incomplete ones are tallied so the
+    caller can say so without letting them downgrade or upgrade the tier.
+    """
+    count = 0
+    notes: list[str] = []
+    incomplete = 0
+
+    lpi = explicit.lightning_potential_hour_max_jkg
+    if lpi is None:
+        incomplete += 1
+    elif lpi >= _EXPLICIT_LPI_STRONG_JKG:
+        count += 2
+        notes.append(f"strong lightning potential (LPI {lpi:.1f} J/kg)")
+    elif lpi >= _EXPLICIT_LPI_CORROB_JKG:
+        count += 1
+        notes.append(f"lightning potential (LPI {lpi:.1f} J/kg)")
+
+    w = explicit.updraft_hour_max_ms
+    if w is None:
+        incomplete += 1
+    elif w >= _EXPLICIT_UPDRAFT_CORROB_MS:
+        count += 1
+        notes.append(f"strong updraft ({w:.0f} m/s)")
+
+    graupel = explicit.graupel_hour_mm
+    if graupel is None:
+        incomplete += 1
+    elif graupel >= _EXPLICIT_GRAUPEL_CORROB_MM:
+        count += 1
+        # Hard wording rule (#462): graupel / mixed-phase core — never "hail".
+        # An hourly ACCUMULATION in mm — not a rate (the parameterized notes
+        # nearby are genuinely mm/h, so the unit has to differ here).
+        notes.append(f"graupel / strong mixed-phase core ({graupel:.1f} mm this hour)")
+
+    cape_ml = nwp_diagnostics.ml_cape_jkg if nwp_diagnostics is not None else None
+    if cape_ml is None:
+        incomplete += 1
+    elif cape_ml >= _EXPLICIT_CAPE_CORROB_JKG:
+        count += 1
+        notes.append(f"unstable environment (ML-CAPE {cape_ml:.0f} J/kg)")
+
+    return count, notes, incomplete
+
+
+def _explicit_risk_from_table(
+    dbz: float | None, corroborators: int
+) -> ConvectiveRisk:
+    """The v1 dbz × |C| decision table (see the constants block above)."""
+    if dbz is None or dbz < _EXPLICIT_DBZ_FIRE:
+        return ConvectiveRisk.NONE
+    if dbz >= _EXPLICIT_DBZ_SEVERE:
+        return ConvectiveRisk.HIGH
+    if dbz >= _EXPLICIT_DBZ_CONVECTIVE:
+        return ConvectiveRisk.HIGH if corroborators >= 2 else ConvectiveRisk.MODERATE
+    # 35–44 dBZ: echo present but possibly stratiform rain / melting-band
+    # bright-band — only corroborated echoes fire.
+    if corroborators >= 2:
+        return ConvectiveRisk.MODERATE
+    if corroborators == 1:
+        return ConvectiveRisk.MARGINAL
+    return ConvectiveRisk.NONE
+
+
+def _explicit_lead_note(lead_hours: float | None) -> str | None:
+    """Lead-time confidence wording for a fired explicit cell (#462)."""
+    if lead_hours is None:
+        return None
+    if lead_hours <= _EXPLICIT_LEAD_RADAR_NUDGED_H:
+        return (
+            "Short lead — radar-nudged ICON-D2 (latent-heat nudging): cell "
+            "positions are observationally constrained"
+        )
+    if lead_hours <= _EXPLICIT_LEAD_PLACEMENT_H:
+        return (
+            "Cell presence/character reliable at this lead; exact placement "
+            "approximate — plan deviations on area, not on the depicted cell"
+        )
+    return (
+        "Long lead for a convection-permitting model — treat as an "
+        "environment-level signal: exact cell placement at this range is unlikely"
+    )
+
+
+def assess_convective_explicit(
+    indices: ThermodynamicIndices,
+    nwp_diagnostics: NWPCloudDiagnostics | None,
+    explicit: "NWPExplicitConvectiveDiagnostics",
+) -> ConvectiveAssessment | None:
+    """Assess convective risk from a convection-permitting model's storm fields.
+
+    The explicit-convection sibling of :func:`assess_convective_nwp` (#462):
+    consumes the :class:`NWPExplicitConvectiveDiagnostics` payload (corridor
+    extrema — see the payload docstring) and returns the standard convective-
+    assessment contract with ``method="nwp_explicit"``.
+
+    Structural safety properties:
+    - ``top_ft`` is ALWAYS ``None`` — D2 cells have unresolved vertical
+      geometry for clearance purposes, so the overfly-clearance filter
+      structurally cannot consume the 18 dBZ echo top as a cloud top. The echo
+      top travels only as the ``echo_top_18dbz_ft`` character/detail field.
+    - ``detection_complete=False`` returns ``None`` — "explicit assessment
+      unavailable". It must NOT become an NWP ``NONE`` (unknown is not quiet),
+      nor a CAPE-only fallback presented as D2's explicit verdict; the caller
+      records the unavailability (``convective_explicit_unavailable``) and the
+      DD/thermo track remains fully usable.
+    - No CIN suppression: a simulated echo IS realized convection — the model
+      already convected, so penalising it on surface/ML CIN would be circular
+      (same reasoning as the ``nwp_precip`` path).
+    - A quiet-but-complete hour returns a real ``NONE`` assessment (not
+      ``None``) so DD-vs-model cross-checks can still fire.
+    """
+    if not explicit.detection_complete:
+        return None
+
+    dbz = explicit.reflectivity_hour_max_dbz
+    cape = _effective_cape(indices)
+    cin = indices.cin_surface_jkg
+    # Hard wording rule (#462): the explicit track never says "hail" — D2's
+    # mixed-phase signal is graupel, which does not discriminate hail.
+    # _severity_modifiers' freezing-level+CAPE heuristic emits "hail risk", so
+    # rephrase it here to the graupel/mixed-phase framing.
+    modifiers = [
+        m.replace("hail risk", "graupel / strong mixed-phase core potential")
+        for m in _severity_modifiers(indices, cape)
+    ]
+
+    corrob_count, corrob_notes, incomplete = _explicit_corroborators(
+        explicit, nwp_diagnostics,
+    )
+    risk = _explicit_risk_from_table(dbz, corrob_count)
+
+    drivers: list[str] = []
+    suppressors: list[str] = []
+
+    if dbz is not None and dbz >= _EXPLICIT_DBZ_FIRE:
+        drivers.append(
+            f"Explicitly simulated storm echo — corridor-max reflectivity "
+            f"{dbz:.0f} dBZ over the past hour (ICON-D2, convection-permitting)"
+        )
+        point_dbz = explicit.reflectivity_point_dbz
+        if (
+            point_dbz is not None
+            and dbz >= _EXPLICIT_DBZ_CONVECTIVE
+            and dbz - point_dbz >= _EXPLICIT_CELL_MINUS_SHIELD_DBZ
+        ):
+            drivers.append(
+                f"Discrete cell geometry — corridor max {dbz:.0f} dBZ vs "
+                f"{point_dbz:.0f} dBZ at the route point: a compact cell near "
+                "the route, not a shield over it"
+            )
+        if dbz < _EXPLICIT_DBZ_CONVECTIVE and corrob_count == 0:
+            if (
+                point_dbz is not None
+                and point_dbz >= _EXPLICIT_DBZ_FIRE - 5.0
+                and dbz - point_dbz < _EXPLICIT_CELL_MINUS_SHIELD_DBZ
+            ):
+                suppressors.append(
+                    "Echo widespread and uncorroborated at 35–44 dBZ — likely "
+                    "stratiform rain / melting-band bright-band, not convection"
+                )
+            else:
+                suppressors.append(
+                    "Echo present but uncorroborated at 35–44 dBZ — possibly "
+                    "stratiform rain / melting-band bright-band, not convection"
+                )
+        drivers.extend(corrob_notes)
+        if incomplete and corrob_count < 2:
+            drivers.append(
+                f"{incomplete} corroborator channel(s) unavailable — tier from "
+                "the reflectivity row alone (missing data never downgrades)"
+            )
+        if explicit.echo_top_18dbz_ft is not None:
+            # Depth/character AFTER firing — explicitly NOT a cloud top: the
+            # physical storm top (weakly-reflecting anvil ice) sits higher.
+            drivers.append(
+                f"18 dBZ echo top ~{explicit.echo_top_18dbz_ft:.0f} ft "
+                "(storm depth indicator — the cloud top is higher; not for "
+                "overfly planning)"
+            )
+        uh = explicit.updraft_helicity_2_5km_hour_max_m2s2
+        if uh is not None and abs(uh) >= _EXPLICIT_UH_NOTE_M2S2:
+            sense = "cyclonic" if uh > 0 else "anticyclonic"
+            drivers.append(
+                f"Rotating updraft signature (2–5 km updraft helicity "
+                f"{uh:.0f} m²/s², {sense}) — organized-storm character"
+            )
+        lead_note = _explicit_lead_note(explicit.lead_hours)
+        if lead_note is not None:
+            drivers.append(lead_note)
+
+    return ConvectiveAssessment(
+        risk_level=risk,
+        cape_jkg=cape,
+        cin_jkg=cin,
+        lcl_altitude_ft=indices.lcl_altitude_ft,
+        lfc_altitude_ft=indices.lfc_altitude_ft,
+        el_altitude_ft=indices.el_altitude_ft,
+        bulk_shear_0_6km_kt=indices.bulk_shear_0_6km_kt,
+        lifted_index=indices.lifted_index,
+        k_index=indices.k_index,
+        total_totals=indices.total_totals,
+        severe_modifiers=modifiers,
+        drivers=drivers,
+        suppressors=suppressors,
+        base_ft=None,
+        top_ft=None,   # structural: echo top must never reach the clearance filter
+        cover_pct=None,
+        convective_precip_mm_h=None,
+        method="nwp_explicit",
+        explicit_source=explicit.source,
+        reflectivity_hour_max_dbz=dbz,
+        echo_top_18dbz_ft=explicit.echo_top_18dbz_ft,
+    )
+
+
+def _explicit_cross_check(
+    thermo: "ConvectiveAssessment",
+    nwp: "ConvectiveAssessment",
+) -> "ConvectiveCrossCheck | None":
+    """DD-vs-explicit divergence for the ICON-D2 mode (#462).
+
+    Same two material divergences as the parameterized check, keyed on the
+    explicit track's own firing verdict (the decision table already folds in
+    reflectivity + corroborators):
+    - thermo MODERATE+ but the simulated radar is quiet/uncorroborated →
+      ``dd_not_corroborated``;
+    - thermo NONE/MARGINAL but D2 explicitly develops a cell (MODERATE+) →
+      ``model_active_dd_quiet``.
+    MARGINAL explicit (a single-corroborator 35–44 dBZ echo) sits in neither
+    band, mirroring the parameterized gap between quiet and active.
+    """
+    model_active = _RISK_LEVELS.index(nwp.risk_level) >= _RISK_LEVELS.index(
+        ConvectiveRisk.MODERATE
+    )
+    model_quiet = nwp.risk_level == ConvectiveRisk.NONE
+
+    thermo_high = _RISK_LEVELS.index(thermo.risk_level) >= _RISK_LEVELS.index(
+        ConvectiveRisk.MODERATE
+    )
+    thermo_low = thermo.risk_level in (ConvectiveRisk.NONE, ConvectiveRisk.MARGINAL)
+
+    dbz = nwp.reflectivity_hour_max_dbz
+    if thermo_high and model_quiet:
+        cape_txt = f" (CAPE {thermo.cape_jkg:.0f})" if thermo.cape_jkg is not None else ""
+        echo_txt = (
+            f"corridor-max reflectivity {dbz:.0f} dBZ"
+            if dbz is not None else "no simulated echo"
+        )
+        note = (
+            f"Thermo Convective shows {thermo.risk_level.value.upper()} instability"
+            f"{cape_txt}, but ICON-D2's explicit convection is quiet ({echo_txt})"
+        )
+        return ConvectiveCrossCheck(direction="dd_not_corroborated", note=note)
+
+    if thermo_low and model_active:
+        echo_txt = (
+            f"{dbz:.0f} dBZ corridor-max echo" if dbz is not None else "a storm cell"
+        )
+        dd_txt = (
+            "little instability"
+            if thermo.risk_level == ConvectiveRisk.NONE
+            else "only marginal instability"
+        )
+        note = (
+            f"ICON-D2 explicitly develops a cell ({echo_txt}), but Thermo "
+            f"Convective shows {dd_txt}"
+        )
+        return ConvectiveCrossCheck(direction="model_active_dd_quiet", note=note)
+
+    return None
+
+
 # Convective DD-vs-model cross-check thresholds (tunable module constants).
 # These gate the "does the model's own convective scheme corroborate the DD
 # (CAPE-derived) risk" signal surfaced in the advisory popup and LLM digest.
@@ -941,6 +1267,10 @@ def convective_cross_check(
     """
     if nwp is None or thermo is None:
         return None
+    if nwp.method == "nwp_explicit":
+        # ICON-D2 explicit-convection mode (#462): the firing verdict is the
+        # reflectivity decision table, not precip/cover/tower — own check.
+        return _explicit_cross_check(thermo, nwp)
     if nwp.method == "nwp_cape_fallback":
         # Circular: the fallback is CAPE-scored like thermo (no native scheme
         # output), so a quiet/active comparison would re-derive thermo against

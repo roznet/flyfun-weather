@@ -162,6 +162,19 @@ class ConvectiveEvaluator:
                     ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
                     region_cells.append((dist, None))
                     continue
+
+                # Explicit-convection unavailable (#462): this ICON-D2 hour
+                # carried an explicit payload whose detection channel failed
+                # (masked corridor / decode failure). Render UNAVAILABLE and
+                # exclude from the extent denominator exactly like a missing
+                # sounding — unknown must never read as "checked, nothing
+                # firing" (GREEN), and the thermo fallback (badged "thermo"
+                # via convective_method_effective) must not present as D2's
+                # explicit verdict on the ribbon.
+                if sounding.convective_explicit_unavailable:
+                    ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
+                    region_cells.append((dist, None))
+                    continue
                 total += 1
 
                 # Independent of the grade filters below: compare the chosen

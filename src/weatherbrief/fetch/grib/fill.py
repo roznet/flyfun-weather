@@ -90,6 +90,7 @@ def propagate_all(
     # every hour look like an anchor afterwards.
     _linear_interp_ecmwf_surface(sections, all_forecasts)
     _fill_cloud_diagnostics(sections, all_forecasts, gfs_init=gfs_init)
+    _fill_explicit_diagnostics(sections, all_forecasts)
     _linear_interp_pressure_levels(sections, all_forecasts)
     # CLW/ICMR overlay onto OM pressure_levels (GFS path only — for ECMWF/ICON
     # the pressure-level interp above already populates CLW/ICMR within the
@@ -151,6 +152,64 @@ def _fill_diag_hourly(hourly_list: list[HourlyForecast]) -> int:
             last_diag = h.nwp_cloud_diagnostics
         elif last_diag is not None:
             h.nwp_cloud_diagnostics = last_diag.model_copy()
+            filled += 1
+    return filled
+
+
+def _fill_explicit_diagnostics(
+    sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+) -> None:
+    """Hold ``explicit_convective_diagnostics`` over gap hours (#462).
+
+    Interval-max semantics (rule 3): the payload at anchor hour H describes
+    the ``(H−1, H]`` window, so a gap hour strictly between anchors H and H+1
+    lies in the NEXT anchor's window and inherits THAT payload — the same
+    covering-interval hold as the 10fg gust precedent (#441 #6), never a
+    linear blend of reflectivity (logarithmic quantity) and never a forward
+    smear of last hour's storm. Hours after the last anchor get the last
+    completed interval. No-op for models without explicit payloads.
+    """
+    total = 0
+    for cs in sections:
+        for wf in cs.point_forecasts:
+            total += _fill_explicit_hourly(wf.hourly)
+    for wf in all_forecasts:
+        total += _fill_explicit_hourly(wf.hourly)
+    if total:
+        logger.info(
+            "Explicit-convective diagnostics held over on %d gap hourly entries",
+            total,
+        )
+
+
+def _fill_explicit_hourly(hourly_list: list[HourlyForecast]) -> int:
+    sorted_hours = sorted(hourly_list, key=lambda h: h.time)
+    if not sorted_hours:
+        return 0
+    anchor_indices = [
+        i for i, h in enumerate(sorted_hours)
+        if h.explicit_convective_diagnostics is not None
+    ]
+    if not anchor_indices:
+        return 0
+
+    filled = 0
+    # Between anchors: the NEXT anchor's window contains the gap hour.
+    for k in range(len(anchor_indices) - 1):
+        prev_i, next_i = anchor_indices[k], anchor_indices[k + 1]
+        next_payload = sorted_hours[next_i].explicit_convective_diagnostics
+        for i in range(prev_i + 1, next_i):
+            h = sorted_hours[i]
+            if h.explicit_convective_diagnostics is None:
+                h.explicit_convective_diagnostics = next_payload.model_copy()
+                filled += 1
+    # After the last anchor: the last completed interval (forward hold).
+    last_payload = sorted_hours[anchor_indices[-1]].explicit_convective_diagnostics
+    for i in range(anchor_indices[-1] + 1, len(sorted_hours)):
+        h = sorted_hours[i]
+        if h.explicit_convective_diagnostics is None:
+            h.explicit_convective_diagnostics = last_payload.model_copy()
             filled += 1
     return filled
 

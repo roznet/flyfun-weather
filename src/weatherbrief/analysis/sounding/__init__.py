@@ -311,9 +311,29 @@ def analyze_sounding_lite(
     convective = assess_convective_thermo(
         indices, omega_700_pa_s=_omega_near_700(derived_levels)
     )
-    convective_nwp = assess_convective_nwp(
-        indices, hourly.nwp_cloud_diagnostics if hourly else None,
-    )
+    # NWP convective track (#283): the model's own convective signal. On
+    # ICON-D2 hours the payload is the EXPLICIT storm-field diagnostics
+    # (#462) — a different kind of signal with its own assessment; presence
+    # of the payload IS the explicit-mode switch (provenance travels via
+    # payload.source). A payload with incomplete detection yields None →
+    # recorded as explicit-unavailable (unknown, never "scheme quiet").
+    convective_explicit_unavailable = False
+    explicit_payload = hourly.explicit_convective_diagnostics if hourly else None
+    if explicit_payload is not None:
+        from weatherbrief.analysis.sounding.convective import (
+            assess_convective_explicit,
+        )
+
+        convective_nwp = assess_convective_explicit(
+            indices,
+            hourly.nwp_cloud_diagnostics if hourly else None,
+            explicit_payload,
+        )
+        convective_explicit_unavailable = convective_nwp is None
+    else:
+        convective_nwp = assess_convective_nwp(
+            indices, hourly.nwp_cloud_diagnostics if hourly else None,
+        )
 
     # Compute ceiling from NWP-reclassified cloud layers
     sounding_ceiling_ft = compute_sounding_ceiling_ft(
@@ -344,6 +364,7 @@ def analyze_sounding_lite(
         convective=convective,
         convective_thermo=convective,
         convective_nwp=convective_nwp,
+        convective_explicit_unavailable=convective_explicit_unavailable,
         precipitation=None,
         vertical_motion=None,
         cloud_cover_low_pct=hourly.cloud_cover_low_pct if hourly else None,

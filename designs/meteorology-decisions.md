@@ -1958,3 +1958,126 @@ follow-up:
 - Watch for any all-quiet-NWP sounding that *did* produce observed convection
   (lightning/METAR-TS) — that is the case the removed floor was protecting, and
   the one that would argue for a narrower cap.
+
+## 19. ICON-D2 explicit-convection track: reflectivity firing, corridor extrema, echo top as detail-only
+
+**Date:** 2026-07-21
+**Status:** Implemented (#462).
+**Context:** Follow-up to the ICON-D2 source upgrade (#456). D2 runs **no
+deep-convection parameterization**, so the parameterized diagnostics consumed
+from ICON-EU (`hbas_con`/`htop_con`/`rain_con`) either don't exist on the D2
+feed or silently change meaning; D2 packs ship those fields as ``None``. Deep
+convection in D2 lives in **explicit storm fields** — a different *kind* of
+signal — so it gets its own payload, its own assessment
+(``method="nwp_explicit"``), and its own cross-check, never blended with the
+parameterized track. All feed semantics below were verified against
+`opendata.dwd.de` (eccodes per-message inspection of live 00z files) and the
+DWD ICON database manual on 2026-07-21.
+
+### The variable set (and what was rejected)
+
+- ``dbz_ctmax`` (column-max simulated reflectivity, hour-max) — the **firing
+  signal**. One full-hour message per file; attaches to ``(H−1, H]``.
+  Caveat accepted: DWD's forward operator is a Rayleigh approximation over
+  QR/QS/QG/T, so absolute dBZ is approximate (bright-band/graupel biases) —
+  handled by the 35–44 dBZ corroboration row, not by lowering the tier.
+- ``lpi_max`` (Lynn & Yair 2010; w² integrated over the graupel-bearing
+  layer), ``w_ctmax`` (max updraft 0–10 km), ``grau_gsp`` (grid-scale graupel,
+  de-accumulated **per cell** from on-the-hour accumulations) — the
+  corroborator set. LPI physically requires the graupel scheme, so LPI and
+  graupel are correlated corroborators — |C| is not "independent
+  confirmations", and is treated as such in calibration.
+- ``uh_max_med`` (updraft helicity 2–5 km) — **chosen over ``uh_max``
+  (2–8 km)** because 2–5 km is the literature/HRRR-calibrated layer, keeping
+  rotation notes comparable to portable thresholds. Narrative-only in v1
+  either way; signed argmax-|uh| keeps the rotation sense.
+- ``echotop`` (delivered as ``min_pres`` in Pa, 4×15-min messages per file) —
+  the hourly product is **constructed** as the min pressure over the four
+  quarter windows ending in ``(H−1, H]`` (three from file f(H−1), one from
+  f(H)). It is a **storm-depth indicator, never a cloud top**: an 18 dBZ echo
+  top sits below the physical storm top (weakly-reflecting anvil ice), so it
+  is structurally barred from ``top_ft`` (the assessment always sets
+  ``top_ft=None``) and from the overfly-clearance filter, where it would err
+  in the dangerous direction.
+- Rejected/deferred: ``dbz_cmax`` (instant; sub-hourly detail not needed in
+  v1), ``tcond10_mx`` (overlaps the dbz signal), ``rain_con`` (≈0 without the
+  deep scheme), ``hbas_con``/``htop_con``/``prr_con``/``echotopinm`` (404),
+  ``uh_max`` (superseded by ``uh_max_med``, above), ICON-D2-EPS (future
+  probabilistic signal class), radar blending (out of scope).
+
+### Sentinel discipline: bitmap is the only "unknown"
+
+The GRIB **bitmap** alone marks missing data (the masked domain corners,
+~16.7% of cells on every field). Encoded quiet values are real data: **−150
+dBZ** is the genuine no-echo floor and participates in the corridor max;
+**−999 Pa** is "no ≥18 dBZ echo this quarter" and counts as a valid cell
+(excluded only from the pressure min). Completeness flags are driven by
+bitmap-valid corridor fractions (≥ 50 %), never by decoded values — so a
+quiet night reads QUIET, never UNAVAILABLE, and a masked corridor reads
+UNAVAILABLE, never QUIET. This is the #421 None ≠ 0 rule applied at grid
+level.
+
+### Firing table (v1 calibration starting points, not physical constants)
+
+| corridor ``dbz_ctmax`` | \|C\| = 0 | \|C\| = 1 | \|C\| ≥ 2 |
+|---|---|---|---|
+| < 35 dBZ | no fire | no fire | no fire |
+| 35–44 dBZ | no fire (stratiform/bright-band note) | MARGINAL | MODERATE |
+| 45–49 dBZ | MODERATE | MODERATE | HIGH |
+| ≥ 50 dBZ | HIGH | HIGH | HIGH |
+
+Corroborators (count only when the channel is **complete**): ``lpi_max`` ≥ 1
+J/kg (≥ 5 counts 2), ``w_ctmax`` ≥ 10 m/s, ``grau_gsp`` ≥ 0.5 mm in the hour,
+``cape_ml`` ≥ 500 J/kg. Incomplete channels never downgrade below the
+dbz-alone row and never upgrade. No CIN suppression: a simulated echo IS
+realized convection (the model already convected), so penalising it on
+surface/ML CIN would be circular. Graupel wording is never "hail".
+
+### Corridor extrema, and the cell-vs-shield discriminator
+
+Per-point bilinear sampling defeats a 2.2 km model: a cell between route
+points vanishes, making D2 *less* likely to fire than coarse models. All
+explicit channels are therefore reduced over a ~10 NM disc per route point
+(values are **corridor maxima**, disclosed as such). Consequences accepted:
+one real cell lights up several adjacent route points (coverage inflation),
+and D2 reads systematically "more alarming" than centreline-sampled models —
+the right asymmetry for aviation. Because the corridor max alone cannot tell
+a discrete cell from a stratiform shield, the payload also carries the
+centreline bilinear reflectivity: point ≈ max ⇒ widespread (stratiform
+wording); max ≫ point ⇒ discrete cell (geometry note). Cheap, and it makes
+the 35–44 dBZ row's "likely stratiform" note geometric rather than guessed.
+
+### Lead-time confidence is a first-order variable
+
+ICON-D2 is **radar-nudged** (latent-heat nudging of 3-D volume reflectivity),
+so its reflectivity is observationally constrained in the first hours and
+increasingly free-running — with the usual convection-permitting placement
+error growth — thereafter. The assessment attaches lead-time wording to every
+fired cell: ≤ 6 h "radar-nudged, positions meaningful"; 6–24 h "presence/
+character reliable, placement approximate"; > 24 h "environment-level
+signal". Wording only, never a tier input: placement uncertainty must not
+downgrade a simulated echo. Rejected: lead-scaled tiers (hides evidence
+instead of framing it).
+
+### Unavailable ≠ quiet, end to end
+
+A payload is attached to **every** D2-enriched hour (all-None with
+completeness flags False when the decode fails), so "no payload" means "not
+D2-sourced" and can never read as model-quiet. ``detection_complete=False``
+yields no assessment (``convective_nwp=None``) plus
+``convective_explicit_unavailable=True``; the convective evaluator renders
+those points **UNAVAILABLE** (excluded from the extent denominator like a
+missing sounding) instead of GREEN. Grading falls back to the thermo track
+badged truthfully (``convective_method_effective="thermo"``); the DD
+cross-check compares against the explicit verdict's own firing semantics and
+stays silent when there is no explicit verdict.
+
+### Aggregation: deliberately deferred to #442
+
+A lone D2 explicit cell against quiet coarse models aggregates GREEN under
+today's majority rules. The proposal on the table — high-confidence D2
+explicit convection floors the aggregate at AMBER ("ICON-D2 explicitly
+develops a cell; coarser models do not resolve it"), possibly lead-scaled —
+changes aggregation semantics and is decided in the #442 grade rework, not
+silently here. What this track does now: the per-model D2 status is fully
+visible in the per-model breakdown regardless.

@@ -11,8 +11,10 @@ Handles two categories of GFS variables:
 from __future__ import annotations
 
 import logging
+import math
 import tempfile
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -1530,6 +1532,542 @@ def build_icon_cloud_diagnostics(
         convective_top_ft=convective_top_ft,
         ml_cape_jkg=ml_cape,
         ml_cin_jkg=ml_cin,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ICON-D2 explicit-convection decode (#462) — eccodes per-message path
+# ---------------------------------------------------------------------------
+#
+# D2's convection-permitting storm fields CANNOT go through the cfgrib path
+# above: several of them pack multiple sub-hourly GRIB messages per file and
+# the hourly products must be selected/constructed by validity — never merged
+# (verified against the live feed 2026-07-21, eccodes inspection of 00z f012):
+#
+# - dbz_ctmax / lpi_max / w_ctmax / uh_max_med: ONE message per file,
+#   stepType=max over the PREVIOUS hour (stepRange "11-12"-style). Interval
+#   maxima attach to (H−1, H].
+# - echotop (shortName min_pres, Pa, stepType=min, −999 Pa = valid "no echo"):
+#   FOUR 15-min messages per file, valid :00/:15/:30/:45. The hourly echo top
+#   for flight hour H is CONSTRUCTED as the min pressure over the four quarter
+#   windows ending at H−45/H−30/H−15/H — three messages from file f(H−1) plus
+#   the first of file f(H) — aligned with dbz_ctmax's (H−1, H] interval.
+# - grau_gsp (shortName tgrp, kg/m², stepType=accum since init): ONE on-the-
+#   hour message (stepUnits=hours) plus three quarter-hour accums we must NOT
+#   use. De-accumulated PER CELL (accum_H − accum_{H−1}, clipped ≥ 0), then
+#   corridor-max — like rain_con but on the grid, before reduction.
+#
+# Sentinel discipline (None ≠ 0, #421): the GRIB BITMAP alone marks missing
+# data (masked domain corners, ~16.7% of cells on every field). Encoded quiet
+# values are real data: −150 dBZ = genuinely quiet reflectivity floor (kept —
+# it participates in the corridor max), −999 Pa = "no 18 dBZ echo this
+# quarter" (excluded from the pressure min, counted as a valid cell).
+# Completeness flags below are driven by bitmap-valid corridor fractions,
+# never by decoded values.
+#
+# Corridor extrema: per-point bilinear sampling defeats a 2.2 km model — a
+# cell between route points vanishes. Each channel is reduced over a disc of
+# D2_CORRIDOR_RADIUS_KM around each route point; values are corridor extrema,
+# not centreline values. dbz_ctmax additionally keeps the centreline bilinear
+# value so a widespread stratiform shield (point ≈ corridor max) is
+# distinguishable from a discrete cell (max ≫ point).
+
+D2_CORRIDOR_RADIUS_NM = 10.0
+D2_CORRIDOR_RADIUS_KM = D2_CORRIDOR_RADIUS_NM * 1.852
+
+_D2_EXPLICIT_SHORTNAMES = frozenset({
+    "dbz_ctmax", "min_pres", "lpi_max", "w_ctmax", "uh_max_med", "tgrp",
+})
+_D2_MISSING_VALUE = 9999.0          # eccodes missingValue on these products
+_D2_ECHOTOP_NO_ECHO_PA = -999.0     # valid "no ≥18 dBZ echo" sentinel
+_D2_CORRIDOR_MIN_VALID_FRAC = 0.5   # corridor coverage required per channel
+_KM_PER_DEG_LAT = 111.195
+
+
+class _D2Message(NamedTuple):
+    """One decoded explicit-convection GRIB message as a 2-D grid."""
+    var: str                # canonical field key (dbz_ctmax / echotop / ...)
+    values: "np.ndarray"    # (n_lat, n_lon) float64, missing → NaN
+    valid_minutes: int      # validity offset from run init, in minutes
+    on_hour_accum: bool     # grau_gsp only: stepUnits=hours since-init accum
+
+
+def _d2_valid_offset_minutes(gid) -> int:
+    """(validityDate/validityTime − dataDate/dataTime) in minutes (eccodes)."""
+    import eccodes
+
+    def _ymdh(date_key: str, time_key: str) -> datetime:
+        d = int(eccodes.codes_get(gid, date_key))
+        t = int(eccodes.codes_get(gid, time_key))  # HHMM (e.g. 1115 = 11:15)
+        return datetime(
+            d // 10000, (d // 100) % 100, d % 100,
+            t // 100, t % 100, tzinfo=timezone.utc,
+        )
+
+    delta = _ymdh("validityDate", "validityTime") - _ymdh("dataDate", "dataTime")
+    return int(delta.total_seconds() // 60)
+
+
+def _read_d2_explicit_messages(
+    grib_bytes: bytes,
+) -> "tuple[list[_D2Message], np.ndarray | None, np.ndarray | None, bytes]":
+    """Split a D2 single-level blob into explicit messages + a standard remainder.
+
+    Returns ``(messages, lat_vec, lon_vec, standard_bytes)``: the decoded
+    explicit-convection messages (values as NaN-masked grids), the shared grid
+    axes (None when no explicit message was found), and the concatenation of
+    every NON-explicit message (ceiling/clc*/cape_ml/cin_ml) for the existing
+    cfgrib path — so multi-message storm fields never reach cfgrib's merge
+    logic. Grid axes come from the first explicit message's eccodes-computed
+    latitudes/longitudes arrays (SIGNED, monotonic: −3.94…20.34 °E), NOT from
+    the raw grid keys (which encode the first longitude as 356.06°).
+    """
+    import eccodes
+    import numpy as np
+
+    messages: list[_D2Message] = []
+    standard = bytearray()
+    lat_vec = lon_vec = None
+    if not grib_bytes:
+        return messages, None, None, b""
+
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+    try:
+        with open(tmp_path, "rb") as f:
+            while True:
+                gid = eccodes.codes_grib_new_from_file(f)
+                if gid is None:
+                    break
+                try:
+                    short = str(eccodes.codes_get(gid, "shortName")).lower()
+                    if short not in _D2_EXPLICIT_SHORTNAMES:
+                        standard.extend(eccodes.codes_get_message(gid))
+                        continue
+                    ni = int(eccodes.codes_get(gid, "Ni"))
+                    nj = int(eccodes.codes_get(gid, "Nj"))
+                    if lat_vec is None:
+                        lats = np.asarray(
+                            eccodes.codes_get_array(gid, "latitudes"), dtype=np.float64,
+                        )
+                        lons = np.asarray(
+                            eccodes.codes_get_array(gid, "longitudes"), dtype=np.float64,
+                        )
+                        lat_vec = lats.reshape(nj, ni)[:, 0]
+                        lon_vec = lons.reshape(nj, ni)[0, :]
+                    values = np.asarray(
+                        eccodes.codes_get_values(gid), dtype=np.float64,
+                    ).reshape(nj, ni)
+                    missing = float(eccodes.codes_get(gid, "missingValue"))
+                    values = np.where(values == missing, np.nan, values)
+
+                    var = {
+                        "dbz_ctmax": "dbz_ctmax",
+                        "min_pres": "echotop",
+                        "lpi_max": "lpi_max",
+                        "w_ctmax": "w_ctmax",
+                        "uh_max_med": "uh_max_med",
+                        "tgrp": "grau_gsp",
+                    }[short]
+                    step_units = int(eccodes.codes_get(gid, "stepUnits"))
+                    step_type = str(eccodes.codes_get(gid, "stepType"))
+                    messages.append(_D2Message(
+                        var=var,
+                        values=values,
+                        valid_minutes=_d2_valid_offset_minutes(gid),
+                        on_hour_accum=(step_type == "accum" and step_units == 1),
+                    ))
+                finally:
+                    eccodes.codes_release(gid)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return messages, lat_vec, lon_vec, bytes(standard)
+
+
+def read_icon_d2_grid_mask(
+    grib_bytes: bytes,
+) -> "tuple[np.ndarray, np.ndarray, np.ndarray] | None":
+    """Grid axes + bitmap validity mask from the first message of a D2 blob.
+
+    Used by the domain-gate hardening (#462): the delivered regular-lat-lon
+    grid carries ~16.7% bitmap-masked cells (the native rotated domain's
+    corners), and this mask tests the ACTUAL delivered product. Returns
+    ``(lat_vec, lon_vec, valid_mask)`` with valid_mask True where the cell is
+    a real model cell, or None when undecodable.
+    """
+    import eccodes
+    import numpy as np
+
+    if not grib_bytes:
+        return None
+    with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
+        tmp.write(grib_bytes)
+        tmp_path = Path(tmp.name)
+    try:
+        with open(tmp_path, "rb") as f:
+            gid = eccodes.codes_grib_new_from_file(f)
+            if gid is None:
+                return None
+            try:
+                ni = int(eccodes.codes_get(gid, "Ni"))
+                nj = int(eccodes.codes_get(gid, "Nj"))
+                lats = np.asarray(eccodes.codes_get_array(gid, "latitudes"))
+                lons = np.asarray(eccodes.codes_get_array(gid, "longitudes"))
+                values = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64)
+                missing = float(eccodes.codes_get(gid, "missingValue"))
+                return (
+                    lats.reshape(nj, ni)[:, 0],
+                    lons.reshape(nj, ni)[0, :],
+                    (values.reshape(nj, ni) != missing),
+                )
+            finally:
+                eccodes.codes_release(gid)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _d2_corridor_cells(
+    lat_vec: "np.ndarray",
+    lon_vec: "np.ndarray",
+    lat: float,
+    lon: float,
+    radius_km: float = D2_CORRIDOR_RADIUS_KM,
+) -> "tuple[np.ndarray, np.ndarray, bool] | None":
+    """Grid cells within *radius_km* of a route point.
+
+    Returns ``(rows, cols, clipped)`` — index arrays of the corridor disc and
+    whether the disc was cut by the grid boundary — or None when the point is
+    outside the grid entirely. A clipped corridor is incomplete by
+    construction: the extremum would be computed over a partial
+    neighbourhood, so callers treat completeness as False.
+    """
+    import numpy as np
+
+    frac_lat, lat_ok = _frac_grid_indices(lat_vec, [lat])
+    frac_lon, lon_ok = _frac_grid_indices(lon_vec, [lon])
+    if not (bool(lat_ok[0]) and bool(lon_ok[0])):
+        return None
+
+    ci = float(frac_lat[0])  # lat axis (rows)
+    cj = float(frac_lon[0])  # lon axis (cols)
+    dlat_km = abs(float(lat_vec[-1] - lat_vec[0])) / max(len(lat_vec) - 1, 1) * _KM_PER_DEG_LAT
+    dlon_km = (
+        abs(float(lon_vec[-1] - lon_vec[0])) / max(len(lon_vec) - 1, 1)
+        * _KM_PER_DEG_LAT * math.cos(math.radians(lat))
+    )
+    if dlat_km <= 0 or dlon_km <= 0:
+        return None
+
+    ri = int(math.ceil(radius_km / dlat_km))
+    rj = int(math.ceil(radius_km / dlon_km))
+    n_rows, n_cols = len(lat_vec), len(lon_vec)
+    i0, i1 = int(math.floor(ci)) - ri, int(math.ceil(ci)) + ri + 1
+    j0, j1 = int(math.floor(cj)) - rj, int(math.ceil(cj)) + rj + 1
+    clipped = i0 < 0 or j0 < 0 or i1 > n_rows or j1 > n_cols
+    i0, j0 = max(i0, 0), max(j0, 0)
+    i1, j1 = min(i1, n_rows), min(j1, n_cols)
+    if i0 >= i1 or j0 >= j1:
+        return None
+
+    ii = np.arange(i0, i1)[:, None]
+    jj = np.arange(j0, j1)[None, :]
+    dist2 = ((ii - ci) * dlat_km) ** 2 + ((jj - cj) * dlon_km) ** 2
+    sel = dist2 <= radius_km ** 2
+    rows = np.broadcast_to(ii, dist2.shape)[sel]
+    cols = np.broadcast_to(jj, dist2.shape)[sel]
+    if rows.size == 0:
+        return None
+    return rows, cols, clipped
+
+
+def _d2_corridor_stats(
+    values: "np.ndarray",
+    rows: "np.ndarray",
+    cols: "np.ndarray",
+) -> "tuple[np.ndarray, float]":
+    """Valid corridor values + valid fraction for one point/channel."""
+    import numpy as np
+
+    cell_values = values[rows, cols]
+    valid = ~np.isnan(cell_values)
+    frac = float(valid.sum()) / float(cell_values.size) if cell_values.size else 0.0
+    return cell_values[valid], frac
+
+
+def corridor_fully_valid(
+    lat_vec: "np.ndarray",
+    lon_vec: "np.ndarray",
+    valid_mask: "np.ndarray",
+    lat: float,
+    lon: float,
+    radius_km: float = D2_CORRIDOR_RADIUS_KM,
+) -> bool:
+    """True when a route point's ENTIRE corridor disc lies in valid grid cells.
+
+    Domain-gate hardening (#462): a route can pass the D2 bbox gate yet clip
+    the delivered grid's bitmap-masked corners (~16.7% of cells) or its outer
+    boundary — corridor extrema there would be computed over partial
+    neighbourhoods. The gate requires the full disc present and unmasked.
+    """
+    cells = _d2_corridor_cells(lat_vec, lon_vec, lat, lon, radius_km)
+    if cells is None:
+        return False
+    rows, cols, clipped = cells
+    if clipped:
+        return False
+    return bool(valid_mask[rows, cols].all())
+
+
+def _d2_centreline_value(
+    values: "np.ndarray",
+    lat_vec: "np.ndarray",
+    lon_vec: "np.ndarray",
+    lat: float,
+    lon: float,
+) -> float | None:
+    """Bilinear value at the exact route point (None on any masked corner)."""
+    import numpy as np
+
+    bw = _bilinear_grid_weights(lat_vec, lon_vec, [lat], [lon])
+    if bw is None or bw.inb_idx.size == 0:
+        return None
+    corners = np.array([
+        values[bw.i0[0], bw.j0[0]], values[bw.i0[0], bw.j1[0]],
+        values[bw.i1[0], bw.j0[0]], values[bw.i1[0], bw.j1[0]],
+    ])
+    if np.isnan(corners).any():
+        return None
+    v = (
+        bw.w00[0] * corners[0] + bw.w01[0] * corners[1]
+        + bw.w10[0] * corners[2] + bw.w11[0] * corners[3]
+    )
+    return float(v)
+
+
+def _isa_pressure_to_ft(pressure_pa: float) -> float:
+    """Pressure → altitude via the ICAO standard atmosphere (single datum).
+
+    The echo top is a corridor extremum — its cell is generally NOT under the
+    route centreline, so converting through the centreline sounding column
+    would borrow a datum from the wrong place; ISA is reproducible and good
+    to ~±1000 ft at storm-top levels, ample for a depth/character indicator
+    that is explicitly never used for overfly clearance (#462).
+    """
+    if pressure_pa <= 0:
+        return 0.0
+    if pressure_pa >= 22632.06:  # troposphere (to 11 km)
+        h_m = 44330.8 * (1.0 - (pressure_pa / 101325.0) ** 0.1902632)
+    else:  # isothermal stratosphere (11–20 km)
+        h_m = 11000.0 + 6341.62 * math.log(22632.06 / pressure_pa)
+    return h_m * _M_TO_FT
+
+
+def decode_icon_d2_explicit(
+    grib_bytes: bytes,
+    prev_grib_bytes: bytes | None,
+    fhour: int,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> "tuple[list[dict[str, float | None]], bytes]":
+    """Decode D2 explicit-convection fields to corridor extrema per route point.
+
+    Args:
+        grib_bytes: This forecast hour's single-level blob (all variables).
+        prev_grib_bytes: The PREVIOUS step's blob — supplies the three leading
+            echotop quarters and the grau_gsp predecessor accumulation. None
+            when no predecessor was fetched (hour 0 or a failed lead file).
+        fhour: This blob's forecast hour H. The decoded products describe the
+            ``(H−1, H]`` interval (interval-max semantics, #462 rule 3).
+        latitudes/longitudes: Route points (signed −180…+180 lons).
+
+    Returns:
+        ``(raws, standard_bytes)`` — one raw dict per route point (corridor
+        extrema + per-channel valid fractions + corridor-clipped flag), and
+        the non-explicit remainder of THIS hour's blob for the cfgrib path.
+        A route point outside the grid gets an all-None dict with
+        ``corridor_clipped=True`` (unknown, never quiet).
+    """
+    import numpy as np
+
+    n_points = len(latitudes)
+    messages, lat_vec, lon_vec, standard = _read_d2_explicit_messages(grib_bytes)
+    prev_messages: list[_D2Message] = []
+    if prev_grib_bytes:
+        prev_messages, _, _, _ = _read_d2_explicit_messages(prev_grib_bytes)
+
+    raws: list[dict[str, float | None]] = [
+        {
+            "reflectivity_hour_max_dbz": None,
+            "reflectivity_point_dbz": None,
+            "dbz_valid_frac": 0.0,
+            "echo_top_18dbz_pa": None,
+            "echo_top_quarters_valid": 0,
+            "lightning_potential_hour_max_jkg": None,
+            "lpi_valid_frac": 0.0,
+            "updraft_hour_max_ms": None,
+            "w_valid_frac": 0.0,
+            "updraft_helicity_2_5km_hour_max_m2s2": None,
+            "uh_valid_frac": 0.0,
+            "graupel_hour_mm": None,
+            "grau_valid_frac": 0.0,
+            "corridor_clipped": True,
+        }
+        for _ in range(n_points)
+    ]
+    if lat_vec is None:
+        return raws, standard
+
+    # Hour-max channels from THIS hour's file (one message each).
+    hour_max: dict[str, np.ndarray] = {}
+    # echotop quarter windows keyed by end-minute offset (both files).
+    echo_quarters: dict[int, np.ndarray] = {}
+    # grau_gsp on-the-hour accumulations keyed by whole-hour offset.
+    grau_accums: dict[int, np.ndarray] = {}
+    for msg in messages:
+        if msg.var in ("dbz_ctmax", "lpi_max", "w_ctmax", "uh_max_med"):
+            hour_max[msg.var] = msg.values
+        elif msg.var == "echotop":
+            echo_quarters[msg.valid_minutes] = msg.values
+        elif msg.var == "grau_gsp" and msg.on_hour_accum:
+            grau_accums[msg.valid_minutes // 60] = msg.values
+    for msg in prev_messages:
+        if msg.var == "echotop":
+            echo_quarters.setdefault(msg.valid_minutes, msg.values)
+        elif msg.var == "grau_gsp" and msg.on_hour_accum:
+            grau_accums.setdefault(msg.valid_minutes // 60, msg.values)
+
+    # dbz_ctmax's interval is (H−1, H]; the four echo-top quarter windows
+    # ENDING in that interval are H−45/H−30/H−15/H (minutes since init).
+    quarter_ends = [fhour * 60 - 45, fhour * 60 - 30, fhour * 60 - 15, fhour * 60]
+
+    # Per-cell graupel de-accumulation (both accums must exist; clip ≥ 0 so a
+    # reset accumulation never yields negative rates — rain_con precedent).
+    grau_hourly: np.ndarray | None = None
+    accum_h = grau_accums.get(fhour)
+    accum_prev = grau_accums.get(fhour - 1)
+    if accum_h is not None and accum_prev is not None:
+        grau_hourly = np.clip(accum_h - accum_prev, 0.0, None)
+
+    for pt in range(n_points):
+        lat, lon = latitudes[pt], longitudes[pt]
+        cells = _d2_corridor_cells(lat_vec, lon_vec, lat, lon)
+        if cells is None:
+            continue  # all-None + corridor_clipped=True (already initialised)
+        rows, cols, clipped = cells
+        raw = raws[pt]
+        raw["corridor_clipped"] = clipped
+
+        grid = hour_max.get("dbz_ctmax")
+        if grid is not None:
+            valid, frac = _d2_corridor_stats(grid, rows, cols)
+            raw["dbz_valid_frac"] = frac
+            if valid.size:
+                # −150 dBZ is a valid quiet floor — it participates in the max.
+                raw["reflectivity_hour_max_dbz"] = float(np.max(valid))
+            raw["reflectivity_point_dbz"] = _d2_centreline_value(
+                grid, lat_vec, lon_vec, lat, lon,
+            )
+
+        grid = hour_max.get("lpi_max")
+        if grid is not None:
+            valid, frac = _d2_corridor_stats(grid, rows, cols)
+            raw["lpi_valid_frac"] = frac
+            if valid.size:
+                raw["lightning_potential_hour_max_jkg"] = float(np.max(valid))
+
+        grid = hour_max.get("w_ctmax")
+        if grid is not None:
+            valid, frac = _d2_corridor_stats(grid, rows, cols)
+            raw["w_valid_frac"] = frac
+            if valid.size:
+                raw["updraft_hour_max_ms"] = float(np.max(valid))
+
+        grid = hour_max.get("uh_max_med")
+        if grid is not None:
+            valid, frac = _d2_corridor_stats(grid, rows, cols)
+            raw["uh_valid_frac"] = frac
+            if valid.size:
+                # argmax |uh| but store the SIGNED value (rotation sense kept).
+                raw["updraft_helicity_2_5km_hour_max_m2s2"] = float(
+                    valid[np.argmax(np.abs(valid))]
+                )
+
+        if grau_hourly is not None:
+            valid, frac = _d2_corridor_stats(grau_hourly, rows, cols)
+            raw["grau_valid_frac"] = frac
+            if valid.size:
+                raw["graupel_hour_mm"] = float(np.max(valid))
+
+        # Hourly echo top: corridor min pressure per quarter (sentinel −999 Pa
+        # excluded — it is "no echo", not a high top), then the min across the
+        # four quarters (highest echo of the hour). Quarters missing from both
+        # files simply don't count — completeness records how many were valid.
+        quarter_mins: list[float] = []
+        quarters_valid = 0
+        for q_end in quarter_ends:
+            q_grid = echo_quarters.get(q_end)
+            if q_grid is None:
+                continue
+            cell_values, frac = _d2_corridor_stats(q_grid, rows, cols)
+            if frac < _D2_CORRIDOR_MIN_VALID_FRAC:
+                continue
+            real = cell_values[cell_values > _D2_ECHOTOP_NO_ECHO_PA]
+            quarters_valid += 1
+            if real.size:
+                quarter_mins.append(float(np.min(real)))
+        raw["echo_top_quarters_valid"] = quarters_valid
+        if quarters_valid == len(quarter_ends) and quarter_mins:
+            # Only a FULL set of quarters yields the hourly value — a partial
+            # min would understate storm depth while looking complete.
+            raw["echo_top_18dbz_pa"] = min(quarter_mins)
+
+    return raws, standard
+
+
+def build_icon_d2_explicit_diagnostics(
+    raw: dict[str, float | None],
+    lead_hours: float | None,
+) -> "NWPExplicitConvectiveDiagnostics":
+    """Convert one corridor-extrema raw dict into the payload model (#462).
+
+    Completeness is bitmap-driven per channel: a corridor needs ≥ 50% valid
+    cells (and no grid-boundary clipping) for its channel to count as
+    complete; quiet floors (−150 dBZ, −999 Pa) are valid data, never missing.
+    """
+    from weatherbrief.models.analysis import NWPExplicitConvectiveDiagnostics
+
+    clipped = bool(raw.get("corridor_clipped"))
+
+    def _enough(frac_key: str) -> bool:
+        return not clipped and (raw.get(frac_key) or 0.0) >= _D2_CORRIDOR_MIN_VALID_FRAC
+
+    detection_complete = _enough("dbz_valid_frac")
+    strength_complete = (
+        _enough("lpi_valid_frac") and _enough("w_valid_frac") and _enough("grau_valid_frac")
+    )
+    echo_top_complete = not clipped and raw.get("echo_top_quarters_valid") == 4
+
+    echo_top_pa = raw.get("echo_top_18dbz_pa")
+    echo_top_ft = (
+        round(_isa_pressure_to_ft(echo_top_pa)) if echo_top_pa is not None else None
+    )
+
+    return NWPExplicitConvectiveDiagnostics(
+        source="icon_d2",
+        reflectivity_hour_max_dbz=raw.get("reflectivity_hour_max_dbz"),
+        reflectivity_point_dbz=raw.get("reflectivity_point_dbz"),
+        echo_top_18dbz_ft=echo_top_ft,
+        lightning_potential_hour_max_jkg=raw.get("lightning_potential_hour_max_jkg"),
+        updraft_hour_max_ms=raw.get("updraft_hour_max_ms"),
+        updraft_helicity_2_5km_hour_max_m2s2=raw.get(
+            "updraft_helicity_2_5km_hour_max_m2s2"
+        ),
+        graupel_hour_mm=raw.get("graupel_hour_mm"),
+        lead_hours=lead_hours,
+        detection_complete=detection_complete,
+        strength_complete=strength_complete,
+        echo_top_complete=echo_top_complete,
     )
 
 

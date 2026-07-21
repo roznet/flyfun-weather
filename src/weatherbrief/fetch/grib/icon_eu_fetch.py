@@ -70,6 +70,9 @@ class IconVariant:
             this variant. NOT identical between variants: ICON-D2 has no deep-
             convection parameterization, so ``hbas_con``/``htop_con``/``rain_con``
             don't exist (or are meaningless) on its feed — see the D2 tuple below.
+        cloud_diag_cache_version: Version suffix of the single-level
+            cloud-diagnostic blob cache key. Bump when the variable list (blob
+            content) changes so warm caches re-fetch (#421 precedent).
     """
 
     slug: str
@@ -93,6 +96,21 @@ class IconVariant:
     hourly_to_h: int
     coarse_step_h: int
     cloud_diag_variables: tuple[str, ...]
+    cloud_diag_cache_version: str = "V2"
+
+    @property
+    def needs_predecessor_step(self) -> bool:
+        """True when the single-level fetch needs one leading step prepended.
+
+        Any variable whose hourly value is derived against the previous step
+        requires the lead file: accumulated fields de-accumulated per hour
+        (``rain_con`` on EU, ``grau_gsp`` on D2) and sub-hourly windowed fields
+        whose hourly product spans messages from two adjacent files (D2
+        ``echotop`` quarters — #462).
+        """
+        return bool(
+            {"rain_con", "grau_gsp", "echotop"}.intersection(self.cloud_diag_variables)
+        )
 
 
 # Single-level cloud diagnostic variables (ICON-EU).
@@ -115,9 +133,9 @@ ICON_EU_CLOUD_DIAG_VARIABLES = (
     "rain_con",
 )
 
-# Single-level diagnostics for ICON-D2 — deliberately SMALLER than ICON-EU's
-# list. D2 is convection-permitting: it runs NO deep-convection scheme, so
-# (verified live against opendata.dwd.de, 2026-07-21):
+# Single-level diagnostics for ICON-D2. D2 is convection-permitting: it runs
+# NO deep-convection scheme, so (verified live against opendata.dwd.de,
+# 2026-07-21):
 # - hbas_con / htop_con → 404. Only shallow-convection hbas_sc/htop_sc exist,
 #   and those describe fair-weather cumulus — mapping them into
 #   convective_base/top would show a benign low top during a real storm.
@@ -125,14 +143,36 @@ ICON_EU_CLOUD_DIAG_VARIABLES = (
 #   shallow scheme barely precipitates; explicit-storm rain lands in
 #   rain_gsp/prg_gsp). Feeding it into convective_precip_mm_h would make the
 #   native convective gate read "quiet" exactly when D2 sees a storm.
-# All three therefore stay ABSENT for D2 → downstream fields are None
-# (missing-data semantics, which icon_eu_conv_rain_rate_mm_h and the firing
-# gate already handle). Issue #462 replaces them with D2's convection-
-# permitting diagnostics (dbz_cmax, echotop, lpi, uh_max, prg_gsp).
+# All three therefore stay ABSENT for D2 → downstream parameterized fields are
+# None (missing-data semantics). In their place (#462), D2's convection-
+# permitting storm fields (all verified against the live feed 2026-07-21 —
+# eccodes per-message inspection of 00z f012 files):
+# - dbz_ctmax — column-max simulated reflectivity, dBZ, stepType=max over the
+#   previous hour (single full-hour message per file). The firing signal.
+# - echotop — LOWEST PRESSURE (= highest altitude) with reflectivity ≥ 18 dBZ,
+#   delivered as shortName `min_pres` in Pa, stepType=min, FOUR 15-min
+#   messages per file; −999 Pa = "no echo this quarter" (valid data, not
+#   missing). The hourly product is CONSTRUCTED as the min over the four
+#   quarter windows ending in (H−1, H] — three messages from file f(H−1) plus
+#   the first of file f(H). Depth/character only — NEVER a cloud top.
+# - lpi_max — Lightning Potential Index (Lynn & Yair 2010), J/kg, hour max.
+# - w_ctmax — max updraft in the 0–10 km column, m/s, hour max.
+# - uh_max_med — updraft helicity over the 2–5 km AGL layer, m²/s², hour max
+#   of the SIGNED amplitude. Chosen over uh_max (2–8 km) deliberately: 2–5 km
+#   is the literature/HRRR-calibrated layer, so rotation notes can reference
+#   portable thresholds.
+# - grau_gsp — grid-scale graupel, kg/m² ≡ mm, ACCUMULATED since init; the
+#   file carries one on-the-hour message (stepUnits=hours) plus three quarter-
+#   hour accums — de-accumulation uses the on-the-hour messages only.
+# Deferred: dbz_cmax (instant — optional sub-hourly detail), tcond10_mx
+# (column condensate above −10 °C — overlaps the dbz signal; revisit with
+# calibration). Not usable: hbas_con/htop_con (404), rain_con (≈0), prr_con
+# (404), echotopinm (404 — only the pressure form is delivered).
 ICON_D2_CLOUD_DIAG_VARIABLES = (
     "ceiling",
     "clcl", "clcm", "clch", "clct",
     "cape_ml", "cin_ml",
+    "dbz_ctmax", "echotop", "lpi_max", "w_ctmax", "uh_max_med", "grau_gsp",
 )
 
 
@@ -204,6 +244,10 @@ ICON_D2 = IconVariant(
     hourly_to_h=48,
     coarse_step_h=1,
     cloud_diag_variables=ICON_D2_CLOUD_DIAG_VARIABLES,
+    # V2 → V3 in #462: the explicit-convection storm fields (dbz_ctmax,
+    # echotop, lpi_max, w_ctmax, uh_max_med, grau_gsp) joined the blob, so
+    # pre-#462 cached blobs must re-fetch.
+    cloud_diag_cache_version="V3",
 )
 
 # Back-compat module constants (ICON-EU). The variant above is the single
@@ -290,11 +334,13 @@ ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V2"
 def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     """Cache-key label for a variant's single-level cloud-diagnostic blob.
 
-    ``{cache_prefix}_CLOUD_DIAG_V2`` — the ``_V2`` suffix matches the ICON-EU
-    constant so the two share the same rain_con-inclusive schema; only the
-    prefix differs so ICON-D2 blobs never masquerade as ICON-EU in a cache dir.
+    ``{cache_prefix}_CLOUD_DIAG_{version}`` — the prefix keeps the two variants
+    from colliding in a cache dir; the version is bumped per variant whenever
+    its variable list (blob content) changes, so warm caches re-fetch (#421
+    precedent). ICON-D2 moved to ``_V3`` in #462 when the explicit-convection
+    storm fields were added to its blob; ICON-EU stays at ``_V2``.
     """
-    return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
+    return f"{variant.cache_prefix}_CLOUD_DIAG_{variant.cloud_diag_cache_version}"
 
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 8
