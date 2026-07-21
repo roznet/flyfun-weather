@@ -1,4 +1,4 @@
-"""ICON-D2 ceiling-limited fetch (#469 phase 2).
+"""ICON-D2 ceiling-limited fetch (#469 phase 2) — GATED OFF by default.
 
 The wind/cloud sounding variables (u/v/w/qc/qi/clc) carry nothing useful above
 the flight ceiling, so they are fetched only down to a domain-safe model-level
@@ -6,8 +6,16 @@ cut derived from the ceiling. The thermodynamic column (t/qv/p) stays full so
 MetPy CAPE — the buoyancy integral to an equilibrium level far above the flight
 — is unaffected.
 
+That asymmetry is why the feature ships behind ``icon_ceiling_limit_enabled()``
+with the default FALSE: it leaves pressure levels above the cut carrying
+temperature but no wind, which the downstream consumers currently render as
+REASSURING rather than unavailable (see the function's docstring). These tests
+exercise the machinery directly / with the gate forced on so it stays correct
+for re-landing, plus the gate's own default-off behaviour.
+
 Covers the pure cut/level-split logic, the per-variable level plumbing on the
-context, the prefetch honouring it, and _prepare_icon_eu wiring the ceiling in.
+context, the prefetch honouring it, _prepare_icon_eu wiring the ceiling in, and
+the gate.
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ from weatherbrief.fetch.grib.icon_eu_fetch import (
     ICON_D2,
     ICON_EU,
     LIMITED_LEVEL_VARIABLES,
+    icon_ceiling_limit_enabled,
     icon_levels_by_var,
     icon_limited_top_level,
     icon_model_level_var_label,
@@ -177,13 +186,19 @@ class TestPrepareCeiling:
             return d2_run if variant is _D2 else None
         return _fake
 
-    def _prepare(self, tmp_path, ceiling):
+    def _prepare(self, tmp_path, ceiling, enabled=True):
         route = [_rp(48.35, 11.79), _rp(52.52, 13.4, 300)]  # inside D2 bbox
         dep = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
         with patch(
             "weatherbrief.fetch.grib.icon_eu_fetch.find_latest_icon_eu_run",
             self._finder(d2_run=("20260720", 12)),
-        ), patch.object(grib_mod, "_d2_corridor_mask_ok", return_value=True):
+        ), patch.object(grib_mod, "_d2_corridor_mask_ok", return_value=True), \
+                patch.object(
+                    # _prepare_icon_eu imports this function-locally, so it
+                    # resolves from the source module at call time.
+                    icon_fetch_mod, "icon_ceiling_limit_enabled",
+                    return_value=enabled,
+                ):
             ctx, skip = grib_mod._prepare_icon_eu(
                 self._icon_sections(), route, dep,
                 data_dir=tmp_path, flight_duration_hours=2.0,
@@ -202,3 +217,30 @@ class TestPrepareCeiling:
         ctx = self._prepare(tmp_path, ceiling=20_000)
         assert ctx is not None and ctx.variant is ICON_D2
         assert ctx.levels_by_var is None  # no truncation
+
+    def test_gate_off_keeps_full_column_even_at_low_ceiling(self, tmp_path):
+        # #469 phase 2 is gated OFF by default: a truncated column reads as
+        # reassuring downstream (turbulence GREEN not UNAVAILABLE, high cloud
+        # decks as "clear"). With the gate off, a ceiling that WOULD cut must
+        # still yield the full column for every variable.
+        ctx = self._prepare(tmp_path, ceiling=18_000, enabled=False)
+        assert ctx is not None and ctx.variant is ICON_D2
+        assert ctx.levels_by_var is None
+        assert ctx.levels_for_var("u") == list(range(16, 66))
+        assert ctx.levels_for_var("t") == list(range(16, 66))
+
+
+class TestCeilingLimitGate:
+    """The env gate itself (#469 phase 2 held back pending consumer fixes)."""
+
+    def test_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("WB_ICON_CEILING_LIMIT_ENABLED", raising=False)
+        assert icon_ceiling_limit_enabled() is False
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("true", True), ("1", True), ("yes", True), ("TRUE", True),
+        ("false", False), ("0", False), ("", False), ("garbage", False),
+    ])
+    def test_env_override(self, monkeypatch, raw, expected):
+        monkeypatch.setenv("WB_ICON_CEILING_LIMIT_ENABLED", raw)
+        assert icon_ceiling_limit_enabled() is expected

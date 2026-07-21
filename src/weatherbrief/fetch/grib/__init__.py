@@ -3179,6 +3179,7 @@ def _prepare_icon_eu(
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
         icon_eu_window_out_of_range,
+        icon_ceiling_limit_enabled,
         icon_levels_by_var,
         route_in_icon_eu_domain,
     )
@@ -3264,7 +3265,17 @@ def _prepare_icon_eu(
     # cut (t/qv/p stay full column for CAPE). None → every variable full column
     # (ICON-EU, unknown/high ceiling). Only a per-level-cache variant can act on
     # this — the whole-column blob has no per-level granularity to top up from.
-    levels_by_var = icon_levels_by_var(variant, flight_ceiling_ft, levels)
+    #
+    # GATED OFF by default: a truncated column currently reads as reassuring
+    # downstream (turbulence GREEN instead of UNAVAILABLE, high cloud decks as
+    # "clear") — see icon_ceiling_limit_enabled() for the full reasoning and
+    # what re-landing needs. Off → None → the same full-column path ICON-EU
+    # already takes in production. Phases 1 (per-level cache + top-up) and 3
+    # (flight warming) are independent of this flag and stay active.
+    levels_by_var = (
+        icon_levels_by_var(variant, flight_ceiling_ft, levels)
+        if icon_ceiling_limit_enabled() else None
+    )
 
     return _IconEuContext(
         init_date=init_date, init_hour=init_hour,

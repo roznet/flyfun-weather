@@ -380,7 +380,12 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
 
 
-# Ceiling-limited fetch (#469 phase 2). The sounding splits into two classes:
+# Ceiling-limited fetch (#469 phase 2) — GATED OFF BY DEFAULT, see
+# :func:`icon_ceiling_limit_enabled` below for why. The machinery stays in the
+# tree (and fully unit-tested) so re-landing it is a default flip plus the
+# consumer fixes.
+#
+# The sounding splits into two classes:
 #
 # - FULL_COLUMN — t, qv, p are kept at the FULL model column regardless of the
 #   flight ceiling. MetPy CAPE is the buoyancy integral to the equilibrium
@@ -412,6 +417,40 @@ ICON_D2_CEILING_LEVEL_CUTS: tuple[tuple[int, int], ...] = (
     (16_096, 30),  # level 30 = 16,096 ft
     (18_680, 27),  # level 27 = 18,680 ft — the domain-safe cut for FL180
 )
+
+
+def icon_ceiling_limit_enabled() -> bool:
+    """True when the ceiling-limited sounding fetch (#469 phase 2) may apply.
+
+    DEFAULT FALSE. The cut is safe for the *fetch*, but the consumers of the
+    sounding are not yet safe for a truncated column, and every failure mode
+    below reads as REASSURING rather than unavailable:
+
+    - The cut is asymmetric by necessity (t/qv/p stay full column for CAPE),
+      so pressure levels above the cut exist with temperature but NO wind.
+      ``analysis/sounding/prepare.py`` gates wind all-or-nothing
+      (``has_wind = all(...)``), so ONE missing level drops wind for the whole
+      profile → no Richardson number → ``cat_risk_layers == []`` → the
+      turbulence advisory grades GREEN "smooth" instead of UNAVAILABLE (its
+      guard keys on the vertical-motion assessment, which omega keeps alive).
+      That is the #391/#393 "absence reads as clear" failure exactly.
+    - Truncating ``clc`` caps NWP cloud decks at the cut: a deck ABOVE it
+      disappears and reads as "model clear" to the cloud-top advisory, the
+      DD/NWP agreement check and the digest.
+    - The cross-section deliberately renders to ceiling + 5,000 ft and the
+      Skew-T to 250 hPa, so both would show an unexplained blank top strip
+      for ICON only, while ECMWF/GFS still draw it.
+
+    Re-landing needs those consumers to report a truncated column honestly
+    (per-level wind gate, an "above the fetched cut" sentinel distinct from
+    "clear", clipped/labelled charts) — or a uniform cut for ALL variables,
+    which removes the mixed-column problem but then has to solve CAPE.
+
+    Override with ``WB_ICON_CEILING_LIMIT_ENABLED=true`` for measurement.
+    """
+    return os.environ.get(
+        "WB_ICON_CEILING_LIMIT_ENABLED", "false",
+    ).strip().lower() in ("1", "true", "yes")
 
 
 def icon_limited_top_level(
