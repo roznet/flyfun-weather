@@ -125,11 +125,28 @@ class TestD2HorizonAndGrid:
         assert hours == [2, 3, 4]
 
     def test_level_slice_and_variant_config(self):
-        assert (ICON_D2.level_min, ICON_D2.level_max) == (25, 65)
+        # Level slice validated against DWD's HHL field (2026-07-21): D2 level
+        # 16 ≈ 9,460 m ≈ FL310 (≈ ICON-EU's level-35 300 hPa top); level 65 =
+        # surface. D2 level numbers are NOT comparable to EU's.
+        assert (ICON_D2.level_min, ICON_D2.level_max) == (16, 65)
         assert ICON_D2.slug == "icon-d2"
         assert ICON_D2.source_key == "icon_d2:dwd"
         assert icon_cloud_diag_cache_key(ICON_D2) == "ICON_D2_CLOUD_DIAG_V2"
         assert icon_cloud_diag_cache_key(ICON_EU) == "ICON_EU_CLOUD_DIAG_V2"
+
+    def test_d2_diag_list_drops_parameterized_convection_fields(self):
+        # D2 has no deep-convection scheme: hbas_con/htop_con 404 on the feed
+        # and rain_con is near-zero in explicit storms (verified live
+        # 2026-07-21). They must be absent so downstream fields stay None
+        # (missing-data semantics) rather than misleadingly quiet. #462 adds
+        # the convection-permitting replacements.
+        for var in ("hbas_con", "htop_con", "rain_con"):
+            assert var not in ICON_D2.cloud_diag_variables
+            assert var in ICON_EU.cloud_diag_variables
+        # The shared non-convective diagnostics stay identical.
+        for var in ("ceiling", "clcl", "clcm", "clch", "clct", "cape_ml", "cin_ml"):
+            assert var in ICON_D2.cloud_diag_variables
+            assert var in ICON_EU.cloud_diag_variables
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +216,7 @@ class TestPrepareIconVariantSelection:
         assert skip is None
         assert ctx is not None
         assert ctx.variant is ICON_D2
-        assert ctx.levels == list(range(25, 66))
+        assert ctx.levels == list(range(16, 66))
 
     def test_falls_back_to_eu_when_route_outside_d2(self, tmp_path):
         from weatherbrief.fetch.grib import _prepare_icon_eu

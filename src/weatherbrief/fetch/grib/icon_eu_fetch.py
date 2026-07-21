@@ -66,6 +66,10 @@ class IconVariant:
         horizon_main_h/horizon_short_h: Per-cycle model-level forecast horizon.
         hourly_to_h: Last hourly forecast step; steps above it are ``coarse_step_h``.
         coarse_step_h: Step size in the post-hourly region (EU 3h; D2 has none → 1).
+        cloud_diag_variables: Single-level diagnostic variables published for
+            this variant. NOT identical between variants: ICON-D2 has no deep-
+            convection parameterization, so ``hbas_con``/``htop_con``/``rain_con``
+            don't exist (or are meaningless) on its feed — see the D2 tuple below.
     """
 
     slug: str
@@ -88,6 +92,48 @@ class IconVariant:
     horizon_short_h: int
     hourly_to_h: int
     coarse_step_h: int
+    cloud_diag_variables: tuple[str, ...]
+
+
+# Single-level cloud diagnostic variables (ICON-EU).
+# cape_ml / cin_ml (mixed-layer CAPE/CIN, instantaneous) added for the
+# native convective track (#283 Phase 2). rain_con (convective rain,
+# accumulated since init) added in #421 so the convective firing gate and
+# native corroboration can evaluate ICON towers — the rate is de-accumulated
+# in the enrichment loop, not here.
+# SNOW_CON (convective snow, also accumulated) is intentionally NOT fetched
+# (#421 scope decision): it would double the single-level file count for the
+# rare convective-snow-shower case, and omitting it is safe by construction —
+# the firing gate holds down only on positive dry evidence, so a winter ICON
+# tower with rain_con ~0 but real convective snow simply keeps its tier (no
+# regression, just an unclosed corner). If added, sum the two de-accumulated
+# rates before assigning convective_precip_mm_h.
+ICON_EU_CLOUD_DIAG_VARIABLES = (
+    "ceiling", "hbas_con", "htop_con",
+    "clcl", "clcm", "clch", "clct",
+    "cape_ml", "cin_ml",
+    "rain_con",
+)
+
+# Single-level diagnostics for ICON-D2 — deliberately SMALLER than ICON-EU's
+# list. D2 is convection-permitting: it runs NO deep-convection scheme, so
+# (verified live against opendata.dwd.de, 2026-07-21):
+# - hbas_con / htop_con → 404. Only shallow-convection hbas_sc/htop_sc exist,
+#   and those describe fair-weather cumulus — mapping them into
+#   convective_base/top would show a benign low top during a real storm.
+# - rain_con → exists but is near-zero even in severe storms (the remaining
+#   shallow scheme barely precipitates; explicit-storm rain lands in
+#   rain_gsp/prg_gsp). Feeding it into convective_precip_mm_h would make the
+#   native convective gate read "quiet" exactly when D2 sees a storm.
+# All three therefore stay ABSENT for D2 → downstream fields are None
+# (missing-data semantics, which icon_eu_conv_rain_rate_mm_h and the firing
+# gate already handle). Issue #462 replaces them with D2's convection-
+# permitting diagnostics (dbz_cmax, echotop, lpi, uh_max, prg_gsp).
+ICON_D2_CLOUD_DIAG_VARIABLES = (
+    "ceiling",
+    "clcl", "clcm", "clch", "clct",
+    "cape_ml", "cin_ml",
+)
 
 
 # ICON-EU model-level horizon depends on the run cycle (verified empirically
@@ -118,6 +164,7 @@ ICON_EU = IconVariant(
     horizon_short_h=30,
     hourly_to_h=78,
     coarse_step_h=3,
+    cloud_diag_variables=ICON_EU_CLOUD_DIAG_VARIABLES,
 )
 
 # ICON-D2: 2.2 km convection-permitting, central-Europe domain, 8 runs/day,
@@ -127,13 +174,14 @@ ICON_EU = IconVariant(
 # "icon-d2". Domain corners + 65-level count from DWD's ICON-D2 regular-lat-lon
 # product (1215×746 ≈ 906k points ≈ ICON-EU's ~905k).
 #
-# level_min=25 is a deliberately-conservative top: the log-pressure
-# interpolation clips any target pressure level above the fetched column, so
-# over-fetching a few thin upper levels only costs a little bandwidth while
-# under-fetching would truncate the sounding at cruise. 25–65 (41 levels)
-# comfortably spans surface→~FL300. Validate the exact top against DWD's D2 HHL
-# table once the feed is reachable. Publication delay ~1–2h — 2h with margin;
-# the run-finder HEAD-probes anyway so a small miss just walks back one cycle.
+# level_min=16 validated against DWD's HHL (half-level height) field decoded
+# from the live feed (2026-07-21): D2 level 16 ≈ 9,460 m ≈ FL310, matching
+# ICON-EU's level-35 top (~300 hPa). D2 level numbering is NOT comparable to
+# EU's (65 levels vs 74, both numbered top-down with bottom = surface): level
+# 25 — the original guess — sits at only ~6,300 m ≈ FL207 and would truncate
+# every D2 sounding at ~20,000 ft. 16–65 = 50 levels, surface→~FL310.
+# Publication delay ~1–2h — 2h with margin; the run-finder HEAD-probes anyway
+# so a small miss just walks back one cycle.
 ICON_D2 = IconVariant(
     slug="icon-d2",
     source_key="icon_d2:dwd",
@@ -146,7 +194,7 @@ ICON_D2 = IconVariant(
     lon_max=20.34,
     cycles=(21, 18, 15, 12, 9, 6, 3, 0),
     publish_delay_hours=2.0,
-    level_min=25,
+    level_min=16,
     level_max=65,
     var_suffix_upper=False,
     single_level_2d=True,
@@ -155,6 +203,7 @@ ICON_D2 = IconVariant(
     horizon_short_h=48,
     hourly_to_h=48,
     coarse_step_h=1,
+    cloud_diag_variables=ICON_D2_CLOUD_DIAG_VARIABLES,
 )
 
 # Back-compat module constants (ICON-EU). The variant above is the single
@@ -227,26 +276,6 @@ def icon_eu_window_out_of_range(
 # Geopotential height is instead derived from pressure via the hypsometric equation
 # in the sounding analysis (or omitted — not critical for core analysis).
 ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
-
-# Single-level cloud diagnostic variables.
-# cape_ml / cin_ml (mixed-layer CAPE/CIN, instantaneous) added for the
-# native convective track (#283 Phase 2). rain_con (convective rain,
-# accumulated since init) added in #421 so the convective firing gate and
-# native corroboration can evaluate ICON towers — the rate is de-accumulated
-# in the enrichment loop, not here.
-# SNOW_CON (convective snow, also accumulated) is intentionally NOT fetched
-# (#421 scope decision): it would double the single-level file count for the
-# rare convective-snow-shower case, and omitting it is safe by construction —
-# the firing gate holds down only on positive dry evidence, so a winter ICON
-# tower with rain_con ~0 but real convective snow simply keeps its tier (no
-# regression, just an unclosed corner). If added, sum the two de-accumulated
-# rates before assigning convective_precip_mm_h.
-ICON_EU_CLOUD_DIAG_VARIABLES = (
-    "ceiling", "hbas_con", "htop_con",
-    "clcl", "clcm", "clch", "clct",
-    "cape_ml", "cin_ml",
-    "rain_con",
-)
 
 # Cache-key label for the single-level cloud-diagnostic blob. Bumped to V2 in
 # #421 when rain_con was added: the blob is cached under ONE key for all
@@ -361,7 +390,8 @@ def fetch_icon_eu_single_level(
         init_date: YYYYMMDD format.
         init_hour: Cycle hour (0, 3, 6, ..., 21).
         forecast_hours: Forecast hours to download.
-        variables: Variable names (defaults to ICON_EU_CLOUD_DIAG_VARIABLES).
+        variables: Variable names (defaults to the variant's
+            ``cloud_diag_variables`` — NOT the same list for EU and D2).
         session: Optional requests session.
         max_workers: Per-call download thread count. Callers that already
             run several fetches concurrently pass a smaller value so the
@@ -372,7 +402,7 @@ def fetch_icon_eu_single_level(
         Dict of {forecast_hour: concatenated decompressed GRIB2 bytes}.
     """
     if variables is None:
-        variables = list(ICON_EU_CLOUD_DIAG_VARIABLES)
+        variables = list(variant.cloud_diag_variables)
 
     sess = session or requests.Session()
     result: dict[int, bytes] = {}

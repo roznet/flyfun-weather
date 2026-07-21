@@ -3157,8 +3157,10 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
 
     # One leading single-level step so the first window hour has a predecessor
     # to de-accumulate rain_con against (#421). Cloud-diag fetch only — the
-    # model-level sounding list above is untouched.
-    if ctx.forecast_hours:
+    # model-level sounding list above is untouched. Skipped when the variant
+    # doesn't fetch rain_con (ICON-D2, #456/#462) — no accumulated field, no
+    # predecessor needed.
+    if ctx.forecast_hours and "rain_con" in variant.cloud_diag_variables:
         lead = icon_eu_previous_step(min(ctx.forecast_hours), variant)
         if lead is not None and lead not in ctx.forecast_hours:
             lead_ck = cache_key(lead, diag_key)
@@ -3348,7 +3350,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     # _matches_valid_time never matches an out-of-window hourly, so it only
     # seeds the de-accumulation state.
     steps = sorted(set(forecast_hours))
-    if steps:
+    if steps and "rain_con" in variant.cloud_diag_variables:
         lead = icon_eu_previous_step(steps[0], variant)
         if lead is not None and lead not in steps:
             steps.insert(0, lead)

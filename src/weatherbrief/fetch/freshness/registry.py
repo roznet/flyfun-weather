@@ -270,14 +270,16 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         role="primary-sounding",
         resolution="~2.2 km",
         coverage="Central Europe (43.18–58.08°N, 3.94°W–20.34°E)",
-        pressure_levels=41,
+        pressure_levels=50,
         description=(
             "Direct GRIB from DWD ICON-D2 opendata (2.2 km, convection-"
-            "permitting). 65 model levels interpolated to pressure levels — "
-            "full sounding replacement plus cloud microphysics and "
+            "permitting). Model levels 16–65 interpolated to pressure levels "
+            "— full sounding replacement plus cloud microphysics and "
             "diagnostics. 8 cycles/day (every 3h), hourly to 48h. Serves the "
             "icon slot in place of ICON-EU when the whole route fits the D2 "
-            "domain and the flight window is within 48h; otherwise ICON-EU."
+            "domain and the flight window is within 48h; otherwise ICON-EU. "
+            "No deep-convection scheme: convective base/top and rain_con are "
+            "absent by design (see #462 for the native replacements)."
         ),
     ),
     "gfs:openmeteo": SourceConfig(
