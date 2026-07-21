@@ -2019,8 +2019,15 @@ HRRR's 2–5 km).
    covering interval (contrast the ECMWF gust precedent, whose window spans
    the gap), so a missing hour stays honestly unavailable.
 4. **Graupel ≠ hail** — wording everywhere is "graupel / strong mixed-phase
-   core". De-accumulation uses the **on-the-hour** since-init messages only
-   (the quarter-hour accumulations in the same file are never mixed in).
+   core", including the `_severity_modifiers` freezing-level+CAPE heuristic,
+   which is rephrased on the explicit track (its "hail risk" string is a
+   parameterized-era proxy; D2's mixed-phase signal does not discriminate
+   hail). De-accumulation uses the **on-the-hour** since-init messages only
+   (the quarter-hour accumulations in the same file are never mixed in), and
+   is **per cell, then corridor max** (diff-then-reduce): differencing two
+   independently-reduced corridor maxima understates whenever the
+   max-holding cell shifts between hours — a moving cell's real hourly peak
+   would vanish from the corroborator count (PR #463 review).
 5. **None ≠ 0 (#421), per tier.** Completeness means "valid unmasked corridor
    cells decoded", not "file downloaded": an all-masked corridor is
    UNAVAILABLE; a −150 dBZ encoder floor is genuinely QUIET (normalized to
@@ -2028,7 +2035,13 @@ HRRR's 2–5 km).
    **no assessment at all** (`convective_nwp=None` +
    `convective_explicit_unavailable=True`) — never an NWP NONE ("scheme
    quiet"), never a "quiet scheme" reading in cross-checks, never a CAPE-only
-   fallback presented as D2's explicit verdict. Grading then falls back to the
+   fallback presented as D2's explicit verdict. To make that reachable, the
+   enrichment **always attaches a payload** for every in-window D2 hour —
+   with all channels None and every completeness flag False when nothing
+   decoded — because payload *presence* is the mode signal: a payload-less
+   hour would silently fall back to the parameterized path, which on D2
+   (scheme fields unfetched, #461) structurally reads as a quiet scheme,
+   turning a one-hour fetch hiccup into fake-quiet (PR #463 review). Grading then falls back to the
    thermo track, truthfully badged. Incomplete corroborator channels never
    move the tier in either direction — |C| counts only complete channels, and
    a zero on one channel never suppresses positive evidence on another.
