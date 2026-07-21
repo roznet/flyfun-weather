@@ -379,6 +379,79 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
 
 
+# Ceiling-limited fetch (#469 phase 2). The sounding splits into two classes:
+#
+# - FULL_COLUMN — t, qv, p are kept at the FULL model column regardless of the
+#   flight ceiling. MetPy CAPE is the buoyancy integral to the equilibrium
+#   level, which routinely sits far above the flight (the live ESMX→EKRK case
+#   had EL at FL306 with cruise at 6,000 ft, D2 echo tops at FL365). Truncating
+#   these would systematically under-compute CAPE and cap tower tops, degrading
+#   the convective track (#462/#466/#467). p is needed at every level anyway to
+#   interpolate the others. (cape_ml/cin_ml are single-level NWP fields, so the
+#   NWP CAPE is unaffected either way — it is the sounding-derived CAPE at risk.)
+# - LIMITED — u, v, w, qc, qi, clc carry nothing useful above the ceiling, so
+#   they are fetched only down to the ceiling-derived top level (~19% of a D2
+#   run's volume when cut at FL180). Limiting the full-column three as well would
+#   save ~3% more but is NOT safe, per the above.
+FULL_COLUMN_VARIABLES = ("t", "qv", "p")
+LIMITED_LEVEL_VARIABLES = ("u", "v", "w", "qc", "qi", "clc")
+
+# Domain-safe ceiling → top-level anchors for ICON-D2: (sea_level_height_ft,
+# top_level), shallow→deep. Model levels are terrain-following and ride HIGHER
+# over terrain (level 27 = 18,680 ft at sea level, 20,549 ft over the Alps), so
+# the SEA-LEVEL column is the binding case — a cut chosen from these heights
+# covers the ceiling everywhere in the D2 domain (the whole-domain minimum
+# terrain is ~sea level). Heights are DWD ICON-D2 HHL decodes (issue #469);
+# only levels with a measured anchor are used as cut points, and a ceiling
+# between anchors rounds to the deeper (lower-index) one — never truncating
+# below the ceiling. A ceiling above the deepest anchor falls through to the
+# full column (level_min), where the phase-1 top-up fetches the extra levels.
+ICON_D2_CEILING_LEVEL_CUTS: tuple[tuple[int, int], ...] = (
+    (10_354, 38),  # level 38 = 10,354 ft at sea level
+    (16_096, 30),  # level 30 = 16,096 ft
+    (18_680, 27),  # level 27 = 18,680 ft — the domain-safe cut for FL180
+)
+
+
+def icon_limited_top_level(
+    variant: IconVariant, ceiling_ft: int | None,
+) -> int:
+    """Top (smallest-index) model level to fetch for the LIMITED variables.
+
+    Returns ``variant.level_min`` (the full column) when the variant does not
+    use the per-level cache, the ceiling is unknown, or the ceiling is above the
+    deepest documented anchor — every one of those cases means "don't truncate".
+    Otherwise returns the domain-safe cut from
+    :data:`ICON_D2_CEILING_LEVEL_CUTS`.
+    """
+    if not variant.per_level_cache or ceiling_ft is None:
+        return variant.level_min
+    for height_ft, level in ICON_D2_CEILING_LEVEL_CUTS:
+        if height_ft >= ceiling_ft:
+            return level
+    return variant.level_min
+
+
+def icon_levels_by_var(
+    variant: IconVariant,
+    ceiling_ft: int | None,
+    full_levels: list[int],
+) -> dict[str, list[int]] | None:
+    """Per-variable level subset for a ceiling-limited fetch, or None.
+
+    None means "no truncation" (unlimited variant, unknown/high ceiling) → every
+    variable uses ``full_levels``. Otherwise only the LIMITED variables carry a
+    reduced list (``[top..level_max]``); the FULL_COLUMN variables are absent
+    from the map, so :meth:`_IconEuContext.levels_for_var` keeps them at the
+    full column.
+    """
+    top = icon_limited_top_level(variant, ceiling_ft)
+    if top <= variant.level_min:
+        return None
+    limited = [level for level in full_levels if level >= top]
+    return {var: limited for var in LIMITED_LEVEL_VARIABLES}
+
+
 def icon_model_level_var_label(
     variant: IconVariant, variable: str, level: int,
 ) -> str:
