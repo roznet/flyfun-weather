@@ -2062,7 +2062,7 @@ def _enrich_forecasts_inner(
     flight_duration_hours: float = 0.0,
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
-) -> tuple[dict[str, int], dict[str, str]]:
+) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
     """Inner body of enrich_forecasts; assumes _GRIB_TIMER is set to *timer*."""
     grib_init_times: dict[str, int] = {}
     grib_skip_reasons: dict[str, str] = {}
