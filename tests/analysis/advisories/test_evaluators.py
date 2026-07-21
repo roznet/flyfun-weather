@@ -37,6 +37,7 @@ def _conv_route(
     *,
     total_nm: float = 200.0,
     cruise_ft: int = 8000,
+    precip_mm_h: float | None = None,
 ) -> RouteContext:
     """Build a RouteContext where each model carries an explicit per-point risk
     list. All lists must share the same length (= number of route points).
@@ -54,7 +55,8 @@ def _conv_route(
             model: SoundingAnalysis(
                 indices=ThermodynamicIndices(),
                 convective=ConvectiveAssessment(
-                    risk_level=risks[i], cape_jkg=1000.0
+                    risk_level=risks[i], cape_jkg=1000.0,
+                    convective_precip_mm_h=precip_mm_h,
                 ),
             )
             for model, risks in per_model_risks.items()
@@ -727,6 +729,41 @@ class TestConvectiveHeadline:
         assert "40%" in res.aggregate_detail
         assert "across models" not in res.aggregate_detail
         assert "peak" not in res.aggregate_detail.lower()
+
+    def test_low_only_realized_scheme_says_firing_not_primed(self):
+        """Same LOW-only shape, but the scheme IS precipitating convectively.
+
+        The nwp_precip ladder caps below MODERATE because depth is unknown from
+        rate alone — that is NOT the same as a quiet scheme, and the copy must
+        not say "not firing". Observed on EGTF→BIG→LFAT→LFQA 2026-07-17, where
+        ECMWF carried 1.96 mm/h of native convective precip at LFQA (5x ICON's
+        0.40, the hardest-raining model on the route) and was reported to the
+        pilot as "Low-end CAPE primed, not firing".
+        """
+        risks = [ConvectiveRisk.LOW] * 4 + [ConvectiveRisk.NONE] * 6
+        ctx = _conv_route({"ecmwf": risks}, precip_mm_h=1.96)
+        res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+
+        m = res.per_model[0]
+        assert m.affected_mod_points == 0          # still LOW-only
+        assert "firing" in m.detail.lower()
+        assert "not firing" not in m.detail.lower()
+        assert "primed" not in m.detail.lower()
+        # The cross-model headline follows the same realization rule.
+        assert "firing" in res.aggregate_detail.lower()
+        assert "not firing" not in res.aggregate_detail.lower()
+
+    def test_low_only_quiet_scheme_still_says_primed(self):
+        """The #300 case is unchanged: precip at/below the firing floor is a
+        genuinely quiet scheme, so favourable CAPE must still read 'primed,
+        not firing' and never masquerade as active convection."""
+        risks = [ConvectiveRisk.LOW] * 4 + [ConvectiveRisk.NONE] * 6
+        for precip in (None, 0.0, 0.1):
+            ctx = _conv_route({"gfs": risks}, precip_mm_h=precip)
+            res = ConvectiveEvaluator.evaluate(ctx, _CONV_PARAMS)
+            m = res.per_model[0]
+            assert "primed" in m.detail.lower(), precip
+            assert "not firing" in m.detail.lower(), precip
 
     def test_range_collapses_when_models_agree(self):
         """Two RED models with identical MODERATE+ coverage (50%) → the range

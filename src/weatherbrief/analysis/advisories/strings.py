@@ -87,6 +87,30 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "MODERATE+ über {min}–{max}% je nach Modell — Spitze {peak}",
         "es": "MODERATE+ sobre {min}–{max}% entre modelos — pico {peak}",
     },
+    # LOW-only case, scheme ACTIVELY precipitating: the model's own convective
+    # precip is above the firing floor, but its tier is capped below MODERATE
+    # because the nwp_precip ladder can't infer depth from rate. Distinct from
+    # `convective.favorability` below, which means the opposite (CAPE present,
+    # scheme quiet) — using that wording here told a pilot the hardest-raining
+    # model on the route was "not firing" (EGTF→LFQA 2026-07-17).
+    "convective.realized_low": {
+        "en": "Convective showers firing, tops unresolved, over {extent}",
+        "fr": "Averses convectives actives, sommets non résolus, sur {extent}",
+        "de": "Konvektive Schauer aktiv, Obergrenzen unbestimmt, über {extent}",
+        "es": "Chubascos convectivos activos, topes sin resolver, sobre {extent}",
+    },
+    "convective.realized_low_pct": {
+        "en": "Convective showers firing, tops unresolved, over {pct}%",
+        "fr": "Averses convectives actives, sommets non résolus, sur {pct}%",
+        "de": "Konvektive Schauer aktiv, Obergrenzen unbestimmt, über {pct}%",
+        "es": "Chubascos convectivos activos, topes sin resolver, sobre {pct}%",
+    },
+    "convective.realized_low_range": {
+        "en": "Convective showers firing, tops unresolved, over {min}–{max}% across models",
+        "fr": "Averses convectives actives, sommets non résolus, sur {min}–{max}% selon les modèles",
+        "de": "Konvektive Schauer aktiv, Obergrenzen unbestimmt, über {min}–{max}% je nach Modell",
+        "es": "Chubascos convectivos activos, topes sin resolver, sobre {min}–{max}% entre modelos",
+    },
     # LOW-only case: CAPE is present (primed) but no MODERATE+ firing — worded so
     # it can't masquerade as active convection (#300).
     "convective.favorability": {

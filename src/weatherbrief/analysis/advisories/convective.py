@@ -13,7 +13,10 @@ from weatherbrief.analysis.advisories._helpers import (
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
-from weatherbrief.analysis.sounding.convective import convective_cross_check
+from weatherbrief.analysis.sounding.convective import (
+    _FIRING_PRECIP_MM_H,
+    convective_cross_check,
+)
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryHighlights,
@@ -39,6 +42,20 @@ _RISK_ORDER = [
 # here (MODERATE+), separate from the LOW min_risk floor that drives the colour
 # (#300).
 _MOD_IDX = _RISK_ORDER.index(ConvectiveRisk.MODERATE)
+
+
+def _scheme_realized(max_precip_mm_h: float | None) -> bool:
+    """True when the model's own scheme is actually precipitating convectively.
+
+    Shares the sounding layer's firing floor so the advisory copy and the tier
+    that produced it can't drift apart: above that floor the ``nwp_precip``
+    ladder has already fired (MARGINAL/LOW/MODERATE), so the model is realizing
+    convection even though its tier may sit below MODERATE — that ladder is
+    capped because depth is unknown from rate alone, not because the scheme is
+    quiet. ``None`` (no native precip channel at all, e.g. a model whose
+    diagnostics don't carry it) is NOT realization — unknown is not firing.
+    """
+    return max_precip_mm_h is not None and max_precip_mm_h > _FIRING_PRECIP_MM_H
 
 
 def _coverage_suffix(max_cover_pct: float | None) -> str:
@@ -133,6 +150,9 @@ class ConvectiveEvaluator:
 
         per_model: list[ModelAdvisoryResult] = []
         peak_by_model: dict[str, ConvectiveRisk] = {}
+        # Did each model's own scheme actually precipitate? Mirrors the
+        # per-model wording choice into the cross-model headline below.
+        realized_by_model: dict[str, bool] = {}
 
         for model in ctx.models:
             total = 0
@@ -143,6 +163,13 @@ class ConvectiveEvaluator:
             worst_risk = ConvectiveRisk.NONE
             below_cruise_count = 0  # risky points skipped because tops below cruise
             max_cover_pct: float | None = None
+            # Peak native convective precip among the flagged points. Distinguishes
+            # "the scheme is quiet" from "the scheme IS precipitating but its tier
+            # is capped because depth is unknown" (the nwp_precip ladder tops out
+            # at MODERATE). Without it the LOW-only headline below claims "not
+            # firing" about a model that is actively raining — see the wording
+            # note there.
+            max_precip_mm_h: float | None = None
             # Per-point highlight geometry (#373). Every route point contributes
             # a ribbon severity (no sounding → UNAVAILABLE, unaffected → GREEN);
             # flagged points also contribute a tower cutout.
@@ -283,6 +310,11 @@ class ConvectiveEvaluator:
                 if conv.cover_pct is not None:
                     max_cover_pct = max(max_cover_pct or 0, conv.cover_pct)
 
+                if conv.convective_precip_mm_h is not None:
+                    max_precip_mm_h = max(
+                        max_precip_mm_h or 0.0, conv.convective_precip_mm_h
+                    )
+
                 # Highlight geometry for this flagged point (#373).
                 severity = HighlightSeverity.RED if is_high else HighlightSeverity.AMBER
                 ribbon_points.append((dist, severity))
@@ -415,7 +447,22 @@ class ConvectiveEvaluator:
                         "convective.risk_over_mod", loc,
                         extent=ext_mod, peak=worst_risk.value.upper(),
                     ) + cover_suffix
+                elif _scheme_realized(max_precip_mm_h):
+                    # The scheme IS precipitating convectively — it just can't
+                    # say how deep, so the nwp_precip ladder capped its tier
+                    # below MODERATE. Saying "primed, not firing" here is
+                    # factually wrong and reads as "this model sees nothing":
+                    # observed on EGTF→BIG→LFAT→LFQA 2026-07-17, where ECMWF was
+                    # the HARDEST-raining model on the route (1.96 mm/h native
+                    # convective precip at LFQA, 5x ICON's 0.40) and was
+                    # described to the pilot as not firing, while ICON graded
+                    # RED off a diagnosed tower. Realization, not tier, picks
+                    # the wording.
+                    detail = adv_t(
+                        "convective.realized_low", loc, extent=ext,
+                    ) + cover_suffix
                 else:
+                    # Genuinely quiet scheme with favourable CAPE (#300).
                     # Calibrated for the default LOW floor (min_risk=2): "primed,
                     # not firing" fits a LOW peak. Under a non-default min_risk=1
                     # a MARGINAL-only route also lands here and the wording is a
@@ -472,6 +519,7 @@ class ConvectiveEvaluator:
                 primary_method_id=driving_method_id(highlights, status),
             ))
             peak_by_model[model] = worst_risk
+            realized_by_model[model] = _scheme_realized(max_precip_mm_h)
 
         result = RouteAdvisoryResult.from_per_model("convective", per_model, params)
         # Override the generic representative-model detail with a cross-model
@@ -509,12 +557,20 @@ class ConvectiveEvaluator:
                 )
                 if pcts:
                     lo, hi = pcts[0], pcts[-1]
+                    # Same realization-not-tier rule as the per-model detail: if
+                    # ANY supporting model is actually raining convectively, the
+                    # cross-model headline must not say "not firing" either.
+                    realized = any(
+                        realized_by_model.get(m.model, False)
+                        for m in matching if m.total_points > 0
+                    )
+                    stem = "realized_low" if realized else "favorability"
                     if lo == hi:
                         result.aggregate_detail = adv_t(
-                            "convective.favorability_pct", loc, pct=lo
+                            f"convective.{stem}_pct", loc, pct=lo
                         )
                     else:
                         result.aggregate_detail = adv_t(
-                            "convective.favorability_range", loc, min=lo, max=hi
+                            f"convective.{stem}_range", loc, min=lo, max=hi
                         )
         return result
