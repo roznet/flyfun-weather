@@ -1610,6 +1610,46 @@ def _d2_read_message_grid(gid) -> "tuple[np.ndarray, np.ndarray, np.ndarray] | N
     return lats, lons, grid
 
 
+def _d2_corridor_window(
+    lats_axis: "np.ndarray",
+    lons_axis: "np.ndarray",
+    lat: float,
+    lon: float,
+    radius_nm: float,
+) -> "tuple[int, int, int, int, float] | None":
+    """Index window ``(j0, j1, i0, i1, coslat)`` for a point's corridor buffer.
+
+    Returns None unless the ENTIRE buffer lies inside the grid extent. Testing
+    the buffer rather than just the centreline is the point: ``searchsorted``
+    silently clips its window at the array bounds, so a point within
+    ``radius_nm`` of the outer edge would otherwise reduce over a truncated
+    corridor and still report it complete — and it defeats the validity-mask
+    gate outright, whose valid-cell and all-cell counts are then truncated
+    identically and can never disagree (external #462 review of PR #463).
+    An edge corridor is UNAVAILABLE, the same verdict as an all-masked one.
+    """
+    import numpy as np
+
+    coslat = math.cos(math.radians(lat))
+    if coslat <= 0.01:
+        return None
+    dlat = radius_nm / _NM_PER_DEG_LAT
+    dlon = radius_nm / (_NM_PER_DEG_LAT * coslat)
+
+    if not (lats_axis[0] <= lat - dlat and lat + dlat <= lats_axis[-1]):
+        return None
+    if not (lons_axis[0] <= lon - dlon and lon + dlon <= lons_axis[-1]):
+        return None
+
+    j0 = int(np.searchsorted(lats_axis, lat - dlat, side="left"))
+    j1 = int(np.searchsorted(lats_axis, lat + dlat, side="right"))
+    i0 = int(np.searchsorted(lons_axis, lon - dlon, side="left"))
+    i1 = int(np.searchsorted(lons_axis, lon + dlon, side="right"))
+    if j1 <= j0 or i1 <= i0:
+        return None
+    return j0, j1, i0, i1, coslat
+
+
 def _d2_corridor_cells(
     lats_axis: "np.ndarray",
     lons_axis: "np.ndarray",
@@ -1620,30 +1660,18 @@ def _d2_corridor_cells(
 ) -> "np.ndarray | None":
     """Return the valid (non-NaN) cell values within ``radius_nm`` of a point.
 
-    None when the point (plus buffer) lies outside the grid extent — callers
-    treat that as an invalid corridor, same as an all-masked one. The mask is
-    an exact great-circle distance test over a small bounding-box window, not
-    a lat/lon rectangle, so the kernel is genuinely circular.
+    None when the point's buffer is not wholly inside the grid extent (see
+    :func:`_d2_corridor_window`) — callers treat that as an invalid corridor,
+    same as an all-masked one. The kernel is an exact distance test over a
+    small bounding-box window, not a lat/lon rectangle, so it is genuinely
+    circular.
     """
     import numpy as np
 
-    dlat = radius_nm / _NM_PER_DEG_LAT
-    coslat = math.cos(math.radians(lat))
-    if coslat <= 0.01:
+    window = _d2_corridor_window(lats_axis, lons_axis, lat, lon, radius_nm)
+    if window is None:
         return None
-    dlon = radius_nm / (_NM_PER_DEG_LAT * coslat)
-
-    if not (lats_axis[0] <= lat <= lats_axis[-1]) or not (
-        lons_axis[0] <= lon <= lons_axis[-1]
-    ):
-        return None
-
-    j0 = int(np.searchsorted(lats_axis, lat - dlat, side="left"))
-    j1 = int(np.searchsorted(lats_axis, lat + dlat, side="right"))
-    i0 = int(np.searchsorted(lons_axis, lon - dlon, side="left"))
-    i1 = int(np.searchsorted(lons_axis, lon + dlon, side="right"))
-    if j1 <= j0 or i1 <= i0:
-        return None
+    j0, j1, i0, i1, coslat = window
 
     sub = grid[j0:j1, i0:i1]
     sub_lats = lats_axis[j0:j1][:, None]
@@ -1677,23 +1705,10 @@ def _d2_corridor_cell_map(
     """
     import numpy as np
 
-    dlat = radius_nm / _NM_PER_DEG_LAT
-    coslat = math.cos(math.radians(lat))
-    if coslat <= 0.01:
+    window = _d2_corridor_window(lats_axis, lons_axis, lat, lon, radius_nm)
+    if window is None:
         return None
-    dlon = radius_nm / (_NM_PER_DEG_LAT * coslat)
-
-    if not (lats_axis[0] <= lat <= lats_axis[-1]) or not (
-        lons_axis[0] <= lon <= lons_axis[-1]
-    ):
-        return None
-
-    j0 = int(np.searchsorted(lats_axis, lat - dlat, side="left"))
-    j1 = int(np.searchsorted(lats_axis, lat + dlat, side="right"))
-    i0 = int(np.searchsorted(lons_axis, lon - dlon, side="left"))
-    i1 = int(np.searchsorted(lons_axis, lon + dlon, side="right"))
-    if j1 <= j0 or i1 <= i0:
-        return None
+    j0, j1, i0, i1, coslat = window
 
     cells: dict[tuple[int, int], float] = {}
     for j in range(j0, j1):
@@ -1993,7 +2008,15 @@ def d2_corridor_fully_valid(
     """True when every route point's corridor buffer lies entirely in valid cells.
 
     All-or-nothing, matching the #456 domain rule: one clipped corner fails
-    the whole route (→ ICON-EU), never a per-point mix.
+    the whole route (→ ICON-EU), never a per-point mix. Two distinct ways to
+    clip, both rejected here:
+
+    - **bitmap-masked cells** inside the buffer (the ~17% corners the native
+      rotated-pole domain doesn't cover) — caught by the valid-vs-all count;
+    - **the outer grid boundary** truncating the buffer — caught by
+      :func:`_d2_corridor_window`, which is what makes the count comparison
+      meaningful at all: without it both gathers clip identically at the array
+      bounds and can never disagree (external #462 review of PR #463).
     """
     import numpy as np
 
@@ -2003,16 +2026,17 @@ def d2_corridor_fully_valid(
     # Invalid cells become NaN so the corridor gather counts them as missing;
     # completeness of the gather then equals "no masked cell in the buffer".
     grid = np.where(valid, 1.0, np.nan)
+    # Hoisted: the all-ones reference grid is per-product, not per-point.
+    ones = np.ones_like(grid)
 
     for lat, lon in zip(latitudes, longitudes):
         cells = _d2_corridor_cells(lats_axis, lons_axis, grid, lat, lon, radius_nm)
         if cells is None:
             return False
-        # Count cells inside the buffer INCLUDING masked ones, by gathering on
-        # an all-ones grid; if any were dropped as NaN the corridor clips the
-        # masked corner.
+        # Count cells inside the buffer INCLUDING masked ones; if any were
+        # dropped as NaN the corridor clips the masked corner.
         all_cells = _d2_corridor_cells(
-            lats_axis, lons_axis, np.ones_like(grid), lat, lon, radius_nm,
+            lats_axis, lons_axis, ones, lat, lon, radius_nm,
         )
         if all_cells is None or cells.size != all_cells.size or cells.size == 0:
             return False

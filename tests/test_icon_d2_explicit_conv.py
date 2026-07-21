@@ -183,16 +183,29 @@ class TestExplicitConvDecode:
 
     def test_masked_corridor_is_invalid_not_quiet(self):
         # Point whose whole corridor is bitmap-masked → (None, False):
-        # UNAVAILABLE, never "no echo".
+        # UNAVAILABLE, never "no echo". Sited well inside the grid extent so
+        # this exercises the BITMAP path, not the outer-edge guard below.
         vals = _grid(-150.0)
-        vals[:2, :2] = np.nan  # mask the SW corner
+        vals[2, 3] = np.nan  # the only cell in this point's 10 nm buffer
         msg = _make_msg(vals, 660, 720)
-        res = self._decode({"dbz_ctmax": msg}, [47.0], [10.0])
+        res = self._decode({"dbz_ctmax": msg}, [48.0], [11.5])
         assert res[0]["dbz_ctmax"] == (None, False)
 
     def test_point_outside_grid_is_invalid(self):
         msg = _make_msg(_grid(-150.0), 660, 720)
         res = self._decode({"dbz_ctmax": msg}, [55.0], [11.5])
+        assert res[0]["dbz_ctmax"] == (None, False)
+
+    def test_corridor_clipped_by_outer_grid_edge_is_invalid(self):
+        # The point is INSIDE the grid and every cell it can see is valid, but
+        # its 10 nm buffer runs past the western boundary (10°E). searchsorted
+        # would silently clip the window and report a complete corridor over a
+        # truncated buffer — the corridor must read UNAVAILABLE instead
+        # (external #462 review of PR #463).
+        vals = _grid(-150.0)
+        vals[2, 0] = 48.0
+        msg = _make_msg(vals, 660, 720)
+        res = self._decode({"dbz_ctmax": msg}, [48.0], [10.1])
         assert res[0]["dbz_ctmax"] == (None, False)
 
     def test_echotop_quarters_keyed_by_end_minute_with_sentinel(self):
@@ -239,17 +252,24 @@ class TestD2ValidityMask:
         )
 
         vals = _grid(1.0)
-        vals[0, 0] = np.nan  # masked corner cell (47°N, 10°E)
+        vals[2, 3] = np.nan  # masked cell at 48°N, 11.5°E
         mask = build_d2_validity_mask(_make_msg(vals, 660, 720))
         assert mask is not None
         assert int(mask["valid"].sum()) == 34
-        # Central point: whole corridor valid.
-        assert d2_corridor_fully_valid(mask, [48.0], [11.5], radius_nm=10.0)
-        # Point whose buffer clips the masked corner: fails, and the rule is
+        # Point whose corridor holds only valid cells.
+        assert d2_corridor_fully_valid(mask, [48.0], [12.0], radius_nm=10.0)
+        # Point whose buffer clips the masked cell: fails, and the rule is
         # all-or-nothing — one bad point fails the whole route.
-        assert not d2_corridor_fully_valid(mask, [47.05, 48.0], [10.05, 11.5], radius_nm=10.0)
+        assert not d2_corridor_fully_valid(
+            mask, [48.0, 48.0], [12.0, 11.5], radius_nm=10.0,
+        )
         # Point outside the grid entirely: fails.
         assert not d2_corridor_fully_valid(mask, [55.0], [11.5], radius_nm=10.0)
+        # Point inside the grid, seeing only valid cells, but whose buffer runs
+        # past the western boundary. Both gathers clip identically there, so the
+        # valid-vs-all count can never catch it — the window guard must
+        # (external #462 review of PR #463).
+        assert not d2_corridor_fully_valid(mask, [48.0], [10.1], radius_nm=10.0)
 
 
 # ---------------------------------------------------------------------------

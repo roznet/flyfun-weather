@@ -2106,3 +2106,14 @@ preferred over hardcoding DWD's rotated-pole constants). Mask unavailable →
 fail-open to the bbox gate (behaviour then no worse than #461 — masked corners
 decode as unavailable, not wrong); corridor clips masked cells → the whole
 slot falls back to ICON-EU, same all-or-nothing rule as the bbox.
+
+A corridor can be clipped **two** ways, and both now read UNAVAILABLE: by
+bitmap-masked cells inside the buffer, and by the **outer grid boundary**. The
+second one was initially missed (external #462 review of PR #463) — the index
+window is built with `searchsorted`, which silently truncates at the array
+bounds, so a point within one corridor radius of the domain edge reduced over
+a partial buffer and still reported `detection_complete=True`. It also
+defeated the mask gate outright: the gate compares valid-cell against
+all-cell counts inside the buffer, and at the boundary both gathers clip
+identically, so they can never disagree. `_d2_corridor_window` now requires
+the whole buffer to lie inside the grid extent before either check runs.
