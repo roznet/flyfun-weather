@@ -260,3 +260,157 @@ class TestPrecacheLoopFiltering:
         from weatherbrief.fetch.grib.precache import MAIN_CYCLE_HOURS
         for h in (3, 9, 15, 21):
             assert h not in MAIN_CYCLE_HOURS
+
+
+# ---------------------------------------------------------------------------
+# ICON-D2 flight warming (#469 phase 3)
+# ---------------------------------------------------------------------------
+
+
+class _FakeScalars:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return _FakeScalars(self._rows)
+
+
+class _FakeDB:
+    def __init__(self, rows):
+        self._rows = rows
+        self.closed = False
+
+    def execute(self, _stmt):
+        return _FakeResult(self._rows)
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeRow:
+    def __init__(self, fid):
+        self.id = fid
+        self.departure_time = _utc(2026, 7, 21, 12)
+        self.flight_duration_hours = 2.0
+        self.flight_ceiling_ft = 18000
+
+
+class _FakeCtx:
+    def __init__(self, variant):
+        self.variant = variant
+
+
+class TestIconD2FlightWarming:
+    def _patches(self, rows, prepare_side_effect, warmed):
+        """Patch the warm path's collaborators; return a contextmanager stack."""
+        import contextlib
+
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+
+        @contextlib.contextmanager
+        def _cm():
+            with patch("flyfun_common.db.SessionLocal", return_value=_FakeDB(rows)), \
+                    patch("weatherbrief.storage.flights._row_to_flight",
+                          side_effect=lambda r: r), \
+                    patch("weatherbrief.api.packs._build_route_config",
+                          side_effect=lambda flight, db_path: flight), \
+                    patch("weatherbrief.fetch.route_points.interpolate_route",
+                          side_effect=lambda route, spacing_nm=10.0: ["pt"]), \
+                    patch("weatherbrief.fetch.grib._prepare_icon_eu",
+                          side_effect=prepare_side_effect) as prep, \
+                    patch("weatherbrief.fetch.grib._prefetch_icon_eu_data",
+                          side_effect=lambda ctx: warmed.append(ctx)) as fetch:
+                yield prep, fetch
+
+        return _cm()
+
+    def test_empty_db_path_is_noop(self):
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+        stats = precache_icon_d2_flights(_utc(2026, 7, 21, 0), db_path="")
+        assert stats["flights_warmed"] == 0
+        assert stats["flights_considered"] == 0
+
+    def test_only_d2_eligible_flights_warmed(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        # flight 1 → D2 (warm), 2 → EU (skip), 3 → no run (skip).
+        outcomes = {
+            1: (_FakeCtx(ICON_D2), None),
+            2: (_FakeCtx(ICON_EU), None),
+            3: (None, "out_of_range"),
+        }
+
+        # Rows are returned in order, so drive the outcomes by call sequence.
+        calls = {"i": 0}
+        ids = [1, 2, 3]
+
+        def prepare_seq(sections, route_points, dep, **kwargs):
+            fid = ids[calls["i"]]
+            calls["i"] += 1
+            return outcomes[fid]
+
+        rows = [_FakeRow(1), _FakeRow(2), _FakeRow(3)]
+        warmed: list = []
+        with self._patches(rows, prepare_seq, warmed):
+            stats = precache_icon_d2_flights(
+                _utc(2026, 7, 21, 0), db_path="/db",
+                now=_utc(2026, 7, 21, 0),
+            )
+        assert stats == {
+            "flights_considered": 3, "flights_warmed": 1, "flights_skipped": 2,
+        }
+        assert len(warmed) == 1
+        assert warmed[0].variant is ICON_D2
+
+    def test_ceiling_passed_to_prepare(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        captured = {}
+
+        def prepare(sections, route_points, dep, **kwargs):
+            captured.update(kwargs)
+            return _FakeCtx(ICON_D2), None
+
+        row = _FakeRow(1)
+        row.flight_ceiling_ft = 8000
+        row.flight_duration_hours = 2.0
+        # _build_route_config is mocked to return the flight itself, so the
+        # warm path reads route.flight_ceiling_ft off the row.
+        warmed: list = []
+        with self._patches([row], prepare, warmed):
+            precache_icon_d2_flights(
+                _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
+            )
+        assert captured["flight_ceiling_ft"] == 8000
+        assert captured["flight_duration_hours"] == 2.0
+
+    def test_one_flight_failure_does_not_abort_others(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        calls = {"i": 0}
+
+        def prepare_seq(sections, route_points, dep, **kwargs):
+            calls["i"] += 1
+            if calls["i"] == 1:
+                raise RuntimeError("boom")
+            return _FakeCtx(ICON_D2), None
+
+        warmed: list = []
+        with self._patches([_FakeRow(1), _FakeRow(2)], prepare_seq, warmed):
+            stats = precache_icon_d2_flights(
+                _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
+            )
+        assert stats["flights_considered"] == 2
+        assert stats["flights_warmed"] == 1   # second flight still warmed
+        assert stats["flights_skipped"] == 1
