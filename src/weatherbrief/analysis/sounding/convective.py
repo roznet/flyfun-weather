@@ -895,7 +895,7 @@ def assess_convective_nwp(
 # --- Explicit-convection assessment (ICON-D2, issue #462) --------------------
 #
 # D2 is convection-permitting: deep convection lives in explicit storm fields
-# (simulated reflectivity, echo top, LPI, updrafts, graupel), not in a
+# (simulated reflectivity, echo top, LPI, updrafts), not in a
 # parameterized scheme's diagnosed tower. This is a different KIND of signal
 # from assess_convective_nwp's tower-top track, so it gets its own assessment
 # with its own method string ("nwp_explicit") — the two are never blended.
@@ -918,13 +918,18 @@ def assess_convective_nwp(
 # channel never suppresses positive evidence on another. |uh| is
 # narrative/character only in v1 — HRRR UH thresholds are NOT portable (2–8 km
 # vs 2–5 km layer).
+#
+# The v1 corroborator set is lpi_max + w_ctmax + ml_cape. grau_gsp (surface
+# graupel precipitation) was dropped (#468): it measures snow pellets reaching
+# the GROUND, ~always 0 under warm-season route-corridor cores, not the column
+# mixed-phase property #462 intended — so it could never realistically fire.
+# Its column replacement (tcond10_mx) is deferred pending calibration (#468).
 _EXPLICIT_DBZ_FIRE = 35.0       # below → no fire (environment tracks unaffected)
 _EXPLICIT_DBZ_CONVECTIVE = 45.0  # 35–44 band may be stratiform/melting-band
 _EXPLICIT_DBZ_SEVERE = 50.0     # >= → HIGH regardless of corroborators
 _EXPLICIT_LPI_CORROB_JKG = 1.0
 _EXPLICIT_LPI_STRONG_JKG = 5.0  # counts as 2 corroborators
 _EXPLICIT_UPDRAFT_CORROB_MS = 10.0
-_EXPLICIT_GRAUPEL_CORROB_MM = 0.5
 _EXPLICIT_CAPE_CORROB_JKG = 500.0
 _EXPLICIT_UH_NOTE_M2S2 = 25.0   # rotation NOTE only, never a tier input
 
@@ -959,19 +964,6 @@ def _explicit_corroborators(
     elif w >= _EXPLICIT_UPDRAFT_CORROB_MS:
         count += 1
         notes.append(f"strong updraft ({w:.0f} m/s)")
-
-    graupel = explicit.graupel_hour_mm
-    if graupel is None:
-        incomplete += 1
-    elif graupel >= _EXPLICIT_GRAUPEL_CORROB_MM:
-        count += 1
-        # Hard wording rule (#462): graupel / mixed-phase core — never "hail".
-        notes.append(
-            # An hourly ACCUMULATION in mm — not a rate. The neighbouring
-            # parameterized notes above are genuinely mm/h (convective_precip_
-            # mm_h), so the unit has to differ here (PR #463 review round 2).
-            f"graupel / strong mixed-phase core ({graupel:.1f} mm this hour)"
-        )
 
     cape_ml = nwp_diagnostics.ml_cape_jkg if nwp_diagnostics is not None else None
     if cape_ml is None:

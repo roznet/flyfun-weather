@@ -2,9 +2,9 @@
 
 Fetch config → message-level decode (sub-hourly stepRange selection, corridor
 extrema, sentinels, validity mask) → enrichment semantics (hourly echo-top
-construction over exactly four quarter-windows, on-the-hour graupel
-de-accumulation, interval attachment, completeness degradation) → the
-domain-gate hardening and the total-D2-failure → ICON-EU re-run path.
+construction over exactly four quarter-windows, interval attachment,
+completeness degradation) → the domain-gate hardening and the total-D2-failure
+→ ICON-EU re-run path.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from weatherbrief.fetch.grib.icon_eu_fetch import (
     ICON_D2,
     ICON_D2_EXPLICIT_CONV_VARIABLES,
     ICON_EU,
-    icon_d2_hourly_graupel_mm,
     icon_explicit_conv_cache_key,
 )
 from weatherbrief.models import (
@@ -44,9 +43,12 @@ def _rp(lat: float, lon: float, nm: float = 0.0) -> RoutePoint:
 class TestExplicitConvConfig:
     def test_d2_explicit_variable_list(self):
         assert ICON_D2.explicit_conv_variables == ICON_D2_EXPLICIT_CONV_VARIABLES
-        for var in ("dbz_ctmax", "echotop", "lpi_max", "w_ctmax", "uh_max", "grau_gsp"):
+        for var in ("dbz_ctmax", "echotop", "lpi_max", "w_ctmax", "uh_max"):
             assert var in ICON_D2.explicit_conv_variables
-        # dbz_cmax (optional) and tcond10_mx (deferred) stay out of v1.
+        # grau_gsp dropped in v1 (#468 — surface graupel, ~always 0 on a
+        # warm-season corridor); dbz_cmax (optional) and tcond10_mx (deferred
+        # replacement) stay out of v1.
+        assert "grau_gsp" not in ICON_D2.explicit_conv_variables
         assert "dbz_cmax" not in ICON_D2.explicit_conv_variables
         assert "tcond10_mx" not in ICON_D2.explicit_conv_variables
 
@@ -54,8 +56,8 @@ class TestExplicitConvConfig:
         assert ICON_EU.explicit_conv_variables == ()
 
     def test_needs_predecessor_flag_generalized(self):
-        # EU: rain_con de-accumulation. D2: graupel de-accumulation + the
-        # three prior-file echo-top quarters. One variant-level flag (#462).
+        # EU: rain_con de-accumulation. D2: the three prior-file echo-top
+        # quarters. One variant-level flag (#462).
         assert ICON_EU.needs_predecessor_step is True
         assert ICON_D2.needs_predecessor_step is True
 
@@ -64,40 +66,6 @@ class TestExplicitConvConfig:
             icon_explicit_conv_cache_key("dbz_ctmax", ICON_D2)
             == "ICON_D2_EXPL_DBZ_CTMAX_V1"
         )
-
-
-class TestGraupelDeaccumulation:
-    def test_hourly_delta_per_cell(self):
-        cur = {(0, 0): 3.5}
-        prev = {(0, 0): 2.0}
-        assert icon_d2_hourly_graupel_mm(cur, prev, 1.0) == pytest.approx(1.5)
-
-    def test_diff_then_reduce_catches_moving_cell(self):
-        # The cell holding the corridor max shifts between hours: reduce-then-
-        # diff would compute max(H) − max(H−1) = 5.0 − 5.0 = 0 and miss the
-        # real 4.0 mm hourly peak in cell (1,1) (#463 review). Diff-then-
-        # reduce takes the per-cell deltas first.
-        prev = {(0, 0): 5.0, (1, 1): 0.0}
-        cur = {(0, 0): 5.0, (1, 1): 4.0}
-        assert icon_d2_hourly_graupel_mm(cur, prev, 1.0) == pytest.approx(4.0)
-
-    def test_per_cell_clamped_at_zero(self):
-        # Decreasing accumulation (new run / GRIB glitch) → 0, not negative.
-        assert icon_d2_hourly_graupel_mm({(0, 0): 1.0}, {(0, 0): 2.0}, 1.0) == 0.0
-
-    def test_none_is_unknown_not_zero(self):
-        assert icon_d2_hourly_graupel_mm(None, {(0, 0): 2.0}, 1.0) is None
-        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, None, 1.0) is None
-        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, {(0, 0): 2.0}, None) is None
-
-    def test_disjoint_cells_are_unknown(self):
-        # No common cells between the two hours → nothing to difference.
-        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, {(1, 1): 2.0}, 1.0) is None
-
-    def test_non_hourly_window_is_unknown(self):
-        # A skipped step means the delta spans >1h — differencing it into a
-        # single "hour" would silently dilute the rate.
-        assert icon_d2_hourly_graupel_mm({(0, 0): 3.5}, {(0, 0): 2.0}, 2.0) is None
 
 
 # ---------------------------------------------------------------------------
@@ -253,20 +221,6 @@ class TestExplicitConvDecode:
         assert res[0]["echotop_quarters"][720] == (pytest.approx(40000.0), True)
         assert res[0]["echotop_quarters"][735] == (None, True)
 
-    def test_graupel_uses_on_the_hour_message_only(self):
-        # The quarter-hour since-init accumulation (0–735m) carries a LARGER
-        # value; de-accumulation must still read the on-the-hour (0–720m)
-        # message — mixing the two would corrupt the hourly delta (#462 rule).
-        # Graupel decodes to a PER-CELL map (diff-then-reduce at enrichment).
-        on_hour = _grid(2.0)
-        quarter = _grid(9.0)
-        blob = _make_msg(on_hour, 0, 720, "accum") + _make_msg(quarter, 0, 735, "accum")
-        res = self._decode({"grau_gsp": blob}, [48.0], [11.5])
-        cells, valid = res[0]["grau_gsp_cells"]
-        assert valid is True
-        assert cells
-        assert all(v == pytest.approx(2.0) for v in cells.values())
-
     def test_uh_keeps_signed_value_at_absmax(self):
         vals = _grid(0.0)
         vals[2, 3] = -60.0  # strongest amplitude, anticyclonic
@@ -335,18 +289,14 @@ def _icon_cross_section(n_points: int, hours: list[int]) -> RouteCrossSection:
 # Per-fhour synthetic decode results for two route points. Point 0 exercises
 # the happy path + degradations; point 1 is fully masked (never gets data).
 _DECODED_BY_FHOUR = {
-    # Lead step f011 — state seeding only (graupel baseline + the three
-    # quarter windows ending 675/690/705 that hour 12 needs).
+    # Lead step f011 — state seeding only (the three quarter windows ending
+    # 675/690/705 that hour 12 needs).
     11: [
         {
             "dbz_ctmax": (44.0, True),
             "lpi_max": (0.5, True),
             "w_ctmax": (5.0, True),
             "uh_max": (2.0, True),
-            # Two corridor cells: the max-holding cell (0,0) stays flat into
-            # f012 while (1,1) produces the real hourly delta — catches a
-            # reduce-then-diff regression (#463 review).
-            "grau_gsp_cells": ({(0, 0): 2.0, (1, 1): 0.3}, True),
             "echotop_quarters": {
                 660: (50000.0, True),
                 675: (45000.0, True),
@@ -363,9 +313,6 @@ _DECODED_BY_FHOUR = {
             "lpi_max": (3.0, True),
             "w_ctmax": (12.0, True),
             "uh_max": (30.0, True),
-            # Corridor max of accumulations is (0,0)=2.0 both hours (delta 0);
-            # the true hourly peak is (1,1): 1.8 − 0.3 = 1.5 mm.
-            "grau_gsp_cells": ({(0, 0): 2.0, (1, 1): 1.8}, True),
             "echotop_quarters": {
                 720: (40000.0, True),
                 735: (None, True),
@@ -375,15 +322,14 @@ _DECODED_BY_FHOUR = {
         },
         {"echotop_quarters": {}},
     ],
-    # f013 — degraded hour: graupel channel failed; the 780' quarter (ending
-    # 13:00) is missing → echo top must degrade, never a partial min.
+    # f013 — degraded hour: the 780' quarter (ending 13:00) is missing → echo
+    # top must degrade, never a partial min.
     13: [
         {
             "dbz_ctmax": (36.0, True),
             "lpi_max": (0.0, True),
             "w_ctmax": (2.0, True),
             "uh_max": (1.0, True),
-            "grau_gsp_cells": (None, False),
             "echotop_quarters": {
                 795: (None, True),
             },
@@ -430,11 +376,8 @@ class TestExplicitConvEnrichment:
         assert diag.source == "icon_d2"
         assert diag.reflectivity_hour_max_dbz == pytest.approx(48.0)
         assert diag.detection_complete is True
+        # lpi_max (3.0) and w_ctmax (12.0) both decoded → strength complete.
         assert diag.strength_complete is True
-        # Graupel: per-cell de-accumulation over exactly 1 h, then corridor
-        # max — the max-holding cell (0,0) is flat (delta 0) while (1,1)
-        # carries the real 1.5 mm peak. Reduce-then-diff would read 0.0.
-        assert diag.graupel_hour_mm == pytest.approx(1.5)
         # Hourly echo top = min pressure over EXACTLY the four windows ending
         # 11:15/11:30/11:45 (prev file) + 12:00 (this file): min = 40000 Pa.
         # The 660' quarter (ending 11:00) must NOT participate.
@@ -452,9 +395,9 @@ class TestExplicitConvEnrichment:
         # partial min is presented as the hourly echo top.
         assert diag.echo_top_complete is False
         assert diag.echo_top_18dbz_ft is None
-        # Graupel channel failed this hour → None (unknown), strength incomplete.
-        assert diag.graupel_hour_mm is None
-        assert diag.strength_complete is False
+        # Strength stays complete — lpi_max (0.0) and w_ctmax (2.0) both
+        # decoded; only the echo-top channel degraded this hour.
+        assert diag.strength_complete is True
 
     def test_lead_step_is_never_attached(self, tmp_path):
         cs = self._run(tmp_path)
@@ -475,7 +418,6 @@ class TestExplicitConvEnrichment:
             assert diag.strength_complete is False
             assert diag.echo_top_complete is False
             assert diag.reflectivity_hour_max_dbz is None
-            assert diag.graupel_hour_mm is None
 
 
 # ---------------------------------------------------------------------------
@@ -579,7 +521,7 @@ class TestExplicitConvPrefetch:
 
         explicit_calls = [c for c in single_level_calls if c[1] is not None]
         # Every explicit variable fetched per window hour AND for the lead
-        # step f011 (graupel de-accumulation + prior echo-top quarters).
+        # step f011 (the prior-file echo-top quarters hour 12 needs).
         for fhour in (11, 12, 13):
             fetched_vars = {c[1][0] for c in explicit_calls if c[0] == fhour}
             assert fetched_vars == set(ICON_D2_EXPLICIT_CONV_VARIABLES)

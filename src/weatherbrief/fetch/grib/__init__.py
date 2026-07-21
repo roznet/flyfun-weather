@@ -3374,9 +3374,9 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
         jobs.extend(_explicit_jobs(fhour))
 
     # One leading single-level step so the first window hour has a predecessor
-    # (variant-level flag, #421/#462): rain_con (EU) and grau_gsp (D2) need it
-    # to de-accumulate the first hour, and the D2 hourly echo top needs the
-    # previous file's three quarter-hour windows. Single-level fetches only —
+    # (variant-level flag, #421/#462): rain_con (EU) needs it to de-accumulate
+    # the first hour, and the D2 hourly echo top needs the previous file's
+    # three quarter-hour windows. Single-level fetches only —
     # the model-level sounding list above is untouched. Each list is fetched
     # for the lead step only when that list is what needs the predecessor.
     if ctx.forecast_hours and variant.needs_predecessor_step:
@@ -3806,13 +3806,10 @@ def _enrich_icon_d2_explicit_convective(
     """Attach :class:`NWPExplicitConvectiveDiagnostics` to ICON-D2 hours (#462).
 
     Walks forecast hours in order with one leading step prepended (the
-    predecessor file provides BOTH the graupel de-accumulation baseline and
-    the three quarter-hour echo-top windows of the hour before the window's
-    first hour), decoding each hour's per-variable explicit-conv blobs via
-    the corridor-extremum decoder, then:
+    predecessor file provides the three quarter-hour echo-top windows of the
+    hour before the window's first hour), decoding each hour's per-variable
+    explicit-conv blobs via the corridor-extremum decoder, then:
 
-    - de-accumulates ``grau_gsp`` (on-the-hour messages only) into
-      ``graupel_hour_mm`` — PER CELL, then corridor max (diff-then-reduce);
     - constructs the HOURLY echo top for valid hour H as the minimum pressure
       across the four 15-min windows ending at H−45, H−30, H−15 and H minutes
       — three from file f(H−1), one from f(H). A missing/invalid quarter
@@ -3830,7 +3827,6 @@ def _enrich_icon_d2_explicit_convective(
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         fetch_icon_eu_single_level,
-        icon_d2_hourly_graupel_mm,
         icon_eu_previous_step,
         icon_explicit_conv_cache_key,
     )
@@ -3844,19 +3840,13 @@ def _enrich_icon_d2_explicit_convective(
         steps.insert(0, lead)
 
     n_points = len(point_lats)
-    # Per-point de-accumulation / quarter-window state from the previous step.
-    # None / {} = no usable predecessor (missing-data-safe: first hour then
-    # reads graupel None + echo_top incomplete rather than a fabricated value).
-    # Graupel state is PER CELL (grid-index → since-init accumulation): the
-    # hourly value is the corridor max of per-cell deltas, never a delta of
-    # corridor maxima (#463 review — a shifting max-holding cell would
-    # otherwise understate a real peak).
-    prev_grau_cells: list[dict | None] = [None] * n_points
+    # Per-point quarter-window state from the previous step. ``{}`` = no usable
+    # predecessor (missing-data-safe: the first hour then reads echo_top
+    # incomplete rather than a fabricated value).
     prev_quarters: list[dict[int, tuple[float | None, bool]]] = [
         {} for _ in range(n_points)
     ]
     prev_fhour: int | None = None
-    prev_valid_utc: datetime | None = None
 
     total_enriched = 0
     for fhour in steps:
@@ -3894,11 +3884,6 @@ def _enrich_icon_d2_explicit_convective(
             decoded_points = [{"echotop_quarters": {}} for _ in range(n_points)]
 
         valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
-        window_h: float | None = None
-        if prev_valid_utc is not None:
-            _dh = (valid_utc - prev_valid_utc).total_seconds() / 3600.0
-            if _dh > 0:
-                window_h = _dh
         contiguous = prev_fhour is not None and fhour - prev_fhour == 1
 
         # The four quarter windows covering (H−1, H], as end-minutes since init.
@@ -3913,13 +3898,6 @@ def _enrich_icon_d2_explicit_convective(
             lpi_val, lpi_valid = point.get("lpi_max", (None, False))
             w_val, w_valid = point.get("w_ctmax", (None, False))
             uh_val, uh_valid = point.get("uh_max", (None, False))
-            grau_cells, grau_valid = point.get("grau_gsp_cells", (None, False))
-
-            graupel_mm = icon_d2_hourly_graupel_mm(
-                grau_cells if grau_valid else None,
-                prev_grau_cells[i],
-                window_h,
-            )
 
             # Hourly echo top: min over exactly the four quarters ending in
             # (H−1, H]. Quarters must all be present AND corridor-valid;
@@ -3959,24 +3937,18 @@ def _enrich_icon_d2_explicit_convective(
                 lightning_potential_hour_max_jkg=lpi,
                 updraft_hour_max_ms=w,
                 updraft_helicity_2_8km_hour_max_m2s2=uh,
-                graupel_hour_mm=graupel_mm,
                 detection_complete=dbz_valid,
-                strength_complete=(
-                    lpi is not None and w is not None and graupel_mm is not None
-                ),
+                strength_complete=(lpi is not None and w is not None),
                 echo_top_complete=echo_complete,
             ))
             echo_pa_per_point.append(echo_pa)
 
         # Carry state forward BEFORE the attach filter so the lead step (and
-        # any out-of-window step) still seeds de-accumulation + quarters.
+        # any out-of-window step) still seeds the quarter windows.
         for i in range(n_points):
             point = decoded_points[i] if i < len(decoded_points) else {}
-            grau_cells, grau_valid = point.get("grau_gsp_cells", (None, False))
-            prev_grau_cells[i] = grau_cells if grau_valid else None
             prev_quarters[i] = dict(point.get("echotop_quarters", {}))
         prev_fhour = fhour
-        prev_valid_utc = valid_utc
 
         if fhour not in forecast_hours:
             continue  # lead step: state seeding only, never attached

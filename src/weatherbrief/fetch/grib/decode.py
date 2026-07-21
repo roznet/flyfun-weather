@@ -1541,11 +1541,10 @@ def build_icon_cloud_diagnostics(
 # The D2 explicit storm fields are NOT decoded through the cfgrib cloud-diag
 # path above, for two reasons:
 # - Sub-hourly message structure: an `echotop` file carries FOUR 15-min
-#   `min_pres` messages and a `grau_gsp` file carries an on-the-hour since-init
-#   accumulation PLUS three quarter-hour accumulations. cfgrib would either
-#   merge them along a step dimension or split datasets unpredictably; the
-#   consumer must select messages by their step window explicitly, never trust
-#   the merge (#462 verified structure).
+#   `min_pres` messages per forecast hour. cfgrib would either merge them along
+#   a step dimension or split datasets unpredictably; the consumer must select
+#   messages by their step window explicitly, never trust the merge (#462
+#   verified structure).
 # - Corridor extrema: per-point bilinear sampling defeats a 2.2 km model — a
 #   storm cell between 10 NM route points (or displaced a few km by timing
 #   error) vanishes, making D2 LESS likely to fire than coarse models. These
@@ -1702,45 +1701,6 @@ def _d2_corridor_cells(
     return cells[~np.isnan(cells)]
 
 
-def _d2_corridor_cell_map(
-    lats_axis: "np.ndarray",
-    lons_axis: "np.ndarray",
-    grid: "np.ndarray",
-    lat: float,
-    lon: float,
-    radius_nm: float,
-) -> "dict[tuple[int, int], float] | None":
-    """Valid corridor cells as {(j, i): value}, keyed by normalized grid index.
-
-    Same geometry as :func:`_d2_corridor_cells` but keeps cell identity, for
-    fields where the corridor reduction must happen AFTER a per-cell temporal
-    operation — the accumulated ``grau_gsp`` is de-accumulated per cell and
-    only then reduced, because ``corridor_max(H) − corridor_max(H−1)``
-    understates whenever the cell holding the running maximum shifts between
-    hours (#463 review). Keys are indices into the ascending-normalized axes,
-    which are stable across messages of the same product.
-    """
-    import numpy as np
-
-    window = _d2_corridor_window(lats_axis, lons_axis, lat, lon, radius_nm)
-    if window is None:
-        return None
-    j0, j1, i0, i1, coslat = window
-
-    cells: dict[tuple[int, int], float] = {}
-    for j in range(j0, j1):
-        for i in range(i0, i1):
-            v = grid[j, i]
-            if np.isnan(v):
-                continue
-            dist_nm = _NM_PER_DEG_LAT * math.sqrt(
-                (lats_axis[j] - lat) ** 2 + ((lons_axis[i] - lon) * coslat) ** 2
-            )
-            if dist_nm <= radius_nm:
-                cells[(j, i)] = float(v)
-    return cells
-
-
 def _d2_reduce(
     cells: "np.ndarray | None", mode: str
 ) -> tuple[float | None, bool]:
@@ -1815,7 +1775,7 @@ def _d2_iter_messages(grib_bytes: bytes):
 
 
 # Reduction mode per explicit-convection variable (hour-max single-message
-# fields). `echotop` and `grau_gsp` have bespoke multi-message handling below.
+# fields). `echotop` has bespoke multi-message handling below.
 _D2_HOUR_MAX_MODES = {
     "dbz_ctmax": "max",
     "lpi_max": "max",
@@ -1847,11 +1807,6 @@ def decode_icon_d2_explicit_conv_per_point(
             argmax|uh| for helicity). ``corridor_valid`` False = channel
             unavailable here. dbz values at/below the −100 dBZ quiet bar
             normalize to None (valid + None = genuinely quiet).
-        - ``"grau_gsp_cells"``: ``({(j, i): accum_mm} | None, corridor_valid)``
-            — the on-the-hour since-init accumulation kept PER CELL, so the
-            enrichment loop can de-accumulate per cell and only then take the
-            corridor max (diff-then-reduce; reduce-then-diff understates when
-            the max-holding cell shifts between hours).
         - ``"echotop_quarters"``: ``{end_minute: (min_pres_pa | None, valid)}``
             one entry per decoded 15-min window; value None with valid True =
             no 18 dBZ echo in that window (sentinel −999). The HOURLY echo top
@@ -1861,9 +1816,7 @@ def decode_icon_d2_explicit_conv_per_point(
 
     Message selection is explicit by step window (minutes since init):
     hour-max fields take the message ending on the hour with the widest
-    window; graupel takes ONLY the on-the-hour accumulation (never the
-    quarter-hour ones — #462 de-accumulation rule); echotop keeps every
-    quarter window keyed by its end minute.
+    window; echotop keeps every quarter window keyed by its end minute.
     """
     n_points = len(latitudes)
     results: list[dict] = [
@@ -1876,7 +1829,7 @@ def decode_icon_d2_explicit_conv_per_point(
         if not grib_bytes:
             continue
         try:
-            if var in _D2_HOUR_MAX_MODES or var == "grau_gsp":
+            if var in _D2_HOUR_MAX_MODES:
                 _d2_decode_hour_field(
                     var, grib_bytes, latitudes, longitudes, radius_nm, results,
                 )
@@ -1902,10 +1855,10 @@ def _d2_decode_hour_field(
     radius_nm: float,
     results: list[dict],
 ) -> None:
-    """Decode a single-value-per-hour field (hour-max or on-hour accumulation)."""
+    """Decode a single-value-per-hour hour-max field to corridor extrema."""
     # Pick the message: end on the hour; among those, the widest window (a
-    # defensive tiebreak in case DWD ever adds quarter-hour messages to the
-    # hour-max files the way grau_gsp carries both).
+    # defensive tiebreak in case DWD ever adds quarter-hour messages to these
+    # hour-max files).
     best: tuple[int, tuple] | None = None  # (window_minutes, grid_tuple)
     for gid in _d2_iter_messages(grib_bytes):
         start_m, end_m = _d2_message_step_minutes(gid)
@@ -1920,19 +1873,6 @@ def _d2_decode_hour_field(
     if best is None:
         return
     lats_axis, lons_axis, grid = best[1]
-
-    if var == "grau_gsp":
-        # Accumulated field: keep per-cell values so de-accumulation happens
-        # per cell BEFORE the corridor reduction (diff-then-reduce). Reducing
-        # first and differencing the two maxima understates whenever the
-        # max-holding cell shifts between hours (#463 review).
-        for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
-            cell_map = _d2_corridor_cell_map(
-                lats_axis, lons_axis, grid, lat, lon, radius_nm,
-            )
-            valid = bool(cell_map)
-            results[i]["grau_gsp_cells"] = (cell_map if valid else None, valid)
-        return
 
     mode = _D2_HOUR_MAX_MODES.get(var, "max")
     for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
