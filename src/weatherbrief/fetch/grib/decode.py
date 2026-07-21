@@ -1574,6 +1574,16 @@ _D2_MISSING_VALUE = -1.0e30
 _NM_PER_DEG_LAT = 60.0
 
 
+def _to_180(lon: float) -> float:
+    """0–360 → −180..+180, the convention route points use.
+
+    The D2 regular-lat-lon product spans 3.94°W–20.34°E, so it does not wrap
+    the antimeridian once normalized — the axis stays monotonic ascending and
+    needs no seam handling.
+    """
+    return lon - 360.0 if lon > 180.0 else lon
+
+
 def _d2_read_message_grid(gid) -> "tuple[np.ndarray, np.ndarray, np.ndarray] | None":
     """Read one regular-ll GRIB message into (lats_axis, lons_axis, values).
 
@@ -1591,6 +1601,13 @@ def _d2_read_message_grid(gid) -> "tuple[np.ndarray, np.ndarray, np.ndarray] | N
     lat_last = float(eccodes.codes_get(gid, "latitudeOfLastGridPointInDegrees"))
     lon_first = float(eccodes.codes_get(gid, "longitudeOfFirstGridPointInDegrees"))
     lon_last = float(eccodes.codes_get(gid, "longitudeOfLastGridPointInDegrees"))
+    # DWD delivers these keys in the 0–360 convention: the D2 domain's western
+    # edge (3.94°W) reads 356.06. Route points are −180..+180, so the raw axis
+    # matches nothing — and 356.06 > 20.34 also mis-fires the descending-flip
+    # below, mirroring the grid east–west. cfgrib normalizes this for us on the
+    # other decode paths (verified: its axis reads −3.940 .. 20.340 for the
+    # same message), which is exactly why the eccodes path has to do it here.
+    lon_first, lon_last = _to_180(lon_first), _to_180(lon_last)
 
     eccodes.codes_set(gid, "missingValue", _D2_MISSING_VALUE)
     values = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64)

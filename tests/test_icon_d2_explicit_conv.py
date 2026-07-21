@@ -115,8 +115,14 @@ def _make_msg(
     start_min: int,
     end_min: int,
     step_type: str = "max",
+    lon0: float = _LON0,
+    lon1: float = _LON1,
 ) -> bytes:
-    """Encode a regular-ll GRIB2 message with a minutes step range + bitmap."""
+    """Encode a regular-ll GRIB2 message with a minutes step range + bitmap.
+
+    ``lon0``/``lon1`` may be given in the 0–360 convention DWD actually
+    delivers (see ``test_zero_to_360_longitude_axis_is_normalized``).
+    """
     import eccodes
 
     gid = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
@@ -125,9 +131,12 @@ def _make_msg(
     eccodes.codes_set(gid, "Nj", nj)
     eccodes.codes_set(gid, "latitudeOfFirstGridPointInDegrees", _LAT1)
     eccodes.codes_set(gid, "latitudeOfLastGridPointInDegrees", _LAT0)
-    eccodes.codes_set(gid, "longitudeOfFirstGridPointInDegrees", _LON0)
-    eccodes.codes_set(gid, "longitudeOfLastGridPointInDegrees", _LON1)
-    eccodes.codes_set(gid, "iDirectionIncrementInDegrees", (_LON1 - _LON0) / (ni - 1))
+    eccodes.codes_set(gid, "longitudeOfFirstGridPointInDegrees", lon0)
+    eccodes.codes_set(gid, "longitudeOfLastGridPointInDegrees", lon1)
+    span = (lon1 - 360.0 if lon1 > 180.0 else lon1) - (
+        lon0 - 360.0 if lon0 > 180.0 else lon0
+    )
+    eccodes.codes_set(gid, "iDirectionIncrementInDegrees", span / (ni - 1))
     eccodes.codes_set(gid, "jDirectionIncrementInDegrees", (_LAT1 - _LAT0) / (nj - 1))
     eccodes.codes_set(gid, "jScansPositively", 0)
     eccodes.codes_set(gid, "stepUnits", "m")
@@ -195,6 +204,31 @@ class TestExplicitConvDecode:
         msg = _make_msg(_grid(-150.0), 660, 720)
         res = self._decode({"dbz_ctmax": msg}, [55.0], [11.5])
         assert res[0]["dbz_ctmax"] == (None, False)
+
+    def test_zero_to_360_longitude_axis_is_normalized(self):
+        # DWD delivers `longitudeOfFirstGridPointInDegrees` in the 0–360
+        # convention: the real D2 domain's western edge (3.94°W) reads 356.06,
+        # verified live. Route points are −180..+180, so without normalization
+        # NO point in the domain matches the axis — the corridor gate rejects
+        # every route and D2 is silently never selected. cfgrib normalizes for
+        # us on the other decode paths; this eccodes path must do it itself.
+        # 9 columns spanning 4°W..4°E, 5 rows spanning 47..49°N.
+        vals = np.full((5, 9), -150.0)
+        vals[2, 2] = 52.0  # 48.0°N, 2.0°W
+        msg = _make_msg(vals, 660, 720, lon0=356.0, lon1=4.0)
+
+        from weatherbrief.fetch.grib.decode import _d2_iter_messages, _d2_read_message_grid
+
+        for gid in _d2_iter_messages(msg):
+            lats_axis, lons_axis, _grid = _d2_read_message_grid(gid)
+        assert lons_axis[0] == pytest.approx(-4.0)
+        assert lons_axis[-1] == pytest.approx(4.0)
+        assert list(lons_axis) == sorted(lons_axis)  # ascending, not mirrored
+
+        res = self._decode({"dbz_ctmax": msg}, [48.0], [-2.0], radius_nm=25.0)
+        value, valid = res[0]["dbz_ctmax"]
+        assert valid is True
+        assert value == pytest.approx(52.0)
 
     def test_corridor_clipped_by_outer_grid_edge_is_invalid(self):
         # The point is INSIDE the grid and every cell it can see is valid, but
