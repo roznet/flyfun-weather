@@ -2021,8 +2021,9 @@ HRRR's 2–5 km).
    spatial interpolator.
 3. **Interval maxima attach to `(H−1, H]`.** The hourly echo top is
    *constructed*: min pressure across exactly the four 15-min `min_pres`
-   windows ending at H−45 … H (three live in file f(H−1) — the predecessor
-   fetch now serves both this and graupel de-accumulation). A missing quarter
+   windows ending at H−45 … H (three live in file f(H−1) — the sole reason
+   D2 sets `needs_predecessor_step` since `grau_gsp` was dropped in #468).
+   A missing quarter
    degrades `echo_top_complete` — never a partial min presented as the hourly
    value. No hold-over fill: a 1-hour maximum from a failed hour has no
    covering interval (contrast the ECMWF gust precedent, whose window spans
