@@ -882,24 +882,39 @@ def fetch_ecmwf_grib_snapshots(
     # (day_offset × sample_hour) grid to the set of delivered steps we touch:
     # each target step plus the previous delivered step its tp/sf accumulation
     # diff reads.
+    def _iter_delivered_samples():
+        """Yield ``(target_dt, step_h)`` for every sampled, delivered step.
+
+        Single source of truth for the (day_offset × sample_hour) grid and its
+        delivered-step filter: the decode precompute and the snapshot loop both
+        consume this, so the two enumerations cannot drift apart — a step
+        sampled by one but not the other would resolve to the ``empty``/``None``
+        cache sentinel and degrade data silently (the #415 failure shape).
+        """
+        for day_offset in range(days + 1):
+            target_date = (init_time + timedelta(days=day_offset)).date()
+            hours = (
+                sample_hours if sample_hours is not None
+                else sample_hours_for_day(day_offset)
+            )
+            for hour in hours:
+                target_dt = datetime.combine(
+                    target_date, dt_time(hour, 0, 0), tzinfo=timezone.utc,
+                )
+                step_h = int((target_dt - init_time).total_seconds() / 3600)
+                if step_h <= 0 or step_h > max_step or step_h not in files_by_step:
+                    continue
+                yield target_dt, step_h
+
     a1_needed: set[int] = set()
     a2_needed: set[int] = set()
-    for day_offset in range(days + 1):
-        target_date = (init_time + timedelta(days=day_offset)).date()
-        hours = sample_hours if sample_hours is not None else sample_hours_for_day(day_offset)
-        for hour in hours:
-            target_dt = datetime.combine(
-                target_date, dt_time(hour, 0, 0), tzinfo=timezone.utc,
-            )
-            step_h = int((target_dt - init_time).total_seconds() / 3600)
-            if step_h <= 0 or step_h > max_step or step_h not in files_by_step:
-                continue
-            a1_needed.add(step_h)
-            prev_step = _previous_delivered_step(step_h)
-            if prev_step is not None:
-                a1_needed.add(prev_step)
-            if files_by_step[step_h].get("a2") is not None:
-                a2_needed.add(step_h)
+    for _target_dt, step_h in _iter_delivered_samples():
+        a1_needed.add(step_h)
+        prev_step = _previous_delivered_step(step_h)
+        if prev_step is not None:
+            a1_needed.add(prev_step)
+        if files_by_step[step_h].get("a2") is not None:
+            a2_needed.add(step_h)
 
     # A step lacking an a1 file resolves to the empty sentinel without a decode
     # (matches the old per-step short-circuit in ``_decode_a1``).
@@ -952,123 +967,111 @@ def fetch_ecmwf_grib_snapshots(
             pl_data, _ = res
             a2_cache[step_h] = pl_data
 
-    for day_offset in range(days + 1):
-        target_date = (init_time + timedelta(days=day_offset)).date()
-        hours = sample_hours if sample_hours is not None else sample_hours_for_day(day_offset)
-        for hour in hours:
-            target_dt = datetime.combine(
-                target_date, dt_time(hour, 0, 0), tzinfo=timezone.utc,
-            )
-            step_h = int((target_dt - init_time).total_seconds() / 3600)
-            if step_h <= 0 or step_h > max_step:
-                continue
-            if step_h not in files_by_step:
-                continue
+    for target_dt, step_h in _iter_delivered_samples():
+        cur_a1 = a1_cache.get(step_h, empty)
+        prev_step = _previous_delivered_step(step_h)
+        prev_a1 = (
+            a1_cache.get(prev_step, empty) if prev_step is not None else None
+        )
+        # Window the accumulation actually covers: 1 h inside the hourly
+        # region, 3 h or 6 h further out. Recorded per row so a 6 h total is
+        # never mistaken for an hourly one.
+        precip_period_h = (step_h - prev_step) if prev_step is not None else None
 
-            cur_a1 = a1_cache.get(step_h, empty)
-            prev_step = _previous_delivered_step(step_h)
-            prev_a1 = (
-                a1_cache.get(prev_step, empty) if prev_step is not None else None
-            )
-            # Window the accumulation actually covers: 1 h inside the hourly
-            # region, 3 h or 6 h further out. Recorded per row so a 6 h total is
-            # never mistaken for an hourly one.
-            precip_period_h = (step_h - prev_step) if prev_step is not None else None
+        pl_data = a2_cache.get(step_h)
 
-            pl_data = a2_cache.get(step_h)
+        t_step = time.monotonic()
+        step_pending: list[tuple[int, dict]] = []
+        for i, airport in enumerate(airports):
+            cur_raw = cur_a1[i] if i < len(cur_a1) else {}
+            snap_fields = build_ecmwf_surface_snapshot(cur_raw)
 
-            t_step = time.monotonic()
-            step_pending: list[tuple[int, dict]] = []
-            for i, airport in enumerate(airports):
-                cur_raw = cur_a1[i] if i < len(cur_a1) else {}
-                snap_fields = build_ecmwf_surface_snapshot(cur_raw)
+            # Step-diff for accumulated fields (precipitation, snowfall)
+            if prev_a1 is not None and i < len(prev_a1):
+                prev_fields = build_ecmwf_surface_snapshot(prev_a1[i])
+                cur_pp = snap_fields.get("precipitation_mm")
+                prev_pp = prev_fields.get("precipitation_mm")
+                if cur_pp is not None and prev_pp is not None:
+                    snap_fields["precipitation_mm"] = max(0.0, cur_pp - prev_pp)
+                cur_sf = snap_fields.get("snowfall_cm")
+                prev_sf = prev_fields.get("snowfall_cm")
+                if cur_sf is not None and prev_sf is not None:
+                    snap_fields["snowfall_cm"] = max(0.0, cur_sf - prev_sf)
 
-                # Step-diff for accumulated fields (precipitation, snowfall)
-                if prev_a1 is not None and i < len(prev_a1):
-                    prev_fields = build_ecmwf_surface_snapshot(prev_a1[i])
-                    cur_pp = snap_fields.get("precipitation_mm")
-                    prev_pp = prev_fields.get("precipitation_mm")
-                    if cur_pp is not None and prev_pp is not None:
-                        snap_fields["precipitation_mm"] = max(0.0, cur_pp - prev_pp)
-                    cur_sf = snap_fields.get("snowfall_cm")
-                    prev_sf = prev_fields.get("snowfall_cm")
-                    if cur_sf is not None and prev_sf is not None:
-                        snap_fields["snowfall_cm"] = max(0.0, cur_sf - prev_sf)
+            # LCL from T-Td spread
+            t = snap_fields.get("temperature_2m_c")
+            d = snap_fields.get("dewpoint_2m_c")
+            lcl_ft = None
+            if t is not None and d is not None:
+                spread = t - d
+                if spread >= 0:
+                    lcl_ft = _LCL_CONSTANT_FT * spread
 
-                # LCL from T-Td spread
-                t = snap_fields.get("temperature_2m_c")
-                d = snap_fields.get("dewpoint_2m_c")
-                lcl_ft = None
-                if t is not None and d is not None:
-                    spread = t - d
-                    if spread >= 0:
-                        lcl_ft = _LCL_CONSTANT_FT * spread
+            snap = {
+                "icao": airport.icao,
+                "model": "ecmwf",
+                "model_init_time": init_time,
+                "forecast_hour": target_dt,
+                "temperature_2m_c": snap_fields.get("temperature_2m_c"),
+                "dewpoint_2m_c": snap_fields.get("dewpoint_2m_c"),
+                "visibility_m": snap_fields.get("visibility_m"),
+                "wind_speed_10m_kt": snap_fields.get("wind_speed_10m_kt"),
+                "wind_direction_10m_deg": snap_fields.get("wind_direction_10m_deg"),
+                "wind_gusts_10m_kt": snap_fields.get("wind_gusts_10m_kt"),
+                "precipitation_mm": snap_fields.get("precipitation_mm"),
+                "snowfall_cm": snap_fields.get("snowfall_cm"),
+                "precip_period_h": precip_period_h,
+                "cape_jkg": snap_fields.get("cape_jkg"),
+                "cloud_cover_pct": snap_fields.get("cloud_cover_pct"),
+                "cloud_cover_low_pct": snap_fields.get("cloud_cover_low_pct"),
+                "nwp_ceiling_ft": snap_fields.get("nwp_ceiling_ft"),
+                "cloud_base_ft": snap_fields.get("cloud_base_ft"),
+                "lcl_ft": lcl_ft,
+            }
 
-                snap = {
-                    "icao": airport.icao,
-                    "model": "ecmwf",
-                    "model_init_time": init_time,
-                    "forecast_hour": target_dt,
-                    "temperature_2m_c": snap_fields.get("temperature_2m_c"),
-                    "dewpoint_2m_c": snap_fields.get("dewpoint_2m_c"),
-                    "visibility_m": snap_fields.get("visibility_m"),
-                    "wind_speed_10m_kt": snap_fields.get("wind_speed_10m_kt"),
-                    "wind_direction_10m_deg": snap_fields.get("wind_direction_10m_deg"),
-                    "wind_gusts_10m_kt": snap_fields.get("wind_gusts_10m_kt"),
-                    "precipitation_mm": snap_fields.get("precipitation_mm"),
-                    "snowfall_cm": snap_fields.get("snowfall_cm"),
-                    "precip_period_h": precip_period_h,
-                    "cape_jkg": snap_fields.get("cape_jkg"),
-                    "cloud_cover_pct": snap_fields.get("cloud_cover_pct"),
-                    "cloud_cover_low_pct": snap_fields.get("cloud_cover_low_pct"),
-                    "nwp_ceiling_ft": snap_fields.get("nwp_ceiling_ft"),
-                    "cloud_base_ft": snap_fields.get("cloud_base_ft"),
-                    "lcl_ft": lcl_ft,
-                }
-
-                # Sounding analysis on a2 pressure levels for sounding-derived columns
-                if pl_data is not None and i < len(pl_data) and pl_data[i]:
-                    try:
-                        levels = build_pressure_levels_from_grib(pl_data[i])
-                    except Exception:
-                        logger.warning(
-                            "ECMWF pressure-level build failed for %s step %dh",
-                            airport.icao, step_h, exc_info=True,
+            # Sounding analysis on a2 pressure levels for sounding-derived columns
+            if pl_data is not None and i < len(pl_data) and pl_data[i]:
+                try:
+                    levels = build_pressure_levels_from_grib(pl_data[i])
+                except Exception:
+                    logger.warning(
+                        "ECMWF pressure-level build failed for %s step %dh",
+                        airport.icao, step_h, exc_info=True,
+                    )
+                    levels = []
+                if levels:
+                    hourly = HourlyForecast(
+                        time=target_dt,
+                        temperature_2m_c=snap_fields.get("temperature_2m_c"),
+                        dewpoint_2m_c=snap_fields.get("dewpoint_2m_c"),
+                        surface_pressure_hpa=snap_fields.get("surface_pressure_hpa"),
+                        wind_speed_10m_kt=snap_fields.get("wind_speed_10m_kt"),
+                        wind_direction_10m_deg=snap_fields.get("wind_direction_10m_deg"),
+                        cape_jkg=snap_fields.get("cape_jkg"),
+                        cloud_cover_pct=snap_fields.get("cloud_cover_pct"),
+                        cloud_cover_low_pct=snap_fields.get("cloud_cover_low_pct"),
+                        pressure_levels=levels,
+                    )
+                    if pooled:
+                        from weatherbrief.analysis.sounding.snapshot_fields import (
+                            build_sounding_payload,
                         )
-                        levels = []
-                    if levels:
-                        hourly = HourlyForecast(
-                            time=target_dt,
-                            temperature_2m_c=snap_fields.get("temperature_2m_c"),
-                            dewpoint_2m_c=snap_fields.get("dewpoint_2m_c"),
-                            surface_pressure_hpa=snap_fields.get("surface_pressure_hpa"),
-                            wind_speed_10m_kt=snap_fields.get("wind_speed_10m_kt"),
-                            wind_direction_10m_deg=snap_fields.get("wind_direction_10m_deg"),
-                            cape_jkg=snap_fields.get("cape_jkg"),
-                            cloud_cover_pct=snap_fields.get("cloud_cover_pct"),
-                            cloud_cover_low_pct=snap_fields.get("cloud_cover_low_pct"),
-                            pressure_levels=levels,
+
+                        step_pending.append(
+                            (len(snapshots), build_sounding_payload(hourly, "ecmwf"))
                         )
-                        if pooled:
-                            from weatherbrief.analysis.sounding.snapshot_fields import (
-                                build_sounding_payload,
-                            )
+                    else:
+                        _enrich_with_sounding(snap, hourly, "ecmwf", edr_acc=edr_acc)
 
-                            step_pending.append(
-                                (len(snapshots), build_sounding_payload(hourly, "ecmwf"))
-                            )
-                        else:
-                            _enrich_with_sounding(snap, hourly, "ecmwf", edr_acc=edr_acc)
+            snapshots.append(snap)
 
-                snapshots.append(snap)
+        # Merge per step (not per run) so pending payloads stay bounded
+        # at ~len(airports) and results land before the next decode.
+        # Same explicit priority as this function's own a1/a2 decodes.
+        _analyze_soundings_pooled(step_pending, snapshots, priority=priority)
 
-            # Merge per step (not per run) so pending payloads stay bounded
-            # at ~len(airports) and results land before the next decode.
-            # Same explicit priority as this function's own a1/a2 decodes.
-            _analyze_soundings_pooled(step_pending, snapshots, priority=priority)
-
-            analysis_s += time.monotonic() - t_step
-            steps_processed += 1
+        analysis_s += time.monotonic() - t_step
+        steps_processed += 1
 
     logger.info(
         "ECMWF GRIB leg: %d steps, %d snapshots, decode %.0fs "
