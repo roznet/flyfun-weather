@@ -412,6 +412,31 @@ class HourlyForecast(BaseModel):
                 return lvl
         return None
 
+    def attach_nwp_diagnostics(self, diag: "NWPCloudDiagnostics") -> None:
+        """Attach NWP cloud diagnostics and mirror the fields that shadow them.
+
+        ``freezing_level_ft`` on the diagnostics and ``freezing_level_m`` on
+        this hour are two views of the same quantity, and sounding analysis
+        reads the *hourly* one to populate ``indices.nwp_freezing_level_ft``.
+        Setting the diagnostics without mirroring leaves that index blank.
+
+        Both the GRIB-native application path and the spatial-fill path go
+        through here so the mirror cannot be applied on one and forgotten on
+        the other — it previously was (#485 follow-up): spatial interpolation
+        assigned the diagnostics directly, so an interior route point filled
+        from its neighbours got a freezing level in the diagnostics but not in
+        the field the sounding actually reads.
+
+        Open-Meteo's ``cloud_cover_*_pct`` fields are deliberately NOT
+        overwritten — they carry hourly-interpolated coverage that is more
+        temporally accurate than forward-filled GRIB values on non-native
+        hours. The freezing level is different: the model-native value
+        (e.g. ECMWF ``deg0l``) is preferred over Open-Meteo's.
+        """
+        self.nwp_cloud_diagnostics = diag
+        if diag.freezing_level_ft is not None:
+            self.freezing_level_m = diag.freezing_level_ft / 3.28084
+
 
 class WaypointForecast(BaseModel):
     """Complete forecast for one waypoint from one model."""

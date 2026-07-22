@@ -177,8 +177,12 @@ def interpolate_diagnostics_spatially(
                 else:
                     frac = (distances[pt_idx] - distances[left_idx]) / gap_nm
 
-                target_h.nwp_cloud_diagnostics = _lerp_diagnostics(
-                    left_diag, right_diag, frac,
+                # attach_nwp_diagnostics, not a bare assignment: the freezing
+                # level is mirrored onto target_h.freezing_level_m, which is
+                # the field sounding analysis actually reads for
+                # indices.nwp_freezing_level_ft (#485 follow-up).
+                target_h.attach_nwp_diagnostics(
+                    _lerp_diagnostics(left_diag, right_diag, frac)
                 )
                 total_filled += 1
 
