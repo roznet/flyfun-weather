@@ -186,7 +186,8 @@ def test_cap_evicts_oldest_init_first(tmp_path):
 
     # Cap at ~9 KiB with floor 1 forces eviction of the single oldest run.
     removed = purge_old_runs(
-        tmp_path, model="icon-d2", cap_bytes=9 * 1024, floor_runs=1, now=now,
+        tmp_path, model="icon-d2", cap_bytes=9 * 1024, floor_runs=1,
+        now=now, enforce_cap=True,
     )
 
     assert removed == 1
@@ -208,7 +209,8 @@ def test_cap_never_breaches_floor(tmp_path):
 
     # Cap far below total, floor 2 → only the single oldest may go.
     removed = purge_old_runs(
-        tmp_path, model="icon-d2", cap_bytes=1, floor_runs=2, now=now,
+        tmp_path, model="icon-d2", cap_bytes=1, floor_runs=2,
+        now=now, enforce_cap=True,
     )
 
     assert removed == 1
@@ -227,12 +229,88 @@ def test_cap_logs_each_eviction(tmp_path, caplog):
 
     with caplog.at_level("INFO"):
         purge_old_runs(
-            tmp_path, model="icon-d2", cap_bytes=9 * 1024, floor_runs=1, now=now,
+            tmp_path, model="icon-d2", cap_bytes=9 * 1024, floor_runs=1,
+            now=now, enforce_cap=True,
         )
 
     cap_logs = [r for r in caplog.records if "cache cap: evicted" in r.getMessage()]
     assert len(cap_logs) == 1
     assert "icon-d2" in cap_logs[0].getMessage()
+
+
+def test_cap_not_enforced_without_flag(tmp_path):
+    """The recursive cap walk is skipped unless enforce_cap=True.
+
+    Keeps the expensive size scan off the per-briefing hot path (issue #475):
+    three over-cap runs, all within TTL, survive a default purge_old_runs call.
+    """
+    now = datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+    runs = []
+    for hours_old in (5, 3, 1):
+        init = now - timedelta(hours=hours_old)
+        runs.append(_make_run(
+            tmp_path, "icon-d2", init.strftime("%Y%m%d"), init.hour,
+            n_files=4, size=1024,
+        ))
+
+    # Tiny cap that WOULD evict if enforced — but enforce_cap defaults False.
+    removed = purge_old_runs(
+        tmp_path, model="icon-d2", cap_bytes=1, floor_runs=1, now=now,
+    )
+
+    assert removed == 0
+    assert all(r.exists() for r in runs)
+
+
+def test_purge_survives_dir_vanishing_midwalk(tmp_path, monkeypatch):
+    """A run dir removed by a concurrent purge mid-cap-walk must not raise.
+
+    Simulates the race the review flagged (issue #475): _dir_size_bytes is
+    called while another purge has already rmtree'd the dir. purge_old_runs must
+    degrade to a skip, not propagate FileNotFoundError up into enrichment.
+    """
+    from weatherbrief.fetch.grib import cache as cache_mod
+
+    now = datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+    victim = None
+    for hours_old in (5, 3, 1):
+        init = now - timedelta(hours=hours_old)
+        d = _make_run(
+            tmp_path, "icon-d2", init.strftime("%Y%m%d"), init.hour,
+            n_files=4, size=1024,
+        )
+        if hours_old == 5:
+            victim = d
+
+    real_size = cache_mod._dir_size_bytes
+
+    def racing_size(path):
+        # First real call: yank the dir out from under the walk, as a
+        # concurrent purge would, then measure (now-vanished) path.
+        if path == victim and victim.exists():
+            import shutil as _sh
+            _sh.rmtree(victim)
+        return real_size(path)
+
+    monkeypatch.setattr(cache_mod, "_dir_size_bytes", racing_size)
+
+    # Must not raise; the vanished dir just contributes 0.
+    removed = purge_old_runs(
+        tmp_path, model="icon-d2", cap_bytes=1, floor_runs=1,
+        now=now, enforce_cap=True,
+    )
+    assert isinstance(removed, int)
+
+
+def test_helpers_survive_nonexistent_paths(tmp_path):
+    """_dir_size_bytes and _run_age_seconds don't raise on a vanished dir."""
+    from weatherbrief.fetch.grib.cache import _dir_size_bytes, _run_age_seconds
+
+    ghost = tmp_path / ".cache" / "grib" / "icon-d2" / "gone_00z"
+    assert _dir_size_bytes(ghost) == 0
+    # Unparseable name + missing dir → mtime fallback can't stat → +inf, no raise.
+    unparseable = tmp_path / "not-a-run-dir"
+    assert _run_age_seconds(unparseable, now_ts=0.0) == float("inf")
 
 
 def test_cap_default_applies_to_icon_d2(monkeypatch):

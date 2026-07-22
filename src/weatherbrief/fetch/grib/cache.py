@@ -233,22 +233,43 @@ def init_dt_from_run_dir(run_dir: Path) -> datetime | None:
 
 
 def _run_age_seconds(run_dir: Path, now_ts: float) -> float:
-    """Age of ``run_dir`` in seconds, by init time (mtime fallback)."""
+    """Age of ``run_dir`` in seconds, by init time (mtime fallback).
+
+    Best-effort under concurrent purges: ``purge_old_runs`` runs from several
+    uncoordinated contexts (per-briefing enrichment, the warm loop, the daily
+    retention pass), so a dir can vanish between ``iterdir`` and here. Parseable
+    names never touch the filesystem; for the mtime fallback, a vanished dir is
+    treated as infinitely old — it sorts/purges as the oldest, and the eviction
+    ``rmtree`` is ``ignore_errors`` so acting on an already-gone dir is a no-op.
+    Degrade-to-skip matches the surrounding ``_prepare_icon_eu`` error handling
+    rather than letting a race blow up the whole enrichment call.
+    """
     init_dt = init_dt_from_run_dir(run_dir)
     if init_dt is not None:
         return now_ts - init_dt.timestamp()
-    return now_ts - run_dir.stat().st_mtime
+    try:
+        return now_ts - run_dir.stat().st_mtime
+    except OSError:
+        return float("inf")
 
 
 def _dir_size_bytes(path: Path) -> int:
-    """Total size of all files under ``path`` (best-effort; skips vanished)."""
+    """Total size of all files under ``path`` (best-effort; skips vanished).
+
+    Tolerant of a concurrent purge removing files/dirs mid-walk: each ``stat``
+    is guarded, and the ``rglob`` scandir itself is wrapped so a run dir that
+    disappears under us contributes what was counted so far rather than raising.
+    """
     total = 0
-    for p in path.rglob("*"):
-        try:
-            if p.is_file():
-                total += p.stat().st_size
-        except OSError:
-            continue
+    try:
+        for p in path.rglob("*"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return total
     return total
 
 
@@ -300,14 +321,23 @@ def purge_old_runs(
     cap_bytes: int | None = None,
     floor_runs: int = DEFAULT_CACHE_FLOOR_RUNS,
     now: datetime | None = None,
+    enforce_cap: bool = False,
 ) -> int:
-    """Purge cache directories for ``model`` — by TTL, then by size cap.
+    """Purge cache directories for ``model`` — by TTL, and optionally by cap.
 
-    1. **TTL** — drop any run dir older than the model's TTL, aged by the init
-       time encoded in the dir name (mtime fallback for unparseable names).
-    2. **Size cap** — if a cap applies (``cap_bytes`` or the model default via
-       :func:`cache_cap_bytes`), evict the oldest-init runs until the model
-       total fits, never below ``floor_runs``.
+    1. **TTL (always)** — drop any run dir older than the model's TTL, aged by
+       the init time in the dir name (mtime fallback for unparseable names).
+       Cheap: a hot-path caller pays one ``scandir`` + an ``is_dir`` stat per
+       run dir, with no recursive walk.
+    2. **Size cap (only when ``enforce_cap``)** — evict the oldest-init runs
+       until the model total fits its cap (``cap_bytes`` or the model default
+       via :func:`cache_cap_bytes`), never below ``floor_runs``. The cap check
+       needs a recursive size walk (``rglob`` + ``stat`` over every cached
+       file), far too expensive to run on every user-facing briefing — so it is
+       a slow-moving backstop invoked only from the scheduled contexts (the
+       precache/warm loop after each warm, and the daily retention pass). The
+       per-briefing ``_prepare_icon_eu``/GFS enrichment path leaves it off; the
+       TTL rule (plus init-time aging) already bounds those to ~2 runs.
 
     Returns the total number of directories removed.
     """
@@ -327,11 +357,12 @@ def purge_old_runs(
             removed += 1
             logger.debug("Purged old cache: %s", run_dir)
 
-    if cap_bytes is None:
-        cap_bytes = cache_cap_bytes(model)
-    if cap_bytes is not None:
-        removed += _enforce_size_cap(
-            cache_root, model, cap_bytes, floor_runs, now_ts,
-        )
+    if enforce_cap:
+        if cap_bytes is None:
+            cap_bytes = cache_cap_bytes(model)
+        if cap_bytes is not None:
+            removed += _enforce_size_cap(
+                cache_root, model, cap_bytes, floor_runs, now_ts,
+            )
 
     return removed
