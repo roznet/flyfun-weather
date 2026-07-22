@@ -452,6 +452,24 @@ def _analyze_sounding_heavy(
         pressure_levels=levels,
     )
 
+    # Ceiling-limited fetch (#469/#474) detection. The cut drops wind/cloud
+    # (u/v/w/clc) above a ceiling-derived level while keeping the thermodynamic
+    # column (t/qv/p) full, so a NO-WIND region sits ABOVE the wind column. Only
+    # then is the column truncated; a sporadic mid-column wind gap is not (max
+    # no-wind altitude would not exceed the wind top). Record the top of the
+    # fetched wind/cloud column so consumers keep the truncated strip out of
+    # DD-vs-NWP comparisons and label the charts, never reading it as calm/clear.
+    wind_alts = [
+        dl.altitude_ft for dl in derived_levels
+        if dl.wind_speed_kt is not None and dl.altitude_ft is not None
+    ]
+    nowind_alts = [
+        dl.altitude_ft for dl in derived_levels
+        if dl.wind_speed_kt is None and dl.altitude_ft is not None
+    ]
+    if wind_alts and nowind_alts and max(nowind_alts) > max(wind_alts):
+        result.fetched_column_top_ft = float(max(wind_alts))
+
     # SFIP icing index (full → NWP-gated, proxy → DD-gated)
     sfip_zones = assess_sfip_zones(
         derived_levels,

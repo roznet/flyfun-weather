@@ -259,6 +259,7 @@ export function snapshotToVizData(
     cruiseAltitudeFt: ceilingFt,
     ceilingAltitudeFt: ceilingFt,
     flightCeilingFt: ceilingFt + 5000,
+    fetchedColumnTopFt: null,
     totalDistanceNm: Math.max(1, (meta.hours.length - 1) * HOURS_TO_NM_SCALE),
     waypointMarkers: [],
     departureTime: meta.start_hour,

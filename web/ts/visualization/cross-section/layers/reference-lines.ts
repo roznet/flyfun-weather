@@ -62,5 +62,16 @@ export const cruiseAltitudeLayer: CrossSectionLayer = {
       drawRefLine(ctx, transform, data.ceilingAltitudeFt, ceilingLabel,
         theme.reference.ceilingColor, 1.5, [4, 4], -4);
     }
+
+    // Fetched-column top — a ceiling-limited fetch (#469/#474) truncated this
+    // model's wind/cloud column, so mark where its data ends. Above the line the
+    // cross-section is blank for THIS model by design (data not fetched), not
+    // because the air is calm/clear. Only drawn when it falls within the plot.
+    const dataTop = data.fetchedColumnTopFt;
+    if (dataTop != null && dataTop < data.flightCeilingFt) {
+      const label = t('viz.refDataTop', { alt: Math.round(dataTop).toLocaleString() });
+      drawRefLine(ctx, transform, dataTop, label,
+        theme.reference.ceilingColor, 1, [2, 3], 14);
+    }
   },
 };

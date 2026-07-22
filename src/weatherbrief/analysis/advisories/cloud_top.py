@@ -116,12 +116,17 @@ class CloudTopEvaluator:
                 if max_top is None or highest_top > max_top:
                     max_top = highest_top
 
-                if highest_top + margin_ft > ceiling:
+                # A deck whose top was truncated by a ceiling-limited fetch
+                # (#469/#474) blocks regardless of its capped top_ft: the real
+                # top may extend above the ceiling, so "on top" is not
+                # established — never let a truncated top read as toppable.
+                blocking = [
+                    cl for cl in reachable
+                    if cl.top_ft + margin_ft > ceiling or cl.top_truncated
+                ]
+                if blocking:
                     # The blocking deck: the reachable layers whose tops violate
-                    # the ceiling margin.
-                    blocking = [
-                        cl for cl in reachable if cl.top_ft + margin_ft > ceiling
-                    ]
+                    # the ceiling margin (or whose top is truncated/unknown).
                     samples.append(EvidenceSample(
                         distance_nm=dist, assessed=True,
                         severity=HighlightSeverity.AMBER,

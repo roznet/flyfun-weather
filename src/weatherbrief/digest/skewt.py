@@ -241,14 +241,25 @@ def generate_skewt(
         if has_dewpoint else None
     )
 
-    has_wind = all(
+    # Wind barbs per level, NaN where absent (mirrors prepare.py). A
+    # ceiling-limited fetch (#469/#474) leaves upper levels with temperature but
+    # no wind; an all-or-nothing gate would drop barbs for the whole column,
+    # including the flyable levels that do have wind. NaN levels simply render no
+    # barb (matplotlib skips them), so the fetched column stays barbed.
+    has_any_wind = any(
         pl.wind_speed_kt is not None and pl.wind_direction_deg is not None
         for pl in levels
     )
     u_wind = v_wind = None
-    if has_wind:
-        speed = np.array([pl.wind_speed_kt for pl in levels]) * units.knot
-        direction = np.array([pl.wind_direction_deg for pl in levels]) * units.degree
+    if has_any_wind:
+        speed = np.array([
+            pl.wind_speed_kt if pl.wind_speed_kt is not None else np.nan
+            for pl in levels
+        ]) * units.knot
+        direction = np.array([
+            pl.wind_direction_deg if pl.wind_direction_deg is not None else np.nan
+            for pl in levels
+        ]) * units.degree
         u_wind, v_wind = mpcalc.wind_components(speed, direction)
 
     # --- Figure layout ---
@@ -404,19 +415,22 @@ def generate_hodograph(
 
     levels.sort(key=lambda pl: pl.pressure_hpa, reverse=True)
 
-    has_wind = all(
-        pl.wind_speed_kt is not None and pl.wind_direction_deg is not None
-        for pl in levels
-    )
-    if not has_wind:
+    # Per-level wind: a ceiling-limited fetch (#469/#474) truncates wind above
+    # the cut, so build the hodograph from the levels that DO carry wind (the
+    # flyable column) instead of failing the whole plot all-or-nothing.
+    wind_levels = [
+        pl for pl in levels
+        if pl.wind_speed_kt is not None and pl.wind_direction_deg is not None
+    ]
+    if len(wind_levels) < 3:
         raise ValueError("Wind data required for hodograph")
 
-    speed = np.array([pl.wind_speed_kt for pl in levels]) * units.knot
-    direction = np.array([pl.wind_direction_deg for pl in levels]) * units.degree
+    speed = np.array([pl.wind_speed_kt for pl in wind_levels]) * units.knot
+    direction = np.array([pl.wind_direction_deg for pl in wind_levels]) * units.degree
     u_wind, v_wind = mpcalc.wind_components(speed, direction)
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 6))
-    _draw_hodograph_on_axes(ax, levels, u_wind, v_wind)
+    _draw_hodograph_on_axes(ax, wind_levels, u_wind, v_wind)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches="tight",

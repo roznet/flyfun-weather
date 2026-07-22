@@ -260,7 +260,14 @@ def _compute_bulk_shear(
         du = u[top_idx] - u[bot_idx]
         dv = v[top_idx] - v[bot_idx]
         shear = np.sqrt(du**2 + dv**2)
-        return round(float(shear.to("knot").magnitude), 1)
+        shear_kt = float(shear.to("knot").magnitude)
+        # A ceiling-limited fetch (#469/#474) NaN-fills wind above the cut. When
+        # the top level of the shear layer is truncated (e.g. 0-6 km with a cut
+        # near the ceiling), du/dv are NaN -> NaN shear. Report None (shear
+        # genuinely unavailable there), never a NaN that would poison JSON.
+        if np.isnan(shear_kt):
+            return None
+        return round(shear_kt, 1)
     except Exception:
         return None
 

@@ -233,12 +233,15 @@ class TestPrepareCeiling:
 class TestCeilingLimitGate:
     """The env gate itself (#469 phase 2 held back pending consumer fixes)."""
 
-    def test_disabled_by_default(self, monkeypatch):
+    def test_enabled_by_default(self, monkeypatch):
+        # #474 re-landed the cut with the consumer fixes → default ON.
         monkeypatch.delenv("WB_ICON_CEILING_LIMIT_ENABLED", raising=False)
-        assert icon_ceiling_limit_enabled() is False
+        assert icon_ceiling_limit_enabled() is True
 
     @pytest.mark.parametrize("raw,expected", [
         ("true", True), ("1", True), ("yes", True), ("TRUE", True),
+        # An explicitly empty / unrecognised value disables (only the default,
+        # i.e. an UNSET var, is now ON — see test_enabled_by_default).
         ("false", False), ("0", False), ("", False), ("garbage", False),
     ])
     def test_env_override(self, monkeypatch, raw, expected):

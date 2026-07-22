@@ -355,11 +355,19 @@ final class CrossSectionViewModel {
     ) -> VizRouteData {
         var points: [VizPoint] = []
         var waypointMarkers: [WaypointMarker] = []
+        // Ceiling-limited fetch (#469/#474): track the lowest fetched wind/cloud
+        // top across route points for the rendered model, so the cross-section
+        // labels the truncated strip instead of leaving it unexplained.
+        var fetchedColumnTopFt: Double? = nil
 
         for rpa in manifest.analyses {
             let sounding = rpa.sounding[model]
             let wind = rpa.windComponents[model]
             points.append(extractPoint(rpa: rpa, sounding: sounding, wind: wind, model: model))
+
+            if let colTop = sounding?.fetchedColumnTopFt {
+                fetchedColumnTopFt = min(fetchedColumnTopFt ?? colTop, colTop)
+            }
 
             if let icao = rpa.waypointIcao {
                 waypointMarkers.append(WaypointMarker(
@@ -381,6 +389,7 @@ final class CrossSectionViewModel {
             cruiseAltitudeFt: Double(manifest.cruiseAltitudeFt),
             ceilingAltitudeFt: actualCeiling,
             flightCeilingFt: max(actualCeiling, Double(manifest.cruiseAltitudeFt)) + 5000,
+            fetchedColumnTopFt: fetchedColumnTopFt,
             totalDistanceNm: manifest.totalDistanceNm,
             waypointMarkers: waypointMarkers,
             departureTime: manifest.departureTime,

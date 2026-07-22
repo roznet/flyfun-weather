@@ -32,11 +32,18 @@ from weatherbrief.models import (
 def _cloud_overlap_fraction(
     a: list[EnhancedCloudLayer],
     b: list[EnhancedCloudLayer],
+    max_alt_ft: float | None = None,
 ) -> float:
     """Jaccard-like overlap on altitude intervals.
 
     Returns 1.0 when both lists are empty (mutually agreeing on no cloud).
     Returns ratio of intersection / union of altitude coverage otherwise.
+
+    ``max_alt_ft`` clips both tracks to below that altitude before measuring.
+    Used when a ceiling-limited fetch (#469/#474) truncated the NWP column: the
+    DD track is full-column (built from t/qv), so a high DD deck above the cut
+    the NWP track never saw would read as spurious disagreement. Clipping both
+    to the fetched top confines the comparison to where both tracks have data.
     """
     if not a and not b:
         return 1.0
@@ -52,9 +59,14 @@ def _cloud_overlap_fraction(
         below assume disjoint spans, so we merge before measuring — otherwise
         the pairwise intersection double-counts and the fraction can exceed 1.
         """
-        spans = sorted(
-            (cl.base_ft, cl.top_ft) for cl in layers if cl.top_ft > cl.base_ft
-        )
+        spans: list[tuple[float, float]] = []
+        for cl in layers:
+            base, top = cl.base_ft, cl.top_ft
+            if max_alt_ft is not None:
+                top = min(top, max_alt_ft)
+            if top > base:
+                spans.append((base, top))
+        spans.sort()
         merged: list[list[float]] = []
         for base, top in spans:
             if merged and base <= merged[-1][1]:
@@ -200,7 +212,12 @@ class DDvsNWPAgreementEvaluator:
                     nwp_clouds == [] and sounding.nwp_cloud_diagnostics is not None
                 )
                 if has_native_nwp:
-                    overlap = _cloud_overlap_fraction(dd_clouds, nwp_native)
+                    # A ceiling-limited fetch truncates the NWP column but not
+                    # the DD column — confine the overlap to where both saw data.
+                    overlap = _cloud_overlap_fraction(
+                        dd_clouds, nwp_native,
+                        max_alt_ft=sounding.fetched_column_top_ft,
+                    )
                     if overlap < cloud_overlap_min:
                         disagreements.append("clouds")
 

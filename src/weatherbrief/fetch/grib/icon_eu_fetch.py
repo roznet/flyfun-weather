@@ -380,10 +380,9 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
 
 
-# Ceiling-limited fetch (#469 phase 2) — GATED OFF BY DEFAULT, see
-# :func:`icon_ceiling_limit_enabled` below for why. The machinery stays in the
-# tree (and fully unit-tested) so re-landing it is a default flip plus the
-# consumer fixes.
+# Ceiling-limited fetch (#469 phase 2) — DEFAULT ON since #474 re-landed it with
+# the consumer fixes (see :func:`icon_ceiling_limit_enabled` below). Disable with
+# ``WB_ICON_CEILING_LIMIT_ENABLED=false``.
 #
 # The sounding splits into two classes:
 #
@@ -422,34 +421,30 @@ ICON_D2_CEILING_LEVEL_CUTS: tuple[tuple[int, int], ...] = (
 def icon_ceiling_limit_enabled() -> bool:
     """True when the ceiling-limited sounding fetch (#469 phase 2) may apply.
 
-    DEFAULT FALSE. The cut is safe for the *fetch*, but the consumers of the
-    sounding are not yet safe for a truncated column, and every failure mode
-    below reads as REASSURING rather than unavailable:
+    DEFAULT TRUE since #474 re-landed it (approach A: fix the consumers, keep
+    the asymmetric cut). The cut keeps t/qv/p full column for CAPE and drops
+    u/v/w/qc/qi/clc above a ceiling-derived level, so upper levels carry
+    temperature but no wind/cloud. The consumers now report that truncated strip
+    honestly instead of as REASSURING:
 
-    - The cut is asymmetric by necessity (t/qv/p stay full column for CAPE),
-      so pressure levels above the cut exist with temperature but NO wind.
-      ``analysis/sounding/prepare.py`` gates wind all-or-nothing
-      (``has_wind = all(...)``), so ONE missing level drops wind for the whole
-      profile → no Richardson number → ``cat_risk_layers == []`` → the
-      turbulence advisory grades GREEN "smooth" instead of UNAVAILABLE (its
-      guard keys on the vertical-motion assessment, which omega keeps alive).
-      That is the #391/#393 "absence reads as clear" failure exactly.
-    - Truncating ``clc`` caps NWP cloud decks at the cut: a deck ABOVE it
-      disappears and reads as "model clear" to the cloud-top advisory, the
-      DD/NWP agreement check and the digest.
-    - The cross-section deliberately renders to ceiling + 5,000 ft and the
-      Skew-T to 250 hPa, so both would show an unexplained blank top strip
-      for ICON only, while ECMWF/GFS still draw it.
+    - ``analysis/sounding/prepare.py`` gates wind PER LEVEL (NaN fill, mirroring
+      omega), so the flyable column below the cut keeps real wind → Richardson /
+      CAT still grade at cruise and turbulence no longer reads a false GREEN
+      "smooth" (the #391/#393 failure). Bulk shear whose top is truncated
+      reports None rather than a NaN.
+    - ``analysis/sounding/clouds.py`` flags a deck ``top_truncated`` when the cut
+      bounds its top, ``SoundingAnalysis.fetched_column_top_ft`` records the
+      fetched top, and the cloud-top / DD-vs-NWP consumers treat the strip above
+      it as unknown (never toppable, never "model clear").
+    - The cross-section and Skew-T label the fetched top so the ICON-only blank
+      strip above the cut reads as "not modeled above FLxxx", not as absent.
 
-    Re-landing needs those consumers to report a truncated column honestly
-    (per-level wind gate, an "above the fetched cut" sentinel distinct from
-    "clear", clipped/labelled charts) — or a uniform cut for ALL variables,
-    which removes the mixed-column problem but then has to solve CAPE.
-
-    Override with ``WB_ICON_CEILING_LIMIT_ENABLED=true`` for measurement.
+    Set ``WB_ICON_CEILING_LIMIT_ENABLED=false`` to disable the cut (e.g. to
+    re-measure the marginal saving now that phase-3 flight warming runs at a
+    near-100 % hit rate — see #474).
     """
     return os.environ.get(
-        "WB_ICON_CEILING_LIMIT_ENABLED", "false",
+        "WB_ICON_CEILING_LIMIT_ENABLED", "true",
     ).strip().lower() in ("1", "true", "yes")
 
 

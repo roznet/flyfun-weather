@@ -7,6 +7,12 @@ struct VizRouteData {
     let cruiseAltitudeFt: Double
     let ceilingAltitudeFt: Double
     let flightCeilingFt: Double  // Y-axis max = max(ceiling, cruise) + 5000
+    /// Top of the fetched wind/cloud column (ft) for the rendered model when a
+    /// ceiling-limited fetch (#469/#474) truncated it (ICON-D2). Above it the
+    /// cross-section has no wind / NWP-cloud data for this model, so a labelled
+    /// line marks it as "not modeled" rather than an unexplained blank strip.
+    /// nil = full column fetched.
+    var fetchedColumnTopFt: Double? = nil
     let totalDistanceNm: Double
     let waypointMarkers: [WaypointMarker]
     let departureTime: String

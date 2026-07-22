@@ -315,6 +315,9 @@ export interface EnhancedCloudLayer {
   mean_dewpoint_depression_c: number | null;
   mean_cloud_cover_pct: number | null;
   source: string;
+  /** True when a ceiling-limited fetch (#469/#474) bounded this deck's top:
+   * the real top may extend higher, so it must not read as toppable. */
+  top_truncated?: boolean;
 }
 
 export interface IcingZone {
@@ -439,6 +442,12 @@ export interface SoundingAnalysis {
   temperature_2m_c?: number | null;
   dewpoint_2m_c?: number | null;
   nwp_cloud_diagnostics: NWPCloudDiagnostics | null;
+  // Top of the fetched wind/cloud column (ft) when a ceiling-limited fetch
+  // (#469/#474) truncated the model levels (ICON-D2). Above this altitude
+  // wind and NWP cloud are UNAVAILABLE — not calm/clear — so the cross-section
+  // labels it rather than leaving an unexplained blank strip. Absent/null when
+  // the full column was fetched.
+  fetched_column_top_ft?: number | null;
 }
 
 export interface VerticalRegime {

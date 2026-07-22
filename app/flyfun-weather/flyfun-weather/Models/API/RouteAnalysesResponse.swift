@@ -44,6 +44,10 @@ struct SoundingAnalysis: Codable, Sendable {
     let cloudCoverMidPct: Double?
     let cloudCoverHighPct: Double?
     let nwpCloudDiagnostics: NWPCloudDiagnostics?
+    /// Top of the fetched wind/cloud column (ft) when a ceiling-limited fetch
+    /// (#469/#474) truncated this model's levels (ICON-D2). Above it wind and
+    /// NWP cloud are unavailable — not calm/clear. nil = full column fetched.
+    let fetchedColumnTopFt: Double?
 }
 
 struct ThermodynamicIndices: Codable, Sendable {
@@ -75,6 +79,9 @@ struct EnhancedCloudLayer: Codable, Sendable {
     /// `mean_cloud_cover_pct` — model cloud fraction for NWP layers (band
     /// cover% for GRIB, mean CAF for nwp_3d); nil for DD layers.
     let meanCloudCoverPct: Double?
+    /// True when a ceiling-limited fetch (#469/#474) bounded this deck's top;
+    /// the real top may extend higher, so it must not read as toppable.
+    let topTruncated: Bool?
 }
 
 struct IcingZone: Codable, Sendable {

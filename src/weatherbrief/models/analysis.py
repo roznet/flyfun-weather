@@ -623,6 +623,12 @@ class EnhancedCloudLayer(BaseModel):
     #   "grib"        — GRIB2 model diagnostics with explicit base/top
     #   "synthesized" — Open-Meteo cloud %, narrowed by DD envelope + inversions
     source: str = "dd"
+    # True when this deck's top is bounded by a ceiling-limited fetch cut
+    # (#469/#474) rather than by the model's own cloud scheme: the layer above
+    # the top carried no cloud fraction because it was NOT fetched, so the real
+    # deck may extend higher. Distinguishes "top is here" from "top is at least
+    # here, data truncated" — a truncated top must never read as toppable.
+    top_truncated: bool = False
 
 
 class InversionLayer(BaseModel):
@@ -865,6 +871,15 @@ class SoundingAnalysis(BaseModel):
     # cloud_layers / icing_zones when loading old JSON that lacks them.
     dd_cloud_layers: list[EnhancedCloudLayer] = Field(default_factory=list)
     icing_ogimet_dd_zones: list[IcingZone] = Field(default_factory=list)
+
+    # Top of the fetched wind/cloud column (ft) when a ceiling-limited fetch
+    # (#469/#474) truncated the model levels: above this altitude u/v/w/clc were
+    # not fetched, so wind and NWP-cloud data are UNAVAILABLE there — never
+    # calm/clear. None means the full column was fetched (no truncation). The
+    # thermodynamic column (t/qv/p -> CAPE, DD clouds, freezing level) is always
+    # full and unaffected. Consumers use this to keep the truncated strip out of
+    # DD-vs-NWP comparisons and to label the charts honestly.
+    fetched_column_top_ft: Optional[float] = None
 
     @model_validator(mode="after")
     def _sync_dd_sources(self) -> "SoundingAnalysis":

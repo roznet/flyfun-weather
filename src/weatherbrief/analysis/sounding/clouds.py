@@ -445,6 +445,20 @@ def build_nwp_cloud_layers_from_fraction(
         else:
             cats.append(_nwp_pct_to_coverage(lv.cloud_area_fraction_pct))
 
+    # Ceiling-limited fetch (#469/#474): the cut drops clc together with wind
+    # (u/v) above a ceiling-derived level while keeping the thermodynamic column
+    # (t/qv/p) full. A level that carries temperature but neither cloud fraction
+    # NOR wind is therefore ABOVE the fetched cut — cloud there is unknown, not
+    # sub-FEW/clear. This fingerprint lets a deck whose top is bounded by the cut
+    # flag ``top_truncated`` (its real top may be higher), so it can't publish a
+    # deck top that reads as toppable.
+    truncated_level = [
+        lv.temperature_c is not None
+        and lv.cloud_area_fraction_pct is None
+        and lv.wind_speed_kt is None
+        for lv in levels
+    ]
+
     layers: list[EnhancedCloudLayer] = []
     n = len(levels)
     i = 0
@@ -487,6 +501,12 @@ def build_nwp_cloud_layers_from_fraction(
         mean_caf = sum(caf_vals) / len(caf_vals)
         mean_t = round(sum(t_vals) / len(t_vals), 1) if t_vals else None
 
+        # The deck's top is bounded by the fetched cut (not the model's own
+        # cloud scheme) when the level just above the run was truncated: its
+        # real top may extend higher, so mark it so consumers treat the top as
+        # "at least here, data truncated" rather than a firm, toppable top.
+        top_truncated = j + 1 < n and truncated_level[j + 1]
+
         layers.append(EnhancedCloudLayer(
             base_ft=round(base_ft),
             top_ft=round(top_ft),
@@ -498,6 +518,7 @@ def build_nwp_cloud_layers_from_fraction(
             mean_dewpoint_depression_c=None,
             mean_cloud_cover_pct=round(mean_caf, 1),
             source="nwp_3d",
+            top_truncated=top_truncated,
         ))
         i = j + 1
 

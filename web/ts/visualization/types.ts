@@ -130,6 +130,14 @@ export interface VizRouteData {
   ceilingAltitudeFt: number;
   /** Y-axis maximum = max(ceiling, cruise) + 5000. */
   flightCeilingFt: number;
+  /**
+   * Top of the fetched wind/cloud column (ft) for the rendered model when a
+   * ceiling-limited fetch (#469/#474) truncated it (ICON-D2). Above this the
+   * cross-section has no wind / NWP-cloud data for this model, so a labelled
+   * reference line marks it as "not modeled" instead of leaving a blank strip.
+   * `null` when the full column was fetched (all other models, high ceilings).
+   */
+  fetchedColumnTopFt: number | null;
   totalDistanceNm: number;
   waypointMarkers: WaypointMarker[];
   departureTime: string;

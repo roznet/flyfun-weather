@@ -22,14 +22,25 @@ struct ReferenceLinesLayer: CrossSectionLayerProtocol {
                         label: "Ceiling \(Int(data.ceilingAltitudeFt))'",
                         color: ColorScales.ceilingColor)
         }
+
+        // Fetched-column top — a ceiling-limited fetch (#469/#474) truncated this
+        // model's wind/cloud column, so mark where its data ends. Above the line
+        // the section is blank for THIS model by design (data not fetched), not
+        // because the air is calm/clear.
+        if let dataTop = data.fetchedColumnTopFt, dataTop < data.flightCeilingFt {
+            let dataTopY = transform.altitudeToY(dataTop)
+            drawRefLine(&context, y: dataTopY, left: plot.left, right: plot.right,
+                        label: "Not modeled above \(Int(dataTop))'",
+                        color: ColorScales.ceilingColor, dash: [2, 3])
+        }
     }
 
     private func drawRefLine(_ context: inout GraphicsContext, y: CGFloat, left: CGFloat, right: CGFloat,
-                             label: String, color: Color) {
+                             label: String, color: Color, dash: [CGFloat] = [8, 4]) {
         var path = Path()
         path.move(to: CGPoint(x: left, y: y))
         path.addLine(to: CGPoint(x: right, y: y))
-        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: [8, 4]))
+        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: dash))
 
         // Label with background pill
         let text = context.resolve(Text(label).font(.caption2).foregroundColor(color))

@@ -66,11 +66,22 @@ export function extractVizData(
     });
   }
 
+  // Ceiling-limited fetch (#469/#474): the rendered model's wind/cloud column
+  // may be truncated above a ceiling-derived level. Track the lowest fetched
+  // top across route points (the most conservative "data ends here") so the
+  // cross-section can label the blank strip instead of leaving it unexplained.
+  let fetchedColumnTopFt: number | null = null;
+
   for (const rpa of manifest.analyses) {
     const sounding = rpa.sounding[model] ?? null;
     const wind = windOverlayByIndex.get(rpa.point_index) ?? rpa.wind_components[model] ?? null;
     const terrainFt = interpolateTerrainElevation(terrainProfile, rpa.distance_from_origin_nm);
     const sun = sunByDistance.get(Math.round(rpa.distance_from_origin_nm * 10)) ?? null;
+
+    const colTop = sounding?.fetched_column_top_ft ?? null;
+    if (colTop != null) {
+      fetchedColumnTopFt = fetchedColumnTopFt == null ? colTop : Math.min(fetchedColumnTopFt, colTop);
+    }
 
     points.push(extractPoint(rpa, sounding, wind, model, terrainFt, sun, manifest.cruise_altitude_ft));
 
@@ -92,6 +103,7 @@ export function extractVizData(
     cruiseAltitudeFt: effectiveCruise,
     ceilingAltitudeFt: actualCeiling,
     flightCeilingFt: Math.max(actualCeiling, effectiveCruise) + 5000,
+    fetchedColumnTopFt,
     totalDistanceNm: manifest.total_distance_nm,
     waypointMarkers,
     departureTime: manifest.departure_time,
