@@ -381,17 +381,38 @@ class TestForwardFillPressureLevels:
 
 
 class TestGfsWindowLength:
-    """GFS averaging-window cadence: f001/4/7 → 1h, f002/5/8 → 2h, rest → 3h."""
+    """GFS averaging windows reset at each multiple of 6 and grow to the next.
+
+    Expected values below are transcribed from a live NCEP index
+    (``gfs.20260722/00/atmos/gfs.t00z.pgrb2.0p25.fNNN.idx``,
+    ``LCDC:low cloud layer``), not derived from the implementation (#480).
+    """
 
     @pytest.mark.parametrize("fhour,expected", [
-        (1, 1), (4, 1), (7, 1), (118, 1),
-        (2, 2), (5, 2), (8, 2), (119, 2),
-        (3, 3), (6, 3), (9, 3), (120, 3),
-        (123, 3), (126, 3), (132, 3), (168, 3), (384, 3),
+        # First 6-hour cycle: 0-1, 0-2, … 0-6.
+        (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6),
+        # Second cycle restarts at 6: 6-7, 6-8, 6-9, … 6-12.
+        (7, 1), (8, 2), (9, 3), (12, 6),
+        # Hourly region, end of range.
+        (118, 4), (119, 5), (120, 6),
+        # 3-hourly region past f120 — widths alternate 3 / 6.
+        (123, 3), (126, 6), (129, 3), (132, 6),
+        (168, 6), (384, 6),
         (0, 0),  # analysis — no window
     ])
     def test_window_length(self, fhour, expected):
         assert _gfs_window_length_hours(fhour) == expected
+
+    @pytest.mark.parametrize("fhour", list(range(1, 200)))
+    def test_window_never_exceeds_six_hours(self, fhour):
+        """The window always starts at a multiple of 6, so it can never be
+        wider than 6 h nor narrower than 1 h."""
+        assert 1 <= _gfs_window_length_hours(fhour) <= 6
+
+    @pytest.mark.parametrize("fhour", [6, 12, 60, 120, 126, 132])
+    def test_window_start_is_a_multiple_of_six(self, fhour):
+        start = fhour - _gfs_window_length_hours(fhour)
+        assert start % 6 == 0
 
 
 def _make_cs_with_hourly_model(
@@ -417,16 +438,23 @@ class TestGfsMidpointInterp:
     """pt11-style regression: midpoint anchoring collapses the phantom layer.
 
     init = 2026-05-12 00z, target hour = 134 → step f132 anchor at 12z
-    (window 09-12z, midpoint 10:30z) reading 100% mid, step f135 at 15z
-    (window 12-15z, midpoint 13:30z) reading 0%. Forward-fill would smear
-    100% across 13z/14z; midpoint interp collapses to 0% at 14z (past the
-    f135 midpoint).
+    (window 126-132, i.e. 06-12z, midpoint 09:00z) reading 100% mid, step
+    f135 at 15z (window 132-135, i.e. 12-15z, midpoint 13:30z) reading 0%.
+    Forward-fill would smear 100% across 13z/14z; midpoint interp collapses
+    to 0% at 14z (past the f135 midpoint).
+
+    Note the two windows are NOT the same width. NCEP resets the averaging
+    window at each multiple of 6 and lets it grow, so f132 spans 6 h while
+    f135 spans 3 h — verified against a live index (#480). The original
+    version of this test assumed a uniform 3 h window and therefore put the
+    f132 midpoint at 10:30z.
     """
 
     def _build_pt11_section(self) -> tuple[datetime, RouteCrossSection]:
         gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
         # 12z (f132, 100%), 13z gap, 14z gap, 15z (f135, 0%), 16z gap, 17z gap,
-        # 18z (f138, 0%). Step span = 3 h, window midpoints at 10:30 and 13:30.
+        # 18z (f138, 0%). Step span = 3 h; window midpoints at 09:00 (f132,
+        # window 126-132) and 13:30 (f135, window 132-135).
         diag_high = NWPCloudDiagnostics(
             mid=NWPCloudLayerDiag(cover_pct=100.0, base_ft=18000, top_ft=22200),
         )
@@ -459,12 +487,12 @@ class TestGfsMidpointInterp:
         assert hourly[3].nwp_cloud_diagnostics.mid.cover_pct == 0.0
 
     def test_intermediate_hour_interpolates_between_midpoints(self):
-        """13z sits between midpoints 10:30 (100%) and 13:30 (0%) →
-        frac = 2.5/3 = 0.833 → 16.7%. Above drop threshold → layer kept."""
+        """13z sits between midpoints 09:00 (100%) and 13:30 (0%) →
+        frac = 4.0/4.5 = 0.889 → 11.1%. Above drop threshold → layer kept."""
         gfs_init, cs = self._build_pt11_section()
         propagate_all([cs], [], gfs_init=gfs_init)
         mid_13z = cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics.mid
-        assert mid_13z.cover_pct == pytest.approx(100 - 100 * 2.5 / 3.0, abs=0.1)
+        assert mid_13z.cover_pct == pytest.approx(100 - 100 * 4.0 / 4.5, abs=0.1)
         # Geometry held over from higher-cover (prev) endpoint.
         assert mid_13z.base_ft == 18000
         assert mid_13z.top_ft == 22200

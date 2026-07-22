@@ -629,6 +629,40 @@ def decode_grib_per_point(
         tmp_path.unlink(missing_ok=True)
 
 
+def _close_cyclic_longitude(data_array, lon_dim):
+    """Append a wrapped column at ``first + 360`` when the grid spans the globe.
+
+    GFS route targets are normalised with ``lon % 360``, but a global 0.25°
+    grid's last coordinate is 359.75 — so a longitude just west of Greenwich
+    (−0.25° … 0°) maps to 359.75 … 360.0 and lands PAST the end of the axis.
+    ``xarray.interp`` neither extrapolates nor knows the axis is cyclic, so it
+    returned NaN for a band that every UK↔continent route crosses (issue #484).
+
+    Closing the seam with a duplicate of the first column at ``first + 360``
+    makes that last cell interpolate like any other. Regional grids (ICON-EU,
+    ICON-D2, an ECMWF area subset) are not cyclic and are returned untouched.
+    """
+    import numpy as np
+    import xarray as xr
+
+    lons = data_array[lon_dim].values
+    if lons.ndim != 1 or lons.size < 2:
+        return data_array
+
+    step = float(lons[1] - lons[0])
+    if step <= 0:
+        return data_array  # descending or degenerate — not our case
+
+    # Cyclic iff one more step past the last coordinate closes the circle.
+    span = float(lons[-1] - lons[0]) + step
+    if not np.isclose(span, 360.0, atol=step / 2.0):
+        return data_array
+
+    seam = data_array.isel({lon_dim: 0})
+    seam = seam.assign_coords({lon_dim: float(lons[0]) + 360.0})
+    return xr.concat([data_array, seam], dim=lon_dim)
+
+
 def _interpolate_per_point(
     data_array,
     latitudes: list[float],
@@ -650,6 +684,8 @@ def _interpolate_per_point(
 
         if lat_dim is None or lon_dim is None:
             return [None] * n
+
+        data_array = _close_cyclic_longitude(data_array, lon_dim)
 
         lat_arr = xr.DataArray(latitudes, dims="points")
         lon_arr = xr.DataArray(longitudes, dims="points")

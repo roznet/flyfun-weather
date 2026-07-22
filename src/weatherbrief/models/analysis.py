@@ -172,6 +172,51 @@ class NWPCloudDiagnostics(BaseModel):
     freezing_level_ft: Optional[float] = None
 
 
+# --- Interpolation inventory for NWPCloudDiagnostics (issue #485) -----------
+#
+# These diagnostics are interpolated on two independent axes — spatially
+# between route points (analysis/spatial_interpolation.py) and temporally
+# across GFS gap hours (fetch/grib/fill.py). The two implementations had
+# drifted apart, each silently dropping fields the other carried. Both now
+# derive their field list from here, so a field added to the model above
+# cannot be handled on only one axis.
+#
+# The classification below is the one thing the two axes genuinely disagree
+# about: on the GFS time axis, values NCEP publishes as a time-AVERAGE over
+# the step's window must be aligned on the window midpoint rather than the
+# step time, while instantaneous values align on the step time. The spatial
+# axis has no such distinction and interpolates every scalar the same way.
+
+NWP_CLOUD_DIAG_LAYER_FIELDS: tuple[str, ...] = ("low", "mid", "high")
+"""Sub-model layer fields — interpolated by their own helper, not as scalars.
+
+GFS publishes low/mid/high cover as time-averages, so on the time axis these
+are midpoint-aligned along with ``NWP_CLOUD_DIAG_AVERAGED_SCALARS``.
+"""
+
+NWP_CLOUD_DIAG_AVERAGED_SCALARS: tuple[str, ...] = ("boundary_cover_pct",)
+"""Scalars GFS publishes ONLY as a time-average over the step's window."""
+
+NWP_CLOUD_DIAG_INSTANT_SCALARS: tuple[str, ...] = tuple(
+    name
+    for name in NWPCloudDiagnostics.model_fields
+    if name not in NWP_CLOUD_DIAG_LAYER_FIELDS
+    and name not in NWP_CLOUD_DIAG_AVERAGED_SCALARS
+)
+"""Every remaining scalar, treated as instantaneous.
+
+Derived rather than hand-listed so a newly added field is interpolated by
+default. If a future field is actually a time-average, add it to
+``NWP_CLOUD_DIAG_AVERAGED_SCALARS`` — the failure mode of forgetting is a
+modest time-alignment error, not a silently dropped field.
+"""
+
+NWP_CLOUD_DIAG_SCALARS: tuple[str, ...] = (
+    NWP_CLOUD_DIAG_AVERAGED_SCALARS + NWP_CLOUD_DIAG_INSTANT_SCALARS
+)
+"""All non-layer scalars. Both interpolation axes must cover all of these."""
+
+
 class NWPExplicitConvectiveDiagnostics(BaseModel):
     """Explicit-convection storm diagnostics from a convection-permitting model.
 
