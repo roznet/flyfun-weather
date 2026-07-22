@@ -100,6 +100,25 @@ class TestGreenwichSeam:
         closed = _close_cyclic_longitude(da, "longitude")
         assert closed.longitude.size == da.longitude.size
 
+    def test_wrap_is_skipped_when_no_target_is_in_the_seam_band(self):
+        """The concat copies the whole field (~8 MB global 0.25°) and runs per
+        variable inside memory-constrained decode workers, so routes that never
+        cross Greenwich must not pay for it."""
+        da = _global_grid()
+        no_seam = [lon % 360 for lon in (2.0, 5.0, -1.0, -0.5)]
+        assert (
+            _close_cyclic_longitude(da, "longitude", no_seam).longitude.size
+            == da.longitude.size
+        )
+
+    def test_wrap_still_happens_when_one_target_is_in_the_seam_band(self):
+        da = _global_grid()
+        mixed = [lon % 360 for lon in (2.0, -0.1)]
+        assert (
+            _close_cyclic_longitude(da, "longitude", mixed).longitude.size
+            == da.longitude.size + 1
+        )
+
     def test_regional_grid_still_interpolates_normally(self):
         da = _regional_grid()
         (value,) = _interpolate_per_point(da, [51.0], [5.0])
@@ -592,6 +611,63 @@ class TestFreezingLevelMirror:
         assert out.total_totals == pytest.approx(45.0)
         assert out.ml_cape_jkg == pytest.approx(1000.0)
         assert out.ml_cin_jkg == pytest.approx(-150.0)
+
+    def test_layer_interpolators_carry_every_layer_field(self):
+        """The top-level inventory treats low/mid/high as opaque, so a field
+        added to NWPCloudLayerDiag would be dropped by BOTH layer
+        interpolators with nothing to catch it — the #485 shape one level
+        down. Currently correct; this keeps it that way."""
+        from weatherbrief.analysis.spatial_interpolation import _lerp_layer
+        from weatherbrief.fetch.grib.fill import _interp_layer
+        from weatherbrief.models import NWPCloudLayerDiag
+
+        # Cover must stay above the 5% drop threshold or the layer is
+        # legitimately zeroed out.
+        a = NWPCloudLayerDiag(**{
+            name: 40.0 for name in NWPCloudLayerDiag.model_fields
+        })
+        b = NWPCloudLayerDiag(**{
+            name: 80.0 for name in NWPCloudLayerDiag.model_fields
+        })
+
+        for fn, label in ((_lerp_layer, "spatial"), (_interp_layer, "time")):
+            out = fn(a, b, 0.5)
+            for name in NWPCloudLayerDiag.model_fields:
+                assert getattr(out, name) is not None, (
+                    f"{label} layer interpolator dropped {name}"
+                )
+
+    def test_pressure_level_interp_carries_every_field(self):
+        """Same guard for PressureLevelData: _interp_levels_at rebuilds the
+        object field-by-field, so a new field would silently vanish on every
+        gap hour. Currently complete."""
+        from weatherbrief.fetch.grib.fill import _interp_levels_at
+        from weatherbrief.models import PressureLevelData
+
+        def _lvl(scale):
+            return PressureLevelData(
+                pressure_hpa=850,
+                temperature_c=10.0 * scale,
+                relative_humidity_pct=50.0 * scale,
+                dewpoint_c=5.0 * scale,
+                wind_speed_kt=20.0 * scale,
+                wind_direction_deg=180.0 * scale,
+                geopotential_height_m=1500.0 * scale,
+                vertical_velocity_pa_s=0.1 * scale,
+                cloud_liquid_water_kg_kg=0.0001 * scale,
+                ice_mixing_ratio_kg_kg=0.0002 * scale,
+                cloud_area_fraction_pct=60.0 * scale,
+                clw_interpolated=True,
+            )
+
+        prev, nxt = _lvl(1.0), _lvl(1.5)
+        out = _interp_levels_at([prev], {850: nxt}, 0.5)
+        assert len(out) == 1
+        for name in PressureLevelData.model_fields:
+            value = getattr(out[0], name)
+            assert value is not None, f"_interp_levels_at dropped {name}"
+            if name not in ("pressure_hpa", "clw_interpolated"):
+                assert value != 0, f"_interp_levels_at zeroed {name}"
 
     def test_averaged_scalars_use_the_midpoint_fraction(self):
         """Boundary-layer cover is published averaged-only, so it must follow
