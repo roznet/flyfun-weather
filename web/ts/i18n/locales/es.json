@@ -221,6 +221,7 @@
   "digest.generate": "Generar resumen con IA",
   "digest.failed": "Error al cargar el resumen.",
   "digest.profileMismatch": "Los avisos de abajo se han recalculado para el perfil actual, pero este resumen de IA se redactó para el perfil \"{name}\". Actualice el briefing para regenerar el resumen.",
+  "digest.altitudeMismatch": "Este resumen de IA se redactó para una altitud de crucero de {digestAlt}; el vuelo ahora está planificado a {currentAlt}. Actualice el briefing para regenerar el resumen.",
   "dwd.originalGerman": "Alemán original",
   "dwd.header": "Resumen sinóptico DWD — ",
   "gramet.noCreds": "GRAMET no disponible. Para activarlo, vincule su cuenta de Autorouter en la <a href=\"/settings.html\">Configuración de cuenta</a>.",

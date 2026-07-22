@@ -221,6 +221,7 @@
   "digest.generate": "KI-Zusammenfassung erstellen",
   "digest.failed": "Zusammenfassung konnte nicht geladen werden.",
   "digest.profileMismatch": "Die Hinweise unten wurden für das aktuelle Profil neu berechnet, doch diese KI-Zusammenfassung wurde für Profil \"{name}\" erstellt. Aktualisieren Sie das Briefing, um die Zusammenfassung neu zu erstellen.",
+  "digest.altitudeMismatch": "Diese KI-Zusammenfassung wurde für eine Reiseflughöhe von {digestAlt} erstellt; der Flug ist jetzt mit {currentAlt} geplant. Aktualisieren Sie das Briefing, um die Zusammenfassung neu zu erstellen.",
   "dwd.originalGerman": "Deutsches Original",
   "dwd.header": "DWD Synoptische Übersicht — ",
   "gramet.noCreds": "Kein GRAMET verfügbar. Um es zu aktivieren, verknüpfen Sie Ihr Autorouter-Konto in den <a href=\"/settings.html\">Kontoeinstellungen</a>.",

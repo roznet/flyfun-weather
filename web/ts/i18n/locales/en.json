@@ -260,6 +260,7 @@
   "digest.generate": "Generate AI summary",
   "digest.failed": "Failed to load digest.",
   "digest.profileMismatch": "The advisories below have been recalculated for the current profile, but this AI summary was written for profile \"{name}\". Refresh the briefing to regenerate the summary.",
+  "digest.altitudeMismatch": "This AI summary was written for a cruise altitude of {digestAlt}; the flight is now planned at {currentAlt}. Refresh the briefing to regenerate the summary.",
   "dwd.originalGerman": "Original German",
   "dwd.header": "DWD Synoptic Overview — ",
   "gramet.noCreds": "No GRAMET available. To enable, link your Autorouter account in <a href=\"/settings.html\">Account Settings</a>.",

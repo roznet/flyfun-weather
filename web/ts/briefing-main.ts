@@ -2072,7 +2072,7 @@ async function init(): Promise<void> {
       ui.renderRouteSigmets(state.snapshot);
       ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
       ui.renderRouteAlternates(state.snapshot);
-      ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
+      ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending, state.snapshot?.route?.cruise_altitude_ft ?? null);
       ui.renderDwdCharts(state.flight, state.currentPack, user.is_admin || !!state.currentPack?.metoffice_charts_public);
       ui.renderDWDOverview(state.flight, state.currentPack, user.is_admin);
       ui.renderGramet(state.flight, state.currentPack);
@@ -2123,7 +2123,7 @@ async function init(): Promise<void> {
       renderPointSections(state);
       if (state.displayMode !== prev.displayMode) {
         renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
-        ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending);
+        ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending, state.snapshot?.route?.cruise_altitude_ft ?? null);
         // Entering compact: enforce preferred-only layers for clouds/icing
         // (triggers vizSettings change → renderVisualization runs via that subscriber).
         // Runs even with empty preferredMethods — getCompactLayerOverrides falls
@@ -2585,7 +2585,7 @@ async function init(): Promise<void> {
     ui.renderRouteSigmets(s.snapshot);
     ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
     ui.renderRouteAlternates(s.snapshot);
-    ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending);
+    ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending, s.snapshot?.route?.cruise_altitude_ft ?? null);
     ui.renderDwdCharts(s.flight, s.currentPack, user.is_admin || !!s.currentPack?.metoffice_charts_public);
     ui.renderDWDOverview(s.flight, s.currentPack, user.is_admin);
     ui.renderGramet(s.flight, s.currentPack);

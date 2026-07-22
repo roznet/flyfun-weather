@@ -2203,6 +2203,7 @@ export function renderSynopsis(
   digest: WeatherDigest | null,
   displayMode: DisplayMode = 'full',
   digestPending: boolean = false,
+  packCruiseAltFt: number | null = null,
 ): void {
   const el = $('synopsis-section');
   if (!el) return;
@@ -2213,8 +2214,10 @@ export function renderSynopsis(
     return;
   }
 
+  const altWarning = buildDigestAltitudeWarning(flight, packCruiseAltFt);
+
   if (digest) {
-    const warning = buildDigestProfileWarning(digest, flight.profile_id);
+    const warning = buildDigestProfileWarning(digest, flight.profile_id) + altWarning;
     const staleClass = warning ? ' digest-stale' : '';
     el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
     renderDigestFeedbackToolbar(flight.id, pack.fetch_timestamp);
@@ -2224,7 +2227,7 @@ export function renderSynopsis(
   if (pack.has_digest) {
     el.innerHTML = `<p class="muted">${t('digest.loading')}</p>`;
     clearDigestFeedbackToolbar();
-    fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode, flight.profile_id);
+    fetchAndRenderDigestJson(flight.id, pack.fetch_timestamp, el, displayMode, flight.profile_id, altWarning);
     return;
   }
 
@@ -2273,16 +2276,34 @@ function buildDigestProfileWarning(
   return `<div class="digest-profile-warning">${t('digest.profileMismatch', { name: escapeHtml(digestProfileName) })}</div>`;
 }
 
+/**
+ * Build a warning banner if the flight's cruise altitude no longer matches the
+ * altitude the pack (and therefore its digest) was generated with. An altitude
+ * edit only invalidates advisories — the digest text is never regenerated, so
+ * without this banner it silently narrates the old altitude.
+ */
+function buildDigestAltitudeWarning(
+  flight: FlightResponse,
+  packCruiseAltFt: number | null,
+): string {
+  if (packCruiseAltFt == null || packCruiseAltFt === flight.cruise_altitude_ft) return '';
+  return `<div class="digest-profile-warning">${t('digest.altitudeMismatch', {
+    digestAlt: formatAlt(packCruiseAltFt),
+    currentAlt: formatAlt(flight.cruise_altitude_ft),
+  })}</div>`;
+}
+
 async function fetchAndRenderDigestJson(
   flightId: string, timestamp: string, el: HTMLElement, displayMode: DisplayMode,
   currentProfileId?: number | null,
+  altWarning: string = '',
 ): Promise<void> {
   try {
     const url = api.digestJsonUrl(flightId, timestamp);
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`${resp.status}`);
     const digest: WeatherDigest = await resp.json();
-    const warning = buildDigestProfileWarning(digest, currentProfileId ?? null);
+    const warning = buildDigestProfileWarning(digest, currentProfileId ?? null) + altWarning;
     const staleClass = warning ? ' digest-stale' : '';
     el.innerHTML = `${warning}<div class="${staleClass}">${renderDigestHtml(digest, displayMode)}</div>`;
     renderDigestFeedbackToolbar(flightId, timestamp);
