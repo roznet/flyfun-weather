@@ -432,6 +432,99 @@ class TestFreezingLevelMirror:
         h.attach_nwp_diagnostics(NWPCloudDiagnostics(freezing_level_ft=9000.0))
         assert h.freezing_level_m == pytest.approx(9000.0 / 3.28084)
 
+    def test_no_direct_diagnostics_assignment(self):
+        """Structural guard: nothing outside the model may assign
+        ``nwp_cloud_diagnostics`` directly, because that bypasses the
+        freezing-level mirror.
+
+        This exact omission shipped three times across this audit — the
+        spatial fill, then all three time-axis fill sites, then the RH gate.
+        A source-level rule is the only thing that makes it stop recurring;
+        reviewing for it by eye demonstrably does not.
+        """
+        import re
+        from pathlib import Path
+
+        import weatherbrief
+
+        src_root = Path(weatherbrief.__file__).parent
+        pattern = re.compile(r"\.nwp_cloud_diagnostics\s*=(?!=)")
+        offenders = []
+        for path in src_root.rglob("*.py"):
+            if path.name == "analysis.py" and path.parent.name == "models":
+                continue  # the model itself legitimately assigns the field
+            for lineno, line in enumerate(
+                path.read_text().splitlines(), start=1,
+            ):
+                if pattern.search(line):
+                    rel = path.relative_to(src_root)
+                    offenders.append(f"{rel}:{lineno}: {line.strip()}")
+
+        assert not offenders, (
+            "assign via HourlyForecast.attach_nwp_diagnostics() instead — "
+            "a direct assignment skips the freezing_level_m mirror:\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_gfs_rh_gate_preserves_non_layer_fields(self):
+        """The gate replaces only the layer bands; every other diagnostic must
+        ride through. It used to rebuild the object from a hand-written field
+        list, silently dropping the #283 convective/stability fields."""
+        from weatherbrief.fetch.grib.fill import _gate_gfs_hourly
+        from weatherbrief.models import NWPCloudLayerDiag, PressureLevelData
+
+        h = self._hour()
+        # A low layer with no supporting RH/condensate → the gate drops it.
+        h.pressure_levels = [
+            PressureLevelData(
+                pressure_hpa=850, relative_humidity_pct=5.0,
+                cloud_liquid_water_kg_kg=0.0, ice_mixing_ratio_kg_kg=0.0,
+                geopotential_height_m=1500.0,
+            ),
+        ]
+        h.attach_nwp_diagnostics(
+            NWPCloudDiagnostics(
+                low=NWPCloudLayerDiag(cover_pct=90.0, base_ft=3000, top_ft=6000),
+                ml_cape_jkg=1200.0,
+                ml_cin_jkg=-50.0,
+                k_index=28.0,
+                total_totals=48.0,
+                convective_precip_mm_h=2.5,
+                freezing_level_ft=9000.0,
+            )
+        )
+
+        dropped = _gate_gfs_hourly(h)
+        assert dropped >= 1, "expected the unsupported low layer to be gated"
+
+        diag = h.nwp_cloud_diagnostics
+        assert diag.ml_cape_jkg == pytest.approx(1200.0)
+        assert diag.ml_cin_jkg == pytest.approx(-50.0)
+        assert diag.k_index == pytest.approx(28.0)
+        assert diag.total_totals == pytest.approx(48.0)
+        assert diag.convective_precip_mm_h == pytest.approx(2.5)
+        # And the mirror still holds after the gate rewrites the object.
+        assert h.freezing_level_m == pytest.approx(9000.0 / 3.28084)
+
+    def test_time_axis_forward_fill_mirrors_the_freezing_level(self):
+        """The bot's reported case: ECMWF gap hours between a1 anchors got the
+        diagnostics forward-filled but kept Open-Meteo's freezing_level_m."""
+        from weatherbrief.fetch.grib.fill import _fill_diag_hourly
+
+        anchor = self._hour()
+        anchor.attach_nwp_diagnostics(
+            NWPCloudDiagnostics(freezing_level_ft=9000.0)
+        )
+        gap = self._hour()
+        gap.time = _INIT + timedelta(hours=1)
+        gap.freezing_level_m = 2500.0  # stale Open-Meteo value
+
+        assert _fill_diag_hourly([anchor, gap]) == 1
+        assert gap.nwp_cloud_diagnostics.freezing_level_ft == pytest.approx(9000.0)
+        assert gap.freezing_level_m == pytest.approx(9000.0 / 3.28084), (
+            "forward-fill set the diagnostics but left the stale mirror"
+        )
+
     def test_spatial_fill_mirrors_the_interpolated_freezing_level(self):
         """End to end: an interior point filled from two neighbours must end up
         with the mirror set, not just the diagnostics."""
