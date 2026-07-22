@@ -636,12 +636,15 @@ def _run_retention_once() -> None:
     except Exception:
         logger.error("ECMWF delivery purge failed", exc_info=True)
 
-    # Purge old GRIB download cache; per-model TTL in MODEL_TTL_SECONDS
+    # Purge old GRIB download cache; per-model TTL in MODEL_TTL_SECONDS plus the
+    # size cap (issue #475). This daily pass is a backstop — the same
+    # purge_old_runs runs on every briefing/warm fetch — but it also collects
+    # models with no live traffic (e.g. icon-d2 when precache is disabled).
     try:
         from weatherbrief.fetch.grib.cache import purge_old_runs
 
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
-        for model in ("gfs", "icon-eu"):
+        for model in ("gfs", "icon-eu", "icon-d2"):
             removed = purge_old_runs(data_dir, model=model)
             if removed:
                 logger.info("Purged %d old %s GRIB cache dirs", removed, model)
@@ -1399,6 +1402,7 @@ async def run_grib_precache_loop(app_state) -> None:
         precache_gfs_run,
         precache_icon_d2_flights,
         precache_icon_eu_run,
+        should_warm,
     )
     from weatherbrief.fetch.freshness.markers import get_store
 
@@ -1409,21 +1413,29 @@ async def run_grib_precache_loop(app_state) -> None:
     await asyncio.sleep(_GRIB_PRECACHE_STARTUP_DELAY_SECONDS)
 
     last_done: dict[str, str] = {}  # source_key -> "YYYYMMDD_HHz"
+    # (freshness source key, freshness model key, cache slug, precache fn).
+    # The cache slug is the wall-clock warming-window key (issue #475): "icon-eu"
+    # and "icon-d2" are gated to 03Z-21Z, "gfs" is ungated.
     targets = [
-        ("icon_eu:dwd", "icon_eu", precache_icon_eu_run),
-        ("gfs:noaa", "gfs", precache_gfs_run),
+        ("icon_eu:dwd", "icon_eu", "icon-eu", precache_icon_eu_run),
+        ("gfs:noaa", "gfs", "gfs", precache_gfs_run),
     ]
     main_cycles = set(MAIN_CYCLE_HOURS)
 
     while True:
         try:
+            now = datetime.now(timezone.utc)
             store = get_store()
-            for source_key, model, fn in targets:
+            for source_key, model, slug, fn in targets:
                 marker = store.get_sync(source_key, model)
                 if marker is None or marker.init.hour not in main_cycles:
                     continue
                 key = marker.init.strftime("%Y%m%d_%Hz")
-                if last_done.get(source_key) == key:
+                # Skip (do NOT record last_done) when this run is already warmed
+                # or the wall-clock warming window is closed — a skipped pass is
+                # never backfilled; the next in-window tick warms the freshest
+                # run then.
+                if not should_warm(slug, key, last_done.get(source_key), now):
                     continue
                 logger.info(
                     "Pre-caching %s %s for airport-profile",
@@ -1441,11 +1453,14 @@ async def run_grib_precache_loop(app_state) -> None:
             # actual upcoming flights, on EVERY fresh D2 run (all 8 cycles, not
             # just the four main ones) so a briefing lands on the freshest run's
             # warm cache. Keyed separately so a shared run hour can't collide
-            # with an EU/GFS entry in last_done.
+            # with an EU/GFS entry in last_done. Gated to the same 03Z-21Z
+            # wall-clock window (issue #475).
             d2_marker = store.get_sync("icon_d2:dwd", "icon_d2")
             if d2_marker is not None:
                 d2_key = d2_marker.init.strftime("%Y%m%d_%Hz")
-                if last_done.get("icon_d2:flights") != d2_key:
+                if should_warm(
+                    "icon-d2", d2_key, last_done.get("icon_d2:flights"), now,
+                ):
                     db_path = getattr(app_state, "db_path", "")
                     logger.info("Warming ICON-D2 cache for upcoming flights (run %s)", d2_key)
                     stats = await asyncio.to_thread(

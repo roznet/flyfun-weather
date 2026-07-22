@@ -425,3 +425,85 @@ class TestIconD2FlightWarming:
         assert stats["flights_considered"] == 2
         assert stats["flights_warmed"] == 1   # second flight still warmed
         assert stats["flights_skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Wall-clock warming window (issue #475 item 3)
+# ---------------------------------------------------------------------------
+
+
+class TestWarmingWindow:
+
+    def test_gated_models_default_03z_21z(self):
+        from weatherbrief.fetch.grib.precache import MODEL_WARMING_WINDOW_UTC
+        assert MODEL_WARMING_WINDOW_UTC["icon-d2"] == (3, 21)
+        assert MODEL_WARMING_WINDOW_UTC["icon-eu"] == (3, 21)
+
+    def test_gfs_is_ungated(self):
+        from weatherbrief.fetch.grib.precache import (
+            MODEL_WARMING_WINDOW_UTC,
+            is_within_warming_window,
+        )
+        assert "gfs" not in MODEL_WARMING_WINDOW_UTC
+        # Ungated → runs at any hour, including the dead of night.
+        for hour in (0, 2, 3, 12, 21, 23):
+            assert is_within_warming_window("gfs", _utc(2026, 7, 21, hour))
+
+    def test_d2_daytime_passes_run(self):
+        """The six daytime D2 passes (05..20) are inside the window."""
+        from weatherbrief.fetch.grib.precache import is_within_warming_window
+        for hour in (5, 8, 11, 14, 17, 20):
+            assert is_within_warming_window("icon-d2", _utc(2026, 7, 21, hour))
+
+    def test_d2_overnight_passes_skipped(self):
+        """The 23Z and 02Z D2 passes are outside the window."""
+        from weatherbrief.fetch.grib.precache import is_within_warming_window
+        assert not is_within_warming_window("icon-d2", _utc(2026, 7, 21, 23))
+        assert not is_within_warming_window("icon-d2", _utc(2026, 7, 21, 2))
+
+    def test_icon_eu_boundaries(self):
+        """ICON-EU 03Z pass runs; the 21Z pass is dropped."""
+        from weatherbrief.fetch.grib.precache import is_within_warming_window
+        assert is_within_warming_window("icon-eu", _utc(2026, 7, 21, 3))
+        assert is_within_warming_window("icon-eu", _utc(2026, 7, 21, 15))
+        assert not is_within_warming_window("icon-eu", _utc(2026, 7, 21, 21))
+
+
+class TestShouldWarm:
+
+    def test_inside_window_new_run_warms(self):
+        from weatherbrief.fetch.grib.precache import should_warm
+        assert should_warm(
+            "icon-d2", "20260721_17z", last_key=None, now=_utc(2026, 7, 21, 17),
+        )
+
+    def test_already_done_skips(self):
+        from weatherbrief.fetch.grib.precache import should_warm
+        assert not should_warm(
+            "icon-d2", "20260721_17z", last_key="20260721_17z",
+            now=_utc(2026, 7, 21, 17),
+        )
+
+    def test_outside_window_skips_and_not_backfilled(self):
+        """A skipped overnight pass is never replayed once the window opens.
+
+        23Z pass → skipped (last_done stays at the prior in-window run). When
+        03:00 arrives, the marker has advanced to the 03z run, so should_warm
+        fires for THAT run — not the skipped 23z/00z runs.
+        """
+        from weatherbrief.fetch.grib.precache import should_warm
+
+        last = "20260720_20z"  # last in-window run warmed the evening before
+        # 23:00 pass for the 21z init → skipped (outside window). Caller must
+        # NOT record it, so last_done is unchanged.
+        assert not should_warm(
+            "icon-d2", "20260720_21z", last_key=last, now=_utc(2026, 7, 20, 23),
+        )
+        # 02:00 pass for the 00z init → still skipped.
+        assert not should_warm(
+            "icon-d2", "20260721_00z", last_key=last, now=_utc(2026, 7, 21, 2),
+        )
+        # 03:00: window opens, freshest run is now the 03z init → warm it.
+        assert should_warm(
+            "icon-d2", "20260721_03z", last_key=last, now=_utc(2026, 7, 21, 3),
+        )
