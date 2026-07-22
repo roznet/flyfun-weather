@@ -968,12 +968,26 @@ def fetch_icon_eu_per_variable(
                     failures[status] = failures.get(status, 0) + 1
 
         total_failed = sum(failures.values())
-        if buf:
+        # All-or-nothing (#478). A whole-column blob is cached under a key that
+        # says nothing about how many levels are inside it, so returning a
+        # partial one would have it served as complete for the rest of the run's
+        # TTL — the exact ambiguity the per-level layout exists to close. Drop it
+        # instead and let the next call refetch the variable; correctness is
+        # worth more here than the re-download, and the warning names the
+        # shortfall so a persistently missing level is visible rather than
+        # silently baked into the cache.
+        if downloaded == len(levels):
             result[var] = bytes(buf)
             logger.info(
                 "%s f%03d %s: downloaded %d/%d levels (%.1f KB)%s",
-                variant.slug, forecast_hour, var, downloaded,
-                downloaded + total_failed, len(buf) / 1024,
+                variant.slug, forecast_hour, var, downloaded, len(levels),
+                len(buf) / 1024, _format_failure_summary(failures),
+            )
+        elif buf:
+            logger.warning(
+                "%s f%03d %s: incomplete column (%d/%d levels) — discarding, "
+                "not caching a partial blob%s",
+                variant.slug, forecast_hour, var, downloaded, len(levels),
                 _format_failure_summary(failures),
             )
         else:

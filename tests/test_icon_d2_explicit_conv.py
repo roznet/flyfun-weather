@@ -609,7 +609,7 @@ class TestD2TotalFailureFallback:
         dep = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
 
         def _fake_prepare(cross_sections, rps, departure_time, *, data_dir,
-                          flight_duration_hours=0.0, flight_ceiling_ft=None,
+                          flight_duration_hours=0.0,
                           as_of_time=None, force_variant=None):
             variant = force_variant or ICON_D2
             ctx = grib_mod._IconEuContext(
