@@ -197,22 +197,40 @@ are midpoint-aligned along with ``NWP_CLOUD_DIAG_AVERAGED_SCALARS``.
 NWP_CLOUD_DIAG_AVERAGED_SCALARS: tuple[str, ...] = ("boundary_cover_pct",)
 """Scalars GFS publishes ONLY as a time-average over the step's window."""
 
+NWP_CLOUD_DIAG_RATE_SCALARS: tuple[str, ...] = ("convective_precip_mm_h",)
+"""Scalars that are a RATE over the window ENDING at their anchor hour.
+
+De-accumulated precipitation rates (ECMWF ``cp``, ICON ``rain_con``) describe
+``(N-w, N]``, so a gap hour strictly between anchors N and N+w lies inside the
+NEXT anchor's window and must take THAT value — a covering-interval hold, not
+persistence and not a lerp. Forward-filling presents the previous window's
+rate inside the current one, which can read "dry" through a firing window.
+
+This is the same semantics ``fill.py`` already applies to the ECMWF 10fg gust
+(a window maximum); the rate field was simply never classified alongside it.
+On the SPATIAL axis the distinction does not exist — neighbouring route points
+share a valid time, so rates interpolate like anything else.
+"""
+
 NWP_CLOUD_DIAG_INSTANT_SCALARS: tuple[str, ...] = tuple(
     name
     for name in NWPCloudDiagnostics.model_fields
     if name not in NWP_CLOUD_DIAG_LAYER_FIELDS
     and name not in NWP_CLOUD_DIAG_AVERAGED_SCALARS
+    and name not in NWP_CLOUD_DIAG_RATE_SCALARS
 )
 """Every remaining scalar, treated as instantaneous.
 
 Derived rather than hand-listed so a newly added field is interpolated by
-default. If a future field is actually a time-average, add it to
-``NWP_CLOUD_DIAG_AVERAGED_SCALARS`` — the failure mode of forgetting is a
-modest time-alignment error, not a silently dropped field.
+default. If a future field is actually a time-average or a windowed rate, add
+it to the corresponding tuple above — the failure mode of forgetting is a
+time-alignment error, not a silently dropped field.
 """
 
 NWP_CLOUD_DIAG_SCALARS: tuple[str, ...] = (
-    NWP_CLOUD_DIAG_AVERAGED_SCALARS + NWP_CLOUD_DIAG_INSTANT_SCALARS
+    NWP_CLOUD_DIAG_AVERAGED_SCALARS
+    + NWP_CLOUD_DIAG_RATE_SCALARS
+    + NWP_CLOUD_DIAG_INSTANT_SCALARS
 )
 """All non-layer scalars. Both interpolation axes must cover all of these."""
 

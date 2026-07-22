@@ -150,18 +150,62 @@ def _fill_cloud_diagnostics(
 
 
 def _fill_diag_hourly(hourly_list: list[HourlyForecast]) -> int:
-    """Forward-fill: each gap hour gets a shallow copy of the preceding
-    anchor's diag, so a downstream in-place mutation (e.g. icing analysis
-    setting a flag) on one hour cannot leak across other hours that share
-    the same anchor."""
+    """Fill ``nwp_cloud_diagnostics`` on gap hours between native GRIB steps.
+
+    Geometry and cover persist from the PRECEDING anchor — ICON-EU and ECMWF
+    publish instantaneous cover, and layer geometry is categorical and slowly
+    varying, so persistence is the right semantic.
+
+    ``NWP_CLOUD_DIAG_RATE_SCALARS`` are the exception: a de-accumulated rate at
+    anchor N describes the window ``(N-w, N]``, so a gap hour between anchors N
+    and N+w falls inside the NEXT anchor's window and takes THAT value. This is
+    a covering-interval hold, matching what ``_linear_interp_ecmwf_surface``
+    already does for the 10fg gust. Forward-filling the rate instead presented
+    the previous window's value inside the current window — shifting convective
+    precip by up to 6 h at 6-hourly cadence, so a firing window could read
+    "dry" and hold a tower down via the firing gate.
+
+    Hours after the LAST anchor keep persistence for everything: there is no
+    covering window to hold over, and the last completed window is the only
+    honest estimate available.
+
+    Each filled hour gets its own copy, so a downstream in-place mutation (e.g.
+    icing analysis setting a flag) cannot leak across hours sharing an anchor.
+    """
+    from weatherbrief.models.analysis import NWP_CLOUD_DIAG_RATE_SCALARS
+
+    sorted_hours = sorted(hourly_list, key=lambda h: h.time)
+    anchors = [
+        i for i, h in enumerate(sorted_hours) if h.nwp_cloud_diagnostics is not None
+    ]
+    if not anchors:
+        return 0
+
     filled = 0
-    last_diag: NWPCloudDiagnostics | None = None
-    for h in sorted(hourly_list, key=lambda h: h.time):
-        if h.nwp_cloud_diagnostics is not None:
-            last_diag = h.nwp_cloud_diagnostics
-        elif last_diag is not None:
+
+    # Between anchors: previous anchor's state, next anchor's rates.
+    for k in range(len(anchors) - 1):
+        prev_i, next_i = anchors[k], anchors[k + 1]
+        prev_diag = sorted_hours[prev_i].nwp_cloud_diagnostics
+        next_diag = sorted_hours[next_i].nwp_cloud_diagnostics
+        rates = {
+            name: getattr(next_diag, name) for name in NWP_CLOUD_DIAG_RATE_SCALARS
+        }
+        for i in range(prev_i + 1, next_i):
+            h = sorted_hours[i]
+            if h.nwp_cloud_diagnostics is not None:
+                continue
+            h.attach_nwp_diagnostics(prev_diag.model_copy(update=rates))
+            filled += 1
+
+    # After the last anchor: persistence for every field, rates included.
+    last_diag = sorted_hours[anchors[-1]].nwp_cloud_diagnostics
+    for i in range(anchors[-1] + 1, len(sorted_hours)):
+        h = sorted_hours[i]
+        if h.nwp_cloud_diagnostics is None:
             h.attach_nwp_diagnostics(last_diag.model_copy())
             filled += 1
+
     return filled
 
 
@@ -306,6 +350,11 @@ def _interp_diag_at(
     cover). ``step_frac`` is the fraction in step-time space — used for the
     instantaneous fields (convective, total, ceiling, etc.). (#441 finding #5)
 
+    ``NWP_CLOUD_DIAG_RATE_SCALARS`` take the NEXT anchor's value outright: a
+    de-accumulated rate covers the window ending at its anchor, so the gap hour
+    sits inside the next anchor's window. Interpolating a windowed rate would
+    invent a value for an interval nothing measured.
+
     Which field goes in which bucket comes from the shared inventory in
     ``models.analysis`` rather than a hand-written list here — this function
     and its spatial-axis counterpart had drifted apart, each dropping fields
@@ -315,6 +364,7 @@ def _interp_diag_at(
     from weatherbrief.models.analysis import (
         NWP_CLOUD_DIAG_AVERAGED_SCALARS,
         NWP_CLOUD_DIAG_INSTANT_SCALARS,
+        NWP_CLOUD_DIAG_RATE_SCALARS,
     )
 
     low = _interp_layer(prev_diag.low, next_diag.low, mid_frac)
@@ -328,6 +378,9 @@ def _interp_diag_at(
     scalars.update({
         name: _lerp(getattr(prev_diag, name), getattr(next_diag, name), step_frac)
         for name in NWP_CLOUD_DIAG_INSTANT_SCALARS
+    })
+    scalars.update({
+        name: getattr(next_diag, name) for name in NWP_CLOUD_DIAG_RATE_SCALARS
     })
 
     return NWPCloudDiagnostics(

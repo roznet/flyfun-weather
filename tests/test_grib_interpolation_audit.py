@@ -31,6 +31,7 @@ from weatherbrief.models.analysis import (
     NWP_CLOUD_DIAG_AVERAGED_SCALARS,
     NWP_CLOUD_DIAG_INSTANT_SCALARS,
     NWP_CLOUD_DIAG_LAYER_FIELDS,
+    NWP_CLOUD_DIAG_RATE_SCALARS,
     NWP_CLOUD_DIAG_SCALARS,
 )
 
@@ -395,10 +396,23 @@ class TestDiagnosticsFieldInventory:
             "for interpolation"
         )
 
-    def test_averaged_and_instant_scalars_do_not_overlap(self):
-        assert not (
-            set(NWP_CLOUD_DIAG_AVERAGED_SCALARS) & set(NWP_CLOUD_DIAG_INSTANT_SCALARS)
+    def test_scalar_buckets_are_disjoint(self):
+        buckets = [
+            set(NWP_CLOUD_DIAG_AVERAGED_SCALARS),
+            set(NWP_CLOUD_DIAG_INSTANT_SCALARS),
+            set(NWP_CLOUD_DIAG_RATE_SCALARS),
+        ]
+        for i, a in enumerate(buckets):
+            for b in buckets[i + 1:]:
+                assert not (a & b), f"{a & b} classified twice"
+
+    def test_every_scalar_lands_in_exactly_one_bucket(self):
+        union = (
+            set(NWP_CLOUD_DIAG_AVERAGED_SCALARS)
+            | set(NWP_CLOUD_DIAG_INSTANT_SCALARS)
+            | set(NWP_CLOUD_DIAG_RATE_SCALARS)
         )
+        assert union == set(NWP_CLOUD_DIAG_SCALARS)
 
     def test_spatial_interpolation_carries_every_scalar(self):
         a = _filled_diag(10.0)
@@ -412,7 +426,11 @@ class TestDiagnosticsFieldInventory:
         b = _filled_diag(20.0)
         out = _interp_diag_at(a, b, mid_frac=0.5, step_frac=0.5)
         for name in NWP_CLOUD_DIAG_SCALARS:
-            assert getattr(out, name) == pytest.approx(15.0), f"{name} dropped"
+            # Windowed rates are HELD from the covering (next) anchor rather
+            # than blended — interpolating a windowed rate would invent a
+            # value for an interval nothing measured.
+            expected = 20.0 if name in NWP_CLOUD_DIAG_RATE_SCALARS else 15.0
+            assert getattr(out, name) == pytest.approx(expected), f"{name} dropped"
 
     def test_freezing_level_survives_spatial_fill(self):
         """The concrete regression: ECMWF `deg0l` was lost on spatially filled
@@ -525,6 +543,79 @@ class TestFreezingLevelMirror:
         # And the mirror still holds after the gate rewrites the object.
         assert h.freezing_level_m == pytest.approx(9000.0 / 3.28084)
 
+    def test_windowed_rate_is_held_over_its_covering_interval(self):
+        """A de-accumulated rate at anchor N covers (N-w, N], so a gap hour
+        between anchors N and N+w belongs to the NEXT anchor's window.
+        Forward-filling presented the previous window's rate inside the current
+        one — up to 6 h of misattribution feeding the convective firing gate.
+        Same semantics fill.py already applies to the ECMWF 10fg gust.
+        """
+        from weatherbrief.fetch.grib.fill import _fill_diag_hourly
+
+        # Anchors at +0h (dry window) and +3h (wet window), gaps at +1h/+2h.
+        hours = []
+        for offset in range(4):
+            h = self._hour()
+            h.time = _INIT + timedelta(hours=offset)
+            hours.append(h)
+        hours[0].attach_nwp_diagnostics(
+            NWPCloudDiagnostics(convective_precip_mm_h=0.0, total_cover_pct=10.0)
+        )
+        hours[3].attach_nwp_diagnostics(
+            NWPCloudDiagnostics(convective_precip_mm_h=4.0, total_cover_pct=90.0)
+        )
+
+        assert _fill_diag_hourly(hours) == 2
+
+        for gap in (hours[1], hours[2]):
+            diag = gap.nwp_cloud_diagnostics
+            assert diag.convective_precip_mm_h == pytest.approx(4.0), (
+                "gap hour took the previous window's rate — it lies inside the "
+                "next anchor's window"
+            )
+            # Non-rate fields still persist from the PREVIOUS anchor.
+            assert diag.total_cover_pct == pytest.approx(10.0)
+
+    def test_trailing_hours_keep_the_last_completed_window_rate(self):
+        """After the last anchor there is no covering window, so persistence is
+        the only honest option."""
+        from weatherbrief.fetch.grib.fill import _fill_diag_hourly
+
+        hours = []
+        for offset in range(3):
+            h = self._hour()
+            h.time = _INIT + timedelta(hours=offset)
+            hours.append(h)
+        hours[0].attach_nwp_diagnostics(
+            NWPCloudDiagnostics(convective_precip_mm_h=2.5, total_cover_pct=50.0)
+        )
+
+        assert _fill_diag_hourly(hours) == 2
+        for trailing in (hours[1], hours[2]):
+            assert trailing.nwp_cloud_diagnostics.convective_precip_mm_h == (
+                pytest.approx(2.5)
+            )
+
+    def test_missing_next_rate_yields_none_not_a_stale_value(self):
+        """If the covering anchor has no rate, the gap hour must report None
+        rather than inheriting the previous window's number."""
+        from weatherbrief.fetch.grib.fill import _fill_diag_hourly
+
+        hours = []
+        for offset in range(3):
+            h = self._hour()
+            h.time = _INIT + timedelta(hours=offset)
+            hours.append(h)
+        hours[0].attach_nwp_diagnostics(
+            NWPCloudDiagnostics(convective_precip_mm_h=3.0, total_cover_pct=50.0)
+        )
+        hours[2].attach_nwp_diagnostics(
+            NWPCloudDiagnostics(total_cover_pct=60.0)  # no rate this step
+        )
+
+        assert _fill_diag_hourly(hours) == 1
+        assert hours[1].nwp_cloud_diagnostics.convective_precip_mm_h is None
+
     def test_time_axis_forward_fill_mirrors_the_freezing_level(self):
         """The bot's reported case: ECMWF gap hours between a1 anchors got the
         diagnostics forward-filled but kept Open-Meteo's freezing_level_m."""
@@ -606,7 +697,8 @@ class TestFreezingLevelMirror:
             ml_cape_jkg=1500.0, ml_cin_jkg=-200.0,
         )
         out = _interp_diag_at(a, b, mid_frac=0.5, step_frac=0.5)
-        assert out.convective_precip_mm_h == pytest.approx(2.0)
+        # Held from the covering anchor, not blended (windowed rate).
+        assert out.convective_precip_mm_h == pytest.approx(3.0)
         assert out.k_index == pytest.approx(25.0)
         assert out.total_totals == pytest.approx(45.0)
         assert out.ml_cape_jkg == pytest.approx(1000.0)
@@ -679,6 +771,11 @@ class TestFreezingLevelMirror:
             assert getattr(out, name) == pytest.approx(25.0), f"{name} used step_frac"
         for name in NWP_CLOUD_DIAG_INSTANT_SCALARS:
             assert getattr(out, name) == pytest.approx(75.0), f"{name} used mid_frac"
+        # Windowed rates are held from the covering (next) anchor, not blended.
+        for name in NWP_CLOUD_DIAG_RATE_SCALARS:
+            assert getattr(out, name) == pytest.approx(100.0), (
+                f"{name} was interpolated instead of held over its window"
+            )
 
 
 # ---------------------------------------------------------------------------
