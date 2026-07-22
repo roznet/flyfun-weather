@@ -382,7 +382,14 @@ class TestIconD2FlightWarming:
         assert len(warmed) == 1
         assert warmed[0].variant is ICON_D2
 
-    def test_ceiling_passed_to_prepare(self):
+    def test_duration_passed_to_prepare(self):
+        """The warm path threads the flight's real duration through.
+
+        Duration picks the forecast-hour window, so it must reach _prepare_icon_eu
+        for the warmed cache to be byte-for-byte what the briefing later reads.
+        (The ceiling is deliberately NOT passed any more: the sounding column is
+        never subset per flight — #478 removed the ceiling-limited fetch.)
+        """
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
         from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
 
@@ -393,17 +400,14 @@ class TestIconD2FlightWarming:
             return _FakeCtx(ICON_D2), None
 
         row = _FakeRow(1)
-        row.flight_ceiling_ft = 8000
         row.flight_duration_hours = 2.0
-        # _build_route_config is mocked to return the flight itself, so the
-        # warm path reads route.flight_ceiling_ft off the row.
         warmed: list = []
         with self._patches([row], prepare, warmed):
             precache_icon_d2_flights(
                 _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
             )
-        assert captured["flight_ceiling_ft"] == 8000
         assert captured["flight_duration_hours"] == 2.0
+        assert "flight_ceiling_ft" not in captured
 
     def test_one_flight_failure_does_not_abort_others(self):
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2

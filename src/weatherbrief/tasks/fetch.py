@@ -460,7 +460,6 @@ def run_fetch(
                 cross_sections, all_forecasts, route_points,
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
-                flight_ceiling_ft=route.flight_ceiling_ft,
                 progress_callback=progress_callback,
                 # `as_of_time` pins GRIB run-selection to runs initialized before
                 # it. Set for historical flights (departure) and for in-progress

@@ -1997,7 +1997,6 @@ def enrich_forecasts(
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
-    flight_ceiling_ft: int | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
     priority: int | DecodePriority | None = None,
@@ -2018,10 +2017,6 @@ def enrich_forecasts(
         departure_time: Aware UTC datetime of flight departure.
         data_dir: Base data directory for caching.
         flight_duration_hours: Flight duration for per-hour enrichment.
-        flight_ceiling_ft: Flight ceiling (MSL ft). When set, the ICON-D2
-            sounding fetch is limited to the model levels needed to cover the
-            ceiling for the wind/cloud variables (u/v/w/qc/qi/clc), keeping
-            t/qv/p at the full column (#469 phase 2). None → full column.
         as_of_time: If set, only use model runs initialized before this time.
         priority: Decode priority for this call's GRIB jobs. ``None`` (default)
             resolves to the ``_DECODE_PRIORITY`` ContextVar set by the entry
@@ -2047,7 +2042,6 @@ def enrich_forecasts(
             timer, cross_sections, all_forecasts, route_points,
             departure_time, data_dir=data_dir,
             flight_duration_hours=flight_duration_hours,
-            flight_ceiling_ft=flight_ceiling_ft,
             progress_callback=progress_callback,
             as_of_time=as_of_time,
         )
@@ -2066,7 +2060,6 @@ def _enrich_forecasts_inner(
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
-    flight_ceiling_ft: int | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
 ) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
@@ -2099,7 +2092,6 @@ def _enrich_forecasts_inner(
             cross_sections, route_points, departure_time,
             data_dir=data_dir,
             flight_duration_hours=flight_duration_hours,
-            flight_ceiling_ft=flight_ceiling_ft,
             as_of_time=as_of_time,
         )
 
@@ -2162,7 +2154,6 @@ def _enrich_forecasts_inner(
                 eu_ctx, eu_skip = _prepare_icon_eu(
                     cross_sections, route_points, departure_time,
                     data_dir=data_dir, flight_duration_hours=flight_duration_hours,
-                    flight_ceiling_ft=flight_ceiling_ft,
                     as_of_time=as_of_time, force_variant=ICON_EU,
                 )
                 if eu_ctx is not None:
@@ -3023,7 +3014,7 @@ class _IconEuContext:
 
     __slots__ = (
         "init_date", "init_hour", "forecast_hours", "run_dir",
-        "levels", "levels_by_var", "point_lats", "point_lons",
+        "levels", "point_lats", "point_lons",
         "session", "variant",
     )
 
@@ -3032,34 +3023,19 @@ class _IconEuContext:
         run_dir: Path, levels: list[int],
         point_lats: list[float], point_lons: list[float],
         session: requests.Session, variant,
-        levels_by_var: dict[str, list[int]] | None = None,
     ):
         self.init_date = init_date
         self.init_hour = init_hour
         self.forecast_hours = forecast_hours
         self.run_dir = run_dir
+        # Every model-level variable is fetched over this full range — the
+        # sounding column is never subset per variable (#478).
         self.levels = levels
-        # Per-variable level subset for the ceiling-limited fetch (#469 phase 2).
-        # None → every variable uses the full ``levels`` list. When set, only the
-        # limited sounding variables (u/v/w/qc/qi/clc) carry a reduced list; the
-        # full-column variables (t/qv/p) are absent and fall back to ``levels``.
-        self.levels_by_var = levels_by_var
         self.point_lats = point_lats
         self.point_lons = point_lons
         self.session = session
         # IconVariant (ICON_EU / ICON_D2) chosen for this briefing's icon slot.
         self.variant = variant
-
-    def levels_for_var(self, variable: str) -> list[int]:
-        """Model levels to fetch/decode for *variable* (ceiling-limited, #469).
-
-        Falls back to the full ``levels`` list when no per-variable override is
-        set (phase 1, ICON-EU, or an unlimited fetch) or for a variable not in
-        the override map (the full-column t/qv/p).
-        """
-        if self.levels_by_var is None:
-            return self.levels
-        return self.levels_by_var.get(variable, self.levels)
 
 
 def _d2_corridor_mask_ok(
@@ -3147,7 +3123,6 @@ def _prepare_icon_eu(
     *,
     data_dir: Path,
     flight_duration_hours: float = 0.0,
-    flight_ceiling_ft: int | None = None,
     as_of_time: datetime | None = None,
     force_variant=None,
 ) -> tuple[_IconEuContext | None, str | None]:
@@ -3179,8 +3154,6 @@ def _prepare_icon_eu(
         compute_icon_eu_flight_window_hours,
         find_latest_icon_eu_run,
         icon_eu_window_out_of_range,
-        icon_ceiling_limit_enabled,
-        icon_levels_by_var,
         route_in_icon_eu_domain,
     )
 
@@ -3260,27 +3233,9 @@ def _prepare_icon_eu(
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
     levels = list(range(variant.level_min, variant.level_max + 1))
 
-    # Ceiling-limited fetch (#469 phase 2): the wind/cloud variables need
-    # nothing above the flight ceiling, so restrict them to a domain-safe level
-    # cut (t/qv/p stay full column for CAPE). None → every variable full column
-    # (ICON-EU, unknown/high ceiling). Only a per-level-cache variant can act on
-    # this — the whole-column blob has no per-level granularity to top up from.
-    #
-    # GATED OFF by default: a truncated column currently reads as reassuring
-    # downstream (turbulence GREEN instead of UNAVAILABLE, high cloud decks as
-    # "clear") — see icon_ceiling_limit_enabled() for the full reasoning and
-    # what re-landing needs. Off → None → the same full-column path ICON-EU
-    # already takes in production. Phases 1 (per-level cache + top-up) and 3
-    # (flight warming) are independent of this flag and stay active.
-    levels_by_var = (
-        icon_levels_by_var(variant, flight_ceiling_ft, levels)
-        if icon_ceiling_limit_enabled() else None
-    )
-
     return _IconEuContext(
         init_date=init_date, init_hour=init_hour,
         forecast_hours=forecast_hours, run_dir=run_dir, levels=levels,
-        levels_by_var=levels_by_var,
         point_lats=[rp.lat for rp in route_points],
         point_lons=[rp.lon for rp in route_points],
         session=session, variant=variant,
@@ -3452,7 +3407,7 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
                 ):
                     continue
                 missing = [
-                    level for level in ctx.levels_for_var(var)
+                    level for level in ctx.levels
                     if not is_cached(
                         ctx.run_dir,
                         cache_key(fhour, icon_model_level_var_label(variant, var, level)),
@@ -3559,7 +3514,7 @@ def _decode_and_merge_icon_eu(
                     str(ctx.run_dir / cache_key(
                         fhour, icon_model_level_var_label(variant, var, level),
                     ))
-                    for level in ctx.levels_for_var(var)
+                    for level in ctx.levels
                     if is_cached(ctx.run_dir, cache_key(
                         fhour, icon_model_level_var_label(variant, var, level),
                     ))
