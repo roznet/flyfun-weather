@@ -253,7 +253,7 @@ grib_init_times, grib_skip_reasons = enrich_forecasts(
 **ECMWF IFS enrichment** (`_enrich_ecmwf()`):
 1. Scan the ECPDS delivery directory for ECMWF GRIB files (local disk, no HTTP)
 2. Parse filenames to extract run metadata (model, base time, step, a1/a2 part)
-3. Pick the latest operational run; filter steps to the flight window (±3h margin)
+3. Pick the latest operational run; select steps via `_select_ecmwf_window_steps` — everything within the ±3h `ECMWF_FLIGHT_WINDOW_MARGIN`, **union the immediately bracketing steps** (latest at/before departure, earliest at/after the window end). The bracket union is what makes this cadence-independent: ECMWF is hourly to +90h, 3-hourly to +144h, then 6-hourly to +168h, and a fixed margin alone cannot retain two anchors in the 6-hourly range (#483). The margin constant stays 3h so `tasks/time_scan.py`'s coverage rule window can only under-claim relative to what was decoded, never over-claim
 4. **Pressure levels (a2 files):** Decode clwc/ciwc/cc at 25 pressure levels per point. Multi-grid files (main Europe + Nordic extension) handled via first-wins: each point uses whichever sub-grid covers it
 5. **Surface diagnostics (a1 files):** Decode ceil, cbh, lcc/mcc/hcc/tcc, `hcct` (convective cloud top), `deg0l` (freezing level). Heights in meters (9999m = no-cloud sentinel → None). Fractions 0–1 → converted to 0–100%.
 6. Merge cloud water into ECMWF cross-sections; attach `NWPCloudDiagnostics`. When `deg0l` is present, `_apply_cloud_diagnostics()` also overwrites `hourly.freezing_level_m` with the GRIB-native value so `indices.nwp_freezing_level_ft` carries the model's own freezing level rather than Open-Meteo's.

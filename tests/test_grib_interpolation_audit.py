@@ -20,6 +20,7 @@ from weatherbrief.fetch.grib import (
     _select_ecmwf_window_steps,
 )
 from weatherbrief.fetch.grib.decode import (
+    _bilinear_grid_weights,
     _close_cyclic_longitude,
     _interpolate_per_point,
 )
@@ -108,6 +109,91 @@ class TestGreenwichSeam:
         da = _regional_grid()
         (value,) = _interpolate_per_point(da, [51.0], [40.0])
         assert value is None
+
+
+def _gather(lat_arr, lon_arr, values, lat, lon):
+    """Run the vectorised numpy path end to end for one target point.
+
+    Mirrors the gather in ``_decode_pressure_vars_from_datasets``. Returns None
+    when the point is reported out of bounds.
+    """
+    gw = _bilinear_grid_weights(
+        lat_arr, lon_arr, np.array([lat]), np.array([lon]),
+    )
+    if gw is None or gw.inb_idx.size == 0:
+        return None
+    return float(
+        (
+            gw.w00 * values[gw.i0, gw.j0]
+            + gw.w01 * values[gw.i0, gw.j1]
+            + gw.w10 * values[gw.i1, gw.j0]
+            + gw.w11 * values[gw.i1, gw.j1]
+        )[0]
+    )
+
+
+class TestGreenwichSeamVectorisedPath:
+    """`decode_grib_per_point` (the live GFS CLWMR/ICMR decode, dispatched as
+    the ``decode_gfs_pressure`` job) does NOT go through
+    ``_interpolate_per_point`` — it uses the vectorised numpy gather, which had
+    the identical seam bug via ``np.interp(..., left=nan, right=nan)``. Closing
+    the seam only in the xarray path left this one broken (#484)."""
+
+    def _grid(self):
+        lons = np.arange(0.0, 360.0, 0.25)
+        lats = np.arange(60.0, 40.0, -0.25)
+        signed = ((lons + 180.0) % 360.0) - 180.0
+        return lats, lons, np.tile(signed, (len(lats), 1))
+
+    @pytest.mark.parametrize("lon", [-0.01, -0.05, -0.10, -0.20, -0.24])
+    def test_just_west_of_greenwich_interpolates(self, lon):
+        lats, lons, values = self._grid()
+        got = _gather(lats, lons, values, 51.0, lon % 360)
+        assert got is not None, f"{lon} dropped as out-of-bounds at the seam"
+        assert got == pytest.approx(lon, abs=1e-6)
+
+    @pytest.mark.parametrize("lon", [-0.25, -0.5, -2.0, 0.0, 0.1, 3.0])
+    def test_longitudes_that_already_worked_are_unchanged(self, lon):
+        lats, lons, values = self._grid()
+        assert _gather(lats, lons, values, 51.0, lon % 360) == pytest.approx(
+            lon, abs=1e-6
+        )
+
+    def test_wrapped_column_index_folds_back_into_the_array(self):
+        """The gather indexes the real data array, so the extended axis's
+        column W must wrap to 0 rather than run off the end."""
+        lats, lons, _ = self._grid()
+        gw = _bilinear_grid_weights(
+            lats, lons, np.array([51.0]), np.array([359.9]),
+        )
+        assert gw is not None and gw.inb_idx.size == 1
+        assert int(gw.j0[0]) == lons.size - 1  # last real column
+        assert int(gw.j1[0]) == 0              # wrapped to the first
+
+    def test_regional_grid_is_untouched(self):
+        lons = np.arange(-10.0, 20.0, 0.0625)
+        lats = np.arange(60.0, 40.0, -0.0625)
+        values = np.tile(lons, (len(lats), 1))
+        assert _gather(lats, lons, values, 51.0, 5.0) == pytest.approx(5.0)
+
+    def test_regional_grid_still_reports_out_of_bounds(self):
+        lons = np.arange(-10.0, 20.0, 0.0625)
+        lats = np.arange(60.0, 40.0, -0.0625)
+        values = np.tile(lons, (len(lats), 1))
+        assert _gather(lats, lons, values, 51.0, 40.0) is None
+
+    def test_both_paths_agree_at_the_seam(self):
+        """The xarray and numpy paths must not disagree about the same point."""
+        lats, lons, values = self._grid()
+        da = xr.DataArray(
+            values,
+            dims=("latitude", "longitude"),
+            coords={"latitude": lats, "longitude": lons},
+        )
+        for lon in (-0.10, -0.05, -0.20):
+            (via_xarray,) = _interpolate_per_point(da, [51.0], [lon % 360])
+            via_numpy = _gather(lats, lons, values, 51.0, lon % 360)
+            assert via_xarray == pytest.approx(via_numpy, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------

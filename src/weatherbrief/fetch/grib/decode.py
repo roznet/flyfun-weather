@@ -387,24 +387,43 @@ def _bilinear_grid_weights(
     every variable/level. Returns None for a degenerate grid (< 2 points on an
     axis); ``inb_idx`` may be empty when no target is inside the grid, which each
     caller handles per its own out-of-bounds semantics.
+
+    On a globe-spanning longitude axis the seam is closed by extending the axis
+    one step past its end and wrapping the resulting column index back to 0
+    (#484). Without this, targets between the last coordinate and 360° — i.e.
+    route points just west of Greenwich, after ``lon % 360`` — fall outside
+    ``_frac_grid_indices`` and are dropped as out-of-bounds. The xarray path
+    fixes the same seam by appending a duplicate column; this path cannot,
+    because the gather indexes the real data array directly, so it wraps the
+    index instead. Regional grids are untouched.
     """
     import numpy as np
 
     H, W = lat_arr.size, lon_arr.size
     if H < 2 or W < 2:
         return None
+
+    wrap_lon = _is_cyclic_longitude(lon_arr)
+    lon_axis = np.append(lon_arr, lon_arr[0] + 360.0) if wrap_lon else lon_arr
+
     frac_lat, lat_ok = _frac_grid_indices(lat_arr, targets_lat)
-    frac_lon, lon_ok = _frac_grid_indices(lon_arr, targets_lon)
+    frac_lon, lon_ok = _frac_grid_indices(lon_axis, targets_lon)
     in_bounds = lat_ok & lon_ok
     inb_idx = np.flatnonzero(in_bounds)
     fl = frac_lat[in_bounds]
     fln = frac_lon[in_bounds]
     i0 = np.clip(np.floor(fl).astype(np.intp), 0, H - 2)
-    j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
+    j0 = np.clip(np.floor(fln).astype(np.intp), 0, lon_axis.size - 2)
     i1 = i0 + 1
     j1 = j0 + 1
     ai = fl - i0
     aj = fln - j0
+    if wrap_lon:
+        # Interpolation weights are already computed from the extended axis;
+        # only the gather indices need folding back into the real array, where
+        # column W is column 0.
+        j0 = j0 % W
+        j1 = j1 % W
     return _GridWeights(
         i0, j0, i1, j1,
         (1.0 - ai) * (1.0 - aj), (1.0 - ai) * aj, ai * (1.0 - aj), ai * aj,
@@ -629,33 +648,45 @@ def decode_grib_per_point(
         tmp_path.unlink(missing_ok=True)
 
 
-def _close_cyclic_longitude(data_array, lon_dim):
-    """Append a wrapped column at ``first + 360`` when the grid spans the globe.
+def _is_cyclic_longitude(lon_arr) -> bool:
+    """True when a 1-D ascending longitude axis wraps the globe.
 
     GFS route targets are normalised with ``lon % 360``, but a global 0.25°
     grid's last coordinate is 359.75 — so a longitude just west of Greenwich
     (−0.25° … 0°) maps to 359.75 … 360.0 and lands PAST the end of the axis.
-    ``xarray.interp`` neither extrapolates nor knows the axis is cyclic, so it
-    returned NaN for a band that every UK↔continent route crosses (issue #484).
+    Neither interpolation path knows the axis is cyclic on its own, so both
+    returned NaN for a band that every UK↔continent route crosses (#484).
 
-    Closing the seam with a duplicate of the first column at ``first + 360``
-    makes that last cell interpolate like any other. Regional grids (ICON-EU,
-    ICON-D2, an ECMWF area subset) are not cyclic and are returned untouched.
+    Regional grids (ICON-EU, ICON-D2, an ECMWF area subset) are not cyclic and
+    must be left alone, so that they keep returning None outside their domain.
+
+    Single source of truth for the two decode paths that need it:
+    ``_close_cyclic_longitude`` (xarray) and ``_bilinear_grid_weights``
+    (vectorised numpy).
     """
     import numpy as np
+
+    if lon_arr.ndim != 1 or lon_arr.size < 2:
+        return False
+    step = float(lon_arr[1] - lon_arr[0])
+    if step <= 0:
+        return False  # descending or degenerate — not our case
+    # Cyclic iff one more step past the last coordinate closes the circle.
+    span = float(lon_arr[-1] - lon_arr[0]) + step
+    return bool(np.isclose(span, 360.0, atol=step / 2.0))
+
+
+def _close_cyclic_longitude(data_array, lon_dim):
+    """Append a wrapped column at ``first + 360`` when the grid spans the globe.
+
+    Closing the seam with a duplicate of the first column makes the last cell
+    interpolate like any other. Used by the ``xarray.interp`` path; the
+    vectorised numpy path closes the same seam in ``_bilinear_grid_weights``.
+    """
     import xarray as xr
 
     lons = data_array[lon_dim].values
-    if lons.ndim != 1 or lons.size < 2:
-        return data_array
-
-    step = float(lons[1] - lons[0])
-    if step <= 0:
-        return data_array  # descending or degenerate — not our case
-
-    # Cyclic iff one more step past the last coordinate closes the circle.
-    span = float(lons[-1] - lons[0]) + step
-    if not np.isclose(span, 360.0, atol=step / 2.0):
+    if not _is_cyclic_longitude(lons):
         return data_array
 
     seam = data_array.isel({lon_dim: 0})
