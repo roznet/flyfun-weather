@@ -637,15 +637,17 @@ def _run_retention_once() -> None:
         logger.error("ECMWF delivery purge failed", exc_info=True)
 
     # Purge old GRIB download cache; per-model TTL in MODEL_TTL_SECONDS plus the
-    # size cap (issue #475). This daily pass is a backstop — the same
-    # purge_old_runs runs on every briefing/warm fetch — but it also collects
-    # models with no live traffic (e.g. icon-d2 when precache is disabled).
+    # size cap (issue #475). This daily pass enforces the cap (enforce_cap=True)
+    # — the expensive recursive size walk belongs on a schedule, not the
+    # per-briefing enrichment path — and also collects models with no live
+    # traffic (e.g. icon-d2 when precache is disabled). The warm loop enforces
+    # the cap more frequently after each warm.
     try:
         from weatherbrief.fetch.grib.cache import purge_old_runs
 
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
         for model in ("gfs", "icon-eu", "icon-d2"):
-            removed = purge_old_runs(data_dir, model=model)
+            removed = purge_old_runs(data_dir, model=model, enforce_cap=True)
             if removed:
                 logger.info("Purged %d old %s GRIB cache dirs", removed, model)
     except Exception:
@@ -1397,6 +1399,7 @@ async def run_grib_precache_loop(app_state) -> None:
 
     Disable via ``WB_GRIB_PRECACHE_ENABLED=false`` (default in dev).
     """
+    from weatherbrief.fetch.grib.cache import purge_old_runs
     from weatherbrief.fetch.grib.precache import (
         MAIN_CYCLE_HOURS,
         precache_gfs_run,
@@ -1412,6 +1415,7 @@ async def run_grib_precache_loop(app_state) -> None:
     )
     await asyncio.sleep(_GRIB_PRECACHE_STARTUP_DELAY_SECONDS)
 
+    data_dir = Path(os.environ.get("DATA_DIR", "data"))
     last_done: dict[str, str] = {}  # source_key -> "YYYYMMDD_HHz"
     # (freshness source key, freshness model key, cache slug, precache fn).
     # The cache slug is the wall-clock warming-window key (issue #475): "icon-eu"
@@ -1446,6 +1450,13 @@ async def run_grib_precache_loop(app_state) -> None:
                     "Pre-cache %s %s done: %s",
                     source_key, key, stats,
                 )
+                # Enforce the size cap once per warm, off the per-briefing hot
+                # path (issue #475). A no-op recursive walk for uncapped models
+                # (icon-eu/gfs) but keeps the cap tracking the warming cadence
+                # for any capped model warmed here.
+                await asyncio.to_thread(
+                    purge_old_runs, data_dir, slug, enforce_cap=True,
+                )
                 last_done[source_key] = key
 
             # ICON-D2 flight warming (#469 phase 3). Distinct from the
@@ -1467,6 +1478,10 @@ async def run_grib_precache_loop(app_state) -> None:
                         precache_icon_d2_flights, d2_marker.init, db_path,
                     )
                     logger.info("ICON-D2 flight warm %s done: %s", d2_key, stats)
+                    # Enforce the D2 size cap once per warm, off the hot path.
+                    await asyncio.to_thread(
+                        purge_old_runs, data_dir, "icon-d2", enforce_cap=True,
+                    )
                     last_done["icon_d2:flights"] = d2_key
         except Exception:
             logger.error("GRIB pre-cache loop cycle failed", exc_info=True)
