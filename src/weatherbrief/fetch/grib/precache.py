@@ -315,7 +315,6 @@ def precache_icon_d2_flights(
                 [icon_section], route_points, flight.departure_time,
                 data_dir=data_dir,
                 flight_duration_hours=route.flight_duration_hours,
-                flight_ceiling_ft=route.flight_ceiling_ft,
             )
             # Only warm D2. An EU context means the route/window isn't D2-eligible
             # (or no covering D2 run) — the airport-profile precache warms EU.

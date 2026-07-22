@@ -79,18 +79,21 @@ class IconVariant:
             that need message-level ``stepRange`` selection at decode.
         per_level_cache: True → the model-level sounding is cached one file per
             (variable, level) (``f029_ICON_D2_T_L27.grib2``) rather than one
-            whole-column blob per variable (#469 phase 1). This is what makes a
-            partial-level fetch SAFE: with a whole-column key, writing a subset
-            of levels and then reporting the key as cached would silently serve
-            a truncated column to the next briefing that needs more levels. Per
-            level, ``is_cached`` answers per level, so a briefing needing deeper
-            levels fetches only the missing files (the ceiling-limited top-up,
-            phase 2). ICON-EU keeps the whole-column blob (False): its 40-level
-            column is cheap and no EU path fetches a subset. Whole-column blobs
-            written by older code (both ``{prefix}_{VAR}`` and the even-older
-            ``{prefix}_QC_QI_P``) stay valid — the read path treats them as a
-            hit for the full range (see the migration note in the prefetch/decode
-            loops), so no cache flush is needed.
+            whole-column blob per variable (#469 phase 1). This is **partial-write
+            safety**: DWD publishes one file per level either way, so the layout
+            is volume-neutral, but a whole-column key cannot distinguish a
+            complete column from a partial one — if some level downloads fail,
+            the concatenated blob is still cached under a key that reports
+            "present", and every later briefing silently reads a short column.
+            Per level, ``is_cached`` answers per level, so a failed level is
+            visibly missing: decode can require the complete set (#478) and the
+            next briefing tops up only what is absent. ICON-EU keeps the
+            whole-column blob (False): completeness is unverifiable there, which
+            is exactly why the heavier, more failure-prone D2 column does not use
+            it. Whole-column blobs written by older code (both ``{prefix}_{VAR}``
+            and the even-older ``{prefix}_QC_QI_P``) stay valid — the read path
+            treats them as a hit for the full range (see the migration note in
+            the prefetch/decode loops), so no cache flush is needed.
     """
 
     slug: str
@@ -275,9 +278,10 @@ ICON_D2 = IconVariant(
     coarse_step_h=1,
     cloud_diag_variables=ICON_D2_CLOUD_DIAG_VARIABLES,
     explicit_conv_variables=ICON_D2_EXPLICIT_CONV_VARIABLES,
-    # D2's 50-level, 2.6×-heavier column is where a ceiling-limited fetch pays
-    # off (#469), so it caches per (variable, level) to make that partial fetch
-    # safe. ICON-EU stays on the whole-column blob.
+    # D2's column is 50 levels × 9 variables per forecast hour — the most files,
+    # so the most exposed to a partial download. Cache per (variable, level) so
+    # an incomplete fetch is detectable rather than cached as complete (#478).
+    # ICON-EU's 40-level column stays on the whole-column blob.
     per_level_cache=True,
 )
 
@@ -378,118 +382,6 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     files use message-level decode instead of the cfgrib blob path.
     """
     return f"{variant.cache_prefix}_CLOUD_DIAG_V2"
-
-
-# Ceiling-limited fetch (#469 phase 2) — GATED OFF BY DEFAULT, see
-# :func:`icon_ceiling_limit_enabled` below for why. The machinery stays in the
-# tree (and fully unit-tested) so re-landing it is a default flip plus the
-# consumer fixes.
-#
-# The sounding splits into two classes:
-#
-# - FULL_COLUMN — t, qv, p are kept at the FULL model column regardless of the
-#   flight ceiling. MetPy CAPE is the buoyancy integral to the equilibrium
-#   level, which routinely sits far above the flight (the live ESMX→EKRK case
-#   had EL at FL306 with cruise at 6,000 ft, D2 echo tops at FL365). Truncating
-#   these would systematically under-compute CAPE and cap tower tops, degrading
-#   the convective track (#462/#466/#467). p is needed at every level anyway to
-#   interpolate the others. (cape_ml/cin_ml are single-level NWP fields, so the
-#   NWP CAPE is unaffected either way — it is the sounding-derived CAPE at risk.)
-# - LIMITED — u, v, w, qc, qi, clc carry nothing useful above the ceiling, so
-#   they are fetched only down to the ceiling-derived top level (~19% of a D2
-#   run's volume when cut at FL180). Limiting the full-column three as well would
-#   save ~3% more but is NOT safe, per the above.
-FULL_COLUMN_VARIABLES = ("t", "qv", "p")
-LIMITED_LEVEL_VARIABLES = ("u", "v", "w", "qc", "qi", "clc")
-
-# Domain-safe ceiling → top-level anchors for ICON-D2: (sea_level_height_ft,
-# top_level), shallow→deep. Model levels are terrain-following and ride HIGHER
-# over terrain (level 27 = 18,680 ft at sea level, 20,549 ft over the Alps), so
-# the SEA-LEVEL column is the binding case — a cut chosen from these heights
-# covers the ceiling everywhere in the D2 domain (the whole-domain minimum
-# terrain is ~sea level). Heights are DWD ICON-D2 HHL decodes (issue #469);
-# only levels with a measured anchor are used as cut points, and a ceiling
-# between anchors rounds to the deeper (lower-index) one — never truncating
-# below the ceiling. A ceiling above the deepest anchor falls through to the
-# full column (level_min), where the phase-1 top-up fetches the extra levels.
-ICON_D2_CEILING_LEVEL_CUTS: tuple[tuple[int, int], ...] = (
-    (10_354, 38),  # level 38 = 10,354 ft at sea level
-    (16_096, 30),  # level 30 = 16,096 ft
-    (18_680, 27),  # level 27 = 18,680 ft — the domain-safe cut for FL180
-)
-
-
-def icon_ceiling_limit_enabled() -> bool:
-    """True when the ceiling-limited sounding fetch (#469 phase 2) may apply.
-
-    DEFAULT FALSE. The cut is safe for the *fetch*, but the consumers of the
-    sounding are not yet safe for a truncated column, and every failure mode
-    below reads as REASSURING rather than unavailable:
-
-    - The cut is asymmetric by necessity (t/qv/p stay full column for CAPE),
-      so pressure levels above the cut exist with temperature but NO wind.
-      ``analysis/sounding/prepare.py`` gates wind all-or-nothing
-      (``has_wind = all(...)``), so ONE missing level drops wind for the whole
-      profile → no Richardson number → ``cat_risk_layers == []`` → the
-      turbulence advisory grades GREEN "smooth" instead of UNAVAILABLE (its
-      guard keys on the vertical-motion assessment, which omega keeps alive).
-      That is the #391/#393 "absence reads as clear" failure exactly.
-    - Truncating ``clc`` caps NWP cloud decks at the cut: a deck ABOVE it
-      disappears and reads as "model clear" to the cloud-top advisory, the
-      DD/NWP agreement check and the digest.
-    - The cross-section deliberately renders to ceiling + 5,000 ft and the
-      Skew-T to 250 hPa, so both would show an unexplained blank top strip
-      for ICON only, while ECMWF/GFS still draw it.
-
-    Re-landing needs those consumers to report a truncated column honestly
-    (per-level wind gate, an "above the fetched cut" sentinel distinct from
-    "clear", clipped/labelled charts) — or a uniform cut for ALL variables,
-    which removes the mixed-column problem but then has to solve CAPE.
-
-    Override with ``WB_ICON_CEILING_LIMIT_ENABLED=true`` for measurement.
-    """
-    return os.environ.get(
-        "WB_ICON_CEILING_LIMIT_ENABLED", "false",
-    ).strip().lower() in ("1", "true", "yes")
-
-
-def icon_limited_top_level(
-    variant: IconVariant, ceiling_ft: int | None,
-) -> int:
-    """Top (smallest-index) model level to fetch for the LIMITED variables.
-
-    Returns ``variant.level_min`` (the full column) when the variant does not
-    use the per-level cache, the ceiling is unknown, or the ceiling is above the
-    deepest documented anchor — every one of those cases means "don't truncate".
-    Otherwise returns the domain-safe cut from
-    :data:`ICON_D2_CEILING_LEVEL_CUTS`.
-    """
-    if not variant.per_level_cache or ceiling_ft is None:
-        return variant.level_min
-    for height_ft, level in ICON_D2_CEILING_LEVEL_CUTS:
-        if height_ft >= ceiling_ft:
-            return level
-    return variant.level_min
-
-
-def icon_levels_by_var(
-    variant: IconVariant,
-    ceiling_ft: int | None,
-    full_levels: list[int],
-) -> dict[str, list[int]] | None:
-    """Per-variable level subset for a ceiling-limited fetch, or None.
-
-    None means "no truncation" (unlimited variant, unknown/high ceiling) → every
-    variable uses ``full_levels``. Otherwise only the LIMITED variables carry a
-    reduced list (``[top..level_max]``); the FULL_COLUMN variables are absent
-    from the map, so :meth:`_IconEuContext.levels_for_var` keeps them at the
-    full column.
-    """
-    top = icon_limited_top_level(variant, ceiling_ft)
-    if top <= variant.level_min:
-        return None
-    limited = [level for level in full_levels if level >= top]
-    return {var: limited for var in LIMITED_LEVEL_VARIABLES}
 
 
 def icon_model_level_var_label(
@@ -1109,8 +1001,9 @@ def fetch_icon_eu_per_level(
     Unlike :func:`fetch_icon_eu_per_variable` (which concatenates all levels of
     a variable into ONE blob), this keeps every level separate so the caller can
     cache each ``(variable, level)`` under its own key — the per-level cache
-    layout (#469 phase 1) that makes a partial-level fetch safe. All requested
-    files download on a single pool, exactly like the per-variable path.
+    layout (#469 phase 1), which keeps a partial download *detectable* instead
+    of cached as complete. All requested files download on a single pool,
+    exactly like the per-variable path.
 
     Returns:
         ``{(variable, level): decompressed_grib2_bytes}`` for each file that
