@@ -932,3 +932,62 @@ class TestPoolSoundingsGating:
     def test_explicit_opt_in_threads_through(self):
         fetch = self._run(pool_soundings=True)
         assert fetch.call_args.kwargs["pool_soundings"] is True
+
+
+class TestGribStepSnapping:
+    """The verification grid samples daily, so offsets land 24 h apart and
+    cross ICON-EU's hourly/3-hourly boundary at +78 h. f100 is not a published
+    step — it 404'd ten times per run and left the far-day sample with no ICON
+    cloud diagnostics. Steps below are ground truth from a live DWD probe
+    (f099 -> 200, f100 -> 404, f102 -> 200)."""
+
+    @pytest.mark.parametrize("raw,expected", [
+        (4, 4), (28, 28), (52, 52), (76, 76),  # hourly region, unchanged
+        (78, 78),                              # last hourly step
+        (100, 99),                             # the reported 404
+        (101, 102),                            # rounds to nearest, not floor
+        (124, 120),                            # clamped to the 120 h horizon
+    ])
+    def test_icon_snaps_to_published_steps(self, raw, expected):
+        from weatherbrief.tasks.standalone_verification import _grib_step_snapper
+        assert _grib_step_snapper("icon")(raw) == expected
+
+    @pytest.mark.parametrize("raw", [4, 28, 52, 76, 100])
+    def test_gfs_is_identity_over_the_sampled_range(self, raw):
+        """GFS is hourly through +120 h and this grid never samples past ~100 h,
+        so its coarse region is out of reach — snapping would be wrong here."""
+        from weatherbrief.tasks.standalone_verification import _grib_step_snapper
+        assert _grib_step_snapper("gfs")(raw) == raw
+
+    def test_snapped_hour_is_fetched_and_mapped_back(self):
+        """The fetch and the lookup must agree. Snapping only the fetch would
+        stop the 404s but still drop the data, because ``grib_data`` is keyed
+        by the snapped step while the lookup recomputes the raw offset.
+        """
+        from weatherbrief.tasks.standalone_verification import _enrich_with_grib
+        from weatherbrief.tasks.airport_watchlist import WatchlistAirport
+
+        init = datetime(2026, 7, 22, 6, 0, tzinfo=timezone.utc)
+        snapshots = [{
+            "icao": "EBOS", "model": "icon",
+            "forecast_hour": init + timedelta(hours=100),
+        }]
+        airports = [WatchlistAirport(icao="EBOS", lat=51.2, lon=2.86)]
+
+        requested: list[list[int]] = []
+
+        def fake_fetch(init_date, init_hour, hours, lats, lons, session=None,
+                       priority=None):
+            requested.append(list(hours))
+            return {h: [SimpleNamespace(nwp_ceiling_ft=2500.0,
+                                        cloud_base_ft=2000.0)] for h in hours}
+
+        with patch(
+            "weatherbrief.tasks.standalone_grib.fetch_icon_cloud_diag", fake_fetch,
+        ):
+            _enrich_with_grib(snapshots, "icon", init, airports, MagicMock())
+
+        assert requested == [[99]], f"expected the snapped step, got {requested}"
+        assert snapshots[0]["nwp_ceiling_ft"] == 2500.0, (
+            "snapped hour fetched but never mapped back onto the snapshot"
+        )

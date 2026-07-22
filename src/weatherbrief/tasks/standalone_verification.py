@@ -659,6 +659,21 @@ def _enrich_with_sounding(
     snap.update(compute_snapshot_sounding_fields(hourly, model, edr_acc=edr_acc))
 
 
+def _grib_step_snapper(model: str):
+    """Return ``fhour -> published fhour`` for *model*'s GRIB output grid.
+
+    Only ICON needs one today (hourly to +78 h, 3-hourly to +120 h). Everything
+    else gets identity: GFS is hourly across the range this grid samples, and
+    ECMWF never reaches here (it takes the local-GRIB path above).
+    """
+    if model != "icon":
+        return lambda fhour: fhour
+
+    from weatherbrief.fetch.grib.icon_eu_fetch import _snap_to_icon_eu_grid
+
+    return _snap_to_icon_eu_grid
+
+
 def _enrich_with_grib(
     snapshots: list[dict],
     model: str,
@@ -691,7 +706,20 @@ def _enrich_with_grib(
 
     init_date, init_hour = datetime_to_init_parts(init_time)
 
-    # Determine which forecast hours we need (as offsets from init)
+    # Offset from init → the model's own output grid. The verification grid
+    # samples daily, so offsets land 24 h apart (4, 28, 52, 76, 100 …) with no
+    # regard for where a model thins out. ICON-EU is hourly only to +78 h and
+    # 3-hourly after, so f100 is simply not a published step: it 404'd ten
+    # times per run AND left the far-day sample with no ICON cloud diagnostics
+    # at all. Snapping to the nearest real step costs an hour of currency at
+    # four days out and returns actual data.
+    #
+    # GFS needs no equivalent here: it is hourly through +120 h and this grid
+    # never samples past ~100 h (MODEL_FORECAST_DAYS = 4), so its coarse region
+    # is out of reach. If that horizon ever grows, GFS needs the same snap via
+    # ``grib_fetch._snap_to_gfs_grid``.
+    snap_step = _grib_step_snapper(model)
+
     fhour_set: set[int] = set()
     for snap in snapshots:
         if snap["model"] != model:
@@ -699,7 +727,7 @@ def _enrich_with_grib(
         delta = snap["forecast_hour"] - init_time
         offset = int(delta.total_seconds() / 3600)
         if offset >= 0:
-            fhour_set.add(offset)
+            fhour_set.add(snap_step(offset))
 
     if not fhour_set:
         return
@@ -740,12 +768,15 @@ def _enrich_with_grib(
         logger.warning("GRIB enrichment failed for %s", model, exc_info=True)
         return
 
-    # Map GRIB data back to snapshots
+    # Map GRIB data back to snapshots. MUST apply the same snap as the fetch
+    # above — ``grib_data`` is keyed by the snapped step, so recomputing the
+    # raw offset here would miss every hour that got snapped and silently drop
+    # the data we just paid to download.
     for snap in snapshots:
         if snap["model"] != model:
             continue
         delta = snap["forecast_hour"] - init_time
-        fhour = int(delta.total_seconds() / 3600)
+        fhour = snap_step(int(delta.total_seconds() / 3600))
         airport_idx = icao_to_idx.get(snap["icao"])
 
         if fhour in grib_data and airport_idx is not None:
