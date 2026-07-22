@@ -2193,6 +2193,16 @@ def _enrich_forecasts_inner(
             as_of_time=as_of_time,
         )
 
+    if progress_callback is not None:
+        enrich_models = [
+            m.value.upper() for m in (ModelSource.GFS, ModelSource.ECMWF)
+            if any(cs.model == m for cs in cross_sections)
+        ]
+        if icon_ctx is not None:
+            enrich_models.append(icon_ctx.variant.slug.upper())
+        if enrich_models:
+            progress_callback("grib_enrichment", ", ".join(enrich_models))
+
     # Phase 1: Download/decode in parallel — GFS (download+decode),
     # ICON-EU (download-only), ECMWF GRIB (local disk decode).
     # Workers must run inside the parent's contextvars copy so timing/RSS
@@ -2235,6 +2245,8 @@ def _enrich_forecasts_inner(
     active_icon_variant = icon_ctx.variant if icon_ctx is not None else None
     with _grib_time("phase2_icon_decode"):
         if icon_ctx is not None:
+            if progress_callback is not None:
+                progress_callback("grib_enrichment", icon_ctx.variant.slug.upper())
             icon_ts, icon_skip = _decode_and_merge_icon_eu(
                 icon_ctx, cross_sections, all_forecasts, route_points,
             )
@@ -2255,6 +2267,10 @@ def _enrich_forecasts_inner(
                     as_of_time=as_of_time, force_variant=ICON_EU,
                 )
                 if eu_ctx is not None:
+                    if progress_callback is not None:
+                        progress_callback(
+                            "grib_enrichment", eu_ctx.variant.slug.upper(),
+                        )
                     _prefetch_icon_eu_data(eu_ctx)
                     icon_ts, icon_skip = _decode_and_merge_icon_eu(
                         eu_ctx, cross_sections, all_forecasts, route_points,
