@@ -68,6 +68,46 @@ def test_generate_skewt_creates_png(skewt_forecast, tmp_path):
     assert header[:4] == b"\x89PNG"
 
 
+@pytest.fixture
+def partial_wind_forecast():
+    """A partial GRIB fetch left the upper levels without u/v (#478).
+
+    Temperature and dewpoint arrived; wind did not. The Skew-T barbs and the
+    hodograph must build from the levels that DO carry wind instead of failing
+    all-or-nothing."""
+    levels = [
+        PressureLevelData(pressure_hpa=1000, temperature_c=15, dewpoint_c=10,
+                          wind_speed_kt=5, wind_direction_deg=180, geopotential_height_m=110),
+        PressureLevelData(pressure_hpa=850, temperature_c=4, dewpoint_c=0,
+                          wind_speed_kt=20, wind_direction_deg=240, geopotential_height_m=1450),
+        PressureLevelData(pressure_hpa=700, temperature_c=-5, dewpoint_c=-12,
+                          wind_speed_kt=30, wind_direction_deg=270, geopotential_height_m=3010),
+        # --- u/v missing above here; temperature/dewpoint survive ---
+        PressureLevelData(pressure_hpa=500, temperature_c=-22, dewpoint_c=-35,
+                          geopotential_height_m=5550),
+        PressureLevelData(pressure_hpa=300, temperature_c=-45, dewpoint_c=-60,
+                          geopotential_height_m=9100),
+    ]
+    return HourlyForecast(time=datetime(2026, 2, 14, 9, 0), pressure_levels=levels)
+
+
+def test_generate_skewt_partial_wind(partial_wind_forecast, tmp_path):
+    """Still renders — barbs are drawn only where wind exists."""
+    out_path = tmp_path / "partial_skewt.png"
+    result = generate_skewt(partial_wind_forecast, "EKRK", "icon", out_path)
+    assert result == out_path and out_path.exists()
+    with open(out_path, "rb") as f:
+        assert f.read(4) == b"\x89PNG"
+
+
+def test_generate_hodograph_partial_wind(partial_wind_forecast, tmp_path):
+    """Builds from the wind-carrying levels rather than raising just because
+    the top of the column lost its wind to a failed download."""
+    out_path = tmp_path / "partial_hodo.png"
+    result = generate_hodograph(partial_wind_forecast, "EKRK", "icon", out_path)
+    assert result == out_path and out_path.exists()
+
+
 def test_generate_skewt_insufficient_levels(tmp_path):
     """Raises ValueError with fewer than 3 levels."""
     levels = [

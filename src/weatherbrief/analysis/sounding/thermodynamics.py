@@ -260,7 +260,16 @@ def _compute_bulk_shear(
         du = u[top_idx] - u[bot_idx]
         dv = v[top_idx] - v[bot_idx]
         shear = np.sqrt(du**2 + dv**2)
-        return round(float(shear.to("knot").magnitude), 1)
+        shear_kt = float(shear.to("knot").magnitude)
+        # prepare_profile NaN-fills wind at levels a partial fetch missed, so an
+        # endpoint of the shear layer can be NaN -> NaN shear. Report None (the
+        # shear is genuinely unavailable), never a NaN: it would serialise as
+        # invalid JSON and read downstream as a number. Required companion to the
+        # per-level wind gate in prepare.py — that gate is what lets NaN reach
+        # here at all (#478).
+        if np.isnan(shear_kt):
+            return None
+        return round(shear_kt, 1)
     except Exception:
         return None
 

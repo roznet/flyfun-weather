@@ -230,12 +230,12 @@ def precache_icon_eu_run(init: datetime) -> dict[str, int]:
 # ICON-D2 flight warming (#469 phase 3) -----------------------------------
 #
 # Unlike the airport-profile precache above (a fixed D-0..D-3 grid for the
-# maps), this warms ONLY what we already know will be asked for: the routes,
-# window hours, and ceilings of flights actually in the DB for the next
-# WARM_HORIZON_HOURS. It reuses the flight-briefing prepare+prefetch path
-# verbatim (_prepare_icon_eu → _prefetch_icon_eu_data), so the warmed cache is
+# maps), this warms ONLY what we already know will be asked for: the routes and
+# window hours of flights actually in the DB for the next WARM_HORIZON_HOURS.
+# It reuses the flight-briefing prepare+prefetch path verbatim
+# (_prepare_icon_eu → _prefetch_icon_eu_data), so the warmed cache is
 # byte-for-byte what an on-demand briefing would fetch — same run, same
-# ceiling-limited per-level files (phases 1+2) — giving a near-100% hit rate
+# per-level files over the same full model column — giving a near-100% hit rate
 # instead of the ~20% a broad daylight precache would (the rejected option in
 # #469). Broad daylight precaching was 2–4× more DWD bandwidth than on-demand.
 

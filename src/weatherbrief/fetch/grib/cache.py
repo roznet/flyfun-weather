@@ -320,8 +320,8 @@ def _enforce_size_cap(
         # Floor won: the retained runs alone exceed the cap. Disk is NOT bounded
         # in this state, so say so loudly rather than returning a clean count
         # that reads as "cap enforced". Means the per-run size has grown (more
-        # flights, or phase 2 still gated off) and the cap or floor needs a
-        # look — the alternative, evicting below the floor, would drop the
+        # flights, or more forecast hours per flight) and the cap or floor needs
+        # a look — the alternative, evicting below the floor, would drop the
         # prior-run fallback a briefing depends on.
         logger.warning(
             "GRIB cache cap NOT met for %s: %.1f MiB over cap %.1f MiB with "
