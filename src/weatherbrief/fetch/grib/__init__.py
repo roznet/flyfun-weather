@@ -825,8 +825,15 @@ def _select_ecmwf_window_steps(
     """Pick the ECMWF forecast steps to decode for one flight window.
 
     Takes everything within ``margin`` of the window, UNION the steps
-    immediately bracketing it — the latest step at or before ``flight_start``
-    and the earliest at or after ``flight_end``.
+    immediately bracketing it — the latest step STRICTLY BEFORE
+    ``flight_start`` and the earliest at or after ``flight_end``.
+
+    The lower bracket has to be strict. With ``<=``, a departure landing
+    exactly on a forecast step selects that step as its own predecessor, so in
+    the 6-hourly range a flight at exactly +156h yielded ``[156, 162]`` and the
+    accumulated fields had nothing to difference against for the departure
+    hour. Strict ``<`` yields ``[150, 156, 162]``; the exact step is still
+    retained by the margin window, so nothing is lost.
 
     The bracket union is what makes this cadence-independent. ECMWF output is
     hourly to +90h, 3-hourly to +144h, then 6-hourly to +168h at 00/12z, so a
@@ -852,7 +859,7 @@ def _select_ecmwf_window_steps(
         if flight_start - margin <= valid_time <= flight_end + margin
     }
 
-    before = [s for s in all_steps if s[2] <= flight_start]
+    before = [s for s in all_steps if s[2] < flight_start]
     if before:
         keep.add(max(before, key=lambda s: s[2])[0])
 
@@ -2043,13 +2050,13 @@ def _grib_session() -> requests.Session:
 
 
 def _apply_cloud_diagnostics(hourly: HourlyForecast, diag: NWPCloudDiagnostics) -> None:
-    """Attach NWP cloud diagnostics. Open-Meteo cloud_cover_*_pct fields are
-    preserved — they provide hourly-interpolated coverage that is more temporally
-    accurate than forward-filled GRIB values on non-native hours."""
-    hourly.nwp_cloud_diagnostics = diag
-    # ECMWF deg0l: model-native freezing level overrides Open-Meteo's value.
-    if diag.freezing_level_ft is not None:
-        hourly.freezing_level_m = diag.freezing_level_ft / _M_TO_FT
+    """Attach NWP cloud diagnostics, mirroring the shadowed hourly fields.
+
+    Thin wrapper over ``HourlyForecast.attach_nwp_diagnostics`` — the mirror
+    logic lives on the model so the spatial-fill path shares it rather than
+    reimplementing (and forgetting) half of it.
+    """
+    hourly.attach_nwp_diagnostics(diag)
 
 
 def _forecast_hour_to_utc(init_date: str, init_hour: int, fhour: int) -> datetime:

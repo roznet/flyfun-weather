@@ -21,6 +21,7 @@ from weatherbrief.fetch.grib import (
 )
 from weatherbrief.fetch.grib.decode import (
     _bilinear_grid_weights,
+    _decode_pressure_vars_from_datasets,
     _close_cyclic_longitude,
     _interpolate_per_point,
 )
@@ -196,6 +197,46 @@ class TestGreenwichSeamVectorisedPath:
             assert via_xarray == pytest.approx(via_numpy, abs=1e-9)
 
 
+class TestSeamThroughPressureLevelDecode:
+    """End-to-end through `_decode_pressure_vars_from_datasets` — the function
+    `decode_grib_per_point` actually calls for GFS CLWMR/ICMR. Before the fix
+    a target at -0.10 came back as an empty dict with covered=False."""
+
+    def _dataset(self):
+        lons = np.arange(0.0, 360.0, 0.25)
+        lats = np.arange(60.0, 40.0, -0.25)
+        levels = np.array([850, 700])
+        # clwmr value encodes the signed longitude so a wrong wrap is visible.
+        signed = ((lons + 180.0) % 360.0) - 180.0
+        block = np.tile(signed, (len(levels), len(lats), 1))
+        return xr.Dataset(
+            {"clwmr": (("isobaricInhPa", "latitude", "longitude"), block)},
+            coords={
+                "isobaricInhPa": levels,
+                "latitude": lats,
+                "longitude": lons,
+            },
+        )
+
+    @pytest.mark.parametrize("lon", [-0.10, -0.05, -0.20])
+    def test_pressure_levels_resolve_at_the_seam(self, lon):
+        ds = self._dataset()
+        results, covered = _decode_pressure_vars_from_datasets(
+            [ds], [51.0], [lon % 360],
+        )
+        assert covered == [True], f"{lon} reported as uncovered"
+        assert results[0], f"{lon} returned an empty pressure-level dict"
+        assert results[0][850]["cloud_liquid_water_kg_kg"] == pytest.approx(lon, abs=1e-6)
+
+    def test_longitude_well_inside_the_grid_still_works(self):
+        ds = self._dataset()
+        results, covered = _decode_pressure_vars_from_datasets(
+            [ds], [51.0], [5.0 % 360],
+        )
+        assert covered == [True]
+        assert results[0][700]["cloud_liquid_water_kg_kg"] == pytest.approx(5.0, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # #483 — ECMWF step selection must bracket the window at any cadence
 # ---------------------------------------------------------------------------
@@ -245,6 +286,31 @@ class TestEcmwfWindowStepSelection:
         selected = self._select(dep_hour)
         assert any(s <= dep_hour for s in selected)
         assert any(s >= dep_hour + 1 for s in selected)
+
+    @pytest.mark.parametrize("dep_hour", [150, 156, 162])
+    def test_departure_exactly_on_a_six_hourly_step_keeps_a_predecessor(
+        self, dep_hour,
+    ):
+        """A departure landing exactly on a step must not select that step as
+        its own predecessor — otherwise accumulated tp/sf/cp have nothing to
+        difference against for the departure hour."""
+        selected = self._select(dep_hour)
+        assert any(s < dep_hour for s in selected), (
+            f"+{dep_hour}h selected itself as the lower bracket: {selected}"
+        )
+        assert dep_hour - 6 in selected
+
+    @pytest.mark.parametrize("dep_hour", [24, 60, 96, 120, 144])
+    def test_departure_exactly_on_a_step_elsewhere_also_keeps_a_predecessor(
+        self, dep_hour,
+    ):
+        selected = self._select(dep_hour)
+        assert any(s < dep_hour for s in selected)
+
+    def test_exact_step_itself_is_still_retained(self):
+        """Making the lower bracket strict must not drop the departure step —
+        the margin window still covers it."""
+        assert 156 in self._select(156)
 
     def test_hourly_range_selection_is_unchanged_by_the_bracket_union(self):
         """Inside hourly cadence the brackets already sit within the margin,
@@ -335,6 +401,86 @@ class TestDiagnosticsFieldInventory:
         a = NWPCloudDiagnostics(freezing_level_ft=8000.0)
         b = NWPCloudDiagnostics(freezing_level_ft=10000.0)
         assert _lerp_diagnostics(a, b, 0.5).freezing_level_ft == pytest.approx(9000.0)
+
+
+class TestFreezingLevelMirror:
+    """Interpolating `freezing_level_ft` into the diagnostics is only half the
+    job — sounding analysis reads `HourlyForecast.freezing_level_m` to populate
+    `indices.nwp_freezing_level_ft`, so the mirror has to move with it."""
+
+    def _hour(self):
+        from weatherbrief.models import HourlyForecast
+        return HourlyForecast(time=_INIT)
+
+    def test_attach_mirrors_the_freezing_level(self):
+        h = self._hour()
+        h.attach_nwp_diagnostics(NWPCloudDiagnostics(freezing_level_ft=9000.0))
+        assert h.nwp_cloud_diagnostics.freezing_level_ft == pytest.approx(9000.0)
+        assert h.freezing_level_m == pytest.approx(9000.0 / 3.28084)
+
+    def test_attach_leaves_the_mirror_alone_when_there_is_no_value(self):
+        """No freezing level in the diagnostics must not blank an existing
+        Open-Meteo value."""
+        h = self._hour()
+        h.freezing_level_m = 2500.0
+        h.attach_nwp_diagnostics(NWPCloudDiagnostics(total_cover_pct=50.0))
+        assert h.freezing_level_m == pytest.approx(2500.0)
+
+    def test_model_native_value_overrides_open_meteo(self):
+        h = self._hour()
+        h.freezing_level_m = 2500.0
+        h.attach_nwp_diagnostics(NWPCloudDiagnostics(freezing_level_ft=9000.0))
+        assert h.freezing_level_m == pytest.approx(9000.0 / 3.28084)
+
+    def test_spatial_fill_mirrors_the_interpolated_freezing_level(self):
+        """End to end: an interior point filled from two neighbours must end up
+        with the mirror set, not just the diagnostics."""
+        from weatherbrief.analysis.spatial_interpolation import (
+            interpolate_diagnostics_spatially,
+        )
+        from weatherbrief.models import (
+            ModelSource,
+            RouteCrossSection,
+            RoutePoint,
+            Waypoint,
+            WaypointForecast,
+        )
+
+        def _wf(idx, diag):
+            h = self._hour()
+            if diag is not None:
+                h.attach_nwp_diagnostics(diag)
+            return WaypointForecast(
+                waypoint=Waypoint(icao=f"PT{idx}", name=f"pt{idx}",
+                                  lat=51.0, lon=float(idx)),
+                model=ModelSource.ECMWF,
+                fetched_at=_INIT,
+                hourly=[h],
+            )
+
+        left = NWPCloudDiagnostics(freezing_level_ft=8000.0)
+        right = NWPCloudDiagnostics(freezing_level_ft=10000.0)
+        cs = RouteCrossSection(
+            model=ModelSource.ECMWF,
+            route_points=[],  # not used by interpolation
+            fetched_at=_INIT,
+            point_forecasts=[_wf(0, left), _wf(1, None), _wf(2, right)],
+        )
+        route_points = [
+            RoutePoint(
+                lat=51.0, lon=float(i), distance_from_origin_nm=float(i * 10),
+            )
+            for i in range(3)
+        ]
+
+        filled = interpolate_diagnostics_spatially([cs], route_points, 100.0)
+        assert filled == 1
+
+        mid = cs.point_forecasts[1].hourly[0]
+        assert mid.nwp_cloud_diagnostics.freezing_level_ft == pytest.approx(9000.0)
+        assert mid.freezing_level_m == pytest.approx(9000.0 / 3.28084), (
+            "spatial fill set the diagnostics but not the field sounding reads"
+        )
 
     def test_convective_fields_survive_time_fill(self):
         """The other direction of the same drift: the #283 convective and
