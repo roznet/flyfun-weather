@@ -3392,20 +3392,16 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     jobs: list[tuple] = []
     for fhour in ctx.forecast_hours:
         # Model-level data (t, qv, p, u, v, w, qc, qi, clc) — per variable.
-        # Migration: the even-older combined blob is a hit for the whole column.
-        legacy_ck = cache_key(fhour, f"{prefix}_QC_QI_P")
-        if is_cached(ctx.run_dir, legacy_ck):
-            pass  # legacy combined cache hit covers every variable + level
-        elif variant.per_level_cache:
-            # ICON-D2: cache one file per (variable, level). A whole-column
-            # per-variable blob (older D2 code) still counts as covered — it
-            # holds every level. Otherwise fetch only the levels this briefing
-            # wants that aren't already on disk (#469).
+        if variant.per_level_cache:
+            # ICON-D2: cache one file per (variable, level), and IGNORE any
+            # whole-column blob — both the per-variable one and the even-older
+            # combined ``{prefix}_QC_QI_P``. Decode refuses to read them (their
+            # level count is unverifiable, #478), so honouring them here would
+            # deadlock the hour: prefetch would skip the per-level fetch because
+            # a blob "covers" it, decode would then refuse the blob, and the
+            # hour would be skipped forever until the blob aged out. Fetch only
+            # the levels not already on disk (#469).
             for var in ICON_EU_VARIABLES:
-                if is_cached(
-                    ctx.run_dir, cache_key(fhour, icon_model_level_var_legacy_label(variant, var)),
-                ):
-                    continue
                 missing = [
                     level for level in ctx.levels
                     if not is_cached(
@@ -3415,6 +3411,10 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
                 ]
                 if missing:
                     jobs.append((_fetch_var_levels, fhour, var, missing))
+        elif is_cached(ctx.run_dir, cache_key(fhour, f"{prefix}_QC_QI_P")):
+            # Whole-column variant: the even-older combined blob covers every
+            # variable + level, so nothing model-level needs fetching.
+            pass
         else:
             for var in ICON_EU_VARIABLES:
                 ck = cache_key(fhour, icon_model_level_var_legacy_label(variant, var))
@@ -3490,62 +3490,79 @@ def _decode_and_merge_icon_eu(
     # skipped. The decode bytes are read inside the worker.
     fhour_jobs: dict[int, tuple[str, tuple]] = {}
     for fhour in ctx.forecast_hours:
-        legacy_ck = cache_key(fhour, f"{prefix}_QC_QI_P")
-        if is_cached(ctx.run_dir, legacy_ck):
-            fhour_jobs[fhour] = (
-                "decode_icon_legacy",
-                (str(ctx.run_dir / legacy_ck), ctx.point_lats, ctx.point_lons),
-            )
-            continue
+        # The even-older combined blob. Only whole-column variants may use it:
+        # for a per-level variant it would re-open the very ambiguity the
+        # per-level layout exists to close (see the per-variable note below).
+        if not variant.per_level_cache:
+            legacy_ck = cache_key(fhour, f"{prefix}_QC_QI_P")
+            if is_cached(ctx.run_dir, legacy_ck):
+                fhour_jobs[fhour] = (
+                    "decode_icon_legacy",
+                    (str(ctx.run_dir / legacy_ck), ctx.point_lats, ctx.point_lons),
+                )
+                continue
 
         # Each variable maps to a LIST of cache-file paths the worker
-        # concatenates: a one-element whole-column blob (ICON-EU, or a legacy
-        # ICON-D2 hit), else one file per model level (ICON-D2 per-level cache,
-        # #469).
+        # concatenates: a one-element whole-column blob (ICON-EU), else one file
+        # per model level (ICON-D2 per-level cache, #469).
         #
-        # COMPLETENESS (#478). Every variable is requested over the SAME full
-        # column (``ctx.levels``), so "did we get what we asked for?" is just a
-        # count. Decoding a partial column instead would silently produce a
-        # short sounding that reads as calm/clear/smooth rather than
-        # unavailable — the failure this whole issue exists to prevent — and a
-        # decoded column carries no marker distinguishing "not fetched" from
-        # "nothing there". So an incomplete hour is SKIPPED for ICON entirely:
-        # a missing hour is a state the pipeline already handles honestly,
-        # whereas a partial column is not, and the per-level cache means the
-        # next briefing tops up only the files that are actually absent.
+        # COMPLETENESS (#478). An incomplete hour is SKIPPED for ICON entirely
+        # rather than decoded partially: the GRIB sounding REPLACES the
+        # Open-Meteo pressure levels wholesale, so a missing variable or a short
+        # column silently reads as calm/clear/smooth rather than unavailable —
+        # the failure this issue exists to prevent — and a decoded column
+        # carries no marker distinguishing "not fetched" from "nothing there".
+        # A missing hour is a state the pipeline already handles honestly.
         #
-        # A whole-column blob is accepted as complete without checking: it holds
-        # every level by construction, and its completeness is unverifiable
-        # anyway — precisely why the heavier D2 column uses per-level instead.
+        # Two independent things have to hold:
+        #  1. every required variable is present at all (checked for EVERY
+        #     variant — a whole-column variant can lose a whole variable just as
+        #     easily, and losing u/v alone is enough to flatten CAT to "smooth");
+        #  2. for per-level variants, each variable has its FULL level set —
+        #     every variable is requested over the same ``ctx.levels``, so this
+        #     is just a count.
+        #
+        # A whole-column blob is NOT verifiable for (2): the writer concatenates
+        # whatever levels arrived, so a partial download is cached under a key
+        # that reports "present". That ambiguity is exactly why the heavier D2
+        # column uses per-level instead — and why per-level variants refuse
+        # legacy blobs outright rather than trusting them.
         var_paths: dict[str, list[str]] = {}
         incomplete: list[str] = []
         for var in ICON_EU_VARIABLES:
-            legacy_var_ck = cache_key(fhour, icon_model_level_var_legacy_label(variant, var))
-            if is_cached(ctx.run_dir, legacy_var_ck):
-                var_paths[var] = [str(ctx.run_dir / legacy_var_ck)]
+            if not variant.per_level_cache:
+                legacy_var_ck = cache_key(
+                    fhour, icon_model_level_var_legacy_label(variant, var),
+                )
+                if is_cached(ctx.run_dir, legacy_var_ck):
+                    var_paths[var] = [str(ctx.run_dir / legacy_var_ck)]
                 continue
-            if variant.per_level_cache:
-                level_paths = [
-                    str(ctx.run_dir / cache_key(
-                        fhour, icon_model_level_var_label(variant, var, level),
-                    ))
-                    for level in ctx.levels
-                    if is_cached(ctx.run_dir, cache_key(
-                        fhour, icon_model_level_var_label(variant, var, level),
-                    ))
-                ]
-                if len(level_paths) < len(ctx.levels):
-                    incomplete.append(f"{var}:{len(level_paths)}/{len(ctx.levels)}")
-                    continue
-                var_paths[var] = level_paths
-        if incomplete:
+            level_paths = [
+                str(ctx.run_dir / cache_key(
+                    fhour, icon_model_level_var_label(variant, var, level),
+                ))
+                for level in ctx.levels
+                if is_cached(ctx.run_dir, cache_key(
+                    fhour, icon_model_level_var_label(variant, var, level),
+                ))
+            ]
+            if len(level_paths) < len(ctx.levels):
+                incomplete.append(f"{var}:{len(level_paths)}/{len(ctx.levels)}")
+                continue
+            var_paths[var] = level_paths
+        missing_vars = [v for v in ICON_EU_VARIABLES if v not in var_paths]
+        if var_paths and (incomplete or missing_vars):
+            detail = ", ".join(
+                incomplete + [f"{v}:absent" for v in missing_vars if v not in
+                              {i.split(":")[0] for i in incomplete}]
+            )
             logger.warning(
                 "%s f%03d: incomplete model-level cache, skipping hour for ICON "
-                "(%s) — next briefing tops up the missing levels",
-                variant.slug, fhour, ", ".join(incomplete),
+                "(%s) — next briefing refetches what's missing",
+                variant.slug, fhour, detail,
             )
             continue
-        if var_paths:
+        if var_paths and not missing_vars:
             fhour_jobs[fhour] = (
                 "decode_icon_chunked",
                 (var_paths, ctx.point_lats, ctx.point_lons),

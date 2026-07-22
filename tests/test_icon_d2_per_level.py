@@ -158,23 +158,29 @@ def test_prefetch_tops_up_only_missing_levels(tmp_path, d2_prefetch):
     assert get_cached(tmp_path, cache_key(12, icon_model_level_var_label(ICON_D2, "t", 16))) == b"have"
 
 
-def test_prefetch_legacy_whole_column_blob_skips_variable(tmp_path, d2_prefetch):
-    # A whole-column per-variable blob (older D2 code) covers every level.
+def test_prefetch_ignores_legacy_whole_column_blob(tmp_path, d2_prefetch):
+    """A per-level variant must NOT treat a legacy blob as covering the column.
+
+    Decode refuses those blobs (#478 — their level count is unverifiable), so
+    honouring one here would deadlock the hour: nothing per-level gets fetched,
+    then decode declines the blob, and the hour is skipped until it ages out.
+    """
     put_cached(tmp_path, cache_key(12, "ICON_D2_T"), b"legacy-whole-column")
     ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17])
     grib_mod._prefetch_icon_eu_data_inner(ctx)
 
     fetched_vars = {var for _, var, _ in d2_prefetch["per_level"]}
-    assert "t" not in fetched_vars
-    assert fetched_vars == set(ICON_EU_VARIABLES) - {"t"}
+    assert fetched_vars == set(ICON_EU_VARIABLES)  # including "t"
 
 
-def test_prefetch_legacy_combined_blob_skips_all_model_level(tmp_path, d2_prefetch):
+def test_prefetch_ignores_legacy_combined_blob(tmp_path, d2_prefetch):
+    """Same for the even-older combined blob — same deadlock reasoning."""
     put_cached(tmp_path, cache_key(12, "ICON_D2_QC_QI_P"), b"legacy-combined")
     ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17])
     grib_mod._prefetch_icon_eu_data_inner(ctx)
 
-    assert d2_prefetch["per_level"] == []  # nothing model-level fetched
+    fetched_vars = {var for _, var, _ in d2_prefetch["per_level"]}
+    assert fetched_vars == set(ICON_EU_VARIABLES)
 
 
 # ---------------------------------------------------------------------------
@@ -219,19 +225,6 @@ def test_decode_builds_per_level_path_lists(tmp_path):
     for paths in var_paths.values():
         assert len(paths) == 2
         assert all(Path(p).name.startswith("f012_ICON_D2_") for p in paths)
-
-
-def test_decode_prefers_legacy_whole_column_blob(tmp_path):
-    # Legacy per-var blob present for "t"; per-level files for the rest.
-    put_cached(tmp_path, cache_key(12, "ICON_D2_T"), b"whole")
-    for var in set(ICON_EU_VARIABLES) - {"t"}:
-        put_cached(tmp_path, cache_key(12, icon_model_level_var_label(ICON_D2, var, 16)), b"x")
-    ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16])
-
-    jobs = _capture_decode_jobs(tmp_path, ctx)
-    worker, (var_paths, _lats, _lons) = jobs[0]
-    assert var_paths["t"] == [str(tmp_path / cache_key(12, "ICON_D2_T"))]
-    assert Path(var_paths["qc"][0]).name == "f012_ICON_D2_QC_L16.grib2"
 
 
 # ---------------------------------------------------------------------------
@@ -285,17 +278,106 @@ def test_decode_runs_when_every_variable_is_complete(tmp_path):
     assert all(len(paths) == 3 for paths in var_paths.values())
 
 
-def test_decode_accepts_whole_column_blob_without_level_count(tmp_path):
-    """A whole-column blob is complete by construction and unverifiable anyway.
+# ---------------------------------------------------------------------------
+# Completeness loopholes closed after external review of PR #479
+# ---------------------------------------------------------------------------
 
-    ICON-EU's normal path — and the reason the heavier D2 column uses per-level
-    instead: there is no way to tell a short blob from a full one.
+
+def test_decode_skips_hour_when_a_whole_variable_is_absent_icon_eu(tmp_path, caplog):
+    """A missing VARIABLE must skip the hour on whole-column variants too.
+
+    The level-count check only applies to per-level variants, so ICON-EU needs
+    its own guard: the GRIB sounding replaces the Open-Meteo pressure levels
+    wholesale, so losing u/v alone leaves no wind anywhere -> no Richardson ->
+    empty CAT layers -> turbulence reads a false "smooth".
     """
-    for var in ICON_EU_VARIABLES:
-        put_cached(tmp_path, cache_key(12, f"ICON_D2_{var.upper()}"), b"whole")
-    ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17, 18])
+    import logging
 
+    for var in ICON_EU_VARIABLES:
+        if var in ("u", "v"):
+            continue  # both wind components lost
+        put_cached(tmp_path, cache_key(12, f"ICON_EU_{var.upper()}"), b"blob")
+    ctx = _IconEuContext(
+        init_date="20260722", init_hour=0, forecast_hours=[12], run_dir=tmp_path,
+        levels=[35, 36], point_lats=[48.0], point_lons=[11.0],
+        session=None, variant=ICON_EU,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        jobs = _capture_decode_jobs(tmp_path, ctx)
+
+    assert jobs == []
+    msgs = " ".join(r.getMessage() for r in caplog.records)
+    assert "u:absent" in msgs and "v:absent" in msgs
+
+
+def test_decode_icon_eu_complete_blob_set_still_decodes(tmp_path):
+    """The inverse — a full set of whole-column blobs is still accepted."""
+    for var in ICON_EU_VARIABLES:
+        put_cached(tmp_path, cache_key(12, f"ICON_EU_{var.upper()}"), b"blob")
+    ctx = _IconEuContext(
+        init_date="20260722", init_hour=0, forecast_hours=[12], run_dir=tmp_path,
+        levels=[35, 36], point_lats=[48.0], point_lons=[11.0],
+        session=None, variant=ICON_EU,
+    )
     jobs = _capture_decode_jobs(tmp_path, ctx)
     assert len(jobs) == 1
-    _worker, (var_paths, _lats, _lons) = jobs[0]
-    assert all(len(paths) == 1 for paths in var_paths.values())
+
+
+def test_per_level_variant_refuses_legacy_whole_column_blobs(tmp_path):
+    """D2 must not trust a legacy blob: the writer concatenated whatever levels
+    arrived, so its level count is unverifiable after the fact — the exact
+    ambiguity the per-level layout exists to close."""
+    for var in ICON_EU_VARIABLES:
+        put_cached(tmp_path, cache_key(12, f"ICON_D2_{var.upper()}"), b"blob")
+    ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17])
+
+    assert _capture_decode_jobs(tmp_path, ctx) == []
+
+
+def test_per_level_variant_refuses_legacy_combined_blob(tmp_path):
+    """Same for the even-older combined {prefix}_QC_QI_P blob."""
+    put_cached(tmp_path, cache_key(12, "ICON_D2_QC_QI_P"), b"combined")
+    ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17])
+
+    assert _capture_decode_jobs(tmp_path, ctx) == []
+
+
+def test_per_variable_fetch_discards_incomplete_column(monkeypatch, caplog):
+    """The writer must not cache a partial whole-column blob.
+
+    It is stored under a key that says nothing about how many levels are inside,
+    so a partial blob would be served as complete for the rest of the run's TTL.
+    """
+    import logging
+
+    from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_per_variable
+
+    def fake_download(url, session):
+        # Level 36 always 404s; everything else succeeds.
+        return (None, 404) if url.endswith("_36_t.grib2.bz2") or "_36_" in url else (b"x", 200)
+
+    monkeypatch.setattr(icon_fetch_mod, "_download_one_file", fake_download)
+
+    with caplog.at_level(logging.WARNING):
+        result = fetch_icon_eu_per_variable(
+            "20260722", 0, 12, levels=[35, 36], variables=["t"],
+            session=object(), variant=ICON_EU,
+        )
+
+    assert result == {}  # discarded, not a 1-of-2-level blob
+    assert any("incomplete column" in r.getMessage() for r in caplog.records)
+
+
+def test_per_variable_fetch_caches_complete_column(monkeypatch):
+    """The inverse — a fully-downloaded column is returned as before."""
+    from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_per_variable
+
+    monkeypatch.setattr(
+        icon_fetch_mod, "_download_one_file", lambda url, session: (b"x", 200),
+    )
+    result = fetch_icon_eu_per_variable(
+        "20260722", 0, 12, levels=[35, 36], variables=["t"],
+        session=object(), variant=ICON_EU,
+    )
+    assert result["t"] == b"xx"
