@@ -146,7 +146,7 @@ Schedule: **light** (score-only) cycles at 06:15 / 09:15 / 12:15 / 15:15 / 18:15
 
 ```bash
 ssh brice@161.35.35.15 "docker logs --since 24h weatherbrief 2>&1 \
-  | grep -E 'Standalone .* cycle:|Standalone cycle peaks:|Standalone cycle RSS @|Standalone cycle memory anomaly|Recorded failed .* cycle|Memory anomaly check failed|ECMWF a. decode failed|Cache rebuild:|ECMWF GRIB leg:|get_digest_data|analyzed [0-9]+ snapshots'"
+  | grep -E 'Standalone .* cycle:|Standalone cycle peaks:|Standalone cycle RSS @|Standalone cycle memory anomaly|Recorded failed .* cycle|Memory anomaly check failed|ECMWF a. decode failed|Cache rebuild:|ECMWF GRIB leg:|get_digest_data|analyzed [0-9]+ snapshots|\(pooled\)|GRIB decode pool (started|shut down)|force-terminated'"
 ```
 
 The cycle has **three flavours**, each with its own `Standalone <type> cycle:` summary line. Don't conflate them:
@@ -156,14 +156,16 @@ The cycle has **three flavours**, each with its own `Standalone <type> cycle:` s
 
 Read:
 
-- `Standalone <type> cycle: M models, S snapshots, ... (Tms)` — post-#448 expected bands (pre-PR-B; the sounding process pool will roughly halve the forecast figure again):
-  - **forecast**: ~65–80 min total wall (fetch ~68 min is single-core sounding analysis — the known cost). >95 min is a warn, >120 min an issue.
+- `Standalone <type> cycle: M models, S snapshots, ... (Tms)` — post-#448 + post-PR-B (#450) expected bands. PR B moved the ~68-min single-core sounding analysis to a 2-worker process pool inside the cycle child, roughly halving the fetch phase:
+  - **forecast**: **~25–35 min** total wall. **>45 min is a warn, >60 min an issue** (>60 min usually means the pool did not engage — see the `(pooled)` check below). Band set from the PR-B estimate; confirm/retune against the first few validated droplet cycles. (Pre-PR-B was ~65–80 min.)
   - **light**: ~2–5 min total wall. >10 min is a warn — check the `Cache rebuild:` breakdown below.
 - **Cache-rebuild breakdown (#448 instrumentation)** — `Cache rebuild: N stats (Xms) + M bias_leaderboard (Yms) + K forecast_map (Zms) entries (Tms total)`:
   - stats should be **seconds** (tens of seconds worst case). Minutes again = the `COUNT(DISTINCT)` plan regressed — check the `get_digest_data(...)` INFO breakdown line (only logged when >5 s) for which sub-query, and confirm index `ix_verif_scores_source_time` still exists.
   - After a **forecast** cycle the line `Standalone forecast cycle: skipping rollup + stats/leaderboard cache` must appear and `cache rebuilt (Nms)` should be **<60 s** (forecast-map only). A forecast cycle spending minutes in cache rebuild = the cycle-aware skip regressed.
 - **Hard failure to grep for**: any SQL error mentioning `ix_verif_scores_source_time` (e.g. MySQL 1176 "Key ... doesn't exist") — the activity queries FORCE INDEX it by name; if that index is ever dropped, every dashboard/digest stats call hard-fails. Always an issue.
-- **Sounding-analysis timings** — `Model <m> chunk N/7: analyzed S snapshots in Xs` (gfs/icon, ~2 chunks in flight) and `ECMWF GRIB leg: N steps, S snapshots, sounding analysis Xs`. These quantify the dominant single-core cost (~55–60 min/cycle total pre-PR-B). Use them to spot drift and to validate PR B when it lands.
+- **Sounding-analysis timings** — `Model <m> chunk N/7: analyzed S snapshots in Xs` (gfs/icon, ~2 chunks in flight) and `ECMWF GRIB leg: N steps, S snapshots, sounding analysis Xs`. Post-PR-B every one of these lines must carry a **`(pooled)`** suffix, and the child must log `GRIB decode pool started (workers=2` (workers=2 is the cycle child; the main app pool is workers=3 — don't confuse them). Worker-side proof of parallelism: grep `analyze_sounding_batch: .* profiles dur=` — two distinct `pid=` values interleaving = both workers busy. **If `(pooled)` is missing**, pooling did not engage (cycle falls back to inline ~68-min single-core) — check the child got `GRIB_DECODE_WORKERS=2` (overridden by `STANDALONE_ANALYSIS_WORKERS`; `0` = deliberate rollback to inline).
+- **Equivalence check** — snapshots stored ~54–56K (`Model .*: stored .* snapshots`), and sounding analysis actually ran: `SELECT COUNT(*) ... WHERE model_init_time > <today> AND sounding_cape_jkg IS NOT NULL` should be **~99%** (CAPE is computed for every analysed profile; ~1% gap = normal out-of-bounds profiles). Do **not** use `sounding_ceiling_ft` — it is weather-conditional (NULL = clear) and normally ~53%. A big `cape` drop = batches failing silently; grep `Pooled sounding analysis` warnings (should be absent/rare).
+- **Pool teardown (PR B)** — on a healthy cycle grep `GRIB decode pool shut down (wait=True, ... workers=[])` shortly before the cache rebuild, and the child must exit promptly after `cache rebuilt` (no gap = no atexit hang). A `force-terminated` line is the failure-path net (TERM→KILL of a wedged worker) — expected absent on a clean run; its presence = a worker had to be killed, investigate.
 - `Standalone cycle peaks: rss=<N>MB cgroup=<N>MB samples=<N>` — **read `rss=`, not `cgroup=`** (see §L2). RSS is actual demand; cgroup will pin near the limit just from mmap'd GRIB cache and is not a pressure signal on its own. Flag when `rss=` >4.5 GiB.
 - **`Standalone cycle memory anomaly (source=...): peak_rss=<N>MB peak_cgroup=<N> baseline=<N> cgroup_limit=6144 (relative_threshold=<R>, absolute_threshold=<A>)`** — the app's own self-alert, currently thresholded on `peak_cgroup`. Because of §L2 this fires routinely without indicating a real problem; **read `peak_rss` to decide**:
   - `peak_rss` well under 4 GiB → false positive; mention in the summary but rank as note, not warn.
