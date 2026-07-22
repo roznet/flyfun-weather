@@ -159,7 +159,7 @@ def _fill_diag_hourly(hourly_list: list[HourlyForecast]) -> int:
         if h.nwp_cloud_diagnostics is not None:
             last_diag = h.nwp_cloud_diagnostics
         elif last_diag is not None:
-            h.nwp_cloud_diagnostics = last_diag.model_copy()
+            h.attach_nwp_diagnostics(last_diag.model_copy())
             filled += 1
     return filled
 
@@ -244,7 +244,7 @@ def _interp_gfs_diag_hourly(
             interp_diag = _interp_diag_at(
                 prev_diag, next_diag, mid_frac=mid_frac, step_frac=step_frac,
             )
-            h.nwp_cloud_diagnostics = interp_diag
+            h.attach_nwp_diagnostics(interp_diag)
             filled += 1
 
     # After the last anchor: forward-fill (no upper bracket to interp against).
@@ -254,7 +254,7 @@ def _interp_gfs_diag_hourly(
     last_diag = sorted_hours[last_idx].nwp_cloud_diagnostics
     for i in range(last_idx + 1, len(sorted_hours)):
         if sorted_hours[i].nwp_cloud_diagnostics is None:
-            sorted_hours[i].nwp_cloud_diagnostics = last_diag.model_copy()
+            sorted_hours[i].attach_nwp_diagnostics(last_diag.model_copy())
             filled += 1
 
     return filled
@@ -618,15 +618,15 @@ def _gate_gfs_hourly(h: HourlyForecast) -> int:
     if n_dropped == 0:
         return 0
 
-    h.nwp_cloud_diagnostics = NWPCloudDiagnostics(
-        low=new_low, mid=new_mid, high=new_high,
-        convective_cover_pct=diag.convective_cover_pct,
-        convective_base_ft=diag.convective_base_ft,
-        convective_top_ft=diag.convective_top_ft,
-        total_cover_pct=diag.total_cover_pct,
-        boundary_cover_pct=diag.boundary_cover_pct,
-        ceiling_ft=diag.ceiling_ft,
-        freezing_level_ft=diag.freezing_level_ft,
+    # model_copy(update=...) rather than rebuilding field-by-field: the gate
+    # only replaces the three layer bands, so everything else must ride through
+    # untouched. The previous hand-written constructor call silently dropped
+    # the #283 convective/stability fields (convective_precip_mm_h, k_index,
+    # total_totals, ml_cape_jkg, ml_cin_jkg) whenever the gate fired — inert
+    # today only because GFS doesn't decode them, but the same field-list drift
+    # as #485. Copying forward cannot go stale.
+    h.attach_nwp_diagnostics(
+        diag.model_copy(update={"low": new_low, "mid": new_mid, "high": new_high})
     )
     return n_dropped
 

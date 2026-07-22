@@ -420,12 +420,14 @@ class HourlyForecast(BaseModel):
         reads the *hourly* one to populate ``indices.nwp_freezing_level_ft``.
         Setting the diagnostics without mirroring leaves that index blank.
 
-        Both the GRIB-native application path and the spatial-fill path go
-        through here so the mirror cannot be applied on one and forgotten on
-        the other — it previously was (#485 follow-up): spatial interpolation
-        assigned the diagnostics directly, so an interior route point filled
-        from its neighbours got a freezing level in the diagnostics but not in
-        the field the sounding actually reads.
+        **Every** write of ``nwp_cloud_diagnostics`` must go through here —
+        the GRIB-native application path, the spatial fill, the time-axis
+        forward-fill/interp, and the GFS RH/condensate gate. This mirror was
+        forgotten on the spatial path (#485 follow-up) and then again on all
+        four time-axis/gate sites, each time leaving a freezing level in the
+        diagnostics and a stale Open-Meteo value in the field the sounding
+        actually reads. ``test_no_direct_diagnostics_assignment`` enforces the
+        rule against the source so it stops depending on reviewer memory.
 
         Open-Meteo's ``cloud_cover_*_pct`` fields are deliberately NOT
         overwritten — they carry hourly-interpolated coverage that is more
