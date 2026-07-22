@@ -401,20 +401,31 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
 FULL_COLUMN_VARIABLES = ("t", "qv", "p")
 LIMITED_LEVEL_VARIABLES = ("u", "v", "w", "qc", "qi", "clc")
 
+# Display headroom above the flight ceiling that the cut must ALSO cover. The
+# cross-section (and Skew-T) render wind/cloud up to ``ceiling + this`` — the
+# clients hard-code the same value (web ``CROSS_SECTION_DISPLAY_BUFFER_FT`` in
+# ``web/ts/visualization/chart-projection-constants.ts``, iOS
+# ``VizRouteData.displayBufferFt``). If the ceiling-limited cut stopped at the
+# bare ceiling, ICON-D2 would draw a blank strip across that whole rendered band
+# while the full-column models fill it (#474). Gate on ``ceiling + buffer`` so
+# the fetched column always reaches the top of what's actually displayed.
+# KEEP IN SYNC with the client constant.
+CROSS_SECTION_DISPLAY_BUFFER_FT = 5_000
+
 # Domain-safe ceiling → top-level anchors for ICON-D2: (sea_level_height_ft,
 # top_level), shallow→deep. Model levels are terrain-following and ride HIGHER
 # over terrain (level 27 = 18,680 ft at sea level, 20,549 ft over the Alps), so
 # the SEA-LEVEL column is the binding case — a cut chosen from these heights
-# covers the ceiling everywhere in the D2 domain (the whole-domain minimum
-# terrain is ~sea level). Heights are DWD ICON-D2 HHL decodes (issue #469);
-# only levels with a measured anchor are used as cut points, and a ceiling
+# covers the coverage target everywhere in the D2 domain (the whole-domain
+# minimum terrain is ~sea level). Heights are DWD ICON-D2 HHL decodes (issue
+# #469); only levels with a measured anchor are used as cut points, and a target
 # between anchors rounds to the deeper (lower-index) one — never truncating
-# below the ceiling. A ceiling above the deepest anchor falls through to the
-# full column (level_min), where the phase-1 top-up fetches the extra levels.
+# below it. A target above the deepest anchor falls through to the full column
+# (level_min), where the phase-1 top-up fetches the extra levels.
 ICON_D2_CEILING_LEVEL_CUTS: tuple[tuple[int, int], ...] = (
     (10_354, 38),  # level 38 = 10,354 ft at sea level
     (16_096, 30),  # level 30 = 16,096 ft
-    (18_680, 27),  # level 27 = 18,680 ft — the domain-safe cut for FL180
+    (18_680, 27),  # level 27 = 18,680 ft
 )
 
 
@@ -453,16 +464,22 @@ def icon_limited_top_level(
 ) -> int:
     """Top (smallest-index) model level to fetch for the LIMITED variables.
 
+    The cut must cover not just the flight ceiling but the whole rendered band
+    (``ceiling + CROSS_SECTION_DISPLAY_BUFFER_FT``), so the cross-section /
+    Skew-T never show a blank strip for ICON-D2 where the full-column models
+    draw (#474).
+
     Returns ``variant.level_min`` (the full column) when the variant does not
-    use the per-level cache, the ceiling is unknown, or the ceiling is above the
-    deepest documented anchor — every one of those cases means "don't truncate".
-    Otherwise returns the domain-safe cut from
+    use the per-level cache, the ceiling is unknown, or the coverage target is
+    above the deepest documented anchor — every one of those cases means "don't
+    truncate". Otherwise returns the domain-safe cut from
     :data:`ICON_D2_CEILING_LEVEL_CUTS`.
     """
     if not variant.per_level_cache or ceiling_ft is None:
         return variant.level_min
+    coverage_ft = ceiling_ft + CROSS_SECTION_DISPLAY_BUFFER_FT
     for height_ft, level in ICON_D2_CEILING_LEVEL_CUTS:
-        if height_ft >= ceiling_ft:
+        if height_ft >= coverage_ft:
             return level
     return variant.level_min
 

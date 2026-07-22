@@ -127,7 +127,7 @@ def prepare_profile(
     if has_height:
         height = np.array([lv.geopotential_height_m for lv, _ in valid]) * units.meter
 
-    # Omega — use NaN for missing levels (unlike wind which requires all-or-nothing)
+    # Omega — use NaN for missing levels (same per-level NaN-fill as wind above)
     has_any_omega = any(lv.vertical_velocity_pa_s is not None for lv, _ in valid)
     omega = None
     if has_any_omega:

@@ -3,6 +3,15 @@ import SwiftUI
 // MARK: - Route-level visualization data
 
 struct VizRouteData {
+    /// Vertical headroom (ft) the cross-section renders ABOVE the flight ceiling
+    /// — the Y-axis top is `max(ceiling, cruise) + this`. The ICON-D2
+    /// ceiling-limited fetch gates on `ceiling + this` too, so the fetched
+    /// column reaches the top of what's drawn (no blank strip). KEEP IN SYNC
+    /// with the server `CROSS_SECTION_DISPLAY_BUFFER_FT`
+    /// (src/weatherbrief/fetch/grib/icon_eu_fetch.py) and web
+    /// `CROSS_SECTION_DISPLAY_BUFFER_FT` (web/ts/visualization/types.ts).
+    static let displayBufferFt: Double = 5000
+
     let points: [VizPoint]
     let cruiseAltitudeFt: Double
     let ceilingAltitudeFt: Double

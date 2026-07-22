@@ -3,6 +3,7 @@
 import type { ElevationProfile, RouteAnalysesManifest, RoutePointAnalysis, SoundingAnalysis, RouteObservations, RouteSigmets } from '../store/types';
 import type { RouteWindOverlay } from '../adapters/api-adapter';
 import type { TerrainPoint, VizRouteData, VizPoint, WaypointMarker, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizSldZone, VizCATLayer, VizInversionLayer, VizCloudDiag, VizCurrentConditions, VizMetarColumn, VizSigmetZone, VizFronts, VizNightInterval, VizSunSide, VizSunAtPoint } from './types';
+import { CROSS_SECTION_DISPLAY_BUFFER_FT } from './types';
 import type { FrontCrossing, FrontProximity, RouteFrontsManifest } from '../types/fronts';
 import { computeSurfaceObscurationFromCloudLayers } from './surface-obscuration';
 import { randomOverlapPct } from './scales';
@@ -102,7 +103,7 @@ export function extractVizData(
     points,
     cruiseAltitudeFt: effectiveCruise,
     ceilingAltitudeFt: actualCeiling,
-    flightCeilingFt: Math.max(actualCeiling, effectiveCruise) + 5000,
+    flightCeilingFt: Math.max(actualCeiling, effectiveCruise) + CROSS_SECTION_DISPLAY_BUFFER_FT,
     fetchedColumnTopFt,
     totalDistanceNm: manifest.total_distance_nm,
     waypointMarkers,

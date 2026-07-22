@@ -31,8 +31,10 @@ import weatherbrief.fetch.grib.icon_eu_fetch as icon_fetch_mod
 from weatherbrief.fetch.grib import _IconEuContext
 from weatherbrief.fetch.grib.cache import cache_key, get_cached
 from weatherbrief.fetch.grib.icon_eu_fetch import (
+    CROSS_SECTION_DISPLAY_BUFFER_FT,
     FULL_COLUMN_VARIABLES,
     ICON_D2,
+    ICON_D2_CEILING_LEVEL_CUTS,
     ICON_EU,
     LIMITED_LEVEL_VARIABLES,
     icon_ceiling_limit_enabled,
@@ -52,17 +54,21 @@ def _rp(lat: float, lon: float, nm: float = 0.0) -> RoutePoint:
 # ---------------------------------------------------------------------------
 
 
+# The cut covers ``ceiling + CROSS_SECTION_DISPLAY_BUFFER_FT`` (5,000 ft), not
+# the bare ceiling — so the cross-section's rendered band above the ceiling is
+# fetched too (#474). Expected values are the anchor at/above ceiling+5,000.
 @pytest.mark.parametrize(
     "ceiling_ft, expected",
     [
-        (18_000, 27),   # the issue's domain-safe cut for FL180
-        (18_680, 27),   # exactly the anchor height still qualifies
-        (18_681, 16),   # just above the deepest anchor → full column
-        (16_000, 30),
-        (12_000, 30),   # between anchors → rounds to the deeper level
-        (10_000, 38),
-        (6_000, 38),    # no shallower anchor → deepest documented cut
-        (20_000, 16),   # above every anchor → full column (level_min)
+        (5_000, 38),    # cov 10,000 → level 38 (10,354)
+        (5_354, 38),    # cov exactly 10,354 → level 38
+        (5_355, 30),    # cov 10,355 → rounds up to level 30 (16,096)
+        (8_000, 30),    # cov 13,000 → level 30
+        (11_096, 30),   # cov exactly 16,096 → level 30
+        (11_097, 27),   # cov 16,097 → rounds up to level 27 (18,680)
+        (13_680, 27),   # cov exactly 18,680 → level 27
+        (13_681, 16),   # cov 18,681 → above deepest anchor → full column
+        (18_000, 16),   # typical IFR ceiling: cov 23,000 → full column
     ],
 )
 def test_d2_top_level_for_ceiling(ceiling_ft, expected):
@@ -71,6 +77,16 @@ def test_d2_top_level_for_ceiling(ceiling_ft, expected):
 
 def test_top_level_unknown_ceiling_is_full_column():
     assert icon_limited_top_level(ICON_D2, None) == ICON_D2.level_min
+
+
+def test_cut_covers_ceiling_plus_display_buffer():
+    # The cut for a ceiling must reach at least ceiling + the display buffer, so
+    # the cross-section's rendered band (ceiling + 5,000 ft) is fully fetched.
+    assert CROSS_SECTION_DISPLAY_BUFFER_FT == 5_000
+    height_by_level = {lv: ft for ft, lv in ICON_D2_CEILING_LEVEL_CUTS}
+    for ceiling, cut_level in [(5_000, 38), (8_000, 30), (11_097, 27)]:
+        assert icon_limited_top_level(ICON_D2, ceiling) == cut_level
+        assert height_by_level[cut_level] >= ceiling + CROSS_SECTION_DISPLAY_BUFFER_FT
 
 
 def test_top_level_eu_never_limits():
@@ -90,17 +106,20 @@ def _full_d2_levels() -> list[int]:
 def test_levels_by_var_none_when_no_truncation():
     assert icon_levels_by_var(ICON_EU, 6_000, _full_d2_levels()) is None
     assert icon_levels_by_var(ICON_D2, None, _full_d2_levels()) is None
+    # ceiling + 5,000 buffer above the deepest anchor → full column.
+    assert icon_levels_by_var(ICON_D2, 18_000, _full_d2_levels()) is None
     assert icon_levels_by_var(ICON_D2, 20_000, _full_d2_levels()) is None
 
 
 def test_levels_by_var_limits_only_wind_cloud_vars():
-    mapping = icon_levels_by_var(ICON_D2, 18_000, _full_d2_levels())
+    # ceiling 8,000 → cov 13,000 → cut at level 30 (16,096 ft).
+    mapping = icon_levels_by_var(ICON_D2, 8_000, _full_d2_levels())
     assert mapping is not None
     assert set(mapping.keys()) == set(LIMITED_LEVEL_VARIABLES)
     for var in FULL_COLUMN_VARIABLES:
         assert var not in mapping  # t/qv/p stay full via levels_for_var fallback
     for var, levels in mapping.items():
-        assert levels == list(range(27, ICON_D2.level_max + 1))
+        assert levels == list(range(30, ICON_D2.level_max + 1))
 
 
 def test_levels_by_var_and_full_column_disjoint():
@@ -113,13 +132,13 @@ def test_context_levels_for_var_splits_full_and_limited():
     ctx = _IconEuContext(
         init_date="20260721", init_hour=0, forecast_hours=[12],
         run_dir=Path("/tmp"), levels=full,
-        levels_by_var=icon_levels_by_var(ICON_D2, 18_000, full),
+        levels_by_var=icon_levels_by_var(ICON_D2, 8_000, full),
         point_lats=[48.0], point_lons=[11.0], session=None, variant=ICON_D2,
     )
     assert ctx.levels_for_var("t") == full           # full column
     assert ctx.levels_for_var("p") == full
-    assert ctx.levels_for_var("u") == list(range(27, 66))  # limited
-    assert ctx.levels_for_var("clc") == list(range(27, 66))
+    assert ctx.levels_for_var("u") == list(range(30, 66))  # limited (cov 13k → L30)
+    assert ctx.levels_for_var("clc") == list(range(30, 66))
 
 
 # ---------------------------------------------------------------------------
@@ -148,20 +167,20 @@ def test_prefetch_fetches_reduced_levels_for_limited_vars(tmp_path, monkeypatch)
     ctx = _IconEuContext(
         init_date="20260721", init_hour=0, forecast_hours=[12],
         run_dir=tmp_path, levels=full,
-        levels_by_var=icon_levels_by_var(ICON_D2, 18_000, full),
+        levels_by_var=icon_levels_by_var(ICON_D2, 8_000, full),
         point_lats=[48.0], point_lons=[11.0], session=None, variant=ICON_D2,
     )
     grib_mod._prefetch_icon_eu_data_inner(ctx)
 
     by_var = dict(per_level_calls)
-    # Wind/cloud variables fetched only from the FL180 cut (level 27) down.
+    # Wind/cloud variables fetched only from the cut (ceiling 8k + 5k → level 30) down.
     for var in LIMITED_LEVEL_VARIABLES:
-        assert by_var[var] == tuple(range(27, 66))
+        assert by_var[var] == tuple(range(30, 66))
     # Thermodynamic column stays full.
     for var in FULL_COLUMN_VARIABLES:
         assert by_var[var] == tuple(range(16, 66))
     # And the reduced level files really landed on disk for a limited var.
-    assert get_cached(tmp_path, cache_key(12, icon_model_level_var_label(ICON_D2, "u", 27))) == b"x"
+    assert get_cached(tmp_path, cache_key(12, icon_model_level_var_label(ICON_D2, "u", 30))) == b"x"
     assert get_cached(tmp_path, cache_key(12, icon_model_level_var_label(ICON_D2, "u", 16))) is None
 
 
@@ -207,14 +226,16 @@ class TestPrepareCeiling:
         return ctx
 
     def test_low_ceiling_limits_d2_context(self, tmp_path):
-        ctx = self._prepare(tmp_path, ceiling=18_000)
+        # ceiling 8,000 + 5,000 display buffer = cov 13,000 → cut at level 30.
+        ctx = self._prepare(tmp_path, ceiling=8_000)
         assert ctx is not None and ctx.variant is ICON_D2
         assert ctx.levels_by_var is not None
-        assert ctx.levels_for_var("u") == list(range(27, 66))
+        assert ctx.levels_for_var("u") == list(range(30, 66))
         assert ctx.levels_for_var("t") == list(range(16, 66))
 
     def test_high_ceiling_keeps_full_column(self, tmp_path):
-        ctx = self._prepare(tmp_path, ceiling=20_000)
+        # 18,000 + 5,000 buffer is above the deepest anchor → no truncation.
+        ctx = self._prepare(tmp_path, ceiling=18_000)
         assert ctx is not None and ctx.variant is ICON_D2
         assert ctx.levels_by_var is None  # no truncation
 
@@ -223,7 +244,7 @@ class TestPrepareCeiling:
         # reassuring downstream (turbulence GREEN not UNAVAILABLE, high cloud
         # decks as "clear"). With the gate off, a ceiling that WOULD cut must
         # still yield the full column for every variable.
-        ctx = self._prepare(tmp_path, ceiling=18_000, enabled=False)
+        ctx = self._prepare(tmp_path, ceiling=8_000, enabled=False)
         assert ctx is not None and ctx.variant is ICON_D2
         assert ctx.levels_by_var is None
         assert ctx.levels_for_var("u") == list(range(16, 66))

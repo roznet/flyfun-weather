@@ -3,6 +3,17 @@
 import type { FrontCrossing, FrontProximity, FrontChain } from '../types/fronts';
 import type { AdvisoryHighlights } from '../types/advisories';
 
+/**
+ * Vertical headroom (ft) the cross-section / Skew-T render ABOVE the flight
+ * ceiling — the Y-axis top is `max(ceiling, cruise) + this`. The ICON-D2
+ * ceiling-limited fetch gates on `ceiling + this` too, so the fetched column
+ * always reaches the top of what's drawn (no blank strip). KEEP IN SYNC with
+ * the server constant `CROSS_SECTION_DISPLAY_BUFFER_FT` in
+ * `src/weatherbrief/fetch/grib/icon_eu_fetch.py` and the iOS
+ * `VizRouteData.displayBufferFt`.
+ */
+export const CROSS_SECTION_DISPLAY_BUFFER_FT = 5000;
+
 // --- Settings ---
 
 export type VizLayout = 'cross-section' | 'map' | 'split' | 'compare';

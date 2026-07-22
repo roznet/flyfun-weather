@@ -3261,17 +3261,18 @@ def _prepare_icon_eu(
     levels = list(range(variant.level_min, variant.level_max + 1))
 
     # Ceiling-limited fetch (#469 phase 2): the wind/cloud variables need
-    # nothing above the flight ceiling, so restrict them to a domain-safe level
-    # cut (t/qv/p stay full column for CAPE). None → every variable full column
+    # nothing above the flight ceiling (+ the cross-section display buffer, baked
+    # into icon_limited_top_level), so restrict them to a domain-safe level cut
+    # (t/qv/p stay full column for CAPE). None → every variable full column
     # (ICON-EU, unknown/high ceiling). Only a per-level-cache variant can act on
     # this — the whole-column blob has no per-level granularity to top up from.
     #
-    # GATED OFF by default: a truncated column currently reads as reassuring
-    # downstream (turbulence GREEN instead of UNAVAILABLE, high cloud decks as
-    # "clear") — see icon_ceiling_limit_enabled() for the full reasoning and
-    # what re-landing needs. Off → None → the same full-column path ICON-EU
-    # already takes in production. Phases 1 (per-level cache + top-up) and 3
-    # (flight warming) are independent of this flag and stay active.
+    # DEFAULT ON since #474 re-landed it with the consumer fixes (per-level wind
+    # gate, top_truncated/fetched_column_top_ft honesty, labelled charts) — see
+    # icon_ceiling_limit_enabled(). Set WB_ICON_CEILING_LIMIT_ENABLED=false to
+    # disable → None → the same full-column path ICON-EU takes. Phases 1
+    # (per-level cache + top-up) and 3 (flight warming) are independent of this
+    # flag and stay active.
     levels_by_var = (
         icon_levels_by_var(variant, flight_ceiling_ft, levels)
         if icon_ceiling_limit_enabled() else None

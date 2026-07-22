@@ -10,6 +10,7 @@
  */
 
 import type { VizRouteData, VizPoint, AltitudeLines, VizCloudLayer, VizIcingZone, VizSfipZone, VizCATLayer, VizInversionLayer } from '../visualization/types';
+import { CROSS_SECTION_DISPLAY_BUFFER_FT } from '../visualization/types';
 import type { SoundingProfileData, SoundingProfileLevel, ParcelPathPoint, CloudLayer, IcingZone, InversionLayer } from '../visualization/skewt/types';
 import { computeSurfaceObscuration, type ObscurationLevel } from '../visualization/surface-obscuration';
 import { randomOverlapPct } from '../visualization/scales';
@@ -258,7 +259,7 @@ export function snapshotToVizData(
     points,
     cruiseAltitudeFt: ceilingFt,
     ceilingAltitudeFt: ceilingFt,
-    flightCeilingFt: ceilingFt + 5000,
+    flightCeilingFt: ceilingFt + CROSS_SECTION_DISPLAY_BUFFER_FT,
     fetchedColumnTopFt: null,
     totalDistanceNm: Math.max(1, (meta.hours.length - 1) * HOURS_TO_NM_SCALE),
     waypointMarkers: [],

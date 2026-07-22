@@ -388,7 +388,7 @@ final class CrossSectionViewModel {
             points: points,
             cruiseAltitudeFt: Double(manifest.cruiseAltitudeFt),
             ceilingAltitudeFt: actualCeiling,
-            flightCeilingFt: max(actualCeiling, Double(manifest.cruiseAltitudeFt)) + 5000,
+            flightCeilingFt: max(actualCeiling, Double(manifest.cruiseAltitudeFt)) + VizRouteData.displayBufferFt,
             fetchedColumnTopFt: fetchedColumnTopFt,
             totalDistanceNm: manifest.totalDistanceNm,
             waypointMarkers: waypointMarkers,
