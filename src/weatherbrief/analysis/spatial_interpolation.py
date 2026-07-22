@@ -218,35 +218,26 @@ def _lerp_layer(
 def _lerp_diagnostics(
     a: NWPCloudDiagnostics, b: NWPCloudDiagnostics, frac: float,
 ) -> NWPCloudDiagnostics:
+    """Interpolate every diagnostic between two route points.
+
+    Field coverage comes from ``NWP_CLOUD_DIAG_SCALARS`` rather than a
+    hand-written list — this used to drop ``freezing_level_ft`` because the
+    list here and the one on the time axis drifted independently (#485). The
+    spatial axis makes no averaged-vs-instantaneous distinction: neighbouring
+    route points share a valid time, so every scalar interpolates the same way.
+    """
     from weatherbrief.models import NWPCloudDiagnostics as Cls
+    from weatherbrief.models.analysis import NWP_CLOUD_DIAG_SCALARS
+
+    scalars = {
+        name: _lerp_optional(getattr(a, name), getattr(b, name), frac)
+        for name in NWP_CLOUD_DIAG_SCALARS
+    }
     return Cls(
         low=_lerp_layer(a.low, b.low, frac),
         mid=_lerp_layer(a.mid, b.mid, frac),
         high=_lerp_layer(a.high, b.high, frac),
-        convective_cover_pct=_lerp_optional(
-            a.convective_cover_pct, b.convective_cover_pct, frac,
-        ),
-        convective_base_ft=_lerp_optional(
-            a.convective_base_ft, b.convective_base_ft, frac,
-        ),
-        convective_top_ft=_lerp_optional(
-            a.convective_top_ft, b.convective_top_ft, frac,
-        ),
-        # Native convective realization + stability (#283 Phase 2).
-        convective_precip_mm_h=_lerp_optional(
-            a.convective_precip_mm_h, b.convective_precip_mm_h, frac,
-        ),
-        k_index=_lerp_optional(a.k_index, b.k_index, frac),
-        total_totals=_lerp_optional(a.total_totals, b.total_totals, frac),
-        ml_cape_jkg=_lerp_optional(a.ml_cape_jkg, b.ml_cape_jkg, frac),
-        ml_cin_jkg=_lerp_optional(a.ml_cin_jkg, b.ml_cin_jkg, frac),
-        total_cover_pct=_lerp_optional(
-            a.total_cover_pct, b.total_cover_pct, frac,
-        ),
-        boundary_cover_pct=_lerp_optional(
-            a.boundary_cover_pct, b.boundary_cover_pct, frac,
-        ),
-        ceiling_ft=_lerp_optional(a.ceiling_ft, b.ceiling_ft, frac),
+        **scalars,
     )
 
 

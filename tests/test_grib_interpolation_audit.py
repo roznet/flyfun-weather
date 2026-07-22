@@ -1,0 +1,381 @@
+"""Regression tests from the GRIB interpolation audit (#480, #482-#485).
+
+Each class here pins one defect found by an external review of the spatial /
+temporal / vertical interpolation paths. They are grouped in one file because
+they share a provenance, not a module — the fixes span decode, fill, the ECMWF
+enrichment loop and spatial interpolation.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+import pytest
+import xarray as xr
+
+from weatherbrief.analysis.spatial_interpolation import _lerp_diagnostics
+from weatherbrief.fetch.grib import (
+    _advance_ecmwf_accumulators,
+    _select_ecmwf_window_steps,
+)
+from weatherbrief.fetch.grib.decode import (
+    _close_cyclic_longitude,
+    _interpolate_per_point,
+)
+from weatherbrief.fetch.grib.fill import _interp_diag_at
+from weatherbrief.models import NWPCloudDiagnostics
+from weatherbrief.models.analysis import (
+    NWP_CLOUD_DIAG_AVERAGED_SCALARS,
+    NWP_CLOUD_DIAG_INSTANT_SCALARS,
+    NWP_CLOUD_DIAG_LAYER_FIELDS,
+    NWP_CLOUD_DIAG_SCALARS,
+)
+
+
+# ---------------------------------------------------------------------------
+# #484 — Greenwich seam on the cyclic GFS longitude axis
+# ---------------------------------------------------------------------------
+
+
+def _global_grid() -> xr.DataArray:
+    """Global 0.25° grid whose value at each cell IS its longitude in ±180.
+
+    Encoding the answer into the data means a wrong seam interpolation shows
+    up as a wrong value, not just a non-NaN.
+    """
+    lons = np.arange(0.0, 360.0, 0.25)
+    lats = np.arange(60.0, 40.0, -0.25)
+    signed = ((lons + 180.0) % 360.0) - 180.0
+    return xr.DataArray(
+        np.tile(signed, (len(lats), 1)),
+        dims=("latitude", "longitude"),
+        coords={"latitude": lats, "longitude": lons},
+    )
+
+
+def _regional_grid() -> xr.DataArray:
+    """ICON-EU-like regional grid — not cyclic, must be left alone."""
+    lons = np.arange(-10.0, 20.0, 0.0625)
+    lats = np.arange(60.0, 40.0, -0.0625)
+    return xr.DataArray(
+        np.tile(lons, (len(lats), 1)),
+        dims=("latitude", "longitude"),
+        coords={"latitude": lats, "longitude": lons},
+    )
+
+
+class TestGreenwichSeam:
+    """GFS targets are normalised with ``lon % 360`` but the grid stops at
+    359.75, so longitudes in (-0.25, 0) landed past the end of the axis and
+    returned NaN — a band every UK↔continent route crosses (#484)."""
+
+    @pytest.mark.parametrize("lon", [-0.01, -0.05, -0.10, -0.20, -0.24])
+    def test_just_west_of_greenwich_interpolates(self, lon):
+        da = _global_grid()
+        (value,) = _interpolate_per_point(da, [51.0], [lon % 360])
+        assert value is not None, f"{lon} fell into the seam gap"
+        assert value == pytest.approx(lon, abs=1e-6)
+
+    @pytest.mark.parametrize("lon", [-0.25, -0.5, -1.0, 0.0, 0.1, 2.0])
+    def test_longitudes_that_already_worked_are_unchanged(self, lon):
+        da = _global_grid()
+        (value,) = _interpolate_per_point(da, [51.0], [lon % 360])
+        assert value == pytest.approx(lon, abs=1e-6)
+
+    def test_seam_column_is_appended_once_for_a_cyclic_grid(self):
+        da = _global_grid()
+        closed = _close_cyclic_longitude(da, "longitude")
+        assert closed.longitude.size == da.longitude.size + 1
+        assert float(closed.longitude[-1]) == pytest.approx(360.0)
+        # The wrapped column must equal the 0° column it duplicates.
+        assert closed.isel(longitude=-1).values == pytest.approx(
+            da.isel(longitude=0).values
+        )
+
+    def test_regional_grid_is_not_wrapped(self):
+        da = _regional_grid()
+        closed = _close_cyclic_longitude(da, "longitude")
+        assert closed.longitude.size == da.longitude.size
+
+    def test_regional_grid_still_interpolates_normally(self):
+        da = _regional_grid()
+        (value,) = _interpolate_per_point(da, [51.0], [5.0])
+        assert value == pytest.approx(5.0, abs=1e-6)
+
+    def test_regional_grid_still_returns_none_outside_its_domain(self):
+        """Wrapping must not accidentally make out-of-domain points resolve."""
+        da = _regional_grid()
+        (value,) = _interpolate_per_point(da, [51.0], [40.0])
+        assert value is None
+
+
+# ---------------------------------------------------------------------------
+# #483 — ECMWF step selection must bracket the window at any cadence
+# ---------------------------------------------------------------------------
+
+
+_INIT = datetime(2026, 7, 22, 0, 0, tzinfo=timezone.utc)
+
+# The real 00z manifest shape: hourly to 90, 3-hourly to 144, 6-hourly to 168.
+_ECMWF_STEPS = (
+    list(range(0, 91))
+    + list(range(93, 145, 3))
+    + [150, 156, 162, 168]
+)
+
+
+def _steps():
+    return [(h, {}, _INIT + timedelta(hours=h)) for h in _ECMWF_STEPS]
+
+
+class TestEcmwfWindowStepSelection:
+    """A fixed ±3 h margin cannot bracket 6-hourly output past +144h (#483)."""
+
+    def _select(self, dep_hour, duration_h=1.0):
+        start = _INIT + timedelta(hours=dep_hour)
+        end = start + timedelta(hours=duration_h)
+        chosen = _select_ecmwf_window_steps(
+            _steps(), start, end, timedelta(hours=3),
+        )
+        return [s[0] for s in chosen]
+
+    def test_six_hourly_range_keeps_both_brackets(self):
+        """The reported case: +154h kept only step 156 before the fix."""
+        selected = self._select(154)
+        assert 150 in selected, "lower bracket missing — nothing to interpolate from"
+        assert 156 in selected
+
+    @pytest.mark.parametrize("dep_hour", [146, 148, 151, 154, 158, 160, 165])
+    def test_every_departure_in_the_six_hourly_range_is_bracketed(self, dep_hour):
+        selected = self._select(dep_hour)
+        start_h = dep_hour
+        end_h = dep_hour + 1
+        assert any(s <= start_h for s in selected), f"no lower anchor at +{dep_hour}h"
+        assert any(s >= end_h for s in selected), f"no upper anchor at +{dep_hour}h"
+
+    @pytest.mark.parametrize("dep_hour", [10, 45, 89, 95, 110, 140])
+    def test_hourly_and_three_hourly_ranges_are_bracketed_too(self, dep_hour):
+        selected = self._select(dep_hour)
+        assert any(s <= dep_hour for s in selected)
+        assert any(s >= dep_hour + 1 for s in selected)
+
+    def test_hourly_range_selection_is_unchanged_by_the_bracket_union(self):
+        """Inside hourly cadence the brackets already sit within the margin,
+        so the fix must be a no-op there."""
+        start = _INIT + timedelta(hours=40)
+        end = start + timedelta(hours=2)
+        margin = timedelta(hours=3)
+        margin_only = sorted(
+            s[0] for s in _steps() if start - margin <= s[2] <= end + margin
+        )
+        assert self._select(40, duration_h=2.0) == margin_only
+
+    def test_selection_is_sorted_and_deduplicated(self):
+        selected = self._select(154)
+        assert selected == sorted(set(selected))
+
+    def test_departure_before_the_first_step_has_no_lower_bracket(self):
+        """Nothing to invent — must not crash, must still take the upper side."""
+        start = _INIT - timedelta(hours=5)
+        selected = [
+            s[0] for s in _select_ecmwf_window_steps(
+                _steps(), start, start + timedelta(hours=1), timedelta(hours=3),
+            )
+        ]
+        assert selected, "should still pick the earliest available step"
+        assert min(selected) == 0
+
+    def test_departure_past_the_horizon_takes_the_last_step(self):
+        start = _INIT + timedelta(hours=200)
+        selected = [
+            s[0] for s in _select_ecmwf_window_steps(
+                _steps(), start, start + timedelta(hours=1), timedelta(hours=3),
+            )
+        ]
+        assert selected == [168]
+
+    def test_no_steps_available(self):
+        start = _INIT + timedelta(hours=10)
+        assert _select_ecmwf_window_steps(
+            [], start, start + timedelta(hours=1), timedelta(hours=3),
+        ) == []
+
+
+# ---------------------------------------------------------------------------
+# #485 — the two interpolation axes must cover the same fields
+# ---------------------------------------------------------------------------
+
+
+def _filled_diag(value: float) -> NWPCloudDiagnostics:
+    """A diagnostics object with every scalar set, so a dropped field shows up
+    as a None rather than being masked by a default."""
+    return NWPCloudDiagnostics(**{name: value for name in NWP_CLOUD_DIAG_SCALARS})
+
+
+class TestDiagnosticsFieldInventory:
+    """`_lerp_diagnostics` (spatial) and `_interp_diag_at` (time) had drifted
+    apart, each silently dropping fields the other carried (#485)."""
+
+    def test_inventory_partitions_every_model_field(self):
+        covered = set(NWP_CLOUD_DIAG_LAYER_FIELDS) | set(NWP_CLOUD_DIAG_SCALARS)
+        assert covered == set(NWPCloudDiagnostics.model_fields), (
+            "a field was added to NWPCloudDiagnostics without classifying it "
+            "for interpolation"
+        )
+
+    def test_averaged_and_instant_scalars_do_not_overlap(self):
+        assert not (
+            set(NWP_CLOUD_DIAG_AVERAGED_SCALARS) & set(NWP_CLOUD_DIAG_INSTANT_SCALARS)
+        )
+
+    def test_spatial_interpolation_carries_every_scalar(self):
+        a = _filled_diag(10.0)
+        b = _filled_diag(20.0)
+        out = _lerp_diagnostics(a, b, 0.5)
+        for name in NWP_CLOUD_DIAG_SCALARS:
+            assert getattr(out, name) == pytest.approx(15.0), f"{name} dropped"
+
+    def test_time_interpolation_carries_every_scalar(self):
+        a = _filled_diag(10.0)
+        b = _filled_diag(20.0)
+        out = _interp_diag_at(a, b, mid_frac=0.5, step_frac=0.5)
+        for name in NWP_CLOUD_DIAG_SCALARS:
+            assert getattr(out, name) == pytest.approx(15.0), f"{name} dropped"
+
+    def test_freezing_level_survives_spatial_fill(self):
+        """The concrete regression: ECMWF `deg0l` was lost on spatially filled
+        interior route points."""
+        a = NWPCloudDiagnostics(freezing_level_ft=8000.0)
+        b = NWPCloudDiagnostics(freezing_level_ft=10000.0)
+        assert _lerp_diagnostics(a, b, 0.5).freezing_level_ft == pytest.approx(9000.0)
+
+    def test_convective_fields_survive_time_fill(self):
+        """The other direction of the same drift: the #283 convective and
+        stability fields were absent from the GFS time axis."""
+        a = NWPCloudDiagnostics(
+            convective_precip_mm_h=1.0, k_index=20.0, total_totals=40.0,
+            ml_cape_jkg=500.0, ml_cin_jkg=-100.0,
+        )
+        b = NWPCloudDiagnostics(
+            convective_precip_mm_h=3.0, k_index=30.0, total_totals=50.0,
+            ml_cape_jkg=1500.0, ml_cin_jkg=-200.0,
+        )
+        out = _interp_diag_at(a, b, mid_frac=0.5, step_frac=0.5)
+        assert out.convective_precip_mm_h == pytest.approx(2.0)
+        assert out.k_index == pytest.approx(25.0)
+        assert out.total_totals == pytest.approx(45.0)
+        assert out.ml_cape_jkg == pytest.approx(1000.0)
+        assert out.ml_cin_jkg == pytest.approx(-150.0)
+
+    def test_averaged_scalars_use_the_midpoint_fraction(self):
+        """Boundary-layer cover is published averaged-only, so it must follow
+        mid_frac while instantaneous scalars follow step_frac."""
+        a = _filled_diag(0.0)
+        b = _filled_diag(100.0)
+        out = _interp_diag_at(a, b, mid_frac=0.25, step_frac=0.75)
+        for name in NWP_CLOUD_DIAG_AVERAGED_SCALARS:
+            assert getattr(out, name) == pytest.approx(25.0), f"{name} used step_frac"
+        for name in NWP_CLOUD_DIAG_INSTANT_SCALARS:
+            assert getattr(out, name) == pytest.approx(75.0), f"{name} used mid_frac"
+
+
+# ---------------------------------------------------------------------------
+# #482 — a missing accumulated step must invalidate its predecessor
+# ---------------------------------------------------------------------------
+
+
+class _AccumState:
+    """Holds the three per-point predecessor lists for a fixed point count."""
+
+    def __init__(self, n_points: int):
+        self.n = n_points
+        self.tp: list[float | None] = [None] * n_points
+        self.sf: list[float | None] = [None] * n_points
+        self.cp: list[float | None] = [None] * n_points
+
+    def advance(self, sfc_data, sfc_covered):
+        _advance_ecmwf_accumulators(
+            sfc_data, sfc_covered, self.n,
+            prev_tp_per_point=self.tp,
+            prev_sf_per_point=self.sf,
+            prev_cp_per_point=self.cp,
+        )
+
+
+def _raw(tp=None, sf=None, cp=None):
+    out = {}
+    if tp is not None:
+        out["total_precip_m"] = tp
+    if sf is not None:
+        out["snowfall_m_we"] = sf
+    if cp is not None:
+        out["conv_precip_m"] = cp
+    return out
+
+
+class TestEcmwfAccumulatorPredecessor:
+    """``prev_a1_valid_utc`` advances every processed step, so a predecessor
+    retained across a missing step gets divided by the wrong window (#482)."""
+
+    def test_present_value_is_carried_forward(self):
+        st = _AccumState(1)
+        st.advance([_raw(tp=0.005, sf=0.001, cp=0.002)], [True])
+        assert st.tp == [0.005]
+        assert st.sf == [0.001]
+        assert st.cp == [0.002]
+
+    def test_missing_field_resets_only_that_field(self):
+        st = _AccumState(1)
+        st.advance([_raw(tp=0.005, sf=0.001, cp=0.002)], [True])
+        st.advance([_raw(tp=0.007)], [True])  # sf/cp absent this step
+        assert st.tp == [0.007]
+        assert st.sf == [None], "stale snowfall accumulator survived a gap"
+        assert st.cp == [None], "stale convective accumulator survived a gap"
+
+    def test_uncovered_point_resets_every_field(self):
+        st = _AccumState(1)
+        st.advance([_raw(tp=0.005, sf=0.001, cp=0.002)], [True])
+        st.advance([_raw(tp=0.009, sf=0.003, cp=0.004)], [False])
+        assert st.tp == [None]
+        assert st.sf == [None]
+        assert st.cp == [None]
+
+    def test_empty_raw_dict_resets(self):
+        st = _AccumState(1)
+        st.advance([_raw(tp=0.005)], [True])
+        st.advance([{}], [True])
+        assert st.tp == [None]
+
+    def test_one_point_gap_does_not_disturb_its_neighbours(self):
+        st = _AccumState(3)
+        st.advance([_raw(tp=0.001), _raw(tp=0.002), _raw(tp=0.003)], [True] * 3)
+        st.advance([_raw(tp=0.004), _raw(), _raw(tp=0.006)], [True] * 3)
+        assert st.tp == [0.004, None, 0.006]
+
+    def test_short_sfc_data_resets_the_tail(self):
+        """A truncated decode must not leave trailing points holding stale
+        accumulators from an older step."""
+        st = _AccumState(3)
+        st.advance([_raw(tp=0.001), _raw(tp=0.002), _raw(tp=0.003)], [True] * 3)
+        st.advance([_raw(tp=0.004)], [True])
+        assert st.tp == [0.004, None, None]
+
+    def test_recovery_after_a_gap_needs_two_good_steps(self):
+        """After a gap the next step re-seeds the predecessor; the step after
+        that can difference again."""
+        st = _AccumState(1)
+        st.advance([_raw(tp=0.001)], [True])
+        st.advance([{}], [True])           # gap → reset
+        assert st.tp == [None]             # next step can compute no rate
+        st.advance([_raw(tp=0.005)], [True])
+        assert st.tp == [0.005]            # re-seeded, differencing resumes
+
+    def test_zero_is_preserved_not_treated_as_missing(self):
+        """A genuine 0.0 accumulation must be carried, not reset — otherwise
+        dry steps would keep resetting the chain."""
+        st = _AccumState(1)
+        st.advance([_raw(tp=0.0, sf=0.0, cp=0.0)], [True])
+        assert st.tp == [0.0]
+        assert st.sf == [0.0]
+        assert st.cp == [0.0]

@@ -269,20 +269,24 @@ def _gfs_fhour(gfs_init: datetime, target: datetime) -> int:
 def _gfs_window_length_hours(fhour: int) -> int:
     """Width of the averaging window ending at GFS forecast step ``fhour``.
 
-    NCEP cadence:
-      - f001 / f004 / f007 / … → 1 h
-      - f002 / f005 / f008 / … → 2 h
-      - f003 / f006 / f009 / … / f120 → 3 h
-      - f > 120 → 3 h (3-hourly cadence past f120)
+    NCEP resets the accumulation/averaging window at every multiple of 6 and
+    lets it GROW to the next reset — it is not a repeating 1/2/3 cycle. Read
+    off the live ``.idx`` (``LCDC:low cloud layer``)::
+
+        f001 0-1     f004 0-4     f006 0-6     f012 6-12
+        f007 6-7     f009 6-9     f120 114-120
+        f123 120-123 f126 120-126 f129 126-129 f132 126-132
+
+    So the window START is the largest multiple of 6 strictly below ``fhour``,
+    and one formula covers the whole range — including past f120, where the
+    3-hourly output cadence makes the widths alternate 3 / 6 rather than
+    staying at 3 (issue #480).
 
     f000 is analysis (no window) and gets returned as 0.
     """
     if fhour <= 0:
         return 0
-    if fhour > 120:
-        return 3
-    r = fhour % 3
-    return 3 if r == 0 else r
+    return fhour - 6 * ((fhour - 1) // 6)
 
 
 def _interp_diag_at(
@@ -298,37 +302,36 @@ def _interp_diag_at(
     for the AVERAGED-window fields (low/mid/high cover and boundary-layer
     cover). ``step_frac`` is the fraction in step-time space — used for the
     instantaneous fields (convective, total, ceiling, etc.). (#441 finding #5)
+
+    Which field goes in which bucket comes from the shared inventory in
+    ``models.analysis`` rather than a hand-written list here — this function
+    and its spatial-axis counterpart had drifted apart, each dropping fields
+    the other carried (#485).
     """
     from weatherbrief.models import NWPCloudDiagnostics
+    from weatherbrief.models.analysis import (
+        NWP_CLOUD_DIAG_AVERAGED_SCALARS,
+        NWP_CLOUD_DIAG_INSTANT_SCALARS,
+    )
 
     low = _interp_layer(prev_diag.low, next_diag.low, mid_frac)
     mid = _interp_layer(prev_diag.mid, next_diag.mid, mid_frac)
     high = _interp_layer(prev_diag.high, next_diag.high, mid_frac)
 
+    scalars = {
+        name: _lerp(getattr(prev_diag, name), getattr(next_diag, name), mid_frac)
+        for name in NWP_CLOUD_DIAG_AVERAGED_SCALARS
+    }
+    scalars.update({
+        name: _lerp(getattr(prev_diag, name), getattr(next_diag, name), step_frac)
+        for name in NWP_CLOUD_DIAG_INSTANT_SCALARS
+    })
+
     return NWPCloudDiagnostics(
         low=low,
         mid=mid,
         high=high,
-        convective_cover_pct=_lerp(
-            prev_diag.convective_cover_pct, next_diag.convective_cover_pct, step_frac,
-        ),
-        convective_base_ft=_lerp(
-            prev_diag.convective_base_ft, next_diag.convective_base_ft, step_frac,
-        ),
-        convective_top_ft=_lerp(
-            prev_diag.convective_top_ft, next_diag.convective_top_ft, step_frac,
-        ),
-        total_cover_pct=_lerp(
-            prev_diag.total_cover_pct, next_diag.total_cover_pct, step_frac,
-        ),
-        # Boundary-layer cover is published averaged-only → midpoint align.
-        boundary_cover_pct=_lerp(
-            prev_diag.boundary_cover_pct, next_diag.boundary_cover_pct, mid_frac,
-        ),
-        ceiling_ft=_lerp(prev_diag.ceiling_ft, next_diag.ceiling_ft, step_frac),
-        freezing_level_ft=_lerp(
-            prev_diag.freezing_level_ft, next_diag.freezing_level_ft, step_frac,
-        ),
+        **scalars,
     )
 
 

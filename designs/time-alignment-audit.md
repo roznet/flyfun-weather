@@ -130,19 +130,24 @@ Open-Meteo provides **hourly** forecast data for the full 24h cross-section, inc
 
 After all GRIB enrichment completes, `propagate_all` fills `nwp_cloud_diagnostics` on gap hours between native GRIB steps. The strategy is source-dependent:
 
-- **GFS, when `gfs_init` is provided** — window-midpoint linear interpolation (`_interp_gfs_diag_hourly`). NCEP publishes only the averaged form of LCDC/MCDC/HCDC, so each anchor sits at `step - window_length/2` (1/2/3 h depending on step position; 3 h past f120) and low/mid/high cover interpolate linearly between bracketing midpoints. Layer geometry (`base_ft`, `top_ft`, `top_temp_c`) holds over from the higher-cover endpoint; sub-5 % (`_GFS_LAYER_DROP_THRESHOLD_PCT`) covers drop the layer entirely. Convective, boundary, total cover, ceiling, and freezing level interpolate linearly with **step-time** anchoring (instantaneous in GFS pgrb2). A follow-up `apply_gfs_rh_condensate_gate` drops any layer whose pressure-level RH and condensate inside `[base_ft, top_ft]` contradict the averaged cover (per-band thresholds `_GFS_GATE_RH_LOW_PCT` = 60, `_GFS_GATE_RH_MID_PCT` = 70, `_GFS_GATE_RH_HIGH_PCT` = 70). See [meteorology-decisions §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) for the rationale.
+- **GFS, when `gfs_init` is provided** — window-midpoint linear interpolation (`_interp_gfs_diag_hourly`). NCEP publishes only the averaged form of LCDC/MCDC/HCDC, so each anchor sits at `step - window_length/2` and low/mid/high cover interpolate linearly between bracketing midpoints. **The averaging window resets at every multiple of 6 and grows to the next reset** — `0-1`, `0-2`, … `0-6`, then `6-7` … `6-12`, and so on — so `window_length = fhour - 6*((fhour-1)//6)`, giving 1-6 h depending on step position. Past f120 the 3-hourly output cadence makes the widths alternate 3 / 6 (`120-123`, `120-126`, `126-129`, `126-132`). This is verified against live NCEP `.idx` metadata; the code previously assumed a repeating 1/2/3 cycle capped at 3 h (#480). Layer geometry (`base_ft`, `top_ft`, `top_temp_c`) holds over from the higher-cover endpoint; sub-5 % (`_GFS_LAYER_DROP_THRESHOLD_PCT`) covers drop the layer entirely. Convective, boundary, total cover, ceiling, and freezing level interpolate linearly with **step-time** anchoring (instantaneous in GFS pgrb2). A follow-up `apply_gfs_rh_condensate_gate` drops any layer whose pressure-level RH and condensate inside `[base_ft, top_ft]` contradict the averaged cover (per-band thresholds `_GFS_GATE_RH_LOW_PCT` = 60, `_GFS_GATE_RH_MID_PCT` = 70, `_GFS_GATE_RH_HIGH_PCT` = 70). See [meteorology-decisions §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) for the rationale.
 - **ICON-EU, ECMWF, and the GFS fallback** (no `gfs_init`) — forward-fill (`_fill_diag_hourly`). ICON-EU and ECMWF publish instantaneous cover, so persistence is the right semantic.
 
 GFS path (with `gfs_init`), illustrating the f132 / f135 case past f120:
 
 ```
-Hour 12 Z (f132 native, avg over 09–12 Z) → midpoint anchor at 10:30 Z
-Hour 13 Z (interp) → linearly interpolated between f132 midpoint (10:30) and f135 midpoint (13:30)
+Hour 12 Z (f132 native, avg over 126–132 = 06–12 Z) → midpoint anchor at 09:00 Z
+Hour 13 Z (interp) → linearly interpolated between f132 midpoint (09:00) and f135 midpoint (13:30)
 Hour 14 Z (interp) → just past f135 midpoint, so dominated by f135's value
-Hour 15 Z (f135 native, avg over 12–15 Z) → midpoint anchor at 13:30 Z
+Hour 15 Z (f135 native, avg over 132–135 = 12–15 Z) → midpoint anchor at 13:30 Z
 Hour 16 Z (interp) → linearly interpolated between f135 midpoint and f138 midpoint
 ...
 ```
+
+Note the neighbouring windows are **not** the same width — f132 spans 6 h while
+f135 spans 3 h, because the window resets at f132 (a multiple of 6). Midpoint
+spacing is therefore uneven, which is exactly why the anchor has to be computed
+from the real window rather than assumed.
 
 Forward-fill path (ICON-EU / ECMWF / GFS fallback):
 

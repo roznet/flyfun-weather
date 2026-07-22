@@ -806,7 +806,98 @@ def _decode_timeout_s() -> float:
 # the step filter in ``_enrich_ecmwf_inner``). Module-level so the timing-scan
 # coverage detector (``tasks/time_scan.py``) reads the SAME value instead of
 # mirroring a magic number that could drift.
+#
+# This is a LOWER BOUND on what gets decoded, not the exact span: the step
+# filter additionally always keeps the steps immediately bracketing the flight
+# window, because ECMWF cadence widens to 6-hourly past +144h and a fixed
+# margin cannot bracket it (issue #483). Keeping the constant at 3 h means the
+# coverage rule window in ``time_scan`` stays unchanged — it can only
+# under-claim relative to what was decoded, never over-claim.
 ECMWF_FLIGHT_WINDOW_MARGIN = timedelta(hours=3)
+
+
+def _select_ecmwf_window_steps(
+    all_steps: list[tuple[int, dict, datetime]],
+    flight_start: datetime,
+    flight_end: datetime,
+    margin: timedelta,
+) -> list[tuple[int, dict, datetime]]:
+    """Pick the ECMWF forecast steps to decode for one flight window.
+
+    Takes everything within ``margin`` of the window, UNION the steps
+    immediately bracketing it — the latest step at or before ``flight_start``
+    and the earliest at or after ``flight_end``.
+
+    The bracket union is what makes this cadence-independent. ECMWF output is
+    hourly to +90h, 3-hourly to +144h, then 6-hourly to +168h at 00/12z, so a
+    fixed margin cannot guarantee two anchors in the 6-hourly range: a flight
+    at +154h keeps only step 156, because 150 falls outside ``start - 3h``.
+    Without a lower anchor, instantaneous fields have nothing to interpolate
+    between and accumulated fields (``tp``/``sf``/``cp``) have no predecessor
+    to de-accumulate against (issue #483).
+
+    Args:
+        all_steps: ``(step_hours, parts, valid_time)`` for every available
+            step, in any order.
+        flight_start: Window start (departure).
+        flight_end: Window end (departure + duration).
+        margin: Slack either side of the window.
+
+    Returns:
+        The selected steps, sorted by ``step_hours``.
+    """
+    keep: set[int] = {
+        step_hours
+        for step_hours, _, valid_time in all_steps
+        if flight_start - margin <= valid_time <= flight_end + margin
+    }
+
+    before = [s for s in all_steps if s[2] <= flight_start]
+    if before:
+        keep.add(max(before, key=lambda s: s[2])[0])
+
+    after = [s for s in all_steps if s[2] >= flight_end]
+    if after:
+        keep.add(min(after, key=lambda s: s[2])[0])
+
+    return sorted((s for s in all_steps if s[0] in keep), key=lambda s: s[0])
+
+
+def _advance_ecmwf_accumulators(
+    sfc_data: list[dict[str, float]],
+    sfc_covered: list[bool],
+    n_points: int,
+    *,
+    prev_tp_per_point: list[float | None],
+    prev_sf_per_point: list[float | None],
+    prev_cp_per_point: list[float | None],
+) -> None:
+    """Carry one a1 step's cumulative ``tp``/``sf``/``cp`` forward, in place.
+
+    Assigns UNCONDITIONALLY, including ``None``. A point whose value is absent
+    at this step — uncovered, or a partially decoded a1 — has its predecessor
+    RESET, so the next step differences against nothing and produces no rate.
+
+    That reset is the whole point (issue #482). The shared
+    ``prev_a1_valid_utc`` advances for every processed step, so a predecessor
+    retained across a missing step would be paired with a window it does not
+    span: the next successful step would subtract a two-step-old accumulator
+    while dividing by a single step's duration, inflating the rate roughly by
+    the ratio of the two spans. Declining to emit a rate is the missing-data-
+    safe outcome; a plausible-looking wrong one is not.
+
+    This mirrors the ICON ``rain_con`` loop, which was ported from this
+    function and already carries the fix.
+    """
+    for i in range(n_points):
+        # Walk every route point, not just the decoded prefix — a short
+        # sfc_data would otherwise leave the tail holding stale values.
+        raw = sfc_data[i] if i < len(sfc_data) else None
+        covered = sfc_covered[i] if i < len(sfc_covered) else False
+        usable = bool(covered) and bool(raw)
+        prev_tp_per_point[i] = raw.get("total_precip_m") if usable else None
+        prev_sf_per_point[i] = raw.get("snowfall_m_we") if usable else None
+        prev_cp_per_point[i] = raw.get("conv_precip_m") if usable else None
 
 
 # ---------------------------------------------------------------------------
@@ -2308,13 +2399,26 @@ def _enrich_ecmwf_inner(
 
     # Filter steps to the flight window (with margin) up-front so we can
     # fan out all decodes in parallel before merging.
-    margin = ECMWF_FLIGHT_WINDOW_MARGIN
-    window_steps: list[tuple[int, dict[str, Path], datetime]] = []
-    for step_hours, parts in sorted(files_by_step.items()):
-        valid_time = latest_bt + timedelta(hours=step_hours)
-        if valid_time < flight_start - margin or valid_time > flight_end + margin:
-            continue
-        window_steps.append((step_hours, parts, valid_time))
+    #
+    # The margin alone is NOT sufficient to bracket the window, because ECMWF
+    # cadence is not uniform: hourly to +90h, 3-hourly to +144h, then 6-hourly
+    # to +168h at 00/12z. A flight at +154h with a fixed 3 h margin kept only
+    # step 156 — step 150 fell outside `start - 3h` — leaving instantaneous
+    # fields with a single anchor (no interpolation) and accumulated fields
+    # with no predecessor to de-accumulate against (issue #483).
+    #
+    # So take the margin window UNION the immediate bracketing steps: the last
+    # step at or before the start and the first at or after the end. That is
+    # cadence-independent and self-maintaining if ECMWF changes its schedule
+    # again. At hourly/3-hourly cadence the brackets already fall inside the
+    # margin, so this adds nothing and behaviour is unchanged.
+    all_steps = [
+        (step_hours, parts, latest_bt + timedelta(hours=step_hours))
+        for step_hours, parts in sorted(files_by_step.items())
+    ]
+    window_steps = _select_ecmwf_window_steps(
+        all_steps, flight_start, flight_end, ECMWF_FLIGHT_WINDOW_MARGIN,
+    )
 
     # Build the parallel job batch: one a2 (pressure) and/or one a1 (surface)
     # decode per step. Each step's two decodes are independent of each other,
@@ -2429,19 +2533,14 @@ def _enrich_ecmwf_inner(
                     prev_tp_per_point=prev_tp_per_point,
                     prev_sf_per_point=prev_sf_per_point,
                 )
-                # Update step-difference state from this step's cumulative values.
-                for i, (raw, cov) in enumerate(zip(sfc_data, sfc_covered)):
-                    if not cov or not raw:
-                        continue
-                    tp = raw.get("total_precip_m")
-                    if tp is not None:
-                        prev_tp_per_point[i] = tp
-                    sf = raw.get("snowfall_m_we")
-                    if sf is not None:
-                        prev_sf_per_point[i] = sf
-                    cp = raw.get("conv_precip_m")
-                    if cp is not None:
-                        prev_cp_per_point[i] = cp
+                # Carry this step's cumulative values forward as the next
+                # step's predecessors.
+                _advance_ecmwf_accumulators(
+                    sfc_data, sfc_covered, n_points,
+                    prev_tp_per_point=prev_tp_per_point,
+                    prev_sf_per_point=prev_sf_per_point,
+                    prev_cp_per_point=prev_cp_per_point,
+                )
                 prev_a1_valid_utc = valid_time
                 del sfc_data, sfc_covered, diagnostics
     _grib_gc()
