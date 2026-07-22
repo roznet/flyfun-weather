@@ -539,18 +539,33 @@ def _is_cyclic_longitude(lon_arr) -> bool:
     return bool(np.isclose(span, 360.0, atol=step / 2.0))
 
 
-def _close_cyclic_longitude(data_array, lon_dim):
+def _close_cyclic_longitude(data_array, lon_dim, targets_lon=None):
     """Append a wrapped column at ``first + 360`` when the grid spans the globe.
 
     Closing the seam with a duplicate of the first column makes the last cell
     interpolate like any other. Used by the ``xarray.interp`` path; the
     vectorised numpy path closes the same seam in ``_bilinear_grid_weights``.
+
+    ``targets_lon`` short-circuits the work when no target actually lands in
+    the seam band. That matters: the concat copies the whole field (~8 MB for
+    a global 0.25° grid) and this runs per variable per dataset inside the
+    decode workers, which are memory-constrained and run 3-up. Only routes
+    crossing the Greenwich meridian need the wrap, so the common case should
+    not pay for it. Pass ``None`` to wrap unconditionally.
     """
+    import numpy as np
     import xarray as xr
 
     lons = data_array[lon_dim].values
     if not _is_cyclic_longitude(lons):
         return data_array
+
+    if targets_lon is not None:
+        targets = np.asarray(targets_lon, dtype=np.float64)
+        # The seam band is (last coordinate, first + 360) — everything else
+        # already falls inside a real cell.
+        if not np.any((targets > float(lons[-1])) & (targets < float(lons[0]) + 360.0)):
+            return data_array
 
     seam = data_array.isel({lon_dim: 0})
     seam = seam.assign_coords({lon_dim: float(lons[0]) + 360.0})
@@ -579,7 +594,7 @@ def _interpolate_per_point(
         if lat_dim is None or lon_dim is None:
             return [None] * n
 
-        data_array = _close_cyclic_longitude(data_array, lon_dim)
+        data_array = _close_cyclic_longitude(data_array, lon_dim, longitudes)
 
         lat_arr = xr.DataArray(latitudes, dims="points")
         lon_arr = xr.DataArray(longitudes, dims="points")

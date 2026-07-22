@@ -19,8 +19,9 @@ Interpolation policy:
   - **GFS cloud diagnostics** (when ``gfs_init`` provided): low/mid/high
     cover_pct interpolated linearly between **window midpoints** rather than
     step times — NCEP publishes the averaged form (LCDC/MCDC/HCDC) past f0,
-    so the value at native step f is centred on the midpoint of its 1/2/3-h
-    window. Layer geometry (base/top/temp) is held over from the higher-cover
+    so the value at native step f is centred on the midpoint of its averaging
+    window (1-6 h — see ``_gfs_window_length_hours``). Layer geometry
+    (base/top/temp) is held over from the higher-cover
     endpoint, not interpolated. Layers fall away when interpolated cover
     < 5%. Convective/boundary/total cover and ceiling stay step-anchored
     (instantaneous in pgrb2).
@@ -172,8 +173,12 @@ def _interp_gfs_diag_hourly(
 
     NCEP publishes only the time-averaged form of LCDC/MCDC/HCDC (and the
     matching PRES bottoms/tops) for forecast hours > 0. Each native step f
-    carries values averaged over the window ending at f, of length 1/2/3 h
-    depending on f's position in the GFS 3-h reset cycle (all 3-h past f120).
+    carries values averaged over the window ending at f. NCEP resets that
+    window at every multiple of 6 and lets it grow to the next reset, so its
+    length is 1-6 h depending on f's position — see
+    ``_gfs_window_length_hours``, which owns the arithmetic and the live-index
+    provenance (#480). Past f120 the 3-hourly cadence makes the widths
+    alternate 3 / 6.
     Anchoring the averaged value at the **window midpoint** rather than the
     step time avoids forward-fill smearing the previous window's cover
     forward across the snapshot hour.
@@ -195,8 +200,6 @@ def _interp_gfs_diag_hourly(
     6. Hours before the first anchor are left as-is (matches the prior
        forward-fill semantics — no data to extrapolate from).
     """
-    from weatherbrief.models import NWPCloudDiagnostics
-
     sorted_hours = sorted(hourly_list, key=lambda h: h.time)
     if not sorted_hours:
         return 0
@@ -605,8 +608,6 @@ def _gate_gfs_hourly(h: HourlyForecast) -> int:
     function we can invert at this stage. The downstream ceiling consumers
     cross-check against pressure-level RH anyway.
     """
-    from weatherbrief.models import NWPCloudDiagnostics
-
     diag = h.nwp_cloud_diagnostics
     if diag is None or not h.pressure_levels:
         return 0

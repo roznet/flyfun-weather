@@ -72,8 +72,10 @@ The ECMWF `ceil` (ceiling) field in the a1 surface GRIB is ~50% NaN. ECMWF only 
 `_fill_cloud_diagnostics`, `_fill_cloud_water`,
 `apply_gfs_rh_condensate_gate`
 
-GFS LCDC/MCDC/HCDC are averaged-window fields (1/2/3 h windows depending on
-the step's position in the 3-h reset cycle, always 3 h past f120). Past
+GFS LCDC/MCDC/HCDC are averaged-window fields (1-6 h windows: NCEP resets
+the window at every multiple of 6 and lets it grow to the next reset, so
+past f120 the widths alternate 3 / 6. This write-up originally said
+"1/2/3 h ... always 3 h past f120" — that model was disproven in #480). Past
 f120 the 3-hourly cadence meant gap hours were forward-filled from the
 preceding native step, smearing each window's average forward up to 2 h
 beyond where it applied. At pt11 of flight
