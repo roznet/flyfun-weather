@@ -282,6 +282,13 @@ Two compounding effects in the GFS pgrb2 product:
    (… f120, f123, f126, f129 …). Gap hours between those steps used to
    inherit the preceding step's diagnostics via forward-fill.
 
+> **Correction (2026-07-22):** the window table above was wrong — NCEP's
+> averaging window resets every **6 h**, not 3 h (live `.idx`: f004=0-4,
+> f005=0-5, f006=0-6, f012=6-12, f120=114-120; 3 h/6 h alternating past
+> f120). The midpoint-anchoring *design* below is unchanged, but until the
+> table fix `_gfs_window_length_hours` anchored midpoints 1.5 h too late on
+> half of all steps. See `_gfs_window_length_hours` in `fill.py`.
+
 For the pt11 case the chain was: f132 native step carries the average over
 **09–12 Z** (100 % cover), forward-fill propagated that value across 13:00
 and 14:00 Z, the next native step f135 (window 12–15 Z, 0 % cover) overwrote

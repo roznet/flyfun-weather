@@ -379,6 +379,8 @@ def _bilinear_grid_weights(
     lon_arr: np.ndarray,
     targets_lat: np.ndarray,
     targets_lon: np.ndarray,
+    *,
+    cyclic_lon: bool = False,
 ) -> "_GridWeights | None":
     """Compute bilinear corner indices + weights once per dataset.
 
@@ -387,24 +389,50 @@ def _bilinear_grid_weights(
     every variable/level. Returns None for a degenerate grid (< 2 points on an
     axis); ``inb_idx`` may be empty when no target is inside the grid, which each
     caller handles per its own out-of-bounds semantics.
+
+    ``cyclic_lon=True`` (GFS only): global 0–360 grids wrap the last half-cell
+    — a target in ``(lon_arr[-1], lon_arr[0] + W·dx]`` interpolates between the
+    last column and the first instead of dropping out of bounds, closing the
+    prime-meridian seam.
     """
     import numpy as np
 
     H, W = lat_arr.size, lon_arr.size
     if H < 2 or W < 2:
         return None
+    targets_lat = np.asarray(targets_lat, dtype=np.float64)
+    targets_lon = np.asarray(targets_lon, dtype=np.float64)
     frac_lat, lat_ok = _frac_grid_indices(lat_arr, targets_lat)
     frac_lon, lon_ok = _frac_grid_indices(lon_arr, targets_lon)
+    if cyclic_lon:
+        dx = lon_arr[1] - lon_arr[0]
+        if dx > 0:
+            wrap_end = lon_arr[0] + W * dx
+            wrapped = (
+                ~lon_ok
+                & (targets_lon > lon_arr[-1])
+                & (targets_lon <= wrap_end + dx * 0.51)
+            )
+            if wrapped.any():
+                frac_lon = frac_lon.copy()
+                lon_ok = lon_ok.copy()
+                frac_lon[wrapped] = (W - 1) + (targets_lon[wrapped] - lon_arr[-1]) / dx
+                lon_ok[wrapped] = True
     in_bounds = lat_ok & lon_ok
     inb_idx = np.flatnonzero(in_bounds)
     fl = frac_lat[in_bounds]
     fln = frac_lon[in_bounds]
     i0 = np.clip(np.floor(fl).astype(np.intp), 0, H - 2)
-    j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
     i1 = i0 + 1
-    j1 = j0 + 1
+    if cyclic_lon:
+        j0 = np.floor(fln).astype(np.intp) % W
+        j1 = (j0 + 1) % W
+        aj = fln - np.floor(fln)
+    else:
+        j0 = np.clip(np.floor(fln).astype(np.intp), 0, W - 2)
+        j1 = j0 + 1
+        aj = fln - j0
     ai = fl - i0
-    aj = fln - j0
     return _GridWeights(
         i0, j0, i1, j1,
         (1.0 - ai) * (1.0 - aj), (1.0 - ai) * aj, ai * (1.0 - aj), ai * aj,
@@ -420,6 +448,7 @@ def _decode_pressure_vars_from_datasets(
     var_map: dict[str, str] | None = None,
     frac_vars: set[str] | None = None,
     first_wins: bool = False,
+    cyclic_lon: bool = False,
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
     """Shared decode loop for pressure-level GRIB datasets.
 
@@ -435,6 +464,8 @@ def _decode_pressure_vars_from_datasets(
         var_map: GRIB shortName → field name mapping. Defaults to _VAR_MAP.
         frac_vars: Variable names (lowercase) that are 0–1 fractions needing ×100.
         first_wins: If True, skip a field at a level if already set (multi-grid).
+        cyclic_lon: GFS only — wrap the 0–360 longitude seam (see
+            ``_bilinear_grid_weights``). Regional grids must leave this off.
 
     Returns:
         Tuple of (per-point results, coverage mask).
@@ -474,7 +505,9 @@ def _decode_pressure_vars_from_datasets(
 
         # Bilinear corner indices + weights — computed once per dataset and
         # reused for every variable in that dataset.
-        bw = _bilinear_grid_weights(lat_arr, lon_arr, targets_lat, targets_lon)
+        bw = _bilinear_grid_weights(
+            lat_arr, lon_arr, targets_lat, targets_lon, cyclic_lon=cyclic_lon,
+        )
         if bw is None or bw.inb_idx.size == 0:
             continue
         i0, j0, i1, j1 = bw.i0, bw.j0, bw.i1, bw.j1
@@ -611,11 +644,12 @@ def decode_grib_per_point(
         # .idx would be orphaned (604 found in the wild). (#441 efficiency)
         datasets = cfgrib.open_datasets(str(tmp_path), backend_kwargs={"indexpath": ""})
 
-        # Normalize longitudes to 0–360 (GFS convention)
+        # Normalize longitudes to 0–360 (GFS convention); the grid is global,
+        # so the bilinear weights wrap the prime-meridian seam (cyclic_lon).
         target_lons = [(lon % 360) for lon in longitudes]
 
         results, _ = _decode_pressure_vars_from_datasets(
-            datasets, latitudes, target_lons,
+            datasets, latitudes, target_lons, cyclic_lon=True,
         )
 
         for ds in datasets:
@@ -627,6 +661,34 @@ def decode_grib_per_point(
         return [{} for _ in latitudes]
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _wrap_cyclic_lon(data_array, lon_dim):
+    """Pad a GLOBAL 0–360 grid by one wrapped column at lon=360.
+
+    The GFS axis runs 0 … 359.75°, so a route point in the last half-cell —
+    lon ∈ (359.75, 360] ≡ (0.25°W … 0°) — falls off the axis end and gets NaN
+    (no data at all near the prime meridian). Appending the first column at
+    360° closes the seam. Detection is deliberately strict (ascending from
+    exactly 0 with a uniform step reaching 360), so regional grids
+    (ECMWF/ICON, ±180 or sub-global) pass through untouched.
+    """
+    import numpy as np
+    import xarray as xr
+
+    try:
+        lons = np.asarray(data_array.coords[lon_dim].values, dtype=np.float64)
+    except Exception:
+        return data_array
+    if lons.size < 2 or lons[0] != 0.0:
+        return data_array
+    dx = lons[1] - lons[0]
+    if dx <= 0 or not np.allclose(np.diff(lons), dx, rtol=0, atol=dx * 0.01):
+        return data_array
+    if abs((lons[-1] + dx) - 360.0) > dx * 0.51:
+        return data_array
+    pad = data_array.isel({lon_dim: [0]}).assign_coords({lon_dim: [360.0]})
+    return xr.concat([data_array, pad], dim=lon_dim)
 
 
 def _interpolate_per_point(
@@ -650,6 +712,8 @@ def _interpolate_per_point(
 
         if lat_dim is None or lon_dim is None:
             return [None] * n
+
+        data_array = _wrap_cyclic_lon(data_array, lon_dim)
 
         lat_arr = xr.DataArray(latitudes, dims="points")
         lon_arr = xr.DataArray(longitudes, dims="points")
@@ -1441,6 +1505,20 @@ def _normalize_model_cin(
     return -max(0.0, float(val))
 
 
+_ECMWF_NO_CLOUD_SENTINEL_M = 9999.0  # ECMWF uses 9999m for "no cloud"
+
+# Fields whose real-encoded 9999 m "no cloud" sentinel must be masked BEFORE
+# bilinear interpolation: blending it with real heights fabricates
+# intermediate values (500 m beside 9999 m → ~5,200 m) that then pass the
+# < 9999 filter at build time — phantom mid/high ceilings where most of the
+# stencil is cloud-free. Masking first makes the corner NaN → the point reads
+# None (conservative), matching the bitmap-missing path.
+_ECMWF_SENTINEL_MASK_M = 9998.0
+_ECMWF_PRE_INTERP_MASK_FIELDS = frozenset({
+    "ceiling_m", "cloud_base_height_m", "convective_cloud_top_m", "freezing_level_m",
+})
+
+
 def _k_index_to_c(raw: dict[str, float], key: str) -> float | None:
     """K-index normalized to °C.
 
@@ -1452,16 +1530,36 @@ def _k_index_to_c(raw: dict[str, float], key: str) -> float | None:
     K or °C (Total Totals is immune: its 2 positive / 2 negative terms cancel the
     offset). (#283 review)
 
+    The 9999 missing sentinel (real-encoded, can survive cfgrib unmasked — the
+    sibling ``mlcin100`` needed the same guard in #441) is dropped to None
+    BEFORE any conversion, so it can never become 9726 °C.
+
     Source unit reference: ECMWF GRIB2 parameter ``kx`` (paramId 260121,
     "K index") is documented in Kelvin in the ECMWF parameter database
     (https://codes.ecmwf.int/grib/param-db/260121). If that encoding ever
     changes, re-verify here rather than relying solely on the >100 heuristic.
     """
     val = raw.get(key)
-    if val is None:
+    if val is None or val >= _ECMWF_SENTINEL_MASK_M:
         return None
     val = float(val)
     return val - 273.15 if val > 100.0 else val
+
+
+def _drop_ge_sentinel(
+    raw: dict[str, float], key: str, at_or_above: float = _ECMWF_SENTINEL_MASK_M,
+) -> float | None:
+    """Passthrough that drops ECMWF's 9999 missing sentinel to None.
+
+    For fields consumed without unit conversion (``mlcape100``, ``totalx``):
+    the sentinel is real-encoded and can survive cfgrib unmasked, so an
+    unguarded ``_opt_float`` could surface 9999 J/kg of phantom CAPE. Same
+    rationale as the ``mlcin100`` guard in ``_normalize_model_cin`` (#441).
+    """
+    val = raw.get(key)
+    if val is None or val >= at_or_above:
+        return None
+    return float(val)
 
 
 def build_icon_cloud_diagnostics(
@@ -1501,7 +1599,13 @@ def build_icon_cloud_diagnostics(
     mid_cover = _pct("mid_cover_pct")
     high_cover = _pct("high_cover_pct")
     total_cover = _pct("total_cover_pct")
-    ml_cape = _opt_float(raw, "ml_cape_jkg")  # instantaneous (#283)
+    # ICON CAPE_ML: instantaneous (#283). Live samples (2026-07-22, EU + D2)
+    # show no −999.9 sentinel (undefined is bitmap-masked instead), but drop
+    # one defensively — the sibling CIN_ML needed the same treatment (#441),
+    # and a real CAPE is never negative.
+    ml_cape = _opt_float(raw, "ml_cape_jkg")
+    if ml_cape is not None and ml_cape <= -900.0:
+        ml_cape = None
     # ICON CIN_ML is a positive magnitude with -999.9 as the undefined
     # sentinel → convert to internal negative convention. (#441 finding #2)
     ml_cin = _normalize_model_cin(raw, "ml_cin_jkg", drop_at_or_below=-900.0)
@@ -2287,6 +2391,10 @@ def decode_ecmwf_surface_per_point(
                     continue
 
                 xr_var = ds[var_name]
+                if field_name in _ECMWF_PRE_INTERP_MASK_FIELDS:
+                    # Sentinel masking must precede interpolation (see the
+                    # comment at _ECMWF_PRE_INTERP_MASK_FIELDS).
+                    xr_var = xr_var.where(xr_var < _ECMWF_SENTINEL_MASK_M)
                 values = _interpolate_per_point(xr_var, latitudes, longitudes)
                 for i, val in enumerate(values):
                     if val is not None and field_name not in results[i]:
@@ -2300,9 +2408,6 @@ def decode_ecmwf_surface_per_point(
     finally:
         for ds in datasets:
             ds.close()
-
-
-_ECMWF_NO_CLOUD_SENTINEL_M = 9999.0  # ECMWF uses 9999m for "no cloud"
 
 
 def build_ecmwf_cloud_diagnostics(
@@ -2351,8 +2456,8 @@ def build_ecmwf_cloud_diagnostics(
     # step-difference in the ECMWF merge loop, not here. (#283 Phase 2)
     # kx arrives in Kelvin → normalized to °C (Total Totals is offset-immune).
     k_index = _k_index_to_c(raw, "k_index_c")
-    total_totals = _opt_float(raw, "total_totals_c")
-    ml_cape = _opt_float(raw, "ml_cape_jkg")
+    total_totals = _drop_ge_sentinel(raw, "total_totals_c")
+    ml_cape = _drop_ge_sentinel(raw, "ml_cape_jkg")
     # ECMWF mlcin100 is a positive magnitude with 9999 as the missing
     # sentinel (usually already NaN-masked by cfgrib) → internal negative. (#441)
     ml_cin = _normalize_model_cin(raw, "ml_cin_jkg", drop_at_or_above=9998.0)
@@ -2468,7 +2573,7 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
         out["snowfall_cm"] = sf * 1000.0
 
     cape = raw.get("mucape_jkg")
-    if cape is not None:
+    if cape is not None and cape < _ECMWF_SENTINEL_MASK_M:
         out["cape_jkg"] = cape
 
     tcc = raw.get("total_cover_frac")
@@ -2498,7 +2603,7 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
     kx = _k_index_to_c(raw, "k_index_c")
     if kx is not None:
         out["nwp_k_index"] = kx
-    totalx = raw.get("total_totals_c")
+    totalx = _drop_ge_sentinel(raw, "total_totals_c")
     if totalx is not None:
         out["nwp_total_totals"] = totalx
 

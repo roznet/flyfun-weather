@@ -149,16 +149,50 @@ def _fill_cloud_diagnostics(
 
 
 def _fill_diag_hourly(hourly_list: list[HourlyForecast]) -> int:
-    """Forward-fill: each gap hour gets a shallow copy of the preceding
-    anchor's diag, so a downstream in-place mutation (e.g. icing analysis
-    setting a flag) on one hour cannot leak across other hours that share
-    the same anchor."""
+    """Fill ``nwp_cloud_diagnostics`` on gap hours between native GRIB steps.
+
+    Geometry/cover fields are persistence-filled from the PREVIOUS anchor
+    (cloud-layer geometry is categorical and slowly varying). One field is
+    different: ``convective_precip_mm_h`` is a windowed RATE — the value at
+    anchor hour N describes the window ``(N−w, N]``, so a gap hour strictly
+    between anchors N and N+w lies in the NEXT anchor's window and inherits
+    THAT rate (covering-interval hold, the same semantics as the 10fg gust
+    fix in #441). Forward-filling it presented the *previous* window's rate
+    inside the current one — a firing window could read "dry" (wrongly
+    holding a tower down via the firing gate) and a dry window "wet", shifted
+    by up to 6 h at 6-hourly cadence. Hours after the last anchor keep the
+    last completed window's rate (previous forward-fill semantics).
+
+    Each filled hour gets its own model_copy, so a downstream in-place
+    mutation (e.g. icing analysis setting a flag) on one hour cannot leak
+    across other hours that share the same anchor.
+    """
+    sorted_hours = sorted(hourly_list, key=lambda h: h.time)
+    anchor_idx = [
+        i for i, h in enumerate(sorted_hours) if h.nwp_cloud_diagnostics is not None
+    ]
+    if not anchor_idx:
+        return 0
+
     filled = 0
-    last_diag: NWPCloudDiagnostics | None = None
-    for h in sorted(hourly_list, key=lambda h: h.time):
-        if h.nwp_cloud_diagnostics is not None:
-            last_diag = h.nwp_cloud_diagnostics
-        elif last_diag is not None:
+    # Between anchors: prev anchor's geometry, NEXT anchor's rate.
+    for k in range(len(anchor_idx) - 1):
+        prev_i, next_i = anchor_idx[k], anchor_idx[k + 1]
+        prev_diag = sorted_hours[prev_i].nwp_cloud_diagnostics
+        next_rate = sorted_hours[next_i].nwp_cloud_diagnostics.convective_precip_mm_h
+        for i in range(prev_i + 1, next_i):
+            h = sorted_hours[i]
+            if h.nwp_cloud_diagnostics is not None:
+                continue
+            filled_diag = prev_diag.model_copy()
+            filled_diag.convective_precip_mm_h = next_rate
+            h.nwp_cloud_diagnostics = filled_diag
+            filled += 1
+    # Trailing hours after the last anchor: last completed window.
+    last_diag = sorted_hours[anchor_idx[-1]].nwp_cloud_diagnostics
+    for i in range(anchor_idx[-1] + 1, len(sorted_hours)):
+        h = sorted_hours[i]
+        if h.nwp_cloud_diagnostics is None:
             h.nwp_cloud_diagnostics = last_diag.model_copy()
             filled += 1
     return filled
@@ -172,8 +206,9 @@ def _interp_gfs_diag_hourly(
 
     NCEP publishes only the time-averaged form of LCDC/MCDC/HCDC (and the
     matching PRES bottoms/tops) for forecast hours > 0. Each native step f
-    carries values averaged over the window ending at f, of length 1/2/3 h
-    depending on f's position in the GFS 3-h reset cycle (all 3-h past f120).
+    carries values averaged over the window ending at f, whose length follows
+    the GFS 6-h reset cycle (1–6 h by position in the block; 3 h/6 h
+    alternating past f120 — see ``_gfs_window_length_hours``).
     Anchoring the averaged value at the **window midpoint** rather than the
     step time avoids forward-fill smearing the previous window's cover
     forward across the snapshot hour.
@@ -269,20 +304,23 @@ def _gfs_fhour(gfs_init: datetime, target: datetime) -> int:
 def _gfs_window_length_hours(fhour: int) -> int:
     """Width of the averaging window ending at GFS forecast step ``fhour``.
 
-    NCEP cadence:
-      - f001 / f004 / f007 / … → 1 h
-      - f002 / f005 / f008 / … → 2 h
-      - f003 / f006 / f009 / … / f120 → 3 h
-      - f > 120 → 3 h (3-hourly cadence past f120)
+    NCEP cadence — verified against live ``.idx`` stepRanges (2026-07-22:
+    f004=0-4, f005=0-5, f006=0-6, f012=6-12, f120=114-120, f123=120-123,
+    f126=120-126, f129=126-129, f240=234-240, f384=378-384): the averaging
+    window resets every **6 hours**, not 3 as a previous version of this
+    table assumed (which anchored midpoints 1.5 h too late on half of all
+    steps).
+      - f ≤ 120 (hourly): ``((f − 1) mod 6) + 1``  (0-1 … 0-6, 6-7 … 6-12, …)
+      - f > 120 (3-hourly): windows alternate 3 h / 6 h inside the same 6-h
+        blocks — 3 h when ``(f − 120)/3`` is odd, else 6 h.
 
     f000 is analysis (no window) and gets returned as 0.
     """
     if fhour <= 0:
         return 0
-    if fhour > 120:
-        return 3
-    r = fhour % 3
-    return 3 if r == 0 else r
+    if fhour <= 120:
+        return (fhour - 1) % 6 + 1
+    return 3 if ((fhour - 120) // 3) % 2 == 1 else 6
 
 
 def _interp_diag_at(

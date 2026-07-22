@@ -337,7 +337,7 @@ The ceiling and convective base/top from ICON-EU diagnostics ARE used elsewhere 
 
 Open-Meteo provides hourly-interpolated cloud cover percentages. GRIB2 native-step diagnostics arrive at 1h or 3h intervals.
 
-- **GFS path (with `gfs_init`)** — low/mid/high cover is now window-midpoint linearly interpolated and the RH/condensate gate drops phantom layers (see [meteorology-decisions.md §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) and Stage 2). The remaining desync is between the freshly-interpolated cover and held-over layer geometry — bounded by the bracketing native steps' window length (≤ 1.5 h on either side past f120).
+- **GFS path (with `gfs_init`)** — low/mid/high cover is now window-midpoint linearly interpolated and the RH/condensate gate drops phantom layers (see [meteorology-decisions.md §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate) and Stage 2). The remaining desync is between the freshly-interpolated cover and held-over layer geometry — bounded by the bracketing native steps' window length (≤ 3 h on either side, 6-h-reset cadence).
 - **ICON-EU / ECMWF / GFS fallback** — forward-fill leaves boundaries stale up to one full native step behind (3 h at longer lead times). Cover and boundaries can disagree by that much. Accepted as a reasonable approximation; ICON-EU and ECMWF cover is instantaneous, so persistence of both cover and geometry together is consistent.
 
 ---
