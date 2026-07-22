@@ -3501,9 +3501,24 @@ def _decode_and_merge_icon_eu(
         # Each variable maps to a LIST of cache-file paths the worker
         # concatenates: a one-element whole-column blob (ICON-EU, or a legacy
         # ICON-D2 hit), else one file per model level (ICON-D2 per-level cache,
-        # #469). A whole-column blob is preferred when present — it holds every
-        # level, so any ceiling-limited subset is satisfiable from it.
+        # #469).
+        #
+        # COMPLETENESS (#478). Every variable is requested over the SAME full
+        # column (``ctx.levels``), so "did we get what we asked for?" is just a
+        # count. Decoding a partial column instead would silently produce a
+        # short sounding that reads as calm/clear/smooth rather than
+        # unavailable — the failure this whole issue exists to prevent — and a
+        # decoded column carries no marker distinguishing "not fetched" from
+        # "nothing there". So an incomplete hour is SKIPPED for ICON entirely:
+        # a missing hour is a state the pipeline already handles honestly,
+        # whereas a partial column is not, and the per-level cache means the
+        # next briefing tops up only the files that are actually absent.
+        #
+        # A whole-column blob is accepted as complete without checking: it holds
+        # every level by construction, and its completeness is unverifiable
+        # anyway — precisely why the heavier D2 column uses per-level instead.
         var_paths: dict[str, list[str]] = {}
+        incomplete: list[str] = []
         for var in ICON_EU_VARIABLES:
             legacy_var_ck = cache_key(fhour, icon_model_level_var_legacy_label(variant, var))
             if is_cached(ctx.run_dir, legacy_var_ck):
@@ -3519,8 +3534,17 @@ def _decode_and_merge_icon_eu(
                         fhour, icon_model_level_var_label(variant, var, level),
                     ))
                 ]
-                if level_paths:
-                    var_paths[var] = level_paths
+                if len(level_paths) < len(ctx.levels):
+                    incomplete.append(f"{var}:{len(level_paths)}/{len(ctx.levels)}")
+                    continue
+                var_paths[var] = level_paths
+        if incomplete:
+            logger.warning(
+                "%s f%03d: incomplete model-level cache, skipping hour for ICON "
+                "(%s) — next briefing tops up the missing levels",
+                variant.slug, fhour, ", ".join(incomplete),
+            )
+            continue
         if var_paths:
             fhour_jobs[fhour] = (
                 "decode_icon_chunked",

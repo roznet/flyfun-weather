@@ -95,16 +95,33 @@ def prepare_profile(
     temperature = np.array([lv.temperature_c for lv, _ in valid]) * units.degC
     dewpoint = np.array([dp for _, dp in valid]) * units.degC
 
-    # Wind — only if all valid levels have it
-    has_wind = all(
+    # Wind — per-level, NaN for missing levels (mirrors the omega branch below,
+    # NOT all-or-nothing). A partial GRIB fetch can leave SOME levels without
+    # u/v: DWD publishes one file per (variable, level), so a handful of failed
+    # downloads — or a failure at the top of the column — yields temperature
+    # without wind there. An all-or-nothing gate would then discard wind for the
+    # ENTIRE profile, including the flyable levels that did arrive, leaving
+    # Richardson/CAT with nothing to grade — so turbulence reads GREEN "smooth"
+    # rather than assessing the levels that DO have wind. That is the #391/#393
+    # "absence reads as clear" failure, reachable from a single failed download
+    # (#478). With NaN fill the flyable column keeps real wind; downstream MetPy
+    # calls propagate NaN per element, and the per-level guards (stability
+    # indicators, bulk shear, derived-level wind) already skip NaN.
+    has_any_wind = any(
         lv.wind_speed_kt is not None and lv.wind_direction_deg is not None
         for lv, _ in valid
     )
     wind_speed = None
     wind_direction = None
-    if has_wind:
-        wind_speed = np.array([lv.wind_speed_kt for lv, _ in valid]) * units.knot
-        wind_direction = np.array([lv.wind_direction_deg for lv, _ in valid]) * units.degree
+    if has_any_wind:
+        wind_speed = np.array([
+            lv.wind_speed_kt if lv.wind_speed_kt is not None else np.nan
+            for lv, _ in valid
+        ]) * units.knot
+        wind_direction = np.array([
+            lv.wind_direction_deg if lv.wind_direction_deg is not None else np.nan
+            for lv, _ in valid
+        ]) * units.degree
 
     # Height — only if all valid levels have geopotential
     has_height = all(lv.geopotential_height_m is not None for lv, _ in valid)
@@ -112,7 +129,7 @@ def prepare_profile(
     if has_height:
         height = np.array([lv.geopotential_height_m for lv, _ in valid]) * units.meter
 
-    # Omega — use NaN for missing levels (unlike wind which requires all-or-nothing)
+    # Omega — use NaN for missing levels (same per-level NaN-fill as wind above)
     has_any_omega = any(lv.vertical_velocity_pa_s is not None for lv, _ in valid)
     omega = None
     if has_any_omega:

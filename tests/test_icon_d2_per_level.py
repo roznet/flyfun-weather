@@ -2,12 +2,14 @@
 
 The ICON-D2 model-level sounding is cached one file per (variable, level)
 (``f012_ICON_D2_T_L27.grib2``) instead of one whole-column blob per variable.
-That is what makes a partial-level fetch safe (a whole-column key can't tell a
-truncated column from a complete one) and enables the ceiling-limited top-up.
+That is what keeps a partial download *detectable*: a whole-column key can't
+tell a short column from a complete one, so a failed partial write would be
+cached as complete and served to every later briefing.
 
 These cover: the cache-key labels, the per-level download primitive, the
 prefetch job-planning (fetch only missing levels, honour both legacy layouts),
-and the decode read-path building per-level path lists.
+the decode read-path building per-level path lists, and the decode completeness
+check that skips an hour rather than decoding a partial column (#478).
 """
 
 from __future__ import annotations
@@ -230,3 +232,70 @@ def test_decode_prefers_legacy_whole_column_blob(tmp_path):
     worker, (var_paths, _lats, _lons) = jobs[0]
     assert var_paths["t"] == [str(tmp_path / cache_key(12, "ICON_D2_T"))]
     assert Path(var_paths["qc"][0]).name == "f012_ICON_D2_QC_L16.grib2"
+
+
+# ---------------------------------------------------------------------------
+# Decode completeness (#478) — an incomplete hour is skipped, never decoded
+# ---------------------------------------------------------------------------
+#
+# Every variable is requested over the same full column, so completeness is a
+# count. Decoding a partial column would produce a short sounding that reads as
+# calm/clear/smooth rather than unavailable — the failure #478 exists to stop.
+
+
+def test_decode_skips_hour_when_a_variable_is_incomplete(tmp_path, caplog):
+    import logging
+
+    # Every variable complete over 3 levels except "u", which is missing one.
+    for var in ICON_EU_VARIABLES:
+        levels = (16, 17) if var == "u" else (16, 17, 18)
+        for level in levels:
+            put_cached(
+                tmp_path,
+                cache_key(12, icon_model_level_var_label(ICON_D2, var, level)),
+                b"x",
+            )
+    ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17, 18])
+
+    with caplog.at_level(logging.WARNING):
+        jobs = _capture_decode_jobs(tmp_path, ctx)
+
+    # No decode job at all for that hour — not a partial one.
+    assert jobs == []
+    assert any("incomplete model-level cache" in r.getMessage() for r in caplog.records)
+    # The log names the offending variable and the shortfall, so the operator
+    # can tell a fetch failure from a quiet channel.
+    assert any("u:2/3" in r.getMessage() for r in caplog.records)
+
+
+def test_decode_runs_when_every_variable_is_complete(tmp_path):
+    """The inverse — completeness must not be over-eager and skip good hours."""
+    for var in ICON_EU_VARIABLES:
+        for level in (16, 17, 18):
+            put_cached(
+                tmp_path,
+                cache_key(12, icon_model_level_var_label(ICON_D2, var, level)),
+                b"x",
+            )
+    ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17, 18])
+
+    jobs = _capture_decode_jobs(tmp_path, ctx)
+    assert len(jobs) == 1
+    _worker, (var_paths, _lats, _lons) = jobs[0]
+    assert all(len(paths) == 3 for paths in var_paths.values())
+
+
+def test_decode_accepts_whole_column_blob_without_level_count(tmp_path):
+    """A whole-column blob is complete by construction and unverifiable anyway.
+
+    ICON-EU's normal path — and the reason the heavier D2 column uses per-level
+    instead: there is no way to tell a short blob from a full one.
+    """
+    for var in ICON_EU_VARIABLES:
+        put_cached(tmp_path, cache_key(12, f"ICON_D2_{var.upper()}"), b"whole")
+    ctx = _d2_ctx(tmp_path, forecast_hours=[12], levels=[16, 17, 18])
+
+    jobs = _capture_decode_jobs(tmp_path, ctx)
+    assert len(jobs) == 1
+    _worker, (var_paths, _lats, _lons) = jobs[0]
+    assert all(len(paths) == 1 for paths in var_paths.values())
