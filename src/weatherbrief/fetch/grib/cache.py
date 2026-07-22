@@ -52,9 +52,13 @@ _GIB = 1024 ** 3
 # preserved). Deliberately *not* LRU — a stale run is stale regardless of how
 # recently it was read, so age (init time) is the right utility signal.
 #
-# ICON-D2 (issue #475): two full runs measure ~41.6 GiB, so a 45 GiB cap lets
-# the normal current+prior pair sit while evicting a third run that TTL drift or
-# a growing flight set would otherwise pile on (~64 GiB against ~52 GiB free).
+# ICON-D2 (issue #475). Mind the units — the #475 measurements are DECIMAL GB
+# and this cap is BINARY GiB. Two full runs measure ~41.6 GB = ~38.7 GiB, so the
+# 45 GiB cap sits ~6 GiB above the normal current+prior pair: the pair is never
+# evicted, but a third run (~59 GiB) that TTL drift or a growing flight set
+# would pile on is. Note 45 GiB = ~48 GB against prod's ~52 GB free, so the cap
+# is a backstop with only ~4 GB of slack — lower it (e.g. 40) if the volume
+# tightens; the normal steady state is ~39 GiB and unaffected.
 # Env override per model: ``WB_GRIB_CACHE_CAP_GB_<MODEL>`` (e.g.
 # ``WB_GRIB_CACHE_CAP_GB_ICON_D2=40``; ``0``/negative disables). Models without
 # a default and no override are uncapped (GFS is cheap; ICON-EU is bounded by
@@ -310,6 +314,21 @@ def _enforce_size_cap(
             reclaimed / (1024 * 1024),
             total / (1024 * 1024),
             cap_bytes / (1024 * 1024),
+        )
+
+    if total > cap_bytes:
+        # Floor won: the retained runs alone exceed the cap. Disk is NOT bounded
+        # in this state, so say so loudly rather than returning a clean count
+        # that reads as "cap enforced". Means the per-run size has grown (more
+        # flights, or phase 2 still gated off) and the cap or floor needs a
+        # look — the alternative, evicting below the floor, would drop the
+        # prior-run fallback a briefing depends on.
+        logger.warning(
+            "GRIB cache cap NOT met for %s: %.1f MiB over cap %.1f MiB with "
+            "only %d run(s) left (floor %d). Disk is unbounded until the cap "
+            "or floor is retuned.",
+            model, total / (1024 * 1024), cap_bytes / (1024 * 1024),
+            len(run_dirs) - removed, floor_runs,
         )
     return removed
 

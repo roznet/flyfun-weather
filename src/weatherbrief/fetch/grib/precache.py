@@ -56,11 +56,20 @@ MAIN_CYCLE_HOURS = (0, 6, 12, 18)
 #
 # Default 03Z-21Z for the two DWD models. D2 warming fires at 02/05/08/11/14/
 # 17/20/23 UTC (publish_delay 2 h after the 3-hourly inits); [3, 21) keeps the
-# six daytime passes (05..20) and drops the 23Z + 02Z passes — 24% fewer
-# forecast-hours. The ICON-EU airport precache publishes at 03/09/15/21 UTC;
-# [3, 21) drops the 21Z pass. Any window from 03Z to 20Z inclusive yields the
-# same daytime D2 passes — 21Z is the endpoint for margin, not because it's
-# tight (the nearest passes outside are 23Z / 02Z).
+# six daytime passes (05..20). The ICON-EU airport precache publishes at
+# 03/09/15/21 UTC; [3, 21) drops the 21Z pass. Any window from 03Z to 20Z
+# inclusive yields the same daytime D2 passes — 21Z is the endpoint for margin,
+# not because it's tight (the nearest passes outside are 23Z / 02Z).
+#
+# Only ONE D2 pass per day is actually dropped, not two, so the real saving is
+# ~13% of forecast-hours (#475 first estimated 24% by assuming both night
+# passes vanish). The 23Z pass is genuinely lost: by the time the window opens
+# at 03Z its run (21z) has been superseded. The 02Z pass is *deferred, not
+# dropped* — ``should_warm`` leaves ``last_done`` untouched at 02Z, and at 03Z
+# the same 00z run is still the freshest (03z doesn't publish until 05Z), so it
+# is warmed then. That is the intended behaviour and worth keeping: prod has
+# 05Z departures whose pilots check around 03-04Z, and they should find a warm
+# cache on the freshest run available.
 #
 # GFS is left ungated on purpose: it's the cheapest model (~1.5 GB/run) so
 # gating saves least, and it is the one thing US expansion would need running

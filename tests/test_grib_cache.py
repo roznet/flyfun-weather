@@ -7,6 +7,7 @@ correctness — see issue #123.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import threading
@@ -216,6 +217,50 @@ def test_cap_never_breaches_floor(tmp_path):
     assert removed == 1
     surviving = [r for r in runs if r.exists()]
     assert len(surviving) == 2  # floor preserved
+
+
+def test_cap_warns_when_floor_wins(tmp_path, caplog):
+    """Floor beating the cap must be loud — disk is unbounded in that state.
+
+    Returning a clean eviction count here would read as "cap enforced" when it
+    wasn't; the operator needs to know the cap/floor need retuning.
+    """
+    now = datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+    for hours_old in (3, 1):
+        init = now - timedelta(hours=hours_old)
+        _make_run(
+            tmp_path, "icon-d2", init.strftime("%Y%m%d"), init.hour,
+            n_files=4, size=1024,
+        )
+
+    # Already at the floor, still way over cap → nothing may be evicted.
+    with caplog.at_level(logging.WARNING):
+        removed = purge_old_runs(
+            tmp_path, model="icon-d2", cap_bytes=1, floor_runs=2,
+            now=now, enforce_cap=True,
+        )
+
+    assert removed == 0
+    assert any("cap NOT met" in r.getMessage() for r in caplog.records)
+
+
+def test_cap_met_does_not_warn(tmp_path, caplog):
+    """The inverse: a cap that IS met must not emit the warning."""
+    now = datetime(2026, 7, 21, 12, tzinfo=timezone.utc)
+    for hours_old in (3, 1):
+        init = now - timedelta(hours=hours_old)
+        _make_run(
+            tmp_path, "icon-d2", init.strftime("%Y%m%d"), init.hour,
+            n_files=4, size=1024,
+        )
+
+    with caplog.at_level(logging.WARNING):
+        purge_old_runs(
+            tmp_path, model="icon-d2", cap_bytes=10 * 1024 * 1024,
+            floor_runs=2, now=now, enforce_cap=True,
+        )
+
+    assert not any("cap NOT met" in r.getMessage() for r in caplog.records)
 
 
 def test_cap_logs_each_eviction(tmp_path, caplog):
