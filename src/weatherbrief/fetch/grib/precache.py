@@ -47,6 +47,62 @@ PRECACHE_MAX_FORECAST_HOUR = 120
 MAIN_CYCLE_HOURS = (0, 6, 12, 18)
 
 
+# --- Wall-clock warming window (issue #475) --------------------------------
+#
+# No user refreshes a flight in the middle of the night, so overnight warming
+# passes are wasted DWD bandwidth. Gate on the wall-clock time the warming pass
+# runs (NOT the run's init hour) with a per-model window ``[start, end)`` in UTC
+# hours; a model absent from the map is ungated.
+#
+# Default 03Z-21Z for the two DWD models. D2 warming fires at 02/05/08/11/14/
+# 17/20/23 UTC (publish_delay 2 h after the 3-hourly inits); [3, 21) keeps the
+# six daytime passes (05..20) and drops the 23Z + 02Z passes — 24% fewer
+# forecast-hours. The ICON-EU airport precache publishes at 03/09/15/21 UTC;
+# [3, 21) drops the 21Z pass. Any window from 03Z to 20Z inclusive yields the
+# same daytime D2 passes — 21Z is the endpoint for margin, not because it's
+# tight (the nearest passes outside are 23Z / 02Z).
+#
+# GFS is left ungated on purpose: it's the cheapest model (~1.5 GB/run) so
+# gating saves least, and it is the one thing US expansion would need running
+# around the clock. Per-model config means US expansion is a config change, not
+# a code change.
+MODEL_WARMING_WINDOW_UTC: dict[str, tuple[int, int]] = {
+    "icon-d2": (3, 21),
+    "icon-eu": (3, 21),
+}
+
+
+def is_within_warming_window(model: str, now: datetime) -> bool:
+    """Whether ``model``'s warming may run at wall-clock ``now`` (UTC).
+
+    Models absent from :data:`MODEL_WARMING_WINDOW_UTC` are ungated (GFS).
+    """
+    window = MODEL_WARMING_WINDOW_UTC.get(model)
+    if window is None:
+        return True
+    start, end = window
+    return start <= now.hour < end
+
+
+def should_warm(
+    model: str,
+    run_key: str,
+    last_key: str | None,
+    now: datetime,
+) -> bool:
+    """Decide whether to warm ``run_key`` for ``model`` at ``now``.
+
+    True only when the run hasn't already been warmed AND ``now`` is inside the
+    model's warming window. A pass outside the window is *skipped, not
+    deferred*: the caller must NOT record ``run_key`` as done, so nothing is
+    backfilled — the next in-window tick simply warms whatever run is freshest
+    then (a newer ``run_key``), never replaying the skipped overnight run.
+    """
+    if last_key == run_key:
+        return False
+    return is_within_warming_window(model, now)
+
+
 def airport_profile_forecast_hours(init: datetime) -> list[int]:
     """Forecast-hour offsets (from ``init``) covering D-0..D-3 selectables.
 
