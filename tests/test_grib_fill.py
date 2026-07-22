@@ -397,7 +397,9 @@ class TestGfsWindowLength:
         (118, 4), (119, 5), (120, 6),
         # 3-hourly region past f120 — widths alternate 3 / 6.
         (123, 3), (126, 6), (129, 3), (132, 6),
-        (168, 6), (384, 6),
+        # Far lead times, also read off the live index rather than extrapolated
+        # from the formula: f180 = 174-180, f240 = 234-240, f384 = 378-384.
+        (180, 6), (240, 6), (384, 6),
         (0, 0),  # analysis — no window
     ])
     def test_window_length(self, fhour, expected):

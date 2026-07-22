@@ -268,25 +268,43 @@ layer that no other source supported.
 
 Two compounding effects in the GFS pgrb2 product:
 
-1. **Averaged cloud cover past f0.** NCEP publishes only the time-averaged
-   form of LCDC/MCDC/HCDC (and the matching cloud-band PRES bottoms/tops) for
-   forecast hours > 0. The averaging window has length 1/2/3 h depending on
-   the step's position in the 3-h reset cycle (1 h at f001/f004/…, 2 h at
-   f002/f005/…, 3 h at f003/f006/…/f120); past f120 it's always 3 h. There
-   is no instantaneous variant in pgrb2. Our decoder already accepts the
-   averaged form (`gfs_idx.py: parse_cloud_diag_idx`) and maps it onto the
-   same internal slots as a hypothetical instantaneous (`decode.py:
-   _CLOUD_DIAG_FIELD_MAP`).
+1. **Averaged cloud cover past f0.** NCEP publishes the time-averaged form of
+   LCDC/MCDC/HCDC for forecast hours > 0, and publishes the matching
+   cloud-band PRES bottoms/tops and TMP cloud-top temperatures *only* in
+   averaged form. Because the geometry has no instantaneous variant, the cover
+   must use the averaged form too, so the two share the same statistical
+   processing and temporal alignment (`gfs_idx.py: _PREFER_AVERAGED_PAIRS`);
+   `decode.py: _CLOUD_DIAG_FIELD_MAP` maps both onto the same internal slots.
+
+   **The averaging window resets at every multiple of 6 and grows to the next
+   reset** — `0-1`, `0-2`, … `0-6`, then `6-7` … `6-12`, and so on — so
+   `window_length = fhour - 6*((fhour-1)//6)`, i.e. 1–6 h depending on step
+   position. Past f120 the 3-hourly output cadence makes the widths alternate
+   3 / 6 (`120-123`, `120-126`, `126-129`, `126-132`), and that pattern holds
+   to the end of the run (`174-180`, `234-240`, `378-384`).
+
+   > **Corrected 2026-07-22 (#480).** This section previously described a
+   > repeating 1/2/3-hour cycle capped at 3 h past f120. That model was an
+   > assumption, never checked against NCEP metadata, and it was wrong. The
+   > values above are read directly from live `.idx` files. The error made
+   > `_gfs_window_length_hours` misplace window midpoints by up to 1.5 h.
 
 2. **3-hourly cadence past f120.** GRIB enrichment snaps to native steps
    (… f120, f123, f126, f129 …). Gap hours between those steps used to
    inherit the preceding step's diagnostics via forward-fill.
 
 For the pt11 case the chain was: f132 native step carries the average over
-**09–12 Z** (100 % cover), forward-fill propagated that value across 13:00
-and 14:00 Z, the next native step f135 (window 12–15 Z, 0 % cover) overwrote
-15:00 Z. The 100 % at 14:00 Z was thus an **08–14 Z back-smear** of a window
-that had ended two hours earlier.
+**06–12 Z** (window `126-132`, 100 % cover), forward-fill propagated that
+value across 13:00 and 14:00 Z, the next native step f135 (window `132-135`
+= 12–15 Z, 0 % cover) overwrote 15:00 Z. The 100 % at 14:00 Z was thus a
+back-smear of a window that had ended two hours earlier.
+
+Note the two neighbouring windows are **not** the same width — f132 spans 6 h
+because the window resets at f132 (a multiple of 6), while f135 spans 3 h.
+Midpoint spacing is therefore uneven, which is why the anchor has to be
+computed from the real window rather than assumed. (The original write-up of
+this incident said f132 covered 09–12 Z, following the incorrect uniform-3 h
+model corrected above.)
 
 ICON-EU and ECMWF publish instantaneous cloud cover and are not affected.
 
