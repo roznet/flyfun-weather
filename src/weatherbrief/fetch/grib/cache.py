@@ -195,6 +195,14 @@ def put_cached(
     into place. The rename is atomic on POSIX and on NTFS, so concurrent
     callers racing on the same ``(run_dir, filename)`` either see the file
     not-yet-present or fully-written — never a half-written interleave.
+
+    The written pages are flushed and dropped from the page cache
+    (``POSIX_FADV_DONTNEED``): cache writes are charged to the container's
+    cgroup and a warm/briefing pass writes gigabytes, pinning the cgroup at
+    its memory limit and starving concurrent decode workers of reclaimable
+    headroom (the 2026-07-23 05:09Z OOM). Nothing re-reads these files soon
+    enough to profit from residency — decode re-reads from SSD in ~ms
+    against a ~30 s decode.
     """
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / filename
@@ -202,6 +210,12 @@ def put_cached(
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+            if hasattr(os, "posix_fadvise"):  # absent on macOS dev machines
+                os.posix_fadvise(
+                    f.fileno(), 0, 0, os.POSIX_FADV_DONTNEED,
+                )
         os.replace(tmp, path)
     except BaseException:
         try:

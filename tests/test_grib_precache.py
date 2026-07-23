@@ -144,10 +144,12 @@ class TestPrecacheIconEuRun:
 
         init = _utc(2026, 5, 8, 0)
 
-        def fake_fetch_per_var(init_date, init_hour, fhour, levels, variables, session):
+        def fake_fetch_per_var(init_date, init_hour, fhour, levels, variables, session,
+                               max_workers=None):
             return {variables[0]: b"GRIB" + variables[0].encode()}
 
-        def fake_fetch_single(init_date, init_hour, fhours, session=None):
+        def fake_fetch_single(init_date, init_hour, fhours, session=None,
+                              max_workers=None):
             return {fhours[0]: b"DIAG"}
 
         with patch(
@@ -327,7 +329,7 @@ class TestIconD2FlightWarming:
                     patch("weatherbrief.fetch.grib._prepare_icon_eu",
                           side_effect=prepare_side_effect) as prep, \
                     patch("weatherbrief.fetch.grib._prefetch_icon_eu_data",
-                          side_effect=lambda ctx: warmed.append(ctx)) as fetch:
+                          side_effect=lambda ctx, **kw: warmed.append(ctx)) as fetch:
                 yield prep, fetch
 
         return _cm()
@@ -371,7 +373,7 @@ class TestIconD2FlightWarming:
 
         rows = [_FakeRow(1), _FakeRow(2), _FakeRow(3)]
         warmed: list = []
-        with self._patches(rows, prepare_seq, warmed):
+        with self._patches(rows, prepare_seq, warmed) as (_prep, fetch):
             stats = precache_icon_d2_flights(
                 _utc(2026, 7, 21, 0), db_path="/db",
                 now=_utc(2026, 7, 21, 0),
@@ -381,6 +383,9 @@ class TestIconD2FlightWarming:
         }
         assert len(warmed) == 1
         assert warmed[0].variant is ICON_D2
+        # Discretionary warm must request the reduced prefetch budget so it
+        # never crowds out a concurrent interactive briefing (05:09Z OOM).
+        assert fetch.call_args.kwargs.get("outer_workers") == 2
 
     def test_duration_passed_to_prepare(self):
         """The warm path threads the flight's real duration through.

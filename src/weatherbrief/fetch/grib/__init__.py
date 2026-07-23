@@ -3364,13 +3364,22 @@ def _prepare_icon_eu(
     ), None
 
 
-def _prefetch_icon_eu_data(ctx: _IconEuContext) -> None:
+def _prefetch_icon_eu_data(
+    ctx: _IconEuContext,
+    *,
+    outer_workers: int | None = None,
+) -> None:
     """Download ICON-EU GRIB2 data and cache to disk (no decode).
 
     Runs in a background thread while GFS enrichment proceeds.
+
+    ``outer_workers`` overrides the concurrent-unit count for discretionary
+    callers (the warm loop) that should keep a smaller memory/bandwidth
+    footprint than an interactive briefing; ``None`` → the normal
+    :func:`_icon_prefetch_workers` budget.
     """
     with _grib_time("icon_prefetch"):
-        _prefetch_icon_eu_data_inner(ctx)
+        _prefetch_icon_eu_data_inner(ctx, outer_workers=outer_workers)
 
 
 def _icon_prefetch_workers() -> int:
@@ -3385,7 +3394,11 @@ def _icon_prefetch_workers() -> int:
     return 4
 
 
-def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
+def _prefetch_icon_eu_data_inner(
+    ctx: _IconEuContext,
+    *,
+    outer_workers: int | None = None,
+) -> None:
     """Download all uncached ICON-EU units for this run.
 
     Cold-cache fetch tail fix: the per-(fhour, variable) downloads used to run
@@ -3414,11 +3427,20 @@ def _prefetch_icon_eu_data_inner(ctx: _IconEuContext) -> None:
     prefix = variant.cache_prefix
     diag_key = icon_cloud_diag_cache_key(variant)
 
-    outer = _icon_prefetch_workers()
-    # Keep outer x inner within the session's connection pool for ALL outer
-    # values (default 4 x 5 = 20), not just the default — a user-set
+    # Discretionary callers (the warm loop) pass an explicit outer_workers and
+    # get HALF the shared connection pool, so a warm pass in flight leaves an
+    # interactive briefing's prefetch the other half instead of racing it for
+    # all 20 connections. Interactive callers keep the full budget.
+    if outer_workers is not None:
+        outer = max(1, outer_workers)
+        budget = max(1, _POOL_MAXSIZE // 2)
+    else:
+        outer = _icon_prefetch_workers()
+        budget = _POOL_MAXSIZE
+    # Keep outer x inner within the connection budget for ALL outer values
+    # (default 4 x 5 = 20), not just the default — a user-set
     # GRIB_ICON_PREFETCH_WORKERS must not silently exceed _POOL_MAXSIZE.
-    inner = max(1, _POOL_MAXSIZE // outer) if outer > 1 else 8
+    inner = max(1, budget // outer) if outer > 1 else 8
 
     def _fetch_var(fhour: int, var: str, ck: str) -> None:
         try:

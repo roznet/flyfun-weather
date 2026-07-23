@@ -177,9 +177,13 @@ def precache_icon_eu_run(init: datetime) -> dict[str, int]:
             if is_cached(run_dir, ck):
                 continue
             try:
+                # Gentle worker count: the airport-profile sweep is the least
+                # urgent GRIB consumer, so it gets a fraction of the download
+                # pool a briefing prefetch would use (05:09Z OOM, 2026-07-23).
                 per_var = fetch_icon_eu_per_variable(
                     init_date, init_hour, fhour,
                     levels=levels, variables=[var], session=session,
+                    max_workers=5,
                 )
                 data = per_var.get(var)
                 if data:
@@ -205,6 +209,7 @@ def precache_icon_eu_run(init: datetime) -> dict[str, int]:
             try:
                 fetched = fetch_icon_eu_single_level(
                     init_date, init_hour, [fhour], session=session,
+                    max_workers=5,
                 )
                 grib_bytes = fetched.get(fhour)
                 if grib_bytes:
@@ -322,7 +327,11 @@ def precache_icon_d2_flights(
                 stats["flights_skipped"] += 1
                 continue
 
-            _prefetch_icon_eu_data(ctx)
+            # Half the outer units (and half the connection pool, enforced by
+            # the callee) of an interactive prefetch: warming is discretionary
+            # and must never crowd out a concurrent briefing's memory or
+            # connections (05:09Z OOM, 2026-07-23).
+            _prefetch_icon_eu_data(ctx, outer_workers=2)
             stats["flights_warmed"] += 1
         except Exception:
             stats["flights_skipped"] += 1
