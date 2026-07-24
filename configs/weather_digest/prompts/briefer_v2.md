@@ -112,7 +112,7 @@ Structure your response as JSON with these exact fields:
   part (the planned cruise altitude's altitude-dependent advisories and the best
   lower / higher alternatives) and an optional **Tactical** part (per-advisory
   route/timing changes, e.g. "climb to cruise after ~40 nm to clear a departure
-  deck"). Mention an option **only when it materially improves the picture**,
+  cloud layer"). Mention an option **only when it materially improves the picture**,
   and when you do, name the specific advisory it improves and any it worsens
   (e.g. "descending to 6,000 ft would clear the icing-escape concern but add a
   headwind penalty"). **Never invent the trade-off** — use only what the section

@@ -211,7 +211,7 @@ function renderPreview(ctx: CanvasRenderingContext2D, theme: CrossSectionTheme):
   ctx.lineTo(plotL + plotW, refY + 12);
   ctx.stroke();
   ctx.setLineDash([]);
-  drawLabel(ctx, 'Cruise / Ceiling', plotL + plotW / 2, refY + 7, bg);
+  drawLabel(ctx, 'Cruise / Flight ceiling', plotL + plotW / 2, refY + 7, bg);
 
   // Terrain (sine wave hill)
   const terrainBaseY = plotT + plotH;

@@ -204,7 +204,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "crucero dentro de la capa convectiva — no sorteable por debajo",
     },
     "convective_character.deck_below_cells": {
-        "en": "cells above a BKN/OVC deck — below-base see-and-avoid not available",
+        "en": "cells above a BKN/OVC layer — below-base see-and-avoid not available",
         "fr": "cellules au-dessus d'une couche BKN/OVC — pas de vol à vue sous la base",
         "de": "Zellen über einer BKN/OVC-Schicht — Sicht-Ausweichen unter der Basis nicht möglich",
         "es": "células sobre una capa BKN/OVC — sin ver-y-evitar bajo la base",
@@ -479,13 +479,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Aeropuertos VFR, sin datos en ruta",
     },
     "vfr.corridor_climb": {
-        "en": "{cov} deck in climb-out at {icao}",
+        "en": "{cov} layer in climb-out at {icao}",
         "fr": "Couche {cov} en montée à {icao}",
         "de": "{cov}-Schicht im Steigflug bei {icao}",
         "es": "Capa {cov} en ascenso en {icao}",
     },
     "vfr.corridor_descent": {
-        "en": "{cov} deck in descent at {icao}",
+        "en": "{cov} layer in descent at {icao}",
         "fr": "Couche {cov} en descente à {icao}",
         "de": "{cov}-Schicht im Sinkflug bei {icao}",
         "es": "Capa {cov} en descenso en {icao}",

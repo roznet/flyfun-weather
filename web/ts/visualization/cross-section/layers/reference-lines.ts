@@ -43,7 +43,7 @@ function drawRefLine(
 
 export const cruiseAltitudeLayer: CrossSectionLayer = {
   id: 'cruise-altitude',
-  name: 'Cruise / Ceiling',
+  name: 'Cruise / Flight ceiling',
   group: 'reference',
   defaultEnabled: true,
 

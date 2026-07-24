@@ -196,7 +196,7 @@ export const ADVISORY_PRESETS: Record<string, AdvisoryPreset> = {
     caption: 'VMC picture: clouds & obscuration vs cruise and airports.',
     interpretation:
       'For VFR the question is staying clear of cloud with the surface in sight. The cloud bands '
-      + 'show where you would lose VMC; watch for a continuous deck (no VFR-on-top gap) and for '
+      + 'show where you would lose VMC; watch for a continuous layer (no VFR-on-top gap) and for '
       + 'cloud sitting near the surface (low ceilings / obscuration). RH near the surface rising '
       + 'toward 100 % is the sign of forming or lowering cloud.',
     groups: ['clouds'],

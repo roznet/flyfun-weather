@@ -900,7 +900,7 @@
     "unit": "%",
     "vibe": "How much sky each layer fills",
     "primary_goal": "Show the model's predicted cloud fraction at each altitude.",
-    "best_used_for": "Seeing where the deck actually is and how solid it is. On the side panel, peaks mark the cloud layers — narrow tall peaks are thin distinct decks, a broad block is a deep overcast. Cross-check the altitude against your cruise level to judge whether you are above, in, or below cloud.",
+    "best_used_for": "Seeing where the cloud actually is and how solid it is. On the side panel, peaks mark the cloud layers — narrow tall peaks are thin distinct layers, a broad block is a deep overcast. Cross-check the altitude against your cruise level to judge whether you are above, in, or below cloud.",
     "limitations": "Fraction is a grid-cell average, so a 50% value can mean a uniform thin veil or broken cumulus with clear gaps — it does not distinguish the two. Sub-grid convective towers are smeared out. Read it alongside RH and the T/Td gap rather than alone.",
     "theory": "Cloud area fraction is the proportion of a model grid cell covered by cloud at a given level, from 0 (clear) to 100% (overcast). Models diagnose it from relative humidity, vertical motion, and a sub-grid cloud scheme. It is the vertical analogue of the cloud-cover layers shaded on the Skew-T and cross-section.",
     "wikipedia": "https://en.wikipedia.org/wiki/Cloud_cover",
@@ -909,7 +909,7 @@
       { "min": 0, "max": 13, "label": "Clear", "risk": "none", "meaning": "Effectively clear at this level (SKC/FEW)." },
       { "min": 13, "max": 50, "label": "Few/Scattered", "risk": "low", "meaning": "Broken gaps — VMC likely through this layer." },
       { "min": 50, "max": 88, "label": "Broken", "risk": "moderate", "meaning": "Mostly covered — expect IMC in and just below." },
-      { "min": 88, "max": 100, "label": "Overcast", "risk": "high", "meaning": "Solid deck — continuous cloud at this altitude." }
+      { "min": 88, "max": 100, "label": "Overcast", "risk": "high", "meaning": "Solid layer — continuous cloud at this altitude." }
     ]
   },
   "skewt_cloud_liquid_water": {

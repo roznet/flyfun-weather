@@ -19,7 +19,7 @@ struct ReferenceLinesLayer: CrossSectionLayerProtocol {
         if abs(data.ceilingAltitudeFt - data.cruiseAltitudeFt) >= 1000 {
             let ceilingY = transform.altitudeToY(data.ceilingAltitudeFt)
             drawRefLine(&context, y: ceilingY, left: plot.left, right: plot.right,
-                        label: "Ceiling \(Int(data.ceilingAltitudeFt))'",
+                        label: "Flight ceiling \(Int(data.ceilingAltitudeFt))'",
                         color: ColorScales.ceilingColor)
         }
     }

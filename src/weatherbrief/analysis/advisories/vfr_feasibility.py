@@ -771,9 +771,9 @@ class VFRFeasibilityEvaluator:
                 "conditions (VFR/MVFR/IFR), en-route cloud clearance relative to "
                 "cruise altitude, minimum cloud separation, and whether the "
                 "climb-out and descent corridors near the airports are clear of "
-                "BKN/OVC decks the flight would have to transit. RED indicates IFR "
-                "conditions, IMC at cruise, or an OVC deck blocking climb/descent; "
-                "AMBER flags marginal conditions or a BKN deck in a corridor."
+                "BKN/OVC layers the flight would have to transit. RED indicates IFR "
+                "conditions, IMC at cruise, or an OVC layer blocking climb/descent; "
+                "AMBER flags marginal conditions or a BKN layer in a corridor."
             ),
             category="flight_rules",
             timing_class="scan",
@@ -816,7 +816,7 @@ class VFRFeasibilityEvaluator:
                 AdvisoryParameterDef(
                     key="terminal_corridor_nm",
                     label="Terminal corridor",
-                    description="Distance from departure/arrival to check for BKN/OVC decks in the climb-out and descent path",
+                    description="Distance from departure/arrival to check for BKN/OVC layers in the climb-out and descent path",
                     type="distance",
                     unit="nm",
                     default=5,
