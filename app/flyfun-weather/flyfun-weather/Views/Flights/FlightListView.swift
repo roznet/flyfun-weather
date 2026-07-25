@@ -314,22 +314,27 @@ struct FlightListView: View {
             Text(unsubscribeError ?? "")
         }
         // Destructive delete confirmation. Attached at the list level (not per row)
-        // so the swipe action can complete and the row close before the dialog
-        // appears; `presenting:` carries the flight so the message names the route.
-        .confirmationDialog(
+        // so the swipe action can complete and the row close before it appears;
+        // `presenting:` carries the flight so the message names the route.
+        //
+        // An `alert`, NOT a `confirmationDialog`: on iPad the latter renders as a
+        // popover, and a popover drops the cancel-role button (it dismisses by
+        // tapping outside instead) — leaving Delete as the only visible choice on
+        // an irreversible action. An alert draws both buttons on every idiom and
+        // won't dismiss on an outside tap.
+        .alert(
             "Delete Flight?",
             isPresented: Binding(
                 get: { deleteCandidate != nil },
                 set: { if !$0 { deleteCandidate = nil } }
             ),
-            titleVisibility: .visible,
             presenting: deleteCandidate
         ) { flight in
-            Button("Delete Flight", role: .destructive) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
                 if let viewModel { delete(flight, viewModel: viewModel) }
             }
             .accessibilityIdentifier("confirmDeleteFlightButton")
-            Button("Cancel", role: .cancel) {}
         } message: { flight in
             Text("\(flight.shortTitle) and all of its briefing history will be deleted. This can’t be undone.")
         }
