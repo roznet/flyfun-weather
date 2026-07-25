@@ -232,6 +232,15 @@ class _RefreshRegistry:
             if removed is not None and not self._entries:
                 self._idle_since = time.monotonic()
 
+    # An entry older than this no longer counts as "active" for idle_seconds:
+    # real refreshes finish in ~3-5 min and even a deep queue drains well
+    # inside 30 min, so anything older is a leaked entry (a path that died
+    # between register and its finally). Without this bound, one leak would
+    # pin idle_seconds at 0.0 and silently disable GRIB warming until the
+    # next restart (#490 follow-up). The queue display deliberately still
+    # shows the leaked entry — only the warm-loop signal ignores it.
+    STALE_ENTRY_SECONDS = 30 * 60
+
     def idle_seconds(self) -> float | None:
         """How long the briefing pipeline has been idle, in seconds.
 
@@ -240,13 +249,28 @@ class _RefreshRegistry:
         process start. Read by the GRIB warm loop, which is discretionary and
         must not compete with an interactive briefing for memory or bandwidth
         (issue #490 — the 2026-07-23 05:09Z OOM).
+
+        Entries older than :data:`STALE_ENTRY_SECONDS` are treated as leaked,
+        not active: the pipeline counts as idle since the newest of them
+        crossed the staleness bound (or since the registry last emptied,
+        whichever is more recent activity).
         """
         with self._lock:
-            if self._entries:
-                return 0.0
-            if self._idle_since is None:
+            now = time.monotonic()
+            newest_entry: float | None = None
+            for entry in self._entries.values():
+                if now - entry.queued_at_mono < self.STALE_ENTRY_SECONDS:
+                    return 0.0
+                if newest_entry is None or entry.queued_at_mono > newest_entry:
+                    newest_entry = entry.queued_at_mono
+            candidates = []
+            if self._idle_since is not None:
+                candidates.append(now - self._idle_since)
+            if newest_entry is not None:
+                candidates.append(now - (newest_entry + self.STALE_ENTRY_SECONDS))
+            if not candidates:
                 return None
-            return time.monotonic() - self._idle_since
+            return max(0.0, min(candidates))
 
     def get(self, flight_id: str) -> RefreshEntry | None:
         with self._lock:

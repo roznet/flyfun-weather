@@ -311,11 +311,21 @@ class _FakeCtx:
 
 
 class TestIconD2FlightWarming:
-    def _patches(self, rows, prepare_side_effect, warmed):
-        """Patch the warm path's collaborators; return a contextmanager stack."""
+    def _patches(self, rows, prepare_side_effect, warmed, prefetch=None):
+        """Patch the warm path's collaborators; return a contextmanager stack.
+
+        ``prefetch`` overrides the fake `_prefetch_icon_eu_data`; the default
+        records the ctx and reports completion (True). Return False from an
+        override to simulate the abort_if gate firing (jobs pending during an
+        active refresh).
+        """
         import contextlib
 
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+
+        def _default_prefetch(ctx, **kw):
+            warmed.append(ctx)
+            return True
 
         @contextlib.contextmanager
         def _cm():
@@ -329,7 +339,7 @@ class TestIconD2FlightWarming:
                     patch("weatherbrief.fetch.grib._prepare_icon_eu",
                           side_effect=prepare_side_effect) as prep, \
                     patch("weatherbrief.fetch.grib._prefetch_icon_eu_data",
-                          side_effect=lambda ctx, **kw: warmed.append(ctx)) as fetch:
+                          side_effect=prefetch or _default_prefetch) as fetch:
                 yield prep, fetch
 
         return _cm()
@@ -385,8 +395,10 @@ class TestIconD2FlightWarming:
         assert len(warmed) == 1
         assert warmed[0].variant is ICON_D2
         # Discretionary warm must request the reduced prefetch budget so it
-        # never crowds out a concurrent interactive briefing (05:09Z OOM).
+        # never crowds out a concurrent interactive briefing (05:09Z OOM),
+        # and must thread the yield gate through as abort_if (#490).
         assert fetch.call_args.kwargs.get("outer_workers") == 2
+        assert callable(fetch.call_args.kwargs.get("abort_if"))
 
     def test_duration_passed_to_prepare(self):
         """The warm path threads the flight's real duration through.
@@ -578,6 +590,65 @@ class TestWarmYielding:
         assert stats["hours_fetched"] == 0  # the hour never completed
         mock_single.assert_not_called()  # cloud diag skipped on the bail-out
 
+    def test_icon_eu_fast_forwards_cached_hours_during_refresh(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """Cache hits are free — an active refresh must not block them.
+
+        A resumption pass over a fully-warmed run completes (so last_done gets
+        recorded) even while a refresh burst is in flight (PR #498 review).
+        """
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        from weatherbrief.fetch.grib.cache import (
+            cache_dir_for_run,
+            cache_key,
+            put_cached,
+        )
+
+        init = _utc(2026, 5, 8, 0)
+        run_dir = cache_dir_for_run(tmp_path, "20260508", 0, model="icon-eu")
+        for fhour in airport_profile_forecast_hours(init):
+            put_cached(run_dir, cache_key(fhour, "ICON_EU_QC_QI_P"), b"x")
+
+        with patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_per_variable"
+        ) as mock_var, patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_single_level"
+        ) as mock_single:
+            stats = precache_icon_eu_run(init, should_defer=lambda: True)
+
+        assert stats["deferred"] == 0
+        assert stats["hours_fetched"] == stats["forecast_hours_total"]
+        mock_var.assert_not_called()
+        mock_single.assert_not_called()
+
+    def test_gfs_fast_forwards_cached_hours_during_refresh(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        from weatherbrief.fetch.grib.cache import (
+            cache_dir_for_run,
+            cache_key,
+            put_cached,
+        )
+
+        init = _utc(2026, 5, 8, 12)
+        run_dir = cache_dir_for_run(tmp_path, "20260508", 12, model="gfs")
+        for fhour in airport_profile_forecast_hours(init):
+            put_cached(run_dir, cache_key(fhour, "CLWMR_ICMR"), b"x")
+            put_cached(run_dir, cache_key(fhour, "CLOUD_DIAG"), b"x")
+
+        with patch(
+            "weatherbrief.fetch.grib.grib_fetch.fetch_idx"
+        ) as mock_idx:
+            stats = precache_gfs_run(init, should_defer=lambda: True)
+
+        assert stats["deferred"] == 0
+        assert stats["hours_fetched"] == stats["forecast_hours_total"]
+        mock_idx.assert_not_called()
+
     def test_icon_eu_reports_not_deferred_on_a_clean_pass(
         self, tmp_path: Path, monkeypatch,
     ):
@@ -623,7 +694,44 @@ class TestWarmYielding:
         assert stats["hours_fetched"] == 2
         assert stats["hours_fetched"] < stats["forecast_hours_total"]
 
-    def test_d2_defers_between_flights(self):
+    def test_d2_defers_when_prefetch_aborts(self):
+        """A flight whose prefetch hits the abort_if gate stops the pass."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        warmed: list = []
+        rows = [_FakeRow(1), _FakeRow(2), _FakeRow(3)]
+
+        def prefetch(ctx, **kw):
+            # First flight completes (fully cached, say); a refresh is active
+            # by the second, which has pending jobs → the gate aborts it.
+            if warmed:
+                return False
+            warmed.append(ctx)
+            return True
+
+        helper = TestIconD2FlightWarming()
+        with helper._patches(
+            rows, lambda *a, **kw: (_FakeCtx(ICON_D2), None), warmed,
+            prefetch=prefetch,
+        ):
+            stats = precache_icon_d2_flights(
+                _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
+            )
+
+        assert stats["deferred"] == 1
+        assert stats["flights_warmed"] == 1
+        assert stats["flights_considered"] == 2  # flight 3 never started
+        assert len(warmed) == 1
+
+    def test_d2_fast_forwards_warmed_flights_during_refresh(self):
+        """An active refresh must not block flights that are already warmed.
+
+        The gate lives inside the prefetch (abort_if) and only fires when
+        downloads are pending — so a resumption pass with every flight cached
+        completes and lets the scheduler record last_done, even mid-burst
+        (PR #498 review finding).
+        """
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
         from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
 
@@ -632,30 +740,18 @@ class TestWarmYielding:
 
         helper = TestIconD2FlightWarming()
         with helper._patches(
+            # Default prefetch fake: no pending jobs → completes (True), as a
+            # fully-warmed flight would even while a refresh is active.
             rows, lambda *a, **kw: (_FakeCtx(ICON_D2), None), warmed,
         ):
             stats = precache_icon_d2_flights(
                 _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
-                # Yield once the first flight has been warmed.
-                should_defer=lambda: len(warmed) >= 1,
+                should_defer=lambda: True,  # refresh active the whole pass
             )
 
-        assert stats["deferred"] == 1
-        assert stats["flights_warmed"] == 1
-        assert stats["flights_considered"] == 1  # flights 2 and 3 never started
-        assert len(warmed) == 1
-
-    def test_d2_defers_before_touching_the_db(self):
-        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
-
-        with patch("flyfun_common.db.SessionLocal") as session:
-            stats = precache_icon_d2_flights(
-                _utc(2026, 7, 21, 0), db_path="/db", should_defer=lambda: True,
-            )
-
-        assert stats["deferred"] == 1
-        assert stats["flights_considered"] == 0
-        session.assert_not_called()
+        assert stats["deferred"] == 0
+        assert stats["flights_warmed"] == 3
+        assert len(warmed) == 3
 
     def test_d2_clean_pass_is_not_deferred(self):
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2

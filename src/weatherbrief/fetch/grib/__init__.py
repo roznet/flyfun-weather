@@ -3400,7 +3400,8 @@ def _prefetch_icon_eu_data(
     ctx: _IconEuContext,
     *,
     outer_workers: int | None = None,
-) -> None:
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
     """Download ICON-EU GRIB2 data and cache to disk (no decode).
 
     Runs in a background thread while GFS enrichment proceeds.
@@ -3409,9 +3410,19 @@ def _prefetch_icon_eu_data(
     callers (the warm loop) that should keep a smaller memory/bandwidth
     footprint than an interactive briefing; ``None`` → the normal
     :func:`_icon_prefetch_workers` budget.
+
+    ``abort_if`` is consulted once, after the download job list is built and
+    only when it is non-empty: a True answer aborts before any bytes move and
+    the call returns ``False``. This is how the warm loop yields to an
+    interactive refresh without giving up its free cache-hit fast-forward —
+    a fully-warmed context has no jobs and completes regardless of the gate
+    (issue #490 / PR #498 review). Returns ``True`` when the prefetch ran to
+    completion (including the no-jobs case).
     """
     with _grib_time("icon_prefetch"):
-        _prefetch_icon_eu_data_inner(ctx, outer_workers=outer_workers)
+        return _prefetch_icon_eu_data_inner(
+            ctx, outer_workers=outer_workers, abort_if=abort_if,
+        )
 
 
 def _icon_prefetch_workers() -> int:
@@ -3430,7 +3441,8 @@ def _prefetch_icon_eu_data_inner(
     ctx: _IconEuContext,
     *,
     outer_workers: int | None = None,
-) -> None:
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
     """Download all uncached ICON-EU units for this run.
 
     Cold-cache fetch tail fix: the per-(fhour, variable) downloads used to run
@@ -3621,16 +3633,24 @@ def _prefetch_icon_eu_data_inner(
             jobs.extend(_explicit_jobs(lead))
 
     if not jobs:
-        return
+        return True
+    if abort_if is not None and abort_if():
+        logger.info(
+            "%s prefetch aborted before download (%d job(s) pending): "
+            "yielding to an interactive refresh",
+            variant.slug, len(jobs),
+        )
+        return False
     if outer == 1 or len(jobs) == 1:
         for fn, *args in jobs:
             fn(*args)
-        return
+        return True
 
     with ThreadPoolExecutor(max_workers=outer, thread_name_prefix="icon-prefetch") as pool:
         futures = [_submit_with_context(pool, fn, *args) for fn, *args in jobs]
         for fut in futures:
             fut.result()  # job functions never raise; .result() surfaces bugs
+    return True
 
 
 def _decode_and_merge_icon_eu(

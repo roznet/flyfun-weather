@@ -120,3 +120,27 @@ class TestIdleSeconds:
     def test_unregister_of_unknown_flight_does_not_start_the_clock(self, registry):
         registry.unregister("never-registered")
         assert registry.idle_seconds() is None
+
+    def test_stale_leaked_entry_does_not_pin_active(self, registry):
+        """A leaked entry (no unregister) must not disable warming forever.
+
+        Entries older than STALE_ENTRY_SECONDS stop counting as active; idle
+        time then runs from the moment the newest of them crossed the bound
+        (#490 follow-up).
+        """
+        registry.try_register("leaked", user_id="user-a")
+        # get() hands out copies, so age the stored entry directly.
+        registry._entries["leaked"].queued_at_mono -= (
+            registry.STALE_ENTRY_SECONDS + 120
+        )
+        idle = registry.idle_seconds()
+        assert idle is not None
+        assert 100 < idle < 140  # ~120s since it went stale
+
+    def test_fresh_entry_alongside_stale_still_pins_active(self, registry):
+        registry.try_register("leaked", user_id="user-a")
+        registry._entries["leaked"].queued_at_mono -= (
+            registry.STALE_ENTRY_SECONDS + 120
+        )
+        registry.try_register("live", user_id="user-b")
+        assert registry.idle_seconds() == 0.0

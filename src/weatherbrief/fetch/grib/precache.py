@@ -204,10 +204,12 @@ def precache_icon_eu_run(
     flight briefing landing in the same window will hit the warm cache.
 
     Yields to interactive briefings: ``should_defer`` (default
-    :func:`interactive_refresh_active`) is polled before each variable
-    download, and a True answer stops the pass with ``deferred=1`` in the
-    stats. Callers must then leave the run un-recorded so the next tick
-    resumes it.
+    :func:`interactive_refresh_active`) is polled before each real download
+    (per variable, and before the cloud-diag fetch) — never ahead of a free
+    ``is_cached`` hit, so a resumption pass fast-forwards through the warmed
+    prefix even during a refresh burst. A True answer stops the pass with
+    ``deferred=1`` in the stats. Callers must then leave the run un-recorded
+    so the next tick resumes it.
     """
     from weatherbrief.fetch.grib import _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import (
@@ -233,11 +235,13 @@ def precache_icon_eu_run(
     vars_fetched = 0
     bytes_downloaded = 0
 
+    # The yield gate is deliberately checked only where a real download is
+    # about to start, never ahead of an `is_cached` hit-check: cache hits are
+    # free, and a resumption pass must be able to fast-forward through the
+    # already-warmed prefix even while a refresh is active — otherwise a
+    # sustained burst (the 05Z scenario) pins the pass at unit 0 every tick
+    # and `last_done` starves (PR #498 review).
     for fhour in forecast_hours:
-        if gate():
-            deferred = True
-            break
-
         # Legacy combined cache (briefings on older code paths) → counts as covered
         if is_cached(run_dir, cache_key(fhour, "ICON_EU_QC_QI_P")):
             hours_fetched += 1
@@ -285,6 +289,9 @@ def precache_icon_eu_run(
         # correctness one.
         diag_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
         if not is_cached(run_dir, diag_ck):
+            if gate():
+                deferred = True
+                break
             try:
                 fetched = fetch_icon_eu_single_level(
                     init_date, init_hour, [fhour], session=session,
@@ -356,11 +363,14 @@ def precache_icon_d2_flights(
     goes through the normal freshest-run finder so it matches the briefing).
     ``db_path`` is the airports DB for waypoint resolution; empty → no-op.
 
-    Yields to interactive briefings between flights: ``should_defer`` (default
-    :func:`interactive_refresh_active`) is polled before each flight, and a
-    True answer stops the pass with ``deferred=1`` in the stats so the caller
-    leaves the run un-recorded. The next tick re-walks the flight list from the
-    start; flights already warmed cost only their cache hits.
+    Yields to interactive briefings, but only when real downloads are pending:
+    ``should_defer`` (default :func:`interactive_refresh_active`) is passed to
+    the prefetch as its ``abort_if`` gate, consulted after the download job
+    list is built. A flight whose files are already on disk has no jobs and
+    completes even mid-refresh, so a resumption pass fast-forwards through the
+    warmed prefix instead of stalling at flight 0 for the whole burst (PR #498
+    review). An aborted prefetch stops the pass with ``deferred=1`` so the
+    caller leaves the run un-recorded and the next tick resumes it.
     """
     from weatherbrief.fetch.grib import _prefetch_icon_eu_data, _prepare_icon_eu
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
@@ -377,14 +387,6 @@ def precache_icon_d2_flights(
         return stats
 
     gate = _yield_gate(should_defer)
-    if gate():
-        stats["deferred"] = 1
-        logger.info(
-            "ICON-D2 flight warm (run %s) deferring to an active briefing "
-            "refresh before starting — will resume next tick",
-            init.strftime("%Y%m%d_%Hz"),
-        )
-        return stats
 
     from flyfun_common.db import SessionLocal
     from sqlalchemy import select
@@ -408,19 +410,6 @@ def precache_icon_d2_flights(
         db.close()
 
     for row in rows:
-        # Between flights: one flight's prefetch is the unit of warm work that
-        # can't be interrupted, so this is the finest granularity available
-        # without reaching into the shared briefing prefetch path.
-        if gate():
-            stats["deferred"] = 1
-            logger.info(
-                "ICON-D2 flight warm (run %s) deferring to an active briefing "
-                "refresh after %d/%d flights — will resume next tick",
-                init.strftime("%Y%m%d_%Hz"),
-                stats["flights_warmed"], len(rows),
-            )
-            break
-
         stats["flights_considered"] += 1
         try:
             flight = _row_to_flight(row)
@@ -450,8 +439,22 @@ def precache_icon_d2_flights(
             # Half the outer units (and half the connection pool, enforced by
             # the callee) of an interactive prefetch: warming is discretionary
             # and must never crowd out a concurrent briefing's memory or
-            # connections (05:09Z OOM, 2026-07-23).
-            _prefetch_icon_eu_data(ctx, outer_workers=2)
+            # connections (05:09Z OOM, 2026-07-23). The gate rides along as
+            # abort_if: a warmed flight (no pending jobs) completes even
+            # mid-refresh; one that needs downloads defers instead.
+            completed = _prefetch_icon_eu_data(
+                ctx, outer_workers=2, abort_if=gate,
+            )
+            if not completed:
+                stats["deferred"] = 1
+                logger.info(
+                    "ICON-D2 flight warm (run %s) deferring to an active "
+                    "briefing refresh after %d/%d flights — will resume "
+                    "next tick",
+                    init.strftime("%Y%m%d_%Hz"),
+                    stats["flights_warmed"], len(rows),
+                )
+                break
             stats["flights_warmed"] += 1
         except Exception:
             stats["flights_skipped"] += 1
@@ -507,10 +510,6 @@ def precache_gfs_run(
     bytes_downloaded = 0
 
     for fhour in forecast_hours:
-        if gate():
-            deferred = True
-            break
-
         clwmr_ck = cache_key(fhour, "CLWMR_ICMR")
         diag_ck = cache_key(fhour, "CLOUD_DIAG")
         clwmr_hit = is_cached(run_dir, clwmr_ck)
@@ -518,6 +517,13 @@ def precache_gfs_run(
         if clwmr_hit and diag_hit:
             hours_fetched += 1
             continue
+
+        # Gate only when a real fetch is pending, after the free hit-check —
+        # a resumption pass must fast-forward through the warmed prefix even
+        # while a refresh is active (PR #498 review).
+        if gate():
+            deferred = True
+            break
 
         try:
             idx_text = fetch_idx(init_date, init_hour, fhour, session=session)

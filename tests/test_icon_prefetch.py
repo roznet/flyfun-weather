@@ -173,3 +173,41 @@ def test_worker_env_parsing(monkeypatch):
     assert grib_mod._icon_prefetch_workers() == 4
     monkeypatch.delenv("GRIB_ICON_PREFETCH_WORKERS")
     assert grib_mod._icon_prefetch_workers() == 4
+
+
+# ---------------------------------------------------------------------------
+# abort_if — the warm loop's yield gate (#490, PR #498 review)
+# ---------------------------------------------------------------------------
+
+
+def test_abort_if_yields_before_any_download(tmp_path, tracker):
+    """Pending jobs + active gate → abort with False, zero bytes moved."""
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    completed = _prefetch_icon_eu_data_inner(ctx, abort_if=lambda: True)
+    assert completed is False
+    assert tracker["var_calls"] == []
+    assert tracker["diag_calls"] == []
+
+
+def test_abort_if_ignored_when_nothing_to_fetch(tmp_path, tracker):
+    """A fully-warmed context has no jobs and completes even mid-refresh.
+
+    This is the fast-forward half of the contract: the gate must never block
+    free cache hits, or a resumption pass stalls at unit 0 for a whole burst.
+    """
+    put_cached(tmp_path, cache_key(6, "ICON_EU_QC_QI_P"), b"legacy")
+    put_cached(tmp_path, cache_key(6, ICON_EU_CLOUD_DIAG_CACHE_KEY), b"diag")
+    # Leading rain_con de-accumulation step (#421) is a job too — cache it.
+    put_cached(tmp_path, cache_key(5, ICON_EU_CLOUD_DIAG_CACHE_KEY), b"diag")
+
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    completed = _prefetch_icon_eu_data_inner(ctx, abort_if=lambda: True)
+    assert completed is True
+    assert tracker["var_calls"] == []
+    assert tracker["diag_calls"] == []
+
+
+def test_completed_pass_returns_true(tmp_path, tracker):
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    assert _prefetch_icon_eu_data_inner(ctx, abort_if=lambda: False) is True
+    assert len(tracker["var_calls"]) == len(ICON_EU_VARIABLES)
