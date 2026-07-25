@@ -41,6 +41,12 @@ struct FlightListView: View {
     /// Error surfaced when a swipe/context-menu unsubscribe fails, so the row
     /// staying put reads as a failure rather than a silent no-op (#446).
     @State private var unsubscribeError: String?
+    /// A flight the user swiped/long-pressed Delete on, held while the destructive
+    /// confirmation is up. Deleting drops all briefing history and can't be undone,
+    /// so — like the web's `confirm()` — it is never a one-tap action.
+    @State private var deleteCandidate: FlightResponse?
+    /// Error surfaced when a delete fails (same reasoning as `unsubscribeError`).
+    @State private var deleteError: String?
     /// Bumped on every `openForecastMap`, used as the map view's `.id` so a *new*
     /// inbound deep link while the map is already open re-creates the view (the
     /// deep link is applied only at `ForecastMapViewModel.init`).
@@ -280,7 +286,7 @@ struct FlightListView: View {
                 }
             }
         }
-        .alert("Shared flight unavailable", isPresented: Binding(
+        .alert("Flight unavailable", isPresented: Binding(
             get: { shareResolveError != nil },
             set: { if !$0 { shareResolveError = nil } }
         )) {
@@ -295,6 +301,34 @@ struct FlightListView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(unsubscribeError ?? "")
+        }
+        // Destructive delete confirmation. Attached at the list level (not per row)
+        // so the swipe action can complete and the row close before the dialog
+        // appears; `presenting:` carries the flight so the message names the route.
+        .confirmationDialog(
+            "Delete Flight?",
+            isPresented: Binding(
+                get: { deleteCandidate != nil },
+                set: { if !$0 { deleteCandidate = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: deleteCandidate
+        ) { flight in
+            Button("Delete Flight", role: .destructive) {
+                if let viewModel { delete(flight, viewModel: viewModel) }
+            }
+            .accessibilityIdentifier("confirmDeleteFlightButton")
+            Button("Cancel", role: .cancel) {}
+        } message: { flight in
+            Text("\(flight.shortTitle) and all of its briefing history will be deleted. This can’t be undone.")
+        }
+        .alert("Couldn’t delete flight", isPresented: Binding(
+            get: { deleteError != nil },
+            set: { if !$0 { deleteError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteError ?? "")
         }
         .task {
             guard let repo = appState.repository else { return }
@@ -443,9 +477,30 @@ struct FlightListView: View {
                     applyPendingNavigation()
                 }
             } else {
-                // Authoritative reload still lacks it — it's genuinely gone. Drop.
+                // Authoritative reload still lacks it — the link names a flight
+                // outside the viewer's list (a feedback email about another
+                // pilot's flight, a link from a different sign-in account). The
+                // server still serves GET /flights/{id} to any authenticated
+                // viewer for a non-private flight, so fetch it directly instead
+                // of silently landing on the list. A non-owner comes back
+                // role == .subscriber and gets the same preview-before-subscribe
+                // screen as a /s/{code} share link; a 404 (private/unknown)
+                // surfaces an alert so the tap is never a silent no-op.
                 reloadRetryFlightId = nil
                 appState.clearPendingNavigation()
+                guard let repo = appState.repository else { return }
+                Task {
+                    do {
+                        let flight = try await repo.flight(id: flightId)
+                        if flight.role == .subscriber {
+                            sharedPreviewFlight = flight
+                        } else {
+                            selection = .flight(flight)
+                        }
+                    } catch {
+                        shareResolveError = "This briefing isn’t available. The flight may be private, deleted, or on a different account."
+                    }
+                }
             }
         }
     }
@@ -464,6 +519,23 @@ struct FlightListView: View {
                 unsubscribeError = error.errorDescription ?? "Couldn’t unsubscribe from this flight."
             } catch {
                 unsubscribeError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Delete one of the user's own flights (confirmed), then reload the list so
+    /// the row disappears. Same detail-pane hygiene as `unsubscribe`: if the
+    /// deleted flight is the current iPad selection, clear it so the detail pane
+    /// doesn't dangle on a flight the server no longer has.
+    private func delete(_ flight: FlightResponse, viewModel: FlightListViewModel) {
+        Task {
+            do {
+                if selection == .flight(flight) { selection = nil }
+                try await viewModel.deleteFlight(flight)
+            } catch let error as APIError {
+                deleteError = error.errorDescription ?? "Couldn’t delete this flight."
+            } catch {
+                deleteError = error.localizedDescription
             }
         }
     }
@@ -531,6 +603,18 @@ struct FlightListView: View {
                     Label("Unsubscribe", systemImage: "person.badge.minus")
                 }
             }
+            // Delete an owned flight, matching the web's Delete button. Owner-only
+            // (the server 404s a subscriber's delete) and online-only. Never
+            // immediate: it opens the destructive confirmation. `allowsFullSwipe`
+            // is already false on this edge, so a long swipe can't trigger it.
+            if !viewModel.isOffline && flight.isEditable {
+                Button(role: .destructive) {
+                    deleteCandidate = flight
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .accessibilityIdentifier("deleteFlightSwipeButton")
+            }
         }
         .contextMenu {
             if !viewModel.isOffline && flight.isEditable {
@@ -572,6 +656,14 @@ struct FlightListView: View {
                 } label: {
                     Label("Unsubscribe", systemImage: "person.badge.minus")
                 }
+            }
+            if !viewModel.isOffline && flight.isEditable {
+                Button(role: .destructive) {
+                    deleteCandidate = flight
+                } label: {
+                    Label("Delete Flight", systemImage: "trash")
+                }
+                .accessibilityIdentifier("deleteFlightMenuItem")
             }
         }
     }

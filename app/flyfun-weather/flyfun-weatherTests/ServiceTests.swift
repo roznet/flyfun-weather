@@ -217,6 +217,61 @@ import Foundation
     }
 }
 
+// MARK: - Deleting a flight evicts its local cache
+
+/// A deleted flight's downloaded packs can never be refreshed or re-downloaded,
+/// so the caching layer drops them (index entries + sidecar directory) once the
+/// server confirms — but only then.
+@Suite struct CachingRepositoryDeleteFlightTests {
+
+    private let all = CachedPackEntry.requiredEndpoints
+
+    /// Seed two flights' packs + sidecars into a temp cache.
+    private func seededCache() async throws -> BriefingCacheStore {
+        let store = BriefingCacheStore(cacheDir: makeTempDir())
+        await store.registerDownload(flightId: "f1", timestamp: "t1", flightTitle: "T",
+                                     assessment: nil, endpoints: all, totalBytes: 1)
+        await store.registerDownload(flightId: "f1", timestamp: "t2", flightTitle: "T",
+                                     assessment: nil, endpoints: all, totalBytes: 1)
+        try await store.writeFlightMetadata(Data("{}".utf8), flightId: "f1", name: "flight")
+        await store.registerDownload(flightId: "f2", timestamp: "t1", flightTitle: "T",
+                                     assessment: nil, endpoints: all, totalBytes: 1)
+        try await store.writeFlightMetadata(Data("{}".utf8), flightId: "f2", name: "flight")
+        return store
+    }
+
+    @Test func successfulDeleteEvictsEveryPackAndTheSidecarDirectory() async throws {
+        let cache = try await seededCache()
+        let online = MockBriefingRepository()
+        let repo = CachingBriefingRepository.makeForTesting(online: online, cache: cache)
+
+        try await repo.deleteFlight(id: "f1")
+
+        #expect(online.deletedFlightIds == ["f1"])
+        #expect(await cache.hasCachedPacks(flightId: "f1") == false)
+        #expect(await cache.readFlightMetadata(flightId: "f1", name: "flight") == nil)
+        // The other flight is untouched.
+        #expect(await cache.hasCachedPacks(flightId: "f2"))
+        #expect(await cache.readFlightMetadata(flightId: "f2", name: "flight") != nil)
+    }
+
+    /// A server-side failure must leave the local copy alone — the flight still
+    /// exists, so throwing away its offline packs would be data loss.
+    @Test func failedDeleteKeepsCachedPacks() async throws {
+        let cache = try await seededCache()
+        let online = MockBriefingRepository()
+        online.deleteFlightResult = .failure(MockError.injected("server down"))
+        let repo = CachingBriefingRepository.makeForTesting(online: online, cache: cache)
+
+        await #expect(throws: MockError.self) {
+            try await repo.deleteFlight(id: "f1")
+        }
+
+        #expect(await cache.hasCachedPacks(flightId: "f1"))
+        #expect(await cache.readFlightMetadata(flightId: "f1", name: "flight") != nil)
+    }
+}
+
 // MARK: - Cache eviction staleness (pure cutoff + legacy fallback)
 
 @Suite struct PackStalenessTests {

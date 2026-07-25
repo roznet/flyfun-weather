@@ -31,6 +31,15 @@ struct UniversalLinkRoutingTests {
         #expect(target == .briefing(flightId: "123"))
     }
 
+    @Test func routesFeedbackEmailLinkWithPackTimestamp() {
+        // The feedback/admin notification email appends `&t=<pack ISO timestamp>`
+        // (with an unencoded `+00:00` offset) to pin the pack on the web. The app
+        // ignores `t` and must still route to the flight.
+        let target = AppState.navigationTarget(
+            for: url("https://weather.flyfun.aero/briefing.html?flight=eglm_sopit_disit_egbo-2026-07-25-781c&t=2026-07-22T16:07:05.119539+00:00"))
+        #expect(target == .briefing(flightId: "eglm_sopit_disit_egbo-2026-07-25-781c"))
+    }
+
     @Test func picksFlightParamAmongOthers() {
         let target = AppState.navigationTarget(
             for: url("https://weather.flyfun.aero/briefing.html?theme=dark&flight=abc&x=1"))

@@ -396,6 +396,49 @@ import MapKit
         }
         #expect(flights.first?.latestBriefing?.assessment == "RED")   // fresh reconcile preserved
     }
+
+    // MARK: Delete an owned flight (swipe / context menu)
+
+    /// A confirmed delete calls the repository once and re-syncs the list, so the
+    /// row disappears immediately instead of at the next foreground refresh.
+    @Test func deleteFlightCallsRepositoryThenReloads() async throws {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([makeFlight(id: "a"), makeFlight(id: "b")])
+        let vm = FlightListViewModel(repository: repo)
+        await vm.loadFlights()
+        // Server truth after the delete.
+        repo.flightsResult = .success([makeFlight(id: "b")])
+
+        try await vm.deleteFlight(makeFlight(id: "a"))
+
+        #expect(repo.deletedFlightIds == ["a"])
+        guard case .loaded(let flights) = vm.state else {
+            Issue.record("expected .loaded, got \(vm.state)")
+            return
+        }
+        #expect(flights.map(\.id) == ["b"])
+    }
+
+    /// A failed delete rethrows (the view surfaces it) and leaves the list exactly
+    /// as it was — a row that couldn't be deleted must not vanish as if it had been.
+    @Test func deleteFlightFailureRethrowsAndKeepsRow() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([makeFlight(id: "a")])
+        repo.deleteFlightResult = .failure(MockError.injected("not owned"))
+        let vm = FlightListViewModel(repository: repo)
+        await vm.loadFlights()
+
+        await #expect(throws: MockError.self) {
+            try await vm.deleteFlight(makeFlight(id: "a"))
+        }
+
+        guard case .loaded(let flights) = vm.state else {
+            Issue.record("expected .loaded, got \(vm.state)")
+            return
+        }
+        #expect(flights.map(\.id) == ["a"])
+        #expect(repo.flightsCallCount == 1)     // no reload on failure
+    }
 }
 
 // MARK: - FlightCardView content equality (#426)

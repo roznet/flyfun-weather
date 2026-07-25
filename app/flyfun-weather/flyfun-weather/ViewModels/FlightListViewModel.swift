@@ -151,6 +151,19 @@ final class FlightListViewModel {
         }
     }
 
+    /// Permanently delete one of the user's own flights (and all its briefing
+    /// history), then re-sync the list so the row — and its offline badge and
+    /// Spotlight entry, both derived from the reloaded list — disappears with it.
+    /// Owner-only and online-only, mirroring the web's Delete button.
+    ///
+    /// Rethrows: a failed delete leaves the row in place, which must read as a
+    /// failure to the user rather than a silent no-op.
+    func deleteFlight(_ flight: FlightResponse) async throws {
+        try await repository.deleteFlight(id: flight.id)
+        Self.logger.info("Deleted flight \(flight.id)")
+        await loadFlights()
+    }
+
     // MARK: - Active-refresh polling (live "Updating…" row indicator)
 
     /// Poll `GET /api/refresh/active` every 5s while the list is visible so a row

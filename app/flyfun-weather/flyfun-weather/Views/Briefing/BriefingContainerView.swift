@@ -14,6 +14,7 @@ struct BriefingContainerView: View {
     /// is immutable. Seeded from the flight in `.task`; updated optimistically.
     @State private var notifyOverride: FlightNotifyOverride = .default
     @State private var notifyOverrideBusy = false
+    @State private var showingShareSheet = false
 
     private static let dayTimeUTC: DateFormatter = {
         let fmt = DateFormatter()
@@ -81,8 +82,14 @@ struct BriefingContainerView: View {
                         // URL. Only the owner sees it, and only for a non-private
                         // flight with a minted code (isShareable) — a private link
                         // would 404 for the recipient, matching the web gate.
-                        if flight.isShareable, let code = flight.shareCode {
-                            ShareLink(item: AppState.shareURL(forShareCode: code)) {
+                        // UIActivityViewController instead of `ShareLink` so the
+                        // sheet can carry the custom "Open in Safari" activity
+                        // (iOS offers Chrome via its share extension but never
+                        // Safari — see ShareActivitySheet).
+                        if flight.isShareable, flight.shareCode != nil {
+                            Button {
+                                showingShareSheet = true
+                            } label: {
                                 Label("Share", systemImage: "square.and.arrow.up")
                                     .font(.caption)
                             }
@@ -111,6 +118,14 @@ struct BriefingContainerView: View {
                                             isInFlightWindow: isInFlightWindow, startTracking: startTracking)
                     }
                 }
+            }
+        }
+        .sheet(isPresented: $showingShareSheet) {
+            if let code = flight.shareCode {
+                ShareActivitySheet(items: [AppState.shareURL(forShareCode: code)],
+                                   activities: [OpenInSafariActivity()])
+                    .presentationDetents([.medium, .large])
+                    .ignoresSafeArea()
             }
         }
         .sheet(isPresented: $showingPirepSheet) {

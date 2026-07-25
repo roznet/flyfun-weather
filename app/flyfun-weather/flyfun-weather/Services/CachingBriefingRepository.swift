@@ -74,6 +74,20 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.updateFlight(flightId: flightId, request: request)
     }
 
+    /// Delete server-side first — only once the server confirms (204) do we drop
+    /// the local copy, so a failed delete leaves a flight that still exists with
+    /// its downloaded packs intact. After that the packs are unreachable (no
+    /// refresh, no re-download), so evict them: index entries first, then the
+    /// whole flight directory including the sidecars, matching the order the
+    /// eviction sweep in `pruneStalePacks` uses.
+    func deleteFlight(id: String) async throws {
+        try await online.deleteFlight(id: id)
+        for entry in await cache.cachedPacks() where entry.flightId == id {
+            await cache.deletePack(flightId: id, timestamp: entry.timestamp)
+        }
+        await cache.removeFlightDirectory(flightId: id)
+    }
+
     func aircraft() async throws -> [AircraftResponse] {
         try await online.aircraft()
     }
@@ -135,6 +149,21 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
             if !recovered.isEmpty {
                 Self.logger.info("Recovered \(recovered.count) flights from download cache")
                 return recovered
+            }
+            throw error
+        }
+    }
+
+    /// Online-first single-flight fetch (Universal Link fallback for flights not
+    /// in the list). Offline fallback: the cached list, since a flight outside
+    /// the viewer's list is never in the per-flight cache anyway.
+    func flight(id: String) async throws -> FlightResponse {
+        do {
+            return try await online.flight(id: id)
+        } catch {
+            if let cached = await readCachedFlightsFromDisk(),
+               let match = cached.first(where: { $0.id == id }) {
+                return match
             }
             throw error
         }
