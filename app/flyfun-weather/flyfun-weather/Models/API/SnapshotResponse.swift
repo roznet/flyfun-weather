@@ -93,8 +93,39 @@ struct RouteObservations: Codable, Sendable {
     /// Airports that actually reported something. The web filters the table the
     /// same way (`apt.has_metar || apt.has_taf`) — a spatial query can return
     /// small GA fields with no data at all.
+    ///
+    /// Server order is along-route (by enroute distance), which is the useful
+    /// reading order; everything downstream preserves it.
     var reportingAirports: [AirportObservation] {
         (airports ?? []).filter { $0.hasMetar == true || $0.hasTaf == true }
+    }
+
+    /// The subset a phone-width table shows before "Show all": the `limit`
+    /// airports nearest the route, **plus** any airport whose model comparison
+    /// is CONFLICTING — the conflict banner must never point at a row the cap
+    /// hid. Returned in route order, not distance order, so the table still
+    /// reads departure→destination.
+    ///
+    /// A 30 nm corridor on a long route routinely reports 30+ fields, which is a
+    /// reasonable table in a browser window but a very long scroll inside the
+    /// iOS Advisory tab.
+    func nearestReportingAirports(limit: Int) -> [AirportObservation] {
+        let reporting = reportingAirports
+        guard limit > 0, reporting.count > limit else { return reporting }
+
+        // Missing distance sorts last rather than winning the "nearest" race.
+        let byDistance = reporting.sorted {
+            ($0.distanceFromRouteNm ?? .greatestFiniteMagnitude)
+                < ($1.distanceFromRouteNm ?? .greatestFiniteMagnitude)
+        }
+        var keep = Set(byDistance.prefix(limit).map(\.icao))
+
+        let conflicting = comparisonsByIcao
+            .filter { $0.value.categoryMatch == "CONFLICTING" || $0.value.windAdvisoryMatch == "CONFLICTING" }
+            .keys
+        keep.formUnion(conflicting)
+
+        return reporting.filter { keep.contains($0.icao) }
     }
 }
 

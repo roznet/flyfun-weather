@@ -209,6 +209,107 @@ import Foundation
     }
 }
 
+// MARK: - Phone row cap (nearest-N + "Show all")
+
+@Suite struct RouteObservationsCapTests {
+
+    /// Build observations from `(icao, distanceNm)` pairs in route order, with an
+    /// optional set of CONFLICTING comparisons.
+    private func observations(
+        _ airports: [(String, Double?)],
+        conflicting: Set<String> = [],
+        silent: Set<String> = []
+    ) throws -> RouteObservations {
+        let aptJSON = airports.map { icao, dist -> String in
+            let d = dist.map { "\($0)" } ?? "null"
+            let reports = silent.contains(icao) ? "false" : "true"
+            return """
+            { "icao": "\(icao)", "distance_from_route_nm": \(d),
+              "metar_weather": [], "has_metar": \(reports), "has_taf": false }
+            """
+        }.joined(separator: ",")
+        let compJSON = airports.map { icao, _ -> String in
+            let match = conflicting.contains(icao) ? "CONFLICTING" : "CONFIRMING"
+            return #"{ "icao": "\#(icao)", "category_match": "\#(match)" }"#
+        }.joined(separator: ",")
+        let json = """
+        { "corridor_nm": 30.0, "fetch_time": "2026-07-25T05:50:00Z",
+          "airports": [\(aptJSON)], "comparisons": [\(compJSON)] }
+        """
+        return try JSONDecoder.weatherBrief.decode(RouteObservations.self, from: Data(json.utf8))
+    }
+
+    @Test func returnsAllWhenUnderTheLimit() throws {
+        let o = try observations([("AAAA", 1), ("BBBB", 2), ("CCCC", 3)])
+        #expect(o.nearestReportingAirports(limit: 10).map(\.icao) == ["AAAA", "BBBB", "CCCC"])
+    }
+
+    @Test func returnsAllWhenExactlyAtTheLimit() throws {
+        let o = try observations([("AAAA", 1), ("BBBB", 2), ("CCCC", 3)])
+        #expect(o.nearestReportingAirports(limit: 3).count == 3)
+    }
+
+    /// Picks by distance but renders in route order — a table that jumped around
+    /// the route would be unreadable.
+    @Test func picksNearestButPreservesRouteOrder() throws {
+        let o = try observations([
+            ("AAAA", 30), ("BBBB", 2), ("CCCC", 40), ("DDDD", 1), ("EEEE", 3),
+        ])
+        let got = o.nearestReportingAirports(limit: 3)
+        // Nearest three are DDDD(1), BBBB(2), EEEE(3) — emitted in route order.
+        #expect(got.map(\.icao) == ["BBBB", "DDDD", "EEEE"])
+    }
+
+    /// A conflicting airport outside the nearest-N must still surface, otherwise
+    /// the conflict banner refers to a row the cap hid.
+    @Test func pinsConflictingAirportBeyondTheCap() throws {
+        let o = try observations([
+            ("AAAA", 1), ("BBBB", 2), ("CCCC", 3), ("ZZZZ", 99),
+        ], conflicting: ["ZZZZ"])
+        let got = o.nearestReportingAirports(limit: 3).map(\.icao)
+        #expect(got.contains("ZZZZ"))
+        #expect(got == ["AAAA", "BBBB", "CCCC", "ZZZZ"])
+    }
+
+    /// A wind-only conflict pins too — `wind_advisory_match` is the other half of
+    /// the banner's trigger.
+    @Test func pinsWindOnlyConflict() throws {
+        let json = """
+        { "corridor_nm": 30.0, "fetch_time": "2026-07-25T05:50:00Z",
+          "airports": [
+            { "icao": "AAAA", "distance_from_route_nm": 1, "metar_weather": [], "has_metar": true },
+            { "icao": "BBBB", "distance_from_route_nm": 2, "metar_weather": [], "has_metar": true },
+            { "icao": "ZZZZ", "distance_from_route_nm": 99, "metar_weather": [], "has_metar": true }
+          ],
+          "comparisons": [
+            { "icao": "ZZZZ", "category_match": "CONFIRMING", "wind_advisory_match": "CONFLICTING" }
+          ] }
+        """
+        let o = try JSONDecoder.weatherBrief.decode(RouteObservations.self, from: Data(json.utf8))
+        #expect(o.nearestReportingAirports(limit: 2).map(\.icao).contains("ZZZZ"))
+    }
+
+    /// Missing distance must not win the "nearest" race — it sorts last.
+    @Test func missingDistanceSortsLast() throws {
+        let o = try observations([("AAAA", nil), ("BBBB", 5), ("CCCC", 6)])
+        #expect(o.nearestReportingAirports(limit: 2).map(\.icao) == ["BBBB", "CCCC"])
+    }
+
+    /// Non-reporting fields are already excluded, so they never consume a slot.
+    @Test func silentAirportsDoNotConsumeSlots() throws {
+        let o = try observations([
+            ("SSS1", 0.1), ("SSS2", 0.2), ("AAAA", 5), ("BBBB", 6),
+        ], silent: ["SSS1", "SSS2"])
+        #expect(o.nearestReportingAirports(limit: 2).map(\.icao) == ["AAAA", "BBBB"])
+    }
+
+    @Test func nonPositiveLimitReturnsEverything() throws {
+        let o = try observations([("AAAA", 1), ("BBBB", 2)])
+        #expect(o.nearestReportingAirports(limit: 0).count == 2)
+        #expect(o.nearestReportingAirports(limit: -1).count == 2)
+    }
+}
+
 // MARK: - Layout model
 
 @Suite struct ObservationAxisTests {

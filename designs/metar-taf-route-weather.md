@@ -142,6 +142,25 @@ phone. The two comparison groups therefore become a switchable axis:
 
 Keyed off `horizontalSizeClass`, matching `RouteMapView`'s dual-metric split.
 
+**Phone row cap (deliberate divergence from web).** A 30 nm corridor on a long
+route routinely reports 30+ fields — the EDDC→EGTF verification run returned 29
+with a METAR. Web renders them all, which is fine in a browser window but a very
+long scroll inside the iOS Advisory tab. In **compact** width the table therefore
+shows the **10 nearest** airports (by `distance_from_route_nm`) with a
+"Show all N airports" toggle; regular width always shows everything.
+
+Two details that matter:
+- Selection is by distance but **rendering stays in route order**, so the table
+  still reads departure→destination rather than jumping around the route.
+- Any airport whose comparison is `CONFLICTING` (category **or** wind) is
+  **pinned into the capped set** regardless of distance — otherwise the
+  conflict banner could point at a row the cap had hidden. This means the
+  collapsed view can exceed 10 rows, which is why the collapse affordance reads
+  "Show fewer" rather than naming a number.
+
+Logic lives on the DTO (`RouteObservations.nearestReportingAirports(limit:)`) so
+it is unit-testable rather than buried in the view.
+
 Other parity notes:
 - **Wind cells** show the *crosswind in kt* coloured by advisory status, rather
   than the web's bare G/A/R letter — touch has no hover tooltip, so the value
