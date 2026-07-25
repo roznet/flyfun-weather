@@ -17,8 +17,10 @@ from sqlalchemy.orm import Session
 from weatherbrief.db.models import (
     TafVerificationScoreRow,
     VerificationMonthlyStatsRow,
+    VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.tasks.verification_gust import gust_aggregate_columns
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +171,61 @@ def rollup_month(db: Session, month_start: datetime) -> int:
     return rows_created
 
 
+def _obs_conditioned_gust_stats(
+    db: Session, month_start: datetime, month_end: datetime,
+) -> dict[tuple[str, str, int, str], dict]:
+    """Per-group gust aggregates that need the observation row (#491).
+
+    The observed gust and the realised peak live on
+    ``verification_observations``, so the occurrence contingency and the
+    forecast-flagged magnitude can't be derived from a score row alone. One
+    grouped SQL query per month keeps that off the Python path — loading a
+    month of observations into memory is not an option at watchlist scale.
+
+    Keyed like ``_rollup_model_scores``'s groups: (source, model, days_out,
+    icao). TAF rows have no entry — see ``_compute_taf_stats``.
+    """
+    rows = db.execute(
+        select(
+            VerificationScoreRow.source,
+            VerificationScoreRow.model,
+            VerificationScoreRow.days_out,
+            VerificationScoreRow.icao,
+            *gust_aggregate_columns(),
+        )
+        .join(
+            VerificationObservationRow,
+            VerificationScoreRow.observation_id == VerificationObservationRow.id,
+        )
+        .where(
+            VerificationScoreRow.observation_time >= month_start,
+            VerificationScoreRow.observation_time < month_end,
+        )
+        .group_by(
+            VerificationScoreRow.source,
+            VerificationScoreRow.model,
+            VerificationScoreRow.days_out,
+            VerificationScoreRow.icao,
+        )
+    ).all()
+
+    out: dict[tuple[str, str, int, str], dict] = {}
+    for r in rows:
+        n_flagged_peak = int(r.n_gust_flagged_peak or 0)
+        out[(r.source, r.model, r.days_out, r.icao)] = {
+            "n_model_gust_flag": int(r.n_model_gust_flag or 0),
+            "n_obs_gust": int(r.n_obs_gust or 0),
+            "n_gust_flag_hit": int(r.n_gust_flag_hit or 0),
+            "n_gust_flagged_peak": n_flagged_peak,
+            "gust_over_peak_bias_kt": (
+                float(r.sum_gust_flagged_over_peak_kt) / n_flagged_peak
+                if n_flagged_peak and r.sum_gust_flagged_over_peak_kt is not None
+                else None
+            ),
+        }
+    return out
+
+
 def _rollup_model_scores(
     db: Session, month_start: datetime, month_end: datetime,
 ) -> int:
@@ -182,6 +239,8 @@ def _rollup_model_scores(
     )
     scores = db.execute(stmt).scalars().all()
 
+    obs_gust_stats = _obs_conditioned_gust_stats(db, month_start, month_end)
+
     # Group by (source, model, days_out, icao)
     groups: dict[tuple[str, str, int, str], list[VerificationScoreRow]] = {}
     for s in scores:
@@ -189,8 +248,10 @@ def _rollup_model_scores(
         groups.setdefault(key, []).append(s)
 
     rows_created = 0
-    for (source, model, days_out, icao), group in groups.items():
+    for key, group in groups.items():
+        source, model, days_out, icao = key
         stats = _compute_model_stats(group)
+        stats.update(obs_gust_stats.get(key, {}))
         row = VerificationMonthlyStatsRow(
             month=month_start,
             source=source,
@@ -296,8 +357,15 @@ def _hit_miss_counts(
 
 def _base_stats(cat: dict[str, int], adv: dict[str, int], n: int,
                 ceiling_deltas: list[float], visibility_deltas: list[float],
-                wind_deltas: list[float]) -> dict:
-    """Build the stats dict shared by model and TAF rollups."""
+                wind_deltas: list[float], gust_deltas: list[float]) -> dict:
+    """Build the stats dict shared by model and TAF rollups.
+
+    ``gust_deltas`` is the obs-flagged conditioning only: a non-NULL gust
+    delta requires an observed gust, so this is "on the hours the airport
+    actually gusted, how far off was the forecast?" (#491). The
+    forecast-flagged conditioning needs the observation row and is merged in
+    by ``_obs_conditioned_gust_stats``.
+    """
     return {
         "n_scores": n,
         "n_cat_match": cat["match"],
@@ -312,6 +380,9 @@ def _base_stats(cat: dict[str, int], adv: dict[str, int], n: int,
         "ceiling_bias_ft": _mean(ceiling_deltas),
         "visibility_mae_m": _mae(visibility_deltas),
         "wind_speed_mae_kt": _mae(wind_deltas),
+        "wind_gust_mae_kt": _mae(gust_deltas),
+        "wind_gust_bias_kt": _mean(gust_deltas),
+        "n_gust": len(gust_deltas),
     }
 
 
@@ -325,6 +396,7 @@ def _compute_model_stats(scores: Sequence[VerificationScoreRow]) -> dict:
     ceiling_deltas = _collect_deltas(scores, "ceiling_delta_ft")
     visibility_deltas = _collect_deltas(scores, "visibility_delta_m")
     wind_deltas = _collect_deltas(scores, "wind_speed_delta_kt")
+    gust_deltas = _collect_deltas(scores, "wind_gust_delta_kt")
     temp_deltas = _collect_deltas(scores, "temperature_delta_c")
 
     p_hit, p_miss, p_fa, has_precip = _hit_miss_counts(
@@ -334,7 +406,10 @@ def _compute_model_stats(scores: Sequence[VerificationScoreRow]) -> dict:
         scores, "obs_has_convection", "model_has_convection",
     )
 
-    stats = _base_stats(cat, adv, len(scores), ceiling_deltas, visibility_deltas, wind_deltas)
+    stats = _base_stats(
+        cat, adv, len(scores), ceiling_deltas, visibility_deltas,
+        wind_deltas, gust_deltas,
+    )
     stats.update({
         "temperature_mae_c": _mae(temp_deltas),
         "n_precip_hit": p_hit if has_precip else None,
@@ -357,10 +432,25 @@ def _compute_taf_stats(scores: Sequence[TafVerificationScoreRow]) -> dict:
     ceiling_deltas = _collect_deltas(scores, "ceiling_delta_ft")
     visibility_deltas = _collect_deltas(scores, "visibility_delta_m")
     wind_deltas = _collect_deltas(scores, "wind_speed_delta_kt")
+    gust_deltas = _collect_deltas(scores, "wind_gust_delta_kt")
 
-    stats = _base_stats(cat, adv, len(scores), ceiling_deltas, visibility_deltas, wind_deltas)
+    stats = _base_stats(
+        cat, adv, len(scores), ceiling_deltas, visibility_deltas,
+        wind_deltas, gust_deltas,
+    )
     stats.update({
         "temperature_mae_c": None,
+        # Occurrence + forecast-flagged magnitude need the observation row,
+        # and the TAF group key (a lead_hours bucket) has no SQL expression
+        # that truncates identically on SQLite and MySQL. TAF gust occurrence
+        # is served by ``verification_stats.get_gust_accuracy``, which reads
+        # taf_verification_scores joined to observations at query time — the
+        # same treatment every other TAF stat gets (#154).
+        "n_model_gust_flag": None,
+        "n_obs_gust": None,
+        "n_gust_flag_hit": None,
+        "n_gust_flagged_peak": None,
+        "gust_over_peak_bias_kt": None,
         "n_precip_hit": None,
         "n_precip_miss": None,
         "n_precip_false_alarm": None,

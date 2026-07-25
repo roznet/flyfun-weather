@@ -150,6 +150,40 @@ class WindAdvisoryStats(BaseModel):
     sample_count: int = 0
 
 
+class GustAccuracyStats(BaseModel):
+    """Per-model gust accuracy, reported under both conditionings (#491).
+
+    The two halves select different, mostly non-overlapping samples and must
+    never be blended into one number — see ``tasks/verification_gust`` for the
+    definitions.
+
+    *Forecast-flagged* (the "why does the gust layer sit above the TAFs?"
+    view): ``n_flagged`` hours where the forecast called a gust,
+    ``flagged_over_peak_kt`` = mean(forecast gust − realised peak) on those
+    hours, ``over_warn_ratio`` = flagged hours ÷ hours the airport gusted,
+    ``n_flag_hit`` = flagged hours that did gust.
+
+    *Obs-flagged* (the extreme-day view): ``n_gust`` hours where the airport
+    gusted and the forecast had a gust value, with ``gust_mae_kt`` /
+    ``gust_bias_kt`` over those hours.
+    """
+
+    model: str
+    days_out: int = 0
+    n: int = 0
+    # Obs-flagged conditioning
+    n_gust: int = 0
+    gust_mae_kt: float | None = None
+    gust_bias_kt: float | None = None
+    # Forecast-flagged conditioning
+    n_flagged: int = 0
+    flagged_over_peak_kt: float | None = None
+    # Occurrence
+    n_obs_gust: int = 0
+    n_flag_hit: int = 0
+    over_warn_ratio: float | None = None
+
+
 class MissedWarning(BaseModel):
     """An observed ``red`` wind advisory that a model called something milder."""
 
@@ -171,6 +205,7 @@ class VerificationDigestData(BaseModel):
     notable_misses: list[NotableMiss] = Field(default_factory=list)
     category_bias: list[CategoryBiasStats] = Field(default_factory=list)
     wind_advisory: list[WindAdvisoryStats] = Field(default_factory=list)
+    gust_accuracy: list[GustAccuracyStats] = Field(default_factory=list)
     missed_warnings: list[MissedWarning] = Field(default_factory=list)
 
 

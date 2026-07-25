@@ -430,6 +430,27 @@ export interface WindAdvisoryStats {
   sample_count: number;
 }
 
+/** Gust accuracy under both conditionings — they are never blended (#491).
+ *
+ * Forecast-flagged: `n_flagged` hours the forecast called a gust,
+ * `flagged_over_peak_kt` = mean(forecast gust − realised peak) on those hours,
+ * `over_warn_ratio` = flagged ÷ hours the airport actually gusted.
+ * Obs-flagged: `n_gust` hours the airport gusted, with MAE and signed bias.
+ */
+export interface GustAccuracyStats {
+  model: string;
+  days_out: number;
+  n: number;
+  n_gust: number;
+  gust_mae_kt: number | null;
+  gust_bias_kt: number | null;
+  n_flagged: number;
+  flagged_over_peak_kt: number | null;
+  n_obs_gust: number;
+  n_flag_hit: number;
+  over_warn_ratio: number | null;
+}
+
 export interface MissedWarning {
   icao: string;
   observation_time: string;
@@ -447,6 +468,8 @@ export interface VerificationDigest {
   notable_misses: NotableMiss[];
   category_bias: CategoryBiasStats[];
   wind_advisory: WindAdvisoryStats[];
+  /** Absent on cache entries written before #491 — treat as empty. */
+  gust_accuracy?: GustAccuracyStats[];
   missed_warnings: MissedWarning[];
 }
 

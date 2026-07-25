@@ -122,6 +122,9 @@ def _build_digest_html(data: VerificationDigestData) -> str:
     # --- Wind advisory ---
     parts.append(_render_wind_section(data))
 
+    # --- Gust ---
+    parts.append(_render_gust_section(data))
+
     # Footer
     parts.append(
         '<p style="font-size:11px; color:#999; margin-top:24px;">'
@@ -308,6 +311,51 @@ def _render_wind_section(data: VerificationDigestData) -> str:
     return "".join(parts)
 
 
+def _render_gust_section(data: VerificationDigestData) -> str:
+    """Render gust accuracy under both conditionings (#491).
+
+    Scoped to D-0 — the digest is a daily health check, and the gust table
+    gets wide fast. The dashboard shows every lead time.
+    """
+    rows = [g for g in data.gust_accuracy if g.days_out == 0]
+    if not rows:
+        return ""
+
+    parts: list[str] = [
+        '<h3 style="font-size:15px; margin:20px 0 8px;">Gust Accuracy (D-0)</h3>',
+        '<p style="color:#666; font-size:12px; margin:0 0 8px;">'
+        "Left: hours the forecast called a gust (gust minus own mean wind "
+        "&ge;10 kt) measured against the realised peak. Right: hours the "
+        "airport actually gusted. Different samples — not averaged.</p>",
+        f'<table style="{_STYLE_TABLE}">',
+        "<tr>",
+    ]
+    for h in ("Model", "Flagged", "vs peak", "Over-warn", "Gust hrs", "MAE", "Bias"):
+        parts.append(f'<th style="{_STYLE_TH}">{h}</th>')
+    parts.append("</tr>")
+
+    for g in rows:
+        cells = [
+            f"{g.n_flagged}",
+            f"{g.flagged_over_peak_kt:+.1f} kt" if g.flagged_over_peak_kt is not None else "—",
+            f"{g.over_warn_ratio:.1f}×" if g.over_warn_ratio is not None else "—",
+            f"{g.n_gust}",
+            f"{g.gust_mae_kt:.1f} kt" if g.gust_mae_kt is not None else "—",
+            f"{g.gust_bias_kt:+.1f} kt" if g.gust_bias_kt is not None else "—",
+        ]
+        parts.append("<tr>")
+        parts.append(
+            f'<td style="{_STYLE_TD} font-weight:600;">'
+            f"{html.escape(g.model.upper())}</td>"
+        )
+        for c in cells:
+            parts.append(f'<td style="{_STYLE_TD} text-align:center;">{c}</td>')
+        parts.append("</tr>")
+    parts.append("</table>")
+
+    return "".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Plain text builder
 # ---------------------------------------------------------------------------
@@ -382,6 +430,27 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
         for w in data.wind_advisory:
             pct = f"{w.accuracy_pct:.0f}%" if w.accuracy_pct is not None else "—"
             lines.append(f"  {w.model.upper():<10} {pct:>6}  (n={w.sample_count})")
+        lines.append("")
+
+    # Gust — both conditionings, D-0 only (see _render_gust_section)
+    gust_rows = [g for g in data.gust_accuracy if g.days_out == 0]
+    if gust_rows:
+        lines.append("GUST ACCURACY (D-0)")
+        lines.append(
+            "  forecast called a gust | airport actually gusted"
+        )
+        for g in gust_rows:
+            peak = (
+                f"{g.flagged_over_peak_kt:+.1f}kt"
+                if g.flagged_over_peak_kt is not None else "—"
+            )
+            warn = f"{g.over_warn_ratio:.1f}x" if g.over_warn_ratio is not None else "—"
+            mae = f"{g.gust_mae_kt:.1f}kt" if g.gust_mae_kt is not None else "—"
+            bias = f"{g.gust_bias_kt:+.1f}kt" if g.gust_bias_kt is not None else "—"
+            lines.append(
+                f"  {g.model.upper():<10} n={g.n_flagged:<5} vs peak {peak:>7} "
+                f"over-warn {warn:>5} | n={g.n_gust:<5} MAE {mae:>7} bias {bias:>7}"
+            )
         lines.append("")
 
     if data.missed_warnings:

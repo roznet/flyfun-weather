@@ -171,6 +171,7 @@ async function loadData(): Promise<void> {
     renderBias(data);
     renderMisses(data);
     renderWind(data);
+    renderGust(data);
     renderHealth(data);
   } catch (err) {
     console.error('Failed to load verification stats', err);
@@ -237,6 +238,23 @@ const SECTION_INFO: Record<string, string> = {
     </div>
     <div class="popup-section"><h4>Missed Wind Warnings</h4>
       <p>Cases where actual conditions triggered a WARNING but the model failed to predict it \u2014 the most safety-critical wind misses.</p>
+    </div>`,
+
+  gust: `
+    <div class="popup-header"><h3>Gust Accuracy</h3></div>
+    <p class="popup-vibe">Two different questions about gust, deliberately never averaged together.</p>
+    <div class="popup-section"><h4>When the forecast calls a gust</h4>
+      <p>A forecast "shows a gust" when its gust exceeds its own mean wind by 10 kt or more — the same criterion that puts a gust group on a METAR.</p>
+      <p><strong>vs peak</strong> — how far the forecast gust sits above the <em>realised peak</em> (the observed gust if the METAR reported one, otherwise the observed mean wind). Models typically run several knots high here.</p>
+      <p><strong>Over-warn</strong> — flagged hours divided by hours the airport actually gusted. 4× means the forecast called four gusty hours for every one that happened.</p>
+      <p><strong>Hit</strong> — share of flagged hours where the airport did gust.</p>
+    </div>
+    <div class="popup-section"><h4>When the airport actually gusted</h4>
+      <p>The opposite conditioning: on the hours a METAR reported a gust, how far off was the forecast gust? Models typically run <em>low</em> here — the extreme days are under-forecast even though the average day is over-warned.</p>
+      <p><strong>MAE</strong> = mean absolute error, <strong>Bias</strong> = signed mean (forecast − observed; negative means the forecast was too low).</p>
+    </div>
+    <div class="popup-section"><h4>Why both</h4>
+      <p>The two select different, mostly non-overlapping sets of hours. A single blended gust number mixes them and reads as self-contradictory.</p>
     </div>`,
 
   health: `
@@ -489,6 +507,62 @@ function renderWind(data: VerificationDigest): void {
     html += '</tbody></table>';
   }
 
+  el.innerHTML = html;
+}
+
+function fmtKt(v: number | null): string {
+  if (v == null) return '—';
+  return `${v > 0 ? '+' : ''}${v.toFixed(1)} kt`;
+}
+
+function renderGust(data: VerificationDigest): void {
+  const el = document.getElementById('gust-section');
+  if (!el) return;
+  // Cache entries written before #491 have no gust_accuracy key.
+  const rows = (data.gust_accuracy ?? []).filter(
+    (g) => g.n_flagged > 0 || g.n_obs_gust > 0 || g.n_gust > 0,
+  );
+
+  let html = `<h2>Gust Accuracy ${infoBtn('gust')}</h2>`;
+  if (rows.length === 0) {
+    el.innerHTML = `${html}<p class="empty-state">No gust data for this period.</p>`;
+    return;
+  }
+
+  html += '<table class="admin-table"><thead>';
+  html += '<tr><th></th><th></th>';
+  html += '<th class="num" colspan="4" style="text-align:center">Forecast called a gust</th>';
+  html += '<th class="num" colspan="3" style="text-align:center">Airport actually gusted</th>';
+  html += '</tr><tr><th>Model</th><th class="num">D-out</th>';
+  html += '<th class="num" title="Hours the forecast gust exceeded its own mean wind by 10 kt or more">Hours</th>';
+  html += '<th class="num" title="Mean forecast gust minus the realised peak (observed gust, else observed mean wind)">vs peak</th>';
+  html += '<th class="num" title="Flagged hours divided by hours the airport actually gusted">Over-warn</th>';
+  html += '<th class="num" title="Share of flagged hours where the airport did gust">Hit</th>';
+  html += '<th class="num" title="Hours with an observed gust and a forecast gust to compare">Hours</th>';
+  html += '<th class="num" title="Mean absolute gust error on those hours">MAE</th>';
+  html += '<th class="num" title="Signed mean error (forecast - observed); negative means the forecast ran low">Bias</th>';
+  html += '</tr></thead><tbody>';
+
+  for (const g of rows) {
+    const hitPct = g.n_flagged > 0 ? (g.n_flag_hit / g.n_flagged) * 100 : null;
+    const overWarn = g.over_warn_ratio != null ? `${g.over_warn_ratio.toFixed(1)}×` : '—';
+    html += '<tr>';
+    html += `<td style="font-weight:600">${escapeHtml(g.model.toUpperCase())}</td>`;
+    html += `<td class="num">D-${g.days_out}</td>`;
+    html += `<td class="num">${g.n_flagged}</td>`;
+    html += `<td class="num">${fmtKt(g.flagged_over_peak_kt)}</td>`;
+    html += `<td class="num">${overWarn}</td>`;
+    html += `<td class="num">${fmtPct(hitPct)}</td>`;
+    html += `<td class="num">${g.n_gust}</td>`;
+    html += `<td class="num">${g.gust_mae_kt != null ? `${g.gust_mae_kt.toFixed(1)} kt` : '—'}</td>`;
+    html += `<td class="num">${fmtKt(g.gust_bias_kt)}</td>`;
+    html += '</tr>';
+  }
+
+  html += '</tbody></table>';
+  html += '<p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">';
+  html += 'The two halves cover different hours and are never averaged together — forecasts over-warn on the average day and run low on the gusty ones.';
+  html += '</p>';
   el.innerHTML = html;
 }
 

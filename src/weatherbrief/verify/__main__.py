@@ -91,49 +91,172 @@ def cmd_collect(args):
         db.close()
 
 
+def _export_observations(db, args) -> list[dict]:
+    """Rows for ``export --table observations`` (the default)."""
+    from sqlalchemy import select
+    from weatherbrief.db.models import VerificationObservationRow
+
+    stmt = select(VerificationObservationRow).order_by(
+        VerificationObservationRow.observation_time.desc()
+    )
+    if args.icao:
+        stmt = stmt.where(VerificationObservationRow.icao == args.icao.upper())
+    if args.limit:
+        stmt = stmt.limit(args.limit)
+
+    return [
+        {
+            "id": r.id,
+            "icao": r.icao,
+            "observation_time": r.observation_time.isoformat() if r.observation_time else None,
+            "collected_at": r.collected_at.isoformat() if r.collected_at else None,
+            "flight_category": r.flight_category,
+            "ceiling_ft": r.ceiling_ft,
+            "visibility_m": r.visibility_m,
+            "wind_dir": r.wind_dir,
+            "wind_speed_kt": r.wind_speed_kt,
+            "wind_gust_kt": r.wind_gust_kt,
+            "temperature_c": r.temperature_c,
+            "dewpoint_c": r.dewpoint_c,
+            "qnh": r.qnh,
+            "weather": r.weather,
+            "taf_flight_category": r.taf_flight_category,
+            "metar_raw": r.metar_raw,
+        }
+        for r in db.execute(stmt).scalars().all()
+    ]
+
+
+def _export_scores(db, args) -> list[dict]:
+    """Rows for ``export --table scores`` — model scores joined to the obs.
+
+    The join is the one every gust analysis does by hand: the forecast gust
+    and its flag live on the score, the observed gust and mean wind on the
+    observation. Exporting them together means the two conditionings (#491)
+    can be computed straight from the CSV.
+    """
+    from sqlalchemy import select
+    from weatherbrief.db.models import (
+        VerificationObservationRow,
+        VerificationScoreRow,
+    )
+
+    s, o = VerificationScoreRow, VerificationObservationRow
+    stmt = (
+        select(s, o.wind_speed_kt, o.wind_gust_kt, o.wind_dir)
+        .join(o, s.observation_id == o.id)
+        .order_by(s.observation_time.desc())
+    )
+    if args.icao:
+        stmt = stmt.where(s.icao == args.icao.upper())
+    if args.source:
+        stmt = stmt.where(s.source == args.source)
+    if args.model:
+        stmt = stmt.where(s.model == args.model)
+    if args.limit:
+        stmt = stmt.limit(args.limit)
+
+    return [
+        {
+            "id": r[0].id,
+            "observation_id": r[0].observation_id,
+            "icao": r[0].icao,
+            "observation_time": r[0].observation_time.isoformat() if r[0].observation_time else None,
+            "model": r[0].model,
+            "model_init_time": r[0].model_init_time.isoformat() if r[0].model_init_time else None,
+            "lead_hours": r[0].lead_hours,
+            "days_out": r[0].days_out,
+            "source": r[0].source,
+            "obs_flight_category": r[0].obs_flight_category,
+            "model_flight_category": r[0].model_flight_category,
+            "category_match": r[0].category_match,
+            "ceiling_delta_ft": r[0].ceiling_delta_ft,
+            "visibility_delta_m": r[0].visibility_delta_m,
+            "wind_speed_delta_kt": r[0].wind_speed_delta_kt,
+            "wind_dir_delta_deg": r[0].wind_dir_delta_deg,
+            "model_wind_gust_kt": r[0].model_wind_gust_kt,
+            "wind_gust_delta_kt": r[0].wind_gust_delta_kt,
+            "model_gust_flag": r[0].model_gust_flag,
+            "temperature_delta_c": r[0].temperature_delta_c,
+            "obs_wind_advisory": r[0].obs_wind_advisory,
+            "model_wind_advisory": r[0].model_wind_advisory,
+            "advisory_match": r[0].advisory_match,
+            "obs_wind_speed_kt": r[1],
+            "obs_wind_gust_kt": r[2],
+            "obs_wind_dir": r[3],
+        }
+        for r in db.execute(stmt).all()
+    ]
+
+
+def _export_taf_scores(db, args) -> list[dict]:
+    """Rows for ``export --table taf-scores`` — TAF scores joined to the obs."""
+    from sqlalchemy import select
+    from weatherbrief.db.models import (
+        TafVerificationScoreRow,
+        VerificationObservationRow,
+    )
+
+    t, o = TafVerificationScoreRow, VerificationObservationRow
+    stmt = (
+        select(t, o.wind_speed_kt, o.wind_gust_kt, o.taf_wind_speed_kt, o.taf_wind_gust_kt)
+        .join(o, t.observation_id == o.id)
+        .order_by(t.observation_time.desc())
+    )
+    if args.icao:
+        stmt = stmt.where(t.icao == args.icao.upper())
+    if args.source:
+        stmt = stmt.where(t.source == args.source)
+    if args.limit:
+        stmt = stmt.limit(args.limit)
+
+    return [
+        {
+            "id": r[0].id,
+            "observation_id": r[0].observation_id,
+            "icao": r[0].icao,
+            "observation_time": r[0].observation_time.isoformat() if r[0].observation_time else None,
+            "taf_issue_time": r[0].taf_issue_time.isoformat() if r[0].taf_issue_time else None,
+            "lead_hours": r[0].lead_hours,
+            "source": r[0].source,
+            "obs_flight_category": r[0].obs_flight_category,
+            "taf_flight_category": r[0].taf_flight_category,
+            "category_match": r[0].category_match,
+            "ceiling_delta_ft": r[0].ceiling_delta_ft,
+            "visibility_delta_m": r[0].visibility_delta_m,
+            "wind_speed_delta_kt": r[0].wind_speed_delta_kt,
+            "wind_dir_delta_deg": r[0].wind_dir_delta_deg,
+            "wind_gust_delta_kt": r[0].wind_gust_delta_kt,
+            "obs_wind_advisory": r[0].obs_wind_advisory,
+            "taf_wind_advisory": r[0].taf_wind_advisory,
+            "advisory_match": r[0].advisory_match,
+            "obs_wind_speed_kt": r[1],
+            "obs_wind_gust_kt": r[2],
+            "taf_wind_speed_kt": r[3],
+            "taf_wind_gust_kt": r[4],
+        }
+        for r in db.execute(stmt).all()
+    ]
+
+
 def cmd_export(args):
     """Export verification data."""
     SessionLocal = _init_db()
     db = SessionLocal()
 
+    table = getattr(args, "table", "observations")
+    builders = {
+        "observations": _export_observations,
+        "scores": _export_scores,
+        "taf-scores": _export_taf_scores,
+    }
+
     try:
-        from sqlalchemy import select
-        from weatherbrief.db.models import VerificationObservationRow
+        records = builders[table](db, args)
 
-        stmt = select(VerificationObservationRow).order_by(
-            VerificationObservationRow.observation_time.desc()
-        )
-        if args.icao:
-            stmt = stmt.where(VerificationObservationRow.icao == args.icao.upper())
-        if args.limit:
-            stmt = stmt.limit(args.limit)
-
-        rows = db.execute(stmt).scalars().all()
-
-        if not rows:
-            print("No observations found.")
+        if not records:
+            print(f"No {table} found.")
             return
-
-        records = []
-        for r in rows:
-            records.append({
-                "id": r.id,
-                "icao": r.icao,
-                "observation_time": r.observation_time.isoformat() if r.observation_time else None,
-                "collected_at": r.collected_at.isoformat() if r.collected_at else None,
-                "flight_category": r.flight_category,
-                "ceiling_ft": r.ceiling_ft,
-                "visibility_m": r.visibility_m,
-                "wind_dir": r.wind_dir,
-                "wind_speed_kt": r.wind_speed_kt,
-                "wind_gust_kt": r.wind_gust_kt,
-                "temperature_c": r.temperature_c,
-                "dewpoint_c": r.dewpoint_c,
-                "qnh": r.qnh,
-                "weather": r.weather,
-                "taf_flight_category": r.taf_flight_category,
-                "metar_raw": r.metar_raw,
-            })
 
         output = args.output or sys.stdout
 
@@ -142,7 +265,7 @@ def cmd_export(args):
             if isinstance(output, str):
                 with open(output, "w") as f:
                     f.write(content)
-                print(f"Exported {len(records)} observations to {output}")
+                print(f"Exported {len(records)} {table} to {output}")
             else:
                 output.write(content + "\n")
         else:  # csv
@@ -156,7 +279,7 @@ def cmd_export(args):
             writer.writerows(records)
             if isinstance(output, str):
                 f.close()
-                print(f"Exported {len(records)} observations to {output}")
+                print(f"Exported {len(records)} {table} to {output}")
             else:
                 output.write(buf.getvalue())
     finally:
@@ -205,6 +328,41 @@ def cmd_backfill(args):
         print(f"Flights scored: {result['flights_scored']}")
         print(f"Model scores:   {result['model_scores']}")
         print(f"TAF scores:     {result['taf_scores']}")
+    finally:
+        db.close()
+
+
+def cmd_backfill_gust(args):
+    """Backfill the gust columns added by migration 082 (#491).
+
+    Two independent halves with very different reach: the TAF gust delta is
+    recoverable for all history (both gusts live on the permanent observation
+    row), the model gust only for the un-pruned snapshot window. Neither
+    rewrites any other scored field.
+    """
+    SessionLocal = _init_db()
+    db = SessionLocal()
+
+    try:
+        from weatherbrief.tasks.verification_gust import (
+            backfill_model_gust,
+            backfill_taf_gust_deltas,
+        )
+
+        do_taf = not args.model_only
+        do_model = not args.taf_only
+
+        if do_taf:
+            n = backfill_taf_gust_deltas(db)
+            print(f"TAF gust deltas:  {n}")
+        if do_model:
+            n = backfill_model_gust(db, days=args.days)
+            print(f"Model gust fields: {n} (last {args.days} days)")
+
+        print(
+            "Re-roll the affected days to pick the new columns up in the "
+            "rollup: python -m weatherbrief.verify rollup-daily-stats --rebuild"
+        )
     finally:
         db.close()
 
@@ -677,6 +835,20 @@ def main():
     p_export.add_argument("--output", "-o", help="Output file (default: stdout)")
     p_export.add_argument("--icao", help="Filter by ICAO code")
     p_export.add_argument("--limit", type=int, help="Limit number of records")
+    p_export.add_argument(
+        "--table", choices=["observations", "scores", "taf-scores"],
+        default="observations",
+        help="What to export (default: observations). 'scores' and "
+             "'taf-scores' join the observation row, so forecast gust and "
+             "observed gust land in the same record.",
+    )
+    p_export.add_argument(
+        "--source", choices=["flight", "standalone"],
+        help="Filter scores by source (scores / taf-scores only)",
+    )
+    p_export.add_argument(
+        "--model", help="Filter scores by model, e.g. gfs (scores only)",
+    )
 
     # score
     p_score = subparsers.add_parser("score", help="Score completed flights")
@@ -684,6 +856,28 @@ def main():
     # backfill
     p_backfill = subparsers.add_parser("backfill", help="Re-run scoring (backfill)")
     p_backfill.add_argument("--flight-id", help="Backfill a specific flight")
+
+    # backfill-gust
+    p_backfill_gust = subparsers.add_parser(
+        "backfill-gust",
+        help="Backfill gust columns on existing scores (#491)",
+    )
+    gust_scope = p_backfill_gust.add_mutually_exclusive_group()
+    gust_scope.add_argument(
+        "--taf-only", action="store_true",
+        help="Only the TAF gust delta (fully backfillable from stored obs)",
+    )
+    gust_scope.add_argument(
+        "--model-only", action="store_true",
+        help="Only the model gust fields (limited to the un-pruned snapshot "
+             "window — see --days)",
+    )
+    p_backfill_gust.add_argument(
+        "--days", type=int, default=10,
+        help="How far back to look for model gust, in days (default: 10 — "
+             "airport_forecast_snapshots are pruned beyond that, so older "
+             "scores have no recoverable forecast gust)",
+    )
 
     # stats
     p_stats = subparsers.add_parser("stats", help="Show verification statistics")
@@ -832,6 +1026,8 @@ def main():
         cmd_score(args)
     elif args.command == "backfill":
         cmd_backfill(args)
+    elif args.command == "backfill-gust":
+        cmd_backfill_gust(args)
     elif args.command == "stats":
         cmd_stats(args)
     elif args.command == "discover":

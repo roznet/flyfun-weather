@@ -22,6 +22,13 @@ Direction encoding mirrors ``tasks/verification_rollup.py`` exactly:
 NULL handling: ``NULL - X = NULL``, and ``NULL = anything`` is FALSE in
 the CASE WHEN comparisons below, so rows with missing categories/advisories
 don't contribute to any direction bucket.
+
+The SELECT joins ``verification_observations`` (inner, on the score's
+``observation_id`` FK) purely for the gust aggregates (#491): the observed
+gust and the realised peak live there, and both are needed to keep the
+forecast-flagged and obs-flagged conditionings separate. The join can't drop
+rows — the FK is NOT NULL and retention prunes observations and scores in the
+same window.
 """
 
 from __future__ import annotations
@@ -41,8 +48,10 @@ from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
     VerificationDailyStatsRow,
+    VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.tasks.verification_gust import gust_aggregate_columns
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +154,13 @@ def _build_rollup_select(day_start: datetime, day_end: datetime, day: date_t):
             _sum_when((obs_c.is_(False)) & (mod_c.is_(True))).label(
                 "n_convection_false_alarm"
             ),
+            # Gust (#491) — needs the observation row for the observed gust
+            # and the realised peak, hence the join below.
+            *gust_aggregate_columns(),
+        )
+        .join(
+            VerificationObservationRow,
+            VerificationScoreRow.observation_id == VerificationObservationRow.id,
         )
         .where(
             VerificationScoreRow.observation_time >= day_start,
