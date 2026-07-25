@@ -41,6 +41,7 @@ from weatherbrief.models.verification import (
     ActivitySummary,
     CategoryAccuracyRow,
     CategoryBiasStats,
+    GustAccuracyStats,
     MissedWarning,
     NotableMiss,
     OptimisticBiasLeaderboardRow,
@@ -498,6 +499,180 @@ def get_wind_advisory_accuracy(
 
 
 # ---------------------------------------------------------------------------
+# Gust accuracy (#491)
+# ---------------------------------------------------------------------------
+
+
+def _gust_stats(
+    model: str,
+    days_out: int,
+    *,
+    n: int,
+    n_gust: int,
+    sum_abs_gust: float | None,
+    sum_gust: float | None,
+    n_flagged: int,
+    n_flagged_peak: int,
+    sum_over_peak: float | None,
+    n_obs_gust: int,
+    n_flag_hit: int,
+) -> GustAccuracyStats:
+    """Turn additive gust counters into the reported ratios.
+
+    Same ``sum / n`` shape as every other rollup-backed metric — the sums are
+    additive across days, the ratios are not, so they're derived here.
+
+    ``n_flagged`` counts every hour the forecast called a gust;
+    ``n_flagged_peak`` counts the subset that also has a realised peak to
+    measure against (a METAR with neither a gust nor a mean wind has none).
+    They are kept apart so the over-warn ratio and the over-peak mean are each
+    divided by their own denominator.
+    """
+    return GustAccuracyStats(
+        model=model,
+        days_out=days_out,
+        n=n,
+        n_gust=n_gust,
+        gust_mae_kt=(
+            round(float(sum_abs_gust) / n_gust, 1)
+            if n_gust and sum_abs_gust is not None else None
+        ),
+        gust_bias_kt=(
+            round(float(sum_gust) / n_gust, 1)
+            if n_gust and sum_gust is not None else None
+        ),
+        n_flagged=n_flagged,
+        flagged_over_peak_kt=(
+            round(float(sum_over_peak) / n_flagged_peak, 1)
+            if n_flagged_peak and sum_over_peak is not None else None
+        ),
+        n_obs_gust=n_obs_gust,
+        n_flag_hit=n_flag_hit,
+        over_warn_ratio=(
+            round(n_flagged / n_obs_gust, 2) if n_obs_gust else None
+        ),
+    )
+
+
+def get_gust_accuracy(
+    db: Session, since: datetime, until: datetime,
+    source: str = "flight",
+    icao_filter: list[str] | None = None,
+) -> list[GustAccuracyStats]:
+    """Per-model gust accuracy under both conditionings (#491).
+
+    NWP reads the daily rollup (one row per model/days_out); TAF is
+    aggregated at query time from ``taf_verification_scores`` joined to
+    ``verification_observations``, like every other TAF stat — the TAF gust
+    and the observed gust both live on the observation row.
+
+    See ``tasks/verification_gust`` for what "flagged" and "realised peak"
+    mean, and why the forecast-flagged and obs-flagged numbers are reported
+    side by side rather than averaged.
+    """
+    since_d, until_d = _date_range(since, until)
+    v = VerificationDailyStatsRow
+    rows = db.execute(
+        select(
+            v.model,
+            v.days_out,
+            func.sum(v.n).label("n"),
+            func.sum(v.n_gust).label("n_gust"),
+            func.sum(v.sum_abs_gust_delta_kt).label("sum_abs_gust"),
+            func.sum(v.sum_gust_delta_kt).label("sum_gust"),
+            func.sum(v.n_gust_flagged_peak).label("n_flagged_peak"),
+            func.sum(v.sum_gust_flagged_over_peak_kt).label("sum_over_peak"),
+            func.sum(v.n_model_gust_flag).label("n_model_gust_flag"),
+            func.sum(v.n_obs_gust).label("n_obs_gust"),
+            func.sum(v.n_gust_flag_hit).label("n_flag_hit"),
+        )
+        .where(
+            v.date.between(since_d, until_d),
+            v.source == source,
+            v.days_out.in_(_DAYS_OUT_COLS),
+            _icao_clause(v.icao, icao_filter),
+        )
+        .group_by(v.model, v.days_out)
+    ).all()
+
+    results: list[GustAccuracyStats] = []
+    for r in rows:
+        stats = _gust_stats(
+            r.model, r.days_out,
+            n=int(r.n or 0),
+            n_gust=int(r.n_gust or 0),
+            sum_abs_gust=r.sum_abs_gust,
+            sum_gust=r.sum_gust,
+            n_flagged=int(r.n_model_gust_flag or 0),
+            n_flagged_peak=int(r.n_flagged_peak or 0),
+            sum_over_peak=r.sum_over_peak,
+            n_obs_gust=int(r.n_obs_gust or 0),
+            n_flag_hit=int(r.n_flag_hit or 0),
+        )
+        if stats.n_gust or stats.n_flagged or stats.n_obs_gust:
+            results.append(stats)
+
+    results.sort(key=lambda s: (s.model, s.days_out))
+
+    # TAF — raw, joined to the observation for the gust group and peak.
+    t = TafVerificationScoreRow
+    o = VerificationObservationRow
+    peak = func.coalesce(o.wind_gust_kt, o.wind_speed_kt)
+    taf_flagged = o.taf_wind_gust_kt.isnot(None)
+    obs_gusting = o.wind_gust_kt.isnot(None)
+    taf_row = db.execute(
+        select(
+            func.count(t.id).label("n"),
+            func.count(t.wind_gust_delta_kt).label("n_gust"),
+            func.sum(func.abs(t.wind_gust_delta_kt)).label("sum_abs_gust"),
+            func.sum(t.wind_gust_delta_kt).label("sum_gust"),
+            func.coalesce(
+                func.sum(case((taf_flagged, 1), else_=0)), 0,
+            ).label("n_flagged"),
+            func.coalesce(
+                func.sum(case((taf_flagged & peak.isnot(None), 1), else_=0)), 0,
+            ).label("n_flagged_peak"),
+            func.sum(
+                case(
+                    (taf_flagged & peak.isnot(None), o.taf_wind_gust_kt - peak),
+                    else_=None,
+                )
+            ).label("sum_over_peak"),
+            func.coalesce(
+                func.sum(case((obs_gusting, 1), else_=0)), 0,
+            ).label("n_obs_gust"),
+            func.coalesce(
+                func.sum(case((taf_flagged & obs_gusting, 1), else_=0)), 0,
+            ).label("n_flag_hit"),
+        )
+        .join(o, t.observation_id == o.id)
+        .where(
+            t.observation_time.between(since, until),
+            t.source == source,
+            _icao_clause(t.icao, icao_filter),
+        )
+    ).one()
+
+    if taf_row.n:
+        taf_stats = _gust_stats(
+            "TAF", 0,
+            n=int(taf_row.n or 0),
+            n_gust=int(taf_row.n_gust or 0),
+            sum_abs_gust=taf_row.sum_abs_gust,
+            sum_gust=taf_row.sum_gust,
+            n_flagged=int(taf_row.n_flagged or 0),
+            n_flagged_peak=int(taf_row.n_flagged_peak or 0),
+            sum_over_peak=taf_row.sum_over_peak,
+            n_obs_gust=int(taf_row.n_obs_gust or 0),
+            n_flag_hit=int(taf_row.n_flag_hit or 0),
+        )
+        if taf_stats.n_gust or taf_stats.n_flagged or taf_stats.n_obs_gust:
+            results.append(taf_stats)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Missed warnings — still raw (needs individual rows)
 # ---------------------------------------------------------------------------
 
@@ -657,6 +832,7 @@ def get_digest_data(
     notable = _timed("notable", get_notable_misses, db, since, until, source, icao_filter)
     bias = _timed("bias", get_category_bias_stats, db, since, until, source, icao_filter)
     wind = _timed("wind", get_wind_advisory_accuracy, db, since, until, source, icao_filter)
+    gust = _timed("gust", get_gust_accuracy, db, since, until, source, icao_filter)
     missed = _timed("missed", get_missed_warnings, db, since, until, source, icao_filter)
 
     category_7d: list[CategoryAccuracyRow] = []
@@ -685,5 +861,6 @@ def get_digest_data(
         notable_misses=notable,
         category_bias=bias,
         wind_advisory=wind,
+        gust_accuracy=gust,
         missed_warnings=missed,
     )

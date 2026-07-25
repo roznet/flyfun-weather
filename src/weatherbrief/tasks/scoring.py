@@ -162,6 +162,7 @@ def _score_model_vs_metar(
     )
     from weatherbrief.models.analysis import ConvectiveRisk
     from weatherbrief.tasks.route_weather import compute_wind_advisory
+    from weatherbrief.tasks.verification_gust import forecast_shows_gust
 
     if hourly is None:
         return None
@@ -251,6 +252,17 @@ def _score_model_vs_metar(
         wind_dir_delta_deg=_circular_delta(
             hourly.wind_direction_10m_deg, float(obs_row.wind_dir)
         ) if obs_row.wind_dir is not None and hourly.wind_direction_10m_deg is not None else None,
+        # Gust (#491): the raw forecast gust is stored, not just its delta —
+        # the observed gust is NULL on ~90% of hours, so a delta alone would
+        # lose every "model called a gust, airport wasn't gusting" row.
+        model_wind_gust_kt=hourly.wind_gusts_10m_kt,
+        wind_gust_delta_kt=_delta(
+            hourly.wind_gusts_10m_kt,
+            float(obs_row.wind_gust_kt) if obs_row.wind_gust_kt is not None else None,
+        ),
+        model_gust_flag=forecast_shows_gust(
+            hourly.wind_speed_10m_kt, hourly.wind_gusts_10m_kt,
+        ),
         temperature_delta_c=_delta(
             hourly.temperature_2m_c, float(obs_row.temperature_c)
         ) if obs_row.temperature_c is not None and hourly.temperature_2m_c is not None else None,
@@ -323,6 +335,12 @@ def _score_taf_vs_metar(
         wind_dir_delta_deg=_circular_delta(
             float(obs_row.taf_wind_dir) if obs_row.taf_wind_dir is not None else None,
             float(obs_row.wind_dir) if obs_row.wind_dir is not None else None,
+        ),
+        # Gust delta only (#491) — the TAF gust itself is already permanent on
+        # the observation row, reachable via observation_id.
+        wind_gust_delta_kt=_delta(
+            float(obs_row.taf_wind_gust_kt) if obs_row.taf_wind_gust_kt is not None else None,
+            float(obs_row.wind_gust_kt) if obs_row.wind_gust_kt is not None else None,
         ),
         obs_wind_advisory=obs_adv,
         taf_wind_advisory=taf_adv,

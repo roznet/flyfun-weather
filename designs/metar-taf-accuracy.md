@@ -65,8 +65,17 @@ tasks/verification_stats.py             ← shared queries for digest + dashboar
 ├── get_notable_misses()                ← raw (needs individual rows)
 ├── get_category_bias_stats()           ← from verification_daily_stats (2 buckets)
 ├── get_wind_advisory_accuracy()        ← from verification_daily_stats
+├── get_gust_accuracy()                 ← from verification_daily_stats; TAF raw (#491)
 ├── get_optimistic_bias_leaderboard()   ← from verification_daily_stats (#154)
 └── get_digest_data()                   ← orchestrator → VerificationDigestData
+
+tasks/verification_gust.py              ← gust definitions + aggregates + backfill (#491)
+├── GUST_FLAG_THRESHOLD_KT              ← 10 kt — the METAR gust-group criterion
+├── forecast_shows_gust()               ← used by scoring to set model_gust_flag
+├── realised_peak_kt()                  ← obs gust if reported, else obs mean wind
+├── gust_aggregate_columns()            ← shared SQL aggregates (daily + monthly)
+├── backfill_taf_gust_deltas()          ← all history (obs row holds both gusts)
+└── backfill_model_gust()               ← un-pruned snapshot window only
 
 tasks/verification_daily_rollup.py      ← daily pre-aggregation (#154)
 ├── rollup_day()                        ← pure SQL INSERT-SELECT, idempotent
@@ -131,8 +140,12 @@ METAR + active-TAF fields as fetched. Natural key `UNIQUE(icao, observation_time
 ### `verification_scores` — model vs reality
 One row per `(icao, observation_time, model, model_init_time, source)`. The `source` column distinguishes flight-based from standalone scores — **all queries filter by source** to prevent mixing. Only two stored values: `'flight'` and `'standalone'` (the `standalone_full`/`standalone_light`/`standalone_forecast` distinction lives only on `verification_cycles.source`, for per-cycle metrics, never on the scores themselves). Migration 055 adds a composite `(source, days_out, observation_time)` index to keep dashboard queries off full table scans.
 
+Gust is stored as a **raw value plus a delta plus a flag** (`model_wind_gust_kt`, `wind_gust_delta_kt`, `model_gust_flag`), unlike every other scored field which keeps only a delta (#491). Two reasons the delta alone doesn't work: the observed gust is NULL on ~90% of hours (a METAR only carries a gust group when the peak exceeds the mean by ~10 kt), so a delta-only column would silently drop exactly the "model called a gust, the airport wasn't gusting" rows; and the forecast gust is **not** recoverable after the fact the way `wind_speed` is, because the snapshot holding it (`airport_forecast_snapshots`) is pruned at >10 days.
+
 ### `taf_verification_scores` — TAF vs METAR
 TAFs are forecasts too, scored per METAR (one TAF scored against multiple METARs across its validity period — shows accuracy over time). Separate table because the key shape differs: `UNIQUE(icao, observation_time, taf_issue_time, source)`.
+
+TAF gust is only a delta (`wind_gust_delta_kt`): the TAF gust itself already lives permanently on `verification_observations.taf_wind_gust_kt`, reachable via `observation_id`. The delta exists for query symmetry and the rollups, and is fully backfillable for all history.
 
 ### `verification_cycles` — per-cycle performance metrics
 Timing (`phase_*_ms`) and counts for each collection/scoring cycle, plus nullable `peak_rss_mb`/`peak_cgroup_mb` (migration 051 / #137; legacy rows predate sampling). `source` distinguishes `flight` / `metar_ingest` / `standalone_*`. The `error` column stores the last 500 chars of a failure traceback so post-mortems don't need log access.
@@ -147,6 +160,7 @@ One row per `(period, source, model, days_out, icao)`, NWP scores only (TAF out 
 - **2 category-direction buckets, not 3** — matches the monthly table's shape; the rare 3-step case (VFR↔LIFR) folds into `_2`. The bias-leaderboard formula `(n_cat_opt_1 + 2 * n_cat_opt_2) / n` weights `_2` accordingly.
 - **No observation_id** — counts of *distinct observations* can't be recovered from per-group counts (one obs → N scores), so `get_activity_summary` keeps its `COUNT(DISTINCT observation_id)` on the raw `verification_scores` instead.
 - **`category_direction(obs, fcst)`** classifies each score as match / optimistic_1/2 (forecast better than reality — dangerous) / pessimistic_1/2 (too conservative). TAF scores use the same classification via `lead_hours // 24 → days_out` bucketing.
+- **Gust columns join the observation row** (#491). The daily rollup's SELECT joins `verification_observations` on the score's FK so it can carry both gust conditionings: magnitude sums (`n_gust`, `sum_abs_gust_delta_kt`, `sum_gust_delta_kt`), the forecast-flagged over-peak sums (`n_gust_flagged_peak`, `sum_gust_flagged_over_peak_kt`), and the occurrence contingency (`n_model_gust_flag`, `n_obs_gust`, `n_gust_flag_hit` — false alarms and misses are derived from those three). The join is inner and can't drop rows: the FK is NOT NULL and retention prunes observations and scores in the same window. Monthly stores the MAE/bias equivalents; its TAF rows leave the occurrence columns NULL (the TAF group key is a `lead_hours` bucket with no SQL expression that truncates identically on SQLite and MySQL — TAF gust occurrence is served at query time by `get_gust_accuracy` instead).
 
 ### `verification_cache` — pre-computed API responses
 Serialized JSON for expensive dashboard/map queries, keyed by `cache_key` (`stats:{source}:{period}`, `bias_leaderboard:{model}:{days_out}:{period}`, `forecast_map:{day}:{hour}`; the `verif_map:*` family was removed in #154). `is_stale()` compares the cached `source_max_time` against live `MAX(observation_time)`/`MAX(fetched_at)` — live > cached means stale, and missing entries are always stale. `rebuild_all()` runs after each standalone cycle, after the daily-rollup refresh.
@@ -276,11 +290,11 @@ Mechanics worth knowing:
 
 ### Digest Data Model
 
-`VerificationDigestData` contains: `period_label`, `activity` (ActivitySummary), `category_accuracy_today` / `category_accuracy_7d` (CategoryAccuracyRow lists), `notable_misses` (with directional severity — optimistic vs pessimistic), `category_bias` (CategoryBiasStats per model), `wind_advisory` (WindAdvisoryStats), `missed_warnings` (MissedWarning list).
+`VerificationDigestData` contains: `period_label`, `activity` (ActivitySummary), `category_accuracy_today` / `category_accuracy_7d` (CategoryAccuracyRow lists), `notable_misses` (with directional severity — optimistic vs pessimistic), `category_bias` (CategoryBiasStats per model), `wind_advisory` (WindAdvisoryStats), `gust_accuracy` (GustAccuracyStats per model/days_out — the email renders D-0 only, the dashboard every lead time), `missed_warnings` (MissedWarning list).
 
 ### Admin Dashboard
 
-`GET /api/admin/verification` (in `api/admin.py`) serves JSON for the web dashboard (`web/verification.html`). Source-filtered: flight and standalone stats are queried independently, never mixed. Dashboard shows category accuracy by model/days_out, notable misses, MAE trends.
+`GET /api/admin/verification` (in `api/admin.py`) serves JSON for the web dashboard (`web/verification.html`). Source-filtered: flight and standalone stats are queried independently, never mixed. Dashboard shows category accuracy by model/days_out, notable misses, MAE trends, and the gust tile (both conditionings side by side — `gust_accuracy` is absent from cache entries written before #491, so the client treats it as empty until the next rebuild).
 
 **Cache layer**: Unfiltered requests (no country/airport filter) use `verification_cache` for fast responses. If the cache is stale or missing, falls back to live query. Filtered requests always run live (small result sets). Cache is rebuilt after each standalone verification cycle via `rebuild_all()` in `cache_builder.py`.
 
@@ -313,6 +327,7 @@ NWP queries (post-#154) read from `verification_daily_stats`:
 - `get_category_accuracy()` — category match rate per model/days_out; TAF added at query time from raw
 - `get_category_bias_stats()` — match + 4 directional buckets (`_2` = "2 or more levels off")
 - `get_wind_advisory_accuracy()` — advisory match rate; TAF added at query time
+- `get_gust_accuracy()` — per model/days_out, both gust conditionings plus the over-warn ratio and hit count (#491). NWP from the rollup's additive sums; TAF joined to the observation at query time
 - `get_optimistic_bias_leaderboard()` — `(n_cat_opt_1 + 2 * n_cat_opt_2) / n` per airport, descending. Drives the leaderboard view that replaced the bias map.
 
 Still on raw `verification_scores` (need individual rows or count-distinct):
@@ -456,6 +471,7 @@ Every derived value must use **the same function the advisory pipeline uses**. T
 | Model visibility | `hourly.visibility_m / 1609.34` (→ statute miles) | `analysis/airport_conditions.py` | Direct from model, converted to SM like advisories do |
 | Model flight category | `classify_flight_category(ceiling_ft, visibility_sm)` | `analysis/airport_conditions.py` | Standard VFR/MVFR/IFR/LIFR thresholds |
 | Model wind advisory | `compute_wind_advisory(dir, speed, gust, runway_ends)` | `tasks/route_weather.py` | Same thresholds: xw ≥15kt amber, ≥25kt red; gust ≥25/35kt |
+| Model gust | `hourly.wind_gusts_10m_kt` (stored raw + delta + flag) | `tasks/verification_gust.py` | `forecast_shows_gust()` applies the METAR ~10 kt criterion to the forecast |
 | Model precipitation | `hourly.precipitation_mm > 0 or hourly.snowfall_cm > 0` | `analysis/sounding/precipitation.py` (`assess_precipitation`) | Same check as `assess_precipitation()` |
 | Model convection | `sounding.convective.risk_level` from `assess_convective_thermo()` | `analysis/sounding/convective.py` | CAPE thresholds: 50/300/1000/2000 J/kg, CIN suppression |
 
@@ -577,6 +593,20 @@ def compute_taf_verification(
     )
 ```
 
+### Gust: Two Conditionings, Never Blended (#491)
+
+Gust accuracy is the one metric where a single averaged number is actively misleading, so `tasks/verification_gust.py` owns the definitions and everything downstream (scoring, both rollups, `get_gust_accuracy`, the dashboard tile) derives from them:
+
+- **Sign** — `delta = forecast − observed`, like every other delta.
+- **Realised peak** — `obs_gust` if the METAR reports a gust group, else `obs_wind`. No gust group means the peak *is* the mean, not that the peak is unknown.
+- **"The forecast shows a gust"** — `forecast_gust − forecast_wind ≥ 10 kt`, the same criterion that puts a gust group on a METAR. Persisted per model score as `model_gust_flag`; the TAF equivalent is "the applicable trend carries a gust group".
+- **Report both conditionings side by side:**
+  - *forecast-flagged* hours — on the hours a model calls a gust, it sits **~+7 kt above** the realised peak, and ~80% of those hours the airport wasn't gusting at all. (This is the "why does the gust layer sit above the TAFs?" view.)
+  - *obs-flagged* hours — on the hours a METAR does report a gust, the model gust lands **4–13 kt below** the true peak. (The extreme-day view.)
+  - TAF over-flags gust *frequency* ~4× but gets the *size* right (±1 kt).
+
+The two select different, mostly non-overlapping samples. Collapsing them into one average is what made the first ad-hoc pass (EGLL/LFPG/EDDF, Apr–Jul 2026) look self-contradictory.
+
 ### Observation Frequency: One Per Airport Per Hour
 
 METARs are issued every 30-60 minutes, and SPECIs can be more frequent. To avoid inflating the dataset with near-duplicate observations, **keep at most one observation per airport per clock hour**. If multiple METARs exist for the same (icao, hour), keep the one closest to the top of the hour (e.g., for 14:00-14:59, prefer the METAR at 14:20 over 14:50). The UNIQUE(icao, observation_time) constraint handles exact dedup; the hourly filtering is applied during collection before insertion.
@@ -626,9 +656,17 @@ python -m weatherbrief.verify score
 # Backfill: re-run scoring after code changes (--flight-id optional)
 python -m weatherbrief.verify backfill --flight-id "LFPG-EDDF-2026-04-01-abc123"
 
-# Export accuracy data
+# Backfill the gust columns from migration 082 (#491). TAF reaches all history;
+# model gust only the un-pruned snapshot window (--days, default 10).
+python -m weatherbrief.verify backfill-gust
+python -m weatherbrief.verify backfill-gust --taf-only
+
+# Export accuracy data (--table observations | scores | taf-scores; the score
+# tables are exported joined to their observation, so forecast gust and
+# observed gust land in the same record)
 python -m weatherbrief.verify export --format csv --output accuracy.csv
-python -m weatherbrief.verify export --format json --output accuracy.json
+python -m weatherbrief.verify export --table scores --source standalone \
+    --model ecmwf --format csv --output scores.csv
 
 # Summary statistics (--source flight|standalone, --model, --icao)
 python -m weatherbrief.verify stats --source standalone
@@ -692,6 +730,8 @@ Dashboard and digest breakdowns — per-model accuracy at lead time, TAF-vs-mode
 | Category direction classification | Distinguishes optimistic (forecast too good — dangerous) from pessimistic (too conservative) with 1-step vs 2-step severity |
 | Dashboard cache with staleness | Expensive queries cached as JSON; staleness checked via MAX(observation_time) comparison; falls back to live on stale |
 | Composite index on (source, days_out, observation_time) | Migration 055 — prevents full table scans on dashboard queries that filter by source + days_out + time range |
+| Store the raw model gust, not just its delta | The observed gust is NULL ~90% of hours and the snapshot holding the forecast gust is pruned at 10 days — a delta-only column would lose the over-warn signal permanently (#491) |
+| Gust reported under two conditionings | Forecast-flagged and obs-flagged hours are nearly disjoint samples pointing opposite ways (over-warns on average, runs low on the gusty days); one blended number reads as self-contradictory |
 
 ## Implementation Status
 

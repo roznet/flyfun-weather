@@ -676,6 +676,19 @@ class VerificationScoreRow(Base):
     wind_dir_delta_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
     temperature_delta_c: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Gust (#491). The raw forecast gust is stored, not just its delta: the
+    # observed gust is NULL on ~90% of hours (a METAR only carries a gust
+    # group when the peak exceeds the mean by ~10 kt), so a delta alone would
+    # drop exactly the "model called a gust, the airport wasn't gusting" rows.
+    # It is also unrecoverable after the fact — the snapshot that carries it
+    # (airport_forecast_snapshots) is pruned at >10 days.
+    model_wind_gust_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "The forecast shows a gust" by the METAR ~10 kt criterion — stored so
+    # rollups can SUM it without carrying model wind speed. See
+    # tasks/verification_gust.forecast_shows_gust.
+    model_gust_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     # Wind advisory comparison
     obs_wind_advisory: Mapped[str | None] = mapped_column(String(10), nullable=True)
     model_wind_advisory: Mapped[str | None] = mapped_column(String(10), nullable=True)
@@ -733,6 +746,11 @@ class TafVerificationScoreRow(Base):
     visibility_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_dir_delta_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Gust delta only (#491) — the TAF gust itself already lives permanently on
+    # verification_observations.taf_wind_gust_kt, reachable via observation_id,
+    # so there is no raw-value column here. This is for query symmetry with
+    # verification_scores and for the rollups.
+    wind_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Wind advisory comparison
     obs_wind_advisory: Mapped[str | None] = mapped_column(String(10), nullable=True)
@@ -989,6 +1007,22 @@ class VerificationMonthlyStatsRow(Base):
     wind_speed_mae_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     temperature_mae_c: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Gust (#491). Two conditionings, never blended — see
+    # tasks/verification_gust for the definitions.
+    #   obs-flagged magnitude: the hours the airport actually gusted
+    wind_gust_mae_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_gust_bias_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_gust: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #   forecast-flagged magnitude: the hours the forecast called a gust
+    gust_over_peak_bias_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_gust_flagged_peak: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #   occurrence contingency (NULL on TAF rows — the obs-side join is only
+    #   run for the model rollup; the daily table carries TAF-free occurrence
+    #   counts and is what the dashboard reads)
+    n_model_gust_flag: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_obs_gust: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    n_gust_flag_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Precipitation / convection hit rates (model scores only, NULL for TAF)
     n_precip_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     n_precip_miss: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1056,6 +1090,35 @@ class VerificationDailyStatsRow(Base):
     sum_abs_wind_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_abs_temp_delta_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     sum_abs_vis_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Gust (#491). Both conditionings are kept separate on purpose — see
+    # tasks/verification_gust for the definitions. Rows rolled up before
+    # migration 082 carry 0/NULL here until the day is re-rolled.
+    #   obs-flagged magnitude: hours the airport actually gusted
+    n_gust: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    sum_abs_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sum_gust_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #   forecast-flagged magnitude: hours the forecast called a gust, measured
+    #   against the realised peak (obs gust if reported, else obs mean wind)
+    n_gust_flagged_peak: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    sum_gust_flagged_over_peak_kt: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+    #   occurrence contingency: hit = flagged & observed, false alarm =
+    #   n_model_gust_flag - n_gust_flag_hit, miss = n_obs_gust - n_gust_flag_hit
+    n_model_gust_flag: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_obs_gust: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    n_gust_flag_hit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
     # Advisory direction counts
     n_advisory_match: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
