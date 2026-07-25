@@ -151,6 +151,10 @@ struct RouteObservationsView: View {
         // property, so reading it inside the row `ForEach` rebuilt the whole
         // dictionary for every row — 29 builds per pass on a real corridor.
         let comparisons = obs.comparisonsByIcao
+        // Same reason: `displayedAirports` re-runs the nearest-N sort (and rebuilds
+        // the comparison lookup for the conflict pin) on every call, and both the
+        // rows and the "Show all" toggle need it.
+        let displayed = displayedAirports(obs)
         VStack(alignment: .leading, spacing: Theme.spacingXS) {
             ScrollView(.horizontal) {
                 // `horizontalSpacing: 0` with per-cell padding instead of grid
@@ -179,7 +183,7 @@ struct RouteObservationsView: View {
                         }
                     }
                     Divider().gridCellUnsizedAxes(.horizontal).gridCellColumns(gridColumnCount)
-                    ForEach(displayedAirports(obs)) { apt in
+                    ForEach(displayed) { apt in
                         row(apt, comparison: comparisons[apt.icao])
                     }
                 }
@@ -187,7 +191,7 @@ struct RouteObservationsView: View {
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
 
-            showAllToggle(obs)
+            showAllToggle(obs, shown: displayed.count)
             legend
         }
     }
@@ -200,10 +204,11 @@ struct RouteObservationsView: View {
     }
 
     /// Expand/collapse control, shown only when the cap is actually hiding rows.
+    /// Takes `shown` from the caller rather than recomputing `displayedAirports`,
+    /// which would re-run the nearest-N sort a second time per render.
     @ViewBuilder
-    private func showAllToggle(_ obs: RouteObservations) -> some View {
+    private func showAllToggle(_ obs: RouteObservations, shown: Int) -> some View {
         let total = obs.reportingAirports.count
-        let shown = displayedAirports(obs).count
         if !isRegularWidth, total > shown || showsAllAirports {
             Button {
                 withAnimation { showsAllAirports.toggle() }

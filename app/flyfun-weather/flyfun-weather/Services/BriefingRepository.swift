@@ -12,8 +12,19 @@ enum RefreshSource: String, Sendable {
 /// Abstraction over briefing data access.
 protocol BriefingRepository: Sendable {
     func flights() async throws -> [FlightResponse]
+    /// Fetch one flight by id, independent of the viewer's list. Backs the
+    /// `briefing.html?flight=<id>` Universal Link fallback for flights that
+    /// aren't in the list (e.g. a feedback email about another pilot's flight):
+    /// the server allows the owner always and any authenticated viewer for a
+    /// non-private flight (role comes back `subscriber`), and 404s otherwise.
+    func flight(id: String) async throws -> FlightResponse
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse
+    /// Permanently delete one of the viewer's own flights and all of its briefing
+    /// history (server 204, owner-only — a subscriber unsubscribes instead).
+    /// Online-only; the caching layer also drops the flight's local pack cache,
+    /// since a deleted flight can never be refreshed or re-downloaded.
+    func deleteFlight(id: String) async throws
     func aircraft() async throws -> [AircraftResponse]
     func profiles() async throws -> [ProfileResponse]
     /// Account usage summary — the iOS app reads only the durable timing-scan
@@ -117,6 +128,10 @@ final class OnlineBriefingRepository: BriefingRepository {
         try await client.request("/api/flights")
     }
 
+    func flight(id: String) async throws -> FlightResponse {
+        try await client.request("/api/flights/\(id)")
+    }
+
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
         let body = try JSONEncoder.weatherBrief.encode(request)
         return try await client.request("/api/flights", method: "POST", body: body)
@@ -127,6 +142,10 @@ final class OnlineBriefingRepository: BriefingRepository {
         // Server returns the updated flight plus an invalidation hint describing
         // how much of the briefing the edit invalidated.
         return try await client.request("/api/flights/\(flightId)", method: "PATCH", body: body)
+    }
+
+    func deleteFlight(id: String) async throws {
+        try await client.requestVoid("/api/flights/\(id)")
     }
 
     func aircraft() async throws -> [AircraftResponse] {

@@ -39,6 +39,9 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var aircraftResult: Result<[AircraftResponse], Error> = .success([])
     var createFlightResult: Result<FlightResponse, Error> = .failure(MockError.notStubbed("createFlight"))
     var updateFlightResult: Result<UpdateFlightResponse, Error> = .failure(MockError.notStubbed("updateFlight"))
+    /// Delete succeeds by default (the common case under test is the happy path);
+    /// set a `.failure` to drive the surfaced-error branch.
+    var deleteFlightResult: Result<Void, Error> = .success(())
     var interpretRouteResult: Result<InterpretRouteResponse, Error> = .failure(MockError.notStubbed("interpretRoute"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
 
@@ -54,6 +57,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     private(set) var submitPirepsBatchCallCount = 0
     private(set) var interpretRouteCallCount = 0
     private(set) var lastUpdateRequest: UpdateFlightRequest?
+    private(set) var deletedFlightIds: [String] = []
     private(set) var lastCreateRequest: CreateFlightRequest?
     private(set) var lastInterpretRawRoute: String?
 
@@ -67,6 +71,12 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         if let hook = beforeFlightsReturn { await hook() }
         return try flightsResult.get()
     }
+    func flight(id: String) async throws -> FlightResponse {
+        guard let match = try flightsResult.get().first(where: { $0.id == id }) else {
+            throw APIError.notFound
+        }
+        return match
+    }
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
         lastCreateRequest = request
         return try createFlightResult.get()
@@ -74,6 +84,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse {
         lastUpdateRequest = request
         return try updateFlightResult.get()
+    }
+    func deleteFlight(id: String) async throws {
+        deletedFlightIds.append(id)
+        try deleteFlightResult.get()
     }
     func aircraft() async throws -> [AircraftResponse] { try aircraftResult.get() }
     func profiles() async throws -> [ProfileResponse] { [] }

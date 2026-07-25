@@ -78,6 +78,13 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
 
     func flights() async throws -> [FlightResponse] { flightsFixture + createdFlights }
 
+    func flight(id: String) async throws -> FlightResponse {
+        guard let match = (flightsFixture + createdFlights).first(where: { $0.id == id }) else {
+            throw APIError.notFound
+        }
+        return match
+    }
+
     func createFlight(_ request: CreateFlightRequest) async throws -> FlightResponse {
         let flight = FlightResponse(
             id: "created-\(createdFlights.count + 1)",
@@ -169,6 +176,7 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     // MARK: Not yet needed by a journey
 
     func updateFlight(flightId: String, request: UpdateFlightRequest) async throws -> UpdateFlightResponse { throw FixtureError.notProvided("updateFlight") }
+    func deleteFlight(id: String) async throws { throw FixtureError.notProvided("deleteFlight") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw FixtureError.notProvided("createAircraft") }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw FixtureError.notProvided("parseFpl") }
     /// Echo the typed tokens back as a clean interpretation. The create/edit flow
