@@ -1446,6 +1446,16 @@ async def run_grib_precache_loop(app_state) -> None:
                     source_key, key,
                 )
                 stats = await asyncio.to_thread(fn, marker.init)
+                if stats.get("deferred"):
+                    # Yielded to an interactive briefing mid-pass (issue #490).
+                    # Leave last_done alone (and skip the cap walk) so the next
+                    # tick resumes this same run — everything already fetched is
+                    # an is_cached skip, so resuming is cheap.
+                    logger.info(
+                        "Pre-cache %s %s deferred to interactive refresh: %s",
+                        source_key, key, stats,
+                    )
+                    continue
                 logger.info(
                     "Pre-cache %s %s done: %s",
                     source_key, key, stats,
@@ -1477,12 +1487,18 @@ async def run_grib_precache_loop(app_state) -> None:
                     stats = await asyncio.to_thread(
                         precache_icon_d2_flights, d2_marker.init, db_path,
                     )
-                    logger.info("ICON-D2 flight warm %s done: %s", d2_key, stats)
-                    # Enforce the D2 size cap once per warm, off the hot path.
-                    await asyncio.to_thread(
-                        purge_old_runs, data_dir, "icon-d2", enforce_cap=True,
-                    )
-                    last_done["icon_d2:flights"] = d2_key
+                    if stats.get("deferred"):
+                        logger.info(
+                            "ICON-D2 flight warm %s deferred to interactive "
+                            "refresh: %s", d2_key, stats,
+                        )
+                    else:
+                        logger.info("ICON-D2 flight warm %s done: %s", d2_key, stats)
+                        # Enforce the D2 size cap once per warm, off the hot path.
+                        await asyncio.to_thread(
+                            purge_old_runs, data_dir, "icon-d2", enforce_cap=True,
+                        )
+                        last_done["icon_d2:flights"] = d2_key
         except Exception:
             logger.error("GRIB pre-cache loop cycle failed", exc_info=True)
         await asyncio.sleep(_GRIB_PRECACHE_POLL_SECONDS)

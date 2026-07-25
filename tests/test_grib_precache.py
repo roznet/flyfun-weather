@@ -380,6 +380,7 @@ class TestIconD2FlightWarming:
             )
         assert stats == {
             "flights_considered": 3, "flights_warmed": 1, "flights_skipped": 2,
+            "deferred": 0,
         }
         assert len(warmed) == 1
         assert warmed[0].variant is ICON_D2
@@ -476,6 +477,202 @@ class TestWarmingWindow:
         assert is_within_warming_window("icon-eu", _utc(2026, 7, 21, 3))
         assert is_within_warming_window("icon-eu", _utc(2026, 7, 21, 15))
         assert not is_within_warming_window("icon-eu", _utc(2026, 7, 21, 21))
+
+
+class TestInteractiveRefreshActive:
+    """The gate the warm loop polls — reads the live refresh registry (#490)."""
+
+    @pytest.fixture
+    def registry(self):
+        """A fresh registry standing in for the process-wide one."""
+        from weatherbrief.api.packs import _RefreshRegistry
+
+        fresh = _RefreshRegistry()
+        with patch("weatherbrief.api.packs.refresh_registry", fresh):
+            yield fresh
+
+    def test_idle_process_does_not_defer(self, registry):
+        from weatherbrief.fetch.grib.precache import interactive_refresh_active
+        # Nothing has ever refreshed → nothing to yield to.
+        assert not interactive_refresh_active()
+
+    def test_queued_refresh_defers(self, registry):
+        from weatherbrief.fetch.grib.precache import interactive_refresh_active
+
+        registry.try_register("f1", triggered_by="user", user_id="u1")
+        assert interactive_refresh_active()
+
+    def test_scheduler_refresh_also_defers(self, registry):
+        """The 05Z burst is scheduler-driven — warming must yield to it too."""
+        from weatherbrief.fetch.grib.precache import interactive_refresh_active
+
+        registry.try_register("f1", triggered_by="scheduler")
+        assert interactive_refresh_active()
+
+    def test_active_refresh_defers_whatever_the_cooldown(self, registry):
+        """The cooldown extends the yield; it can never shorten it."""
+        from weatherbrief.fetch.grib.precache import interactive_refresh_active
+
+        registry.try_register("f1", triggered_by="user", user_id="u1")
+        assert interactive_refresh_active(cooldown_seconds=0.0)
+
+    def test_cooldown_after_last_refresh_finishes(self, registry):
+        from weatherbrief.fetch.grib.precache import (
+            WARM_YIELD_COOLDOWN_SECONDS,
+            interactive_refresh_active,
+        )
+
+        registry.try_register("f1", triggered_by="user", user_id="u1")
+        registry.unregister("f1")
+        # Just finished → still inside the cooldown.
+        assert interactive_refresh_active()
+        assert registry.idle_seconds() < WARM_YIELD_COOLDOWN_SECONDS
+        # Same instant, but with a cooldown short enough to have elapsed.
+        assert not interactive_refresh_active(cooldown_seconds=0.0)
+
+
+class TestWarmYielding:
+    """Every warm pass bails out mid-flight when a briefing needs the box."""
+
+    def test_icon_eu_defers_before_any_download(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        with patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_per_variable"
+        ) as mock_var, patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_single_level"
+        ) as mock_single:
+            stats = precache_icon_eu_run(
+                _utc(2026, 5, 8, 0), should_defer=lambda: True,
+            )
+
+        assert stats["deferred"] == 1
+        assert stats["hours_fetched"] == 0
+        mock_var.assert_not_called()
+        mock_single.assert_not_called()
+
+    def test_icon_eu_defers_between_variables(self, tmp_path: Path, monkeypatch):
+        """A refresh arriving mid-hour stops the pass at the next variable."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        # Yield only once the first variable download has happened.
+        calls = {"n": 0}
+
+        def fetch_var(init_date, init_hour, fhour, **kwargs):
+            calls["n"] += 1
+            return {kwargs["variables"][0]: b"grib"}
+
+        with patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_per_variable",
+            side_effect=fetch_var,
+        ), patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_single_level"
+        ) as mock_single:
+            stats = precache_icon_eu_run(
+                _utc(2026, 5, 8, 0), should_defer=lambda: calls["n"] >= 1,
+            )
+
+        assert stats["deferred"] == 1
+        assert calls["n"] == 1          # stopped after the first variable
+        assert stats["vars_fetched"] == 1
+        assert stats["hours_fetched"] == 0  # the hour never completed
+        mock_single.assert_not_called()  # cloud diag skipped on the bail-out
+
+    def test_icon_eu_reports_not_deferred_on_a_clean_pass(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        with patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_per_variable",
+            return_value={},
+        ), patch(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_single_level",
+            return_value={},
+        ):
+            stats = precache_icon_eu_run(
+                _utc(2026, 5, 8, 0), should_defer=lambda: False,
+            )
+
+        assert stats["deferred"] == 0
+        assert stats["hours_fetched"] == stats["forecast_hours_total"]
+
+    def test_gfs_defers_between_forecast_hours(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+
+        hours = {"n": 0}
+
+        def fetch_idx(init_date, init_hour, fhour, **kwargs):
+            hours["n"] += 1
+            return "idx"
+
+        with patch(
+            "weatherbrief.fetch.grib.grib_fetch.fetch_idx", side_effect=fetch_idx,
+        ), patch(
+            "weatherbrief.fetch.grib.gfs_idx.plan_byte_ranges", return_value=[],
+        ), patch(
+            "weatherbrief.fetch.grib.gfs_idx.plan_cloud_diag_byte_ranges",
+            return_value=[],
+        ):
+            stats = precache_gfs_run(
+                _utc(2026, 5, 8, 0), should_defer=lambda: hours["n"] >= 2,
+            )
+
+        assert stats["deferred"] == 1
+        assert hours["n"] == 2  # two hours fetched, then yielded
+        assert stats["hours_fetched"] == 2
+        assert stats["hours_fetched"] < stats["forecast_hours_total"]
+
+    def test_d2_defers_between_flights(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        warmed: list = []
+        rows = [_FakeRow(1), _FakeRow(2), _FakeRow(3)]
+
+        helper = TestIconD2FlightWarming()
+        with helper._patches(
+            rows, lambda *a, **kw: (_FakeCtx(ICON_D2), None), warmed,
+        ):
+            stats = precache_icon_d2_flights(
+                _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
+                # Yield once the first flight has been warmed.
+                should_defer=lambda: len(warmed) >= 1,
+            )
+
+        assert stats["deferred"] == 1
+        assert stats["flights_warmed"] == 1
+        assert stats["flights_considered"] == 1  # flights 2 and 3 never started
+        assert len(warmed) == 1
+
+    def test_d2_defers_before_touching_the_db(self):
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        with patch("flyfun_common.db.SessionLocal") as session:
+            stats = precache_icon_d2_flights(
+                _utc(2026, 7, 21, 0), db_path="/db", should_defer=lambda: True,
+            )
+
+        assert stats["deferred"] == 1
+        assert stats["flights_considered"] == 0
+        session.assert_not_called()
+
+    def test_d2_clean_pass_is_not_deferred(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+        from weatherbrief.fetch.grib.precache import precache_icon_d2_flights
+
+        warmed: list = []
+        helper = TestIconD2FlightWarming()
+        with helper._patches(
+            [_FakeRow(1)], lambda *a, **kw: (_FakeCtx(ICON_D2), None), warmed,
+        ):
+            stats = precache_icon_d2_flights(
+                _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
+                should_defer=lambda: False,
+            )
+
+        assert stats["deferred"] == 0
+        assert stats["flights_warmed"] == 1
 
 
 class TestShouldWarm:

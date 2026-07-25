@@ -90,3 +90,33 @@ class TestRefreshRegistry:
         snap = registry.queue_snapshot()
         assert snap["queued"] == 1
         assert snap["refreshing"] == 1
+
+
+class TestIdleSeconds:
+    """`idle_seconds` — the signal the GRIB warm loop yields on (issue #490)."""
+
+    def test_none_before_any_refresh(self, registry):
+        assert registry.idle_seconds() is None
+
+    def test_zero_while_a_refresh_is_active(self, registry):
+        registry.try_register("flight-1", user_id="user-a")
+        assert registry.idle_seconds() == 0.0
+
+    def test_counts_up_once_the_last_refresh_finishes(self, registry):
+        registry.try_register("flight-1", user_id="user-a")
+        registry.unregister("flight-1")
+        idle = registry.idle_seconds()
+        assert idle is not None and idle >= 0.0
+
+    def test_still_active_while_another_refresh_runs(self, registry):
+        """Idle starts when the registry empties, not on the first unregister."""
+        registry.try_register("flight-1", user_id="user-a")
+        registry.try_register("flight-2", user_id="user-b")
+        registry.unregister("flight-1")
+        assert registry.idle_seconds() == 0.0
+        registry.unregister("flight-2")
+        assert registry.idle_seconds() is not None
+
+    def test_unregister_of_unknown_flight_does_not_start_the_clock(self, registry):
+        registry.unregister("never-registered")
+        assert registry.idle_seconds() is None
