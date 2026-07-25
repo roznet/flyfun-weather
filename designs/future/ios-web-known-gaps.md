@@ -13,8 +13,10 @@ Related: [ios-app-roadmap.md](../ios-app-roadmap.md) (phase plan + open question
 ## No advisory recalculate on iOS
 
 **Added:** 2026-07-07
-**Web location:** `web/ts/managers/advisories-ui.ts` (profile selector `:438`,
-altitude-override slider `:578`, `onRecalculate` callback `:354`) →
+**Web location:** `web/ts/managers/advisories-ui.ts` — profile selector rendered
+at `:465` (`advisory-profile-select`) and wired at `:548`; altitude-override
+slider rendered at `:476` and wired at `:599`; the `onRecalculate` callback is
+the option at `:368`, wired to the recalculate button at `:563`. →
 `POST /api/flights/{id}/packs/{ts}/advisories/recalculate` (`recalculate_advisories`,
 `api/packs.py:3080`, `tasks/advise.py:run_advisories_from_pack`).
 

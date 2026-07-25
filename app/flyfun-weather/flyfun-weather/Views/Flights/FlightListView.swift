@@ -47,6 +47,9 @@ struct FlightListView: View {
     @State private var deleteCandidate: FlightResponse?
     /// Error surfaced when a delete fails (same reasoning as `unsubscribeError`).
     @State private var deleteError: String?
+    /// A flight whose share sheet is open, presented via `ShareActivitySheet` so
+    /// the list's Share matches the briefing toolbar's (custom "Open in Safari").
+    @State private var shareFlight: FlightResponse?
     /// Bumped on every `openForecastMap`, used as the map view's `.id` so a *new*
     /// inbound deep link while the map is already open re-creates the view (the
     /// deep link is applied only at `ForecastMapViewModel.init`).
@@ -231,6 +234,14 @@ struct FlightListView: View {
                             selection = .flight(updated)
                         }
                     }
+                }
+            }
+            .sheet(item: $shareFlight) { flight in
+                if let code = flight.shareCode {
+                    ShareActivitySheet(items: [AppState.shareURL(forShareCode: code)],
+                                       activities: [OpenInSafariActivity()])
+                        .presentationDetents([.medium, .large])
+                        .ignoresSafeArea()
                 }
             }
             .sheet(item: $pirepFlight) { flight in
@@ -486,9 +497,12 @@ struct FlightListView: View {
                 // role == .subscriber and gets the same preview-before-subscribe
                 // screen as a /s/{code} share link; a 404 (private/unknown)
                 // surfaces an alert so the tap is never a silent no-op.
+                // Keep the pending target when the repository isn't ready yet, as
+                // the `.share` case does — clearing first would drop the deep link
+                // for good instead of resuming it after sign-in.
+                guard let repo = appState.repository else { return }
                 reloadRetryFlightId = nil
                 appState.clearPendingNavigation()
-                guard let repo = appState.repository else { return }
                 Task {
                     do {
                         let flight = try await repo.flight(id: flightId)
@@ -497,8 +511,18 @@ struct FlightListView: View {
                         } else {
                             selection = .flight(flight)
                         }
+                    } catch let error as APIError {
+                        // Only a 404 means private/deleted/other-account. A
+                        // transient failure (offline tap) must say so instead of
+                        // blaming permissions — same split as the `.share` case.
+                        shareResolveError = {
+                            if case .notFound = error {
+                                return "This briefing isn’t available. The flight may be private, deleted, or on a different account."
+                            }
+                            return error.errorDescription ?? "Couldn’t open this briefing."
+                        }()
                     } catch {
-                        shareResolveError = "This briefing isn’t available. The flight may be private, deleted, or on a different account."
+                        shareResolveError = error.localizedDescription
                     }
                 }
             }
@@ -645,8 +669,14 @@ struct FlightListView: View {
             // Owner sharing (#446): share the short /s/{code} link. Hidden for
             // private flights and subscribers (isShareable) — recipients of a
             // private link would 404, mirroring the web share gate.
-            if flight.isShareable, let code = flight.shareCode {
-                ShareLink(item: AppState.shareURL(forShareCode: code)) {
+            // Presents `ShareActivitySheet`, not `ShareLink`, so this entry point
+            // carries the same "Open in Safari" activity as the briefing toolbar's
+            // Share button — sharing the same flight from two places behaved
+            // differently otherwise.
+            if flight.isShareable, flight.shareCode != nil {
+                Button {
+                    shareFlight = flight
+                } label: {
                     Label("Share Flight", systemImage: "square.and.arrow.up")
                 }
             }

@@ -154,19 +154,17 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         }
     }
 
-    /// Online-first single-flight fetch (Universal Link fallback for flights not
-    /// in the list). Offline fallback: the cached list, since a flight outside
-    /// the viewer's list is never in the per-flight cache anyway.
+    /// Online-only single-flight fetch (Universal Link fallback for flights not
+    /// in the list).
+    ///
+    /// Deliberately has no cached fallback. The sole caller reaches here exactly
+    /// when the flight is absent from the loaded list — and offline, that list
+    /// *is* the cached one — so searching `flights.json` could only ever miss.
+    /// Worse, swallowing the error there would report a transient network failure
+    /// as "private, deleted, or on a different account". Letting the error through
+    /// lets the caller tell a 404 from an offline tap.
     func flight(id: String) async throws -> FlightResponse {
-        do {
-            return try await online.flight(id: id)
-        } catch {
-            if let cached = await readCachedFlightsFromDisk(),
-               let match = cached.first(where: { $0.id == id }) {
-                return match
-            }
-            throw error
-        }
+        try await online.flight(id: id)
     }
 
     /// Cached flight list from `flights.json`, if present. No network — lets the
