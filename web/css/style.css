@@ -1122,6 +1122,16 @@ label {
   cursor: not-allowed;
 }
 .btn-icon svg { display: block; }
+/* Labelled variant: same chrome as the icon buttons it sits next to, but with
+   a word so its purpose is obvious (Feedback — the icon alone read as noise). */
+.btn-icon.btn-icon-labeled {
+  width: auto;
+  gap: 0.35rem;
+  padding: 0 0.6rem;
+  border-color: var(--border);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
 .btn-icon.btn-icon-flash {
   background: var(--green-bg);
   color: var(--green);
