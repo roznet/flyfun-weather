@@ -3,8 +3,9 @@ import SwiftUI
 /// The **Advisory** tab (#310): the read-me-first surface. A prominent accented
 /// hero (traffic-light + assessment reason) pinned at the top, then watch chips,
 /// a responsive advisory grid (AMBER/RED as cards, GREEN collapsed into one
-/// all-clear strip), current airport conditions, and — on marginal D-0/D-2
-/// packs — weather alternates. A sticky scroll-spy bar jumps between sections.
+/// all-clear strip), current airport conditions, — on D-0 — the METAR/TAF
+/// observations comparison, and — on marginal D-0/D-2 packs — weather
+/// alternates. A sticky scroll-spy bar jumps between sections.
 struct AdvisoryTabView: View {
     let viewModel: BriefingViewModel
     @Environment(AppState.self) private var appState
@@ -25,6 +26,10 @@ struct AdvisoryTabView: View {
                     .spyAnchor("advisories")
                 AirportConditionsView(viewModel: viewModel)
                     .spyAnchor("conditions")
+                if hasObservations {
+                    RouteObservationsView(viewModel: viewModel)
+                        .spyAnchor("observations")
+                }
                 if hasAlternates {
                     AlternatesView(viewModel: viewModel)
                         .spyAnchor("alternates")
@@ -128,6 +133,17 @@ struct AdvisoryTabView: View {
         return false
     }
 
+    /// D-0 METAR/TAF observations (#492). Gated on an airport actually having
+    /// reported — the same filter the section's table applies — so the scroll-spy
+    /// never offers an anchor that renders empty.
+    private var hasObservations: Bool {
+        if case .loaded(let snapshot) = viewModel.snapshotState,
+           let obs = snapshot.routeObservations {
+            return !obs.reportingAirports.isEmpty
+        }
+        return false
+    }
+
     private var hasWatchItems: Bool {
         if case .loaded(let digest) = viewModel.digestState { return !digest.watchItemsList.isEmpty }
         return false
@@ -144,6 +160,7 @@ struct AdvisoryTabView: View {
         var sections = [SpySection("hero", "Summary")]
         sections.append(SpySection("advisories", "Advisories"))
         sections.append(SpySection("conditions", "Conditions"))
+        if hasObservations { sections.append(SpySection("observations", "Observations")) }
         if hasAlternates { sections.append(SpySection("alternates", "Alternates")) }
         if hasTimingScenarios { sections.append(SpySection("timing", "Timing")) }
         if hasWatchItems { sections.append(SpySection("watch", "Watch")) }

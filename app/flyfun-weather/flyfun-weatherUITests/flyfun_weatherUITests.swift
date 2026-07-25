@@ -9,6 +9,7 @@
 //
 
 import XCTest
+import UIKit
 
 final class flyfun_weatherUITests: XCTestCase {
 
@@ -204,6 +205,98 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 10), "cached flight should be listed offline")
         card.tap()
         waitForBriefingLoaded(app)   // the cached flight's briefing opens offline
+    }
+
+    /// Journey 6 (#492) — Current Observations section. Open fixture-1, jump to
+    /// the Observations scroll-spy section, and confirm the METAR/TAF/model
+    /// comparison table renders. Also pins the responsive contract: the
+    /// Condition/Wind axis picker exists only in compact width (iPhone), because
+    /// regular width (iPad) shows both groups at once.
+    @MainActor
+    func testRouteObservationsSectionRenders() throws {
+        let app = launchMockApp()
+        openFixture1Briefing(app)
+
+        // Advisory is the default tab; the spy pill for the D-0 observations
+        // section only exists when an airport actually reported, so finding it
+        // also confirms the `hasObservations` gate and the spy wiring.
+        let pill = app.buttons["Observations"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 15),
+                      "the Observations spy pill should be present for the D-0 fixture")
+        pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["observationsSection"].waitForExistence(timeout: 10),
+                      "observations section should render")
+
+        // Fixture airports appear as rows (the ⓘ button carries the label).
+        XCTAssertTrue(app.buttons["LFMD details"].firstMatch.waitForExistence(timeout: 5),
+                      "LFMD row should render")
+        XCTAssertTrue(app.buttons["LFTH details"].firstMatch.exists,
+                      "LFTH row (the CONFLICTING case) should render")
+
+        // Responsive contract: an axis *picker* on iPhone, both groups at once on
+        // iPad. Keyed off the segment buttons rather than the picker's
+        // accessibilityIdentifier — SwiftUI doesn't surface that identifier on a
+        // `.segmented` Picker. This is also the sharper assertion: in regular
+        // width "Condition"/"Wind" appear as group *headers* (static text), so
+        // their presence as buttons is exactly what distinguishes the two layouts.
+        let conditionSegment = app.buttons["Condition"].firstMatch
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCTAssertFalse(conditionSegment.exists,
+                           "regular width shows both axes, so there should be no axis picker")
+            XCTAssertTrue(app.staticTexts["Condition"].firstMatch.exists,
+                          "regular width should render the Condition group header")
+            XCTAssertTrue(app.staticTexts["Wind"].firstMatch.exists,
+                          "regular width should render the Wind group header")
+        } else {
+            XCTAssertTrue(conditionSegment.exists,
+                          "compact width should offer the Condition/Wind axis picker")
+        }
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Observations-Condition"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        // Switch to the Wind axis (compact only) and capture that too, so the
+        // crosswind capsules are covered by a visual record.
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            let wind = app.buttons["Wind"].firstMatch
+            if wind.waitForExistence(timeout: 5) {
+                wind.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                let windShot = XCTAttachment(screenshot: app.screenshot())
+                windShot.name = "Observations-Wind"
+                windShot.lifetime = .keepAlways
+                add(windShot)
+            }
+        }
+    }
+
+    /// Journey 6b (#492) — the per-airport ⓘ drill-down opens and shows the raw
+    /// METAR/TAF plus the runway-wind breakdown (the web's obs popup).
+    @MainActor
+    func testRouteObservationsDetailSheet() throws {
+        let app = launchMockApp()
+        openFixture1Briefing(app)
+
+        let pill = app.buttons["Observations"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 15), "Observations spy pill should be present")
+        pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+        let info = app.buttons["LFTH details"].firstMatch
+        XCTAssertTrue(info.waitForExistence(timeout: 10), "LFTH row should render")
+        info.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+        // The sheet is titled with the ICAO and shows the raw METAR text.
+        XCTAssertTrue(app.staticTexts["METAR"].firstMatch.waitForExistence(timeout: 10),
+                      "detail sheet should show a METAR block")
+        XCTAssertTrue(app.staticTexts["Runway wind"].firstMatch.exists,
+                      "detail sheet should show the runway-wind breakdown")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Observations-DetailSheet"
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 
     @MainActor
