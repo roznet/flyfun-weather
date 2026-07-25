@@ -744,3 +744,81 @@ class TestNextDueAtModelUpdate:
         )
         # preflight = 07:00Z on flight day, earlier than the 14:00 regular slot.
         assert due == _utc(2026, 3, 5, 7)
+
+
+# ---------------------------------------------------------------------------
+# GRIB warm loop yields to interactive briefings (issue #490)
+# ---------------------------------------------------------------------------
+
+
+class TestPrecacheLoopYielding:
+    """A deferred warm pass must not be recorded as done.
+
+    Warming is idempotent, so bailing out mid-pass costs nothing — but only if
+    the loop leaves ``last_done`` untouched, so the next 5-min tick resumes the
+    same run instead of skipping it until the next publish.
+    """
+
+    def _run_loop(self, stats_sequence, cycles=2):
+        """Drive ``run_grib_precache_loop`` for ``cycles`` ticks.
+
+        Returns (gfs_call_inits, purge_calls). Only the GFS target and the D2
+        warm produce marker hits; ICON-EU's marker is absent.
+        """
+        import asyncio
+
+        from weatherbrief.scheduler import run_grib_precache_loop
+
+        init = _utc(2026, 7, 23, 0)
+
+        class _Store:
+            def get_sync(self, source_key, model):
+                if source_key == "gfs:noaa":
+                    return SimpleNamespace(init=init)
+                return None
+
+        gfs_calls: list[datetime] = []
+        purges: list[str] = []
+        remaining = list(stats_sequence)
+
+        def fake_gfs(run_init):
+            gfs_calls.append(run_init)
+            return remaining.pop(0)
+
+        sleeps = {"n": 0}
+
+        async def fake_sleep(_seconds):
+            sleeps["n"] += 1
+            # 1st sleep is the startup delay; then one per completed cycle.
+            if sleeps["n"] > cycles:
+                raise asyncio.CancelledError
+
+        with patch("weatherbrief.fetch.freshness.markers.get_store",
+                   return_value=_Store()), \
+                patch("weatherbrief.fetch.grib.precache.precache_gfs_run",
+                      side_effect=fake_gfs), \
+                patch("weatherbrief.fetch.grib.cache.purge_old_runs",
+                      side_effect=lambda d, slug, **kw: purges.append(slug)), \
+                patch("asyncio.sleep", side_effect=fake_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                asyncio.run(
+                    run_grib_precache_loop(SimpleNamespace(db_path=""))
+                )
+
+        return gfs_calls, purges
+
+    def test_deferred_pass_is_retried_next_tick(self):
+        deferred = {"hours_fetched": 3, "forecast_hours_total": 64, "deferred": 1}
+        done = {"hours_fetched": 64, "forecast_hours_total": 64, "deferred": 0}
+        calls, purges = self._run_loop([deferred, done])
+        # Same run warmed twice: the deferred pass left last_done unset.
+        assert len(calls) == 2
+        assert calls[0] == calls[1]
+        # The cap walk only ran for the pass that completed.
+        assert purges == ["gfs"]
+
+    def test_completed_pass_is_not_repeated(self):
+        done = {"hours_fetched": 64, "forecast_hours_total": 64, "deferred": 0}
+        calls, purges = self._run_loop([done])
+        assert len(calls) == 1  # second tick skips the already-warmed run
+        assert purges == ["gfs"]

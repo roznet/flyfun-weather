@@ -141,6 +141,11 @@ class _RefreshRegistry:
         # (/refresh/active) deliberately does NOT touch this — being on the list
         # is not the same as viewing the briefing.
         self._watched: dict[str, float] = {}
+        # Monotonic ts of the moment the registry last went empty. Drives
+        # `idle_seconds()`, which the discretionary GRIB warm loop polls so it
+        # can yield to interactive work (issue #490). None until the first
+        # refresh of the process has finished.
+        self._idle_since: float | None = None
 
     def touch_watch(self, flight_id: str) -> None:
         """Record a UI watch-contact for ``flight_id`` (stream keepalive/status poll)."""
@@ -222,8 +227,26 @@ class _RefreshRegistry:
 
     def unregister(self, flight_id: str) -> None:
         with self._lock:
-            self._entries.pop(flight_id, None)
+            removed = self._entries.pop(flight_id, None)
             self._watched.pop(flight_id, None)
+            if removed is not None and not self._entries:
+                self._idle_since = time.monotonic()
+
+    def idle_seconds(self) -> float | None:
+        """How long the briefing pipeline has been idle, in seconds.
+
+        ``0.0`` while any refresh is queued or running, otherwise the seconds
+        since the last one finished, or ``None`` when no refresh has run since
+        process start. Read by the GRIB warm loop, which is discretionary and
+        must not compete with an interactive briefing for memory or bandwidth
+        (issue #490 — the 2026-07-23 05:09Z OOM).
+        """
+        with self._lock:
+            if self._entries:
+                return 0.0
+            if self._idle_since is None:
+                return None
+            return time.monotonic() - self._idle_since
 
     def get(self, flight_id: str) -> RefreshEntry | None:
         with self._lock:
