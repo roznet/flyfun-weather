@@ -20,10 +20,19 @@ struct RouteObservationsView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var axis: ObservationAxis = .condition
     @State private var detail: AirportObservation?
+    @State private var showsAllAirports = false
+
+    /// How many airports a phone shows before "Show all".
+    private static let compactRowCap = 10
+
+    /// iPad-class width. Drives two decisions that are independent but happen to
+    /// share the same trigger: rendering both comparison groups side-by-side, and
+    /// listing every reporting airport instead of the nearest few.
+    private var isRegularWidth: Bool { sizeClass == .regular }
 
     /// iPad-class width shows both comparison groups at once, so the axis
     /// switcher would have nothing to do and is hidden.
-    private var showsBothAxes: Bool { sizeClass == .regular }
+    private var showsBothAxes: Bool { isRegularWidth }
 
     private var observations: RouteObservations? {
         if case .loaded(let snapshot) = viewModel.snapshotState { return snapshot.routeObservations }
@@ -166,7 +175,7 @@ struct RouteObservationsView: View {
                         }
                     }
                     Divider().gridCellUnsizedAxes(.horizontal).gridCellColumns(gridColumnCount)
-                    ForEach(obs.reportingAirports) { apt in
+                    ForEach(displayedAirports(obs)) { apt in
                         row(apt, comparison: obs.comparisonsByIcao[apt.icao])
                     }
                 }
@@ -174,7 +183,41 @@ struct RouteObservationsView: View {
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
 
+            showAllToggle(obs)
             legend
+        }
+    }
+
+    /// Rows to render: every reporting airport on iPad or once expanded, else the
+    /// nearest few (see `nearestReportingAirports`).
+    private func displayedAirports(_ obs: RouteObservations) -> [AirportObservation] {
+        guard !isRegularWidth, !showsAllAirports else { return obs.reportingAirports }
+        return obs.nearestReportingAirports(limit: Self.compactRowCap)
+    }
+
+    /// Expand/collapse control, shown only when the cap is actually hiding rows.
+    @ViewBuilder
+    private func showAllToggle(_ obs: RouteObservations) -> some View {
+        let total = obs.reportingAirports.count
+        let shown = displayedAirports(obs).count
+        if !isRegularWidth, total > shown || showsAllAirports {
+            Button {
+                withAnimation { showsAllAirports.toggle() }
+            } label: {
+                HStack(spacing: Theme.spacingXS) {
+                    Image(systemName: showsAllAirports ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                    // "Show fewer" rather than "Show nearest 10": a pinned
+                    // CONFLICTING airport can push the collapsed count above the
+                    // cap, so naming the number here would sometimes lie.
+                    Text(showsAllAirports ? "Show fewer" : "Show all \(total) airports")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Theme.primary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("observationsShowAll")
         }
     }
 
@@ -252,9 +295,9 @@ struct RouteObservationsView: View {
             ForEach(visibleAxes) { a in
                 switch a {
                 case .condition:
-                    FlightCategoryBadge(category: apt.metarFlightCategory ?? "—").cell(highlighted: conflicting)
-                    FlightCategoryBadge(category: apt.tafFlightCategoryAtEta ?? "—").cell(highlighted: conflicting)
-                    FlightCategoryBadge(category: comparison?.modelCategory ?? "—").cell(highlighted: conflicting)
+                    categoryCell(apt.metarFlightCategory, highlighted: conflicting)
+                    categoryCell(apt.tafFlightCategoryAtEta, highlighted: conflicting)
+                    categoryCell(comparison?.modelCategory, highlighted: conflicting)
                     AgreementIcon(match: comparison?.categoryMatch).cell(highlighted: conflicting)
                 case .wind:
                     WindAdvisoryBadge(status: apt.metarWindAdvisory, crosswindKt: apt.metarCrosswindKt)
@@ -266,6 +309,22 @@ struct RouteObservationsView: View {
                     AgreementIcon(match: comparison?.windAdvisoryMatch).cell(highlighted: conflicting)
                 }
             }
+        }
+    }
+
+    /// A flight-category cell. Absent data renders as plain muted text, not a
+    /// filled badge — a grey capsule carries the same visual weight as a real
+    /// category and reads as if "—" were itself a rating. Matches how
+    /// `WindAdvisoryBadge` treats a missing advisory.
+    @ViewBuilder
+    private func categoryCell(_ category: String?, highlighted: Bool) -> some View {
+        if let category, !category.isEmpty {
+            FlightCategoryBadge(category: category).cell(highlighted: highlighted)
+        } else {
+            Text("—")
+                .font(.caption2)
+                .foregroundStyle(Theme.textMuted)
+                .cell(highlighted: highlighted)
         }
     }
 
