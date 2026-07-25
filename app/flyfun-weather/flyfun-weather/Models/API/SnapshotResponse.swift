@@ -86,8 +86,14 @@ struct RouteObservations: Codable, Sendable {
 
     /// Comparisons keyed by ICAO — the table joins each airport row to its
     /// model reconciliation.
+    ///
+    /// `uniquingKeysWith` rather than `uniqueKeysWithValues`: this is
+    /// server-derived JSON, and the trapping initializer would `fatalError` on a
+    /// duplicate ICAO — crashing the briefing screen over a malformed payload
+    /// instead of degrading. First entry wins, matching `HelpCatalogResponse`,
+    /// `SkewTVariableCatalog` and `TimingScenariosView`.
     var comparisonsByIcao: [String: ObservationComparison] {
-        Dictionary(uniqueKeysWithValues: (comparisons ?? []).map { ($0.icao, $0) })
+        Dictionary((comparisons ?? []).map { ($0.icao, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Airports that actually reported something. The web filters the table the

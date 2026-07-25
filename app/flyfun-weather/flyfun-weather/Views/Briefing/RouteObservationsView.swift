@@ -147,6 +147,10 @@ struct RouteObservationsView: View {
     /// the row already fits, which is the common case.
     @ViewBuilder
     private func table(_ obs: RouteObservations) -> some View {
+        // Build the ICAO lookup once per render. `comparisonsByIcao` is a computed
+        // property, so reading it inside the row `ForEach` rebuilt the whole
+        // dictionary for every row — 29 builds per pass on a real corridor.
+        let comparisons = obs.comparisonsByIcao
         VStack(alignment: .leading, spacing: Theme.spacingXS) {
             ScrollView(.horizontal) {
                 // `horizontalSpacing: 0` with per-cell padding instead of grid
@@ -176,7 +180,7 @@ struct RouteObservationsView: View {
                     }
                     Divider().gridCellUnsizedAxes(.horizontal).gridCellColumns(gridColumnCount)
                     ForEach(displayedAirports(obs)) { apt in
-                        row(apt, comparison: obs.comparisonsByIcao[apt.icao])
+                        row(apt, comparison: comparisons[apt.icao])
                     }
                 }
                 .padding(.vertical, Theme.spacingXS)

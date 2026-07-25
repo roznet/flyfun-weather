@@ -174,6 +174,29 @@ import Foundation
         #expect(obs.reportingAirports.map(\.icao) == ["EGTF", "EGLL"])
     }
 
+    /// A duplicate ICAO in `comparisons` must not crash. This is server-derived
+    /// JSON, and the trapping `Dictionary(uniqueKeysWithValues:)` would
+    /// `fatalError` here — taking down the briefing screen (and this test
+    /// process) over a malformed payload. First entry wins.
+    @Test func duplicateIcaoInComparisonsDoesNotTrap() throws {
+        let json = """
+        { "corridor_nm": 30.0, "fetch_time": "2026-07-25T05:50:00Z",
+          "airports": [
+            { "icao": "EGTF", "distance_from_route_nm": 1, "metar_weather": [], "has_metar": true }
+          ],
+          "comparisons": [
+            { "icao": "EGTF", "category_match": "CONFIRMING", "detail": "first" },
+            { "icao": "EGTF", "category_match": "CONFLICTING", "detail": "second" }
+          ] }
+        """
+        let obs = try JSONDecoder.weatherBrief.decode(RouteObservations.self, from: Data(json.utf8))
+        let byIcao = obs.comparisonsByIcao
+        #expect(byIcao.count == 1)
+        #expect(byIcao["EGTF"]?.detail == "first")
+        // The cap path also reads the lookup, so it must survive the duplicate too.
+        #expect(obs.nearestReportingAirports(limit: 1).map(\.icao) == ["EGTF"])
+    }
+
     @Test func comparisonJoinIsKeyedByIcao() throws {
         let obs = try decoded()
         let byIcao = obs.comparisonsByIcao
