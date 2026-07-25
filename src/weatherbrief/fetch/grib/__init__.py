@@ -2193,15 +2193,38 @@ def _enrich_forecasts_inner(
             as_of_time=as_of_time,
         )
 
+    # Emit the models being enriched as the progress detail, then narrow the
+    # list as each phase-1 worker finishes so the display tracks what is
+    # still in flight. Done-callbacks run on pool worker threads; the lock
+    # is held across the emit so updates can't land out of order.
+    pending_labels: list[str] = []
+    pending_lock = threading.Lock()
+
     if progress_callback is not None:
-        enrich_models = [
+        pending_labels.extend(
             m.value.upper() for m in (ModelSource.GFS, ModelSource.ECMWF)
             if any(cs.model == m for cs in cross_sections)
-        ]
+        )
         if icon_ctx is not None:
-            enrich_models.append(icon_ctx.variant.slug.upper())
-        if enrich_models:
-            progress_callback("grib_enrichment", ", ".join(enrich_models))
+            pending_labels.append(icon_ctx.variant.slug.upper())
+        if pending_labels:
+            progress_callback("grib_enrichment", ", ".join(pending_labels))
+
+    def _phase1_model_done(label: str) -> Callable[[Future], None]:
+        def _cb(_future: Future) -> None:
+            if progress_callback is None:
+                return
+            with pending_lock:
+                if label not in pending_labels:
+                    return
+                pending_labels.remove(label)
+                # Skip the empty tail — phase 2 (or the next stage) emits
+                # its own detail right after the last worker completes.
+                if pending_labels:
+                    progress_callback(
+                        "grib_enrichment", ", ".join(pending_labels),
+                    )
+        return _cb
 
     # Phase 1: Download/decode in parallel — GFS (download+decode),
     # ICON-EU (download-only), ECMWF GRIB (local disk decode).
@@ -2217,6 +2240,9 @@ def _enrich_forecasts_inner(
                 flight_duration_hours=flight_duration_hours,
                 as_of_time=as_of_time,
             )
+            gfs_future.add_done_callback(
+                _phase1_model_done(ModelSource.GFS.value.upper())
+            )
             ecmwf_future = _submit_with_context(
                 pool, _enrich_ecmwf,
                 cross_sections, all_forecasts, route_points,
@@ -2224,9 +2250,15 @@ def _enrich_forecasts_inner(
                 flight_duration_hours=flight_duration_hours,
                 as_of_time=as_of_time,
             )
+            ecmwf_future.add_done_callback(
+                _phase1_model_done(ModelSource.ECMWF.value.upper())
+            )
             if icon_ctx is not None:
                 icon_dl_future = _submit_with_context(
                     pool, _prefetch_icon_eu_data, icon_ctx,
+                )
+                icon_dl_future.add_done_callback(
+                    _phase1_model_done(icon_ctx.variant.slug.upper())
                 )
             else:
                 icon_dl_future = None
