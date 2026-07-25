@@ -60,7 +60,7 @@ Gated by `days_out == 0 and options.airports_db_path`. Wrapped in try/except so 
 `AirportObservation` stores flat, serializable METAR/TAF fields (no euro_aip `WeatherReport` objects):
 - METAR: raw text, flight category, ceiling, visibility, wind (dir/speed/gust), weather phenomena, temp, dewpoint, QNH
 - TAF: raw text, flight category at ETA, applicable trend type, wind (dir/speed/gust)
-- Wind advisories: `metar_wind_advisory`, `taf_wind_advisory` (OK/CAUTION/WARNING) with best runway and crosswind values
+- Wind advisories: `metar_wind_advisory`, `taf_wind_advisory` — lowercase `green`/`amber`/`red` (from `_wind_advisory_status()`) — with best runway and crosswind values
 - TAF highlighting: `taf_applicable_lines: list[int]` — line indices for base + applicable BECMG/TEMPO groups
 - ETA: `eta_hour_offset: int | None` — rounded hours after departure (from enroute distance interpolation)
 - Metadata: ICAO, distance from route, enroute distance, nearest waypoint
@@ -120,9 +120,49 @@ Observations section on the briefing page with:
 - **Two-row grouped table headers**: ICAO, Dist, ETA (+0h/+1h/etc.), Conditions group (METAR/TAF/Model categories + agreement) and Wind group (METAR/TAF/Model wind + advisory match)
 - **Info button**: ⓘ in ICAO cell opens detailed airport popup
 - **TAF highlighting**: `taf_applicable_lines` indices highlight the base forecast + applicable BECMG/TEMPO lines in the TAF raw text
-- **Wind advisory icons**: OK/CAUTION/WARNING badges with crosswind values per source
+- **Wind advisory icons**: `green`/`amber`/`red` badges (rendered G/A/R) with crosswind values per source
 - **Agreement column**: CONFIRMING/SIGNIFICANT/CONFLICTING badges for both conditions and wind
 - **Refresh button**: re-fetches METAR/TAF via `POST .../observations/refresh` endpoint, updates snapshot in place
+
+### iOS UI (`Views/Briefing/RouteObservationsView.swift`)
+
+The iOS port (#492) sits in the Advisory tab between Conditions and Alternates —
+the same slot as on web — with a scroll-spy anchor (`observations`). It reads
+`snapshot.route_observations` from the standard snapshot endpoint (no iOS-specific
+endpoint; `GET .../snapshot` returns raw `briefing.json`, so the full shape
+including `comparisons` is already on the wire).
+
+**Responsive two-axis table.** The web table is 11 columns, which does not fit a
+phone. The two comparison groups therefore become a switchable axis:
+
+| Width | Behaviour |
+|---|---|
+| Compact (iPhone) | A segmented Condition / Wind picker above the table; one 7-column group at a time (default Condition) |
+| Regular (iPad) | Both groups side-by-side with the web's two-row grouped header; picker hidden |
+
+Keyed off `horizontalSizeClass`, matching `RouteMapView`'s dual-metric split.
+
+Other parity notes:
+- **Wind cells** show the *crosswind in kt* coloured by advisory status, rather
+  than the web's bare G/A/R letter — touch has no hover tooltip, so the value
+  itself has to be the label. A legend under the table states the unit, the
+  colour meaning, and the ✓/⚠/✗ agreement key.
+- **Detail sheet** replaces the web's ⓘ popup: raw METAR, raw TAF with
+  `taf_applicable_lines` emphasised, and the per-source runway-wind breakdown.
+- **Table cells** run at `Grid(horizontalSpacing: 0)` with the gutter inside each
+  cell, so a CONFLICTING row's per-cell shading tiles into one continuous band
+  (Grid applies a row background per cell, not across the row).
+- **No in-section refresh button.** Web has one; on iOS the toolbar Refresh
+  already routes through the tiered `decide_refresh` gate, which at D-0 performs
+  exactly this cheap realtime refresh.
+- **Route SIGMETs are not ported** — iOS has no `route_sigmets` DTO or view at
+  all, so the block is dropped at decode. Tracked in #493.
+
+Fixture-backed (`FixtureBriefingData.route_observations` carries comparisons +
+wind advisories), so mock mode renders it; covered by
+`RouteObservationsTests.swift` (decode/join/filter) and the XCUI journeys
+`testRouteObservationsSectionRenders` / `testRouteObservationsDetailSheet`, which
+assert the compact-vs-regular contract.
 
 ### HTML Report
 
@@ -137,7 +177,7 @@ Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF
 | Category-based comparison (not raw values) | Flight category is the operationally meaningful unit; raw value comparison is noisy |
 | Three-tier classification (no MINOR_DELTA) | Implemented as CONFIRMING/SIGNIFICANT/CONFLICTING; MINOR_DELTA was dropped for simplicity |
 | Sounding ceiling for model category | Uses `sounding_ceiling_ft` from route analyses when available, falling back to visibility-only |
-| Runway crosswind advisory | `compute_wind_advisory()` evaluates all runway ends, picks best runway; OK/CAUTION/WARNING thresholds |
+| Runway crosswind advisory | `compute_wind_advisory()` evaluates all runway ends, picks best runway; `green`/`amber`/`red` thresholds |
 | TAF line highlighting | `_applicable_taf_lines()` identifies base + BECMG/TEMPO groups active at target time for UI highlighting |
 | Per-airport time interpolation | TAF matching and model comparison use `enroute_distance / total_distance * flight_duration` to estimate when the flight passes each airport; falls back to departure time when `flight_duration_hours == 0` |
 | Graceful failure (try/except in pipeline) | Network failures shouldn't block the NWP-based briefing |

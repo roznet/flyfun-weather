@@ -62,28 +62,110 @@ struct ThermodynamicIndicesSummary: Codable, Sendable {
     let nwpCeilingFt: Double?
 }
 
+/// D-0 METAR/TAF observations along the route, plus the obs-vs-model
+/// reconciliation. Mirrors `models/observations.py::RouteObservations`
+/// (source of truth) and the web's `renderRouteObservations`.
+///
+/// Only populated when `days_out == 0` — European TAFs rarely cover the next
+/// day, so the pipeline skips the fetch entirely on D-1+.
+///
+/// SYNC: `web/ts/managers/briefing-ui.ts` (`renderRouteObservations`) renders
+/// the same shape; `src/weatherbrief/models/observations.py` defines it.
 struct RouteObservations: Codable, Sendable {
     let corridorNm: Double?
     let fetchTime: String?
+    let airportsFound: Int?
+    let airportsWithMetar: Int?
+    let airportsWithTaf: Int?
     let airports: [AirportObservation]?
+    let comparisons: [ObservationComparison]?
     let worstMetarCategory: String?
     let worstTafCategory: String?
+    let hasConflicts: Bool?
+    let phenomenaAlongRoute: [String]?
+
+    /// Comparisons keyed by ICAO — the table joins each airport row to its
+    /// model reconciliation.
+    var comparisonsByIcao: [String: ObservationComparison] {
+        Dictionary(uniqueKeysWithValues: (comparisons ?? []).map { ($0.icao, $0) })
+    }
+
+    /// Airports that actually reported something. The web filters the table the
+    /// same way (`apt.has_metar || apt.has_taf`) — a spatial query can return
+    /// small GA fields with no data at all.
+    var reportingAirports: [AirportObservation] {
+        (airports ?? []).filter { $0.hasMetar == true || $0.hasTaf == true }
+    }
 }
 
 struct AirportObservation: Codable, Identifiable, Sendable {
     let icao: String
     let name: String?
     let distanceFromRouteNm: Double?
+    let enrouteDistanceNm: Double?
+    let nearestWaypointIcao: String?
+
+    // METAR
     let metarRaw: String?
+    let metarTime: String?
     let metarFlightCategory: String?
     let metarCeilingFt: Int?
+    let metarVisibilityM: Int?
+    let metarWindDir: Int?
     let metarWindSpeedKt: Int?
     let metarWindGustKt: Int?
     let metarWeather: [String]?
     let metarTemperatureC: Int?
     let metarDewpointC: Int?
+    let metarQnh: Double?
+
+    // TAF
     let tafRaw: String?
     let tafFlightCategoryAtEta: String?
+    let tafTrendType: String?
+    let tafWindDir: Int?
+    let tafWindSpeedKt: Int?
+    let tafWindGustKt: Int?
+    let tafApplicableText: String?
+    /// Line indices of the base forecast + the BECMG/TEMPO groups active at the
+    /// ETA — used to highlight the applicable lines in the raw TAF.
+    let tafApplicableLines: [Int]?
+
+    // Runway wind advisories — lowercase "green"/"amber"/"red"
+    let metarWindAdvisory: String?
+    let metarBestRunwayId: String?
+    let metarCrosswindKt: Double?
+    let metarHeadwindKt: Double?
+    let tafWindAdvisory: String?
+    let tafBestRunwayId: String?
+    let tafCrosswindKt: Double?
+    let tafHeadwindKt: Double?
+
+    let hasMetar: Bool?
+    let hasTaf: Bool?
+    /// Rounded hours after departure that the flight passes this airport.
+    let etaHourOffset: Int?
 
     var id: String { icao }
+}
+
+/// One airport's observation-vs-model reconciliation.
+/// Mirrors `models/observations.py::ObservationComparison`.
+struct ObservationComparison: Codable, Sendable {
+    let icao: String
+    let obsCategory: String?
+    let modelCategory: String?
+    /// "CONFIRMING" / "SIGNIFICANT" / "CONFLICTING".
+    let categoryMatch: String?
+    let ceilingDeltaFt: Int?
+    let visibilityDeltaM: Double?
+    let windSpeedDeltaKt: Double?
+    let modelWindDir: Double?
+    let modelWindSpeedKt: Double?
+    let modelWindGustKt: Double?
+    let modelWindAdvisory: String?
+    let modelBestRunwayId: String?
+    let modelCrosswindKt: Double?
+    let windAdvisoryMatch: String?
+    let detail: String?
 }

@@ -359,24 +359,99 @@ enum FixtureBriefingData {
       "route_observations": {
         "corridor_nm": 15.0,
         "fetch_time": "2099-06-30T05:50:00Z",
-        "worst_metar_category": "VFR",
-        "worst_taf_category": "MVFR",
+        "airports_found": 3,
+        "airports_with_metar": 3,
+        "airports_with_taf": 3,
+        "worst_metar_category": "IFR",
+        "worst_taf_category": "IFR",
+        "has_conflicts": true,
+        "phenomena_along_route": ["TSRA", "BR"],
         "airports": [
           {
             "icao": "LFMD", "name": "Cannes-Mandelieu", "distance_from_route_nm": 0.0,
+            "enroute_distance_nm": 0.0, "nearest_waypoint_icao": "LFMD",
             "metar_raw": "LFMD 300550Z 20008KT 9999 FEW045 SCT090 21/15 Q1016",
-            "metar_flight_category": "VFR", "metar_ceiling_ft": 9000, "metar_wind_speed_kt": 8,
+            "metar_time": "2099-06-30T05:50:00Z",
+            "metar_flight_category": "VFR", "metar_ceiling_ft": 9000, "metar_visibility_m": 9999,
+            "metar_wind_dir": 200, "metar_wind_speed_kt": 8,
             "metar_wind_gust_kt": null, "metar_weather": [], "metar_temperature_c": 21, "metar_dewpoint_c": 15,
-            "taf_raw": "LFMD 300500Z 3006/3018 20010KT 9999 SCT040 TEMPO 3012/3016 VRB15G25KT 4000 TSRA BKN030CB",
-            "taf_flight_category_at_eta": "MVFR"
+            "metar_qnh": 1016.0,
+            "taf_raw": "LFMD 300500Z 3006/3018 20010KT 9999 SCT040\\nTEMPO 3012/3016 VRB15G25KT 4000 TSRA BKN030CB",
+            "taf_flight_category_at_eta": "MVFR", "taf_trend_type": "TEMPO",
+            "taf_wind_dir": 200, "taf_wind_speed_kt": 10, "taf_wind_gust_kt": null,
+            "taf_applicable_lines": [0, 1],
+            "metar_wind_advisory": "green", "metar_best_runway_id": "17", "metar_crosswind_kt": 3.0,
+            "metar_headwind_kt": 7.4,
+            "taf_wind_advisory": "green", "taf_best_runway_id": "17", "taf_crosswind_kt": 4.0,
+            "taf_headwind_kt": 9.2,
+            "has_metar": true, "has_taf": true, "eta_hour_offset": 0
           },
           {
             "icao": "LFML", "name": "Marseille Provence", "distance_from_route_nm": 2.0,
+            "enroute_distance_nm": 78.0, "nearest_waypoint_icao": "LFML",
             "metar_raw": "LFML 300600Z 30012G18KT 9999 BKN038 20/13 Q1017",
-            "metar_flight_category": "VFR", "metar_ceiling_ft": 3800, "metar_wind_speed_kt": 12,
+            "metar_time": "2099-06-30T06:00:00Z",
+            "metar_flight_category": "VFR", "metar_ceiling_ft": 3800, "metar_visibility_m": 9999,
+            "metar_wind_dir": 300, "metar_wind_speed_kt": 12,
             "metar_wind_gust_kt": 18, "metar_weather": [], "metar_temperature_c": 20, "metar_dewpoint_c": 13,
+            "metar_qnh": 1017.0,
             "taf_raw": "LFML 300500Z 3006/3018 30012KT 9999 BKN035",
-            "taf_flight_category_at_eta": "VFR"
+            "taf_flight_category_at_eta": "VFR", "taf_trend_type": null,
+            "taf_wind_dir": 300, "taf_wind_speed_kt": 12, "taf_wind_gust_kt": null,
+            "taf_applicable_lines": [0],
+            "metar_wind_advisory": "amber", "metar_best_runway_id": "31L", "metar_crosswind_kt": 11.0,
+            "metar_headwind_kt": 4.8,
+            "taf_wind_advisory": "green", "taf_best_runway_id": "31L", "taf_crosswind_kt": 6.0,
+            "taf_headwind_kt": 10.4,
+            "has_metar": true, "has_taf": true, "eta_hour_offset": 1
+          },
+          {
+            "icao": "LFTH", "name": "Toulon-Hyeres", "distance_from_route_nm": 11.0,
+            "enroute_distance_nm": 41.0, "nearest_waypoint_icao": "LFTH",
+            "metar_raw": "LFTH 300600Z 09018G28KT 2500 BR OVC008 17/16 Q1015",
+            "metar_time": "2099-06-30T06:00:00Z",
+            "metar_flight_category": "IFR", "metar_ceiling_ft": 800, "metar_visibility_m": 2500,
+            "metar_wind_dir": 90, "metar_wind_speed_kt": 18,
+            "metar_wind_gust_kt": 28, "metar_weather": ["BR"], "metar_temperature_c": 17, "metar_dewpoint_c": 16,
+            "metar_qnh": 1015.0,
+            "taf_raw": "LFTH 300500Z 3006/3018 09018G28KT 3000 BR OVC010\\nBECMG 3009/3011 09012KT 9999 SCT025",
+            "taf_flight_category_at_eta": "IFR", "taf_trend_type": "BECMG",
+            "taf_wind_dir": 90, "taf_wind_speed_kt": 18, "taf_wind_gust_kt": 28,
+            "taf_applicable_lines": [0],
+            "metar_wind_advisory": "red", "metar_best_runway_id": "05", "metar_crosswind_kt": 17.0,
+            "metar_headwind_kt": 6.1,
+            "taf_wind_advisory": "red", "taf_best_runway_id": "05", "taf_crosswind_kt": 17.0,
+            "taf_headwind_kt": 6.1,
+            "has_metar": true, "has_taf": true, "eta_hour_offset": 1
+          }
+        ],
+        "comparisons": [
+          {
+            "icao": "LFMD", "obs_category": "VFR", "model_category": "VFR",
+            "category_match": "CONFIRMING",
+            "ceiling_delta_ft": -400, "visibility_delta_m": 0.0, "wind_speed_delta_kt": 1.0,
+            "model_wind_dir": 205.0, "model_wind_speed_kt": 9.0, "model_wind_gust_kt": null,
+            "model_wind_advisory": "green", "model_best_runway_id": "17", "model_crosswind_kt": 4.0,
+            "wind_advisory_match": "CONFIRMING",
+            "detail": "Model agrees with the observation."
+          },
+          {
+            "icao": "LFML", "obs_category": "VFR", "model_category": "MVFR",
+            "category_match": "SIGNIFICANT",
+            "ceiling_delta_ft": 900, "visibility_delta_m": -1500.0, "wind_speed_delta_kt": -2.0,
+            "model_wind_dir": 295.0, "model_wind_speed_kt": 10.0, "model_wind_gust_kt": null,
+            "model_wind_advisory": "green", "model_best_runway_id": "31L", "model_crosswind_kt": 5.0,
+            "wind_advisory_match": "SIGNIFICANT",
+            "detail": "Model is one category more pessimistic than the METAR (ceiling 2900ft vs 3800ft observed)."
+          },
+          {
+            "icao": "LFTH", "obs_category": "IFR", "model_category": "VFR",
+            "category_match": "CONFLICTING",
+            "ceiling_delta_ft": 3200, "visibility_delta_m": 7499.0, "wind_speed_delta_kt": -8.0,
+            "model_wind_dir": 100.0, "model_wind_speed_kt": 10.0, "model_wind_gust_kt": null,
+            "model_wind_advisory": "amber", "model_best_runway_id": "05", "model_crosswind_kt": 9.0,
+            "wind_advisory_match": "CONFLICTING",
+            "detail": "Model shows VFR but the METAR reports OVC008 in mist — the model is missing a shallow coastal stratus/fog layer."
           }
         ]
       }
