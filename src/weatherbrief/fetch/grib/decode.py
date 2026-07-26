@@ -2456,6 +2456,11 @@ def build_ecmwf_cloud_diagnostics(
     ``ceil`` / ``cbh`` / ``hcct`` are AGL too and are NOT converted here.
     Ceiling and cloud base are conventionally AGL in aviation, so their datum
     is a separate question (the #441 finding #3 follow-up), not this one.
+
+    A NEGATIVE ``deg0l`` is kept and converted: it means the 0 °C isotherm
+    sits below the model's ground, which is a real cold-airmass forecast, and
+    with terrain in hand it maps to a perfectly ordinary MSL height. Only
+    ``deg0l`` gets that latitude — see ``_agl_m``.
     """
     from weatherbrief.models.analysis import (
         NWPCloudDiagnostics,
@@ -2465,11 +2470,37 @@ def build_ecmwf_cloud_diagnostics(
     if not raw:
         return None
 
-    def _m_to_ft(key: str) -> float | None:
+    def _agl_m(key: str, *, allow_below_ground: bool = False) -> float | None:
+        """Validated metres-AGL for one field, or None.
+
+        Drops the 9999 m no-value sentinel. ``allow_below_ground`` decides
+        whether NEGATIVE values survive, and the two answers genuinely
+        differ by field — which is why this floor lives here rather than
+        being re-checked at each call site:
+
+        - ``ceil`` / ``cbh`` / ``hcct``: a cloud below ground is
+          meaningless, so a negative is a decode artifact → dropped.
+        - ``deg0l``: a freezing level below ground is a REAL forecast — the
+          0 °C isotherm extrapolated beneath the model surface when the
+          whole near-surface column is sub-freezing. Dropping it would
+          discard model-native data in exactly the cold-airmass case where
+          the freezing level matters most for icing. The repo's own
+          real-GRIB sanity bounds record this asymmetry: ``freezing_level_m``
+          is bounded ``(-500, 6000)`` where every sibling height is
+          ``(0, 25000)`` (``tests/test_ecmwf_sample.py``).
+
+        NaN never reaches here — ``_interpolate_per_point`` maps it to None.
+        """
         val = raw.get(key)
-        if val is None or val < 0 or val >= _ECMWF_NO_CLOUD_SENTINEL_M:
+        if val is None or val >= _ECMWF_NO_CLOUD_SENTINEL_M:
             return None
-        return round(val * _M_TO_FT)
+        if val < 0 and not allow_below_ground:
+            return None
+        return val
+
+    def _m_to_ft(key: str) -> float | None:
+        val = _agl_m(key)
+        return None if val is None else round(val * _M_TO_FT)
 
     def _frac_to_pct(key: str) -> float | None:
         val = raw.get(key)
@@ -2483,13 +2514,9 @@ def build_ecmwf_cloud_diagnostics(
     # deg0l is AGL; only usable once referenced to MSL. See the datum note
     # in the docstring for why an unconvertible value is dropped, not passed
     # through. (#487)
-    freezing_level_agl_m = raw.get("freezing_level_m")
+    freezing_level_agl_m = _agl_m("freezing_level_m", allow_below_ground=True)
     freezing_level_ft: float | None = None
-    if (
-        freezing_level_agl_m is not None
-        and 0 <= freezing_level_agl_m < _ECMWF_NO_CLOUD_SENTINEL_M
-        and terrain_elevation_m is not None
-    ):
+    if freezing_level_agl_m is not None and terrain_elevation_m is not None:
         freezing_level_ft = round(
             (freezing_level_agl_m + terrain_elevation_m) * _M_TO_FT
         )

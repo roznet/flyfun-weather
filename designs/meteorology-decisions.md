@@ -2537,6 +2537,24 @@ per run.
 Open-Meteo's correctly-referenced MSL number in place. A wrong-datum ECMWF
 value is worse than a right-datum Open-Meteo one.
 
+**A negative `deg0l` is kept and converted.** The 0 °C isotherm sits *below*
+the model's ground when the near-surface column is sub-freezing — a real
+cold-airmass forecast, not a decode artifact, and precisely the case where
+the freezing level matters most for icing. With terrain in hand it maps to an
+ordinary MSL height (0 °C 300 m below an 800 m ridge is 500 m MSL). This
+repo's own real-GRIB sanity bounds already recorded the asymmetry:
+`freezing_level_m` is bounded `(-500, 6000)` in `tests/test_ecmwf_sample.py`
+where `ceiling_m` / `cloud_base_m` / `convective_cloud_top_m` are all
+`(0, 25000)`. The negative floor therefore lives in one place (`_agl_m`,
+opt-in per field) rather than being re-checked inline, so the divergence
+between "cloud below ground is meaningless" and "freezing level below ground
+is real" is explicit rather than accidental.
+
+The first cut of this fix inherited a blanket `val < 0` rejection from the
+shared `_m_to_ft` closure and so dropped exactly that cold-airmass case —
+not a regression (the pre-#487 code rejected it too) but a gap, since #487 is
+what finally put the terrain data in hand to convert it. Caught in review.
+
 ### Deliberately out of scope
 
 `ceil` / `cbh` / `hcct` stay AGL. Ceiling and cloud base are conventionally
@@ -2549,7 +2567,8 @@ field already says MSL.
 
 - `src/weatherbrief/fetch/grib/decode.py` — `model_surface_height_m` (new);
   `build_ecmwf_cloud_diagnostics` takes `terrain_elevation_m` and converts
-  (or drops) `deg0l`.
+  (or drops) `deg0l`; `_agl_m` (new) owns the sentinel + per-field negative
+  floor that `_m_to_ft` now builds on.
 - `src/weatherbrief/fetch/grib/__init__.py` — `_fill_ecmwf_orography` (new),
   memoized per point across steps; the a1 merge passes it through.
 - `src/weatherbrief/analysis/sounding/convective.py` —
