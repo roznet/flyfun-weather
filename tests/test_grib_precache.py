@@ -397,7 +397,7 @@ class TestIconD2FlightWarming:
         # Discretionary warm must request the reduced prefetch budget so it
         # never crowds out a concurrent interactive briefing (05:09Z OOM),
         # and must thread the yield gate through as abort_if (#490).
-        assert fetch.call_args.kwargs.get("outer_workers") == 2
+        assert fetch.call_args.kwargs.get("outer_workers") == 1
         assert callable(fetch.call_args.kwargs.get("abort_if"))
 
     def test_duration_passed_to_prepare(self):

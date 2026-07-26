@@ -442,8 +442,14 @@ def precache_icon_d2_flights(
             # connections (05:09Z OOM, 2026-07-23). The gate rides along as
             # abort_if: a warmed flight (no pending jobs) completes even
             # mid-refresh; one that needs downloads defers instead.
+            #
+            # ONE outer unit, not two: on 2026-07-26 a single warming flight
+            # overlapping one briefing took the container to 5999/6144 MB.
+            # One unit holds a single per-variable level-set in flight
+            # (~80 MB) instead of two. Warming has hours of slack before the
+            # next run publishes, so the halved throughput costs nothing.
             completed = _prefetch_icon_eu_data(
-                ctx, outer_workers=2, abort_if=gate,
+                ctx, outer_workers=1, abort_if=gate,
             )
             if not completed:
                 stats["deferred"] = 1
