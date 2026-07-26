@@ -4,8 +4,9 @@ import SwiftUI
 /// hero (traffic-light + assessment reason) pinned at the top, then watch chips,
 /// a responsive advisory grid (AMBER/RED as cards, GREEN collapsed into one
 /// all-clear strip), current airport conditions, — on D-0 — the METAR/TAF
-/// observations comparison, and — on marginal D-0/D-2 packs — weather
-/// alternates. A sticky scroll-spy bar jumps between sections.
+/// observations comparison and the route SIGMET area hazards, and — on marginal
+/// D-0/D-2 packs — weather alternates. A sticky scroll-spy bar jumps between
+/// sections.
 struct AdvisoryTabView: View {
     let viewModel: BriefingViewModel
     @Environment(AppState.self) private var appState
@@ -29,6 +30,10 @@ struct AdvisoryTabView: View {
                 if hasObservations {
                     RouteObservationsView(viewModel: viewModel)
                         .spyAnchor("observations")
+                }
+                if hasSigmets {
+                    RouteSigmetsView(viewModel: viewModel)
+                        .spyAnchor("sigmets")
                 }
                 if hasAlternates {
                     AlternatesView(viewModel: viewModel)
@@ -144,6 +149,17 @@ struct AdvisoryTabView: View {
         return false
     }
 
+    /// D-0 route SIGMETs (#493). Gated on at least one bulletin actually matching
+    /// the corridor — the same filter the section's table applies — so the
+    /// scroll-spy never offers an anchor that renders empty.
+    private var hasSigmets: Bool {
+        if case .loaded(let snapshot) = viewModel.snapshotState,
+           let block = snapshot.routeSigmets {
+            return !block.matched.isEmpty
+        }
+        return false
+    }
+
     private var hasWatchItems: Bool {
         if case .loaded(let digest) = viewModel.digestState { return !digest.watchItemsList.isEmpty }
         return false
@@ -161,6 +177,7 @@ struct AdvisoryTabView: View {
         sections.append(SpySection("advisories", "Advisories"))
         sections.append(SpySection("conditions", "Conditions"))
         if hasObservations { sections.append(SpySection("observations", "Observations")) }
+        if hasSigmets { sections.append(SpySection("sigmets", "Hazards")) }
         if hasAlternates { sections.append(SpySection("alternates", "Alternates")) }
         if hasTimingScenarios { sections.append(SpySection("timing", "Timing")) }
         if hasWatchItems { sections.append(SpySection("watch", "Watch")) }

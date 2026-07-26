@@ -174,8 +174,8 @@ Other parity notes:
 - **No in-section refresh button.** Web has one; on iOS the toolbar Refresh
   already routes through the tiered `decide_refresh` gate, which at D-0 performs
   exactly this cheap realtime refresh.
-- **Route SIGMETs are not ported** — iOS has no `route_sigmets` DTO or view at
-  all, so the block is dropped at decode. Tracked in #493.
+- **Route SIGMETs** are the sibling section, ported in #493 — see
+  [iOS UI](#ios-ui-viewsbriefingroutesigmetsviewswift) below.
 
 Fixture-backed (`FixtureBriefingData.route_observations` carries comparisons +
 wind advisories), so mock mode renders it; covered by
@@ -301,6 +301,55 @@ clears on the next load. The web UI (`briefing-ui.ts:renderRefreshDelta` →
   `sigmets-section` in `briefing.html`. Read-only — the observations Refresh button refreshes
   SIGMETs too (combined seam).
 
+### iOS UI (`Views/Briefing/RouteSigmetsView.swift`)
+
+Ported in #493, one release after the observations section it sits under. Slot:
+the Advisory tab, after Observations and before Alternates, with a scroll-spy
+anchor (`sigmets`, pill label "Hazards"). Reads `snapshot.route_sigmets` from the
+standard snapshot endpoint — no iOS-specific endpoint and no backend change, since
+`GET .../snapshot` already returns raw `briefing.json`. Before the port the block
+was simply dropped at decode: `SnapshotResponse` had no field for it.
+
+Simpler than its sibling: one row per bulletin, no comparison join, no axis
+switcher — SIGMETs are presented, not reconciled.
+
+| Width | Behaviour |
+|---|---|
+| Compact (iPhone) | 4 columns: Hazard, FIR, Levels, Enroute. Movement folds into the detail sheet |
+| Regular (iPad) | The web's 5th column, Move (`STNR` when stationary), renders inline |
+
+Movement is the column that gives way because the vertical band decides whether a
+GA route is in the hazard at all, while "MOV NE 30kt" only refines the timing.
+
+Parity notes:
+- **Formatters mirror the web helpers exactly** (`sigmetLevel`/`sigmetBand`/
+  `sigmetEnroute`), including floor-division flight levels (`FL097`, not `FL098`)
+  and `?` for an unknown bound — an omitted `base_ft` is genuinely unknown, and
+  rendering it as `SFC` would overstate the bulletin. They live on the DTO
+  (`SigmetAlongRoute.levelBand` / `.enrouteLabel` / `.movementLabel` /
+  `.headline`), so they are unit-testable outside SwiftUI.
+- **Severe row highlight** is red rather than the observations table's amber, and
+  `has_severe` raises a banner — the counterpart of the obs conflict banner.
+- **Detail sheet** replaces the web's ⓘ popup: level band, movement, validity
+  (aviation `DDHHMMZ`), route intersection, then the raw bulletin (selectable
+  monospace) — which is the authoritative text.
+- **Server computed fields** (`count`, `hazards`, `has_severe`) are decoded as
+  optionals with local fallbacks, so a payload without them can't render a
+  "0 SIGMETs" summary above a populated table.
+- **Row identity** is `fir_id` + `raw_text`: one FIR routinely carries several
+  concurrent SIGMETs, so keying on the FIR alone would collapse them into one row.
+- **Polygon `coords` is decoded but unused** — kept on the DTO so the future
+  map/cross-section overlay below doesn't need a second wire change.
+
+Fixture-backed (`FixtureBriefingData.snapshot` carries two SIGMETs, one `SEV`), so
+mock mode renders it; covered by `RouteSigmetsTests.swift` (decode/fallbacks/
+formatters) and the XCUI journeys `testRouteSigmetsSectionRenders` /
+`testRouteSigmetDetailSheet`, which assert the compact-vs-regular contract.
+
+**Verification note**: D-0 only, like observations, so on-device verification needs
+a same-day flight with a live SIGMET along the route. Fixture + XCUI coverage is
+the practical check.
+
 ### Future cross-section / map overlay (not yet built)
 
 The model deliberately retains the polygon `coords`, the `enroute_distance_from/to_nm`
@@ -335,5 +384,6 @@ No re-fetch needed — everything required is already serialized on the snapshot
 - Digest: `src/weatherbrief/digest/prompt_builder.py`, `src/weatherbrief/digest/text.py`
 - Report: `src/weatherbrief/report/templates/briefing.html`, `src/weatherbrief/report/render.py`
 - Web UI: `web/ts/managers/briefing-ui.ts` (`renderRouteSigmets`, `renderRefreshDelta`)
+- iOS UI: `app/flyfun-weather/flyfun-weather/Views/Briefing/RouteObservationsView.swift`, `RouteSigmetsView.swift`; DTOs in `Models/API/SnapshotResponse.swift`; tests `flyfun-weatherTests/RouteObservationsTests.swift`, `RouteSigmetsTests.swift`
 - Tests: `tests/test_route_weather.py` (incl. `TestRunRealtimeRefresh`), `tests/test_refresh_delta.py`, `tests/test_packs.py::TestDecideRefresh`
 - euro_aip weather module: [briefing_weather.md](rzflight design doc)

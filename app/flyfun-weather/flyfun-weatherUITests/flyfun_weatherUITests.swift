@@ -299,6 +299,73 @@ final class flyfun_weatherUITests: XCTestCase {
         add(shot)
     }
 
+    /// Journey 7 (#493) — Area Hazards (route SIGMET) section. Open fixture-1,
+    /// jump to the Hazards scroll-spy section, and confirm the table renders with
+    /// the severe row present. Also pins the responsive contract: the movement
+    /// column is inline in regular width (iPad) and folded into the detail sheet
+    /// in compact width (iPhone).
+    @MainActor
+    func testRouteSigmetsSectionRenders() throws {
+        let app = launchMockApp()
+        openFixture1Briefing(app)
+
+        // The spy pill only exists when a SIGMET actually matched the corridor,
+        // so finding it also confirms the `hasSigmets` gate and the spy wiring.
+        let pill = app.buttons["Hazards"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 15),
+                      "the Hazards spy pill should be present for the D-0 fixture")
+        pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["sigmetsSection"].waitForExistence(timeout: 10),
+                      "SIGMET section should render")
+
+        // Both fixture bulletins appear as rows (the ⓘ button carries the label).
+        XCTAssertTrue(app.buttons["LFMM EMBD TS details"].firstMatch.waitForExistence(timeout: 5),
+                      "the embedded-TS row should render")
+        XCTAssertTrue(app.buttons["LFMM SEV TURB details"].firstMatch.exists,
+                      "the SEV row (which drives the severe banner) should render")
+
+        // Responsive contract: "Move" is a column header on iPad only.
+        let moveHeader = app.staticTexts["Move"].firstMatch
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCTAssertTrue(moveHeader.exists, "regular width should render the Move column")
+        } else {
+            XCTAssertFalse(moveHeader.exists,
+                           "compact width folds movement into the detail sheet")
+        }
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Sigmets-Table"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// Journey 7b (#493) — the per-SIGMET ⓘ drill-down opens and shows the raw
+    /// bulletin (the web's SIGMET popup), which is the authoritative text.
+    @MainActor
+    func testRouteSigmetDetailSheet() throws {
+        let app = launchMockApp()
+        openFixture1Briefing(app)
+
+        let pill = app.buttons["Hazards"].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 15), "Hazards spy pill should be present")
+        pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+        let info = app.buttons["LFMM SEV TURB details"].firstMatch
+        XCTAssertTrue(info.waitForExistence(timeout: 10), "SEV TURB row should render")
+        info.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+        XCTAssertTrue(app.staticTexts["Raw bulletin"].firstMatch.waitForExistence(timeout: 10),
+                      "detail sheet should show the raw bulletin block")
+        XCTAssertTrue(app.staticTexts["Hazard"].firstMatch.exists,
+                      "detail sheet should show the hazard meta block")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Sigmets-DetailSheet"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
