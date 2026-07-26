@@ -575,6 +575,58 @@ class TestAutoRefreshGate:
 
         mock_exec.assert_called_once()
 
+    @patch("weatherbrief.api.packs._finalize_refresh")
+    @patch("weatherbrief.api.packs._prepare_refresh")
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights._row_to_flight")
+    @patch("weatherbrief.scheduler.SessionLocal")
+    def test_pipeline_progress_reaches_the_registry(
+        self, mock_session, mock_row_to_flight, mock_list,
+        mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize,
+    ):
+        """Stages must reach the registry even with no SSE stream attached.
+
+        Nobody streams a scheduled or resumed refresh, so without this wiring a
+        client polling /refresh/status sees "Starting refresh" for the whole
+        pipeline, and the durable job row's heartbeat/last-stage never move —
+        losing the "where did it die" record on exactly the attempt that would
+        tell us whether the briefing is what killed the container (#499).
+        """
+        from unittest.mock import MagicMock, patch as _patch
+
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models import BriefingPackMeta
+        from weatherbrief.scheduler import _auto_refresh_one
+
+        mock_session.return_value = MagicMock()
+        mock_row_to_flight.return_value = SimpleNamespace(
+            departure_time=datetime.now(timezone.utc) + timedelta(days=2),
+        )
+        mock_list.return_value = [BriefingPackMeta(
+            flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
+            days_out=2, artifact_path="/tmp/pack",
+        )]
+        mock_status.return_value = DataStatus(fresh=False)
+        mock_decide.return_value = RefreshDecision(
+            mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=2,
+        )
+        mock_prepare.return_value = (
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+        )
+        mock_exec.return_value = MagicMock()
+
+        _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+
+        callback = mock_exec.call_args.kwargs.get("progress_callback")
+        assert callback is not None, "scheduled/resumed refreshes must report progress"
+
+        with _patch("weatherbrief.api.packs.refresh_registry.update_progress") as mock_prog:
+            callback("grib_enrichment", "gfs")
+        mock_prog.assert_called_once_with("test-flight", "grib_enrichment", "gfs")
+
 
 # ---------------------------------------------------------------------------
 # Model-update-aware email timing (issue #192)

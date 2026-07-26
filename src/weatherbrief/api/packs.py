@@ -2072,6 +2072,13 @@ async def refresh_briefing(
                 route=route,
                 departure_time=flight.departure_time,
                 options=options,
+                # No SSE stream here, but a client polling /refresh/status still
+                # wants stage labels instead of a dead progress bar — and the
+                # durable job row needs its heartbeat and last-stage to advance
+                # so an interrupted run records where it died (#499).
+                progress_callback=lambda stage, detail=None: (
+                    refresh_registry.update_progress(flight_id, stage, detail)
+                ),
             )
             queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
             result.usage.elapsed_seconds = total_elapsed

@@ -477,6 +477,14 @@ def _auto_refresh_one(
             route=route,
             departure_time=flight.departure_time,
             options=options,
+            # Nobody streams a scheduled or resumed refresh, but a user who
+            # opens the briefing while one runs polls /refresh/status — without
+            # this they watch "Starting refresh" for the whole pipeline. It also
+            # keeps the durable job row's heartbeat and last-stage moving, so a
+            # resumed run that dies again still records where (#499).
+            progress_callback=lambda stage, detail=None: (
+                refresh_registry.update_progress(flight_row.id, stage, detail)
+            ),
         )
 
         # Capture timing before unregister

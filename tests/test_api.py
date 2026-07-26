@@ -934,6 +934,48 @@ class TestRefreshEndpoint:
         else:
             refresh_registry.unregister(sample_flight.id)
 
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.airports._load_airport_model")
+    def test_refresh_reports_progress_without_a_stream(
+        self, mock_load, mock_execute, client, sample_flight,
+    ):
+        """The non-streaming refresh must still push stages into the registry.
+
+        Siri/MCP refreshes use this path and are observed by polling
+        /refresh/status, which reads the registry — without the callback the
+        client sees "Starting refresh" for the whole pipeline and the durable
+        job row's stage/heartbeat never advance (#499).
+        """
+        from airport_mocks import TEST_AIRPORTS, mock_model
+        from weatherbrief.api.packs import refresh_registry
+
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+
+        def _fire_progress_then_fail(*args, **kwargs):
+            kwargs["progress_callback"]("fetch_forecasts", "gfs")
+            raise RuntimeError("test stub — pipeline skipped")
+
+        mock_execute.side_effect = _fire_progress_then_fail
+
+        with patch(
+            "weatherbrief.api.packs.refresh_registry.update_progress"
+        ) as mock_prog:
+            resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+            assert resp.status_code == 202
+
+            import time
+            for _ in range(20):
+                if not refresh_registry._entries.get(sample_flight.id):
+                    break
+                time.sleep(0.1)
+            else:
+                refresh_registry.unregister(sample_flight.id)
+
+        mock_prog.assert_called_once_with(
+            sample_flight.id, "fetch_forecasts", "gfs",
+        )
+
     def test_refresh_duplicate_409(self, client, sample_flight):
         """Refresh returns 409 when one is already in progress."""
         from weatherbrief.api.packs import refresh_registry

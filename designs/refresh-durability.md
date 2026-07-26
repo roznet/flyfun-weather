@@ -135,11 +135,16 @@ Two consequences of the gate check worth knowing:
   resume is skipped. That is the intended outcome: the pilot has a briefing off
   those runs, and only the LLM digest is missing — which the pack's Generate
   button covers far more cheaply than a whole pipeline.
-- `heartbeat_at` is only populated on the SSE path, the one that passes a
-  `progress_callback`. The sync and scheduler paths have `started_at` and
-  nothing further until they finish. Reconciliation never reads the heartbeat —
-  non-terminal-at-boot is the whole signal — so this only affects how much a
-  post-mortem can see.
+- `heartbeat_at` and `stage` are populated on **every** path: all three pass a
+  `progress_callback` that forwards into `update_progress`. The SSE path also
+  turns each stage into a stream event; the sync and scheduler/resume paths use
+  it purely to advance the registry, which is what `/refresh/status` polling and
+  the durable row both read. (Until 2026-07-26 only the SSE path wired it, so a
+  resumed run showed "Starting refresh" for its whole life and recorded no stage
+  — losing "where did it die" on exactly the attempt most likely to die again.)
+  Reconciliation still never reads the heartbeat: non-terminal-at-boot is the
+  whole signal. This only affects how much a post-mortem, or a polling client,
+  can see.
 
 A resume re-queues through the registry with `triggered_by="resume"` and
 `attempt + 1`, **then** closes the interrupted row as `failed` — one row per
