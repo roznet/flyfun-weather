@@ -20,11 +20,14 @@ Interpolation policy:
     cover_pct interpolated linearly between **window midpoints** rather than
     step times — NCEP publishes the averaged form (LCDC/MCDC/HCDC) past f0,
     so the value at native step f is centred on the midpoint of its averaging
-    window (1-6 h — see ``_gfs_window_length_hours``). Layer geometry
-    (base/top/temp) is held over from the higher-cover
+    window (1-6 h — see ``_gfs_window_length_hours``). This applies at
+    **every** hour, native steps included: a native step's own published
+    value describes its window midpoint, not its label hour (#481). Layer
+    geometry (base/top/temp) is held over from the higher-cover
     endpoint, not interpolated. Layers fall away when interpolated cover
-    < 5%. Convective/boundary/total cover and ceiling stay step-anchored
-    (instantaneous in pgrb2).
+    < 5%. Boundary-layer cover is averaged-only too and rides the same
+    midpoint alignment; convective/total cover and ceiling stay
+    step-anchored (instantaneous in pgrb2).
   - **Non-GFS cloud diagnostics**: forward-fill (persistence) — ICON-EU and
     ECMWF publish instantaneous cloud cover, and base/top interpolation
     between dissimilar geometries would produce phantom layers.
@@ -41,6 +44,7 @@ Interpolation rules (see also spatial_interpolation.py for the spatial axis):
 
 from __future__ import annotations
 
+import bisect
 import logging
 import math
 from datetime import datetime, timedelta
@@ -213,7 +217,7 @@ def _interp_gfs_diag_hourly(
     hourly_list: list[HourlyForecast],
     gfs_init: datetime,
 ) -> int:
-    """Window-midpoint linear interp for GFS cloud diagnostics.
+    """Window-midpoint resampling of GFS cloud diagnostics onto the hour grid.
 
     NCEP publishes only the time-averaged form of LCDC/MCDC/HCDC (and the
     matching PRES bottoms/tops) for forecast hours > 0. Each native step f
@@ -223,26 +227,41 @@ def _interp_gfs_diag_hourly(
     ``_gfs_window_length_hours``, which owns the arithmetic and the live-index
     provenance (#480). Past f120 the 3-hourly cadence makes the widths
     alternate 3 / 6.
-    Anchoring the averaged value at the **window midpoint** rather than the
-    step time avoids forward-fill smearing the previous window's cover
-    forward across the snapshot hour.
+
+    The averaged value describes its **window midpoint**, ``f - width/2``,
+    not the step hour it is filed under. Every averaged field is therefore
+    resampled onto the hour grid from midpoint-anchored knots.
+
+    **This applies to native anchor hours too (#481).** The original
+    implementation only touched *gap* hours, so it was a no-op wherever GFS
+    anchors are hourly — i.e. everywhere inside f120, which is essentially
+    every briefing. A native step then carried its window-mean labelled at
+    the window's END, a lag of half the window: 0.5 h at f001/f007, 3.0 h at
+    f006/f012, sawtoothing through each 6-hour cycle.
 
     Algorithm per route point:
 
-    1. Identify "anchor" hours (those with ``nwp_cloud_diagnostics`` set).
-    2. For each pair of consecutive anchors, compute each anchor's window
-       midpoint from its f-hour. Interpolate gap hours linearly between the
-       two midpoints, clamping to [0, 1] (no extrapolation past the bracket).
+    1. Identify "anchor" hours (those with ``nwp_cloud_diagnostics`` set) and
+       place each one's averaged fields at its window midpoint.
+    2. For every hour from the first to the last anchor, resample the
+       AVERAGED fields (low/mid/high layers and
+       ``NWP_CLOUD_DIAG_AVERAGED_SCALARS``) linearly between the two
+       midpoint knots bracketing that hour. The bracket is found in midpoint
+       space independently of the step bracket — with uneven window widths
+       the nearest midpoints are not always the nearest steps.
     3. Layer geometry (base_ft / top_ft / top_temp_c) is **not** numerically
        interpolated — it uses the higher-cover endpoint's geometry. When the
-       interpolated cover falls below 5%, the layer is dropped entirely.
-    4. Instantaneous fields (convective_cover_pct, boundary_cover_pct,
-       total_cover_pct, ceiling_ft, convective_base/top_ft, freezing_level_ft)
-       stay step-time-anchored and interpolate linearly with no midpoint
-       offset.
-    5. Hours after the last anchor are forward-filled (no upper bracket).
-    6. Hours before the first anchor are left as-is (matches the prior
-       forward-fill semantics — no data to extrapolate from).
+       resampled cover falls below 5%, the layer is dropped entirely.
+    4. Instantaneous fields (convective_cover_pct, total_cover_pct,
+       ceiling_ft, convective_base/top_ft, freezing_level_ft) stay
+       step-time-anchored. At a native step that means its own published
+       value survives untouched; only gap hours interpolate them.
+    5. Beyond the last midpoint there is no upper knot, so the averaged
+       fields clamp to the last anchor's published value rather than
+       extrapolate. This always covers the final anchor hour itself, which
+       therefore keeps the number NCEP published.
+    6. Hours after the last anchor are forward-filled; hours before the first
+       anchor are left as-is (no data to extrapolate from).
     """
     sorted_hours = sorted(hourly_list, key=lambda h: h.time)
     if not sorted_hours:
@@ -255,49 +274,66 @@ def _interp_gfs_diag_hourly(
     if not anchor_indices:
         return 0
 
+    anchor_diags = [sorted_hours[i].nwp_cloud_diagnostics for i in anchor_indices]
+    anchor_times = [sorted_hours[i].time for i in anchor_indices]
+    midpoints = [
+        t - timedelta(hours=_gfs_window_length_hours(_gfs_fhour(gfs_init, t)) / 2.0)
+        for t in anchor_times
+    ]
+    anchor_pos = {idx: k for k, idx in enumerate(anchor_indices)}
+
     filled = 0
+    first_idx, last_idx = anchor_indices[0], anchor_indices[-1]
 
-    # Within-anchor segments: window-midpoint interp.
-    for k in range(len(anchor_indices) - 1):
-        prev_i = anchor_indices[k]
-        next_i = anchor_indices[k + 1]
-        if next_i - prev_i <= 1:
-            continue  # adjacent anchors — no gap
-        prev_h = sorted_hours[prev_i]
-        next_h = sorted_hours[next_i]
-        prev_diag = prev_h.nwp_cloud_diagnostics
-        next_diag = next_h.nwp_cloud_diagnostics
-        if prev_diag is None or next_diag is None:
-            continue
+    for i in range(first_idx, last_idx + 1):
+        h = sorted_hours[i]
+        ka, kb, mid_frac = _midpoint_bracket(midpoints, h.time)
+        k_self = anchor_pos.get(i)
 
-        prev_fhour = _gfs_fhour(gfs_init, prev_h.time)
-        next_fhour = _gfs_fhour(gfs_init, next_h.time)
-        prev_mid = prev_h.time - timedelta(hours=_gfs_window_length_hours(prev_fhour) / 2.0)
-        next_mid = next_h.time - timedelta(hours=_gfs_window_length_hours(next_fhour) / 2.0)
-        mid_span = (next_mid - prev_mid).total_seconds()
-        step_span = (next_h.time - prev_h.time).total_seconds()
-        if mid_span <= 0 or step_span <= 0:
-            continue
-
-        for i in range(prev_i + 1, next_i):
-            h = sorted_hours[i]
-            # Averaged-window cover for low/mid/high uses midpoint anchoring.
-            mid_frac = (h.time - prev_mid).total_seconds() / mid_span
-            mid_frac = max(0.0, min(1.0, mid_frac))
-            # Instantaneous fields use step-time anchoring.
-            step_frac = (h.time - prev_h.time).total_seconds() / step_span
-            step_frac = max(0.0, min(1.0, step_frac))
-
-            interp_diag = _interp_diag_at(
-                prev_diag, next_diag, mid_frac=mid_frac, step_frac=step_frac,
+        if k_self is not None:
+            # Native step: only the averaged fields move. Its instantaneous
+            # and rate fields are published AT this hour and stay as decoded.
+            if kb is None and ka == k_self:
+                continue  # clamped to itself — nothing to re-label
+            averaged = _resamplable_averaged_fields(
+                anchor_diags[ka],
+                anchor_diags[kb] if kb is not None else anchor_diags[ka],
+                mid_frac,
             )
-            h.attach_nwp_diagnostics(interp_diag)
+            if not averaged:
+                continue
+            h.attach_nwp_diagnostics(
+                anchor_diags[k_self].model_copy(update=averaged)
+            )
             filled += 1
+            continue
+
+        # Gap hour: the step bracket is the enclosing anchor pair.
+        ks = bisect.bisect_right(anchor_indices, i) - 1
+        if ks < 0 or ks + 1 >= len(anchor_indices):
+            continue
+        step_span = (anchor_times[ks + 1] - anchor_times[ks]).total_seconds()
+        if step_span <= 0:
+            continue
+        step_frac = (h.time - anchor_times[ks]).total_seconds() / step_span
+        step_frac = max(0.0, min(1.0, step_frac))
+
+        fields = _averaged_fields(
+            anchor_diags[ka],
+            anchor_diags[kb] if kb is not None else anchor_diags[ka],
+            mid_frac,
+        )
+        fields.update(
+            _instant_and_rate_fields(
+                anchor_diags[ks], anchor_diags[ks + 1], step_frac,
+            )
+        )
+        h.attach_nwp_diagnostics(_build_diag(fields))
+        filled += 1
 
     # After the last anchor: forward-fill (no upper bracket to interp against).
     # Each trailing gap hour gets its own shallow copy so a downstream
     # in-place mutation on one hour doesn't leak across the others.
-    last_idx = anchor_indices[-1]
     last_diag = sorted_hours[last_idx].nwp_cloud_diagnostics
     for i in range(last_idx + 1, len(sorted_hours)):
         if sorted_hours[i].nwp_cloud_diagnostics is None:
@@ -305,6 +341,36 @@ def _interp_gfs_diag_hourly(
             filled += 1
 
     return filled
+
+
+def _midpoint_bracket(
+    midpoints: list[datetime],
+    target: datetime,
+) -> tuple[int, int | None, float]:
+    """Locate ``target`` in window-midpoint space.
+
+    Returns ``(ka, kb, frac)`` where ``ka``/``kb`` index the bracketing
+    anchors and ``frac`` is the position between their midpoints. ``kb`` is
+    None when ``target`` falls outside the knot range — before the first
+    midpoint or at/after the last — in which case the caller clamps to
+    ``ka`` rather than extrapolating a time-mean past the data.
+
+    Midpoints are monotonically increasing: within a 6-hour cycle the window
+    grows one hour per step so the midpoint advances half an hour per step,
+    and the reset jumps it forward. The jump is why the bracket must be found
+    here rather than inherited from the step bracket.
+    """
+    j = bisect.bisect_right(midpoints, target)
+    if j == 0:
+        return 0, None, 0.0
+    if j >= len(midpoints):
+        return len(midpoints) - 1, None, 0.0
+    ka, kb = j - 1, j
+    span = (midpoints[kb] - midpoints[ka]).total_seconds()
+    if span <= 0:
+        return ka, None, 0.0
+    frac = (target - midpoints[ka]).total_seconds() / span
+    return ka, kb, max(0.0, min(1.0, frac))
 
 
 def _gfs_fhour(gfs_init: datetime, target: datetime) -> int:
@@ -359,36 +425,113 @@ def _interp_diag_at(
     ``models.analysis`` rather than a hand-written list here — this function
     and its spatial-axis counterpart had drifted apart, each dropping fields
     the other carried (#485).
+
+    Since #481 the two buckets can be bracketed by DIFFERENT anchor pairs
+    (uneven window widths put the nearest midpoints and the nearest steps in
+    different places), so the split lives in ``_averaged_fields`` /
+    ``_instant_and_rate_fields``. This wrapper keeps the single-pair form for
+    callers that genuinely share one bracket.
     """
-    from weatherbrief.models import NWPCloudDiagnostics
+    fields = _averaged_fields(prev_diag, next_diag, mid_frac)
+    fields.update(_instant_and_rate_fields(prev_diag, next_diag, step_frac))
+    return _build_diag(fields)
+
+
+def _averaged_fields(
+    prev_diag: NWPCloudDiagnostics,
+    next_diag: NWPCloudDiagnostics,
+    frac: float,
+) -> dict[str, object]:
+    """The window-AVERAGED half of a diagnostics object at ``frac``.
+
+    Layers plus ``NWP_CLOUD_DIAG_AVERAGED_SCALARS`` — everything NCEP
+    publishes as a time-mean, hence everything that has to be positioned in
+    window-midpoint space rather than step-time space.
+    """
+    from weatherbrief.models.analysis import NWP_CLOUD_DIAG_AVERAGED_SCALARS
+
+    fields: dict[str, object] = {
+        "low": _interp_layer(prev_diag.low, next_diag.low, frac),
+        "mid": _interp_layer(prev_diag.mid, next_diag.mid, frac),
+        "high": _interp_layer(prev_diag.high, next_diag.high, frac),
+    }
+    fields.update({
+        name: _lerp(getattr(prev_diag, name), getattr(next_diag, name), frac)
+        for name in NWP_CLOUD_DIAG_AVERAGED_SCALARS
+    })
+    return fields
+
+
+def _resamplable_averaged_fields(
+    prev_diag: NWPCloudDiagnostics,
+    next_diag: NWPCloudDiagnostics,
+    frac: float,
+) -> dict[str, object]:
+    """``_averaged_fields`` restricted to what the two knots actually support.
+
+    Used when re-labelling a NATIVE step (#481), where the alternative to a
+    resampled value is a real published one. A band whose cover is missing on
+    either knot cannot be resampled, and emitting the ``_interp_layer`` empty
+    layer there would delete a decoded band on the strength of a decode gap
+    somewhere else. Same for a scalar that lerps to None. Gap hours keep the
+    unfiltered behaviour — they have no published value to protect.
+
+    The sub-5% drop still fires, but only on the GEOMETRY: a band that
+    re-labels below the threshold keeps its cover number and loses its
+    base/top. A published 0 % ("model says clear") must not degrade into
+    None ("unknown") — ``_has_native_cloud_content`` and the DD-vs-NWP
+    comparisons read that difference.
+    """
+    from weatherbrief.models import NWPCloudLayerDiag
+
+    fields = _averaged_fields(prev_diag, next_diag, frac)
+    out: dict[str, object] = {}
+    for name, value in fields.items():
+        if name in ("low", "mid", "high"):
+            prev_cover = getattr(prev_diag, name).cover_pct
+            next_cover = getattr(next_diag, name).cover_pct
+            if prev_cover is None or next_cover is None:
+                continue
+            if value.cover_pct is None:
+                value = NWPCloudLayerDiag(
+                    cover_pct=_lerp(prev_cover, next_cover, frac),
+                )
+        elif value is None:
+            continue
+        out[name] = value
+    return out
+
+
+def _instant_and_rate_fields(
+    prev_diag: NWPCloudDiagnostics,
+    next_diag: NWPCloudDiagnostics,
+    frac: float,
+) -> dict[str, object]:
+    """The step-time-anchored half: instantaneous scalars plus windowed rates.
+
+    Rates take the NEXT anchor's value outright (covering-interval hold); see
+    ``NWP_CLOUD_DIAG_RATE_SCALARS``.
+    """
     from weatherbrief.models.analysis import (
-        NWP_CLOUD_DIAG_AVERAGED_SCALARS,
         NWP_CLOUD_DIAG_INSTANT_SCALARS,
         NWP_CLOUD_DIAG_RATE_SCALARS,
     )
 
-    low = _interp_layer(prev_diag.low, next_diag.low, mid_frac)
-    mid = _interp_layer(prev_diag.mid, next_diag.mid, mid_frac)
-    high = _interp_layer(prev_diag.high, next_diag.high, mid_frac)
-
-    scalars = {
-        name: _lerp(getattr(prev_diag, name), getattr(next_diag, name), mid_frac)
-        for name in NWP_CLOUD_DIAG_AVERAGED_SCALARS
-    }
-    scalars.update({
-        name: _lerp(getattr(prev_diag, name), getattr(next_diag, name), step_frac)
+    fields: dict[str, object] = {
+        name: _lerp(getattr(prev_diag, name), getattr(next_diag, name), frac)
         for name in NWP_CLOUD_DIAG_INSTANT_SCALARS
-    })
-    scalars.update({
+    }
+    fields.update({
         name: getattr(next_diag, name) for name in NWP_CLOUD_DIAG_RATE_SCALARS
     })
+    return fields
 
-    return NWPCloudDiagnostics(
-        low=low,
-        mid=mid,
-        high=high,
-        **scalars,
-    )
+
+def _build_diag(fields: dict[str, object]) -> NWPCloudDiagnostics:
+    """Construct NWPCloudDiagnostics from a merged field dict."""
+    from weatherbrief.models import NWPCloudDiagnostics
+
+    return NWPCloudDiagnostics(**fields)
 
 
 def _interp_layer(

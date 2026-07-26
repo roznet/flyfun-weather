@@ -965,8 +965,16 @@ def _explicit_freezing_level_ft(
 
     Prefer the sounding's own (DD/MetPy) 0 °C crossing — the same column the
     echo top's altitude conversion uses — then the Open-Meteo / model-native
-    freezing level, then the NWP cloud-diagnostics one. Any is a usable datum
-    for the echo-top-vs-melting-layer comparison; the gate needs one, not all.
+    freezing level, then the NWP cloud-diagnostics one.
+
+    All three are MSL, so the chain compares like with like against the echo
+    top. That was not free: ECMWF publishes ``deg0l`` as metres ABOVE GROUND,
+    and it reaches BOTH of the last two candidates (the diagnostics field
+    directly, and ``nwp_freezing_level_ft`` via the
+    ``attach_nwp_diagnostics`` mirror onto ``HourlyForecast.freezing_level_m``
+    — so dropping the third candidate would have fixed nothing). It is
+    normalized to MSL at the decode boundary instead, using the model's own
+    orography; see ``build_ecmwf_cloud_diagnostics`` (#487).
     """
     candidates = [indices.freezing_level_ft, indices.nwp_freezing_level_ft]
     if nwp_diagnostics is not None:

@@ -157,6 +157,9 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "ceil": "ceiling_m",                   # meters AGL, 9999 = no cloud sentinel
     "cbh": "cloud_base_height_m",          # meters AGL, 9999 = no cloud sentinel
     "hcct": "convective_cloud_top_m",      # meters AGL, 9999 = no cloud sentinel
+    # deg0l is AGL as delivered, but unlike ceil/cbh/hcct it feeds a field
+    # (NWPCloudDiagnostics.freezing_level_ft) that every OTHER writer fills
+    # with MSL. build_ecmwf_cloud_diagnostics normalizes it (#487).
     "deg0l": "freezing_level_m",           # meters AGL (geometric height above ground, not MSL)
     # Native convective realization + stability (#283 Phase 2, delivered in a1).
     "cp": "conv_precip_m",                 # m water equiv, ACCUMULATED since init
@@ -2092,6 +2095,7 @@ def _convert_raw_sounding(
 
 def build_pressure_levels_from_grib(
     point_data: dict[int, dict[str, float]],
+    reference_heights_m: dict[int, float] | None = None,
 ) -> list:
     """Build PressureLevelData objects from decoded ECMWF GRIB data.
 
@@ -2104,6 +2108,14 @@ def build_pressure_levels_from_grib(
     pre-amendment ECMWF archives), it is derived via the hypsometric equation
     from temperature + pressure. Current ECMWF runs deliver ``gh`` on every
     pressure level, so this fill is a no-op for them.
+
+    Args:
+        reference_heights_m: Optional ``{pressure_hpa: geopotential height m}``
+            from an independent source for the SAME point and valid time —
+            in practice the Open-Meteo levels already on the hourly the GRIB
+            column is about to replace. Used only to give the reconstruction
+            a real datum instead of ISA (#486); see
+            ``_fill_missing_geopotential_height``.
     """
     from weatherbrief.models.analysis import PressureLevelData
 
@@ -2114,7 +2126,9 @@ def build_pressure_levels_from_grib(
         if converted:
             converted_by_p[p_hpa] = converted
 
-    _fill_missing_geopotential_height(converted_by_p)
+    _fill_missing_geopotential_height(
+        converted_by_p, reference_heights_m=reference_heights_m,
+    )
 
     return [
         PressureLevelData(pressure_hpa=p_hpa, **converted)
@@ -2122,20 +2136,50 @@ def build_pressure_levels_from_grib(
     ]
 
 
+def _virtual_temperature_k(
+    temperature_c: float,
+    relative_humidity_pct: float | None,
+    pressure_hpa: float,
+) -> float:
+    """Virtual temperature (K) from T, RH and p — falls back to T when dry.
+
+    ``Tv = T / (1 − (e/p)(1 − ε))`` with ``ε = R_d/R_v = 0.622`` and vapour
+    pressure ``e`` from the Magnus saturation formula (over water, the same
+    coefficients ``_convert_raw_sounding`` already uses for dewpoint).
+
+    Tv is what the hypsometric equation actually calls for: moist air is less
+    dense than dry air at the same temperature, so using T under-estimates
+    layer thickness by ~0.5–1 % in warm moist air (#486).
+    """
+    import math
+
+    if relative_humidity_pct is None or pressure_hpa <= 0:
+        return temperature_c + 273.15
+    rh = max(0.0, min(100.0, relative_humidity_pct))
+    e_sat = 6.112 * math.exp(17.67 * temperature_c / (temperature_c + 243.5))
+    e = (rh / 100.0) * e_sat
+    denom = 1.0 - (e / pressure_hpa) * (1.0 - 0.622)
+    if denom <= 0:
+        return temperature_c + 273.15
+    return (temperature_c + 273.15) / denom
+
+
 def _fill_missing_geopotential_height(
     converted_by_p: dict[int, dict[str, float]],
+    *,
+    reference_heights_m: dict[int, float] | None = None,
 ) -> None:
     """Derive ``geopotential_height_m`` via the hypsometric equation.
 
-    Mutates the per-level dicts in-place. Iterates from highest pressure
-    (surface) to lowest (TOA), anchoring the column at the surface level
-    using ISA if no real geopotential is present, then integrating upward
-    with layer-mean temperature::
+    Mutates the per-level dicts in-place. Picks the surface-most level whose
+    height is known, then integrates outward from it in both directions with
+    the layer-mean VIRTUAL temperature::
 
-        Δz = (R_d / g) · T_mean · ln(p_lower / p_upper)
+        Δz = (R_d / g) · Tv_mean · ln(p_lower / p_upper)
 
     Levels that already carry a real ``geopotential_height_m`` are preserved
-    (so if the feed starts delivering ``z`` at more levels, those values win).
+    (so if the feed starts delivering ``z`` at more levels, those values win)
+    and each one re-anchors the integration above it.
 
     No-op if every level already has geopotential, or if temperature is
     missing anywhere in the column (can't integrate reliably).
@@ -2146,13 +2190,22 @@ def _fill_missing_geopotential_height(
     full-coverage runs the ``gh`` field is decoded directly and the
     ``all-present`` guard below makes this function a no-op.
 
-    Two known simplifications apply when this codepath is taken:
-    (a) layer-mean uses dry-air temperature instead of virtual temperature
-    — ~0.5–1% underestimate in warm moist air, accumulating ~30–50 m
-    surface→500 hPa; (b) the ISA anchor at the surface-most pressure level
-    is not terrain-aware — fine over flat Europe, off by the terrain-vs-ISA
-    delta at high-elevation airfields. The right fix for (b) would be to
-    anchor using surface ``z`` + ``sp`` from the a1 GRIB.
+    **Datum (#486).** ``reference_heights_m`` supplies real geopotential
+    heights for the same point and valid time from an independent source —
+    in practice Open-Meteo's own levels for the same model. The surface-most
+    matching level becomes the datum, and ONLY that one: the reference sets
+    where the column sits, never how thick its layers are. Without a
+    reference the column falls back to the ISA altitude of its surface-most
+    pressure level.
+
+    Note what the ISA fallback does and does not cost. It is *not* a terrain
+    error: ``pressure_hpa_to_altitude_m`` maps pressure to height, and the
+    anchor level's pressure already encodes terrain (795 hPa → 2000 m, which
+    is about the near-surface pressure over 2000 m terrain). The real error
+    is that pressure surface's deviation from ISA, driven by MSLP and column
+    mean temperature — order 100–300 m in a deep low or a cold column, and a
+    *uniform* offset, since the thicknesses come from the integration below
+    and are unaffected by the anchor.
     """
     import math
 
@@ -2170,26 +2223,71 @@ def _fill_missing_geopotential_height(
     # Surface (highest pressure) → TOA (lowest pressure).
     sorted_p = sorted(converted_by_p.keys(), reverse=True)
 
-    # Anchor: use real value if present at the surface-most level, else ISA.
-    anchor = converted_by_p[sorted_p[0]]
-    if anchor.get("geopotential_height_m") is None:
-        anchor["geopotential_height_m"] = pressure_hpa_to_altitude_m(sorted_p[0])
+    # Seed ONE datum from the reference: the surface-most level the two
+    # sources share. Seeding every match would make the reference dictate the
+    # column's thicknesses too, and it comes from a different run of the same
+    # model — small disagreements would show up as kinks. One datum keeps the
+    # profile's shape entirely GRIB-derived and moves it as a rigid column.
+    if reference_heights_m:
+        for p_hpa in sorted_p:
+            level = converted_by_p[p_hpa]
+            if level.get("geopotential_height_m") is not None:
+                break  # the column already has a real datum at or below here
+            height_m = reference_heights_m.get(p_hpa)
+            if height_m is not None:
+                level["geopotential_height_m"] = height_m
+                break
 
-    for i in range(1, len(sorted_p)):
-        p_lower = sorted_p[i - 1]
-        p_upper = sorted_p[i]
+    def _thickness_m(p_lower: int, p_upper: int) -> float:
+        """Hypsometric thickness of the (p_lower, p_upper) layer, metres."""
         lower = converted_by_p[p_lower]
         upper = converted_by_p[p_upper]
+        tv_lower = _virtual_temperature_k(
+            lower["temperature_c"], lower.get("relative_humidity_pct"), p_lower,
+        )
+        tv_upper = _virtual_temperature_k(
+            upper["temperature_c"], upper.get("relative_humidity_pct"), p_upper,
+        )
+        tv_mean = 0.5 * (tv_lower + tv_upper)
+        return (_RD_DRY_AIR * tv_mean / _G) * math.log(p_lower / p_upper)
 
+    # Datum: the surface-most level that already knows its height (delivered
+    # or seeded). Only when nothing in the column does do we fall back to ISA
+    # at the surface-most level.
+    datum_i = next(
+        (
+            i for i, p in enumerate(sorted_p)
+            if converted_by_p[p].get("geopotential_height_m") is not None
+        ),
+        None,
+    )
+    if datum_i is None:
+        datum_i = 0
+        converted_by_p[sorted_p[0]]["geopotential_height_m"] = (
+            pressure_hpa_to_altitude_m(sorted_p[0])
+        )
+
+    # Downward from the datum (higher pressure, lower altitude).
+    for i in range(datum_i - 1, -1, -1):
+        below = converted_by_p[sorted_p[i]]
+        if below.get("geopotential_height_m") is not None:
+            continue
+        above_p = sorted_p[i + 1]
+        below["geopotential_height_m"] = (
+            converted_by_p[above_p]["geopotential_height_m"]
+            - _thickness_m(sorted_p[i], above_p)
+        )
+
+    # Upward from the datum (lower pressure, higher altitude).
+    for i in range(datum_i + 1, len(sorted_p)):
+        upper = converted_by_p[sorted_p[i]]
         if upper.get("geopotential_height_m") is not None:
             continue
-
-        t_lower_k = lower["temperature_c"] + 273.15
-        t_upper_k = upper["temperature_c"] + 273.15
-        t_mean_k = 0.5 * (t_lower_k + t_upper_k)
-
-        dz = (_RD_DRY_AIR * t_mean_k / _G) * math.log(p_lower / p_upper)
-        upper["geopotential_height_m"] = lower["geopotential_height_m"] + dz
+        lower_p = sorted_p[i - 1]
+        upper["geopotential_height_m"] = (
+            converted_by_p[lower_p]["geopotential_height_m"]
+            + _thickness_m(lower_p, sorted_p[i])
+        )
 
 
 def decode_ecmwf_surface_per_point(
@@ -2250,8 +2348,86 @@ def decode_ecmwf_surface_per_point(
 _ECMWF_NO_CLOUD_SENTINEL_M = 9999.0  # ECMWF uses 9999m for "no cloud"
 
 
+def model_surface_height_m(
+    pressure_levels: list,
+    surface_pressure_hpa: float,
+) -> float | None:
+    """The model's own orography at a point, in metres MSL (#487).
+
+    Reads the geopotential-height column where surface pressure crosses it:
+    ``z(p_surface)``, log-linear in pressure between the two bracketing
+    levels. When ``sp`` is higher-pressure than every level (low terrain,
+    the usual case at sea level) the surface-most level is extended downward
+    hypsometrically with its own temperature.
+
+    Deriving terrain this way rather than from an elevation dataset is
+    deliberate: an AGL field is referenced to the MODEL's orography, which
+    at ~9 km resolution differs from real terrain by hundreds of metres in
+    mountains. Converting AGL→MSL with SRTM would trade one datum error for
+    another.
+
+    Returns None when the column carries no usable heights.
+    """
+    import math
+
+    if surface_pressure_hpa is None or surface_pressure_hpa <= 0:
+        return None
+
+    known = sorted(
+        (
+            (float(pl.pressure_hpa), float(pl.geopotential_height_m))
+            for pl in pressure_levels
+            if pl.pressure_hpa
+            and pl.pressure_hpa > 0
+            and pl.geopotential_height_m is not None
+        ),
+        reverse=True,  # highest pressure (lowest level) first
+    )
+    if not known:
+        return None
+
+    sp = float(surface_pressure_hpa)
+
+    # Below the lowest level: extend downward with the hypsometric equation.
+    if sp >= known[0][0]:
+        p0, z0 = known[0]
+        t_c = next(
+            (
+                pl.temperature_c for pl in pressure_levels
+                if pl.pressure_hpa == int(p0) and pl.temperature_c is not None
+            ),
+            None,
+        )
+        if t_c is None:
+            return z0
+        t_k = _virtual_temperature_k(
+            t_c,
+            next(
+                (
+                    pl.relative_humidity_pct for pl in pressure_levels
+                    if pl.pressure_hpa == int(p0)
+                ),
+                None,
+            ),
+            p0,
+        )
+        return z0 - (_RD_DRY_AIR * t_k / _G) * math.log(sp / p0)
+
+    # Above the top of the column — nothing sane to say about the surface.
+    if sp <= known[-1][0]:
+        return None
+
+    for (p_lower, z_lower), (p_upper, z_upper) in zip(known, known[1:]):
+        if p_upper <= sp <= p_lower:
+            frac = math.log(p_lower / sp) / math.log(p_lower / p_upper)
+            return z_lower + (z_upper - z_lower) * frac
+    return None
+
+
 def build_ecmwf_cloud_diagnostics(
     raw: dict[str, float],
+    *,
+    terrain_elevation_m: float | None = None,
 ) -> "NWPCloudDiagnostics | None":
     """Convert raw ECMWF surface values into NWPCloudDiagnostics.
 
@@ -2262,6 +2438,24 @@ def build_ecmwf_cloud_diagnostics(
     Unit conversions:
     - meters → feet (× 3.28084)
     - 0–1 fraction → 0–100 % (× 100)
+
+    **Freezing-level datum (#487).** ECMWF ``deg0l`` is metres ABOVE GROUND,
+    but ``NWPCloudDiagnostics.freezing_level_ft`` is an MSL field everywhere
+    else it is written or read: GFS fills it from ``HGT@0degC`` (MSL
+    geopotential), the sounding's own 0 °C crossing is MSL, and Open-Meteo's
+    ``freezing_level_height`` is MSL. ``terrain_elevation_m`` — the model's
+    own orography at this point — is added to bring ``deg0l`` onto that
+    datum.
+
+    Without it the value is **dropped rather than passed through as AGL**.
+    ``HourlyForecast.attach_nwp_diagnostics`` mirrors this field onto
+    ``freezing_level_m``, which already holds Open-Meteo's MSL value; a
+    correctly-referenced Open-Meteo number beats a wrongly-referenced ECMWF
+    one, and the mirror is skipped when the field is None.
+
+    ``ceil`` / ``cbh`` / ``hcct`` are AGL too and are NOT converted here.
+    Ceiling and cloud base are conventionally AGL in aviation, so their datum
+    is a separate question (the #441 finding #3 follow-up), not this one.
     """
     from weatherbrief.models.analysis import (
         NWPCloudDiagnostics,
@@ -2286,7 +2480,19 @@ def build_ecmwf_cloud_diagnostics(
     ceiling_ft = _m_to_ft("ceiling_m")
     cloud_base_ft = _m_to_ft("cloud_base_height_m")
     convective_top_ft = _m_to_ft("convective_cloud_top_m")
-    freezing_level_ft = _m_to_ft("freezing_level_m")
+    # deg0l is AGL; only usable once referenced to MSL. See the datum note
+    # in the docstring for why an unconvertible value is dropped, not passed
+    # through. (#487)
+    freezing_level_agl_m = raw.get("freezing_level_m")
+    freezing_level_ft: float | None = None
+    if (
+        freezing_level_agl_m is not None
+        and 0 <= freezing_level_agl_m < _ECMWF_NO_CLOUD_SENTINEL_M
+        and terrain_elevation_m is not None
+    ):
+        freezing_level_ft = round(
+            (freezing_level_agl_m + terrain_elevation_m) * _M_TO_FT
+        )
     low_cover = _frac_to_pct("low_cover_frac")
     mid_cover = _frac_to_pct("mid_cover_frac")
     high_cover = _frac_to_pct("high_cover_frac")

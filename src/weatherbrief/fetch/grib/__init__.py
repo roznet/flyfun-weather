@@ -2451,6 +2451,10 @@ def _enrich_ecmwf_inner(
     prev_sf_per_point: list[float | None] = [None] * n_points
     prev_cp_per_point: list[float | None] = [None] * n_points  # conv precip (#283)
     prev_a1_valid_utc: datetime | None = None
+    # Model orography per point (m MSL), needed to bring ECMWF's AGL freezing
+    # level onto the MSL datum every other source uses (#487). Terrain does
+    # not change between steps, so it is computed once and reused.
+    orography_per_point: list[float | None] = [None] * n_points
 
     # Filter steps to the flight window (with margin) up-front so we can
     # fan out all decodes in parallel before merging.
@@ -2537,9 +2541,18 @@ def _enrich_ecmwf_inner(
         if step_hours in a1_results:
             with _grib_time("ecmwf_a1_merge"):
                 sfc_data, sfc_covered = a1_results.pop(step_hours)
+                # Orography first: the a2 merge above has just written this
+                # step's real `gh` column onto the same hourlies, so
+                # z(surface_pressure) is readable now (#487).
+                _fill_ecmwf_orography(
+                    orography_per_point, ecmwf_sections,
+                    sfc_data, sfc_covered, valid_time,
+                )
                 diagnostics = [
-                    build_ecmwf_cloud_diagnostics(raw) if cov else None
-                    for raw, cov in zip(sfc_data, sfc_covered)
+                    build_ecmwf_cloud_diagnostics(
+                        raw, terrain_elevation_m=orography_per_point[i],
+                    ) if cov else None
+                    for i, (raw, cov) in enumerate(zip(sfc_data, sfc_covered))
                 ]
                 # Convective precip rate (#283): cp is accumulated since init, so
                 # difference it against the previous a1 step (mind the variable
@@ -3069,6 +3082,13 @@ def _replace_pressure_levels_from_grib(
     Works for both ECMWF and ICON-EU GRIB data — the decoded dict format
     is model-agnostic after vertical interpolation to pressure levels.
 
+    The hourly's OUTGOING levels are handed to the builder as a geopotential
+    reference (#486). They are Open-Meteo's, for the same model, point and
+    valid hour, and they carry a real ``geopotential_height_m``; the ICON
+    path has no geopotential of its own (DWD ships none on model levels) and
+    would otherwise anchor its reconstructed column on ISA. Only the datum is
+    borrowed — every layer thickness still comes from the GRIB column.
+
     Returns:
         Number of hourly entries whose pressure levels were replaced.
     """
@@ -3086,7 +3106,9 @@ def _replace_pressure_levels_from_grib(
             for hourly in wf.hourly:
                 if not _matches_valid_time(hourly.time, valid_utc):
                     continue
-                new_levels = build_pressure_levels_from_grib(point_data)
+                new_levels = build_pressure_levels_from_grib(
+                    point_data, _geopotential_reference(hourly),
+                )
                 if new_levels:
                     hourly.pressure_levels = new_levels
                     replaced_count += 1
@@ -3106,12 +3128,67 @@ def _replace_pressure_levels_from_grib(
         for hourly in wf.hourly:
             if not _matches_valid_time(hourly.time, valid_utc):
                 continue
-            new_levels = build_pressure_levels_from_grib(point_data)
+            new_levels = build_pressure_levels_from_grib(
+                point_data, _geopotential_reference(hourly),
+            )
             if new_levels:
                 hourly.pressure_levels = new_levels
                 replaced_count += 1
 
     return replaced_count
+
+
+def _fill_ecmwf_orography(
+    cache: list[float | None],
+    sections: list[RouteCrossSection],
+    sfc_data: list[dict[str, float]],
+    sfc_covered: list[bool],
+    valid_utc: datetime | None,
+) -> None:
+    """Populate per-point model orography (m MSL) in ``cache``, in place.
+
+    Terrain is time-invariant, so each point is computed once — at the first
+    step where both its surface pressure and a geopotential column are
+    available — and reused for the rest of the run. Points that never
+    resolve stay None, and ``build_ecmwf_cloud_diagnostics`` then drops the
+    AGL freezing level rather than mislabelling it (#487).
+    """
+    from weatherbrief.fetch.grib.decode import model_surface_height_m
+
+    if all(v is not None for v in cache):
+        return
+
+    for cs in sections:
+        for point_idx, wf in enumerate(cs.point_forecasts):
+            if point_idx >= len(cache) or cache[point_idx] is not None:
+                continue
+            if point_idx >= len(sfc_data) or not sfc_covered[point_idx]:
+                continue
+            sp_pa = sfc_data[point_idx].get("surface_pressure_pa")
+            if sp_pa is None:
+                continue
+            for hourly in wf.hourly:
+                if not _matches_valid_time(hourly.time, valid_utc):
+                    continue
+                cache[point_idx] = model_surface_height_m(
+                    hourly.pressure_levels, sp_pa / 100.0,
+                )
+                break
+
+
+def _geopotential_reference(hourly: HourlyForecast) -> dict[int, float]:
+    """``{pressure_hpa: geopotential height m}`` from an hourly's own levels.
+
+    Read BEFORE the GRIB replacement overwrites them, so these are the
+    Open-Meteo values for the same model, point and valid hour (#486).
+    Empty when the source didn't deliver heights, in which case
+    ``_fill_missing_geopotential_height`` falls back to its ISA anchor.
+    """
+    return {
+        pl.pressure_hpa: pl.geopotential_height_m
+        for pl in hourly.pressure_levels
+        if pl.geopotential_height_m is not None
+    }
 
 
 

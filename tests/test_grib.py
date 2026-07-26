@@ -1268,6 +1268,44 @@ class TestBuildIconCloudDiagnostics:
         assert diag.ml_cape_jkg == 1200.0
         assert diag.ml_cin_jkg == -45.0  # normalized to internal negative
 
+    def test_ecmwf_freezing_level_converted_to_msl(self):
+        """#487: deg0l is AGL; the diag field is MSL everywhere else."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        # 2000 m AGL over 500 m terrain = 2500 m MSL = 8202 ft.
+        diag = build_ecmwf_cloud_diagnostics(
+            {"freezing_level_m": 2000.0}, terrain_elevation_m=500.0,
+        )
+        assert diag is not None
+        assert diag.freezing_level_ft == round(2500.0 * 3.28084)
+
+    def test_ecmwf_freezing_level_dropped_without_terrain(self):
+        """#487: an unconvertible AGL value is dropped, not passed through.
+
+        Passing it through would overwrite `HourlyForecast.freezing_level_m`
+        — an MSL field already carrying Open-Meteo's correctly-referenced
+        value — with an AGL number.
+        """
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        diag = build_ecmwf_cloud_diagnostics(
+            {"freezing_level_m": 2000.0, "total_cover_frac": 0.5},
+        )
+        assert diag is not None
+        assert diag.freezing_level_ft is None
+        assert diag.total_cover_pct == 50.0  # rest of the diag unaffected
+
+    def test_ecmwf_freezing_level_sentinel_dropped(self):
+        """The 9999 m no-value sentinel must not become 9999 m + terrain."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        diag = build_ecmwf_cloud_diagnostics(
+            {"freezing_level_m": 9999.0, "total_cover_frac": 0.5},
+            terrain_elevation_m=500.0,
+        )
+        assert diag is not None
+        assert diag.freezing_level_ft is None
+
     def test_ecmwf_cin_9999_sentinel_dropped(self):
         """#441: ECMWF 9999 CIN sentinel (if not NaN-masked) is dropped, not read as a cap."""
         from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
