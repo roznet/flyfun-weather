@@ -109,7 +109,7 @@ struct RouteSigmetsView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(Theme.spacingS)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .background(Theme.red.opacity(Theme.tableRowHighlightOpacity), in: RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: Table
@@ -150,11 +150,14 @@ struct RouteSigmetsView: View {
         Text(text)
             .font(.caption2)
             .foregroundStyle(Theme.textMuted)
-            .cell()
+            .tableCell()
     }
 
     @ViewBuilder
     private func row(_ s: SigmetAlongRoute) -> some View {
+        // Red is this table's flag colour (a SEV hazard); the Observations table
+        // passes amber. `tableCell` owns the shared tint strength.
+        let highlight: Color? = s.isSevere ? Theme.red : nil
         GridRow {
             Button { detail = s } label: {
                 HStack(spacing: Theme.spacingXS) {
@@ -169,28 +172,28 @@ struct RouteSigmetsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(s.firId) \(s.headline) details")
-            .cell(highlighted: s.isSevere)
+            .tableCell(highlight: highlight)
 
             Text(s.firId)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Theme.text)
-                .cell(highlighted: s.isSevere)
+                .tableCell(highlight: highlight)
 
             Text(s.levelBand)
                 .font(.caption)
                 .foregroundStyle(Theme.text)
-                .cell(highlighted: s.isSevere)
+                .tableCell(highlight: highlight)
 
             Text(s.enrouteLabel)
                 .font(.caption)
                 .foregroundStyle(Theme.textMuted)
-                .cell(highlighted: s.isSevere)
+                .tableCell(highlight: highlight)
 
             if showsMovement {
                 Text(s.movementLabel ?? "STNR")
                     .font(.caption)
                     .foregroundStyle(Theme.textMuted)
-                    .cell(highlighted: s.isSevere)
+                    .tableCell(highlight: highlight)
             }
         }
     }
@@ -209,19 +212,6 @@ struct RouteSigmetsView: View {
         let base = "Levels: the hazard's vertical band. Enroute: where your track crosses the area, or how far it passes off-track."
         let move = showsMovement ? " Move: area movement (STNR = stationary)." : ""
         return "\(base)\(move) Tap a row for the raw bulletin."
-    }
-}
-
-private extension View {
-    /// One table cell — same construction as the observations table: the Grid
-    /// runs at `horizontalSpacing: 0` so the gutter lives *inside* the cell and a
-    /// highlighted row shades as one continuous band.
-    func cell(highlighted: Bool = false) -> some View {
-        self
-            .padding(.horizontal, Theme.spacingXS)
-            .padding(.vertical, 3)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(highlighted ? Theme.red.opacity(0.12) : .clear)
     }
 }
 

@@ -33,6 +33,11 @@ enum Theme {
     static let sectionSpacing: CGFloat = 24
     static let cornerRadius: CGFloat = 14
 
+    /// Tint strength for a flagged row in a briefing data table (`tableCell`) and
+    /// its matching banner — shared so the Observations and Area Hazards tables
+    /// shade identically despite using different flag colours.
+    static let tableRowHighlightOpacity: Double = 0.12
+
     // MARK: Typography helpers
 
     /// Big, bold hero number — the signature element (assessment / what-changed).

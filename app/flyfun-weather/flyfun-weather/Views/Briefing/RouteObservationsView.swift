@@ -124,7 +124,7 @@ struct RouteObservationsView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(Theme.spacingS)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .background(Theme.amber.opacity(Theme.tableRowHighlightOpacity), in: RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: Axis switcher (compact width only)
@@ -262,19 +262,22 @@ struct RouteObservationsView: View {
             .font(.caption2.weight(.semibold))
             .foregroundStyle(Theme.textMuted)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .cell()
+            .tableCell()
     }
 
     private func columnHeader(_ text: String) -> some View {
         Text(text)
             .font(.caption2)
             .foregroundStyle(Theme.textMuted)
-            .cell()
+            .tableCell()
     }
 
     @ViewBuilder
     private func row(_ apt: AirportObservation, comparison: ObservationComparison?) -> some View {
         let conflicting = comparison?.categoryMatch == "CONFLICTING"
+        // Amber is this table's flag colour (a model conflict); the Area Hazards
+        // table passes red. `tableCell` owns the shared tint strength.
+        let highlight: Color? = conflicting ? Theme.amber : nil
         GridRow {
             Button { detail = apt } label: {
                 HStack(spacing: Theme.spacingXS) {
@@ -289,33 +292,33 @@ struct RouteObservationsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(apt.icao) details")
-            .cell(highlighted: conflicting)
+            .tableCell(highlight: highlight)
 
             Text(apt.distanceFromRouteNm.map { "\(Int($0.rounded()))nm" } ?? "—")
                 .font(.caption)
                 .foregroundStyle(Theme.textMuted)
-                .cell(highlighted: conflicting)
+                .tableCell(highlight: highlight)
 
             Text(apt.etaHourOffset.map { "+\($0)h" } ?? "—")
                 .font(.caption)
                 .foregroundStyle(Theme.textMuted)
-                .cell(highlighted: conflicting)
+                .tableCell(highlight: highlight)
 
             ForEach(visibleAxes) { a in
                 switch a {
                 case .condition:
-                    categoryCell(apt.metarFlightCategory, highlighted: conflicting)
-                    categoryCell(apt.tafFlightCategoryAtEta, highlighted: conflicting)
-                    categoryCell(comparison?.modelCategory, highlighted: conflicting)
-                    AgreementIcon(match: comparison?.categoryMatch).cell(highlighted: conflicting)
+                    categoryCell(apt.metarFlightCategory, highlight: highlight)
+                    categoryCell(apt.tafFlightCategoryAtEta, highlight: highlight)
+                    categoryCell(comparison?.modelCategory, highlight: highlight)
+                    AgreementIcon(match: comparison?.categoryMatch).tableCell(highlight: highlight)
                 case .wind:
                     WindAdvisoryBadge(status: apt.metarWindAdvisory, crosswindKt: apt.metarCrosswindKt)
-                        .cell(highlighted: conflicting)
+                        .tableCell(highlight: highlight)
                     WindAdvisoryBadge(status: apt.tafWindAdvisory, crosswindKt: apt.tafCrosswindKt)
-                        .cell(highlighted: conflicting)
+                        .tableCell(highlight: highlight)
                     WindAdvisoryBadge(status: comparison?.modelWindAdvisory, crosswindKt: comparison?.modelCrosswindKt)
-                        .cell(highlighted: conflicting)
-                    AgreementIcon(match: comparison?.windAdvisoryMatch).cell(highlighted: conflicting)
+                        .tableCell(highlight: highlight)
+                    AgreementIcon(match: comparison?.windAdvisoryMatch).tableCell(highlight: highlight)
                 }
             }
         }
@@ -326,14 +329,14 @@ struct RouteObservationsView: View {
     /// category and reads as if "—" were itself a rating. Matches how
     /// `WindAdvisoryBadge` treats a missing advisory.
     @ViewBuilder
-    private func categoryCell(_ category: String?, highlighted: Bool) -> some View {
+    private func categoryCell(_ category: String?, highlight: Color?) -> some View {
         if let category, !category.isEmpty {
-            FlightCategoryBadge(category: category).cell(highlighted: highlighted)
+            FlightCategoryBadge(category: category).tableCell(highlight: highlight)
         } else {
             Text("—")
                 .font(.caption2)
                 .foregroundStyle(Theme.textMuted)
-                .cell(highlighted: highlighted)
+                .tableCell(highlight: highlight)
         }
     }
 
@@ -345,22 +348,6 @@ struct RouteObservationsView: View {
         let c = cal.dateComponents([.hour, .minute], from: date)
         guard let h = c.hour, let m = c.minute else { return nil }
         return String(format: "%02d%02dZ", h, m)
-    }
-}
-
-private extension View {
-    /// One table cell. The Grid runs at `horizontalSpacing: 0` so the gutter
-    /// lives *inside* the cell — that way a highlighted row's per-cell shading
-    /// tiles into one continuous band instead of a dashed line of blocks.
-    func cell(highlighted: Bool = false) -> some View {
-        self
-            .padding(.horizontal, Theme.spacingXS)
-            .padding(.vertical, 3)
-            // Fill the column the Grid assigns (not just the content width) so a
-            // highlighted row shades as one band; `gridColumnAlignment(.leading)`
-            // on the Grid keeps the content itself left-aligned.
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(highlighted ? Theme.amber.opacity(0.12) : .clear)
     }
 }
 
