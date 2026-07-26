@@ -50,6 +50,8 @@ Optional outputs:
 
 **Entry point:** `execute_briefing(route, departure_time, options)` — called by the API. Derives `target_date` and `target_hour` internally for downstream task modules. Returns `BriefingResult` with all paths and structured results. Never prints or exits.
 
+`execute_briefing` is a thin wrapper that samples memory for the refresh's duration (`MemorySampler`) and emits the `Memory after briefing refresh: …` boundary line in a `finally`, so a refresh that *raises* still reports its peak; `_execute_briefing_stages` holds the actual pipeline. In that line, `this task peaked at …` is the only per-refresh figure — `cgroup peak since container start` is a since-boot high-water mark that nothing resets, and must not be read as this refresh's peak (#506).
+
 `BriefingOptions` controls what gets generated (models, gramet, skewt, llm_digest, enrich_grib, output_dir). `BriefingResult` carries snapshot, paths, digest object, and error list.
 
 **Task modules** (`tasks/`): Pipeline stages extracted into independent modules for testability and incremental re-runs. `pipeline.py` is now a thin orchestrator calling `run_fetch()` → `run_analysis()` → `run_advisories()` → `run_route_weather()` (D-0) → optional outputs. Each task module can also run standalone from saved artifacts (e.g. `run_advisories_from_pack()`).
