@@ -70,6 +70,7 @@ export interface DonationMe {
 export interface DonationStats {
   active_pilots_30d: number;
   briefings_all_time: number;
+  briefings_last_30d: number;
   analysis_words_all_time: number;
   analysis_books_equiv: number;
   words_summary: string;

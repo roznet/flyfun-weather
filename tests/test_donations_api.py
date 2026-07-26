@@ -9,7 +9,7 @@ math are exercised for real.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -560,10 +560,17 @@ class TestSummary:
         assert body["total_year_usd"] == pytest.approx(50.0)
 
 
-def _seed_stats(session_factory, *, packs=3, output_tokens=10_000):
-    """A flight + briefing packs + a usage row carrying output tokens."""
+def _seed_stats(session_factory, *, recent_usage=3, old_usage=0, packs=0,
+                output_tokens=10_000):
+    """A flight + briefing usage rows (the briefing counter) + optional packs.
+
+    ``recent_usage`` rows land inside the 30-day window, ``old_usage`` rows
+    well outside it. ``packs`` seeds ``briefing_packs`` rows that must NOT be
+    counted — retention deletes those, so the stats read ``briefing_usage``.
+    """
     from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow, FlightRow
 
+    now = datetime.now(timezone.utc)
     s = session_factory()
     s.add(FlightRow(id="flt-1", user_id=DEV_USER_ID,
                     departure_time=datetime(2026, 6, 1, tzinfo=timezone.utc)))
@@ -574,8 +581,21 @@ def _seed_stats(session_factory, *, packs=3, output_tokens=10_000):
             fetch_timestamp=datetime(2026, 6, 1, tzinfo=timezone.utc),
             days_out=i,
         ))
-    s.add(BriefingUsageRow(user_id=DEV_USER_ID, flight_id="flt-1",
-                           llm_output_tokens=output_tokens, llm_input_tokens=999_999))
+    # Tokens ride on the first row only, so the word count stays predictable
+    # regardless of how many rows a test seeds.
+    for i in range(recent_usage):
+        s.add(BriefingUsageRow(
+            user_id=DEV_USER_ID, flight_id="flt-1",
+            timestamp=now - timedelta(days=1),
+            llm_output_tokens=output_tokens if i == 0 else 0,
+            llm_input_tokens=999_999,
+        ))
+    for _ in range(old_usage):
+        s.add(BriefingUsageRow(
+            user_id=DEV_USER_ID, flight_id="flt-1",
+            timestamp=now - timedelta(days=120),
+            llm_output_tokens=0, llm_input_tokens=1,
+        ))
     s.commit()
     s.close()
 
@@ -583,11 +603,15 @@ def _seed_stats(session_factory, *, packs=3, output_tokens=10_000):
 class TestSummaryStats:
     def test_stats_trio(self, make_client, session_factory):
         _seed_economics(session_factory)  # 2 distinct briefing users (30d)
-        _seed_stats(session_factory, packs=4, output_tokens=10_000)
+        _seed_stats(session_factory, recent_usage=4, old_usage=2, packs=9,
+                    output_tokens=10_000)
         body = make_client(viewer=None, optional=None).get("/api/donations/summary").json()
         stats = body["stats"]
         assert stats["active_pilots_30d"] == 2
-        assert stats["briefings_all_time"] == 4
+        # 6 usage rows all-time, 4 of them inside the window. The 9 packs are
+        # deliberately ignored — a pack count shrinks under retention.
+        assert stats["briefings_all_time"] == 6
+        assert stats["briefings_last_30d"] == 4
         # Output tokens only, ~0.75 words/token: 10_000 → 7_500 words.
         assert stats["analysis_words_all_time"] == 7_500
         assert stats["words_summary"]  # non-empty phrasing
@@ -599,6 +623,7 @@ class TestSummaryStats:
         # No economics, no packs/usage → neutral zeros, no crash.
         body = make_client(viewer=None, optional=None).get("/api/donations/summary").json()
         assert body["stats"]["briefings_all_time"] == 0
+        assert body["stats"]["briefings_last_30d"] == 0
         assert body["stats"]["analysis_words_all_time"] == 0
         assert body["stats"]["words_summary"] == ""
 

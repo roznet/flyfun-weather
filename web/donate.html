@@ -49,6 +49,12 @@
     }
     .stat-card .value { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
     .stat-card .label { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.2rem; }
+    /* Secondary figure under a headline stat (e.g. the 30-day slice of an
+       all-time total). Quieter than .label so the headline still leads. */
+    .stat-card .sub {
+      font-size: 0.68rem; color: var(--text-muted); opacity: 0.8; margin-top: 0.25rem;
+      font-variant-numeric: tabular-nums;
+    }
     .run-cost-note { color: var(--text-muted); font-size: 0.8rem; margin: -0.5rem 0 1.25rem; }
 
     .preview-note {
@@ -110,6 +116,7 @@
           <div class="stat-card">
             <div class="value" id="stat-briefings">—</div>
             <div class="label">briefings generated</div>
+            <div class="sub" id="stat-briefings-sub"></div>
           </div>
           <div class="stat-card">
             <div class="value" id="stat-words">—</div>

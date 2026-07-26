@@ -143,6 +143,11 @@ function renderStats(s: DonationSummary): void {
   document.getElementById('stat-pilots')!.textContent = stats.active_pilots_30d.toLocaleString();
   document.getElementById('stat-briefings')!.textContent =
     stats.briefings_all_time.toLocaleString();
+  // The 30-day slice pairs the all-time headline with current activity — same
+  // window as the pilots card, so the two read together.
+  const recent = stats.briefings_last_30d;
+  document.getElementById('stat-briefings-sub')!.textContent =
+    recent > 0 ? `${recent.toLocaleString()} in the last 30 days` : '';
 
   // Words is the headline; the ~N books equivalence is an optional flourish.
   const words = stats.analysis_words_all_time;

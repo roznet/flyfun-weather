@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -53,7 +53,7 @@ from weatherbrief.api.preferences import (
     stripe_configured,
     usd_fx_block,
 )
-from weatherbrief.db.models import BriefingPackRow, BriefingUsageRow
+from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.notify.donation_email import send_donation_receipt_email
 from weatherbrief.privacy import mask_email
 from weatherbrief.impact import (
@@ -100,17 +100,32 @@ def _empty_economics() -> ProgramEconomics:
     return ProgramEconomics(monthly_run_cost_usd=0.0, active_users=0, cost_per_user_month_usd=0.0)
 
 
-def _program_stats(db: Session) -> tuple[int, int]:
-    """All-time ``(briefings_generated, ai_output_tokens)`` for the stats header.
+def _program_stats(db: Session, *, since: datetime) -> tuple[int, int, int]:
+    """``(briefings_all_time, briefings_since, ai_output_tokens)`` for the header.
 
-    Briefings = every ``briefing_packs`` row; AI words derive from the sum of
-    ``briefing_usage.llm_output_tokens`` (output only — what the AI *wrote*).
+    Briefings count ``briefing_usage`` rows — one per briefing actually
+    generated — *not* ``briefing_packs``. A pack row is deleted by tiered
+    retention (``tasks/retention.py`` T2) and cascades away when its flight is
+    deleted, so a pack count both understates history and can shrink over
+    time; the briefing still cost real tokens and CPU when it ran. Usage rows
+    are never purged, so this is the honest all-time figure and it matches the
+    admin Usage tab, which aggregates the same table.
+
+    AI words derive from the sum of ``briefing_usage.llm_output_tokens``
+    (output only — what the AI *wrote*).
     """
-    briefings = db.query(func.count()).select_from(BriefingPackRow).scalar() or 0
+    briefings_all = db.query(func.count()).select_from(BriefingUsageRow).scalar() or 0
+    briefings_since = (
+        db.query(func.count())
+        .select_from(BriefingUsageRow)
+        .filter(BriefingUsageRow.timestamp >= since)
+        .scalar()
+        or 0
+    )
     out_tokens = (
         db.query(func.coalesce(func.sum(BriefingUsageRow.llm_output_tokens), 0)).scalar() or 0
     )
-    return int(briefings), int(out_tokens)
+    return int(briefings_all), int(briefings_since), int(out_tokens)
 
 
 def _site_covered(total_year_usd: float, econ: ProgramEconomics, *, now: datetime) -> bool:
@@ -539,6 +554,7 @@ class StatsResponse(BaseModel):
 
     active_pilots_30d: int
     briefings_all_time: int
+    briefings_last_30d: int
     analysis_words_all_time: int
     analysis_books_equiv: float
     words_summary: str
@@ -569,21 +585,24 @@ def get_summary(
 ) -> DonationSummaryResponse:
     """Public this-year community total + coverage framing + stats header.
 
-    Adds the transparency stats trio (active pilots 30d, all-time briefings,
-    all-time AI words) and the margin-excluded run cost — publishing these lets a
-    reader back out per-pilot cost, which is intended. ``?currency=`` overrides
-    the display currency (needed for anonymous viewers and instant reformatting).
+    Adds the transparency stats (active pilots 30d, briefings all-time and over
+    the same 30d window, all-time AI words) and the margin-excluded run cost —
+    publishing these lets a reader back out per-pilot cost, which is intended.
+    ``?currency=`` overrides the display currency (needed for anonymous viewers
+    and instant reformatting).
     """
     now = datetime.now(timezone.utc)
     total = get_year_total_usd(db, now.year, service=SERVICE)
     econ = _economics(db) or _empty_economics()
     yi = yearly_impact(total, econ, now=now)
 
-    briefings, out_tokens = _program_stats(db)
+    since = now - timedelta(days=_ECONOMICS_WINDOW_DAYS)
+    briefings, briefings_recent, out_tokens = _program_stats(db, since=since)
     words = tokens_to_words(out_tokens)
     stats = StatsResponse(
         active_pilots_30d=econ.active_users,
         briefings_all_time=briefings,
+        briefings_last_30d=briefings_recent,
         analysis_words_all_time=words,
         analysis_books_equiv=words_to_books(words),
         words_summary=format_words_written(out_tokens),

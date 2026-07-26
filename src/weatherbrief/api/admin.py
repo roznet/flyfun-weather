@@ -293,6 +293,11 @@ def list_users(
     # Aggregate summary from ALL users (before limiting)
     total_briefings = sum(u["usage"]["briefings"] for u in user_list)
     total_tokens = sum(u["usage"]["total_tokens"] for u in user_list)
+    # Users who actually generated a briefing in the period. ``total_users``
+    # below is every account ever created and ignores ``period`` by nature, so
+    # the summary bar needs a windowed figure to sit next to the windowed
+    # briefing/token counts.
+    active_users = sum(1 for u in user_list if u["usage"]["briefings"] > 0)
 
     # Split humans / agents; paginate humans only
     humans = [u for u in user_list if u["type"] != "agent"]
@@ -307,6 +312,7 @@ def list_users(
         "period": period,
         "summary": {
             "total_users": len(user_list),
+            "active_users": active_users,
             "total_briefings": total_briefings,
             "total_tokens": total_tokens,
             "total_disk_bytes": total_disk,

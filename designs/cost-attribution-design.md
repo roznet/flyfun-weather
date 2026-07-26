@@ -363,7 +363,13 @@ else the program average.
 `GET /api/donations/summary` carries a `stats` block + a `run_cost` block:
 
 - **active_pilots_30d** — `num_users` from the 30d cost report.
-- **briefings_all_time** — `COUNT(*)` over `briefing_packs`.
+- **briefings_all_time** / **briefings_last_30d** — `COUNT(*)` over
+  `briefing_usage` (all rows, and rows inside the same 30d window as the pilots
+  figure). **Not** `briefing_packs`: a pack row is deleted by T2 retention and
+  cascades away with its flight, so a pack count understates history and can
+  shrink over time even though the briefing really was generated and really did
+  cost tokens + CPU. Counting `briefing_usage` — never purged — also makes this
+  agree exactly with the admin Usage tab, which aggregates the same table.
 - **analysis_words_all_time** — `SUM(briefing_usage.llm_output_tokens) × 0.75`.
   **Output tokens only** (what the AI *wrote*, not input/total). `words_to_books`
   (~90,000 words/novel) is an optional, clearly-approximate flourish; words is

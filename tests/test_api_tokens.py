@@ -295,6 +295,36 @@ class TestAdminUsersList:
         assert agent_users[0]["active_tokens"] == 1
         assert len(human_users) == 2  # admin + regular
 
+    def test_active_users_follows_period(self, client, db_session):
+        """``active_users`` is windowed; ``total_users`` is every account."""
+        from weatherbrief.db.models import BriefingUsageRow, FlightRow
+
+        now = datetime.now(timezone.utc)
+        session = db_session()
+        session.add(FlightRow(id="flt-recent", user_id=ADMIN_ID, departure_time=now))
+        session.add(FlightRow(id="flt-old", user_id=REGULAR_ID, departure_time=now))
+        session.flush()
+        session.add(BriefingUsageRow(
+            user_id=ADMIN_ID, flight_id="flt-recent", timestamp=now - timedelta(days=2),
+        ))
+        session.add(BriefingUsageRow(
+            user_id=REGULAR_ID, flight_id="flt-old", timestamp=now - timedelta(days=90),
+        ))
+        session.commit()
+        session.close()
+
+        recent = client.get("/api/admin/users", cookies=_admin_cookie()).json()["summary"]
+        assert recent["active_users"] == 1  # only the 2-day-old briefing counts
+        assert recent["total_briefings"] == 1
+        assert recent["total_users"] == 2  # both accounts, unwindowed
+
+        all_time = client.get(
+            "/api/admin/users?period=all", cookies=_admin_cookie(),
+        ).json()["summary"]
+        assert all_time["active_users"] == 2
+        assert all_time["total_briefings"] == 2
+        assert all_time["total_users"] == 2
+
 
 class TestCreateAdditionalToken:
     def test_create_additional_token(self, client):

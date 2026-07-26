@@ -797,7 +797,7 @@ function renderSummaryBar(el: HTMLElement, s: AdminSummary): void {
     : 0;
   el.style.display = '';
   el.innerHTML = `
-    <div class="summary-card"><div class="value">${s.total_users}</div><div class="label">Users</div></div>
+    <div class="summary-card"><div class="value">${s.active_users}</div><div class="label">Users (${pl})</div><div class="sub">of ${s.total_users} registered</div></div>
     <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Briefings (${pl})</div></div>
     <div class="summary-card"><div class="value">${tokens}</div><div class="label">Tokens (${pl})</div></div>
     <div class="summary-card"><div class="value">${apiCalls.toLocaleString()}</div><div class="label">API Calls (${pl})</div></div>

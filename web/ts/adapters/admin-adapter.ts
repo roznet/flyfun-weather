@@ -28,7 +28,10 @@ export interface AdminUser {
 }
 
 export interface AdminSummary {
+  /** Every account ever created — not windowed by ``period``. */
   total_users: number;
+  /** Accounts that generated at least one briefing within ``period``. */
+  active_users: number;
   total_briefings: number;
   total_tokens: number;
   total_disk_bytes: number;
