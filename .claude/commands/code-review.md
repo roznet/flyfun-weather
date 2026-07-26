@@ -38,6 +38,39 @@ Within each group, order by file/module for readability.
 
 ---
 
+## Output format (machine-read — do not restyle)
+
+`/process-review` watches for this comment by matching on its first line, so the
+comment shape is a contract, not a stylistic choice. Emit exactly this skeleton
+and do not substitute bold, plain text, or a different heading level for the
+headings below:
+
+```markdown
+## Code Review
+
+<one- or two-sentence summary of what was reviewed>
+
+### Critical
+- `path/to/file.py:123` — <finding>
+
+### Important
+- `path/to/file.ts:45` — <finding>
+
+### Minor
+- `path/to/file.swift:67` — <finding>
+```
+
+Rules:
+
+- The **first line is always exactly `## Code Review`** — including for a clean
+  review, which follows it with a brief approval line and no severity sections.
+- Severity headings are `### Critical` / `### Important` / `### Minor`.
+- **Omit a severity section entirely when it has no findings** — do not emit an
+  empty heading or a "none" placeholder.
+- Findings are list items; lead each with the file path (and line where known).
+
+---
+
 ## Review criteria
 
 Apply all of the following in the single pass:
@@ -149,4 +182,5 @@ This is a flag-and-defer check: note the parity risk, don't try to fix the other
 - Nits or minor suggestions below the Minor threshold
 - Pre-existing issues not touched by this PR
 
-If no issues found, post a brief approval comment.
+If no issues found, post a brief approval comment — still under the `## Code
+Review` first line required by the output-format contract above.

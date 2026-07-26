@@ -17,7 +17,9 @@ Watch the target PR for the code-review bot's review, then triage and act on it.
 
 ## The review bot
 
-The reviewer is the GitHub user **`claude`**, driven by a **GitHub Action that fires automatically on every push** to the PR. It posts a single **top-level PR comment** (not inline threads) whose body starts with `## Code Review` and groups findings under **Critical**, **Important**, and **Minor** headings. A clean review posts a brief approval comment with no findings.
+The reviewer is the GitHub user **`claude`**, driven by a **GitHub Action that fires automatically on every push** to the PR. It posts a single **top-level PR comment** (not inline threads) whose **first line is `## Code Review`**, grouping findings under `### Critical` / `### Important` / `### Minor`. A clean review posts a brief approval comment with no findings.
+
+That shape is pinned in `.claude/commands/code-review.md` ("Output format"), but **match on the first line *containing* "Code Review", not on the exact `##` decoration.** It previously drifted to `**Code Review**` — the format was documented only here, on the reading side, and never stated to the reviewer, so it held by luck until a prompt/model change flipped the register. Both ends are fixed now; keep the matcher tolerant anyway so a future drift degrades into a cosmetic mismatch rather than a watch that silently never fires.
 
 Because it is a top-level comment, it is **not** a GitHub "Review": `gh pr view --json reviews` and the inline `pulls/<n>/comments` endpoint are both always empty for this bot — an empty result there means nothing. The login also differs by API: `.author.login` is `claude` via `gh pr view --json comments` (used below), but `user.login` is `claude[bot]` via REST `issues/<n>/comments`. Keep the two straight if you change the query.
 
@@ -29,19 +31,20 @@ Never manually re-trigger the bot; pushing is what triggers it.
 
 ## Step 1 — Wait for the review (watch)
 
-"Ready" = a comment by `claude` starting with `## Code Review` that was created **after the latest commit on the PR branch**. This is a PR-branch-freshness check (so we don't act on a stale review from a previous round) — it is *not* about whether `main` has moved; that's handled separately in Step 2.
+"Ready" = a comment by `claude` whose **first line contains "Code Review"** (any markdown decoration) that was created **after the latest commit on the PR branch**. This is a PR-branch-freshness check (so we don't act on a stale review from a previous round) — it is *not* about whether `main` has moved; that's handled separately in Step 2.
 
 First capture the reference time — the head commit date:
 `gh pr view <num> --json commits --jq '.commits[-1].committedDate'`
 
 Then wait for the review. **Prefer a GitHub MCP subscription if one is connected; otherwise fall back to `gh` polling.**
 
-**Path A — GitHub MCP subscribe (preferred, event-driven).** If a GitHub MCP server is connected to this session, check whether it exposes a PR-activity / comment subscription tool (look via ToolSearch for names like `subscribe`, `pr activity`, `watch`, `pull request comments`). If so, subscribe to this PR's comment/review activity and let the server's change-notifications wake you, instead of polling. When woken, apply the same freshness filter (author `claude`, body starts with `## Code Review`, created after the head commit date). Only use this if such a tool actually exists in the session — do not invent a server.
+**Path A — GitHub MCP subscribe (preferred, event-driven).** If a GitHub MCP server is connected to this session, check whether it exposes a PR-activity / comment subscription tool (look via ToolSearch for names like `subscribe`, `pr activity`, `watch`, `pull request comments`). If so, subscribe to this PR's comment/review activity and let the server's change-notifications wake you, instead of polling. When woken, apply the same freshness filter (author `claude`, first line contains "Code Review", created after the head commit date). Only use this if such a tool actually exists in the session — do not invent a server.
 
 **Path B — `gh` polling (fallback).** If no GitHub MCP server / subscribe tool is available, poll. There is no push/long-poll channel for `gh`, so poll *efficiently* — sleep-and-recheck via the harness scheduler (ScheduleWakeup) or a background Bash loop, **not** a tight token-burning loop. Latest-wins query (note: `gh --jq` does **not** accept `--arg`, so pipe to standalone `jq`):
 ```
 gh pr view <num> --json comments | jq -r --arg t "<head-date>" \
-  '[.comments[] | select(.author.login=="claude" and .createdAt > $t and (.body|startswith("## Code Review")))] | last | (.body // "NO_REVIEW_YET")'
+  '[.comments[] | select(.author.login=="claude" and .createdAt > $t
+    and ((.body | split("\n")[0]) | test("Code Review"; "i")))] | last | (.body // "NO_REVIEW_YET")'
 ```
 Poll about every 60s. **Do not block on a foreground `sleep`** (the harness blocks it) — run the poll as a background Bash loop that exits 0 once the comment is found, or use ScheduleWakeup to re-check.
 

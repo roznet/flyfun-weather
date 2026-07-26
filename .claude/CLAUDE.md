@@ -18,7 +18,9 @@ Read the full comment thread, not just the issue body (`gh issue view <n> --comm
 
 ## Finding the code-review bot's review on a PR
 
-The bot posts its findings as an ordinary **comment on the PR's conversation tab** — not as a GitHub "Review" (Approve / Request-changes) and not as inline diff comments. Look in `gh pr view <n> --comments` for a comment whose body starts with `## Code Review`.
+The bot posts its findings as an ordinary **comment on the PR's conversation tab** — not as a GitHub "Review" (Approve / Request-changes) and not as inline diff comments. Look in `gh pr view <n> --comments` for a comment by `claude` whose **first line contains "Code Review"**.
+
+Match on the text, not the markdown decoration: the comment shape is pinned in `.claude/commands/code-review.md` ("Output format") as `## Code Review`, but it has drifted to `**Code Review**` before, and a matcher that keys off `##` silently finds nothing when it does.
 
 ## Code Design Principles
 
