@@ -291,12 +291,12 @@ def test_serial_path_runs_every_unit_when_the_gate_stays_open(tmp_path, tracker)
     assert _dispatched(tracker) == _UNITS_PER_FHOUR
 
 
-def test_abort_if_gates_the_parallel_path_too(tmp_path, tracker):
-    """``outer > 1`` submits incrementally, so the gate governs it as well.
+def test_parallel_path_break_bookkeeping(tmp_path, tracker):
+    """``outer > 1`` stops at the gate and reports the pass incomplete.
 
-    Warm callers pass ``outer_workers=1`` today and take the serial branch, but
-    a gate that silently stopped working if that budget were raised back to 2
-    is exactly the regression #501 exists to prevent.
+    Counting only — the jobs here return instantly, so this says nothing about
+    whether the gate can interject against real downloads. That is the next
+    test's job.
     """
     ctx = _make_ctx(tmp_path, forecast_hours=[6])
     completed = _prefetch_icon_eu_data_inner(
@@ -304,3 +304,35 @@ def test_abort_if_gates_the_parallel_path_too(tmp_path, tracker):
     )
     assert completed is False
     assert _dispatched(tracker) == 3
+
+
+def test_parallel_path_gate_interjects_during_slow_downloads(tmp_path, tracker):
+    """Submission is throttled to completions, so the gate can actually fire.
+
+    Interleaving a check between ``submit()`` calls does NOT gate this path:
+    submit() is non-blocking, so the whole loop drains in microseconds while
+    the real gate's state moves in seconds — every check answers False and the
+    pass commits to the full job list regardless (PR #504 review). With at
+    most ``outer`` units in flight, a gate that goes active partway through
+    real downloads stops the pass partway through the list.
+
+    Deterministic despite the sleeps: submission blocks whenever ``outer``
+    units are in flight, so after k submissions at least k - outer have
+    completed. The gate here flips at 4 dispatches, which therefore cannot be
+    outrun — it must fire by submission 4 + outer.
+    """
+    tracker["delay"] = 0.02
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    outer = 2
+
+    def gate() -> bool:
+        return _dispatched(tracker) >= 4
+
+    completed = _prefetch_icon_eu_data_inner(
+        ctx, outer_workers=outer, abort_if=gate,
+    )
+    assert completed is False
+    assert _dispatched(tracker) <= 4 + outer, (
+        "submission outran the gate — it is not throttled to completions"
+    )
+    assert _dispatched(tracker) < _UNITS_PER_FHOUR
