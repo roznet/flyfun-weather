@@ -489,18 +489,10 @@ class TestModelGustBackfill:
         init = when - timedelta(hours=6)
 
         oid = _add_obs(db, "LFPG", when, wind=20, gust=28)
-        score = _add_score(
-            db, oid, "LFPG", when, init_time=init, model="icon",
-        )
+        score = _add_score(db, oid, "LFPG", when, init_time=init, model="icon")
         db.add(AirportForecastSnapshotRow(
             icao="LFPG", model="icon", model_init_time=init, forecast_hour=when,
             wind_speed_10m_kt=18.0, wind_gusts_10m_kt=32.0,
-        ))
-        # A decoy an hour away — the nearest forecast hour must win.
-        db.add(AirportForecastSnapshotRow(
-            icao="LFPG", model="icon", model_init_time=init,
-            forecast_hour=when + timedelta(hours=1),
-            wind_speed_10m_kt=19.0, wind_gusts_10m_kt=40.0,
         ))
         db.flush()
 
@@ -509,6 +501,68 @@ class TestModelGustBackfill:
         assert score.model_wind_gust_kt == pytest.approx(32.0)
         assert score.wind_gust_delta_kt == pytest.approx(4.0)  # 32 - 28
         assert score.model_gust_flag is True
+
+    def test_the_stored_wind_delta_picks_between_forecast_hours(
+        self, committing_db,
+    ):
+        """Identify the scored snapshot, don't assume the nearest hour won.
+
+        `_score_cycle` has no forecast_hour tiebreak, so the neighbouring hour
+        can be the one that got scored. The stored wind delta says which.
+        """
+        db = committing_db
+        when = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0,
+        ) - timedelta(hours=3)
+        init = when - timedelta(hours=6)
+
+        oid = _add_obs(db, "EGKK", when, wind=20, gust=28)
+        # delta 19 - 20 = -1.0 -> the +1 h snapshot was the one scored, even
+        # though the exact-hour snapshot is nearer in time.
+        score = _add_score(
+            db, oid, "EGKK", when, init_time=init, model="icon",
+            wind_speed_delta_kt=-1.0,
+        )
+        db.add(AirportForecastSnapshotRow(
+            icao="EGKK", model="icon", model_init_time=init, forecast_hour=when,
+            wind_speed_10m_kt=18.0, wind_gusts_10m_kt=32.0,
+        ))
+        db.add(AirportForecastSnapshotRow(
+            icao="EGKK", model="icon", model_init_time=init,
+            forecast_hour=when + timedelta(hours=1),
+            wind_speed_10m_kt=19.0, wind_gusts_10m_kt=40.0,
+        ))
+        db.flush()
+
+        assert backfill_model_gust(db, days=2) == 1
+        db.refresh(score)
+        assert score.model_wind_gust_kt == pytest.approx(40.0)
+        assert score.wind_gust_delta_kt == pytest.approx(12.0)  # 40 - 28
+
+    def test_ambiguous_forecast_hours_leave_the_row_null(self, committing_db):
+        """Two candidates and no stored delta to separate them -> stay NULL."""
+        db = committing_db
+        when = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0,
+        ) - timedelta(hours=3)
+        init = when - timedelta(hours=6)
+
+        oid = _add_obs(db, "LFBO", when, wind=20, gust=28)
+        _add_score(db, oid, "LFBO", when, init_time=init, model="icon")
+        for offset, wind, gust in (
+            (timedelta(0), 18.0, 32.0),
+            (timedelta(hours=1), 19.0, 40.0),
+        ):
+            db.add(AirportForecastSnapshotRow(
+                icao="LFBO", model="icon", model_init_time=init,
+                forecast_hour=when + offset,
+                wind_speed_10m_kt=wind, wind_gusts_10m_kt=gust,
+            ))
+        db.flush()
+
+        assert backfill_model_gust(db, days=2) == 0
+        row = db.execute(select(VerificationScoreRow)).scalars().one()
+        assert row.model_wind_gust_kt is None
 
     def test_leaves_already_populated_scores_alone(self, committing_db):
         db = committing_db

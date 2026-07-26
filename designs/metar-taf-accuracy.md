@@ -76,6 +76,8 @@ tasks/verification_gust.py              ← gust definitions + aggregates + back
 ├── gust_aggregate_columns()            ← shared SQL aggregates (daily + monthly)
 ├── backfill_taf_gust_deltas()          ← all history (obs row holds both gusts)
 └── backfill_model_gust()               ← un-pruned snapshot window only
+    └── _pick_scored_snapshot()          ← identifies the scored snapshot via
+                                           the stored wind delta; NULL if ambiguous
 
 tasks/verification_daily_rollup.py      ← daily pre-aggregation (#154)
 ├── rollup_day()                        ← pure SQL INSERT-SELECT, idempotent
@@ -657,7 +659,10 @@ python -m weatherbrief.verify score
 python -m weatherbrief.verify backfill --flight-id "LFPG-EDDF-2026-04-01-abc123"
 
 # Backfill the gust columns from migration 083 (#491). TAF reaches all history;
-# model gust only the un-pruned snapshot window (--days, default 10).
+# model gust only the un-pruned snapshot window (--days, default 10). Model
+# rows whose scored snapshot can't be pinned down (several forecast hours in
+# the ±90 min window, no stored wind delta to separate them) stay NULL by
+# design — see _pick_scored_snapshot.
 python -m weatherbrief.verify backfill-gust
 python -m weatherbrief.verify backfill-gust --taf-only
 

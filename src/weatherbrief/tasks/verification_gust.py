@@ -239,11 +239,23 @@ def backfill_model_gust(db: Session, *, days: int = 10) -> int:
 
     Works one UTC day at a time to bound memory: for each day it loads the
     day's un-backfilled scores, the observations they point at, and the
-    snapshots that could match, then matches on
-    ``(icao, model, model_init_time)`` with the forecast hour nearest the
-    observation time. Inside the ±90 min window ``_score_cycle`` pairs on,
-    that is the snapshot the score was written from. Commits per day, and
-    only ever touches rows whose ``model_wind_gust_kt`` is still NULL.
+    snapshots that could match on ``(icao, model, model_init_time)``.
+
+    Picking the right candidate matters. ``_score_cycle`` pairs on a ±90 min
+    window and dedups on ``(icao, observation_time, model, model_init_time)``
+    — no ``forecast_hour`` — so for an hourly model that 180 min window holds
+    2-3 snapshots and whichever the query returned *first* is the one that got
+    scored. "Nearest forecast hour" is therefore a guess, and guessing wrong
+    would write a gust from a different valid time than the ``wind_speed_delta``
+    / ``ceiling_delta`` already stored on that same row.
+
+    So the snapshot is *identified* rather than guessed: ``wind_speed_delta_kt``
+    is exactly ``snapshot.wind_speed_10m_kt - obs.wind_speed_kt``, so the
+    candidate reproducing the stored delta is the one the score was written
+    from. When that is ambiguous (delta NULL, or several candidates tie) the
+    row is left NULL rather than filled from a coin flip — see
+    :func:`_pick_scored_snapshot`. Commits per day, and only ever touches rows
+    whose ``model_wind_gust_kt`` is still NULL.
     """
     now = datetime.now(timezone.utc)
     start_day = (now - timedelta(days=days)).date()
@@ -264,6 +276,48 @@ def backfill_model_gust(db: Session, *, days: int = 10) -> int:
     return updated
 
 
+def _pick_scored_snapshot(
+    candidates: list[tuple],
+    *,
+    obs_time: datetime,
+    obs_wind_kt: float | None,
+    stored_wind_delta_kt: float | None,
+) -> tuple | None:
+    """The snapshot a score row was written from, or None if not identifiable.
+
+    ``candidates`` are ``(forecast_hour, wind_kt, gust_kt)`` for one
+    ``(icao, model, model_init_time)`` key. Only those inside the ±90 min
+    window ``_score_cycle`` pairs on are eligible.
+
+    Identification, not proximity: the stored ``wind_speed_delta_kt`` is
+    ``snapshot.wind_speed_10m_kt - obs.wind_speed_kt``, so the candidate that
+    reproduces it is the one that was scored. Returning None (leaving the row
+    NULL) is the correct outcome whenever that is ambiguous — a wrong gust is
+    worse than a missing one for a feature whose entire purpose is measuring
+    gust error.
+    """
+    eligible = [c for c in candidates if abs(c[0] - obs_time) <= _MATCH_WINDOW]
+    if not eligible:
+        return None
+    if len(eligible) == 1:
+        return eligible[0]
+
+    # Several forecast hours fall in the window — the hourly-model case. Only
+    # the stored wind delta can say which one _score_cycle actually scored.
+    if stored_wind_delta_kt is None or obs_wind_kt is None:
+        return None
+    implied = float(stored_wind_delta_kt) + float(obs_wind_kt)
+    matches = [
+        c for c in eligible
+        if c[1] is not None and abs(float(c[1]) - implied) < 0.01
+    ]
+    if len(matches) != 1:
+        # Zero matches, or two candidates with the same wind but possibly
+        # different gusts — either way the gust cannot be pinned down.
+        return None
+    return matches[0]
+
+
 def _backfill_model_gust_day(
     db: Session, day_start: datetime, day_end: datetime,
 ) -> int:
@@ -276,6 +330,7 @@ def _backfill_model_gust_day(
             VerificationScoreRow.model,
             VerificationScoreRow.model_init_time,
             VerificationScoreRow.observation_time,
+            VerificationScoreRow.wind_speed_delta_kt,
         ).where(
             VerificationScoreRow.observation_time >= day_start,
             VerificationScoreRow.observation_time < day_end,
@@ -310,29 +365,33 @@ def _backfill_model_gust_day(
 
     obs_ids = sorted({s.observation_id for s in scores})
     obs_gusts: dict[int, float | None] = {}
+    obs_winds: dict[int, float | None] = {}
     for chunk_start in range(0, len(obs_ids), 5000):
         chunk = obs_ids[chunk_start : chunk_start + 5000]
-        for oid, gust in db.execute(
+        for oid, gust, wind_kt in db.execute(
             select(
                 VerificationObservationRow.id,
                 VerificationObservationRow.wind_gust_kt,
+                VerificationObservationRow.wind_speed_kt,
             ).where(VerificationObservationRow.id.in_(chunk))
         ).all():
             obs_gusts[oid] = gust
+            obs_winds[oid] = wind_kt
 
     mappings: list[dict] = []
     for s in scores:
         candidates = by_key.get((s.icao, s.model, _naive_utc(s.model_init_time)))
         if not candidates:
             continue
-        obs_time = _naive_utc(s.observation_time)
-        fhour, wind, gust = min(
-            candidates, key=lambda c: abs((c[0] - obs_time).total_seconds()),
+        picked = _pick_scored_snapshot(
+            candidates,
+            obs_time=_naive_utc(s.observation_time),
+            obs_wind_kt=obs_winds.get(s.observation_id),
+            stored_wind_delta_kt=s.wind_speed_delta_kt,
         )
-        # A gap in the snapshot series must leave the row NULL rather than pair
-        # it with a distant forecast hour — same ±90 min reach _score_cycle uses.
-        if abs(fhour - obs_time) > _MATCH_WINDOW:
+        if picked is None:
             continue
+        _fhour, wind, gust = picked
         obs_gust = obs_gusts.get(s.observation_id)
         mappings.append({
             "id": s.id,

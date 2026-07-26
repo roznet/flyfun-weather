@@ -26,8 +26,8 @@ never be blended (forecast-flagged vs obs-flagged — see
 Existing rollup rows keep 0/NULL in the new columns until their day/month
 is re-rolled (``verify rollup-daily-stats --rebuild``).
 
-Revision ID: 082
-Revises: 081
+Revision ID: 083
+Revises: 082
 """
 
 from typing import Sequence, Union
