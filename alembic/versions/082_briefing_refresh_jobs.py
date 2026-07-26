@@ -51,7 +51,7 @@ def upgrade() -> None:
         # resumed refresh keeps the original surface in usage accounting.
         sa.Column("source", sa.String(16), nullable=True),
         sa.Column("as_of_date", sa.Date, nullable=True),
-        # queued | running | succeeded | failed | abandoned
+        # queued | running | succeeded | skipped | failed | abandoned
         sa.Column("status", sa.String(16), nullable=False, server_default="queued"),
         sa.Column("attempt", sa.Integer, nullable=False, server_default="1"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -69,9 +69,13 @@ def upgrade() -> None:
     op.create_index(
         "ix_refresh_jobs_flight", "briefing_refresh_jobs", ["flight_id", "created_at"]
     )
+    # Account deletion sweeps this table by user_id (app._on_delete_user), and
+    # it only grows — matches the indexed FK-to-users pattern used elsewhere.
+    op.create_index("ix_refresh_jobs_user", "briefing_refresh_jobs", ["user_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_refresh_jobs_user", table_name="briefing_refresh_jobs")
     op.drop_index("ix_refresh_jobs_flight", table_name="briefing_refresh_jobs")
     op.drop_index("ix_refresh_jobs_status", table_name="briefing_refresh_jobs")
     op.drop_table("briefing_refresh_jobs")

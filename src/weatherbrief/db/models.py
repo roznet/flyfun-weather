@@ -326,11 +326,18 @@ class BriefingRefreshJobRow(Base):
     __table_args__ = (
         Index("ix_refresh_jobs_status", "status"),
         Index("ix_refresh_jobs_flight", "flight_id", "created_at"),
+        # Account deletion sweeps by user_id; named here rather than via
+        # ``index=True`` so dev's create_all and migration 082 agree on the name.
+        Index("ix_refresh_jobs_user", "user_id"),
     )
 
     #: Statuses a job can end in. Anything else means "still in flight" and, at
-    #: process boot, means "interrupted".
-    TERMINAL = ("succeeded", "failed", "abandoned")
+    #: process boot, means "interrupted". ``skipped`` is distinct from
+    #: ``succeeded`` on purpose: the refresh gate declining a full run is the
+    #: routine outcome for a flight that already has a recent pack, and folding
+    #: it into ``succeeded`` would make the record claim briefings that were
+    #: never produced.
+    TERMINAL = ("succeeded", "skipped", "failed", "abandoned")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     flight_id: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -343,7 +350,7 @@ class BriefingRefreshJobRow(Base):
     # resumed refresh is still accounted to the surface that asked for it.
     source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     as_of_date: Mapped[date_t | None] = mapped_column(Date, nullable=True)
-    # queued | running | succeeded | failed | abandoned
+    # queued | running | succeeded | skipped | failed | abandoned
     status: Mapped[str] = mapped_column(String(16), default="queued")
     attempt: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(

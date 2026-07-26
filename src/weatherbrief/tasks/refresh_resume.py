@@ -162,6 +162,16 @@ def snapshot_orphans() -> list[int]:
         db.close()
 
 
+def _close_orphan(job_id: int, status: str, error: str) -> None:
+    """Terminalize an interrupted job row in its own committed session."""
+    db = SessionLocal()
+    try:
+        finish_job(db, job_id, status, error=error)
+        db.commit()
+    finally:
+        db.close()
+
+
 async def reconcile_one(job_id: int, app_state) -> None:
     """Abandon or resume a single interrupted refresh."""
     from weatherbrief.api.packs import refresh_registry
@@ -191,13 +201,7 @@ async def reconcile_one(job_id: int, app_state) -> None:
             db.commit()
             return
 
-        # Close the interrupted row before re-queuing so the post-mortem keeps
-        # one row per attempt rather than a mutating counter.
-        finish_job(
-            db, job_id, "failed",
-            error=f"interrupted by process restart; resumed as {decision.reason}",
-        )
-        db.commit()
+
         if user_id is None:
             flight_row = db.get(FlightRow, flight_id)
             user_id = flight_row.user_id if flight_row else None
@@ -206,12 +210,18 @@ async def reconcile_one(job_id: int, app_state) -> None:
 
     if user_id is None:
         logger.warning("Refresh resume: no user for flight %s — skipping", flight_id)
+        _close_orphan(job_id, "abandoned", "interrupted by process restart; no owning user")
         return
 
     logger.warning(
         "Refresh resume: re-running interrupted refresh for flight %s (%s)",
         flight_id, decision.reason,
     )
+    # Register BEFORE closing the interrupted row, so the row never claims a
+    # resume that didn't happen. The cost is a narrow window where both rows are
+    # non-terminal: if the process dies in it, the next boot resumes the old row
+    # again and abandons the new one at the attempt cap — an extra run rather
+    # than a lost one, which is the right way round for this failure.
     entry = refresh_registry.try_register(
         flight_id, triggered_by="resume", user_id=user_id,
         source=source, attempt=attempt + 1,
@@ -221,7 +231,18 @@ async def reconcile_one(job_id: int, app_state) -> None:
             "Refresh resume: %s already has a live refresh — nothing to resume",
             flight_id,
         )
+        _close_orphan(
+            job_id, "abandoned",
+            "interrupted by process restart; resume skipped, flight already active",
+        )
         return
+
+    # One row per attempt: this one records the interruption, the row just
+    # registered records the resume.
+    _close_orphan(
+        job_id, "failed",
+        f"interrupted by process restart; resumed as {decision.reason}",
+    )
 
     # Own session for the duration: _auto_refresh_one reads attributes off the
     # FlightRow while it runs, so the row must stay attached to a live session
@@ -233,11 +254,20 @@ async def reconcile_one(job_id: int, app_state) -> None:
             refresh_registry.mark_outcome(flight_id, "abandoned", "flight disappeared")
             return
         refresh_registry.set_refreshing(flight_id)
-        await asyncio.to_thread(
+        ran = await asyncio.to_thread(
             _auto_refresh_one, flight_row, app_state, user_id, triggered_by="resume",
         )
-        refresh_registry.mark_outcome(flight_id, "succeeded")
-        logger.info("Refresh resume: completed for flight %s", flight_id)
+        # decide_resume already checked the gate, so a skip here means it moved
+        # underneath us (the scheduler got there first). Record it as such
+        # rather than as a briefing that never happened.
+        refresh_registry.mark_outcome(
+            flight_id, "succeeded" if ran else "skipped",
+            None if ran else "refresh gate declined a full run",
+        )
+        logger.info(
+            "Refresh resume: %s for flight %s",
+            "completed" if ran else "skipped by the gate", flight_id,
+        )
     except Exception as exc:
         refresh_registry.mark_outcome(flight_id, "failed", str(exc))
         logger.error("Refresh resume failed for flight %s", flight_id, exc_info=True)
