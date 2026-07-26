@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 
 import pytest
 
@@ -298,6 +299,111 @@ class TestModelSurfaceHeight:
         levels = [PressureLevelData(pressure_hpa=1000, temperature_c=15.0)]
         assert model_surface_height_m(levels, 1013.0) is None
         assert model_surface_height_m(self._levels(), 0.0) is None
+
+
+class TestEnrichmentWiring:
+    """The two helpers that connect decode to enrichment (#486/#487).
+
+    Both encode ordering invariants that are load-bearing but were only
+    documented in comments — the kind that survive review and then quietly
+    break in a later refactor. These pin them.
+    """
+
+    @staticmethod
+    def _section(gh_by_p: dict[int, float], valid: datetime):
+        from weatherbrief.models.analysis import (
+            HourlyForecast, ModelSource, PressureLevelData, RouteCrossSection,
+            Waypoint, WaypointForecast,
+        )
+
+        hourly = HourlyForecast(
+            time=valid,
+            pressure_levels=[
+                PressureLevelData(
+                    pressure_hpa=p, temperature_c=15.0 - (1000 - p) * 0.05,
+                    relative_humidity_pct=50.0, geopotential_height_m=z,
+                )
+                for p, z in sorted(gh_by_p.items(), reverse=True)
+            ],
+        )
+        wp = Waypoint(icao="RP000", name="RP000", lat=51.0, lon=0.0)
+        return RouteCrossSection(
+            model=ModelSource.ECMWF, route_points=[], fetched_at=valid,
+            point_forecasts=[
+                WaypointForecast(
+                    waypoint=wp, model=ModelSource.ECMWF,
+                    fetched_at=valid, hourly=[hourly],
+                )
+            ],
+        )
+
+    def test_geopotential_reference_reads_the_outgoing_levels(self):
+        from weatherbrief.fetch.grib import _geopotential_reference
+
+        valid = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+        cs = self._section({1000: 110.0, 850: 1460.0}, valid)
+        hourly = cs.point_forecasts[0].hourly[0]
+        assert _geopotential_reference(hourly) == {1000: 110.0, 850: 1460.0}
+
+    def test_reference_is_read_before_the_replacement_overwrites_it(self):
+        """#486's load-bearing ordering invariant: the reference must be
+        harvested from the hourly BEFORE its levels are replaced. If it ever
+        reads post-replacement, an ICON column (no delivered geopotential)
+        silently falls back to the ISA anchor."""
+        from weatherbrief.fetch.grib import _replace_pressure_levels_from_grib
+        from weatherbrief.models.analysis import ModelSource
+
+        valid = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+        # Open-Meteo says 1000 hPa sits at 500 m — far from its ISA ~110 m.
+        cs = self._section({1000: 500.0, 850: 1850.0}, valid)
+        # Incoming GRIB column carries NO geopotential (the ICON case).
+        decoded = [{
+            1000: {"raw_temperature_k": 288.0, "raw_relative_humidity_pct": 50.0},
+            850: {"raw_temperature_k": 278.0, "raw_relative_humidity_pct": 50.0},
+        }]
+        replaced = _replace_pressure_levels_from_grib(
+            [cs], [], [], decoded,
+            valid_utc=valid, model_source=ModelSource.ICON,
+        )
+        assert replaced == 1
+        heights = {
+            pl.pressure_hpa: pl.geopotential_height_m
+            for pl in cs.point_forecasts[0].hourly[0].pressure_levels
+        }
+        # Anchored on the reference, not on ISA (~110 m at 1000 hPa).
+        assert heights[1000] == pytest.approx(500.0)
+        assert heights[850] > 1000.0
+
+    def test_fill_ecmwf_orography_computes_and_memoizes(self):
+        from weatherbrief.fetch.grib import _fill_ecmwf_orography
+
+        valid = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+        cs = self._section({1000: 110.0, 925: 760.0, 850: 1460.0}, valid)
+        cache: list[float | None] = [None]
+        _fill_ecmwf_orography(
+            cache, [cs], [{"surface_pressure_pa": 92500.0}], [True], valid,
+        )
+        assert cache[0] == pytest.approx(760.0, abs=1.0)
+
+        # Terrain is time-invariant: a later step must not recompute it.
+        _fill_ecmwf_orography(
+            cache, [cs], [{"surface_pressure_pa": 100000.0}], [True], valid,
+        )
+        assert cache[0] == pytest.approx(760.0, abs=1.0)
+
+    def test_fill_ecmwf_orography_leaves_unresolvable_points_none(self):
+        """An uncovered point stays None, and build_ecmwf_cloud_diagnostics
+        then drops the AGL freezing level rather than mislabelling it."""
+        from weatherbrief.fetch.grib import _fill_ecmwf_orography
+
+        valid = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+        cs = self._section({1000: 110.0, 925: 760.0}, valid)
+        cache: list[float | None] = [None]
+        _fill_ecmwf_orography(cache, [cs], [{}], [False], valid)
+        assert cache[0] is None
+        # Covered but no surface pressure in the payload → still None.
+        _fill_ecmwf_orography(cache, [cs], [{}], [True], valid)
+        assert cache[0] is None
 
 
 class TestGeopotentialReferenceAnchor:

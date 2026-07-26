@@ -1295,6 +1295,42 @@ class TestBuildIconCloudDiagnostics:
         assert diag.freezing_level_ft is None
         assert diag.total_cover_pct == 50.0  # rest of the diag unaffected
 
+    def test_ecmwf_freezing_level_below_ground_is_kept(self):
+        """A negative deg0l is a real cold-airmass forecast, not an artifact.
+
+        The 0 °C isotherm sits below the model surface when the near-surface
+        column is sub-freezing — exactly when the freezing level matters most
+        for icing. The repo's own real-GRIB sanity bounds record this:
+        freezing_level_m is (-500, 6000) where every sibling height is
+        (0, 25000). With terrain in hand it maps to an ordinary MSL height.
+        """
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        # 0 °C 300 m BELOW ground, over 800 m terrain → 500 m MSL.
+        diag = build_ecmwf_cloud_diagnostics(
+            {"freezing_level_m": -300.0}, terrain_elevation_m=800.0,
+        )
+        assert diag is not None
+        assert diag.freezing_level_ft == round(500.0 * 3.28084)
+
+    def test_ecmwf_negative_cloud_heights_still_dropped(self):
+        """The below-ground latitude is deg0l's alone — a cloud below ground
+        is meaningless, so ceiling/base/top keep rejecting negatives."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        diag = build_ecmwf_cloud_diagnostics(
+            {
+                "ceiling_m": -50.0,
+                "cloud_base_height_m": -50.0,
+                "convective_cloud_top_m": -50.0,
+                "total_cover_frac": 0.5,
+            },
+            terrain_elevation_m=800.0,
+        )
+        assert diag is not None
+        assert diag.ceiling_ft is None
+        assert diag.convective_top_ft is None
+
     def test_ecmwf_freezing_level_sentinel_dropped(self):
         """The 9999 m no-value sentinel must not become 9999 m + terrain."""
         from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
