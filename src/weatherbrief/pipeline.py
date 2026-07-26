@@ -44,8 +44,15 @@ from weatherbrief.tasks.outputs import run_gramet, run_skewt, run_llm_digest
 logger = logging.getLogger(__name__)
 
 
+from weatherbrief.process_memory_sampler import MemorySampler
 from weatherbrief.process_rss import current_rss_mb as _current_rss_mb
 from weatherbrief.process_rss import log_memory as _log_memory
+
+#: Sampling interval for the per-refresh memory window. The standalone cycle
+#: samples every 5 s, but a briefing's spikes are decode-shaped — seconds, not
+#: minutes — so 5 s steps over them. Two small /proc + /sys reads every 2 s is
+#: nothing against a refresh measured in minutes.
+_MEMORY_SAMPLE_SECONDS = 2.0
 
 
 def _peak_rss_mb() -> float | None:
@@ -242,6 +249,48 @@ def _load_previous_digest(pack_dir: Path | None, days_out: int = -1):
 
 
 def execute_briefing(
+    route: RouteConfig,
+    departure_time: datetime,
+    options: BriefingOptions | None = None,
+    progress_callback: Callable[[str, str | None], None] | None = None,
+    briefing_ready_callback: Callable[["BriefingResult"], None] | None = None,
+) -> BriefingResult:
+    """Run the full briefing pipeline, sampling memory for its duration.
+
+    Thin wrapper around :func:`_execute_briefing_stages`, which holds the
+    actual pipeline. It exists so the memory window has a ``finally`` to close
+    on without indenting six hundred lines: the sampler has to stop even when
+    the refresh raises, and a refresh that died is precisely the one whose
+    peak is worth having. The boundary log line moved here with it, so a
+    failed refresh now reports its memory too (#506).
+
+    The sampled cgroup peak is CONTAINER-wide, so two concurrent briefings
+    each report a peak that includes the other. That is the honest answer to
+    "how close to the limit did we get", which is what it is for. The
+    parent-RSS peak is this process alone and excludes the decode workers.
+
+    See :func:`_execute_briefing_stages` for arguments and return value.
+    """
+    sampler = MemorySampler(interval_seconds=_MEMORY_SAMPLE_SECONDS)
+    sampler.start()
+    try:
+        return _execute_briefing_stages(
+            route,
+            departure_time,
+            options,
+            progress_callback,
+            briefing_ready_callback,
+        )
+    finally:
+        peaks = sampler.stop()
+        _log_memory(
+            "briefing refresh", logger,
+            task_peak_rss_mb=peaks.peak_rss_mb,
+            task_peak_cgroup_mb=peaks.peak_cgroup_mb,
+        )
+
+
+def _execute_briefing_stages(
     route: RouteConfig,
     departure_time: datetime,
     options: BriefingOptions | None = None,
@@ -886,5 +935,6 @@ def execute_briefing(
         total = sum(stage_timings.values())
         logger.info("Pipeline timing: %s total=%.2fs", parts, total)
 
-    _log_memory("briefing refresh", logger)
+    # The boundary memory log lives in the execute_briefing wrapper now, so it
+    # also fires when this function raises (#506).
     return result

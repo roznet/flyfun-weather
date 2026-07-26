@@ -70,18 +70,59 @@ def _read_proc_status_kib() -> dict[str, int] | None:
     return fields if fields else None
 
 
-def _read_cgroup_memory_mib() -> dict[str, int]:
-    """Return {current, peak, max} in MiB from cgroup v2 files (skipping unset).
+#: ``memory.stat`` keys worth logging, in the order they appear in the line.
+#: ``anon`` first because it is the one that decides whether the container
+#: lives; ``file`` next so the two can be compared at a glance.
+_CGROUP_STAT_KEYS = ("anon", "file", "slab")
 
-    Returns an empty dict outside a container or on cgroup v1 (different
-    layout — we don't bother reading it: the production droplet is v2 and
-    dev on macOS has no cgroup memory accounting at all).
+
+def _read_cgroup_memory_stat_mib() -> dict[str, int]:
+    """Return {anon, file, slab} in MiB from cgroup v2 ``memory.stat``.
+
+    ``memory.current`` is one total covering two things with very different
+    consequences. ``anon`` has to fit: the kernel can only swap it or invoke
+    the OOM killer. ``file`` is page cache it can drop on demand. A container
+    sitting near its limit is in real trouble if that is anon and essentially
+    fine if it is cache — and the total alone cannot tell you which, which is
+    how a page-cache excursion and a genuine anon spike came to look identical
+    in these logs (#506).
+
+    Empty dict outside a container or on cgroup v1.
+    """
+    out: dict[str, int] = {}
+    try:
+        with open("/sys/fs/cgroup/memory.stat") as f:
+            content = f.read()
+    except OSError:
+        return out
+    for line in content.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in _CGROUP_STAT_KEYS:
+            try:
+                out[parts[0]] = int(parts[1]) // (1024 * 1024)
+            except ValueError:
+                continue
+    return out
+
+
+def _read_cgroup_memory_mib() -> dict[str, int]:
+    """Return {current, peak, max, swap} in MiB from cgroup v2 files.
+
+    Unset/unreadable keys are skipped. Returns an empty dict outside a
+    container or on cgroup v1 (different layout — we don't bother reading it:
+    the production droplet is v2 and dev on macOS has no cgroup memory
+    accounting at all).
+
+    ``peak`` is ``/sys/fs/cgroup/memory.peak``: a high-water mark since the
+    cgroup was created that nothing here resets. It reports the loudest moment
+    since container start, NOT anything about the task reading it.
     """
     out: dict[str, int] = {}
     for key, path in (
         ("current", "/sys/fs/cgroup/memory.current"),
         ("peak", "/sys/fs/cgroup/memory.peak"),
         ("max", "/sys/fs/cgroup/memory.max"),
+        ("swap", "/sys/fs/cgroup/memory.swap.current"),
     ):
         try:
             with open(path) as f:
@@ -102,13 +143,31 @@ def log_memory(
     logger: logging.Logger,
     *,
     warn_step_mib: int = 500,
+    task_peak_rss_mb: int | None = None,
+    task_peak_cgroup_mb: int | None = None,
 ) -> None:
-    """Log parent-process memory state at a task boundary.
+    """Log memory state at a task boundary.
 
-    Emits one INFO line summarising VmRSS / VmHWM / VmSwap and (when running
-    in a cgroup-v2 container) the cgroup current/peak/max. Escalates to WARN
-    when VmHWM crosses a ``warn_step_mib`` step above the previously-warned
-    mark — first call seeds the baseline silently.
+    One INFO line, whose fields answer deliberately different questions:
+
+    - ``rss`` / ``hwm`` / ``swap`` — the PARENT process only. GRIB decode runs
+      in a ``ProcessPoolExecutor``, so the decode workers are absent from
+      these numbers: they under-report container pressure by construction.
+    - ``cgroup=<current> of <max>`` with an ``anon``/``file``/``slab``/``swap``
+      breakdown — the whole container, split into the part that has to fit and
+      the part the kernel can reclaim.
+    - ``this task peaked at`` — a windowed maximum the caller measured over
+      the task. When present this is the ONLY field in the line that describes
+      this task rather than a point-in-time or since-boot reading. Callers get
+      it from :class:`weatherbrief.process_memory_sampler.MemorySampler`.
+    - ``cgroup peak since container start`` — ``memory.peak``, a high-water
+      mark nothing resets. Spelled out at length because the old
+      ``cgroup=current/peak`` form read as a per-task peak, and a since-boot
+      number then got attributed to whichever task happened to log it. That
+      misreading is what #506 exists to end.
+
+    Escalates to WARN when VmHWM crosses a ``warn_step_mib`` step above the
+    previously-warned mark — first call seeds the baseline silently.
 
     No-op when /proc/self/status is unavailable (macOS dev, exotic kernels).
     Thread-safe: the WARN escalation state is guarded by a module lock.
@@ -121,21 +180,38 @@ def log_memory(
     hwm_mib = status.get("VmHWM", 0) // 1024
     swap_mib = status.get("VmSwap", 0) // 1024
 
+    suffix: list[str] = []
     cgroup = _read_cgroup_memory_mib()
     if cgroup:
         cur = cgroup.get("current")
-        pk = cgroup.get("peak")
         mx = cgroup.get("max")
         cur_str = f"{cur}" if cur is not None else "n/a"
-        pk_str = f"{pk}" if pk is not None else "n/a"
         mx_str = f"{mx}" if mx is not None else "n/a"
-        cgroup_str = f"; cgroup={cur_str}/{pk_str} of {mx_str} MB"
-    else:
-        cgroup_str = ""
+        suffix.append(f"; cgroup={cur_str} of {mx_str} MB")
+
+        stat = _read_cgroup_memory_stat_mib()
+        breakdown = [f"{key}={stat[key]}" for key in _CGROUP_STAT_KEYS if key in stat]
+        if cgroup.get("swap") is not None:
+            breakdown.append(f"swap={cgroup['swap']}")
+        if breakdown:
+            suffix.append(f" ({' '.join(breakdown)})")
+
+    task_peaks = [
+        f"{name}={value}"
+        for name, value in (
+            ("rss", task_peak_rss_mb), ("cgroup", task_peak_cgroup_mb),
+        )
+        if value is not None
+    ]
+    if task_peaks:
+        suffix.append(f"; this task peaked at {' '.join(task_peaks)} MB")
+
+    if cgroup.get("peak") is not None:
+        suffix.append(f"; cgroup peak since container start={cgroup['peak']} MB")
 
     logger.info(
         "Memory after %s: rss=%d hwm=%d swap=%d MB%s",
-        label, rss_mib, hwm_mib, swap_mib, cgroup_str,
+        label, rss_mib, hwm_mib, swap_mib, "".join(suffix),
     )
 
     global _LAST_WARNED_HWM_MIB

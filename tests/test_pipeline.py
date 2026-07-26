@@ -225,3 +225,48 @@ def test_briefing_options_uses_cloud_source_not_cloud_method():
     import weatherbrief.pipeline as pipeline_mod
 
     assert "options.cloud_method" not in inspect.getsource(pipeline_mod)
+
+
+class TestExecuteBriefingMemoryWindow:
+    """``execute_briefing`` samples memory for the refresh's duration (#506).
+
+    The point of the wrapper is that the peak reported alongside a refresh is
+    measured over THAT refresh, rather than being a since-container-start
+    high-water mark that happened to be read at the end of it.
+    """
+
+    def test_task_peaks_are_passed_to_the_boundary_log(self, monkeypatch):
+        import weatherbrief.pipeline as pipeline_mod
+
+        captured: dict = {}
+        monkeypatch.setattr(
+            pipeline_mod, "_execute_briefing_stages", lambda *a, **kw: "result",
+        )
+        monkeypatch.setattr(
+            pipeline_mod, "_log_memory", lambda *a, **kw: captured.update(kw),
+        )
+
+        assert pipeline_mod.execute_briefing(
+            route=None, departure_time=None,
+        ) == "result"
+        assert "task_peak_rss_mb" in captured
+        assert "task_peak_cgroup_mb" in captured
+
+    def test_memory_is_logged_even_when_the_pipeline_raises(self, monkeypatch):
+        """A refresh that died is exactly the one whose peak is worth having."""
+        import weatherbrief.pipeline as pipeline_mod
+
+        calls: list[dict] = []
+
+        def boom(*a, **kw):
+            raise RuntimeError("pipeline exploded")
+
+        monkeypatch.setattr(pipeline_mod, "_execute_briefing_stages", boom)
+        monkeypatch.setattr(
+            pipeline_mod, "_log_memory", lambda *a, **kw: calls.append(kw),
+        )
+
+        with pytest.raises(RuntimeError, match="pipeline exploded"):
+            pipeline_mod.execute_briefing(route=None, departure_time=None)
+
+        assert len(calls) == 1, "the memory window must close on the error path"
