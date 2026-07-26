@@ -156,7 +156,10 @@ async def process_auto_refreshes(app_state) -> None:
         for row in due:
             from weatherbrief.api.packs import refresh_registry
 
-            entry = refresh_registry.try_register(row.id, triggered_by="scheduler")
+            entry = refresh_registry.try_register(
+                row.id, triggered_by="scheduler", user_id=row.user_id,
+                source="scheduler",
+            )
             if entry is None:
                 logger.info("Auto-refresh: skipping %s (refresh already in progress)", row.id)
                 continue
@@ -175,8 +178,10 @@ async def process_auto_refreshes(app_state) -> None:
                         mark_db.commit()
                 finally:
                     mark_db.close()
+                refresh_registry.mark_outcome(row.id, "succeeded")
                 logger.info("Auto-refresh completed: %s", row.id)
-            except Exception:
+            except Exception as exc:
+                refresh_registry.mark_outcome(row.id, "failed", str(exc))
                 logger.error("Auto-refresh failed for %s", row.id, exc_info=True)
             finally:
                 refresh_registry.unregister(row.id)
@@ -395,8 +400,20 @@ def _flight_start_dt(row: FlightRow) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 
-def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
-    """Run the briefing pipeline for a single flight (called in a thread)."""
+def _auto_refresh_one(
+    flight_row: FlightRow,
+    app_state,
+    user_id: str,
+    *,
+    triggered_by: str = "scheduler",
+) -> None:
+    """Run the briefing pipeline for a single flight (called in a thread).
+
+    ``triggered_by`` is the usage attribution recorded on the briefing —
+    ``"scheduler"`` for the auto-refresh loop, ``"resume"`` when the boot-time
+    reconciliation pass re-runs a refresh interrupted by a container restart
+    (issue #499). Both share the same gate-then-run body.
+    """
     from weatherbrief.api.packs import (
         _build_data_status, _days_out_now, _finalize_refresh,
         _notify_refresh_complete, _prepare_refresh,
@@ -451,7 +468,7 @@ def _auto_refresh_one(flight_row: FlightRow, app_state, user_id: str) -> None:
         queue_wait, total_elapsed = refresh_registry.get_timing(flight_row.id)
         result.usage.elapsed_seconds = total_elapsed
         result.usage.queue_wait_seconds = queue_wait
-        result.usage.triggered_by = "scheduler"
+        result.usage.triggered_by = triggered_by
 
         meta = _finalize_refresh(
             flight_row.id, flight, fetch_ts, pack_path, result, db,

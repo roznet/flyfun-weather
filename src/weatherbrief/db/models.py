@@ -307,6 +307,64 @@ class BriefingUsageRow(Base):
     user: Mapped[UserRow] = relationship(UserRow)
 
 
+class BriefingRefreshJobRow(Base):
+    """Durable mirror of an in-flight briefing refresh (issue #499).
+
+    The in-memory ``_RefreshRegistry`` is the single choke point every refresh
+    path goes through; this table is its write-through mirror, so a refresh
+    that is killed mid-flight (OOM, deploy, crash) leaves a record instead of
+    evaporating. A non-terminal row present at process boot is by definition an
+    orphan — the deployment runs a single uvicorn worker, so there is no other
+    instance that could still own it, and no lease is needed.
+
+    ``flight_id`` is intentionally not a foreign key: the row must outlive the
+    flight so reconciliation can tell "flight deleted, don't resume" apart from
+    "no record". See ``weatherbrief.tasks.refresh_resume``.
+    """
+
+    __tablename__ = "briefing_refresh_jobs"
+    __table_args__ = (
+        Index("ix_refresh_jobs_status", "status"),
+        Index("ix_refresh_jobs_flight", "flight_id", "created_at"),
+    )
+
+    #: Statuses a job can end in. Anything else means "still in flight" and, at
+    #: process boot, means "interrupted".
+    TERMINAL = ("succeeded", "failed", "abandoned")
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    flight_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    user_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    # Registry queue-cap class: "user" | "scheduler" | "resume".
+    triggered_by: Mapped[str] = mapped_column(String(16), default="user")
+    # Client-declared attribution ("user" | "siri" | "mcp"), preserved so a
+    # resumed refresh is still accounted to the surface that asked for it.
+    source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    as_of_date: Mapped[date_t | None] = mapped_column(Date, nullable=True)
+    # queued | running | succeeded | failed | abandoned
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Last pipeline stage the registry saw — the "where did it die" half of a
+    # post-mortem for an interrupted refresh.
+    stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pack_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class FeedbackRow(Base):
     __tablename__ = "feedback"
 

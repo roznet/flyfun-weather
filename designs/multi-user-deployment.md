@@ -286,6 +286,8 @@ git pull && docker compose up -d --build
 | `RESEND_FROM` | No | — | Resend sender address |
 | `RESEND_REPLY_TO` | No | — | Resend reply-to address |
 | `HMAC_SECRET` | Prod only | derived from JWT_SECRET | HMAC key for pack integrity + admin approval links |
+| `WB_REFRESH_MAX_ATTEMPTS` | No | `2` | Total attempts per briefing refresh, counting the original run. `1` disables resume-after-restart; see [refresh-durability.md](./refresh-durability.md) |
+| `DISABLE_REFRESH_RESUME` | No | — | `1` skips the boot-time reconciliation pass entirely (rows are still written) |
 
 ## References
 
