@@ -656,7 +656,7 @@ python -m weatherbrief.verify score
 # Backfill: re-run scoring after code changes (--flight-id optional)
 python -m weatherbrief.verify backfill --flight-id "LFPG-EDDF-2026-04-01-abc123"
 
-# Backfill the gust columns from migration 082 (#491). TAF reaches all history;
+# Backfill the gust columns from migration 083 (#491). TAF reaches all history;
 # model gust only the un-pruned snapshot window (--days, default 10).
 python -m weatherbrief.verify backfill-gust
 python -m weatherbrief.verify backfill-gust --taf-only
