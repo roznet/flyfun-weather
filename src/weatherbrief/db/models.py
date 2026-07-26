@@ -327,7 +327,7 @@ class BriefingRefreshJobRow(Base):
         Index("ix_refresh_jobs_status", "status"),
         Index("ix_refresh_jobs_flight", "flight_id", "created_at"),
         # Account deletion sweeps by user_id; named here rather than via
-        # ``index=True`` so dev's create_all and migration 082 agree on the name.
+        # ``index=True`` so dev's create_all and migration 083 agree on the name.
         Index("ix_refresh_jobs_user", "user_id"),
     )
 
@@ -1093,7 +1093,7 @@ class VerificationDailyStatsRow(Base):
 
     # Gust (#491). Both conditionings are kept separate on purpose — see
     # tasks/verification_gust for the definitions. Rows rolled up before
-    # migration 082 carry 0/NULL here until the day is re-rolled.
+    # migration 083 carry 0/NULL here until the day is re-rolled.
     #   obs-flagged magnitude: hours the airport actually gusted
     n_gust: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",

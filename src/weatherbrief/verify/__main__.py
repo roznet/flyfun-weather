@@ -333,7 +333,7 @@ def cmd_backfill(args):
 
 
 def cmd_backfill_gust(args):
-    """Backfill the gust columns added by migration 082 (#491).
+    """Backfill the gust columns added by migration 083 (#491).
 
     Two independent halves with very different reach: the TAF gust delta is
     recoverable for all history (both gusts live on the permanent observation
