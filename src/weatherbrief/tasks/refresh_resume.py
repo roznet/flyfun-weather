@@ -93,7 +93,9 @@ def decide_resume(
     """Decide whether an interrupted refresh is worth re-running.
 
     Ordered cheapest-check-first; every abandon carries the reason that goes
-    into ``last_error`` and the log line.
+    into ``last_error`` and the log line. ``now`` pins the reference instant for
+    *all* the time-dependent checks (departure, coverage, lead time), so a test
+    can exercise any branch deterministically.
     """
     from weatherbrief.api.packs import (
         _build_data_status,
@@ -140,7 +142,7 @@ def decide_resume(
     packs = list_packs(db, job.flight_id)
     if packs:
         status = _build_data_status(packs[0], flight)
-        decision = decide_refresh(status, _days_out_now(flight))
+        decision = decide_refresh(status, _days_out_now(flight, now))
         if decision.mode != "full":
             return ResumeDecision(
                 "abandon", f"refresh gate now says {decision.mode}: {decision.reason}",

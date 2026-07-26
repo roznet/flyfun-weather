@@ -930,9 +930,14 @@ def _refresh_threshold(days_out: int) -> int:
     return _REFRESH_THRESHOLD_BY_DAYS_OUT.get(days_out, _REFRESH_THRESHOLD_DEFAULT)
 
 
-def _days_out_now(flight: Flight) -> int:
-    """Lead time in whole days from now (UTC) to the flight's departure date."""
-    now = datetime.now(timezone.utc)
+def _days_out_now(flight: Flight, now: datetime | None = None) -> int:
+    """Lead time in whole days from now (UTC) to the flight's departure date.
+
+    ``now`` overrides the reference instant so a caller that already pinned one
+    (e.g. ``decide_resume``) gets the same answer from every check it makes,
+    instead of this one silently re-reading the wall clock.
+    """
+    now = now or datetime.now(timezone.utc)
     return (flight.departure_time.date() - now.date()).days
 
 

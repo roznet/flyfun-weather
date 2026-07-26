@@ -346,8 +346,11 @@ class BriefingRefreshJobRow(Base):
     )
     # Registry queue-cap class: "user" | "scheduler" | "resume".
     triggered_by: Mapped[str] = mapped_column(String(16), default="user")
-    # Client-declared attribution ("user" | "siri" | "mcp"), preserved so a
-    # resumed refresh is still accounted to the surface that asked for it.
+    # Client-declared attribution ("user" | "siri" | "mcp") of the request that
+    # started this refresh, preserved across a resume so the job history still
+    # says which surface asked. Note this is the *job* record only: the briefing
+    # a resume produces is logged to ``briefing_usage`` as triggered_by="resume",
+    # which is the more useful value there.
     source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     as_of_date: Mapped[date_t | None] = mapped_column(Date, nullable=True)
     # queued | running | succeeded | skipped | failed | abandoned

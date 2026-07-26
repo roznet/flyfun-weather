@@ -178,7 +178,7 @@ Every refresh logged to `briefing_usage` with timing metrics (`elapsed_seconds`,
 | PDF render rate | 10/hr | `pdf_limiter` sliding window (WeasyPrint is very heavy) |
 | Skew-T / hodograph render rate | 60/hr | `plot_limiter` sliding window (combined budget) |
 
-`RefreshRegistry` (in-memory) tracks active refreshes by flight and user, queue depth, and timing. Each `RefreshEntry` carries `user_id` for per-user accounting. `GET /api/admin/metrics` returns live queue state + 24h/7d/30d timing statistics. `GET /api/refresh/stats` returns 7-day average refresh time (public, used by frontend progress hint).
+`RefreshRegistry` (in-memory, mirrored into `briefing_refresh_jobs` so an interrupted refresh survives a restart — see [refresh-durability.md](./refresh-durability.md)) tracks active refreshes by flight and user, queue depth, and timing. Each `RefreshEntry` carries `user_id` for per-user accounting. `GET /api/admin/metrics` returns live queue state + 24h/7d/30d timing statistics. `GET /api/refresh/stats` returns 7-day average refresh time (public, used by frontend progress hint).
 
 ### Refresh Progress UX
 
