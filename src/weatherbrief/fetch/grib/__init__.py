@@ -17,7 +17,14 @@ import signal
 import threading
 import time as _time_mod
 from collections import deque
-from concurrent.futures import CancelledError, Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    CancelledError,
+    Future,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+)
+from concurrent.futures import wait as _futures_wait
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from enum import IntEnum
@@ -3683,19 +3690,36 @@ def _prefetch_icon_eu_data_inner(
             fn(*args)
         return True
 
-    # Submit incrementally rather than all at once so the gate governs this
-    # path too. Warm callers pass outer_workers=1 today and take the serial
-    # branch above, but a gate that silently stopped working if that budget
-    # were ever raised back to 2 is a trap worth not setting.
+    # Throttle submission to real completions so the gate governs this path
+    # too. Interleaving the check between `submit()` calls is NOT enough:
+    # submit() is non-blocking, so the whole loop finishes in well under a
+    # millisecond while the gate's own state moves on the order of seconds —
+    # every check would answer False and the pass would commit to the entire
+    # job list anyway, just with a no-op check between each dispatch (PR #504
+    # review). Keeping at most `outer` units in flight means the gate is
+    # consulted at download-completion cadence, the only cadence at which it
+    # can actually interject.
+    #
+    # Warm callers pass outer_workers=1 today and take the serial branch
+    # above; this exists so the gate keeps working if that budget is ever
+    # raised back to 2.
     with ThreadPoolExecutor(max_workers=outer, thread_name_prefix="icon-prefetch") as pool:
-        futures = []
+        pending: set[Future] = set()
+        submitted = 0
         for done, (fn, *args) in enumerate(jobs):
             if done and _yielding(done):
                 break
-            futures.append(_submit_with_context(pool, fn, *args))
-        for fut in futures:
+            while len(pending) >= outer:
+                finished, pending = _futures_wait(
+                    pending, return_when=FIRST_COMPLETED,
+                )
+                for fut in finished:
+                    fut.result()  # jobs never raise; .result() surfaces bugs
+            pending.add(_submit_with_context(pool, fn, *args))
+            submitted += 1
+        for fut in pending:
             fut.result()  # job functions never raise; .result() surfaces bugs
-        return len(futures) == len(jobs)
+        return submitted == len(jobs)
 
 
 def _decode_and_merge_icon_eu(
