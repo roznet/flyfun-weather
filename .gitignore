@@ -53,3 +53,7 @@ AGENTS.md
 
 # Local scratch memos — untracked by design
 scratch/
+
+# Real compute-node inventory: ssh targets and paths are deployment-private.
+# deploy/compute-nodes.example.json is tracked and documents the shape.
+deploy/compute-nodes.json

@@ -31,13 +31,14 @@ The project directory on the server is `flyfun-weather`.
 7. **Check for pending Alembic migrations** (see below)
 8. **Check airport database freshness** (see below)
 9. **Check standalone verification cycle timing** (see below)
-10. **STOP and get explicit confirmation** — see the hard gate below. This is a turn boundary, not just a step.
+10. **Check compute-node drift** (see below) — read-only, never blocks
+11. **STOP and get explicit confirmation** — see the hard gate below. This is a turn boundary, not just a step.
 
 ## Confirmation gate (HARD STOP — read every time)
 
 This gate sits between pre-flight and Deploy steps. It has tripped a real incident (a deploy was narrated as done — migration applied, health 200, issues closed — while the confirmation question was *cancelled* and production never changed). The rules below exist because of that; follow them literally.
 
-1. **Confirmation is its own turn.** Post a summary of ALL pre-flight results (commit list, pytest, vitest, Playwright, alembic head count + pending migrations, disk, airport-DB freshness, standalone-cycle status) and ask the user to confirm. Then **end the turn.** Do NOT call any deploy command (`git push`, `git pull`, `docker compose`, `alembic upgrade`, issue-closing `gh`) in the same message — not in parallel, not after, not "optimistically."
+1. **Confirmation is its own turn.** Post a summary of ALL pre-flight results (commit list, pytest, vitest, Playwright, alembic head count + pending migrations, disk, airport-DB freshness, standalone-cycle status, compute-node drift if any nodes are configured) and ask the user to confirm. Then **end the turn.** Do NOT call any deploy command (`git push`, `git pull`, `docker compose`, `alembic upgrade`, issue-closing `gh`) in the same message — not in parallel, not after, not "optimistically."
 2. **Never bundle the gate with the gated action.** The `AskUserQuestion`/confirmation request and the first `ssh ... docker compose` must be in *different turns*, separated by a real user reply you can read.
 3. **Only an actual, readable "yes" from the user counts.** A cancelled `AskUserQuestion`, an empty result, a `(no output)`, a tool error, or anything you "assume" is **NOT** confirmation. If you did not receive clear words of approval, you are still in pre-flight — do not deploy.
 4. **If tool output is unreliable, ABORT — never fabricate.** If results come back blank, lag, cancel in cascades, or look invented (e.g. an alembic revision or build log you can't tie to a real command you ran), STOP. Say plainly "tool output became unreliable, I cannot verify state, halting" and re-verify production with a single clean command (`server HEAD`, `alembic current`, container uptime, HTTP health). Never narrate a step you did not observe a real result for. It is always correct to under-claim and re-check; it is never acceptable to report a fabricated deploy.
@@ -199,6 +200,82 @@ ssh <user>@<server> "docker exec weatherbrief python -m weatherbrief.verify stan
 ```
 This runs a single full cycle (fetch forecasts + observations + score) and exits. Safe to run alongside the loop — the loop's next scheduled cycle will proceed normally.
 
+## Check compute-node drift
+
+Some deployments run the heavy standalone forecast cycle on **off-box compute nodes** that emit a snapshot artifact; the droplet ingests it and skips its own cycle. Those nodes run this same repo, so they drift out of step with production silently — a node sat 64 commits behind for a week before anyone noticed, because nothing surfaced it.
+
+The node inventory lives in **`deploy/compute-nodes.json`** (gitignored — ssh targets are deployment-private). `deploy/compute-nodes.example.json` is tracked and documents every field.
+
+```bash
+# Absent file = no compute offload configured. Skip this whole section silently.
+test -f deploy/compute-nodes.json || echo "no compute nodes configured"
+```
+
+For each node in `.nodes[]`, report its SHA next to `SERVER_SHA` / `LOCAL_SHA`:
+
+```bash
+ssh <node.ssh> "cd <node.repo> && git rev-parse --short HEAD && git branch --show-current"
+```
+
+Include a row per node in the pre-flight summary: name, current SHA, branch, and how many commits behind `LOCAL_SHA` it is (`git rev-list --count <nodeSHA>..<LOCAL_SHA>`).
+
+### Unreachable nodes — expected, and must be surfaced
+
+**Reachability depends on where the skill is running from.** A node flagged `lan_only` (an mDNS `.local` name, a private IP) is reachable only from its own network, so a deploy run from a cloud agent, a different machine, or another network **will never reach it**. That is normal, not a fault, and not something to retry around.
+
+Whatever the cause — off-network, asleep, powered down, DNS failure — treat it identically:
+
+- **Never block the deploy.** Production ships regardless. A node is downstream of prod, and prod does not depend on it being current.
+- **Never guess.** From outside the network you cannot distinguish "node is switched off" from "cannot resolve the name from here". Say which you observed (the actual ssh error), not which you assume.
+- **Warn explicitly in the pre-flight summary**, in the confirmation post the user actually reads:
+
+  > ⚠️ **Compute node `mac-mini-m4` unreachable** (`Could not resolve hostname mac-mini-m4.local`). Node is `lan_only`, so this is expected when deploying from outside the home network. Its version could not be checked and it **will not be updated by this deploy** — it keeps running whatever code it has. Update it manually next time you are on that network.
+
+A stale node is safe: the importer intersects the artifact's columns with the table's, so a node running older code still produces an ingestable artifact. Staleness is a thing to fix at leisure, never a deploy blocker.
+
+## Update compute nodes (after a successful deploy)
+
+Only after production is deployed and healthy. Order matters: prod first, then nodes, so a node is never running ahead of the box that ingests its output.
+
+For each node:
+
+1. **Do not pull while a cycle is running.** A cycle takes ~10–15 min and `git pull` would swap code under it. Check `schedule_utc` / `cycle_minutes` from the config, and confirm no cycle is live:
+   ```bash
+   ssh <node.ssh> "pgrep -fl 'weatherbrief.verify standalone' || echo idle"
+   ```
+   If a cycle is running, skip the node and say so — it can be updated next deploy or by hand. Never kill a cycle to deploy.
+
+2. **Fast-forward only**, so a node with local edits fails loudly instead of silently merging:
+   ```bash
+   ssh <node.ssh> "cd <node.repo> && git checkout <node.branch> && git pull --ff-only"
+   ```
+
+3. **Reinstall dependencies only if they changed** between the node's old SHA and the new one:
+   ```bash
+   git diff --name-only <nodeSHA>..<LOCAL_SHA> -- pyproject.toml
+   # if non-empty:
+   ssh <node.ssh> "cd <node.repo> && ./<node.venv>/bin/pip install -q -e '.[dev]'"
+   ```
+
+4. **Flag migrations — never run them on a node.** Nodes run `ENVIRONMENT=development`, so their SQLite is built by `create_all` and has no `alembic_version` table; `alembic upgrade head` would try to replay every migration against tables that already exist. `create_all` also never ALTERs an existing table, so a new column does **not** appear from a `git pull` alone.
+   ```bash
+   git diff --name-only <nodeSHA>..<LOCAL_SHA> -- alembic/versions/
+   ```
+   If non-empty, report the migrations and stop there. Applying them is a human decision: usually either a single hand-written `ALTER TABLE`, or deleting the node's scratch DB and letting the next cycle rebuild it (node DBs are disposable — they are recomputed every cycle and pruned at 10 days; the artifacts are the real output).
+
+5. **Report per node**: SHA before → after, deps reinstalled yes/no, migrations needing attention, or the reason it was skipped.
+
+**A node failure never fails the deploy.** Unreachable, asleep, or mid-cycle are all warnings — production is already live at this point.
+
+Close the deploy with an explicit statement of what did *not* happen, so an un-updated node is never mistaken for an updated one:
+
+> ⚠️ **Compute nodes not updated: `mac-mini-m4`** — unreachable from here (`lan_only`, deploying from off-network). Still running its previous code, which remains safe to ingest. To update when back on that network:
+> ```
+> ssh brice@mac-mini-m4.local "cd ~/Developer/public/flyfun-weather && git pull --ff-only"
+> ```
+
+Never report a deploy as fully complete while a configured node was skipped. Say production is deployed *and* name the nodes left behind.
+
 ## Deploy steps
 
 > **Do not enter this section until the Confirmation gate above passed with an actual, readable "yes" in a prior turn.** If you cannot point to the user's approving message, go back to the gate. Run each step below as its own isolated tool call (never batched in parallel), and read its real result before moving on.
@@ -227,6 +304,7 @@ This runs a single full cycle (fetch forecasts + observations + score) and exits
    ```
    curl -s -o /dev/null -w '%{http_code}' https://weather.flyfun.aero/health
    ```
+6. **Update compute nodes**, if `deploy/compute-nodes.json` exists — see "Update compute nodes" above. Production is already live and healthy at this point, so nothing here can fail the deploy.
 
 ## Track the deployed version (prod / prod-prev branches)
 

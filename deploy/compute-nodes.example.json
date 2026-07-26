@@ -1,0 +1,47 @@
+{
+  "_doc": [
+    "Compute nodes that run the standalone forecast cycle off-box and push a",
+    "snapshot artifact to the droplet's inbox. Copy this file to",
+    "deploy/compute-nodes.json (gitignored) and fill in the real hosts.",
+    "",
+    "Why a file and not the agent's memory: a deploy step that silently skips a",
+    "node because nobody remembered it fails quietly. A missing file is loud; a",
+    "faulty recollection is not. Host details are deployment-private, so the real",
+    "list stays untracked while this example keeps the contract reviewable.",
+    "",
+    "Fields:",
+    "  name              short label used in deploy output",
+    "  ssh               ssh target, exactly as you would type it",
+    "  repo              checkout path on the node (may use ~)",
+    "  branch            branch the node should track; deploys use --ff-only",
+    "  venv              venv path relative to repo, for dependency reinstalls",
+    "  region            artifact region prefix this node emits (eu | us)",
+    "  runner            the cycle script the scheduler invokes",
+    "  schedule_utc      when the node starts, UTC, for the racing-a-cycle check",
+    "  cycle_minutes     rough cycle duration, to judge whether one is in flight",
+    "  healthcheck_slug  healthchecks.io slug the runner pings on success",
+    "  os                macos | linux — decides launchd vs cron for schedules",
+    "  lan_only          true when the host is only reachable from its own network",
+    "                    (mDNS .local names, private IPs). The deploy skill uses",
+    "                    this to explain an unreachable node instead of implying",
+    "                    the box is down — expected when deploying from elsewhere.",
+    "  notes             anything a human needs before touching the box"
+  ],
+  "nodes": [
+    {
+      "name": "example-node",
+      "ssh": "user@node.example.local",
+      "repo": "~/Developer/public/flyfun-weather",
+      "branch": "main",
+      "venv": "venv",
+      "region": "eu",
+      "runner": "~/bin/flyfun-forecast.sh",
+      "schedule_utc": ["07:15", "19:15"],
+      "cycle_minutes": 15,
+      "healthcheck_slug": "flyfun-forecast-eu",
+      "os": "macos",
+      "lan_only": true,
+      "notes": "Replace with the real node. Keep schedule_utc accurate — the deploy skill uses it to avoid pulling mid-cycle."
+    }
+  ]
+}
