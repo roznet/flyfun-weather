@@ -1,11 +1,15 @@
 /** Layer legend data: maps layer IDs to visual legend entries for the info popup.
  *
- * All colors are derived dynamically from the active cross-section theme.
+ * All colors are derived dynamically from a cross-section theme — the active
+ * one by default. Every builder accepts an explicit theme so a surface that
+ * renders a *not-yet-applied* theme (the theme preview) shares these exact
+ * entries instead of keeping a parallel copy that drifts from the chart.
  */
 
 import { icingRiskColor, catRiskColor, cloudFillFromDD, nwpCloudFill, inversionOpacity, flightCategoryColor } from './scales';
-import { getActiveTheme } from './cross-section/theme';
+import { getActiveTheme, type CrossSectionTheme, type LineStyle } from './cross-section/theme';
 import { parseCloudLayerId, DEFAULT_NATURAL_CONFIG, type CloudStyle } from './cross-section/layers/cloud-bands-factory';
+import { referenceLineStyles } from './cross-section/layers/reference-lines';
 import { t } from '../i18n/i18n';
 
 export interface LegendEntry {
@@ -14,15 +18,22 @@ export interface LegendEntry {
   meaning: string;
   /** Optional CSS for a hatch overlay on the swatch (e.g. repeating-linear-gradient). */
   hatchStyle?: string;
+  /** Present for line layers: the exact stroke the cross-section draws, so the
+   *  swatch reproduces colour AND dash pattern rather than a generic rule. */
+  line?: LineStyle;
 }
 
 /** CSS background that simulates the natural-style puff/gap pattern at a
  *  given fill fraction. Returns a horizontal repeating gradient of
  *  `cloudColor` filled puff segments alternating with transparent gaps,
  *  so the sky behind the swatch shows through where coverage is missing.
- *  At fillFraction == 1.0 returns the solid color (no gaps). */
+ *
+ *  Always an `<image>`, never a bare colour: `hatchStyle` is composed into a
+ *  `background: <image>, <color>` shorthand, and a bare colour in the first
+ *  slot invalidates the whole declaration — which blanked every natural-cloud
+ *  swatch once the default fill fractions went to 1.0. */
 function naturalPuffOverlay(cloudColor: string, fillFraction: number): string {
-  if (fillFraction >= 0.99) return cloudColor;
+  if (fillFraction >= 0.99) return `linear-gradient(${cloudColor}, ${cloudColor})`;
   const cycle = 14; // px in the swatch
   const puffPx = Math.max(2, Math.round(cycle * fillFraction));
   return `repeating-linear-gradient(90deg, `
@@ -36,11 +47,11 @@ function cloudStyleForLayer(layerId: string): CloudStyle {
 
 // --- Dynamic legend builders ---
 
-function icingLegend(): LegendEntry[] {
+function icingLegend(theme: CrossSectionTheme): LegendEntry[] {
   return [
-    { label: t('legend.icing.light'), color: icingRiskColor('light'), meaning: t('legend.icing.lightDesc') },
-    { label: t('legend.icing.moderate'), color: icingRiskColor('moderate'), meaning: t('legend.icing.moderateDesc') },
-    { label: t('legend.icing.severe'), color: icingRiskColor('severe'), meaning: t('legend.icing.severeDesc') },
+    { label: t('legend.icing.light'), color: icingRiskColor('light', theme), meaning: t('legend.icing.lightDesc') },
+    { label: t('legend.icing.moderate'), color: icingRiskColor('moderate', theme), meaning: t('legend.icing.moderateDesc') },
+    { label: t('legend.icing.severe'), color: icingRiskColor('severe', theme), meaning: t('legend.icing.severeDesc') },
   ];
 }
 
@@ -52,22 +63,22 @@ function sldLegend(): LegendEntry[] {
   ];
 }
 
-function catLegend(): LegendEntry[] {
+function catLegend(theme: CrossSectionTheme): LegendEntry[] {
   return [
-    { label: t('legend.cat.light'), color: catRiskColor('light'), meaning: t('legend.cat.lightDesc') },
-    { label: t('legend.cat.moderate'), color: catRiskColor('moderate'), meaning: t('legend.cat.moderateDesc') },
-    { label: t('legend.cat.severe'), color: catRiskColor('severe'), meaning: t('legend.cat.severeDesc') },
+    { label: t('legend.cat.light'), color: catRiskColor('light', theme), meaning: t('legend.cat.lightDesc') },
+    { label: t('legend.cat.moderate'), color: catRiskColor('moderate', theme), meaning: t('legend.cat.moderateDesc') },
+    { label: t('legend.cat.severe'), color: catRiskColor('severe', theme), meaning: t('legend.cat.severeDesc') },
   ];
 }
 
-function convectiveLegend(): LegendEntry[] {
-  const theme = getActiveTheme().convective.towerFill;
+function convectiveLegend(theme: CrossSectionTheme): LegendEntry[] {
+  const fill = theme.convective.towerFill;
   return [
-    { label: t('legend.convective.marginal'), color: theme['marginal'] ?? 'transparent', meaning: t('legend.convective.marginalDesc') },
-    { label: t('legend.convective.low'), color: theme['low'] ?? 'transparent', meaning: t('legend.convective.lowDesc') },
-    { label: t('legend.convective.moderate'), color: theme['moderate'] ?? 'transparent', meaning: t('legend.convective.moderateDesc') },
-    { label: t('legend.convective.high'), color: theme['high'] ?? 'transparent', meaning: t('legend.convective.highDesc') },
-    { label: t('legend.convective.extreme'), color: theme['extreme'] ?? 'transparent', meaning: t('legend.convective.extremeDesc') },
+    { label: t('legend.convective.marginal'), color: fill['marginal'] ?? 'transparent', meaning: t('legend.convective.marginalDesc') },
+    { label: t('legend.convective.low'), color: fill['low'] ?? 'transparent', meaning: t('legend.convective.lowDesc') },
+    { label: t('legend.convective.moderate'), color: fill['moderate'] ?? 'transparent', meaning: t('legend.convective.moderateDesc') },
+    { label: t('legend.convective.high'), color: fill['high'] ?? 'transparent', meaning: t('legend.convective.highDesc') },
+    { label: t('legend.convective.extreme'), color: fill['extreme'] ?? 'transparent', meaning: t('legend.convective.extremeDesc') },
   ];
 }
 
@@ -75,47 +86,54 @@ function convectiveLegend(): LegendEntry[] {
  *  - natural: puff/gap overlay (coverage encoded as horizontal fill fraction)
  *  - soft / square: solid swatch (alpha already encodes coverage via `cloudFillFromDD`)
  */
-function cloudBandsLegend(layerId: string): LegendEntry[] {
+function cloudBandsLegend(layerId: string, theme: CrossSectionTheme): LegendEntry[] {
   const style = cloudStyleForLayer(layerId);
-  const ovcColor = cloudFillFromDD(0.5, 'ovc');
-  const bknColor = cloudFillFromDD(1.5, 'bkn');
-  const sctColor = cloudFillFromDD(2.5, 'sct');
+  const ovcColor = cloudFillFromDD(0.5, 'ovc', theme);
+  const bknColor = cloudFillFromDD(1.5, 'bkn', theme);
+  const sctColor = cloudFillFromDD(2.5, 'sct', theme);
 
+  // Ordered least → most coverage, matching every other legend in the set
+  // (25/50/75% NWP cover, light→severe risk) so a reader scanning several
+  // groups never has to reverse direction mid-key.
   if (style === 'natural') {
     const f = DEFAULT_NATURAL_CONFIG.fillFraction;
     return [
-      { label: t('legend.cloud.ovc'), color: 'transparent', meaning: t('legend.cloud.ovcDesc'),
-        hatchStyle: naturalPuffOverlay(ovcColor, f.OVC) },
-      { label: t('legend.cloud.bkn'), color: 'transparent', meaning: t('legend.cloud.bknDesc'),
-        hatchStyle: naturalPuffOverlay(bknColor, f.BKN) },
       { label: t('legend.cloud.sct'), color: 'transparent', meaning: t('legend.cloud.sctDesc'),
         hatchStyle: naturalPuffOverlay(sctColor, f.SCT) },
+      { label: t('legend.cloud.bkn'), color: 'transparent', meaning: t('legend.cloud.bknDesc'),
+        hatchStyle: naturalPuffOverlay(bknColor, f.BKN) },
+      { label: t('legend.cloud.ovc'), color: 'transparent', meaning: t('legend.cloud.ovcDesc'),
+        hatchStyle: naturalPuffOverlay(ovcColor, f.OVC) },
     ];
   }
 
   // soft and square render as solid fills — the rgba alpha already encodes
   // coverage. No overlay needed; the swatch reads correctly with just the color.
   return [
-    { label: t('legend.cloud.ovc'), color: ovcColor, meaning: t('legend.cloud.ovcDesc') },
-    { label: t('legend.cloud.bkn'), color: bknColor, meaning: t('legend.cloud.bknDesc') },
     { label: t('legend.cloud.sct'), color: sctColor, meaning: t('legend.cloud.sctDesc') },
+    { label: t('legend.cloud.bkn'), color: bknColor, meaning: t('legend.cloud.bknDesc') },
+    { label: t('legend.cloud.ovc'), color: ovcColor, meaning: t('legend.cloud.ovcDesc') },
   ];
 }
 
-function nwpCloudLegend(layerId: string): LegendEntry[] {
+function nwpCloudLegend(layerId: string, theme: CrossSectionTheme): LegendEntry[] {
   const style = cloudStyleForLayer(layerId);
-  const colorAt = (pct: number) => nwpCloudFill(pct);
+  const colorAt = (pct: number) => nwpCloudFill(pct, theme);
 
   if (style === 'natural') {
-    // Natural NWP uses `meanCloudCoverPct / 100` directly as fill fraction,
-    // so legend swatches show the same encoding: 25%/50%/75% gap pattern.
+    // Natural NWP fill fraction is `max(minFillFraction, cover%/100)` — with the
+    // current config that floors at a full band, so coverage reads through the
+    // colour/alpha, not through gaps. Mirror the renderer rather than assuming
+    // gaps, so the swatch never promises a pattern the chart won't draw.
+    const fracAt = (pct: number) =>
+      Math.max(DEFAULT_NATURAL_CONFIG.minFillFraction, Math.min(1, pct / 100));
     return [
       { label: t('legend.nwpCloud.25'), color: 'transparent', meaning: t('legend.nwpCloud.25Desc'),
-        hatchStyle: naturalPuffOverlay(colorAt(25), 0.25) },
+        hatchStyle: naturalPuffOverlay(colorAt(25), fracAt(25)) },
       { label: t('legend.nwpCloud.50'), color: 'transparent', meaning: t('legend.nwpCloud.50Desc'),
-        hatchStyle: naturalPuffOverlay(colorAt(50), 0.50) },
+        hatchStyle: naturalPuffOverlay(colorAt(50), fracAt(50)) },
       { label: t('legend.nwpCloud.75'), color: 'transparent', meaning: t('legend.nwpCloud.75Desc'),
-        hatchStyle: naturalPuffOverlay(colorAt(75), 0.75) },
+        hatchStyle: naturalPuffOverlay(colorAt(75), fracAt(75)) },
     ];
   }
 
@@ -127,35 +145,35 @@ function nwpCloudLegend(layerId: string): LegendEntry[] {
   ];
 }
 
-function inversionLegend(): LegendEntry[] {
-  const [r, g, b] = getActiveTheme().inversion.baseRgb;
+function inversionLegend(theme: CrossSectionTheme): LegendEntry[] {
+  const [r, g, b] = theme.inversion.baseRgb;
   return [
-    { label: t('legend.inversion.weak'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(0.5)})`, meaning: t('legend.inversion.weakDesc') },
-    { label: t('legend.inversion.moderate'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(2)})`, meaning: t('legend.inversion.moderateDesc') },
-    { label: t('legend.inversion.strong'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(4)})`, meaning: t('legend.inversion.strongDesc') },
+    { label: t('legend.inversion.weak'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(0.5, theme)})`, meaning: t('legend.inversion.weakDesc') },
+    { label: t('legend.inversion.moderate'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(2, theme)})`, meaning: t('legend.inversion.moderateDesc') },
+    { label: t('legend.inversion.strong'), color: `rgba(${r}, ${g}, ${b}, ${inversionOpacity(4, theme)})`, meaning: t('legend.inversion.strongDesc') },
   ];
 }
 
-function nightShadingLegend(): LegendEntry[] {
-  const theme = getActiveTheme().nightShading;
+function nightShadingLegend(theme: CrossSectionTheme): LegendEntry[] {
+  const night = theme.nightShading;
   // Shading + the sunset/sunrise boundary markers live in one layer. Marker
   // colours match night-shading.ts (theme-independent: a sun reads as a sun).
   return [
-    { label: t('legend.sun.twilight'), color: theme.twilight, meaning: t('legend.sun.twilightDesc') },
-    { label: t('legend.sun.night'), color: theme.night, meaning: t('legend.sun.nightDesc') },
+    { label: t('legend.sun.twilight'), color: night.twilight, meaning: t('legend.sun.twilightDesc') },
+    { label: t('legend.sun.night'), color: night.night, meaning: t('legend.sun.nightDesc') },
     { label: 'Sunset / Sunrise', color: '#f4b740', meaning: 'Marker where the sun crosses the horizon (elevation 0°)' },
     { label: 'Civil dusk / dawn', color: '#9aa7d0', meaning: 'Marker at sun 6° below the horizon — end/start of usable light' },
   ];
 }
 
-function obscurationLegend(): LegendEntry[] {
-  const theme = getActiveTheme().obscuration;
+function obscurationLegend(theme: CrossSectionTheme): LegendEntry[] {
+  const obs = theme.obscuration;
   // Diagonal hatch overlay matches the canvas rendering's 45° hatching.
-  const hatch = `repeating-linear-gradient(45deg, ${theme.hatchColor} 0px, ${theme.hatchColor} ${theme.hatchLineWidth}px, transparent ${theme.hatchLineWidth}px, transparent ${theme.hatchSpacingPx}px)`;
+  const hatch = `repeating-linear-gradient(45deg, ${obs.hatchColor} 0px, ${obs.hatchColor} ${obs.hatchLineWidth}px, transparent ${obs.hatchLineWidth}px, transparent ${obs.hatchSpacingPx}px)`;
   return [
-    { label: t('legend.obscuration.lifr'), color: theme.lifr, meaning: t('legend.obscuration.lifrDesc'), hatchStyle: hatch },
-    { label: t('legend.obscuration.ifr'), color: theme.ifr, meaning: t('legend.obscuration.ifrDesc'), hatchStyle: hatch },
-    { label: t('legend.obscuration.mvfr'), color: theme.mvfr, meaning: t('legend.obscuration.mvfrDesc'), hatchStyle: hatch },
+    { label: t('legend.obscuration.lifr'), color: obs.lifr, meaning: t('legend.obscuration.lifrDesc'), hatchStyle: hatch },
+    { label: t('legend.obscuration.ifr'), color: obs.ifr, meaning: t('legend.obscuration.ifrDesc'), hatchStyle: hatch },
+    { label: t('legend.obscuration.mvfr'), color: obs.mvfr, meaning: t('legend.obscuration.mvfrDesc'), hatchStyle: hatch },
   ];
 }
 
@@ -171,20 +189,33 @@ function currentConditionsLegend(): LegendEntry[] {
   ];
 }
 
-function lineLegends(): Record<string, LegendEntry[]> {
-  const theme = getActiveTheme();
+/** Line-layer legends. Each entry carries the theme's exact `LineStyle` so the
+ *  swatch reproduces width and dash, not just colour — the only way to tell
+ *  −10°C from −20°C in themes where the two share a hue (GRAMET). */
+function lineLegends(theme: CrossSectionTheme): Record<string, LegendEntry[]> {
+  const lineEntry = (label: string, line: LineStyle, meaning: string): LegendEntry => ({
+    label, color: line.color, meaning, line,
+  });
+  const refStyles = referenceLineStyles(theme);
   return {
-    'freezing-level': [{ label: t('legend.line.freezingLevel'), color: theme.temperature.freezingLevel.color, meaning: t('legend.line.solidLine') }],
-    'minus-10c': [{ label: t('legend.line.minus10'), color: theme.temperature.minus10c.color, meaning: t('legend.line.solidLine') }],
-    'minus-20c': [{ label: t('legend.line.minus20'), color: theme.temperature.minus20c.color, meaning: t('legend.line.dashedLine') }],
-    'lcl': [{ label: t('legend.line.lcl'), color: theme.stability.lcl.color, meaning: t('legend.line.dashedCloudBase') }],
-    'lfc': [{ label: t('legend.line.lfc'), color: theme.stability.lfc.color, meaning: t('legend.line.dashedFreeConvection') }],
-    'el': [{ label: t('legend.line.el'), color: theme.stability.el.color, meaning: t('legend.line.dashedStormTop') }],
+    'freezing-level': [lineEntry(t('legend.line.freezingLevel'), theme.temperature.freezingLevel, t('legend.line.solidLine'))],
+    'minus-10c': [lineEntry(t('legend.line.minus10'), theme.temperature.minus10c, t('legend.line.solidLine'))],
+    'minus-20c': [lineEntry(t('legend.line.minus20'), theme.temperature.minus20c, t('legend.line.dashedLine'))],
+    'lcl': [lineEntry(t('legend.line.lcl'), theme.stability.lcl, t('legend.line.dashedCloudBase'))],
+    'lfc': [lineEntry(t('legend.line.lfc'), theme.stability.lfc, t('legend.line.dashedFreeConvection'))],
+    'el': [lineEntry(t('legend.line.el'), theme.stability.el, t('legend.line.dashedStormTop'))],
+    'cruise-altitude': [
+      lineEntry(t('legend.line.cruise'), refStyles.cruise, t('legend.line.cruiseDesc')),
+      lineEntry(t('legend.line.ceiling'), refStyles.ceiling, t('legend.line.ceilingDesc')),
+    ],
   };
 }
 
 /** Get the visual legend entries for a cross-section layer. */
-export function getLayerLegend(layerId: string): LegendEntry[] | null {
+export function getLayerLegend(
+  layerId: string,
+  theme: CrossSectionTheme = getActiveTheme(),
+): LegendEntry[] | null {
   // Cloud legends are style-aware: they branch on the layer ID to render
   // natural-puff / soft / square swatches matching the actual rendering.
   const cloudIds = new Set([
@@ -193,27 +224,29 @@ export function getLayerLegend(layerId: string): LegendEntry[] | null {
   const nwpCloudIds = new Set([
     'nwp-cloud-bands', 'soft-nwp-cloud-bands', 'square-nwp-cloud-bands',
   ]);
-  if (cloudIds.has(layerId)) return cloudBandsLegend(layerId);
-  if (nwpCloudIds.has(layerId)) return nwpCloudLegend(layerId);
+  if (cloudIds.has(layerId)) return cloudBandsLegend(layerId, theme);
+  if (nwpCloudIds.has(layerId)) return nwpCloudLegend(layerId, theme);
 
   const bandLegends: Record<string, () => LegendEntry[]> = {
-    'icing-bands': icingLegend,
-    'icing-ogimet-nwp-bands': icingLegend,
-    'ieng-icing-bands': icingLegend,
-    'sfip-bands': icingLegend,
+    'icing-bands': () => icingLegend(theme),
+    'icing-ogimet-nwp-bands': () => icingLegend(theme),
+    'ieng-icing-bands': () => icingLegend(theme),
+    'sfip-bands': () => icingLegend(theme),
     'sld-bands': sldLegend,
-    'cat-bands': catLegend,
-    'e-shear-bands': catLegend,
-    'convective-bg': convectiveLegend,
-    'inversion-bands': inversionLegend,
-    'surface-obscuration-bands': obscurationLegend,
+    'cat-bands': () => catLegend(theme),
+    'e-shear-bands': () => catLegend(theme),
+    'convective-bg': () => convectiveLegend(theme),
+    'thermo-convective-bg': () => convectiveLegend(theme),
+    'nwp-convective-bg': () => convectiveLegend(theme),
+    'inversion-bands': () => inversionLegend(theme),
+    'surface-obscuration-bands': () => obscurationLegend(theme),
     'current-conditions': currentConditionsLegend,
-    'night-shading': nightShadingLegend,
+    'night-shading': () => nightShadingLegend(theme),
   };
 
   const bandBuilder = bandLegends[layerId];
   if (bandBuilder) return bandBuilder();
 
-  const lines = lineLegends();
+  const lines = lineLegends(theme);
   return lines[layerId] ?? null;
 }

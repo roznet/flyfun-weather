@@ -2,7 +2,8 @@
 
 import catalog from '../data/metrics-catalog.json';
 import displayConfig from '../data/metrics-display.json';
-import { getLayerLegend, type LegendEntry } from '../visualization/layer-legends';
+import { getLayerLegend } from '../visualization/layer-legends';
+import { legendRowsHtml } from '../visualization/legend-render';
 import { getActiveTheme } from '../visualization/cross-section/theme';
 import type {
   DisplayMode,
@@ -264,34 +265,18 @@ export function renderInfoPopupContent(metricId: string, value?: number): string
   `;
 }
 
-/** Render an HTML color legend strip for a cross-section layer. */
+/** Render an HTML color legend strip for a cross-section layer.
+ *
+ * Swatch markup is shared with the theme preview (`legend-render.ts`), so a
+ * line layer draws its real colour, width and dash rather than a generic rule.
+ */
 export function renderLayerLegend(layerId: string): string {
   const entries = getLayerLegend(layerId);
   if (!entries || entries.length === 0) return '';
 
-  const isLineLegend = entries.length === 1 && entries[0].meaning.includes('line');
-
-  const rows = entries.map((e: LegendEntry) => {
-    // For line layers, draw a line swatch; for bands, draw a filled rectangle on sky-blue bg
-    let swatchStyle: string;
-    if (isLineLegend) {
-      swatchStyle = `background: transparent; border-bottom: 3px solid ${e.color};`;
-    } else if (e.hatchStyle) {
-      swatchStyle = `background: ${e.hatchStyle}, ${e.color};`;
-    } else {
-      swatchStyle = `background: ${e.color};`;
-    }
-    const skyBg = getActiveTheme().sky.background;
-    return `<div class="legend-entry">
-      <span class="legend-swatch-bg" style="background: ${skyBg}"><span class="legend-swatch" style="${swatchStyle}"></span></span>
-      <span class="legend-label">${e.label}</span>
-      <span class="legend-meaning">${e.meaning}</span>
-    </div>`;
-  }).join('');
-
   return `<div class="layer-legend">
     <h4>Color Legend</h4>
-    ${rows}
+    ${legendRowsHtml(entries, getActiveTheme().sky.background)}
   </div>`;
 }
 

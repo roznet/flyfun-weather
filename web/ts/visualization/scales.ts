@@ -2,30 +2,34 @@
  *
  * Cross-section colors are read from the active theme (see cross-section/theme.ts).
  * Map colors remain hardcoded here (separate scope, not themed).
+ *
+ * Every theme-aware function takes an optional explicit `theme`, defaulting to
+ * the active one. Surfaces that render a theme the user has not applied yet —
+ * the theme preview being the only one today — pass it explicitly so their
+ * swatches come from these same formulas instead of a local copy that drifts.
  */
 
-import { getActiveTheme } from './cross-section/theme';
+import { getActiveTheme, type CrossSectionTheme } from './cross-section/theme';
 
 // --- Risk-based colors (theme-aware) ---
 
-export function icingRiskColor(risk: string): string {
-  return getActiveTheme().icing[risk] ?? 'transparent';
+export function icingRiskColor(risk: string, theme: CrossSectionTheme = getActiveTheme()): string {
+  return theme.icing[risk] ?? 'transparent';
 }
 
-export function catRiskColor(risk: string): string {
-  return getActiveTheme().cat[risk] ?? 'transparent';
+export function catRiskColor(risk: string, theme: CrossSectionTheme = getActiveTheme()): string {
+  return theme.cat[risk] ?? 'transparent';
 }
 
-export function convectiveRiskColor(risk: string): string {
-  return getActiveTheme().convective.riskColors[risk] ?? 'transparent';
+export function convectiveRiskColor(risk: string, theme: CrossSectionTheme = getActiveTheme()): string {
+  return theme.convective.riskColors[risk] ?? 'transparent';
 }
 
-export function coverageOpacity(coverage: string): number {
-  return getActiveTheme().coverageOpacity[coverage] ?? 0.3;
+export function coverageOpacity(coverage: string, theme: CrossSectionTheme = getActiveTheme()): number {
+  return theme.coverageOpacity[coverage] ?? 0.3;
 }
 
-function coverageAlpha(coverage: string, t: number): number {
-  const theme = getActiveTheme();
+function coverageAlpha(coverage: string, t: number, theme: CrossSectionTheme): number {
   const [lo, hi] = theme.clouds.coverageAlpha[coverage] ?? [0.30, 0.65];
   return hi - (hi - lo) * t;
 }
@@ -36,8 +40,11 @@ function coverageAlpha(coverage: string, t: number): number {
  * DD ≈ 3 → white (thin cloud edge), lower opacity with visible floor.
  * Falls back to coverage-based fill when DD unavailable.
  */
-export function cloudFillFromDD(dd: number | undefined, coverage: string): string {
-  const theme = getActiveTheme();
+export function cloudFillFromDD(
+  dd: number | undefined,
+  coverage: string,
+  theme: CrossSectionTheme = getActiveTheme(),
+): string {
   if (dd === undefined) {
     const [, hi] = theme.clouds.coverageAlpha[coverage] ?? [0.30, 0.65];
     const [fr, fg, fb] = theme.clouds.fallbackGray;
@@ -49,7 +56,7 @@ export function cloudFillFromDD(dd: number | undefined, coverage: string): strin
   const r = Math.round(dr + (tr - dr) * t);
   const g = Math.round(dg + (tg - dg) * t);
   const b = Math.round(db + (tb - db) * t);
-  const a = coverageAlpha(coverage, t);
+  const a = coverageAlpha(coverage, t, theme);
   return `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
 }
 
@@ -61,21 +68,24 @@ export function cloudFillFromDD(dd: number | undefined, coverage: string): strin
  * Used by the hatched-NWP and square-NWP cloud styles, the NWP cloud legend,
  * and any other consumer that needs the canonical NWP cloud fill.
  */
-export function nwpCloudFill(pct: number): string {
-  const theme = getActiveTheme().nwpClouds;
+export function nwpCloudFill(pct: number, theme: CrossSectionTheme = getActiveTheme()): string {
+  const nwp = theme.nwpClouds;
   const t = Math.min(1, Math.max(0, pct / 100));
-  const [br, bg, bb] = theme.brightRgb;
-  const [dr, dg, db] = theme.deltaRgb;
+  const [br, bg, bb] = nwp.brightRgb;
+  const [dr, dg, db] = nwp.deltaRgb;
   const r = Math.round(br - dr * t);
   const g = Math.round(bg - dg * t);
   const b = Math.round(bb - db * t);
-  const [opFloor, opScale] = theme.opacityRange;
+  const [opFloor, opScale] = nwp.opacityRange;
   const opacity = opFloor + opScale * t;
   return `rgba(${r}, ${g}, ${b}, ${opacity.toFixed(2)})`;
 }
 
-export function inversionOpacity(strengthC: number): number {
-  const { floor, scale, maxStrengthC, cap } = getActiveTheme().inversion.opacityParams;
+export function inversionOpacity(
+  strengthC: number,
+  theme: CrossSectionTheme = getActiveTheme(),
+): number {
+  const { floor, scale, maxStrengthC, cap } = theme.inversion.opacityParams;
   return Math.min(cap, floor + scale * Math.min(strengthC / maxStrengthC, 1));
 }
 

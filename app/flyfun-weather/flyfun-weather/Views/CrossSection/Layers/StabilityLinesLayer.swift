@@ -43,6 +43,19 @@ struct StabilityLinesLayer: CrossSectionLayerProtocol {
         metric == .lcl ? 2.0 : 1.5
     }
 
+    /// The parcel triplet is green/orange/red — the classic red-green confusion
+    /// set — so hue alone cannot identify these lines for a colour-blind pilot.
+    /// Each level carries a structurally distinct stroke as its primary cue,
+    /// readable in monochrome: LCL dotted, LFC dashed, EL dash-dot.
+    /// SYNC: mirrors the web `stability` dashes in `theme.ts`.
+    private var dash: [CGFloat] {
+        switch metric {
+        case .lcl: [2, 4]
+        case .lfc: [6, 4]
+        case .el: [9, 3, 2, 3]
+        }
+    }
+
     func render(context: inout GraphicsContext, transform: CoordTransform, data: VizRouteData) {
         var xs: [CGFloat] = []
         var ys: [CGFloat] = []
@@ -71,6 +84,6 @@ struct StabilityLinesLayer: CrossSectionLayerProtocol {
             path.addCurve(to: CGPoint(x: xs[i + 1], y: ys[i + 1]), control1: cp1, control2: cp2)
         }
 
-        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, dash: [6, 4]))
+        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, dash: dash))
     }
 }

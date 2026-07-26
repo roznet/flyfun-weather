@@ -173,10 +173,16 @@ const STANDARD_THEME: CrossSectionTheme = {
     minus20c: { color: '#1a237e', width: 1, dash: [6, 4] },
   },
 
+  // The parcel triplet is green/orange/red — the classic red-green confusion
+  // set — so hue alone cannot identify these lines for a colour-blind pilot
+  // (simulated protanopia puts LCL and EL at ΔE 9–20, i.e. the same colour).
+  // Each level therefore carries a structurally distinct stroke as its primary
+  // cue, readable even in monochrome: LCL dotted, LFC dashed, EL dash-dot.
+  // SYNC: mirrored in iOS `StabilityLinesLayer.swift` (`dash(for:)`).
   stability: {
-    lcl: { color: '#4caf50', width: 2, dash: [6, 4] },
+    lcl: { color: '#4caf50', width: 2, dash: [2, 4] },
     lfc: { color: '#ff9800', width: 1.5, dash: [6, 4] },
-    el: { color: '#f44336', width: 1.5, dash: [6, 4] },
+    el: { color: '#f44336', width: 1.5, dash: [9, 3, 2, 3] },
   },
 
   reference: {
@@ -338,10 +344,11 @@ const HIGH_CONTRAST_THEME: CrossSectionTheme = {
     minus20c: { color: '#7c4dff', width: 1.5, dash: [6, 4] },
   },
 
+  // Dash roles per STANDARD: dotted / dashed / dash-dot.
   stability: {
-    lcl: { color: '#69f0ae', width: 2.5, dash: [6, 4] },
+    lcl: { color: '#69f0ae', width: 2.5, dash: [2, 4] },
     lfc: { color: '#ffab40', width: 2, dash: [6, 4] },
-    el: { color: '#ff5252', width: 2, dash: [6, 4] },
+    el: { color: '#ff5252', width: 2, dash: [9, 3, 2, 3] },
   },
 
   reference: {
@@ -487,8 +494,21 @@ const GRAMET_THEME: CrossSectionTheme = {
 
   temperature: {
     freezingLevel: { color: '#FF4444', width: 2.5 },
+    // −10 and −20 deliberately share the autorouter green: they are always
+    // stacked in that order, and the dash pattern separates them.
     minus10c: { color: '#22CC44', width: 1.5, dash: [6, 4] },
     minus20c: { color: '#22CC44', width: 1, dash: [4, 4] },
+  },
+
+  stability: {
+    ...STANDARD_THEME.stability,
+    // Standard's green LCL is unusable here — it would be a third green dashed
+    // line against the isotherms, at the same 6/4 dash as −10°C, with no
+    // stacking order to tell them apart. Cyan is the one hue GRAMET leaves
+    // free (freezing is red, icing mint, CAT amber, inversion pink, ceiling
+    // lilac) and reads as the condensation level. Dash stays the shared
+    // dotted LCL role.
+    lcl: { color: '#00E5FF', width: 2, dash: [2, 4] },
   },
 
   reference: {
@@ -578,10 +598,11 @@ const LIGHT_THEME: CrossSectionTheme = {
     minus20c: { color: '#0D47A1', width: 1, dash: [6, 4] },
   },
 
+  // Dash roles per STANDARD: dotted / dashed / dash-dot.
   stability: {
-    lcl: { color: '#2E7D32', width: 2, dash: [6, 4] },
+    lcl: { color: '#2E7D32', width: 2, dash: [2, 4] },
     lfc: { color: '#E65100', width: 1.5, dash: [6, 4] },
-    el: { color: '#C62828', width: 1.5, dash: [6, 4] },
+    el: { color: '#C62828', width: 1.5, dash: [9, 3, 2, 3] },
   },
 
   reference: {

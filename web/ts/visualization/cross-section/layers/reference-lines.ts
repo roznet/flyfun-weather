@@ -1,8 +1,20 @@
 /** Reference lines: cruise altitude and flight ceiling. */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
-import { getActiveTheme } from '../theme';
+import { getActiveTheme, type CrossSectionTheme, type LineStyle } from '../theme';
 import { t } from '../../../i18n/i18n';
+
+/** Stroke specs for the two reference lines. The theme carries only the
+ *  colours, so width + dash live here — exported so the legend and the theme
+ *  preview draw the same stroke this layer does. */
+export function referenceLineStyles(
+  theme: CrossSectionTheme,
+): { cruise: LineStyle; ceiling: LineStyle } {
+  return {
+    cruise: { color: theme.reference.cruiseColor, width: 2.5, dash: [8, 4] },
+    ceiling: { color: theme.reference.ceilingColor, width: 1.5, dash: [4, 4] },
+  };
+}
 
 /** Shared helper: draw a horizontal reference line with a label. */
 function drawRefLine(
@@ -48,19 +60,19 @@ export const cruiseAltitudeLayer: CrossSectionLayer = {
   defaultEnabled: true,
 
   render(ctx: CanvasRenderingContext2D, transform: CoordTransform, data: VizRouteData) {
-    const theme = getActiveTheme();
+    const styles = referenceLineStyles(getActiveTheme());
 
     // Cruise altitude — always drawn
     const cruiseLabel = t('viz.refCruise', { alt: data.cruiseAltitudeFt.toLocaleString() });
     drawRefLine(ctx, transform, data.cruiseAltitudeFt, cruiseLabel,
-      theme.reference.cruiseColor, 2.5, [8, 4], -4);
+      styles.cruise.color, styles.cruise.width, styles.cruise.dash ?? [], -4);
 
     // Flight ceiling — only when meaningfully different from cruise
     const separation = Math.abs(data.ceilingAltitudeFt - data.cruiseAltitudeFt);
     if (separation >= 1000) {
       const ceilingLabel = t('viz.refCeiling', { alt: data.ceilingAltitudeFt.toLocaleString() });
       drawRefLine(ctx, transform, data.ceilingAltitudeFt, ceilingLabel,
-        theme.reference.ceilingColor, 1.5, [4, 4], -4);
+        styles.ceiling.color, styles.ceiling.width, styles.ceiling.dash ?? [], -4);
     }
   },
 };

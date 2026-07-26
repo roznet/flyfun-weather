@@ -324,6 +324,9 @@ extension CrossSectionTheme {
         t.freezingLevel = c(255, 68, 68)                 // #FF4444
         t.minus10c = c(34, 204, 68)                      // #22CC44
         t.minus20c = c(34, 204, 68)                      // #22CC44
+        // Standard's green LCL would be a third green line against the
+        // isotherms here. Cyan is the one hue GRAMET leaves free.
+        t.lcl = c(0, 229, 255)                           // #00E5FF
         t.cruise = c(224, 224, 224)                      // #e0e0e0
         t.ceiling = c(206, 147, 216)                     // #ce93d8
         // clouds / nwpClouds / cat / inversion inherited from standard

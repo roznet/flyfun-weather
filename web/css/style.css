@@ -4042,6 +4042,88 @@ label {
   color: var(--text-muted);
 }
 
+/* Line swatches: a centred rule whose height is the stroke width and whose
+   background carries the dash pattern, so a legend line reads exactly like
+   the stroke on the canvas. */
+.legend-swatch-bg--line {
+  display: inline-flex;
+  align-items: center;
+}
+
+.legend-swatch-line {
+  height: auto;
+  border-radius: 0;
+}
+
+/* --- Theme preview popup --- */
+
+.theme-preview h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+}
+
+.theme-preview-scene {
+  display: block;
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.theme-preview-caption {
+  margin: 0.4rem 0 1rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  max-width: 560px;
+}
+
+.theme-preview-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.5rem 1.25rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.theme-preview-group h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+/* Lines span the full width and flow in their own block — a dashed stroke
+   should never sit in a column next to a filled band and read as one. */
+.theme-preview-group--lines {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+  margin-top: 0.25rem;
+}
+
+.theme-preview-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.9rem;
+}
+
+.theme-preview-group--lines .theme-preview-chips {
+  gap: 0.3rem 1.5rem;
+}
+
+.legend-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  padding: 0.15rem 0;
+  min-width: 0;
+}
+
+.legend-chip-label {
+  white-space: nowrap;
+}
+
 /* --- Route Advisories --- */
 
 .advisory-toolbar {

@@ -535,7 +535,7 @@ export function renderVizControls(
       e.preventDefault();
       e.stopPropagation();
       const themeId = vizThemeSelect?.value ?? getActiveThemeId();
-      showThemePreview(themeId as ThemeId);
+      showThemePreview(themeId as ThemeId, { cloudStyle: settings.cloudStyle });
     });
   }
   // Wire preset selector
@@ -885,7 +885,7 @@ export function renderCompareControls(
       e.preventDefault();
       e.stopPropagation();
       const themeId = vizThemeSelect?.value ?? getActiveThemeId();
-      showThemePreview(themeId as ThemeId);
+      showThemePreview(themeId as ThemeId, { cloudStyle: settings.cloudStyle });
     });
   }
 }

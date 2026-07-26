@@ -82,9 +82,9 @@ Rendering order: **night shading → obscuration → clouds → convection → i
 | Freezing level | 0°C | temperature | `temperature-lines.ts` | on | Blue dashed line (0°C) |
 | −10°C level | −10°C | temperature | `temperature-lines.ts` | off | Cyan dashed line |
 | −20°C level | −20°C | temperature | `temperature-lines.ts` | off | Navy dashed line |
-| LCL | LCL | stability | `stability-lines.ts` | off | Green dotted (lifting condensation) |
-| LFC | LFC | stability | `stability-lines.ts` | off | Orange dotted (level of free convection) |
-| EL | EL | stability | `stability-lines.ts` | off | Red dotted (equilibrium level) |
+| LCL | LCL | stability | `stability-lines.ts` | off | Lifting condensation level. **Dotted** `[2,4]` — see [Colour-blind line encoding](#colour-blind-line-encoding). |
+| LFC | LFC | stability | `stability-lines.ts` | off | Level of free convection. **Dashed** `[6,4]`. |
+| EL | EL | stability | `stability-lines.ts` | off | Equilibrium level. **Dash-dot** `[9,3,2,3]`. |
 | Cruise altitude | Cruise | reference | `reference-lines.ts` | on | Dark gray dashed + flight ceiling (purple) |
 | Advisory highlight | Highlight | highlight | `highlight-layer.ts` | off | Scrim (dim wash with severity-outlined cutouts where the hazard is) + verdict ribbon (6px strip in the bottom margin grading the whole route green/amber/red/gray). Registered **last** (very top of stack). Reads the derived `VizRouteData.advisoryHighlights`; no-ops when absent. `clipToPlot: false` so the ribbon draws in the margin. See [Advisory Highlights](#advisory-highlights-373). |
 
@@ -253,6 +253,50 @@ interface CoordTransform {
 - **Monotone cubic for terrain** — Fritsch-Carlson tangents prevent overshoot (important for elevation data)
 - **Theme-aware canvas colors** — all cross-section colors (sky, clouds, icing, lines, terrain) come from the active `CrossSectionTheme` via `getActiveTheme()`; renderers listen for `theme-changed` events to re-render automatically
 
+## Colour-blind line encoding
+
+The cross-section carries eight horizontal lines (three isotherms, three parcel
+levels, cruise, ceiling). Hue was originally the only thing telling them apart,
+which fails for a colour-blind pilot: simulating protanopia/deuteranopia over
+the palettes put **LCL and EL at ΔE ≈ 9** in the Light theme and **LFC and EL at
+ΔE ≈ 19** in Standard — i.e. the same colour — while all three shared the
+identical `[6, 4]` dash.
+
+The rule now:
+
+> **Dash pattern carries identity; hue is a secondary cue.** Two lines may share
+> a colour when something structural separates them; they may not share both.
+
+The parcel triplet is the acute case (green / orange / red is exactly the
+red-green confusion set), so it gets three structurally distinct strokes,
+readable in monochrome:
+
+| Line | Dash | Reads as |
+|------|------|----------|
+| LCL | `[2, 4]` | dotted |
+| LFC | `[6, 4]` | dashed |
+| EL | `[9, 3, 2, 3]` | dash-dot |
+
+Two deliberate same-colour pairs remain, both safe because the levels are
+*always stacked in a known order* and the dash differs anyway:
+
+- GRAMET draws −10 °C and −20 °C in the same autorouter green (`#22CC44`),
+  separated by `[6,4]` vs `[4,4]`.
+- 0 °C and −10 °C are both solid in Standard / High-Contrast / Light and are
+  colour-confusable under simulation; −10 °C is always above 0 °C, and enabling
+  only one of them makes the question moot. GRAMET is the one theme that also
+  dash-separates them — the more robust treatment if this is ever revisited.
+
+GRAMET additionally overrides LCL to cyan `#00E5FF`: Standard's green LCL would
+have been a *third* green line against that theme's green isotherms, with no
+stacking order to fall back on.
+
+Enforced by `tests/unit/theme-line-distinctness.test.ts`, which fails if any two
+lines in any theme share both colour and dash, or if the parcel triplet loses
+its three distinct dashes. **SYNC:** dashes are mirrored in iOS
+`StabilityLinesLayer.swift` (`dash(for:)`) — unlike colours, iOS hardcodes line
+dashes rather than theming them.
+
 ## Cross-Section Theme System
 
 Switchable visual themes for the cross-section via `cross-section/theme.ts`. Separate from the page-level dark/light theme.
@@ -273,7 +317,12 @@ Switchable visual themes for the cross-section via `cross-section/theme.ts`. Sep
 - **Natural** (DD Natural, NWP Natural): flat-bottom puffs with bumpy tops, drawn procedurally on canvas (no PNG assets). Coverage is encoded as horizontal fill fraction — SCT shows discrete puffs with sky gaps, BKN shows mostly-touching puffs with valleys between humps, OVC shows a continuous bumpy blanket. Each puff is a closed path: flat base + chain of quadratic-Bezier humps whose peaks reach the band-top profile, with per-hump amplitude jitter from a stable per-band hash. Puff slots are anchored on a global x grid so adjacent matched-zone segments tile coherently; the gap pattern is deterministic so the same band keeps a stable shape across redraws. Tunable knobs live in `DEFAULT_NATURAL_CONFIG` in `cloud-bands-factory.ts` (fill-fraction per coverage class, puff/hump width, min band width before falling back to continuous fill, amplitude jitter, edge overflow, fill alpha).
 - **Soft** (Soft DD, Soft NWP): gradient-edge fills with coverage-proportional opacity. Each band has feathered edges (top/bottom 15% fades to transparent). Opacity: OVC ~0.85, BKN ~0.65, SCT ~0.45, modulated by dewpoint depression for density. GRAMET-like aesthetic. Rendering uses `onBand` callback in `renderMatchedZones` to draw vertical `CanvasGradient` fills — no changes to `base.ts` core primitives needed. Theme config: `softClouds: { fillRgb, coverageAlpha, featherFraction }`.
 
-**Theme preview:** `theme-preview.ts` renders a popup canvas showing all visual elements (NWP clouds, DD clouds, icing, CAT, convective tower, inversion, temperature/stability/reference lines, terrain) for the selected theme.
+**Theme preview:** `theme-preview.ts` splits the popup into two halves with one job each — the old single-canvas version crammed both into 520×320 and the labels collided with the bands they named.
+
+- **Scene** (canvas, no text) — every colour family drawn together over the theme's sky and terrain, in plausible vertical order and at real opacities: "what will my chart look like". A `SCENE` constant holds the whole layout as fractions of plot height, with disjoint x-ranges where families would otherwise stack (bands left, convective tower right). Everything is clipped to the frame; natural cloud rows get one generous row-level clip (`NATURAL_OVERHANG_PX`, from the factory's blob radius) rather than a per-cell clip, so blobs blend into a continuous deck instead of being sliced.
+- **Key** (DOM, grouped) — "which colour means what", built from `getLayerLegend()` so it can't drift from the per-layer info popups. Lines live in their own full-width block, each with its own colour + dash sample and its own label.
+
+The preview follows `VizSettings.cloudStyle` (passed from `controls/panel.ts`), so previewing with Square clouds selected shows square cells — it no longer hardcodes the natural style.
 
 **Theme-aware legends:** `layer-legends.ts` generates legend entries dynamically from the active theme. Cloud legend swatches use CSS `repeating-linear-gradient` to replicate canvas hatch patterns.
 
@@ -373,11 +422,12 @@ The factory exposes `CLOUD_LAYER_BY_AXES`, `ALL_CLOUD_LAYER_IDS`, and `parseClou
 
 `visualization/layer-legends.ts` provides a unified legend system for all layers:
 
-- `LegendEntry`: `{ label, color, meaning, hatchStyle? }` — human-readable, visual, and contextual
-- Colors pulled dynamically from `getActiveTheme()` at render time (theme-aware, not cached)
-- Cloud legend swatches include CSS `repeating-linear-gradient` hatch overlay matching canvas rendering
-- Risk-based legends for icing, CAT, convective bands; METAR-style for cloud bands; percentage-based for NWP clouds
-- `getLayerLegend(layerId)` returns legend or null
+- `LegendEntry`: `{ label, color, meaning, hatchStyle?, line? }` — human-readable, visual, and contextual. `line` carries the layer's real `LineStyle` (colour + width + dash), so a line legend reproduces the stroke instead of a generic 3px rule — the only way to separate −10°C from −20°C in themes that give them the same hue (GRAMET).
+- Colors pulled dynamically from a theme at render time (theme-aware, not cached). `getLayerLegend(layerId, theme?)` and the `scales.ts` colour functions all default to `getActiveTheme()` but accept an explicit theme, so the theme preview can render a not-yet-applied theme through the same formulas the renderers use.
+- Cloud legend swatches include CSS `repeating-linear-gradient` hatch overlay matching canvas rendering. `hatchStyle` is **always** a CSS `<image>` (a flat colour becomes `linear-gradient(c, c)`) — it is composed into a `background: <image>, <color>` shorthand, where a bare colour in the first slot invalidates the whole declaration.
+- Risk-based legends for icing, CAT, convective bands; METAR-style for cloud bands; percentage-based for NWP clouds. Every group is ordered **least → most** (SCT→OVC, 25%→75%, light→severe) so a reader scanning several groups never reverses direction.
+- Reference-line widths/dashes come from `referenceLineStyles()` in `layers/reference-lines.ts` — exported from the layer that draws them, not re-declared in the legend.
+- Swatch markup is shared via `legend-render.ts` (`legendRowsHtml` for the info popup, `legendChipsHtml` for the preview grid), so the two surfaces cannot disagree. Swatches sit on a sky-coloured backing plate because nearly every fill is semi-transparent.
 - Displayed in info popups via `renderLayerLegend()` in metrics-helper.ts
 
 ## Info Popup & Metrics UI System
