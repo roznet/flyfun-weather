@@ -479,14 +479,22 @@ class TestGfsMidpointInterp:
         propagate_all([cs], [], gfs_init=gfs_init)
         hourly = cs.point_forecasts[0].hourly
 
-        # 12z (native f132): unchanged 100%.
-        assert hourly[0].nwp_cloud_diagnostics.mid.cover_pct == 100.0
+        # 12z (native f132): the published 100% is the mean over 06-12z,
+        # centred on 09:00z. Since #481 the native step is re-labelled too —
+        # 12z sits 3.0 h past that midpoint on the 4.5 h span to f135's
+        # 13:30z midpoint → 100 - 100*(3.0/4.5) = 33.3%.
+        assert hourly[0].nwp_cloud_diagnostics.mid.cover_pct == pytest.approx(
+            100 - 100 * 3.0 / 4.5, abs=0.1
+        )
         # 14z (gap, past f135 midpoint 13:30): below the 5% drop threshold.
         mid_14z = hourly[2].nwp_cloud_diagnostics.mid
         assert mid_14z.cover_pct is None  # dropped layer
         assert mid_14z.base_ft is None
-        # 15z native: unchanged 0%.
+        # 15z native (f135): its own 0% and the next knot's 0% agree.
         assert hourly[3].nwp_cloud_diagnostics.mid.cover_pct == 0.0
+        # 18z is the last anchor — no upper knot, so its published value
+        # stands rather than being extrapolated.
+        assert hourly[6].nwp_cloud_diagnostics.mid.cover_pct == 0.0
 
     def test_intermediate_hour_interpolates_between_midpoints(self):
         """13z sits between midpoints 09:00 (100%) and 13:30 (0%) →
@@ -609,12 +617,139 @@ class TestGfsMidpointInterp:
         cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
         propagate_all([cs], [], gfs_init=gfs_init)
         mid_f002 = cs.point_forecasts[0].hourly[1].nwp_cloud_diagnostics.mid
-        # f002 is past f003's midpoint (f001:30) → mid_frac clamps to 1.0 →
-        # cover = next anchor's 10%. Layer kept (above 5% drop threshold)
-        # with geometry held from higher-cover endpoint (f001).
+        # f002 sits past the LAST midpoint (f001:30), so there is no upper
+        # knot to interpolate toward. It clamps wholesale onto f003 — cover
+        # AND that cover's own geometry. (Before #481 the clamp took f003's
+        # cover but f001's geometry, because the "higher-cover endpoint" rule
+        # still saw two endpoints; a deck's altitude and its coverage now
+        # always come from the same published step.)
         assert mid_f002.cover_pct == pytest.approx(10.0)
-        assert mid_f002.base_ft == 10000  # f001 geometry (higher cover)
-        assert mid_f002.top_ft == 18000
+        assert mid_f002.base_ft == 11000
+        assert mid_f002.top_ft == 19000
+
+
+class TestGfsNativeStepRelabelling:
+    """#481: hourly GFS anchors get midpoint-aligned too.
+
+    Inside f120 GFS publishes every hour, so there are no gap hours and the
+    old implementation was a complete no-op — every native step carried its
+    window mean labelled at the window's END. The lag sawtooths with the
+    window width: 3 h at f006/f012, 0.5 h at f001/f007.
+    """
+
+    @staticmethod
+    def _hourly_anchors(
+        gfs_init: datetime, covers: dict[int, float],
+    ) -> RouteCrossSection:
+        hourly = [
+            _make_hourly(
+                gfs_init + timedelta(hours=f),
+                diag=NWPCloudDiagnostics(
+                    mid=NWPCloudLayerDiag(
+                        cover_pct=c, base_ft=10000, top_ft=18000,
+                    ),
+                ),
+            )
+            for f, c in sorted(covers.items())
+        ]
+        return _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+
+    def test_hourly_anchors_are_realigned(self):
+        """f004..f007 hourly. Midpoints: f004→2.0, f005→2.5, f006→3.0,
+        f007→6.5. f006's published mean covers 0-6z and is centred at 3.0, so
+        the value reported AT f006 must come from the 3.0→6.5 span, i.e.
+        (6-3)/(6.5-3) = 0.857 of the way to f007's value."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        cs = self._hourly_anchors(
+            gfs_init, {4: 100.0, 5: 100.0, 6: 100.0, 7: 20.0},
+        )
+        propagate_all([cs], [], gfs_init=gfs_init)
+        hourly = cs.point_forecasts[0].hourly
+        f006 = hourly[2].nwp_cloud_diagnostics.mid
+        assert f006.cover_pct == pytest.approx(
+            100 + (20 - 100) * (3.0 / 3.5), abs=0.1
+        )
+        # f007 is the last anchor: no upper knot → published value stands.
+        assert hourly[3].nwp_cloud_diagnostics.mid.cover_pct == 20.0
+
+    def test_steady_state_is_unchanged(self):
+        """Negative control: when neighbouring windows agree, re-labelling
+        must not perturb anything."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        cs = self._hourly_anchors(
+            gfs_init, {4: 86.9, 5: 86.9, 6: 86.9, 7: 86.9},
+        )
+        propagate_all([cs], [], gfs_init=gfs_init)
+        for h in cs.point_forecasts[0].hourly:
+            assert h.nwp_cloud_diagnostics.mid.cover_pct == pytest.approx(86.9)
+            assert h.nwp_cloud_diagnostics.mid.base_ft == 10000
+
+    def test_instantaneous_fields_survive_at_native_steps(self):
+        """Only the averaged half moves. ceiling_ft / total_cover_pct are
+        instantaneous in pgrb2 and are published AT the step, so a native
+        hour must report exactly what NCEP filed."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        hourly = [
+            _make_hourly(
+                gfs_init + timedelta(hours=f),
+                diag=NWPCloudDiagnostics(
+                    mid=NWPCloudLayerDiag(cover_pct=cover, base_ft=10000,
+                                          top_ft=18000),
+                    ceiling_ft=ceiling,
+                    total_cover_pct=cover,
+                ),
+            )
+            for f, cover, ceiling in (
+                (4, 100.0, 1200.0), (5, 100.0, 1500.0),
+                (6, 100.0, 4000.0), (7, 20.0, 9000.0),
+            )
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        hf = cs.point_forecasts[0].hourly
+        assert [h.nwp_cloud_diagnostics.ceiling_ft for h in hf] == [
+            1200.0, 1500.0, 4000.0, 9000.0,
+        ]
+        assert [h.nwp_cloud_diagnostics.total_cover_pct for h in hf] == [
+            100.0, 100.0, 100.0, 20.0,
+        ]
+        # …while the averaged band at f006 did move.
+        assert hf[2].nwp_cloud_diagnostics.mid.cover_pct < 100.0
+
+    def test_missing_neighbour_cover_keeps_published_band(self):
+        """A decode gap on the next step must not delete a decoded band."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        hourly = [
+            _make_hourly(
+                gfs_init + timedelta(hours=4),
+                diag=NWPCloudDiagnostics(
+                    mid=NWPCloudLayerDiag(cover_pct=90.0, base_ft=10000,
+                                          top_ft=18000),
+                ),
+            ),
+            _make_hourly(
+                gfs_init + timedelta(hours=5),
+                diag=NWPCloudDiagnostics(mid=NWPCloudLayerDiag()),
+            ),
+        ]
+        cs = _make_cs_with_hourly_model([hourly], ModelSource.GFS)
+        propagate_all([cs], [], gfs_init=gfs_init)
+        mid_f004 = cs.point_forecasts[0].hourly[0].nwp_cloud_diagnostics.mid
+        assert mid_f004.cover_pct == 90.0
+        assert mid_f004.base_ft == 10000
+
+    def test_no_realignment_without_gfs_init(self):
+        """Back-compat: the non-GFS / no-init path leaves anchors alone."""
+        gfs_init = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+        cs = self._hourly_anchors(
+            gfs_init, {4: 100.0, 5: 100.0, 6: 100.0, 7: 20.0},
+        )
+        propagate_all([cs], [])
+        covers = [
+            h.nwp_cloud_diagnostics.mid.cover_pct
+            for h in cs.point_forecasts[0].hourly
+        ]
+        assert covers == [100.0, 100.0, 100.0, 20.0]
 
 
 class TestGfsClwLinearInterp:

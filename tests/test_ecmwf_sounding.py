@@ -249,3 +249,152 @@ class TestHypsometricGeopotentialFallback:
         assert heights[1000] == pytest.approx(110.0)
         assert heights[850] == pytest.approx(1475.0)
         assert heights[500] == pytest.approx(5570.0)
+
+
+class TestModelSurfaceHeight:
+    """#487: the model's own orography, read off its geopotential column."""
+
+    @staticmethod
+    def _levels():
+        from weatherbrief.models.analysis import PressureLevelData
+
+        return [
+            PressureLevelData(pressure_hpa=1000, temperature_c=15.0,
+                              relative_humidity_pct=50.0,
+                              geopotential_height_m=110.0),
+            PressureLevelData(pressure_hpa=925, temperature_c=10.0,
+                              relative_humidity_pct=50.0,
+                              geopotential_height_m=760.0),
+            PressureLevelData(pressure_hpa=850, temperature_c=5.0,
+                              relative_humidity_pct=50.0,
+                              geopotential_height_m=1460.0),
+        ]
+
+    def test_interpolates_between_bracketing_levels(self):
+        from weatherbrief.fetch.grib.decode import model_surface_height_m
+
+        # sp = 925 hPa → exactly the 925 level's height.
+        assert model_surface_height_m(self._levels(), 925.0) == pytest.approx(
+            760.0, abs=1.0
+        )
+        # Between 1000 and 925: strictly inside the bracket, monotone.
+        mid = model_surface_height_m(self._levels(), 960.0)
+        assert 110.0 < mid < 760.0
+
+    def test_extends_below_the_lowest_level(self):
+        """Sea-level terrain: sp is higher-pressure than any level, so the
+        column is extended downward hypsometrically."""
+        from weatherbrief.fetch.grib.decode import model_surface_height_m
+
+        z = model_surface_height_m(self._levels(), 1013.0)
+        assert z is not None
+        assert z < 110.0  # below the 1000 hPa level
+        assert z > -100.0  # ~13 hPa is ~110 m, not kilometres
+
+    def test_none_without_heights(self):
+        from weatherbrief.fetch.grib.decode import model_surface_height_m
+        from weatherbrief.models.analysis import PressureLevelData
+
+        levels = [PressureLevelData(pressure_hpa=1000, temperature_c=15.0)]
+        assert model_surface_height_m(levels, 1013.0) is None
+        assert model_surface_height_m(self._levels(), 0.0) is None
+
+
+class TestGeopotentialReferenceAnchor:
+    """#486: the reconstruction anchors on a real height, not ISA.
+
+    DWD ships no geopotential on ICON model levels, so the whole ICON column
+    is reconstructed. Anchoring it on the ISA altitude of its surface-most
+    pressure level leaves the column offset by that surface's deviation from
+    ISA — 100–300 m in a deep low or a cold column. The offset is uniform:
+    thicknesses come from the integration and are unaffected.
+    """
+
+    @staticmethod
+    def _column() -> dict[int, dict[str, float]]:
+        return {
+            1000: {"raw_temperature_k": 288.0, "raw_relative_humidity_pct": 50.0},
+            850: {"raw_temperature_k": 278.0, "raw_relative_humidity_pct": 50.0},
+            500: {"raw_temperature_k": 255.0, "raw_relative_humidity_pct": 50.0},
+        }
+
+    def test_reference_replaces_isa_anchor(self):
+        isa = {
+            pl.pressure_hpa: pl.geopotential_height_m
+            for pl in build_pressure_levels_from_grib(self._column())
+        }
+        # A deep low: the 1000 hPa surface sits 250 m below its ISA height.
+        anchored = {
+            pl.pressure_hpa: pl.geopotential_height_m
+            for pl in build_pressure_levels_from_grib(
+                self._column(), {1000: isa[1000] - 250.0},
+            )
+        }
+        assert anchored[1000] == pytest.approx(isa[1000] - 250.0)
+        # Uniform offset — every level shifts by the same amount, so all
+        # layer thicknesses are preserved exactly.
+        for p in (850, 500):
+            assert anchored[p] == pytest.approx(isa[p] - 250.0, abs=1e-6)
+
+    def test_reference_above_the_surface_level_anchors_downward_too(self):
+        """The datum need not be the surface-most level: levels BELOW it are
+        integrated downward rather than left on the ISA datum."""
+        isa = {
+            pl.pressure_hpa: pl.geopotential_height_m
+            for pl in build_pressure_levels_from_grib(self._column())
+        }
+        anchored = {
+            pl.pressure_hpa: pl.geopotential_height_m
+            for pl in build_pressure_levels_from_grib(
+                self._column(), {850: isa[850] - 250.0},
+            )
+        }
+        assert anchored[850] == pytest.approx(isa[850] - 250.0)
+        assert anchored[1000] == pytest.approx(isa[1000] - 250.0, abs=1e-6)
+        assert anchored[500] == pytest.approx(isa[500] - 250.0, abs=1e-6)
+
+    def test_only_the_surface_most_reference_level_is_used(self):
+        """The reference sets WHERE the column sits, never how thick its
+        layers are — so a second, deliberately inconsistent reference level
+        must not bend the profile."""
+        isa = {
+            pl.pressure_hpa: pl.geopotential_height_m
+            for pl in build_pressure_levels_from_grib(self._column())
+        }
+        anchored = {
+            pl.pressure_hpa: pl.geopotential_height_m
+            for pl in build_pressure_levels_from_grib(
+                self._column(),
+                {1000: isa[1000] - 250.0, 850: isa[850] + 900.0},
+            )
+        }
+        for p in (1000, 850, 500):
+            assert anchored[p] == pytest.approx(isa[p] - 250.0, abs=1e-6)
+
+    def test_reference_never_overrides_a_delivered_height(self):
+        """A real GRIB height beats the borrowed reference at the same level."""
+        point_data = {
+            1000: {"raw_temperature_k": 288.0, "raw_geopotential_m2_s2": 9806.65},
+            850: {"raw_temperature_k": 278.0},
+        }
+        levels = build_pressure_levels_from_grib(point_data, {1000: 5.0})
+        heights = {pl.pressure_hpa: pl.geopotential_height_m for pl in levels}
+        assert heights[1000] == pytest.approx(1000.0, abs=1.0)
+
+    def test_moist_column_is_thicker_than_dry(self):
+        """Virtual temperature in the layer mean (#486): the same column at
+        95 % RH must integrate thicker than at 5 %."""
+        def _heights(rh: float) -> dict[int, float]:
+            column = {
+                p: {"raw_temperature_k": t, "raw_relative_humidity_pct": rh}
+                for p, t in ((1000, 300.0), (850, 292.0), (500, 268.0))
+            }
+            return {
+                pl.pressure_hpa: pl.geopotential_height_m
+                for pl in build_pressure_levels_from_grib(column, {1000: 100.0})
+            }
+
+        dry, moist = _heights(5.0), _heights(95.0)
+        assert moist[500] > dry[500]
+        # Warm moist air, surface→500 hPa: tens of metres, not hundreds.
+        assert 10.0 < (moist[500] - dry[500]) < 120.0

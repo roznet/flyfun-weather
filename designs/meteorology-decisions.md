@@ -320,6 +320,40 @@ Each averaged native step's anchor sits at `step - window_length/2`. For
 the pt11 case f135's midpoint is 13:30 Z, so 14:00 Z sits past it and
 interpolates toward the next anchor's 0 % rather than holding f132's 100 %.
 
+> **Extended 2026-07-26 (#481).** As first written, A only rewrote *gap*
+> hours. Inside f120 GFS publishes hourly, so there are no gap hours and A
+> was a complete no-op there — every native step still carried its window
+> mean labelled at the window's END, a lag of half the window width that
+> sawtooths through each 6-hour cycle (0.5 h at f001/f007, 3.0 h at
+> f006/f012). Since #481 the averaged half — low/mid/high plus
+> `NWP_CLOUD_DIAG_AVERAGED_SCALARS` — is resampled from the midpoint knots
+> at **every** hour, native steps included. Two consequences worth stating:
+>
+> - The reported value at a native step is no longer any single published
+>   NCEP number. That is the unavoidable price of A's own premise: a
+>   time-mean cannot simultaneously be correct in value and correct in time.
+>   The **last** anchor is the exception — with no upper knot the resample
+>   clamps to it, so it keeps exactly what NCEP filed.
+> - The averaged bracket is now located in midpoint space independently of
+>   the step bracket. With uneven window widths the two disagree (a gap hour
+>   at f122 sits between the f123 and f126 midpoints, not between f120's and
+>   f123's), which the shared-bracket version could not express.
+>
+> Instantaneous and rate fields are untouched at native steps — they are
+> published *at* the step and remain exactly as decoded.
+>
+> **Rejected: de-averaging the nested windows.** Within a 6-hour cycle the
+> windows share a start (`0-1`, `0-2`, … `0-6`), so
+> `mean(n-1, n] = n·A_n − (n−1)·A_{n−1}` recovers exact disjoint hourly
+> means — strictly better timing than interpolating between midpoints. It
+> was rejected because the paired PRES/TMP geometry has no de-averaged form,
+> so cover and geometry would stop sharing one statistical process — the
+> coupling this whole section is built on (`_PREFER_AVERAGED_PAIRS`) — and
+> because differencing two nested means amplifies noise into out-of-range
+> covers needing clamping. Revisit only together with the "re-derive cover
+> from RH + condensate" end-state below, which removes the averaged form
+> entirely.
+
 **B. Geometry hold-over with sub-5% drop.** `base_ft`, `top_ft`, and
 `top_temp_c` are not numerically interpolatable — interpolating altitudes
 between two dissimilar layer geometries would create phantom intermediate
@@ -327,6 +361,16 @@ layers. The gap-hour layer reuses the geometry of whichever bracketing
 endpoint has the higher cover; when interpolated cover falls below
 `_GFS_LAYER_DROP_THRESHOLD_PCT` (5 %) the entire `NWPCloudLayerDiag` is
 emptied. Visually a dissipating deck thins toward zero and then drops out.
+
+> **#481 refinement at native steps.** At a *native* step the sub-5 % rule
+> drops the geometry but keeps the cover number, because there the
+> alternative is erasing a value the model actually published: 0 % ("clear")
+> must not degrade into `None` ("unknown"), which `_has_native_cloud_content`
+> and the DD-vs-NWP comparisons read as a real distinction. Gap hours keep
+> the original empty-the-band behaviour — they have no published value to
+> protect. A band whose cover is missing on either knot is left entirely
+> alone at a native step, so a decode gap at one hour cannot delete a
+> decoded band at another.
 
 **C. RH/condensate gate** (`apply_gfs_rh_condensate_gate` in `fill.py`).
 After interpolation, for each GFS hourly with both pressure_levels and
@@ -2335,3 +2379,179 @@ NONE (gate); the 35–44 rows are unchanged; and the ESMX real hit (LPI 89, updr
 - **Still-outstanding #467 controls**: a winter graupel-shower day (needs the
   season) and a second/third convective hit before the thresholds are treated as
   fully calibrated rather than validated on one case each way.
+
+---
+
+## 20. Reconstructed geopotential columns anchor on a real height, not ISA
+
+**Date:** 2026-07-26
+**Status:** Implemented (issue #486)
+**Context:** DWD ships no geopotential on ICON model levels
+(`icon_eu_fetch.py: ICON_EU_VARIABLES`), so the entire ICON-EU / ICON-D2
+sounding column is reconstructed by `_fill_missing_geopotential_height`
+(`fetch/grib/decode.py`) from temperature and pressure alone. It anchored on
+`pressure_hpa_to_altitude_m(p_surface_most)` — the ISA altitude of its own
+lowest level — and integrated upward hypsometrically with dry-air layer
+means. The function's own docstring had carried both simplifications as known
+issues since it was written.
+
+### Correcting the framing first
+
+An external audit reported the ISA anchor as a **terrain** error: the whole
+sounding shifted by the terrain-versus-ISA difference, "potentially thousands
+of feet near high terrain". That mechanism is wrong and was not used to
+justify this work. `pressure_hpa_to_altitude_m` maps *pressure* to height, and
+the anchor level's pressure already encodes terrain — 795 hPa → 1999.6 m,
+which is about the near-surface pressure over 2000 m terrain. The anchor lands
+on terrain automatically; no terrain offset is imported.
+
+### The real errors
+
+1. **Anchor datum.** The error is that pressure surface's deviation from ISA,
+   driven by MSLP and column mean temperature. Order **100–300 m** (roughly
+   300–1000 ft) in a deep low or a cold column. Critically it is a *uniform
+   column offset*: thicknesses come from the integration and are untouched.
+   Since icing, turbulence and echo-top geometry depend mostly on relative
+   thickness rather than absolute datum, the practical impact is smaller
+   again — which is why this is a low-priority correctness fix, not a bug
+   hunt.
+2. **Dry-air layer mean.** Using T instead of virtual temperature
+   under-estimates thickness by ~0.5–1 % in warm moist air, ~30–50 m surface
+   → 500 hPa. Smaller in magnitude but *not* a pure offset, so arguably the
+   more interesting of the two: it distorts the shape, and the shape is what
+   the altitude-dependent analyses read.
+
+### The decision
+
+**A. Anchor on a real geopotential height where one exists.**
+`build_pressure_levels_from_grib` takes an optional
+`reference_heights_m` — `{pressure_hpa: height m}` for the same point and
+valid time. `_replace_pressure_levels_from_grib` fills it from the hourly's
+**outgoing** pressure levels, read before the GRIB replacement overwrites
+them. Those are Open-Meteo's values for the same model, point and hour, and
+they carry a real `geopotential_height_m`.
+
+Only the surface-most shared level is used, and only as a datum. Seeding
+every matching level would let the reference dictate the column's
+thicknesses; it comes from a different run of the same model, so small
+disagreements would appear as kinks in the profile. One datum keeps the shape
+entirely GRIB-derived and moves the column rigidly. Levels *below* the datum
+are now integrated downward rather than left stranded on the old ISA anchor.
+
+The ISA fallback stays for the case where no reference is available (nothing
+delivered heights) — it is the only thing left to anchor on.
+
+**B. Virtual temperature in the layer mean.** `_virtual_temperature_k` computes
+`Tv = T / (1 − (e/p)(1 − ε))` with vapour pressure from the Magnus formula
+already used for dewpoint in `_convert_raw_sounding`. Falls back to T when RH
+is absent.
+
+### Why not fetch ICON `ps` + orography
+
+The issue's suggested fix was to anchor on ICON surface pressure and
+orography (or half-level height, `HHL`). Both are real options and `HHL` is
+the cleanest end-state — it would give exact geometric heights for every
+model level with no integration at all. Both need new DWD fetches, new cache
+keys and new decode paths, for an error that is mostly a uniform offset. The
+Open-Meteo reference gets the datum right today with data the pipeline
+already holds. If `HHL` is ever fetched for another reason, prefer it.
+
+### ECMWF is unaffected
+
+Current ECMWF runs deliver `gh` on every pressure level, so the all-present
+guard makes this function a no-op for them. The change matters for ICON-EU /
+ICON-D2 and for pre-amendment ECMWF archives.
+
+### Files changed
+
+- `src/weatherbrief/fetch/grib/decode.py` — `_virtual_temperature_k` (new);
+  `_fill_missing_geopotential_height` takes `reference_heights_m`, picks the
+  surface-most known height as the datum, and integrates both directions from
+  it; `build_pressure_levels_from_grib` passes the reference through.
+- `src/weatherbrief/fetch/grib/__init__.py` — `_geopotential_reference` (new)
+  harvests the outgoing levels; both replacement loops pass it.
+
+---
+
+## 21. Freezing level is MSL everywhere; ECMWF `deg0l` is normalized at decode
+
+**Date:** 2026-07-26
+**Status:** Implemented (issue #487)
+**Context:** ECMWF `ceil` / `cbh` / `hcct` / `deg0l` are all metres **above
+ground** (`decode.py: _ECMWF_CLOUD_DIAG_FIELD_MAP`, established in #441
+finding #3). `deg0l` was mapped straight onto
+`NWPCloudDiagnostics.freezing_level_ft` — a field every *other* writer fills
+with MSL:
+
+- GFS fills it from `HGT@0degC`, MSL geopotential.
+- Open-Meteo's `freezing_level_height` is MSL.
+- The sounding's own `indices.freezing_level_ft` is the MSL 0 °C crossing.
+- ICON does not publish one at all (`hzerocl` is not fetched).
+
+So one ECMWF field carried a different datum into a shared slot.
+
+### The leak is wider than the gate that surfaced it
+
+The issue found this in `_explicit_freezing_level_ft` (the bright-band gate
+for ICON-D2 explicit convection), which builds a three-candidate fallback
+chain and takes the first non-None. Its suggested option — drop the
+diagnostics candidate, since two better-referenced ones precede it — would
+have fixed nothing, because the AGL value reaches candidate **two** as well:
+`HourlyForecast.attach_nwp_diagnostics` mirrors `diag.freezing_level_ft` onto
+`freezing_level_m`, and `analysis/sounding` reads that into
+`indices.nwp_freezing_level_ft`. Candidates 2 and 3 are the same number for
+ECMWF.
+
+Downstream of that same mirror, and unaffected by anything done in the gate:
+
+- `advisories/dd_nwp_agreement.py` compares the MSL sounding freezing level
+  against `nwp_freezing_level_ft` — a pure datum comparison.
+- `analysis/comparison.py` scores model divergence on `freezing_level_m`
+  across models, i.e. ECMWF-AGL against GFS-MSL.
+- `digest/text.py` and `digest/prompt_builder.py` print it as "FzLvl … ft".
+
+Ironically the gate the issue named is where it bites least: the explicit
+track is ICON-D2, and ICON publishes no freezing level, so candidate 3 is
+None there in practice.
+
+### The decision
+
+Normalize at the decode boundary, not at each consumer.
+`build_ecmwf_cloud_diagnostics` takes `terrain_elevation_m` and emits
+`deg0l + terrain` in feet. One conversion fixes every consumer at once and
+keeps the invariant statable: **`freezing_level_ft` and `freezing_level_m`
+are MSL, always.**
+
+**Terrain comes from the model, not from SRTM.** `model_surface_height_m`
+reads `z(surface_pressure)` off the ECMWF geopotential column — log-linear
+between bracketing levels, hypsometric extension below the lowest level. An
+AGL field is referenced to the *model's* orography, which at ~9 km resolution
+differs from real terrain by hundreds of metres in mountains; converting with
+SRTM would trade one datum error for another. Both inputs are already decoded
+(a2 `gh`, a1 `sp`) and the a2 merge runs before a1 at each step, so nothing
+new is fetched. Terrain is time-invariant, so it is computed once per point
+per run.
+
+**When terrain is unavailable the value is dropped, not passed through.**
+`attach_nwp_diagnostics` only mirrors a non-None value, so dropping leaves
+Open-Meteo's correctly-referenced MSL number in place. A wrong-datum ECMWF
+value is worse than a right-datum Open-Meteo one.
+
+### Deliberately out of scope
+
+`ceil` / `cbh` / `hcct` stay AGL. Ceiling and cloud base are conventionally
+AGL in aviation, so "which datum should they be?" is a genuine question with
+a different answer, not the same bug — that is the #441 finding #3 follow-up.
+The freezing level is unambiguous by contrast: every other producer of that
+field already says MSL.
+
+### Files changed
+
+- `src/weatherbrief/fetch/grib/decode.py` — `model_surface_height_m` (new);
+  `build_ecmwf_cloud_diagnostics` takes `terrain_elevation_m` and converts
+  (or drops) `deg0l`.
+- `src/weatherbrief/fetch/grib/__init__.py` — `_fill_ecmwf_orography` (new),
+  memoized per point across steps; the a1 merge passes it through.
+- `src/weatherbrief/analysis/sounding/convective.py` —
+  `_explicit_freezing_level_ft` docstring now states the datum invariant
+  instead of asserting any datum is usable.
