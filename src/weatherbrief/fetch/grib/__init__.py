@@ -3411,13 +3411,20 @@ def _prefetch_icon_eu_data(
     footprint than an interactive briefing; ``None`` → the normal
     :func:`_icon_prefetch_workers` budget.
 
-    ``abort_if`` is consulted once, after the download job list is built and
-    only when it is non-empty: a True answer aborts before any bytes move and
-    the call returns ``False``. This is how the warm loop yields to an
-    interactive refresh without giving up its free cache-hit fast-forward —
-    a fully-warmed context has no jobs and completes regardless of the gate
-    (issue #490 / PR #498 review). Returns ``True`` when the prefetch ran to
-    completion (including the no-jobs case).
+    ``abort_if`` is the warm loop's yield gate. It is consulted before the
+    first download and again between every subsequent (fhour, variable) unit,
+    but only while units remain to fetch: a True answer stops the prefetch and
+    returns ``False``, leaving the units that already finished in the cache.
+
+    Per-unit rather than once-per-call (#501): the single up-front check meant
+    a warm pass one job into a flight could not step aside for another ~80 s,
+    and that window is where a warming flight overlapping a briefing took the
+    container to 5999/6144 MB on 2026-07-26. A fully-warmed context still has
+    no jobs and completes regardless of the gate, so a resumption pass keeps
+    its free cache-hit fast-forward (issue #490 / PR #498 review).
+
+    Returns ``True`` when the prefetch ran to completion (including the
+    no-jobs case), ``False`` when the gate stopped it.
     """
     with _grib_time("icon_prefetch"):
         return _prefetch_icon_eu_data_inner(
@@ -3634,23 +3641,61 @@ def _prefetch_icon_eu_data_inner(
 
     if not jobs:
         return True
-    if abort_if is not None and abort_if():
-        logger.info(
-            "%s prefetch aborted before download (%d job(s) pending): "
-            "yielding to an interactive refresh",
-            variant.slug, len(jobs),
-        )
+
+    # The yield gate is consulted between every download unit, not just once
+    # ahead of the whole list (#501). Checking only once meant a warm pass that
+    # had just entered a flight was committed to that flight's entire job list
+    # — ~80 s during which its buffers and half the connection pool sit on top
+    # of any briefing that starts, straight through the moment that briefing
+    # peaks. Per-unit cuts the un-yieldable window to a single (fhour,
+    # variable) download.
+    #
+    # Stopping part-way through a flight is safe: every finished unit is its
+    # own atomic `put_cached`, so the next pass rebuilds the job list without
+    # it (an `is_cached` skip) and fast-forwards to where this one stopped. The
+    # caller leaves the run un-recorded on a False return, so that next pass is
+    # guaranteed to come.
+    def _yielding(done: int) -> bool:
+        """Consult the gate; log and answer True when the pass must stop."""
+        if abort_if is None or not abort_if():
+            return False
+        if done == 0:
+            logger.info(
+                "%s prefetch aborted before download (%d job(s) pending): "
+                "yielding to an interactive refresh",
+                variant.slug, len(jobs),
+            )
+        else:
+            logger.info(
+                "%s prefetch yielding to an interactive refresh after "
+                "%d/%d unit(s): the finished units stay cached",
+                variant.slug, done, len(jobs),
+            )
+        return True
+
+    if _yielding(0):
         return False
+
     if outer == 1 or len(jobs) == 1:
-        for fn, *args in jobs:
+        for done, (fn, *args) in enumerate(jobs):
+            if done and _yielding(done):
+                return False
             fn(*args)
         return True
 
+    # Submit incrementally rather than all at once so the gate governs this
+    # path too. Warm callers pass outer_workers=1 today and take the serial
+    # branch above, but a gate that silently stopped working if that budget
+    # were ever raised back to 2 is a trap worth not setting.
     with ThreadPoolExecutor(max_workers=outer, thread_name_prefix="icon-prefetch") as pool:
-        futures = [_submit_with_context(pool, fn, *args) for fn, *args in jobs]
+        futures = []
+        for done, (fn, *args) in enumerate(jobs):
+            if done and _yielding(done):
+                break
+            futures.append(_submit_with_context(pool, fn, *args))
         for fut in futures:
             fut.result()  # job functions never raise; .result() surfaces bugs
-    return True
+        return len(futures) == len(jobs)
 
 
 def _decode_and_merge_icon_eu(

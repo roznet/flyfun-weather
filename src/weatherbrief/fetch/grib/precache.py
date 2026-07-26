@@ -123,10 +123,17 @@ def should_warm(
 # warm writes) had no reclaim headroom for the decode workers' anon spike, and
 # the OOM killer took the container down mid-briefing.
 #
-# So: between units of work (per flight for D2, per forecast hour / variable
-# for EU + GFS) the warm pass asks whether the refresh registry has anything
-# queued or running, and bails out if so. The caller must NOT record the run as
-# done when a pass bails — see `precache_*` returning ``deferred``.
+# So: between units of work the warm pass asks whether the refresh registry has
+# anything queued or running, and bails out if so. The caller must NOT record
+# the run as done when a pass bails — see `precache_*` returning ``deferred``.
+#
+# A "unit" is one download everywhere: per (forecast hour, variable) for the EU
+# airport sweep and for D2 flights, per forecast hour for GFS. D2 was the
+# exception until #501 — it checked once per FLIGHT, so a pass that had just
+# entered a flight stayed resident for that flight's whole ~80 s job list, and
+# on 2026-07-26 one such overlap took the container to 5999/6144 MB. The gate
+# only helps to the extent it can fire promptly, so its granularity has to
+# match the granularity of the work.
 
 #: Keep yielding for this long after the last refresh finishes. Memory freed by
 #: a refresh isn't reclaimed the instant its registry entry disappears (decode
@@ -365,12 +372,18 @@ def precache_icon_d2_flights(
 
     Yields to interactive briefings, but only when real downloads are pending:
     ``should_defer`` (default :func:`interactive_refresh_active`) is passed to
-    the prefetch as its ``abort_if`` gate, consulted after the download job
-    list is built. A flight whose files are already on disk has no jobs and
-    completes even mid-refresh, so a resumption pass fast-forwards through the
-    warmed prefix instead of stalling at flight 0 for the whole burst (PR #498
-    review). An aborted prefetch stops the pass with ``deferred=1`` so the
-    caller leaves the run un-recorded and the next tick resumes it.
+    the prefetch as its ``abort_if`` gate, which consults it between every
+    (fhour, variable) download unit — not only once per flight, which left a
+    ~80 s window a warm pass could not step out of (#501). A flight whose files
+    are already on disk has no jobs and completes even mid-refresh, so a
+    resumption pass fast-forwards through the warmed prefix instead of stalling
+    at flight 0 for the whole burst (PR #498 review).
+
+    A gated prefetch stops the pass with ``deferred=1`` so the caller leaves
+    the run un-recorded and the next tick resumes it. Because the gate can now
+    fire mid-flight, the flight it stopped in is left partly warmed and is NOT
+    counted in ``flights_warmed``; its finished units are cached, so the
+    resumed pass picks up where this one left off rather than refetching them.
     """
     from weatherbrief.fetch.grib import _prefetch_icon_eu_data, _prepare_icon_eu
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
@@ -441,7 +454,9 @@ def precache_icon_d2_flights(
             # and must never crowd out a concurrent briefing's memory or
             # connections (05:09Z OOM, 2026-07-23). The gate rides along as
             # abort_if: a warmed flight (no pending jobs) completes even
-            # mid-refresh; one that needs downloads defers instead.
+            # mid-refresh; one that needs downloads defers instead, now
+            # between any two download units rather than only before the
+            # flight's first (#501).
             #
             # ONE outer unit, not two: on 2026-07-26 a single warming flight
             # overlapping one briefing took the container to 5999/6144 MB.
@@ -455,7 +470,8 @@ def precache_icon_d2_flights(
                 stats["deferred"] = 1
                 logger.info(
                     "ICON-D2 flight warm (run %s) deferring to an active "
-                    "briefing refresh after %d/%d flights — will resume "
+                    "briefing refresh after %d/%d flights fully warmed "
+                    "(the current one may be partly warmed) — will resume "
                     "next tick",
                     init.strftime("%Y%m%d_%Hz"),
                     stats["flights_warmed"], len(rows),
