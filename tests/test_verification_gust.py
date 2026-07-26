@@ -532,6 +532,30 @@ class TestModelGustBackfill:
         row = db.execute(select(VerificationScoreRow)).scalars().one()
         assert row.model_wind_gust_kt == pytest.approx(99.0)
 
+    def test_a_snapshot_gap_leaves_the_score_untouched(self, committing_db):
+        """Nearest-wins must not reach past the window live scoring uses."""
+        db = committing_db
+        when = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0,
+        ) - timedelta(hours=4)
+        init = when - timedelta(hours=6)
+
+        oid = _add_obs(db, "EHAM", when, wind=20, gust=28)
+        _add_score(db, oid, "EHAM", when, init_time=init, model="icon")
+        # The only snapshot for this key sits 3 h away — a gap, not a match.
+        db.add(AirportForecastSnapshotRow(
+            icao="EHAM", model="icon", model_init_time=init,
+            forecast_hour=when + timedelta(hours=3),
+            wind_speed_10m_kt=19.0, wind_gusts_10m_kt=40.0,
+        ))
+        db.flush()
+
+        assert backfill_model_gust(db, days=2) == 0
+        row = db.execute(select(VerificationScoreRow)).scalars().one()
+        assert row.model_wind_gust_kt is None
+        assert row.wind_gust_delta_kt is None
+        assert row.model_gust_flag is None
+
     def test_no_snapshot_leaves_the_score_untouched(self, committing_db):
         db = committing_db
         when = datetime.now(timezone.utc) - timedelta(hours=3)
