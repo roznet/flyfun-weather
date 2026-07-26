@@ -48,7 +48,7 @@ killed, with no record, no retry, and nothing to post-mortem.
 | `triggered_by` | `user` \| `scheduler` \| `resume` — the registry's queue-cap class |
 | `source` | Client-declared attribution (`user` \| `siri` \| `mcp` \| `scheduler`) |
 | `as_of_date` | Set when the refresh pinned a backtest date |
-| `status` | `queued` \| `running` \| `succeeded` \| `failed` \| `abandoned` |
+| `status` | `queued` \| `running` \| `succeeded` \| `skipped` \| `failed` \| `abandoned` |
 | `attempt` | 1 for the original run, +1 per resume |
 | `created_at` / `started_at` / `finished_at` / `heartbeat_at` | |
 | `stage` | Last pipeline stage the registry saw — "where did it die" |
@@ -79,6 +79,18 @@ tests and ad-hoc use never touch the DB.
 | `note_pack_path` | record `pack_path` (called from `_prepare_refresh` — the one place every path creates the dir) |
 | `update_progress` | bump `heartbeat_at` + `stage`, throttled to `HEARTBEAT_MIN_INTERVAL` (15s) |
 | `mark_outcome` + `unregister` | terminal status |
+
+`succeeded` vs `skipped` is a real distinction, not bookkeeping.
+`scheduler._auto_refresh_one` returns a **bool** — `False` when it
+short-circuits on its own refresh gate (or a missing `AIRPORTS_DB`) rather than
+running the pipeline — and both callers (the auto-refresh cycle and the resume
+pass) use it to close the row honestly. A gated skip is the *routine* outcome
+for a flight that already has a recent pack, so folding it into `succeeded`
+would have the table claim briefings that were never produced — exactly the
+record this feature exists to make trustworthy. Practically, `skipped` rows
+will dominate the table (bounded at roughly one per flight per day, since
+`last_auto_refresh_at` is bumped either way), which sharpens the pruning
+follow-on below.
 
 Two invariants make this work:
 
@@ -129,10 +141,16 @@ Two consequences of the gate check worth knowing:
   non-terminal-at-boot is the whole signal — so this only affects how much a
   post-mortem can see.
 
-A resume closes the interrupted row as `failed` (`last_error` records the
-interruption) and re-queues through the registry with `triggered_by="resume"`
-and `attempt + 1` — one row per attempt, so the post-mortem reads as a history
-rather than a mutating counter. Execution reuses `scheduler._auto_refresh_one`
+A resume re-queues through the registry with `triggered_by="resume"` and
+`attempt + 1`, **then** closes the interrupted row as `failed` — one row per
+attempt, so the post-mortem reads as a history rather than a mutating counter.
+The ordering matters: registering first means the closed row can never claim a
+resume that didn't happen (another refresh may already own the flight by the
+time the pass fires, in which case the row closes `abandoned` with *resume
+skipped, flight already active*). It costs a narrow window where both rows are
+non-terminal — if the process dies inside it, the next boot resumes the old row
+and abandons the new one at the attempt cap, i.e. one extra run rather than a
+lost one. Execution reuses `scheduler._auto_refresh_one`
 (gate → prepare → pipeline → persist → notify), which grew a `triggered_by`
 parameter purely for usage attribution.
 

@@ -154,7 +154,7 @@ async def process_auto_refreshes(app_state) -> None:
 
             try:
                 refresh_registry.set_refreshing(row.id)
-                await asyncio.to_thread(
+                ran = await asyncio.to_thread(
                     _auto_refresh_one, row, app_state, row.user_id
                 )
                 # Record the refresh timestamp
@@ -166,8 +166,16 @@ async def process_auto_refreshes(app_state) -> None:
                         mark_db.commit()
                 finally:
                     mark_db.close()
-                refresh_registry.mark_outcome(row.id, "succeeded")
-                logger.info("Auto-refresh completed: %s", row.id)
+                # "skipped" and "succeeded" are both terminal, but only one of
+                # them means a briefing was produced — the durable record has
+                # to tell them apart to be worth anything (#499).
+                refresh_registry.mark_outcome(
+                    row.id, "succeeded" if ran else "skipped",
+                    None if ran else "refresh gate declined a full run",
+                )
+                logger.info(
+                    "Auto-refresh %s: %s", "completed" if ran else "skipped", row.id,
+                )
             except Exception as exc:
                 refresh_registry.mark_outcome(row.id, "failed", str(exc))
                 logger.error("Auto-refresh failed for %s", row.id, exc_info=True)
@@ -394,13 +402,20 @@ def _auto_refresh_one(
     user_id: str,
     *,
     triggered_by: str = "scheduler",
-) -> None:
+) -> bool:
     """Run the briefing pipeline for a single flight (called in a thread).
 
     ``triggered_by`` is the usage attribution recorded on the briefing —
     ``"scheduler"`` for the auto-refresh loop, ``"resume"`` when the boot-time
     reconciliation pass re-runs a refresh interrupted by a container restart
     (issue #499). Both share the same gate-then-run body.
+
+    Returns **True** when the pipeline actually ran and persisted a pack, and
+    **False** when the call short-circuited (the refresh gate no longer wants a
+    full run, or ``AIRPORTS_DB`` isn't configured). Callers need the difference
+    to close the durable job row honestly — a gated skip is the routine case
+    for a flight that already has a recent pack, and recording it as
+    ``succeeded`` would make the post-mortem record lie (issue #499).
     """
     from weatherbrief.api.packs import (
         _build_data_status, _days_out_now, _finalize_refresh,
@@ -426,12 +441,12 @@ def _auto_refresh_one(
                     "Auto-refresh: gate=%s for %s (%s), skipping",
                     decision.mode, flight_row.id, decision.reason,
                 )
-                return
+                return False
 
         db_path = getattr(app_state, "db_path", "")
         if not db_path:
             logger.warning("Auto-refresh: AIRPORTS_DB not configured, skipping %s", flight_row.id)
-            return
+            return False
 
         route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
             flight, db_path, user_id, flight_row.id, db=db, is_privileged=True,
@@ -475,6 +490,7 @@ def _auto_refresh_one(
         _notify_refresh_complete(
             db, flight, meta, pack_path, user_id=user_id,
         )
+        return True
 
     finally:
         db.close()

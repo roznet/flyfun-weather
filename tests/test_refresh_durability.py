@@ -395,6 +395,7 @@ class TestReconcileOne:
                 "user_id": user_id,
                 "triggered_by": triggered_by,
             })
+            return True  # the real one returns "did the pipeline run?"
 
         from weatherbrief import scheduler as scheduler_mod
 
@@ -465,6 +466,47 @@ class TestReconcileOne:
         _first, second = _jobs(app_db)
         assert second.status == "failed"
         assert "exploded" in second.last_error
+
+    @pytest.mark.asyncio
+    async def test_a_gate_skip_is_not_recorded_as_a_briefing(
+        self, app_db, monkeypatch,
+    ):
+        """`_auto_refresh_one` returning False must not close the row as success."""
+        from weatherbrief import scheduler as scheduler_mod
+
+        monkeypatch.setenv("WB_REFRESH_MAX_ATTEMPTS", "3")
+        monkeypatch.setattr(
+            scheduler_mod, "_auto_refresh_one", lambda *a, **kw: False,
+        )
+        job_id = self._insert_orphan(app_db)
+
+        await refresh_resume.reconcile_one(job_id, object())
+
+        _first, second = _jobs(app_db)
+        assert second.status == "skipped"
+        assert "gate declined" in second.last_error
+
+    @pytest.mark.asyncio
+    async def test_a_flight_already_refreshing_is_not_claimed_as_resumed(
+        self, app_db, ran,
+    ):
+        """The interrupted row must not claim a resume that never happened."""
+        from weatherbrief.api.packs import refresh_registry
+
+        job_id = self._insert_orphan(app_db)
+        # Something else grabbed the flight during the startup delay.
+        assert refresh_registry.try_register(FLIGHT_ID, user_id=DEV_USER_ID) is not None
+        try:
+            await refresh_resume.reconcile_one(job_id, object())
+        finally:
+            refresh_registry.mark_outcome(FLIGHT_ID, "succeeded")
+            refresh_registry.unregister(FLIGHT_ID)
+
+        assert ran == []
+        orphan = next(j for j in _jobs(app_db) if j.id == job_id)
+        assert orphan.status == "abandoned"
+        assert "already active" in orphan.last_error
+        assert "resumed as" not in orphan.last_error
 
     @pytest.mark.asyncio
     async def test_already_terminal_row_is_left_alone(self, app_db, ran):
