@@ -211,3 +211,96 @@ def test_completed_pass_returns_true(tmp_path, tracker):
     ctx = _make_ctx(tmp_path, forecast_hours=[6])
     assert _prefetch_icon_eu_data_inner(ctx, abort_if=lambda: False) is True
     assert len(tracker["var_calls"]) == len(ICON_EU_VARIABLES)
+
+
+# ---------------------------------------------------------------------------
+# Per-unit gating (#501)
+#
+# The gate used to be consulted once, before the job list ran. A warm pass one
+# job into a flight was then committed to the rest of that flight — ~80 s in
+# which its buffers and half the connection pool sit on top of any briefing
+# that starts. It is now consulted between every unit.
+# ---------------------------------------------------------------------------
+
+
+#: Units a single-fhour ICON-EU context downloads: one per model-level
+#: variable, plus the hour's cloud-diag blob and the leading de-accumulation
+#: step (#421).
+_UNITS_PER_FHOUR = len(ICON_EU_VARIABLES) + 2
+
+
+def _gate_open_for(units: int):
+    """A gate that stays open for ``units`` downloads, then yields forever.
+
+    Check 0 is the pre-download one; check *k* precedes unit *k*.
+    """
+    state = {"checks": 0}
+
+    def gate() -> bool:
+        fired = state["checks"] >= units
+        state["checks"] += 1
+        return fired
+
+    return gate
+
+
+def _dispatched(tracker) -> int:
+    return len(tracker["var_calls"]) + len(tracker["diag_calls"])
+
+
+def test_abort_if_yields_between_units(tmp_path, tracker):
+    """A gate that goes active mid-flight stops the pass at the next unit."""
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    completed = _prefetch_icon_eu_data_inner(
+        ctx, outer_workers=1, abort_if=_gate_open_for(1),
+    )
+    assert completed is False
+    assert _dispatched(tracker) == 1
+
+
+def test_units_finished_before_the_gate_fires_stay_cached(tmp_path, tracker):
+    """Partial progress is the whole reason mid-flight yielding is safe.
+
+    Every finished unit is its own atomic ``put_cached``, so the resumed pass
+    rebuilds a shorter job list and fast-forwards instead of refetching.
+    """
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    assert _prefetch_icon_eu_data_inner(
+        ctx, outer_workers=1, abort_if=_gate_open_for(2),
+    ) is False
+    assert _dispatched(tracker) == 2
+
+    # Resume with the gate down: the finished units are is_cached skips.
+    assert _prefetch_icon_eu_data_inner(
+        ctx, outer_workers=1, abort_if=lambda: False,
+    ) is True
+
+    # Every unit fetched exactly once across the two passes — nothing dropped
+    # by the interruption, nothing paid for twice.
+    assert _dispatched(tracker) == _UNITS_PER_FHOUR
+    assert len(set(tracker["var_calls"])) == len(tracker["var_calls"])
+    assert len(set(tracker["diag_calls"])) == len(tracker["diag_calls"])
+
+
+def test_serial_path_runs_every_unit_when_the_gate_stays_open(tmp_path, tracker):
+    """Guard the off-by-one: an open gate must not cost a unit."""
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    assert _prefetch_icon_eu_data_inner(
+        ctx, outer_workers=1, abort_if=lambda: False,
+    ) is True
+    assert _dispatched(tracker) == _UNITS_PER_FHOUR
+
+
+def test_abort_if_gates_the_parallel_path_too(tmp_path, tracker):
+    """``outer > 1`` submits incrementally, so the gate governs it as well.
+
+    Warm callers pass ``outer_workers=1`` today and take the serial branch, but
+    a gate that silently stopped working if that budget were raised back to 2
+    is exactly the regression #501 exists to prevent.
+    """
+    ctx = _make_ctx(tmp_path, forecast_hours=[6])
+    completed = _prefetch_icon_eu_data_inner(
+        ctx, outer_workers=4, abort_if=_gate_open_for(3),
+    )
+    assert completed is False
+    assert _dispatched(tracker) == 3
