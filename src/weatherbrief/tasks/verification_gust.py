@@ -60,6 +60,10 @@ logger = logging.getLogger(__name__)
 # "the airport was gusting" mean the same thing.
 GUST_FLAG_THRESHOLD_KT = 10.0
 
+# Backfill pairs a score with a snapshot only inside the same window
+# `_score_cycle` uses live, so a backfilled row never says more than a live one.
+_MATCH_WINDOW = timedelta(minutes=90)
+
 
 # ---------------------------------------------------------------------------
 # Scalar definitions (scoring path)
@@ -291,10 +295,8 @@ def _backfill_model_gust_day(
             AirportForecastSnapshotRow.wind_speed_10m_kt,
             AirportForecastSnapshotRow.wind_gusts_10m_kt,
         ).where(
-            AirportForecastSnapshotRow.forecast_hour
-            >= day_start - timedelta(minutes=90),
-            AirportForecastSnapshotRow.forecast_hour
-            < day_end + timedelta(minutes=90),
+            AirportForecastSnapshotRow.forecast_hour >= day_start - _MATCH_WINDOW,
+            AirportForecastSnapshotRow.forecast_hour < day_end + _MATCH_WINDOW,
             AirportForecastSnapshotRow.wind_gusts_10m_kt.isnot(None),
         )
     ).all()
@@ -327,6 +329,10 @@ def _backfill_model_gust_day(
         fhour, wind, gust = min(
             candidates, key=lambda c: abs((c[0] - obs_time).total_seconds()),
         )
+        # A gap in the snapshot series must leave the row NULL rather than pair
+        # it with a distant forecast hour — same ±90 min reach _score_cycle uses.
+        if abs(fhour - obs_time) > _MATCH_WINDOW:
+            continue
         obs_gust = obs_gusts.get(s.observation_id)
         mappings.append({
             "id": s.id,
